@@ -78,7 +78,7 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
 | `pnpm test` | Vitest, one project per workspace package |
 | `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored tag equals the lockfile) |
-| `pnpm check:postgres` | Postgres answers at `STD_DATABASE_URL` |
+| `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
 | `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 
@@ -86,7 +86,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 
 ### Vendored Effect source
 
-`vendor/effect` is Effect's repository at the `effect@<version>` tag that matches the lockfile, added with `git subtree add --squash` and recorded in `vendor/effect-version.json`. It is reference material only: not a workspace package, and excluded from lint (`.eslintignore`), formatting (`oxfmt.config.ts`), type checks and tests. The upgrade procedure is in `docs/decisions/0001-effect.md`.
+`vendor/effect` is Effect's repository at the `effect@<version>` tag that matches the lockfile, imported as a squashed subtree by `tooling/vendor-effect.ts` and recorded in `vendor/effect-version.json` with the tag's commit and tree hash; `check-vendor` compares the committed tree with that hash. It is reference material only: not a workspace package, and excluded from lint (`.eslintignore`), formatting (`oxfmt.config.ts`), type checks and tests. Agent worktrees under `.claude/` are excluded the same way. The upgrade procedure is in `docs/decisions/0001-effect.md`.
 
 ## Server structure (`packages/server/src`)
 
