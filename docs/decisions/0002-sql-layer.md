@@ -53,7 +53,7 @@ const rows =
   );
 ```
 
-Inside a transaction, `SqlClient`, `PgClient`, `CurrentTransaction` and (for request and config commits) `RequestRevision` are provided; `request` and `configCommit` remove them from the effect's requirements. Errors leave as `DatabaseError` instead of `SqlError`.
+Inside a transaction, `SqlClient`, `PgClient`, `CurrentTransaction` and (for request and config commits) `RequestRevision` are provided; `request` and `configCommit` remove them from the effect's requirements. Errors leave as `DatabaseError` instead of `SqlError`. Yield `SqlClient` inside the transaction: a constructor captured outside belongs to the client it came from, which matters for transactions on a dedicated connection.
 
 ## Transactions
 
