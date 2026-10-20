@@ -1,0 +1,148 @@
+import { PgConnection } from "@effect/sql-pg";
+/**
+ * The test database harness: fresh migrated databases, fast creation,
+ * concurrent creation, teardown, the janitor and the statement log.
+ */
+import { assert, describe, it, layer } from "@effect/vitest";
+import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
+import { migration0001 } from "@std/server/platform/migrations/0001-core";
+import { checkPlatformMigrations } from "@std/server/platform/runner";
+import { decodeRows } from "@std/server/sql/rows";
+import { StatementLog } from "@std/server/sql/statement-log";
+import { Context, Effect, Exit, Layer, Redacted, Schema, Scope } from "effect";
+import { SqlClient } from "effect/sql";
+
+import {
+  maintenanceUrl,
+  runJanitor,
+  TEMPLATE_PREFIX,
+  templateName,
+  TEST_DATABASE_MAX_AGE_MS,
+  TestDatabase,
+  testDatabaseLayer,
+  testDatabaseName,
+} from "../src/test-database.ts";
+
+const MAX_CREATE_MS = 1000;
+
+const decodeExists = decodeRows(Schema.Struct({ n: Schema.Int }));
+
+const admin = PgConnection.make({
+  applicationName: "std-testing-test",
+  url: Redacted.make(maintenanceUrl()),
+});
+
+const databaseExists = (name: string) =>
+  Effect.scoped(
+    admin.pipe(
+      Effect.flatMap((connection) =>
+        connection.query(
+          "SELECT count(*)::int AS n FROM pg_database WHERE datname = $1",
+          [name],
+          false
+        )
+      ),
+      Effect.flatMap((result) => decodeExists(result.rows)),
+      Effect.map(([row]) => row?.n === 1)
+    )
+  );
+
+/**
+ * Builds a test database layer in its own scope.
+ * @returns The scope and the database name.
+ */
+const buildDatabase = Effect.gen(function* buildTestDatabase() {
+  const scope = yield* Scope.make();
+  const context = yield* Layer.buildWithScope(testDatabaseLayer(), scope);
+  const database = Context.get(context, TestDatabase);
+
+  return { name: database.name, scope, template: database.template };
+});
+
+describe("test-database", () => {
+  it("names templates after the migrations' checksums and test databases after their creation time", () => {
+    const name = templateName(PLATFORM_MIGRATIONS);
+
+    assert.isTrue(name.startsWith(TEMPLATE_PREFIX));
+    assert.strictEqual(name, templateName([migration0001]));
+    assert.notStrictEqual(
+      name,
+      templateName([{ ...migration0001, statements: ["SELECT 1"] }])
+    );
+    assert.match(testDatabaseName(), /^std_test_[\da-z]+_\d+_[\da-f]{8}$/u);
+    assert.notStrictEqual(testDatabaseName(), testDatabaseName());
+  });
+
+  it.live(
+    "creates a migrated database well under a second and drops it on release",
+    () =>
+      Effect.gen(function* createAndDrop() {
+        // The first build may have to create the template.
+        const warm = yield* buildDatabase;
+        yield* Scope.close(warm.scope, Exit.void);
+
+        const started = Date.now();
+        const built = yield* buildDatabase;
+        const elapsed = Date.now() - started;
+
+        assert.isBelow(elapsed, MAX_CREATE_MS, `created in ${elapsed} ms`);
+        assert.strictEqual(built.template, templateName(PLATFORM_MIGRATIONS));
+        assert.isTrue(yield* databaseExists(built.name));
+
+        yield* Scope.close(built.scope, Exit.void);
+        assert.isFalse(yield* databaseExists(built.name));
+      })
+  );
+
+  it.live("concurrent creations from one template never race", () =>
+    Effect.gen(function* concurrentCreation() {
+      const built = yield* Effect.all(
+        Array.from({ length: 6 }, () => buildDatabase),
+        { concurrency: "unbounded" }
+      );
+
+      const names = new Set(built.map((database) => database.name));
+
+      assert.strictEqual(names.size, 6);
+
+      for (const database of built) {
+        yield* Scope.close(database.scope, Exit.void);
+      }
+    })
+  );
+
+  it.live("the janitor drops test databases older than three hours", () =>
+    Effect.scoped(
+      Effect.gen(function* janitor() {
+        const connection = yield* admin;
+        const now = Date.now();
+        const old = `std_test_${(now - TEST_DATABASE_MAX_AGE_MS - 60_000).toString(36)}_1_deadbeef`;
+        const fresh = `std_test_${now.toString(36)}_1_cafebabe`;
+        yield* connection.query(`CREATE DATABASE "${old}" TEMPLATE template0`);
+        yield* connection.query(
+          `CREATE DATABASE "${fresh}" TEMPLATE template0`
+        );
+
+        yield* runJanitor(connection, templateName(PLATFORM_MIGRATIONS), now);
+
+        assert.isFalse(yield* databaseExists(old));
+        assert.isTrue(yield* databaseExists(fresh));
+        yield* connection.query(`DROP DATABASE "${fresh}" WITH (FORCE)`);
+      })
+    )
+  );
+
+  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect("a test database is migrated and has a statement log", () =>
+      Effect.gen(function* migratedWithLog() {
+        const sql = yield* SqlClient.SqlClient;
+        const log = yield* StatementLog;
+        yield* checkPlatformMigrations();
+        yield* log.clear;
+        yield* sql`SELECT 1 AS one`;
+
+        assert.deepStrictEqual(yield* log.texts, ["SELECT 1 AS one"]);
+      })
+    );
+  });
+});

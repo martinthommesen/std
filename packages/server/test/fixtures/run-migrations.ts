@@ -1,0 +1,36 @@
+/**
+ * Child process for the migration crash tests: runs the migration step of
+ * `std upgrade` with a test migration list against `STD_DATABASE_URL`, as
+ * `application_name = 'std-migration-child'`, so the test can find and kill
+ * it mid-migration.
+ *
+ * Usage: `node run-migrations.ts <set name>`.
+ */
+import { NodeRuntime } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
+
+import { runPlatformMigrations } from "../../src/platform/runner.ts";
+import {
+  DatabaseConfig,
+  DEFAULT_DATABASE_URL,
+} from "../../src/sql/database-config.ts";
+import { SqlLayer } from "../../src/sql/layer.ts";
+import { CHILD_APPLICATION_NAME, migrationSet } from "./test-migrations.ts";
+
+const migrations = migrationSet(process.argv[2]);
+
+const services = SqlLayer.pipe(
+  Layer.provideMerge(
+    DatabaseConfig.fromUrl({
+      applicationName: CHILD_APPLICATION_NAME,
+      url: process.env.STD_DATABASE_URL ?? DEFAULT_DATABASE_URL,
+    })
+  )
+);
+
+NodeRuntime.runMain(
+  runPlatformMigrations(migrations).pipe(
+    Effect.provide(services),
+    Effect.asVoid
+  )
+);
