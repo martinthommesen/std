@@ -1,0 +1,32 @@
+packages:
+  - packages/*
+  - apps/*
+  - examples/*
+  - bench
+
+# Effect runtime packages share one exact version and are upgraded together.
+# @effect/tsgo is pinned separately and upgraded in its own PR (Contracts 9).
+catalog:
+  effect: 4.0.5
+  "@effect/sql-pg": 4.0.5
+  "@effect/platform-node": 4.0.5
+  "@effect/opentelemetry": 4.0.5
+  "@effect/vitest": 4.0.5
+  "@effect/tsgo": 0.54.1
+  typescript: 7.0.2
+  vitest: 5.0.5
+  fast-check: 4.10.2
+  "@types/node": 26.6.5
+
+allowBuilds:
+  lefthook: true
+
+minimumReleaseAgeExclude:
+  - "@effect/tsgo-darwin-arm64@0.54.1"
+  - "@effect/tsgo-darwin-x64@0.54.1"
+  - "@effect/tsgo-linux-arm64@0.54.1"
+  - "@effect/tsgo-linux-arm@0.54.1"
+  - "@effect/tsgo-linux-x64@0.54.1"
+  - "@effect/tsgo-win32-arm64@0.54.1"
+  - "@effect/tsgo-win32-x64@0.54.1"
+  - "@effect/tsgo@0.54.1"
