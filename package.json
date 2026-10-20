@@ -14,7 +14,8 @@
     "ci:local": "node tooling/ci-local.ts",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "std": "node packages/server/src/cli/main.ts"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",
