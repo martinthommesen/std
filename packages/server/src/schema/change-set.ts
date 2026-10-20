@@ -52,7 +52,7 @@ import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { lockWaiting, readOnly } from "../sql/statement-marks.ts";
+import { lockWaiting } from "../sql/statement-marks.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
@@ -223,9 +223,7 @@ const takeTableLocks = (locks: readonly TableLock[]) =>
     const budget: LockBudget = { deadline: Date.now() + DDL_LOCK_BUDGET_MS };
 
     for (const lock of locks) {
-      yield* readOnly(
-        sql.unsafe(`SET LOCAL lock_timeout = '${remainingMs(budget)}ms'`)
-      );
+      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remainingMs(budget)}ms'`);
       yield* lockWaiting(
         sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
       );
@@ -251,10 +249,8 @@ const runDdl = (statements: readonly DdlStatement[], budget: LockBudget) =>
     for (const statement of statements) {
       const remaining = remainingMs(budget);
 
-      yield* readOnly(sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`));
-      yield* readOnly(
-        sql.unsafe(`SET LOCAL statement_timeout = '${remaining}ms'`)
-      );
+      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
+      yield* sql.unsafe(`SET LOCAL statement_timeout = '${remaining}ms'`);
       yield* lockWaiting(sql.unsafe(statement.sql));
     }
   });
@@ -262,10 +258,8 @@ const runDdl = (statements: readonly DdlStatement[], budget: LockBudget) =>
 const restoreTimeouts = SqlClient.SqlClient.pipe(
   Effect.flatMap((sql) =>
     Effect.andThen(
-      readOnly(sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`)),
-      readOnly(
-        sql.unsafe(`SET LOCAL statement_timeout = '${MAIN_STATEMENT_TIMEOUT}'`)
-      )
+      sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`),
+      sql.unsafe(`SET LOCAL statement_timeout = '${MAIN_STATEMENT_TIMEOUT}'`)
     )
   )
 );
