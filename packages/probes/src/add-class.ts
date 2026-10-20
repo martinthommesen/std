@@ -29,6 +29,7 @@ import { bumpRevision } from "@std/server/sql/config-commit";
 import type { ConfigCommitOptions } from "@std/server/sql/config-commit";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
 import { decodeRows } from "@std/server/sql/rows";
+import { lockWaiting } from "@std/server/sql/statement-marks";
 import { Transactions } from "@std/server/sql/transactions";
 import { TestDatabase } from "@std/testing/test-database";
 import { Duration, Effect, Fiber, Schema } from "effect";
@@ -317,8 +318,10 @@ const addClassWork = (counter: { attempts: number }) =>
       const constraint = `${ancestor.table}_class_subtree`;
 
       const [ms] = yield* timedMillis(
-        sql.unsafe(
-          `ALTER TABLE ${qualified(ancestor.table)} DROP CONSTRAINT ${constraint}, ADD CONSTRAINT ${constraint} ${subtreeCheck(classes, ancestor.table)} NOT VALID`
+        lockWaiting(
+          sql.unsafe(
+            `ALTER TABLE ${qualified(ancestor.table)} DROP CONSTRAINT ${constraint}, ADD CONSTRAINT ${constraint} ${subtreeCheck(classes, ancestor.table)} NOT VALID`
+          )
         )
       );
 
@@ -329,12 +332,20 @@ const addClassWork = (counter: { attempts: number }) =>
     }
 
     const [create, trigger] = createClassStatements(classes, NEW_CLASS);
-    const [createMs] = yield* timedMillis(sql.unsafe(create ?? ""));
+
+    const [createMs] = yield* timedMillis(
+      lockWaiting(sql.unsafe(create ?? ""))
+    );
+
     statements.push({
       label: `create ${NEW_CLASS.table} with level FK`,
       ms: createMs,
     });
-    const [triggerMs] = yield* timedMillis(sql.unsafe(trigger ?? ""));
+
+    const [triggerMs] = yield* timedMillis(
+      lockWaiting(sql.unsafe(trigger ?? ""))
+    );
+
     statements.push({
       label: `create ${NEW_CLASS.table} trigger`,
       ms: triggerMs,

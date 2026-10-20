@@ -36,6 +36,7 @@ import type { ConfigCommitOptions } from "@std/server/sql/config-commit";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
 import type { DedicatedConnection } from "@std/server/sql/dedicated";
 import { decodeRows } from "@std/server/sql/rows";
+import { lockWaiting } from "@std/server/sql/statement-marks";
 import { Transactions } from "@std/server/sql/transactions";
 import { TestDatabase } from "@std/testing/test-database";
 import {
@@ -375,8 +376,10 @@ const smallChangeSet = (counter: AttemptCounter) =>
 
     const sql = yield* SqlClient.SqlClient;
     const changeSetId = randomUUID();
-    yield* sql.unsafe(
-      `ALTER TABLE probe_dummy ALTER COLUMN label SET DEFAULT 'change ${changeSetId}'`
+    yield* lockWaiting(
+      sql.unsafe(
+        `ALTER TABLE probe_dummy ALTER COLUMN label SET DEFAULT 'change ${changeSetId}'`
+      )
     );
     yield* sql`INSERT INTO probe_journal (change_set_id, note) VALUES (${changeSetId}::uuid, ${"probe change set"})`;
     yield* bumpRevision(changeSetId);

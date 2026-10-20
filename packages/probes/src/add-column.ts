@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import { bumpRevision } from "@std/server/sql/config-commit";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
+import { lockWaiting } from "@std/server/sql/statement-marks";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -116,7 +117,11 @@ export const runAddColumnProbe = Effect.fn("runAddColumnProbe")(
         connection.transactions.configCommit(
           Effect.gen(function* addColumn() {
             const sql = yield* SqlClient.SqlClient;
-            const [elapsed] = yield* timedMillis(sql.unsafe(statement));
+
+            const [elapsed] = yield* timedMillis(
+              lockWaiting(sql.unsafe(statement))
+            );
+
             yield* bumpRevision(randomUUID());
 
             return elapsed;
