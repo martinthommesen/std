@@ -21,11 +21,14 @@
  *
  * Templates are named after the migrations' checksums
  * (`std_tpl_<24 hex>`), so a change to any migration builds a new one.
- * Creation is serialized across processes with a session advisory lock in
- * the maintenance database, and a template is used only once it is marked
- * `IS_TEMPLATE`, so concurrent vitest processes (from any number of agents)
- * never race. A janitor drops test databases older than three hours and
- * templates created more than a week ago.
+ * Each template has a session advisory lock in the maintenance database
+ * (`TEMPLATE_LOCK_CLASS`, `hashtext(<template name>)`): cloning holds it
+ * shared from the readiness check through `CREATE DATABASE ... TEMPLATE`;
+ * building and dropping hold it exclusive. A template is used only once it
+ * is marked `IS_TEMPLATE`. So concurrent vitest processes (from any number
+ * of agents) never race. A janitor drops test databases older than three
+ * hours and templates created more than a week ago, but only databases with
+ * the harness's exact generated name and its ownership comment.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -75,18 +78,30 @@ export const TEST_DATABASE_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const TEMPLATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Session advisory lock in the maintenance database that serializes
- * template creation across processes (`0x5354440000000101`, next to STD's
- * own keys but never used by STD itself).
+ * First key of each template's two-key advisory lock in the maintenance
+ * database (`0x53544401`); the second key is `hashtext(<template name>)`.
+ * STD itself never takes it.
  */
-export const TEMPLATE_LOCK_KEY = 0x53_54_44_00_00_00_01_01n;
+export const TEMPLATE_LOCK_CLASS = 0x53_54_44_01;
 
-const TEMPLATE_COMMENT_PREFIX = "std test template, created ";
+/** The comment that marks a test database as the harness's own. */
+export const TEST_DATABASE_COMMENT_PREFIX =
+  "std-testing test database, created ";
+
+/** The comment that marks a template as the harness's own. */
+export const TEMPLATE_COMMENT_PREFIX = "std test template, created ";
+
 const NAME_RADIX = 36;
 const RANDOM_BYTES = 4;
 const TEMPLATE_HASH_LENGTH = 24;
 const TEMPLATE_MIGRATION_POOL_SIZE = 2;
-const TEST_NAME = /^std_test_(?<created>[\da-z]+)_/u;
+const CLONE_ATTEMPTS = 3;
+
+/** The complete name format `testDatabaseName` generates. */
+export const TEST_DATABASE_NAME = /^std_test_[\da-z]+_\d+_[\da-f]{8}$/u;
+
+/** The complete name format `templateName` generates. */
+export const TEMPLATE_NAME = /^std_tpl_[\da-f]{24}$/u;
 
 /** The test database of the current layer. */
 export interface TestDatabaseApi {
@@ -208,24 +223,133 @@ const dropDatabase = (
 ): Effect.Effect<readonly unknown[], SqlError> =>
   query(admin, `DROP DATABASE IF EXISTS ${quote(name)} WITH (FORCE)`);
 
-const isExpiredTestDatabase = (name: string, now: number): boolean => {
-  const created = Number.parseInt(
-    TEST_NAME.exec(name)?.groups?.created ?? "",
-    NAME_RADIX
-  );
+/**
+ * When a database's comment says the harness created it.
+ * @param comment - The database comment.
+ * @param prefix - The harness's marker for this kind of database.
+ * @returns The creation time in epoch milliseconds, or `undefined` when the
+ *   comment is not the harness's.
+ */
+const ownedSince = (comment: string, prefix: string): number | undefined => {
+  if (!comment.startsWith(prefix)) {
+    return undefined;
+  }
 
-  return Number.isFinite(created) && now - created > TEST_DATABASE_MAX_AGE_MS;
+  const created = Date.parse(comment.slice(prefix.length));
+
+  return Number.isFinite(created) ? created : undefined;
 };
 
-const isExpiredTemplate = (comment: string, now: number): boolean =>
-  comment.startsWith(TEMPLATE_COMMENT_PREFIX) &&
-  now - Date.parse(comment.slice(TEMPLATE_COMMENT_PREFIX.length)) >
-    TEMPLATE_MAX_AGE_MS;
+/**
+ * Whether the janitor may drop a database: it has the harness's exact name
+ * format, carries the harness's ownership comment, and is old enough.
+ * @param name - The database name.
+ * @param comment - Its comment.
+ * @param now - The current time in epoch milliseconds.
+ * @returns `"test"`, `"template"`, or `undefined` to keep it.
+ */
+export const expiredHarnessDatabase = (
+  name: string,
+  comment: string,
+  now: number
+): "test" | "template" | undefined => {
+  if (TEST_DATABASE_NAME.test(name)) {
+    const created = ownedSince(comment, TEST_DATABASE_COMMENT_PREFIX);
+
+    return created !== undefined && now - created > TEST_DATABASE_MAX_AGE_MS
+      ? "test"
+      : undefined;
+  }
+
+  if (TEMPLATE_NAME.test(name)) {
+    const created = ownedSince(comment, TEMPLATE_COMMENT_PREFIX);
+
+    return created !== undefined && now - created > TEMPLATE_MAX_AGE_MS
+      ? "template"
+      : undefined;
+  }
+
+  return undefined;
+};
+
+const lockStatement = (call: string): string =>
+  `SELECT ${call}(${TEMPLATE_LOCK_CLASS}, hashtext($1)) AS locked`;
+
+const decodeLocked = decodeRows(Schema.Struct({ locked: Schema.Boolean }));
 
 /**
- * Drops test databases older than `TEST_DATABASE_MAX_AGE_MS` and templates
- * other than `keep` created more than `TEMPLATE_MAX_AGE_MS` ago. Best effort:
- * failures are logged and ignored.
+ * Runs `use` while holding a template's advisory lock.
+ * @param admin - A connection to the maintenance database.
+ * @param template - The template name.
+ * @param mode - `shared` for cloning, `exclusive` for building and dropping.
+ * @param use - The work.
+ * @returns The work's result.
+ */
+const withTemplateLock = <A, E>(
+  admin: PgConnection.PgConnection,
+  template: string,
+  mode: "shared" | "exclusive",
+  use: Effect.Effect<A, E>
+): Effect.Effect<A, E | SqlError> =>
+  Effect.acquireUseRelease(
+    query(
+      admin,
+      lockStatement(
+        mode === "shared" ? "pg_advisory_lock_shared" : "pg_advisory_lock"
+      ),
+      [template]
+    ),
+    () => use,
+    () =>
+      Effect.ignore(
+        query(
+          admin,
+          lockStatement(
+            mode === "shared"
+              ? "pg_advisory_unlock_shared"
+              : "pg_advisory_unlock"
+          ),
+          [template]
+        )
+      )
+  );
+
+/**
+ * Drops an expired template, unless someone is cloning or building it.
+ * @param admin - A connection to the maintenance database.
+ * @param template - The template name.
+ * @returns An effect that drops it or leaves it.
+ */
+const dropTemplateIfUnused = (
+  admin: PgConnection.PgConnection,
+  template: string
+): Effect.Effect<void, SqlError> =>
+  Effect.acquireUseRelease(
+    query(admin, lockStatement("pg_try_advisory_lock"), [template]).pipe(
+      Effect.flatMap(decodeLocked),
+      Effect.map(([row]) => row?.locked === true)
+    ),
+    (locked) =>
+      locked
+        ? query(
+            admin,
+            `ALTER DATABASE ${quote(template)} WITH IS_TEMPLATE false`
+          ).pipe(Effect.andThen(dropDatabase(admin, template)), Effect.asVoid)
+        : Effect.void,
+    (locked) =>
+      locked
+        ? Effect.ignore(
+            query(admin, lockStatement("pg_advisory_unlock"), [template])
+          )
+        : Effect.void
+  );
+
+/**
+ * Drops expired databases the harness created: test databases older than
+ * `TEST_DATABASE_MAX_AGE_MS` and templates other than `keep` created more
+ * than `TEMPLATE_MAX_AGE_MS` ago and not in use. A database needs the exact
+ * generated name and the harness's ownership comment. Best effort: failures
+ * are logged and ignored.
  * @param admin - A connection to the maintenance database.
  * @param keep - The template in use.
  * @param now - The current time in epoch milliseconds.
@@ -244,18 +368,16 @@ export const runJanitor = (
     ).pipe(Effect.flatMap(decodeDatabases));
 
     for (const database of databases) {
-      const name = database.datname;
+      const expired = expiredHarnessDatabase(
+        database.datname,
+        database.comment,
+        now
+      );
 
-      if (name.startsWith(TEST_DATABASE_PREFIX)) {
-        if (isExpiredTestDatabase(name, now)) {
-          yield* dropDatabase(admin, name);
-        }
-      } else if (name !== keep && isExpiredTemplate(database.comment, now)) {
-        yield* query(
-          admin,
-          `ALTER DATABASE ${quote(name)} WITH IS_TEMPLATE false`
-        );
-        yield* dropDatabase(admin, name);
+      if (expired === "test") {
+        yield* dropDatabase(admin, database.datname);
+      } else if (expired === "template" && database.datname !== keep) {
+        yield* dropTemplateIfUnused(admin, database.datname);
       }
     }
   }).pipe(
@@ -298,6 +420,13 @@ const migrateDatabase = (
     )
   );
 
+/**
+ * Builds a template; run only under its exclusive lock.
+ * @param admin - A connection to the maintenance database.
+ * @param name - The template name.
+ * @param migrations - The template's migrations.
+ * @returns An effect that leaves a ready template.
+ */
 const buildTemplate = (
   admin: PgConnection.PgConnection,
   name: string,
@@ -322,9 +451,9 @@ const buildTemplate = (
   });
 
 /**
- * Creates the template for a migration list unless it is ready. Serialized
- * across processes by `TEMPLATE_LOCK_KEY`; a half-built template left by a
- * crashed process is dropped and rebuilt.
+ * Creates the template for a migration list unless it is ready, under the
+ * template's exclusive lock; a half-built template left by a crashed process
+ * is dropped and rebuilt.
  * @param admin - A connection to the maintenance database.
  * @param migrations - The template's migrations.
  * @returns The template name.
@@ -335,23 +464,62 @@ export const ensureTemplate = (
 ): Effect.Effect<string, DatabaseError | UpgradeError> => {
   const name = templateName(migrations);
 
-  const locked = Effect.acquireUseRelease(
-    query(admin, `SELECT pg_advisory_lock(${TEMPLATE_LOCK_KEY.toString()})`),
-    () => buildTemplate(admin, name, migrations),
-    () =>
-      Effect.ignore(
-        query(
-          admin,
-          `SELECT pg_advisory_unlock(${TEMPLATE_LOCK_KEY.toString()})`
-        )
+  return hygienic(
+    withTemplateLock(
+      admin,
+      name,
+      "exclusive",
+      buildTemplate(admin, name, migrations)
+    ).pipe(Effect.as(name))
+  );
+};
+
+/**
+ * Clones a test database from a template, building the template first when
+ * needed. The template's shared lock is held from the readiness check
+ * through `CREATE DATABASE`, so the template cannot be dropped in between.
+ * @param admin - A connection to the maintenance database.
+ * @param database - The new database's name.
+ * @param migrations - The template's migrations.
+ * @returns The template name.
+ */
+const cloneTemplate = (
+  admin: PgConnection.PgConnection,
+  database: string,
+  migrations: readonly PlatformMigration[]
+): Effect.Effect<string, DatabaseError | UpgradeError> => {
+  const template = templateName(migrations);
+
+  const cloneIfReady = withTemplateLock(
+    admin,
+    template,
+    "shared",
+    templateReady(admin, template).pipe(
+      Effect.flatMap((ready) =>
+        ready
+          ? query(
+              admin,
+              `CREATE DATABASE ${quote(database)} TEMPLATE ${quote(template)}`
+            ).pipe(Effect.as(true))
+          : Effect.succeed(false)
       )
+    )
   );
 
   return hygienic(
-    templateReady(admin, name).pipe(
-      Effect.flatMap((ready) => (ready ? Effect.void : locked)),
-      Effect.as(name)
-    )
+    Effect.gen(function* cloneOrBuild() {
+      for (let attempt = 0; attempt < CLONE_ATTEMPTS; attempt += 1) {
+        if (yield* cloneIfReady) {
+          return template;
+        }
+
+        yield* ensureTemplate(admin, migrations);
+      }
+
+      return yield* Effect.die(
+        new Error(`Template ${template} vanished ${CLONE_ATTEMPTS} times`)
+      );
+    })
   );
 };
 
@@ -363,32 +531,38 @@ const createTestDatabase = (
   options: TestDatabaseOptions
 ): Effect.Effect<string, DatabaseError | UpgradeError> =>
   Effect.scoped(
-    Effect.gen(function* cloneTemplate() {
+    Effect.gen(function* createDatabase() {
       const admin = yield* connect(adminUrl, HARNESS_APPLICATION_NAME);
-
+      const migrations = options.migrations ?? PLATFORM_MIGRATIONS;
       const empty = options.empty === true || options.encoding !== undefined;
-
-      const source = empty
-        ? "template0"
-        : yield* ensureTemplate(
-            admin,
-            options.migrations ?? PLATFORM_MIGRATIONS
-          );
-
-      const encoding =
-        options.encoding === undefined
-          ? ""
-          : ` ENCODING '${options.encoding}' LOCALE 'C'`;
 
       if (!janitorRan) {
         janitorRan = true;
-        yield* runJanitor(admin, source, Date.now());
+        yield* runJanitor(admin, templateName(migrations), Date.now());
+      }
+
+      let source = "template0";
+
+      if (empty) {
+        const encoding =
+          options.encoding === undefined
+            ? ""
+            : ` ENCODING '${options.encoding}' LOCALE 'C'`;
+
+        yield* hygienic(
+          query(
+            admin,
+            `CREATE DATABASE ${quote(name)} TEMPLATE template0${encoding}`
+          )
+        );
+      } else {
+        source = yield* cloneTemplate(admin, name, migrations);
       }
 
       yield* hygienic(
         query(
           admin,
-          `CREATE DATABASE ${quote(name)} TEMPLATE ${quote(source)}${encoding}`
+          `COMMENT ON DATABASE ${quote(name)} IS '${TEST_DATABASE_COMMENT_PREFIX}${new Date().toISOString()}'`
         )
       );
 
