@@ -20,8 +20,13 @@
  *   paused only while an attempt waits.
  * - `batchOnly`: the same with only the 2 s write batch, so a retry commits.
  * - `tableLock`: a plain session (like psql) holds a lock on the dummy
- *   table, so the commit holds `CONFIG_KEY` while its DDL waits the 2 s
- *   `lock_timeout`: the worst pause per attempt.
+ *   table until the first attempt's DDL gave up after its 2 s
+ *   `lock_timeout`, so that attempt holds `CONFIG_KEY` for the whole wait:
+ *   the worst pause per attempt with one lock. The retry commits.
+ *
+ * Blockers are confirmed in `pg_locks` before the commit starts, and the
+ * table reader is released by what `pg_blocking_pids()` shows, not by
+ * timers.
  *
  * A stall is a run of requests slower than `STALL_MS` that overlap in time.
  */
@@ -52,8 +57,10 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { millisOf } from "./budgeted-ddl.ts";
 import { now } from "./clock.ts";
 import { runClients, stopSignal } from "./load.ts";
+import { holdsConfigKey, isBlockedBy, waitFor } from "./observe.ts";
 import { longestGap, summarize } from "./stats.ts";
 import type { Summary } from "./stats.ts";
 
@@ -65,9 +72,6 @@ const WARMUP = Duration.millis(500);
 
 /** Load runs this long after a scenario's window closes. */
 const COOLDOWN = Duration.millis(300);
-
-/** How long the blockers run before the config commit starts. */
-const BLOCKER_LEAD = Duration.millis(200);
 
 /** Rows each write-batch statement inserts. */
 const BATCH_STATEMENT_ROWS = 100;
@@ -137,6 +141,8 @@ export interface LongRequestResult {
   readonly commit: CommitOutcome;
   readonly longRequestPid: number;
   readonly longRequestMs: number;
+  /** The commit was observed waiting for the long request (`pg_blocking_pids`). */
+  readonly observedBlockedByLongRequest: boolean;
   /** The long request was still running when the config commit gave up. */
   readonly longRequestRunningAtEnd: boolean;
   /** How the long request ended (`completed`, or the SQLSTATE). */
@@ -164,8 +170,6 @@ export interface ConfigPauseOptions {
   readonly longRequestMs: number;
   /** Length of the write batch. */
   readonly batchMs: number;
-  /** How long a plain session holds the dummy table in `tableLock`. */
-  readonly tableHoldMs: number;
   /** Retry delays of the single config commits (default: Contracts 1.4). */
   readonly retryDelays?: ConfigCommitOptions["retryDelays"];
   /** Cancel the long request once the config commit gave up, instead of waiting for it. */
@@ -187,11 +191,6 @@ export interface ConfigPauseResult {
 const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
 
 const decodeActive = decodeRows(Schema.Struct({ active: Schema.Boolean }));
-
-const millisOf = (setting: string): number =>
-  setting.endsWith("ms")
-    ? Number(setting.slice(0, -"ms".length))
-    : Duration.toMillis(Duration.seconds(Number(setting.slice(0, -1))));
 
 /** The `CONFIG_KEY` wait of an attempt, in milliseconds. */
 export const CONFIG_WAIT_MS = millisOf(CONFIG_LOCK_TIMEOUT);
@@ -439,6 +438,35 @@ const oneCommit = (
   });
 
 /**
+ * One config commit, observing whether it waits for `blocker`.
+ * @param coordinator - The coordinator's dedicated connection.
+ * @param blocker - A backend expected to block the commit.
+ * @param retryDelays - Retry delays, or the defaults.
+ * @returns How the commit ended and whether the wait was observed.
+ */
+const commitObservingBlocker = (
+  coordinator: DedicatedConnection,
+  blocker: number,
+  retryDelays: ConfigCommitOptions["retryDelays"]
+) =>
+  Effect.gen(function* observedCommit() {
+    const fiber = yield* Effect.forkChild(oneCommit(coordinator, retryDelays));
+    let blocked = false;
+    yield* waitFor(
+      Effect.gen(function* blockedOrDone() {
+        blocked ||= yield* isBlockedBy(coordinator.processId, blocker);
+
+        const done = yield* Effect.sync(() => fiber.pollUnsafe() !== undefined);
+
+        return blocked || done;
+      })
+    );
+    const commit = yield* Fiber.join(fiber);
+
+    return { blocked, commit };
+  });
+
+/**
  * The stream scenario: back-to-back config commits under load.
  * @param options - Probe options.
  * @param coordinator - The coordinator's dedicated connection.
@@ -506,17 +534,22 @@ const longRequest = (ms: number, pid: Deferred.Deferred<number>) =>
 /**
  * A write batch: one request transaction inserting rows for `ms`.
  * @param ms - How long it writes.
- * @param started - Completed once the batch holds `CONFIG_KEY`.
+ * @param pid - Receives the batch's backend PID once it holds `CONFIG_KEY`.
  * @returns Rows written.
  */
-const writeBatch = (ms: number, started: Deferred.Deferred<boolean>) =>
+const writeBatch = (ms: number, pid: Deferred.Deferred<number>) =>
   Effect.gen(function* batchWrites() {
     const { request } = yield* Transactions;
 
     return yield* request(
       Effect.gen(function* insertForAWhile() {
         const sql = yield* SqlClient.SqlClient;
-        yield* Deferred.succeed(started, true);
+
+        const [row] = yield* sql`SELECT pg_backend_pid() AS pid`.pipe(
+          Effect.flatMap(decodePid)
+        );
+
+        yield* Deferred.succeed(pid, row?.pid ?? 0);
         const end = (yield* now) + ms;
         let rows = 0;
 
@@ -544,7 +577,7 @@ export const measureLongRequest = (
   Effect.gen(function* longRequestScenario() {
     const sql = yield* SqlClient.SqlClient;
     const pid = yield* Deferred.make<number>();
-    const batchStarted = yield* Deferred.make<boolean>();
+    const batchPid = yield* Deferred.make<number>();
     const longStarted = yield* now;
 
     const long = yield* Effect.forkChild(
@@ -552,18 +585,21 @@ export const measureLongRequest = (
     );
 
     const batch = yield* Effect.forkChild(
-      writeBatch(options.batchMs, batchStarted)
+      writeBatch(options.batchMs, batchPid)
     );
 
     const longPid = yield* Deferred.await(pid);
-    yield* Deferred.await(batchStarted);
+    const batchBackend = yield* Deferred.await(batchPid);
+    // Both blockers hold CONFIG_KEY shared before the commit starts.
+    yield* waitFor(holdsConfigKey(longPid));
+    yield* waitFor(holdsConfigKey(batchBackend));
 
-    const { result, window } = yield* underLoad(
+    const { result: observed, window } = yield* underLoad(
       options,
-      Effect.sleep(BLOCKER_LEAD).pipe(
-        Effect.andThen(oneCommit(coordinator, options.retryDelays))
-      )
+      commitObservingBlocker(coordinator, longPid, options.retryDelays)
     );
+
+    const { blocked, commit: result } = observed;
 
     const [running] = yield* sql`
       SELECT count(*) > 0 AS active FROM pg_stat_activity
@@ -591,6 +627,7 @@ export const measureLongRequest = (
         longFailure === undefined ? "completed" : longFailure.sqlState,
       longRequestPid: longPid,
       longRequestRunningAtEnd: running?.active ?? false,
+      observedBlockedByLongRequest: blocked,
       window,
     };
 
@@ -608,19 +645,17 @@ const measureBatchOnly = (
   coordinator: DedicatedConnection
 ) =>
   Effect.gen(function* batchOnlyScenario() {
-    const batchStarted = yield* Deferred.make<boolean>();
+    const batchPid = yield* Deferred.make<number>();
 
     const batch = yield* Effect.forkChild(
-      writeBatch(options.batchMs, batchStarted)
+      writeBatch(options.batchMs, batchPid)
     );
 
-    yield* Deferred.await(batchStarted);
+    yield* waitFor(holdsConfigKey(yield* Deferred.await(batchPid)));
 
     const { result, window } = yield* underLoad(
       options,
-      Effect.sleep(BLOCKER_LEAD).pipe(
-        Effect.andThen(oneCommit(coordinator, options.retryDelays))
-      )
+      oneCommit(coordinator, options.retryDelays)
     );
 
     yield* Fiber.join(batch);
@@ -647,8 +682,18 @@ const measureTableLock = (
     yield* reader.query("BEGIN");
     yield* reader.query("SELECT count(*) FROM probe_dummy");
 
+    // Released once the first attempt's DDL was seen waiting for the reader
+    // and then gave up (its 2 s lock wait timed out), so the retry commits.
     const release = yield* Effect.forkChild(
-      Effect.sleep(Duration.millis(options.tableHoldMs)).pipe(
+      waitFor(isBlockedBy(coordinator.processId, reader.processId)).pipe(
+        Effect.andThen(
+          waitFor(
+            Effect.map(
+              isBlockedBy(coordinator.processId, reader.processId),
+              (blocked) => !blocked
+            )
+          )
+        ),
         Effect.andThen(reader.query("COMMIT"))
       )
     );

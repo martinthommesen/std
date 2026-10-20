@@ -2,12 +2,10 @@
  * The results file of a measurement run: one JSON document and a Markdown
  * rendering ready to quote in `docs/decisions/0007-platform-probes.md`.
  */
-import type {
-  AddClassProbeResult,
-  HeldLock,
-  PlainReader,
-} from "./add-class.ts";
+import type { AddClassProbeResult, HeldLock } from "./add-class.ts";
 import type { AddColumnProbeResult } from "./add-column.ts";
+import { DDL_LOCK_BUDGET_MS } from "./budgeted-ddl.ts";
+import type { AttemptRecord, StepTiming } from "./budgeted-ddl.ts";
 import type { CasefoldProbeResult } from "./casefold.ts";
 import type {
   CommitOutcome,
@@ -16,6 +14,8 @@ import type {
 } from "./config-pause.ts";
 import type { Conditions, Environment } from "./environment.ts";
 import type { KilledBuildResult } from "./killed-index-build.ts";
+import { MULTI_LOCK_STEP } from "./lock-budget.ts";
+import type { LockBudgetResult } from "./lock-budget.ts";
 import type { NotifyProbeResult } from "./notify-throughput.ts";
 import type { Mode } from "./settings.ts";
 import { round } from "./stats.ts";
@@ -23,6 +23,9 @@ import type { Summary } from "./stats.ts";
 
 /** The contract's bound for a boolean or constant-default `ADD COLUMN` (Contracts 6.5). */
 export const ADD_COLUMN_BOUND_MS = 100;
+
+/** Round trips and polling allowed on top of the lock budget. */
+export const BUDGET_SLACK_MS = 500;
 
 /** One probe's result with the conditions it ran under. */
 export interface ProbeRecord<T> {
@@ -42,6 +45,7 @@ export interface ProbeReport {
   readonly configPause: ProbeRecord<ConfigPauseResult> | null;
   readonly killedBuild: ProbeRecord<readonly KilledBuildResult[]> | null;
   readonly addClass: ProbeRecord<readonly AddClassProbeResult[]> | null;
+  readonly lockBudget: ProbeRecord<readonly LockBudgetResult[]> | null;
   readonly casefold: ProbeRecord<CasefoldProbeResult> | null;
   readonly addColumn: ProbeRecord<AddColumnProbeResult> | null;
   readonly notify: ProbeRecord<NotifyProbeResult> | null;
@@ -167,7 +171,7 @@ const renderConfigPause = (record: ProbeRecord<ConfigPauseResult>): string => {
           commitText(result.batchOnly.commit)
         ),
         windowRow(
-          `one commit whose DDL waits for a ${options.tableHoldMs / 1000} s table lock`,
+          "one commit whose DDL waits for a table lock past 2 s",
           result.tableLock.window,
           commitText(result.tableLock.commit)
         ),
@@ -244,15 +248,67 @@ const renderKilledBuild = (
     )}`,
   ].join("\n");
 
-const readerText = (readers: readonly PlainReader[]): string =>
-  readers
-    .map(
-      (reader) =>
-        `, a plain session holds ${reader.tables.join(" and ")} for ${reader.holdMs / 1000} s`
-    )
-    .join("");
-
 const lockText = (lock: HeldLock): string => `${lock.object} ${lock.mode}`;
+
+const blockingText = (result: AddClassProbeResult): string => {
+  const { blocking } = result;
+
+  if (blocking.kind === "reader-past-timeout") {
+    return ", a plain session holds root and parent until the first attempt timed out";
+  }
+
+  if (blocking.kind === "staggered") {
+    return `, two plain sessions hold root and parent, each released after the commit waited ${ms(blocking.holdMs)} on it`;
+  }
+
+  return "";
+};
+
+const attemptsText = (attempts: readonly AttemptRecord[]): string =>
+  attempts
+    .map(
+      (attempt, index) =>
+        `attempt ${index + 1} ${attempt.ok ? "committed" : "rolled back"} after holding CONFIG_KEY ${ms(attempt.heldMs)}`
+    )
+    .join("; ");
+
+const stepRows = (
+  steps: readonly StepTiming[]
+): readonly (readonly string[])[] =>
+  steps.map((step) => [
+    step.label,
+    step.lockWaits.length === 0
+      ? "none"
+      : step.lockWaits.map((wait) => `${wait.table} ${ms(wait.ms)}`).join(", "),
+    ms(step.ms),
+  ]);
+
+const queueLines = (result: AddClassProbeResult): readonly string[] => {
+  const lines: string[] = [];
+
+  if (result.queue !== null) {
+    const { queue } = result;
+    lines.push(
+      "",
+      `While the first attempt waited: a plain read of the root was seen queued behind the waiting ALTER (${yesNo(queue.plainReadQueuedBehindDdl)}) and took ${ms(queue.plainReadMs)}; an STD request was seen waiting for CONFIG_KEY behind the commit (${yesNo(queue.requestQueuedBehindCommit)}) and took ${ms(queue.requestMs)}; both finished before the reader let go (${yesNo(queue.readsDoneBeforeRelease)}); the committed revision was unchanged after the failed attempt (${yesNo(queue.revisionUnchangedAfterFailedAttempt)}).`
+    );
+  }
+
+  if (result.staggered !== null) {
+    const { staggered } = result;
+    lines.push(
+      "",
+      `Observed waits on the two readers: ${staggered.observedWaitsMs.map(ms).join(" and ")}. An STD request issued during the first wait took ${ms(staggered.requestMs)} (budget ${ms(DDL_LOCK_BUDGET_MS)}).`
+    );
+  }
+
+  return lines;
+};
+
+const withinBudget = (attempts: readonly AttemptRecord[]): boolean =>
+  attempts.every(
+    (attempt) => attempt.heldMs <= DDL_LOCK_BUDGET_MS + BUDGET_SLACK_MS
+  );
 
 const renderAddClass = (
   record: ProbeRecord<readonly AddClassProbeResult[]>
@@ -263,16 +319,13 @@ const renderAddClass = (
     conditionsLine(record),
     "",
     ...record.result.flatMap((result) => [
-      `### ${result.rows} records${readerText(result.readers)}`,
+      `### ${result.rows} records, DDL ${result.mechanism}${blockingText(result)}`,
       "",
-      `Config commit: ${result.attempts} attempt(s) got past CONFIG_KEY, ${ms(result.commitMs)} in total.`,
+      `Config commit: ${ms(result.commitMs)} in total; ${attemptsText(result.attempts)}; revision +${result.revisionDelta}.`,
       "",
       table(
-        ["Statement (successful attempt)", "Time"],
-        result.statements.map((statement) => [
-          statement.label,
-          ms(statement.ms),
-        ])
+        ["Statement (successful attempt)", "Explicit lock waits", "Statement"],
+        stepRows(result.steps)
       ),
       "",
       `Locks held before commit: ${result.locks.map(lockText).join("; ")}.`,
@@ -295,12 +348,7 @@ const renderAddClass = (
       ),
       "",
       `A record of the new class inserts through all levels: ${yesNo(result.newRecordInserted)}; a root row with a foreign class is refused with ${result.foreignClassRefused ?? "nothing"}.`,
-      ...(result.waitingReads === null
-        ? []
-        : [
-            "",
-            `While the first attempt waited: a plain read of the root took ${ms(result.waitingReads.plainReadMs)} (queued behind the waiting ALTER), an STD request reading the root took ${ms(result.waitingReads.requestMs)} (waiting on CONFIG_KEY).`,
-          ]),
+      ...queueLines(result),
       "",
       `No ancestor scanned or rewritten by the change set: ${verdict(
         result.ancestors.every(
@@ -308,9 +356,41 @@ const renderAddClass = (
             ancestor.after.relfilenode === ancestor.before.relfilenode &&
             ancestor.transactionSeqScans === 0
         )
-      )}`,
+      )} Every attempt within the ${ms(DDL_LOCK_BUDGET_MS)} lock budget: ${verdict(withinBudget(result.attempts))}`,
       "",
     ]),
+  ].join("\n");
+
+const renderLockBudget = (
+  record: ProbeRecord<readonly LockBudgetResult[]>
+): string =>
+  [
+    "## Probe 3b: the DDL lock budget with one statement that needs two locks",
+    "",
+    conditionsLine(record),
+    "",
+    `\`${MULTI_LOCK_STEP.statement}\` in one config commit; two plain sessions hold an open write on one referenced table each, and each commits once the config commit has waited on it for the hold time. "Within budget" allows ${ms(BUDGET_SLACK_MS)} for round trips.`,
+    "",
+    table(
+      [
+        "DDL mechanism",
+        "Hold per writer",
+        "Observed waits",
+        "Attempts",
+        "STD request issued during the wait",
+        "Table created",
+        "Every attempt within budget",
+      ],
+      record.result.map((result) => [
+        result.mechanism,
+        ms(result.holdMs),
+        result.observedWaitsMs.map(ms).join(", "),
+        attemptsText(result.attempts),
+        ms(result.requestMs),
+        yesNo(result.tableCreated),
+        yesNo(withinBudget(result.attempts)),
+      ])
+    ),
   ].join("\n");
 
 const renderCasefold = (record: ProbeRecord<CasefoldProbeResult>): string => {
@@ -471,6 +551,9 @@ export const renderMarkdown = (report: ProbeReport): string =>
       ? undefined
       : renderKilledBuild(report.killedBuild),
     report.addClass === null ? undefined : renderAddClass(report.addClass),
+    report.lockBudget === null
+      ? undefined
+      : renderLockBudget(report.lockBudget),
     report.casefold === null ? undefined : renderCasefold(report.casefold),
     report.addColumn === null ? undefined : renderAddColumn(report.addColumn),
     report.notify === null ? undefined : renderNotify(report.notify),

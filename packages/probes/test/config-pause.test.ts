@@ -41,7 +41,6 @@ const options: ConfigPauseOptions = {
   ],
   streamCommits: 0,
   streamGapMs: 0,
-  tableHoldMs: 0,
 };
 
 describe("probe-config-pause", () => {
@@ -70,6 +69,10 @@ describe("probe-config-pause", () => {
               `${result.longRequestPid} (${PROBE_APPLICATION_NAME})`
             );
             assert.isBelow(commit.elapsedMs, LONG_REQUEST_MS / 2);
+            assert.isTrue(
+              result.observedBlockedByLongRequest,
+              "the commit waited for the long request"
+            );
             assert.isTrue(
               result.longRequestRunningAtEnd,
               "the long request was not disturbed"

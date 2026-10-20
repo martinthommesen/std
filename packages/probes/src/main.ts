@@ -4,8 +4,8 @@
  * `packages/probes/results/<yyyy-mm-dd>.json` and `.md`.
  *
  * Usage: `pnpm probes [--quick] [probe ...]`, where a probe is its number
- * (1 to 6) or key (`configPause`, `killedBuild`, `addClass`, `casefold`,
- * `addColumn`, `notify`). `--quick` uses small sizes and short runs and
+ * (1 to 6, 7 for probe 3b) or key (`configPause`, `killedBuild`,
+ * `addClass`, `lockBudget`, `casefold`, `addColumn`, `notify`). `--quick` uses small sizes and short runs and
  * writes `<date>-quick.*`, for checking the script itself. Each probe runs
  * in its own fresh database, dropped afterwards. Full runs take about six
  * minutes.
@@ -23,6 +23,7 @@ import { now } from "./clock.ts";
 import { runConfigPauseProbe } from "./config-pause.ts";
 import { readConditions, readEnvironment } from "./environment.ts";
 import { runKilledBuildScenario } from "./killed-index-build.ts";
+import { runLockBudgetProbe } from "./lock-budget.ts";
 import { runNotifyProbe } from "./notify-throughput.ts";
 import { probeDatabaseLayer } from "./probe-database.ts";
 import type { ProbeServices } from "./probe-database.ts";
@@ -149,6 +150,17 @@ const program = Effect.gen(function* probes() {
     )
   );
 
+  const lockBudget = yield* optional(
+    wanted("lockBudget", 7),
+    record(
+      "3b lock budget",
+      DEFAULT_POOL,
+      inSequence(settings.lockBudget, (options) =>
+        Effect.scoped(runLockBudgetProbe(options))
+      )
+    )
+  );
+
   const casefold = yield* optional(
     wanted("casefold", 4),
     record(
@@ -184,6 +196,7 @@ const program = Effect.gen(function* probes() {
     environment,
     finishedAt: new Date().toISOString(),
     killedBuild,
+    lockBudget,
     mode,
     notify,
     startedAt,

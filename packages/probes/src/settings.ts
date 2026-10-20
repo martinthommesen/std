@@ -7,6 +7,7 @@ import type { AddColumnProbeOptions } from "./add-column.ts";
 import type { CasefoldProbeOptions } from "./casefold.ts";
 import type { ConfigPauseOptions } from "./config-pause.ts";
 import type { KilledBuildScenario } from "./killed-index-build.ts";
+import type { LockBudgetOptions } from "./lock-budget.ts";
 import type { NotifyProbeOptions } from "./notify-throughput.ts";
 
 /** Measurement mode. */
@@ -17,6 +18,7 @@ export interface ProbeSettings {
   readonly configPause: ConfigPauseOptions;
   readonly killedBuild: readonly KilledBuildScenario[];
   readonly addClass: readonly AddClassProbeOptions[];
+  readonly lockBudget: readonly LockBudgetOptions[];
   readonly casefold: CasefoldProbeOptions;
   readonly addColumn: AddColumnProbeOptions;
   readonly notify: NotifyProbeOptions;
@@ -85,16 +87,27 @@ const killedBuildScenarios = (
   },
 ];
 
-/** Readers of probe 3 that release the root and the parent at different times. */
-export const STAGGERED_READERS = [
-  { holdMs: 1500, tables: ["asset"] },
-  { holdMs: 3300, tables: ["laptop"] },
-] as const;
+/** How long probes 3 and 3b let the commit wait on each blocker: below the 2 s budget. */
+export const STAGGERED_HOLD_MS = 1200;
 
 const addClassRuns = (rows: number): readonly AddClassProbeOptions[] => [
   { rows },
-  { readers: [{ holdMs: 3000, tables: ["asset", "laptop"] }], rows },
-  { readers: STAGGERED_READERS, rows },
+  { blocking: { kind: "reader-past-timeout" }, rows },
+  {
+    blocking: { holdMs: STAGGERED_HOLD_MS, kind: "staggered" },
+    mechanism: "per-statement",
+    rows,
+  },
+  {
+    blocking: { holdMs: STAGGERED_HOLD_MS, kind: "staggered" },
+    mechanism: "lock-budget",
+    rows,
+  },
+];
+
+const LOCK_BUDGET_RUNS: readonly LockBudgetOptions[] = [
+  { holdMs: STAGGERED_HOLD_MS, mechanism: "per-statement" },
+  { holdMs: STAGGERED_HOLD_MS, mechanism: "lock-budget" },
 ];
 
 const FULL: ProbeSettings = {
@@ -110,9 +123,9 @@ const FULL: ProbeSettings = {
     longRequestMs: LONG_REQUEST_MS,
     streamCommits: 50,
     streamGapMs: 100,
-    tableHoldMs: 3000,
   },
   killedBuild: killedBuildScenarios(100_000, 10_000_000),
+  lockBudget: LOCK_BUDGET_RUNS,
   notify: {
     clients: 16,
     durationMs: 60_000,
@@ -134,6 +147,7 @@ const QUICK: ProbeSettings = {
     streamCommits: 10,
   },
   killedBuild: killedBuildScenarios(10_000, 1_000_000),
+  lockBudget: LOCK_BUDGET_RUNS,
   notify: { ...FULL.notify, durationMs: 5000, records: 10_000, warmupMs: 1000 },
 };
 
