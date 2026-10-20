@@ -166,7 +166,7 @@ export const postgresInfo: Effect.Effect<
     {
       params: [],
       text:
-        "SELECT name, setting || COALESCE(unit, '') AS setting, source FROM pg_settings " +
+        "SELECT name, current_setting(name) AS setting, source FROM pg_settings " +
         "WHERE source NOT IN ('default', 'override') AND name NOT IN ('application_name', 'client_encoding') ORDER BY name",
     },
     SettingRow
