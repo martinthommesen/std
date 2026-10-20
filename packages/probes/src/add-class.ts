@@ -14,11 +14,14 @@
  *
  * The probe records each statement's time, the locks the transaction holds
  * before commit, and each ancestor's `relfilenode` and `seq_scan` before and
- * after. With `reader`, a plain session (like psql) holds `ACCESS SHARE` on
- * the root and its child while the commit runs, so the first DDL waits for
- * the 2 s `lock_timeout`, the transaction rolls back and is retried; the
- * probe also times a plain read of the root and an STD request issued
- * while the commit waits.
+ * after. With `readers`, plain sessions (like psql) hold `ACCESS SHARE` on
+ * ancestors while the commit runs. One reader holding the root and the
+ * parent past the 2 s `lock_timeout` makes the first attempt roll back and
+ * retry. Staggered readers (the root released after 1.5 s, the parent
+ * after 3.3 s) show that `lock_timeout` applies to each lock separately:
+ * one attempt then holds `CONFIG_KEY` longer than 2 s. The probe also times
+ * a plain read of the root and an STD request issued while the commit
+ * waits.
  */
 import { randomUUID } from "node:crypto";
 
@@ -124,17 +127,25 @@ export interface AddClassProbeResult {
   readonly newRecordInserted: boolean;
   /** SQLSTATE when a root row names a class outside the hierarchy. */
   readonly foreignClassRefused: string | null;
-  /** How long the plain reader held its lock, when there was one. */
-  readonly readerHoldMs: number | null;
+  /** The plain sessions that held locks while the commit ran. */
+  readonly readers: readonly PlainReader[];
   readonly waitingReads: WaitingReads | null;
+}
+
+/** A plain session (like psql) that reads tables in an open transaction. */
+export interface PlainReader {
+  /** Tables of schema `probe` it reads, so it holds `ACCESS SHARE` on them. */
+  readonly tables: readonly string[];
+  /** How long after the commit starts it commits. */
+  readonly holdMs: number;
 }
 
 /** Options of probe 3. */
 export interface AddClassProbeOptions {
   /** Records in the hierarchy (a third each of asset, laptop and monitor). */
   readonly rows: number;
-  /** A plain session holds the root and laptop tables this long while the commit runs. */
-  readonly readerHoldMs?: number;
+  /** Plain sessions holding ancestor tables while the commit runs. */
+  readonly readers?: readonly PlainReader[];
   /** Retry delays of the config commit (default: Contracts 1.4). */
   readonly retryDelays?: ConfigCommitOptions["retryDelays"];
 }
@@ -436,21 +447,26 @@ export const runAddClassProbe = Effect.fn("runAddClassProbe")(
       before.push(yield* readTableState(execute, qualified(ancestor.table)));
     }
 
-    const holdMs = options.readerHoldMs;
+    const readers = options.readers ?? [];
     let readerFiber: Fiber.Fiber<WaitingReads, unknown> | undefined;
 
-    if (holdMs !== undefined) {
+    for (const plainReader of readers) {
       const reader = yield* database.session("std-probe-long-reader");
       yield* reader.query("BEGIN");
-      yield* reader.query(
-        "SELECT count(*) FROM probe.asset JOIN probe.laptop USING (id)"
-      );
+
+      for (const table of plainReader.tables) {
+        yield* reader.query(`SELECT count(*) FROM ${qualified(table)}`);
+      }
+
       yield* Effect.forkChild(
-        Effect.sleep(Duration.millis(holdMs)).pipe(
+        Effect.sleep(Duration.millis(plainReader.holdMs)).pipe(
           Effect.andThen(reader.query("COMMIT")),
           Effect.ignore
         )
       );
+    }
+
+    if (readers.length > 0) {
       readerFiber = yield* Effect.forkChild(waitingReads);
     }
 
@@ -511,7 +527,7 @@ export const runAddClassProbe = Effect.fn("runAddClassProbe")(
       foreignClassRefused: widened.refused,
       locks: committed.locks,
       newRecordInserted: widened.inserted,
-      readerHoldMs: holdMs ?? null,
+      readers,
       rows: options.rows,
       statements: committed.statements,
       waitingReads: reads,

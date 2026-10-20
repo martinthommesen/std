@@ -2,7 +2,11 @@
  * The results file of a measurement run: one JSON document and a Markdown
  * rendering ready to quote in `docs/decisions/0007-platform-probes.md`.
  */
-import type { AddClassProbeResult, HeldLock } from "./add-class.ts";
+import type {
+  AddClassProbeResult,
+  HeldLock,
+  PlainReader,
+} from "./add-class.ts";
 import type { AddColumnProbeResult } from "./add-column.ts";
 import type { CasefoldProbeResult } from "./casefold.ts";
 import type {
@@ -240,10 +244,13 @@ const renderKilledBuild = (
     )}`,
   ].join("\n");
 
-const readerText = (holdMs: number | null): string =>
-  holdMs === null
-    ? ""
-    : `, a plain session holds the root and laptop tables for ${holdMs / 1000} s`;
+const readerText = (readers: readonly PlainReader[]): string =>
+  readers
+    .map(
+      (reader) =>
+        `, a plain session holds ${reader.tables.join(" and ")} for ${reader.holdMs / 1000} s`
+    )
+    .join("");
 
 const lockText = (lock: HeldLock): string => `${lock.object} ${lock.mode}`;
 
@@ -256,7 +263,7 @@ const renderAddClass = (
     conditionsLine(record),
     "",
     ...record.result.flatMap((result) => [
-      `### ${result.rows} records${readerText(result.readerHoldMs)}`,
+      `### ${result.rows} records${readerText(result.readers)}`,
       "",
       `Config commit: ${result.attempts} attempt(s) got past CONFIG_KEY, ${ms(result.commitMs)} in total.`,
       "",

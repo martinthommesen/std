@@ -85,8 +85,20 @@ const killedBuildScenarios = (
   },
 ];
 
+/** Readers of probe 3 that release the root and the parent at different times. */
+export const STAGGERED_READERS = [
+  { holdMs: 1500, tables: ["asset"] },
+  { holdMs: 3300, tables: ["laptop"] },
+] as const;
+
+const addClassRuns = (rows: number): readonly AddClassProbeOptions[] => [
+  { rows },
+  { readers: [{ holdMs: 3000, tables: ["asset", "laptop"] }], rows },
+  { readers: STAGGERED_READERS, rows },
+];
+
 const FULL: ProbeSettings = {
-  addClass: [{ rows: 1_000_000 }, { readerHoldMs: 3000, rows: 1_000_000 }],
+  addClass: addClassRuns(1_000_000),
   addColumn: { rows: 1_000_000 },
   casefold: { rows: 1_000_000 },
   configPause: {
@@ -111,7 +123,7 @@ const FULL: ProbeSettings = {
 };
 
 const QUICK: ProbeSettings = {
-  addClass: [{ rows: 30_000 }, { readerHoldMs: 3000, rows: 30_000 }],
+  addClass: addClassRuns(30_000),
   addColumn: { rows: 100_000 },
   casefold: { rows: 50_000 },
   configPause: {

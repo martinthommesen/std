@@ -2,7 +2,9 @@
  * Probe 3 (Contracts 2.4): adding a class to a populated hierarchy widens
  * each ancestor's subtree check `NOT VALID` and creates the child with its
  * level FK, without scanning or rewriting any ancestor; a long reader makes
- * the first attempt hit `lock_timeout`, and the retry succeeds.
+ * the first attempt hit `lock_timeout`, and the retry succeeds. Readers that
+ * release the root and the parent at different times show `lock_timeout`
+ * applies to each lock: one attempt holds `CONFIG_KEY` past 2 s.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Duration, Effect } from "effect";
@@ -15,6 +17,7 @@ import {
 } from "../src/add-class.ts";
 import type { AddClassProbeResult } from "../src/add-class.ts";
 import { probeDatabaseLayer } from "../src/probe-database.ts";
+import { STAGGERED_READERS } from "../src/settings.ts";
 
 const ROWS = 30_000;
 
@@ -104,7 +107,9 @@ describe("probe-add-class", () => {
         Effect.gen(function* addClassUnderReader() {
           const result = yield* Effect.scoped(
             runAddClassProbe({
-              readerHoldMs: READER_HOLD_MS,
+              readers: [
+                { holdMs: READER_HOLD_MS, tables: ["asset", "laptop"] },
+              ],
               retryDelays: FAST_RETRIES,
               rows: ROWS,
             })
@@ -125,6 +130,30 @@ describe("probe-add-class", () => {
           assert.isBelow(
             result.waitingReads?.requestMs ?? Number.POSITIVE_INFINITY,
             READER_HOLD_MS
+          );
+        }),
+      { timeout: 60_000 }
+    );
+  });
+
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "lock_timeout applies to each lock: staggered readers keep one attempt, and CONFIG_KEY, past 2 s",
+      () =>
+        Effect.gen(function* staggeredReaders() {
+          const result = yield* Effect.scoped(
+            runAddClassProbe({ readers: STAGGERED_READERS, rows: ROWS })
+          );
+
+          const [, parent] = STAGGERED_READERS;
+
+          assert.strictEqual(result.attempts, 1, "no lock wait timed out");
+          assert.isAbove(result.commitMs, DDL_LOCK_TIMEOUT_MS + 500);
+          assert.isAtLeast(result.commitMs, parent.holdMs - 500);
+          // The STD request waited for CONFIG_KEY for the whole attempt.
+          assert.isAbove(
+            result.waitingReads?.requestMs ?? 0,
+            DDL_LOCK_TIMEOUT_MS + 200
           );
         }),
       { timeout: 60_000 }
