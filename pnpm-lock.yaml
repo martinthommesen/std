@@ -226,6 +226,9 @@ importers:
       node:
         specifier: runtime:26.12.0
         version: runtime:26.12.0
+      oxc-parser:
+        specifier: 0.148.0
+        version: 0.148.0
       oxfmt:
         specifier: ^0.71.0
         version: 0.71.0
