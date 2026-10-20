@@ -75,7 +75,10 @@ export interface KilledBuildResult {
   readonly tryLockRefusedAfterKill: boolean;
   /** Time from the kill until the backend exited. */
   readonly backendExitAfterKillMs: number;
-  /** Time from the end of whatever kept the build busy until the backend exited. */
+  /**
+   * Time from the writer's commit until the backend exited; negative when
+   * it exited before the commit, `null` for scan scenarios.
+   */
   readonly backendExitAfterReleaseMs: number | null;
   readonly indexState: IndexState;
   /** `pg_try_advisory_lock(SCHEMA_KEY)` succeeded once the backend was gone. */
@@ -353,7 +356,7 @@ export const runKilledBuildScenario = Effect.fn("runKilledBuildScenario")(
       backendAliveAfterKill,
       backendExitAfterKillMs: exitedAt - killedAt,
       backendExitAfterReleaseMs:
-        releasedAt === null ? null : Math.max(0, exitedAt - releasedAt),
+        releasedAt === null ? null : exitedAt - releasedAt,
       effectiveCheckInterval: settingSession[0]?.setting ?? "",
       indexState: yield* watch.indexState,
       lockFreeAfterEnd: yield* watch.tryLock,
