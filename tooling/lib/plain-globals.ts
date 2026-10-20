@@ -1,7 +1,10 @@
+import { Schema } from "effect";
 import type {
   ExportSpecifier,
   ImportSpecifier,
   MemberExpression,
+  ObjectPattern,
+  TemplateLiteral,
   MetaProperty,
   MethodDefinition,
   Program,
@@ -16,6 +19,8 @@ import { Visitor } from "oxc-parser";
 type IdentifierNode = Parameters<NonNullable<VisitorObject["Identifier"]>>[0];
 
 type PropertyNode = Parameters<NonNullable<VisitorObject["Property"]>>[0];
+
+type StringLiteralNode = Parameters<NonNullable<VisitorObject["Literal"]>>[0];
 
 /** A refused construct at a source offset. */
 export interface GlobalFinding {
@@ -47,15 +52,18 @@ export const refusedGlobals: ReadonlySet<string> = new Set([
 // `x.constructor` reaches `Function` from any function value.
 const refusedMembers: ReadonlySet<string> = new Set(["constructor"]);
 
-const keyName = (
-  node: { readonly type: string } & object
+const isString = Schema.is(Schema.String);
+
+// The static text of a string literal or a template without substitutions.
+const staticText = (
+  node: StringLiteralNode | TemplateLiteral
 ): string | undefined => {
-  if (node.type === "Identifier" && "name" in node) {
-    return String(node.name);
+  if (node.type === "Literal") {
+    return isString(node.value) ? node.value : undefined;
   }
 
-  return node.type === "Literal" && "value" in node
-    ? String(node.value)
+  return node.expressions.length === 0
+    ? (node.quasis[0]?.value.cooked ?? undefined)
     : undefined;
 };
 
@@ -83,21 +91,49 @@ export const findGlobalReferences = (program: Program): GlobalFinding[] => {
     }
   };
 
+  const refuseMember = (member: string, offset: number): void => {
+    findings.push({
+      message: `.${member} is not allowed in a plain package, in any form (it reaches the Function constructor)`,
+      offset,
+    });
+  };
+
   const onMember = (node: MemberExpression): void => {
     if (node.type === "MemberExpression" && !node.computed) {
       names.add(node.property);
     }
 
-    const member =
-      node.property.type === "PrivateIdentifier"
-        ? undefined
-        : keyName(node.property);
+    // Computed keys with static text are reported by onStaticText.
+    if (
+      !node.computed &&
+      node.property.type === "Identifier" &&
+      refusedMembers.has(node.property.name)
+    ) {
+      refuseMember(node.property.name, node.property.start);
+    }
+  };
 
-    if (member !== undefined && refusedMembers.has(member)) {
-      findings.push({
-        message: `.${member} is not allowed in a plain package (it reaches the Function constructor)`,
-        offset: node.property.start,
-      });
+  const onObjectPattern = (node: ObjectPattern): void => {
+    for (const property of node.properties) {
+      if (
+        property.type === "Property" &&
+        !property.computed &&
+        property.key.type === "Identifier" &&
+        refusedMembers.has(property.key.name)
+      ) {
+        refuseMember(property.key.name, property.key.start);
+      }
+    }
+  };
+
+  // Any string that spells a refused member name: computed keys
+  // (`f["constructor"]`, ``f[`constructor`]``, `{ ["constructor"]: c }`) and
+  // arguments such as `Reflect.get(f, "constructor")`.
+  const onStaticText = (node: StringLiteralNode | TemplateLiteral): void => {
+    const text = staticText(node);
+
+    if (text !== undefined && refusedMembers.has(text)) {
+      refuseMember(text, node.start);
     }
   };
 
@@ -154,14 +190,17 @@ export const findGlobalReferences = (program: Program): GlobalFinding[] => {
     ExportSpecifier: onExportSpecifier,
     Identifier: onIdentifier,
     ImportSpecifier: onImportSpecifier,
+    Literal: onStaticText,
     MemberExpression: onMember,
     MetaProperty: onMeta,
     MethodDefinition: onClassMember,
+    ObjectPattern: onObjectPattern,
     Property: onProperty,
     PropertyDefinition: onClassMember,
     TSMethodSignature: onSignature,
     TSPropertySignature: onSignature,
     TSQualifiedName: onQualified,
+    TemplateLiteral: onStaticText,
   }).visit(program);
 
   return findings;
