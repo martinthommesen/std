@@ -208,14 +208,25 @@ describe("driver-smoke", () => {
             sql`SELECT 1 AS one`.pipe(Effect.andThen(RequestRevision))
           );
 
-          assert.deepStrictEqual(yield* log.texts, [
+          const texts = yield* log.texts;
+
+          assert.deepStrictEqual(texts.slice(0, 4), [
             "BEGIN ISOLATION LEVEL READ COMMITTED",
             "SET LOCAL statement_timeout = '30s'",
             "SET LOCAL idle_in_transaction_session_timeout = '10s'",
             "SELECT revision, change_set_id FROM core.begin_request()",
-            "SELECT 1 AS one",
-            "COMMIT",
           ]);
+          // The backstop: mark the transaction, run the code, check the mark.
+          assert.match(
+            texts[4] ?? "",
+            /^SELECT set_config\('std\.transaction_token'/u
+          );
+          assert.strictEqual(texts[5], "SELECT 1 AS one");
+          assert.match(
+            texts[6] ?? "",
+            /^SELECT current_setting\('std\.transaction_token'/u
+          );
+          assert.deepStrictEqual(texts.slice(7), ["COMMIT"]);
 
           const [state] = yield* sql`
           SELECT revision, change_set_id FROM core.config_state`.pipe(
@@ -739,7 +750,7 @@ describe("driver-smoke", () => {
           }
 
           const syntax = errorOf(
-            yield* Effect.exit(request(sql`SELEC 'secret-value'`))
+            yield* Effect.exit(request(sql`SELECT 'secret-value' FROM`))
           );
 
           assert.instanceOf(syntax, DatabaseError);

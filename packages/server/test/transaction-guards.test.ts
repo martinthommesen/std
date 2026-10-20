@@ -27,7 +27,25 @@ const countRows = (table: string) =>
     Effect.map(([row]) => row?.n ?? -1)
   );
 
-const REFUSED: readonly (readonly [string, string])[] = [
+const REFUSED: readonly (readonly [string, string | undefined])[] = [
+  [";COMMIT", "transaction-control"],
+  ["; COMMIT", "transaction-control"],
+  ["-- comment\rCOMMIT", "transaction-control"],
+  ["-- comment\r\nCOMMIT", "transaction-control"],
+  ["SELECT 1;", "transaction-control"],
+  ["SELECT 1; -- trailing comment", "transaction-control"],
+  ["", "transaction-control"],
+  ["-- only a comment", "transaction-control"],
+  ["DO $$ BEGIN COMMIT; END $$", "transaction-control"],
+  ["CALL some_procedure()", "transaction-control"],
+  ["DISCARD ALL", "transaction-control"],
+  ["PREPARE p AS SELECT 1", "transaction-control"],
+  ["TRUNCATE t", "transaction-control"],
+  ["SET lock_timeout = '1s'", "transaction-control"],
+  ["SET SESSION statement_timeout = 0", "transaction-control"],
+  ["SET LOCAL search_path = public", "transaction-control"],
+  ["SET LOCAL \"lock_timeout\" = '1s'", undefined],
+  ["SET LOCAL U&\"transaction_\\0069solation\" = 'serializable'", undefined],
   ["COMMIT;", "transaction-control"],
   ["commit", "transaction-control"],
   ["  -- comment\n  Commit", "transaction-control"],
@@ -63,8 +81,16 @@ const REFUSED: readonly (readonly [string, string])[] = [
 
 const ALLOWED: readonly string[] = [
   "SELECT 1",
-  "SELECT 1;",
-  "SELECT 1; -- trailing comment",
+  "SELECT 1 -- trailing comment",
+  "SET LOCAL statement_timeout TO 0",
+  "SET LOCAL idle_in_transaction_session_timeout = '10s'",
+  "UPDATE t SET a = 1",
+  "DELETE FROM t",
+  "CREATE TABLE t (id int)",
+  "ALTER TABLE t ADD COLUMN b int",
+  "COMMENT ON TABLE t IS 'x'",
+  "LOCK TABLE t IN SHARE MODE",
+  "SELECT U&'d\\0061t\\+000061'",
   "SELECT 'a;b'",
   "SELECT E'\\';commit'",
   "SELECT $$;COMMIT$$",
@@ -136,7 +162,13 @@ const forkWriterThatOutlivesBody = (fork: Fork) =>
 describe("transaction-guards", () => {
   it("lexes the leading keywords: comments, punctuation and quoting cannot hide control statements", () => {
     for (const [sql, reason] of REFUSED) {
-      assert.strictEqual(refusalFor(sql)?.[0], reason, sql);
+      const refused = refusalFor(sql);
+
+      assert.isDefined(refused, sql);
+
+      if (reason !== undefined) {
+        assert.strictEqual(refused?.[0], reason, sql);
+      }
     }
 
     for (const sql of ALLOWED) {

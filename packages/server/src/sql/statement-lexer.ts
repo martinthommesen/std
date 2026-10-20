@@ -6,8 +6,9 @@
  * statement's first keyword or a statement separator: whitespace, `--` line
  * comments, nested `/* *\/` block comments, string constants (`'...'` with
  * `''`, escape strings `E'...'` with backslashes), quoted identifiers
- * (`"..."` with `""`), dollar-quoted strings (`$tag$...$tag$`), positional
- * parameters (`$1`) and punctuation. Unterminated constructs consume the
+ * (`"..."` with `""`), Unicode escapes (`U&'...'`, `U&"..."`), dollar-quoted
+ * strings (`$tag$...$tag$`), positional parameters (`$1`) and punctuation.
+ * Line comments end at CR, LF or CRLF. Unterminated constructs consume the
  * rest of the text, as Postgres would before rejecting it.
  */
 
@@ -19,12 +20,36 @@ export interface LexedStatement {
    * most `MAX_LEADING_WORDS`.
    */
   readonly leadingWords: readonly string[];
+  /**
+   * The first `MAX_LEADING_TOKENS` tokens of the text (comments and
+   * whitespace skipped, separators excluded), with their kinds.
+   */
+  readonly leadingTokens: readonly LexedToken[];
   /** How many non-empty statements the text holds, separated by top-level `;`. */
   readonly statements: number;
+  /** How many top-level `;` the text holds. */
+  readonly separators: number;
+}
+
+/** The kinds of token the classifier sees; see `LexedToken.kind`. */
+export type LexedTokenKind = "word" | "quoted" | "literal" | "other";
+
+/** One token as the classifier sees it. */
+export interface LexedToken {
+  /**
+   * `word`: an unquoted word, lower-cased. `quoted`: a quoted identifier
+   * (`"..."` or `U&"..."`), its contents lower-cased. `literal`: a string
+   * constant. `other`: anything else, as written.
+   */
+  readonly kind: LexedTokenKind;
+  readonly text: string;
 }
 
 /** How many leading words the lexer reports. */
 export const MAX_LEADING_WORDS = 4;
+
+/** How many leading tokens the lexer reports. */
+export const MAX_LEADING_TOKENS = 6;
 
 type TokenKind =
   | "blank"
@@ -210,7 +235,41 @@ const wordToken = (sql: string, start: number): Token => {
     return { end: quotedEnd(sql, index, "'", true), kind: "literal" };
   }
 
+  const unicodeQuote = sql[index + 1];
+
+  if ((word === "u" || word === "U") && sql[index] === "&") {
+    if (unicodeQuote === "'") {
+      return { end: quotedEnd(sql, index + 1, "'", false), kind: "literal" };
+    }
+
+    if (unicodeQuote === '"') {
+      const end = quotedEnd(sql, index + 1, '"', false);
+
+      return {
+        end,
+        kind: "quoted",
+        name: sql.slice(index + 2, end - 1).toLowerCase(),
+      };
+    }
+  }
+
   return { end: index, kind: "word", name: word.toLowerCase() };
+};
+
+/**
+ * The end of a line comment: just after the first CR or LF, or the text's end.
+ * @param sql - The text.
+ * @param start - Offset of the `--`.
+ * @returns The offset after the line terminator.
+ */
+const lineEnd = (sql: string, start: number): number => {
+  let index = start;
+
+  while (index < sql.length && sql[index] !== "\n" && sql[index] !== "\r") {
+    index += 1;
+  }
+
+  return Math.min(index + 1, sql.length);
 };
 
 /**
@@ -228,9 +287,7 @@ const tokenAt = (sql: string, start: number): Token => {
   }
 
   if (sql.startsWith("--", start)) {
-    const newline = sql.indexOf("\n", start);
-
-    return { end: newline === -1 ? sql.length : newline + 1, kind: "blank" };
+    return { end: lineEnd(sql, start), kind: "blank" };
   }
 
   if (sql.startsWith("/*", start)) {
@@ -270,16 +327,21 @@ const tokenAt = (sql: string, start: number): Token => {
  */
 export const analyzeStatement = (sql: string): LexedStatement => {
   const leadingWords: string[] = [];
+  const leadingTokens: LexedToken[] = [];
   let collecting = true;
   let statements = 0;
+  let separators = 0;
   let inStatement = false;
   let index = 0;
 
   while (index < sql.length) {
+    const start = index;
     const token = tokenAt(sql, index);
     index = token.end;
 
     if (token.kind === "separator") {
+      separators += 1;
+
       if (inStatement) {
         statements += 1;
         inStatement = false;
@@ -287,6 +349,13 @@ export const analyzeStatement = (sql: string): LexedStatement => {
 
       collecting = false;
     } else if (token.kind !== "blank") {
+      if (leadingTokens.length < MAX_LEADING_TOKENS) {
+        leadingTokens.push({
+          kind: token.kind,
+          text: token.name ?? sql.slice(start, token.end),
+        });
+      }
+
       inStatement = true;
 
       const isName = token.kind === "word" || token.kind === "quoted";
@@ -300,7 +369,9 @@ export const analyzeStatement = (sql: string): LexedStatement => {
   }
 
   return {
+    leadingTokens,
     leadingWords,
+    separators,
     statements: inStatement ? statements + 1 : statements,
   };
 };
