@@ -42,7 +42,7 @@ docs/            plan, contracts, architecture, decisions/, servicenow-mapping.m
 
 ### Dependency rules
 
-- Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), plus ordinary npm libraries. No I/O. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
+- Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), their own `src/` files, other plain packages, and npm libraries listed with a reason in `tooling/plain-allowed-deps.json` whose dependency graph has no Effect. No I/O: no Node built-ins and no host globals. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
 - `api` may import `effect` stable modules, `effect/http-api` and `effect/http`.
 - `server` may use the server allow list (Contracts 9).
 - Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`.

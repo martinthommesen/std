@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,19 +23,26 @@ export const plainEffectModules = [
   "Result",
 ] as const;
 
+/** Extensions of the source files the check parses. */
+export const scannedExtensions: ReadonlySet<string> = new Set([
+  ".cjs",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".mts",
+  ".ts",
+  ".tsx",
+]);
+
 const allowedModules: ReadonlySet<string> = new Set(plainEffectModules);
 
 const allowedText = plainEffectModules.join(", ");
 
-// Node built-ins that could load modules around this check at run time.
-const refusedBuiltins: ReadonlySet<string> = new Set([
-  "module",
-  "vm",
-  "worker_threads",
-]);
-
 /** What the resolver needs to know about the file being checked. */
 export interface PlainContext {
+  /** Third-party packages plain code may import, with their reasons. */
+  readonly allowedDependencies: ReadonlyMap<string, string>;
   /** The plain package that owns the file. */
   readonly pkg: WorkspacePackage;
   /** Every workspace package, by name. */
@@ -51,17 +58,18 @@ interface BareSpecifier {
   readonly subpath: string;
 }
 
+const DependencyMap = Schema.optionalKey(
+  Schema.Record(Schema.String, Schema.String)
+);
+
 const PackageManifestJson = Schema.fromJsonString(
   Schema.Struct({
-    dependencies: Schema.optionalKey(
-      Schema.Record(Schema.String, Schema.String)
-    ),
+    dependencies: DependencyMap,
     exports: Schema.optionalKey(Schema.Json),
     imports: Schema.optionalKey(Schema.Json),
     name: Schema.optionalKey(Schema.String),
-    peerDependencies: Schema.optionalKey(
-      Schema.Record(Schema.String, Schema.String)
-    ),
+    optionalDependencies: DependencyMap,
+    peerDependencies: DependencyMap,
   })
 );
 
@@ -72,11 +80,8 @@ const readManifest = (dir: string): PackageManifest =>
     readFileSync(path.join(dir, "package.json"), "utf-8")
   );
 
-const real = (file: string): string =>
-  existsSync(file) ? realpathSync(file) : path.resolve(file);
-
 const isInside = (file: string, dir: string): boolean => {
-  const relative = path.relative(real(dir), real(file));
+  const relative = path.relative(dir, file);
 
   return (
     relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
@@ -94,6 +99,62 @@ const splitBare = (specifier: string): BareSpecifier => {
   return {
     name: parts.slice(0, size).join("/"),
     subpath: parts.slice(size).join("/"),
+  };
+};
+
+const sourceTwins: ReadonlyMap<string, string> = new Map([
+  [".cjs", ".cts"],
+  [".js", ".ts"],
+  [".jsx", ".tsx"],
+  [".mjs", ".mts"],
+]);
+
+/**
+ * Resolves a local import target to a file the check scans: an existing,
+ * regular (not symlinked) source file inside `dir`, or the `.ts` twin of a
+ * `.js` path. JSON files are accepted too; they cannot import anything.
+ *
+ * @param target - The absolute path the specifier names.
+ * @param dir - The `src/` directory it must stay in.
+ * @returns The file, or a reason why the target is refused.
+ */
+export const scannedFileFor = (
+  target: string,
+  dir: string
+): { readonly file: string } | { readonly refused: string } => {
+  const extension = path.extname(target);
+  const twin = sourceTwins.get(extension);
+
+  const candidates = [
+    target,
+    ...(twin === undefined ? [] : [target.slice(0, -extension.length) + twin]),
+  ];
+
+  for (const candidate of candidates) {
+    if (!isInside(candidate, dir)) {
+      return { refused: "outside this package's src/" };
+    }
+
+    const stats = existsSync(candidate) ? lstatSync(candidate) : undefined;
+
+    const scanned =
+      scannedExtensions.has(path.extname(candidate)) ||
+      path.extname(candidate) === ".json";
+
+    // No symlink anywhere between src/ and the file: the scan never follows one.
+    const direct =
+      stats?.isFile() === true &&
+      path.relative(realpathSync(dir), realpathSync(candidate)) ===
+        path.relative(dir, candidate);
+
+    if (direct && scanned) {
+      return { file: candidate };
+    }
+  }
+
+  return {
+    refused:
+      "not a source file the check scans (missing, a directory, a symlink or another file type)",
   };
 };
 
@@ -156,9 +217,10 @@ const lookUp = (map: Schema.Json | undefined, key: string): string[] => {
   return [];
 };
 
-// Finds an installed package directory, walking up `node_modules`.
-const findInstalled = (name: string, fromFile: string): string | undefined => {
-  let dir = path.dirname(fromFile);
+// Finds an installed package directory, walking up `node_modules` from
+// `fromDir`, as Node does.
+const findInstalled = (name: string, fromDir: string): string | undefined => {
+  let dir = fromDir;
 
   for (;;) {
     const candidate = path.join(dir, "node_modules", name);
@@ -175,6 +237,66 @@ const findInstalled = (name: string, fromFile: string): string | undefined => {
 
     dir = parent;
   }
+};
+
+// The package an npm alias (`npm:effect@4.0.5`) installs, if the spec is one.
+const aliasTarget = (spec: string): string | undefined => {
+  if (!spec.startsWith("npm:")) {
+    return undefined;
+  }
+
+  const target = spec.slice("npm:".length);
+  const versionAt = target.indexOf("@", target.startsWith("@") ? 1 : 0);
+
+  return versionAt === -1 ? target : target.slice(0, versionAt);
+};
+
+/**
+ * Walks an installed package's dependency graph (`dependencies`,
+ * `optionalDependencies`, `peerDependencies`; aliases resolved to the
+ * package they install; each package once) and finds a path to Effect.
+ *
+ * @param dir - The installed package's real directory.
+ * @param seen - Real directories already walked.
+ * @returns The chain of package names that reaches `effect` or `@effect/*`, or undefined.
+ */
+const pathToEffect = (dir: string, seen: Set<string>): string[] | undefined => {
+  seen.add(dir);
+
+  const manifest = readManifest(dir);
+  const self = manifest.name ?? path.basename(dir);
+
+  const dependencies = {
+    ...manifest.peerDependencies,
+    ...manifest.optionalDependencies,
+    ...manifest.dependencies,
+  };
+
+  for (const [name, spec] of Object.entries(dependencies)) {
+    const aliased = aliasTarget(spec);
+    const installed = findInstalled(name, dir);
+
+    const realName =
+      installed === undefined ? undefined : readManifest(installed).name;
+
+    const effect = [name, aliased, realName].find(
+      (candidate) => candidate !== undefined && isEffectPackage(candidate)
+    );
+
+    if (effect !== undefined) {
+      return [self, effect === name ? name : `${name} (${effect})`];
+    }
+
+    if (installed !== undefined && !seen.has(installed)) {
+      const deeper = pathToEffect(installed, seen);
+
+      if (deeper !== undefined) {
+        return [self, ...deeper];
+      }
+    }
+  }
+
+  return undefined;
 };
 
 const checkEffect = (
@@ -211,29 +333,18 @@ const checkEffect = (
   );
 };
 
-const checkBuiltin = (specifier: string): string[] => {
-  const builtin = specifier.replace(/^node:/u, "").split("/")[0] ?? "";
-
-  return refusedBuiltins.has(builtin)
-    ? [
-        `"${specifier}" can load modules around this check and is not allowed in a plain package`,
-      ]
-    : [];
-};
-
-const checkPath = (
+const checkLocal = (
   specifier: string,
-  fromFile: string,
-  context: PlainContext
+  target: string,
+  srcDir: string,
+  label: string
 ): string[] => {
-  const target = specifier.startsWith("file:")
-    ? fileURLToPath(specifier)
-    : path.resolve(path.dirname(fromFile), specifier);
+  const resolved = scannedFileFor(target, srcDir);
 
-  return isInside(target, path.join(context.pkg.dir, "src"))
+  return "file" in resolved
     ? []
     : [
-        `"${specifier}" resolves outside this package's src/ (${path.relative(context.pkg.dir, target)}); plain src/ may import only its own src/ files and packages`,
+        `"${specifier}" ${label} ${path.relative(path.dirname(srcDir), target)}, ${resolved.refused}; plain src/ may import only its own scanned src/ files`,
       ];
 };
 
@@ -255,26 +366,33 @@ const checkWorkspace = (
 
   const siblingSrc = path.join(sibling.dir, "src");
 
-  const allInside =
+  const allScanned =
     targets.length > 0 &&
-    targets.every((target) =>
-      isInside(path.resolve(sibling.dir, target), siblingSrc)
+    targets.every(
+      (target) =>
+        "file" in scannedFileFor(path.resolve(sibling.dir, target), siblingSrc)
     );
 
-  return allInside
+  return allScanned
     ? []
     : [
-        `"${specifier}" does not map into ${bare.name}'s src/ through its "exports"`,
+        `"${specifier}" does not map to a source file in ${bare.name}'s src/ through its "exports"`,
       ];
 };
 
-const checkInstalled = (
+const checkThirdParty = (
   specifier: string,
   bare: BareSpecifier,
-  names: readonly ImportedName[],
-  fromFile: string
+  fromFile: string,
+  context: PlainContext
 ): string[] => {
-  const installed = findInstalled(bare.name, fromFile);
+  if (!context.allowedDependencies.has(bare.name)) {
+    return [
+      `"${specifier}": ${bare.name} is not in tooling/plain-allowed-deps.json; add it there with a reason first`,
+    ];
+  }
+
+  const installed = findInstalled(bare.name, path.dirname(fromFile));
 
   if (installed === undefined) {
     return [
@@ -282,44 +400,37 @@ const checkInstalled = (
     ];
   }
 
-  const manifest = readManifest(installed);
-  const realName = manifest.name ?? bare.name;
+  const realName = readManifest(installed).name ?? bare.name;
 
   if (isEffectPackage(realName)) {
-    return checkEffect(
-      { name: realName, subpath: bare.subpath },
-      names,
-      `"${specifier}" is ${realName}: `
-    );
+    return [
+      `"${specifier}" installs ${realName}; plain packages may not import it under another name`,
+    ];
   }
 
-  const effectDependencies = [
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ].filter((dependency) => isEffectPackage(dependency));
+  const chain = pathToEffect(installed, new Set());
 
-  return effectDependencies.length === 0
+  return chain === undefined
     ? []
     : [
-        `"${specifier}" depends on ${effectDependencies.join(", ")}; plain packages may not use packages built on Effect`,
+        `"${specifier}" depends on Effect (${chain.join(" -> ")}); plain packages may not use packages built on Effect`,
       ];
 };
 
 /**
  * Decides whether a plain package's source file may load a module.
  *
- * Bare `effect` and `@effect/*` specifiers follow the Schema-only rule.
- * Relative, absolute and `file:` specifiers must stay inside the package's
- * own `src/` (those files are checked themselves). `#` imports follow the
- * package's `imports` map. Other workspace packages must be plain, and the
- * subpath must map into their `src/`. Installed packages are followed to
- * their real `package.json`, so an alias of `effect` is caught, and a package
- * that depends on Effect is refused.
+ * Bare `effect` and `@effect/*` specifiers follow the Schema-only rule; Node
+ * built-ins are refused. Relative, absolute, `file:` and `#` specifiers must
+ * name a source file inside the package's own `src/` that the check scans.
+ * Other workspace packages must be plain and map into their `src/`. A
+ * third-party package must be in the allow list, and Effect must not appear
+ * anywhere in its installed dependency graph.
  *
  * @param specifier - The decoded module specifier.
  * @param names - The names imported from `effect`'s barrel, if any.
  * @param fromFile - The importing file.
- * @param context - The owning package and the workspace.
+ * @param context - The owning package, the workspace and the allow list.
  * @returns One message per problem; empty when the import is allowed.
  */
 export const checkSpecifier = (
@@ -328,12 +439,21 @@ export const checkSpecifier = (
   fromFile: string,
   context: PlainContext
 ): string[] => {
-  if (specifier.startsWith("node:") || builtinModules.includes(specifier)) {
-    return checkBuiltin(specifier);
+  const srcDir = path.join(context.pkg.dir, "src");
+  const bare = splitBare(specifier);
+
+  if (specifier.startsWith("node:") || builtinModules.includes(bare.name)) {
+    return [
+      `"${specifier}" is a Node built-in; plain packages run in the browser and do no I/O`,
+    ];
   }
 
   if (/^(?:\.|\/|file:)/u.test(specifier)) {
-    return checkPath(specifier, fromFile, context);
+    const target = specifier.startsWith("file:")
+      ? fileURLToPath(specifier)
+      : path.resolve(path.dirname(fromFile), specifier);
+
+    return checkLocal(specifier, target, srcDir, "resolves to");
   }
 
   if (specifier.startsWith("#")) {
@@ -343,25 +463,19 @@ export const checkSpecifier = (
       return [`"${specifier}" is not in this package's "imports" map`];
     }
 
-    return targets.flatMap((target) => {
-      if (!target.startsWith("./")) {
-        return checkSpecifier(target, names, fromFile, context).map(
-          (message) => `"${specifier}" maps to "${target}": ${message}`
-        );
-      }
-
-      const inside = isInside(
-        path.resolve(context.pkg.dir, target),
-        path.join(context.pkg.dir, "src")
-      );
-
-      return inside
-        ? []
-        : [`"${specifier}" maps to ${target}, outside this package's src/`];
-    });
+    return targets.flatMap((target) =>
+      target.startsWith("./")
+        ? checkLocal(
+            specifier,
+            path.resolve(context.pkg.dir, target),
+            srcDir,
+            "maps to"
+          )
+        : checkSpecifier(target, names, fromFile, context).map(
+            (message) => `"${specifier}" maps to "${target}": ${message}`
+          )
+    );
   }
-
-  const bare = splitBare(specifier);
 
   if (isEffectPackage(bare.name)) {
     return checkEffect(bare, names, "");
@@ -370,6 +484,6 @@ export const checkSpecifier = (
   const sibling = context.workspace.get(bare.name);
 
   return sibling === undefined
-    ? checkInstalled(specifier, bare, names, fromFile)
+    ? checkThirdParty(specifier, bare, fromFile, context)
     : checkWorkspace(specifier, bare, sibling);
 };

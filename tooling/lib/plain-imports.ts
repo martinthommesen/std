@@ -12,6 +12,7 @@ import type {
 } from "oxc-parser";
 import { parseSync, Visitor } from "oxc-parser";
 
+import { findGlobalReferences } from "./plain-globals.ts";
 import type { ImportedName, PlainContext } from "./plain-resolve.ts";
 import { checkSpecifier } from "./plain-resolve.ts";
 
@@ -202,6 +203,7 @@ const findingsOf = (
     TSExternalModuleReference: onRequireReference,
     TSImportType: onImportType,
   }).visit(parsed.program);
+  findings.push(...findGlobalReferences(parsed.program));
 
   return findings;
 };
@@ -209,7 +211,8 @@ const findingsOf = (
 /**
  * Finds the imports a plain package's source file may not have: static
  * imports and re-exports, `import()`, `require()`, `import x = require()`
- * and `import("...")` types, each resolved to the module it loads.
+ * and `import("...")` types, each resolved to the module it loads, plus
+ * references to host globals, `import.meta` and `.constructor`.
  *
  * @param fileName - The file's absolute path; its extension selects the parser mode.
  * @param source - The file's text.
