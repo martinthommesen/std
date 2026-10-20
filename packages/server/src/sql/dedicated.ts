@@ -6,7 +6,8 @@
  * with STD's session parameters plus `tcp_keepalives_idle = 30`,
  * `tcp_keepalives_interval = 10` and `tcp_keepalives_count = 3`, and
  * client-side TCP keepalive. It is a single-connection `PgClient`
- * (`PgClient.makeClient` in `@effect/sql-pg`), so its statements run in
+ * (assembled like `PgClient.makeClient` in `@effect/sql-pg`, with sanitized
+ * statement errors), so its statements run in
  * autocommit mode unless they are inside one of its own transactions.
  */
 import { PgClient } from "@effect/sql-pg";
@@ -17,6 +18,7 @@ import { DatabaseConfig } from "./database-config.ts";
 import { hygienic } from "./errors.ts";
 import type { DatabaseError } from "./errors.ts";
 import { decodeRows } from "./rows.ts";
+import { makeSanitizedConnection } from "./sanitizing-client.ts";
 import {
   COORDINATOR_KEEPALIVE_PARAMETERS,
   connectionConfig,
@@ -96,7 +98,7 @@ export const makeDedicatedConnection = (
     });
 
     const context = yield* hygienic(
-      Layer.build(PgClient.layerFrom(PgClient.makeClient(config)))
+      Layer.build(PgClient.layerFrom(makeSanitizedConnection(config)))
     );
 
     const client = Context.get(context, PgClient.PgClient);

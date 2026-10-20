@@ -20,6 +20,7 @@ import {
   SchemaLockTimeout,
 } from "../src/sql/config-commit.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
+import { DatabaseError } from "../src/sql/errors.ts";
 import {
   advisoryClassId,
   advisoryObjectId,
@@ -29,6 +30,7 @@ import {
 import { RequestRevision } from "../src/sql/request-revision.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
+import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { changeSetId, errorOf, waitUntil } from "./support.ts";
 
@@ -363,6 +365,53 @@ describe("driver-smoke-locks", () => {
     );
 
     dbTest.effect(
+      "only the CONFIG_KEY wait and lockWaiting DDL are retried; any other 55P03 propagates at once",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* otherLockTimeouts() {
+            const sql = yield* SqlClient.SqlClient;
+            const { configCommit } = yield* Transactions;
+            const database = yield* TestDatabase;
+            const log = yield* StatementLog;
+            const before = yield* currentRevision;
+            yield* sql`CREATE TABLE smoke_nowait (id int PRIMARY KEY)`;
+            yield* sql`INSERT INTO smoke_nowait VALUES (1)`;
+
+            const holder = yield* database.session("smoke-row-holder");
+            yield* holder.query("BEGIN");
+            yield* holder.query("SELECT id FROM smoke_nowait FOR UPDATE");
+
+            const attempts = [
+              sql`SELECT id FROM smoke_nowait FOR UPDATE NOWAIT`,
+              sql`DO $$ BEGIN RAISE EXCEPTION 'raised' USING ERRCODE = '55P03'; END $$`,
+              sql`ALTER TABLE smoke_nowait ADD COLUMN extra int`,
+            ];
+
+            for (const statement of attempts) {
+              yield* log.clear;
+
+              const failure = errorOf(
+                yield* Effect.exit(
+                  configCommit(statement, { retryDelays: FAST_RETRIES })
+                )
+              );
+
+              assert.instanceOf(failure, DatabaseError);
+              assert.strictEqual(
+                failure instanceof DatabaseError ? failure.sqlState : "",
+                "55P03"
+              );
+              assert.strictEqual(yield* lockAttempts, 1, "no retry");
+            }
+
+            yield* holder.query("ROLLBACK");
+            assert.strictEqual(yield* currentRevision, before);
+          })
+        ),
+      { timeout: 30_000 }
+    );
+
+    dbTest.effect(
       "a DDL lock wait times out after 2 s per attempt and names the session holding the table",
       () =>
         Effect.scoped(
@@ -381,9 +430,9 @@ describe("driver-smoke-locks", () => {
 
             const exit = yield* Effect.exit(
               configCommit(
-                sql`ALTER TABLE smoke_ddl ADD COLUMN extra int`.pipe(
-                  Effect.andThen(bumpRevision(changeSetId()))
-                ),
+                lockWaiting(
+                  sql`ALTER TABLE smoke_ddl ADD COLUMN extra int`
+                ).pipe(Effect.andThen(bumpRevision(changeSetId()))),
                 { retryDelays: FAST_RETRIES }
               )
             );

@@ -288,10 +288,10 @@ export const readNumeric = (
   }
 
   const data = view(bytes, offset, size);
-  const groups = data.getInt16(0);
+  const groups = data.getUint16(0);
   const weight = data.getInt16(2);
   const sign = data.getUint16(4);
-  const scale = data.getInt16(6);
+  const scale = data.getUint16(6);
 
   if (sign === NUMERIC_NAN) {
     return "NaN";
