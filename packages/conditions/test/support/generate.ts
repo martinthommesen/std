@@ -480,7 +480,18 @@ const pathArb = (
   candidates: readonly Candidate[],
   allowPrevious: boolean
 ): Arbitrary<Path> => {
-  const choice = constantFrom(...candidates);
+  // Pick a field type first, then a path of that type, so types reached by
+  // few paths are generated as often as the rest.
+  const groups = new Map<string, Candidate[]>();
+
+  for (const candidate of candidates) {
+    const key = kindKey(candidate.field);
+    groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+
+  const choice = constantFrom(...groups.values()).chain((group) =>
+    constantFrom(...group)
+  );
 
   if (!(allowPrevious && generator.rules.previous)) {
     return choice.map((candidate) => ({ path: candidate.ids }));
@@ -653,13 +664,13 @@ export const exprArb = (spec: GenerationSpec): Arbitrary<Expr> => {
   for (let depth = 1; depth <= spec.depth; depth += 1) {
     const below = level;
     level = oneof(
-      { arbitrary: atom, weight: 4 },
+      { arbitrary: atom, weight: 3 },
       {
         arbitrary: tuple(
           constantFrom("and" as const, "or" as const),
-          array(below, { maxLength: 3 })
+          array(below, { maxLength: 4 })
         ).map(([op, args]): Expr => ({ args, op })),
-        weight: 2,
+        weight: 3,
       },
       { arbitrary: below.map((arg): Expr => ({ arg, op: "not" })), weight: 1 },
       {
