@@ -93,7 +93,7 @@ Main transaction of a change set:
 
 - Locks are held until the end of the transaction [checked: [explicit locking](https://www.postgresql.org/docs/18/explicit-locking.html)], and without `lock_timeout` a request waits indefinitely [checked: [client defaults](https://www.postgresql.org/docs/18/runtime-config-client.html)].
 - Postgres queues a new lock request behind any waiting request it conflicts with [checked: `waitMask` test in src/backend/storage/lmgr/lock.c, REL_18_STABLE]. So while a config commit waits for `CONFIG_KEY`, new STD requests wait too, and while its DDL waits for a table lock, later requests on that table wait, plain reads included. Per attempt, the request pause is at most the `CONFIG_KEY` wait (200 ms) plus the DDL lock wait (2 s) plus the main transaction's time. Between attempts requests run normally.
-- On lock timeout the transaction rolls back and retries after 0.5, 1, 2 and 4 s with jitter, 5 attempts in total [judgment]. Then `SchemaLockTimeout`, naming the sessions holding conflicting locks (from `pg_locks` and `pg_stat_activity`). Nothing applied, revision unchanged.
+- On lock timeout of the `CONFIG_KEY` wait or of a DDL statement the schema engine marks as lock-waiting, the transaction rolls back and retries after 0.5, 1, 2 and 4 s with jitter, 5 attempts in total [judgment]. Any other lock timeout (`NOWAIT`, a function raising 55P03) fails the change set at once. Then `SchemaLockTimeout`, naming the sessions holding conflicting locks (from `pg_locks` and `pg_stat_activity`). Nothing applied, revision unchanged.
 
 DDL forms STD generates [checked: [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html)]. ALTER TABLE takes `ACCESS EXCLUSIVE` unless the page notes a lower lock, and that is the only mode that blocks plain `SELECT`.
 
@@ -551,7 +551,7 @@ Every save (create, update, delete; single or batch) runs in one transaction:
 Nested saves:
 
 - A nested save joins the outer transaction and never opens a savepoint.
-- If a nested save fails after its first write, the transaction is poisoned. The SQL layer refuses to commit a poisoned transaction (it rolls back and logs a defect), whether or not the caller handled the error. The same rule applies to hooked rows in `saveBatch` (7.7).
+- If a nested save fails after its first write, the transaction is poisoned. The SQL layer counts every statement as a potential write unless the code that built it marks it read-only, so it never infers a write from statement text. The SQL layer refuses to commit a poisoned transaction (it rolls back and logs a defect), whether or not the caller handled the error. The same rule applies to hooked rows in `saveBatch` (7.7).
 - The record service tracks which records are in the current save stack and refuses a nested save to any of them with `RecordInSave`, which fails the outer save. Reason: otherwise a hook that writes B, whose hook writes A, changes A after A's proposed-state check.
 
 Hooks and record rules are selected by the record's concrete class: those attached to it and to every ancestor run, whichever endpoint is used. Order: by order number, then stable hook ID.
