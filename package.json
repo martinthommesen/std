@@ -8,7 +8,7 @@
     "typecheck": "node tooling/typecheck.ts",
     "test": "vitest run",
     "check": "ultracite check",
-    "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts",
+    "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts && node tooling/check-vendor.ts",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down"
