@@ -13,7 +13,7 @@
  * | `eq(f, v)`, `lt`..`ge`, `in`, pattern operators, `inPeriod`, `changed` | `false` |
  * | `ne(f, v)`, `notIn`, `notContains` | `true` |
  * | `empty(f)` / `notEmpty(f)` | `true` / `false` |
- * | `eq(f, g)` with one side empty | `empty(g)`; for booleans `g != true and g != false` |
+ * | `eq(f, g)` with one side empty | `empty(g)`; for booleans `notIn(g, [true, false])` |
  * | `eq(f, g)` with both sides empty | `true` |
  *
  * Constant folding then removes `true` from `and` and `false` from `or`,
@@ -25,8 +25,9 @@
  * Booleans are never null in storage, but they read as empty when masked,
  * on a `previous` image at create, or through an empty reference, so the
  * simplifier keeps their null-aware meaning. `empty` does not apply to
- * booleans (Contracts 5.4), so "g is empty" is written
- * `ne(g, true) and ne(g, false)`, its negation `eq(g, true) or eq(g, false)`.
+ * booleans (Contracts 5.4), so "g is empty" is the single atom
+ * `notIn(g, [true, false])` and its negation `in(g, [true, false])`, which
+ * keeps the condition's depth.
  */
 import {
   exprDepth,
@@ -51,18 +52,14 @@ interface Rules {
   readonly isBoolean: (path: Path) => boolean;
 }
 
-// "g is empty" for a boolean path g, or its negation.
-const booleanEmpty = (path: Path, negated: boolean): Expr => {
-  const op = negated ? "eq" : "ne";
-
-  return {
-    args: [
-      { left: path, op, right: { value: true } },
-      { left: path, op, right: { value: false } },
-    ],
-    op: negated ? "or" : "and",
-  };
-};
+// "g is empty" for a boolean path g, or its negation, as one atom so the
+// rewrite keeps the condition's depth: notIn(g, [true, false]) holds exactly
+// when g is null, in(g, [true, false]) when it is not.
+const booleanEmpty = (path: Path, negated: boolean): Expr => ({
+  left: path,
+  op: negated ? "in" : "notIn",
+  right: [{ value: true }, { value: false }],
+});
 
 const TRUE: Expr = { op: "true" };
 const FALSE: Expr = { op: "false" };

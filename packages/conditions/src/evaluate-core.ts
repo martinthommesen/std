@@ -14,6 +14,7 @@ import {
 } from "@std/values/compare";
 import type { ComparableValue, StoredOrPlaintext } from "@std/values/compare";
 import { isCaseSensitive } from "@std/values/field-type";
+import type { FieldKind } from "@std/values/field-type";
 import { isString } from "@std/values/field-value";
 import { matchesPattern } from "@std/values/like-pattern";
 import { isPlaintext, isSecretState } from "@std/values/write-only";
@@ -322,14 +323,21 @@ export interface ReaderPolicy {
 /**
  * Normalizes write-only states: `{ set: false }` is the empty value of
  * password and secret (Contracts 6.5), so it reads as null, as the column's
- * NULL does in SQL.
+ * NULL does in SQL. Dispatches on the field's kind, never on the value's
+ * shape: a json value `{ "set": false }` is data, not an unset state.
  *
+ * @param kind - The kind of the field the value belongs to.
  * @param value - A value read from an image.
- * @returns Null for an unset state, the value otherwise.
+ * @returns Null for an unset password or secret, the value otherwise.
  */
 export const normalizeWriteOnly = (
+  kind: FieldKind,
   value: StoredOrPlaintext
-): StoredOrPlaintext => (isSecretState(value) && !value.set ? null : value);
+): StoredOrPlaintext => {
+  const writeOnly = kind === "password" || kind === "secret";
+
+  return writeOnly && isSecretState(value) && !value.set ? null : value;
+};
 
 const imageValue = (
   image: RecordImage,
@@ -372,7 +380,7 @@ export const imageReader = (
       }
 
       if (last) {
-        const normalized = normalizeWriteOnly(value);
+        const normalized = normalizeWriteOnly(path.field.type.kind, value);
         const proposed = index === 0 && image === "current";
 
         return policy.terminal === undefined

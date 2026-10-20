@@ -10,7 +10,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { secretState } from "@std/values/write-only";
 import { assert as check, property, record, subarray } from "fast-check";
 
-import { decodeExpr } from "../src/ast.ts";
+import { decodeExpr, exprDepth } from "../src/ast.ts";
 import type { Expr, Path } from "../src/ast.ts";
 import { evaluateInBrowser } from "../src/browser.ts";
 import { checkCondition, checkConditionJson } from "../src/check.ts";
@@ -80,6 +80,17 @@ const EMPTY_ASSET: RecordImage = Object.fromEntries(
 const EMPTY_PERSON: RecordImage = Object.fromEntries(
   PERSON_LIST.map((field) => [field.id, null])
 );
+
+// `depth` nots around an atom.
+const nestedAround = (depth: number, atom: Expr): Expr => {
+  let expr = atom;
+
+  for (let level = 0; level < depth; level += 1) {
+    expr = { arg: expr, op: "not" };
+  }
+
+  return expr;
+};
 
 const nested = (depth: number, wrap: (inner: Expr) => Expr): Expr => {
   let expr: Expr = { op: "true" };
@@ -188,6 +199,59 @@ describe("booleans in the simplifier stay null-aware", () => {
         targets: new Map([[owner, { ...EMPTY_PERSON, [PERSON_VIP.id]: true }]]),
       }),
       { original: true, simplified: true }
+    );
+  });
+});
+
+describe("only password and secret have unset states", () => {
+  it("a json value shaped like { set: false } is data in both evaluators", () => {
+    const empty = prepare({ arg: path(A.data), op: "empty" });
+    const changed = prepare({ arg: path(A.data), op: "changed" });
+
+    for (const data of [{ set: false }, { set: true }]) {
+      const image = { ...EMPTY_ASSET, [A.data.id]: data };
+
+      assert.isFalse(evaluateCondition(empty, { record: image }));
+      assert.isTrue(
+        evaluateCondition(changed, { previous: null, record: image })
+      );
+      assert.strictEqual(evaluateInBrowser(empty, { record: image }), false);
+      assert.strictEqual(
+        evaluateInBrowser(changed, { previous: null, record: image }),
+        true
+      );
+    }
+  });
+});
+
+describe("the boolean rewrite keeps the condition's depth", () => {
+  it("simplifies a 64-level condition into one that still checks", () => {
+    const atom: Expr = {
+      left: path(A.active),
+      op: "eq",
+      right: path(A.owner, PERSON_VIP),
+    };
+
+    const expr = nestedAround(63, atom);
+
+    const simplified = simplifyForCaller(expr, {
+      classId: ASSET,
+      isHidden: (id) => id === A.active.id,
+      view: fixtureView,
+    });
+
+    const owner = PERSON_IDS[0] ?? "";
+
+    const source: ImageSource = {
+      record: { ...EMPTY_ASSET, [A.owner.id]: owner },
+      targets: new Map([[owner, { ...EMPTY_PERSON, [PERSON_VIP.id]: null }]]),
+    };
+
+    assert.strictEqual(exprDepth(expr), 64);
+    assert.strictEqual(exprDepth(simplified), 64);
+    assert.strictEqual(
+      evaluateCondition(prepare(simplified), source),
+      evaluateCondition(prepare(expr), source)
     );
   });
 });

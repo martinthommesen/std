@@ -248,6 +248,9 @@ export const JSON_POOL: readonly JsonValue[] = [
   [],
   { a: 1 },
   { a: 1, b: [true, null] },
+  // Shaped like write-only states; for json fields they are plain data.
+  { set: false },
+  { set: true },
   "x",
   0,
   true,
