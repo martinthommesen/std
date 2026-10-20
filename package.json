@@ -10,7 +10,8 @@
     "check": "ultracite check",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "bench": "pnpm --filter @std/bench bench"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",
