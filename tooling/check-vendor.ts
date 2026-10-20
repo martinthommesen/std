@@ -46,7 +46,7 @@ await runCheck(checkName, () => {
     readFileSync(path.join(root, "pnpm-lock.yaml"), "utf-8")
   );
 
-  const record = Schema.decodeUnknownSync(VendorRecord)(
+  const record = Schema.decodeSync(VendorRecord)(
     readFileSync(path.join(root, "vendor", "effect-version.json"), "utf-8")
   );
 
@@ -73,7 +73,7 @@ await runCheck(checkName, () => {
   );
 
   if (existsSync(manifest)) {
-    const vendored = Schema.decodeUnknownSync(VendoredPackageJson)(
+    const vendored = Schema.decodeSync(VendoredPackageJson)(
       readFileSync(manifest, "utf-8")
     );
 

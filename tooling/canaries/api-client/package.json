@@ -1,0 +1,8 @@
+{
+  "name": "@std-canary/api-client",
+  "private": true,
+  "type": "module",
+  "std": {
+    "profile": "api"
+  }
+}
