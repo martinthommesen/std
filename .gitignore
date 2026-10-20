@@ -9,3 +9,4 @@ coverage/
 .DS_Store
 .vite/
 bench/results/raw/
+.claude/worktrees/
