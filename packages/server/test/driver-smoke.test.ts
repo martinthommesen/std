@@ -10,6 +10,7 @@ import {
   TestDatabase,
   testDatabaseLayer,
 } from "../../testing/src/test-database.ts";
+import { CLASS_CHANGE_REFUSED_SQLSTATE } from "../src/platform/migrations/0001-core.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
 import { DatabaseError } from "../src/sql/errors.ts";
 import {
@@ -447,6 +448,32 @@ describe("driver-smoke", () => {
             )
           );
           assert.deepStrictEqual(events, []);
+        })
+    );
+
+    dbTest.effect(
+      "core.refuse_class_change() refuses a class change with SQLSTATE ST001",
+      () =>
+        Effect.gen(function* classChangeRefused() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE smoke_class (id uuid PRIMARY KEY, class_id uuid NOT NULL)`;
+          yield* sql`
+            CREATE TRIGGER smoke_class_fixed BEFORE UPDATE ON smoke_class FOR EACH ROW
+            WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id)
+            EXECUTE FUNCTION core.refuse_class_change()`;
+          yield* sql`INSERT INTO smoke_class VALUES (uuidv7(), uuidv7())`;
+
+          const refused = errorOf(
+            yield* Effect.exit(
+              request(sql`UPDATE smoke_class SET class_id = uuidv7()`)
+            )
+          );
+
+          assert.instanceOf(refused, DatabaseError);
+          assert.strictEqual(refused?.sqlState, CLASS_CHANGE_REFUSED_SQLSTATE);
+
+          yield* request(sql`UPDATE smoke_class SET class_id = class_id`);
         })
     );
 
