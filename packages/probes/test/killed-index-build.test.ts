@@ -6,11 +6,11 @@
  * notices the lost client and gives up early.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { testDatabaseLayer } from "@std/testing/test-database";
 import { Effect } from "effect";
 
 import { runKilledBuildScenario } from "../src/killed-index-build.ts";
 import type { KilledBuildScenario } from "../src/killed-index-build.ts";
+import { probeDatabaseLayer } from "../src/probe-database.ts";
 
 const HOLD_MS = 1000;
 
@@ -30,7 +30,7 @@ describe("probe-killed-index-build", () => {
     assert.strictEqual(base.checkInterval, "0");
   });
 
-  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "with client_connection_check_interval = 0 the build outlives its client, keeps SCHEMA_KEY, and ends valid",
       () =>

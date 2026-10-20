@@ -4,10 +4,10 @@
  * unique by key.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { testDatabaseLayer } from "@std/testing/test-database";
 import { Effect } from "effect";
 
 import { KEY_COLLISIONS, runCasefoldProbe } from "../src/casefold.ts";
+import { probeDatabaseLayer } from "../src/probe-database.ts";
 
 const ROWS = 20_000;
 
@@ -19,7 +19,7 @@ describe("probe-casefold", () => {
     );
   });
 
-  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "casefold is immutable, indexable, used by equality and unique by key",
       () =>

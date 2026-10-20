@@ -4,10 +4,10 @@
  * checked by the measurement script (`pnpm probes`); CI asserts under 1 s.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { testDatabaseLayer } from "@std/testing/test-database";
 import { Effect } from "effect";
 
 import { ADD_COLUMN_CASES, runAddColumnProbe } from "../src/add-column.ts";
+import { probeDatabaseLayer } from "../src/probe-database.ts";
 
 const ROWS = 1_000_000;
 const LOOSE_BOUND_MS = 1000;
@@ -21,7 +21,7 @@ describe("probe-add-column", () => {
     assert.include(ADD_COLUMN_CASES[0]?.column ?? "", "NOT NULL DEFAULT false");
   });
 
-  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "a constant default leaves relfilenode and seq_scan unchanged; a volatile one rewrites",
       () =>

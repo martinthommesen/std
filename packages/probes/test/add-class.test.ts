@@ -5,7 +5,6 @@
  * the first attempt hit `lock_timeout`, and the retry succeeds.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { testDatabaseLayer } from "@std/testing/test-database";
 import { Duration, Effect } from "effect";
 
 import {
@@ -15,6 +14,7 @@ import {
   runAddClassProbe,
 } from "../src/add-class.ts";
 import type { AddClassProbeResult } from "../src/add-class.ts";
+import { probeDatabaseLayer } from "../src/probe-database.ts";
 
 const ROWS = 30_000;
 
@@ -74,7 +74,7 @@ describe("probe-add-class", () => {
     );
   });
 
-  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "adding a class scans and rewrites no ancestor and takes ACCESS EXCLUSIVE on each briefly",
       () =>
@@ -97,7 +97,7 @@ describe("probe-add-class", () => {
     );
   });
 
-  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(probeDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "a long reader makes the first attempt time out after 2 s; the retry succeeds and nothing was half applied",
       () =>
