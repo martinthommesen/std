@@ -8,10 +8,12 @@ import { storedEquals } from "../src/compare.ts";
 import { getOrThrow } from "../src/field-error.ts";
 import type { Decoded } from "../src/field-error.ts";
 import type { FieldType } from "../src/field-type.ts";
+import { isJsonObject } from "../src/json-value.ts";
 import type { JsonValue } from "../src/json-value.ts";
-import { parseJson } from "../src/json.ts";
+import { JSON_MAX_DEPTH, parseJson } from "../src/json.ts";
 import { isPlaintext, secretState } from "../src/write-only.ts";
-import { planCreate, planUpdate } from "../src/write.ts";
+import { payloadEntry, planCreate, planUpdate } from "../src/write.ts";
+import type { PayloadEntry } from "../src/write.ts";
 
 const TEXT: FieldType = { kind: "text" };
 const LONG_TEXT: FieldType = { kind: "longText" };
@@ -59,6 +61,22 @@ const withTimeZone = (zone: string, run: () => void): void => {
       process.env.TZ = previous;
     }
   }
+};
+
+const nested = (depth: number): string =>
+  `${"[".repeat(depth)}${"]".repeat(depth)}`;
+
+// The "data" entry of a complete record body {"values": {"data": ...}}.
+const dataEntry = (depth: number): PayloadEntry => {
+  const body = getOrThrow(
+    parseJson(`{"values": {"data": ${nested(depth)}, "name": "x"}}`)
+  );
+
+  const values = isJsonObject(body) ? (body.values ?? null) : null;
+
+  return isJsonObject(values)
+    ? payloadEntry(values, "data")
+    : { present: false };
 };
 
 describe("text", () => {
@@ -420,6 +438,48 @@ describe("absent versus null", () => {
 });
 
 describe("json", () => {
+  it("round-trips objects shaped like a secret state whole", () => {
+    const texts = [
+      '{"set": true, "amount": 123}',
+      '{"set": false}',
+      '{"set": true}',
+      '[{"set": true, "note": "x"}, {"set": false, "items": [1, 2]}]',
+      '{"outer": {"set": true, "inner": {"set": false, "n": null}}, "set": "yes"}',
+      '{"coefficient": 1, "scale": 2}',
+    ];
+
+    for (const text of texts) {
+      const value = getOrThrow(parseJson(text));
+
+      assert.deepStrictEqual(roundTrip(JSON_TYPE, value), value);
+      assert.deepStrictEqual(
+        roundTrip(
+          { kind: "condition", profile: "filter" },
+          { args: [], op: "and", set: true }
+        ),
+        { args: [], op: "and", set: true }
+      );
+    }
+  });
+
+  it("limits nesting per field value, not per request body", () => {
+    const accepted = getOrThrow(
+      planCreate(JSON_TYPE, dataEntry(JSON_MAX_DEPTH))
+    );
+
+    assert.strictEqual(accepted.action, "set");
+    assert.strictEqual(
+      reason(planCreate(JSON_TYPE, dataEntry(JSON_MAX_DEPTH + 1))),
+      "tooDeep"
+    );
+    assert.strictEqual(
+      reason(
+        decodeIn(JSON_TYPE, getOrThrow(parseJson(nested(JSON_MAX_DEPTH + 1))))
+      ),
+      "tooDeep"
+    );
+  });
+
   it("refuses duplicate keys and inexact numbers; null is SQL NULL", () => {
     assert.strictEqual(
       reason(parseJson('{"a": 1, "b": {"c": 1, "c": 2}}')),

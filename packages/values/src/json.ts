@@ -5,7 +5,9 @@
  * that a double cannot hold, while `jsonb` keeps the digits, so both engines
  * would see different values. {@link parseJson} refuses both. It also refuses
  * what `jsonb` cannot store (`\u0000`, lone surrogates), integers beyond
- * ±(2^53 - 1), and nesting deeper than {@link JSON_MAX_DEPTH}.
+ * ±(2^53 - 1), and nesting deeper than {@link JSON_TRANSPORT_MAX_DEPTH};
+ * json field values are held to {@link JSON_MAX_DEPTH} by
+ * {@link checkJsonValue}.
  *
  * Request bodies that carry json field values must be parsed with
  * {@link parseJson}, and json output must be written with
@@ -26,8 +28,17 @@ import { jsonbKeys, utf8Length } from "./jsonb.ts";
 /** The largest json value, in UTF-8 bytes of its canonical text (1 MiB). */
 export const JSON_MAX_BYTES = 1_048_576;
 
-/** The deepest nesting of arrays and objects accepted. */
+/** The deepest nesting of arrays and objects a json field value may have. */
 export const JSON_MAX_DEPTH = 1000;
+
+/**
+ * The nesting budget of {@link parseJson} for whole request bodies: the
+ * field limit plus room for the envelope around field values (`values`,
+ * batch and import wrappers). The field limit itself is enforced on each
+ * field value by {@link checkJsonValue}, so an envelope never consumes a
+ * field's allowance.
+ */
+export const JSON_TRANSPORT_MAX_DEPTH = JSON_MAX_DEPTH + 64;
 
 const LEADING_ZEROS = /^0+/u;
 const HEX_DIGITS = /^[\dA-Fa-f]{4}$/u;
@@ -331,10 +342,8 @@ const readLiteral = <A extends JsonValue>(
   return value;
 };
 
-const tooDeep = (): never =>
-  fail(
-    refuse("tooDeep", `JSON values nest at most ${JSON_MAX_DEPTH} levels deep.`)
-  );
+const tooDeep = (limit: number): never =>
+  fail(refuse("tooDeep", `JSON values nest at most ${limit} levels deep.`));
 
 const setProperty = (
   target: Record<string, JsonValue>,
@@ -439,14 +448,14 @@ const readValue: ValueReader = (cursor, depth) => {
 
   switch (cursor.text[cursor.index]) {
     case "{": {
-      return depth >= JSON_MAX_DEPTH
-        ? tooDeep()
+      return depth >= JSON_TRANSPORT_MAX_DEPTH
+        ? tooDeep(JSON_TRANSPORT_MAX_DEPTH)
         : readObject(cursor, depth, readValue);
     }
 
     case "[": {
-      return depth >= JSON_MAX_DEPTH
-        ? tooDeep()
+      return depth >= JSON_TRANSPORT_MAX_DEPTH
+        ? tooDeep(JSON_TRANSPORT_MAX_DEPTH)
         : readArray(cursor, depth, readValue);
     }
 
@@ -493,7 +502,8 @@ const catchRefusal = <A>(run: () => Decoded<A>): Decoded<A> => {
  *
  * @param text - JSON text (RFC 8259).
  * @returns The value, or `invalidJson`, `duplicateKey`, `inexactNumber`,
- *   `unsafeInteger`, `notWellFormed`, `nulCharacter` or `tooDeep`.
+ *   `unsafeInteger`, `notWellFormed`, `nulCharacter` or `tooDeep` (beyond
+ *   {@link JSON_TRANSPORT_MAX_DEPTH}).
  */
 export const parseJson = (text: string): Decoded<JsonValue> =>
   catchRefusal(() => {
@@ -532,7 +542,7 @@ const canonicalValue = (input: JsonValue, depth: number): JsonValue => {
   }
 
   if (depth >= JSON_MAX_DEPTH) {
-    return tooDeep();
+    return tooDeep(JSON_MAX_DEPTH);
   }
 
   if (isJsonArray(input)) {
