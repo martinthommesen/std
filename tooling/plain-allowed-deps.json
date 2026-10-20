@@ -1,0 +1,4 @@
+{
+  "$comment": "Third-party npm packages that plain packages' src/ may import, each with the reason. check-imports refuses any other package, and any listed package whose installed dependency graph contains effect or @effect/*. Add entries in the PR that needs them; see docs/decisions/0001-effect.md.",
+  "packages": {}
+}

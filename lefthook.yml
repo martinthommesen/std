@@ -1,6 +1,10 @@
 pre-commit:
   jobs:
     - run: pnpm exec ultracite fix {staged_files}
+      # vendor/ is upstream Effect source, ignored by Oxlint and Oxfmt; a merge
+      # that brings it in must not hand its files to the fixer.
+      exclude:
+        - "vendor/**"
       glob:
         - "*.js"
         - "*.jsx"

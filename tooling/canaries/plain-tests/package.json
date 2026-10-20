@@ -1,0 +1,12 @@
+{
+  "name": "@std-canary/plain-tests",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./testing/*": "./test/*.ts"
+  },
+  "std": {
+    "profile": "plain"
+  }
+}

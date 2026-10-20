@@ -1,0 +1,68 @@
+---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    packageManagerDependencies:
+      pnpm:
+        specifier: 12.14.0
+        version: 12.14.0
+
+packages:
+
+  '@pnpm/exe@12.14.0':
+    resolution: {integrity: sha512-AAAA}
+
+---
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+catalogs:
+  default:
+    effect:
+      specifier: 4.0.5
+      version: 4.0.5
+
+importers:
+
+  .:
+    devDependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+
+  packages/legacy:
+    dependencies:
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4
+      '@effect/sql-pg':
+        specifier: 4.0.4
+        version: 4.0.4(effect@4.0.4)
+
+packages:
+
+  '@effect/sql-pg@4.0.4':
+    resolution: {integrity: sha512-BBBB}
+    peerDependencies:
+      effect: ^4.0.4
+
+  effect@4.0.4:
+    resolution: {integrity: sha512-CCCC}
+
+  effect@4.0.5:
+    resolution: {integrity: sha512-DDDD}
+
+snapshots:
+
+  '@effect/sql-pg@4.0.4(effect@4.0.4)':
+    dependencies:
+      effect: 4.0.4
+
+  effect@4.0.4: {}
+
+  effect@4.0.5: {}
