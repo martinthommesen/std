@@ -49,8 +49,19 @@
  * - Driver errors are sanitized at the statement (`sanitizing-client.ts`)
  *   and leave as `DatabaseError` (SQLSTATE and constraint only).
  */
+import { randomUUID } from "node:crypto";
+
 import { PgClient } from "@effect/sql-pg";
-import { Cause, Context, Effect, Exit, Fiber, Option, Scope } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Schema,
+  Scope,
+} from "effect";
 import { SqlClient } from "effect/sql";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
@@ -59,6 +70,8 @@ import { hygienic } from "./errors.ts";
 import type { HygienicError } from "./errors.ts";
 import { parseConfigState, RequestRevision } from "./request-revision.ts";
 import type { ConfigState } from "./request-revision.ts";
+import { decodeRows } from "./rows.ts";
+import { discardConnection } from "./sanitizing-client.ts";
 import { CurrentTransaction } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
 import {
@@ -126,7 +139,17 @@ export type TransactionSetup<S> = (
 type Outcome<A, E> =
   | { readonly _tag: "Committed"; readonly value: A }
   | { readonly _tag: "Poisoned"; readonly reason: string }
+  | { readonly _tag: "Refused"; readonly defect: TransactionRefused }
   | { readonly _tag: "Failed"; readonly cause: Cause.Cause<E | SqlError> };
+
+/** An outcome, and whether the connection ended the transaction cleanly. */
+interface Settled<A, E> {
+  readonly outcome: Outcome<A, E>;
+  readonly clean: boolean;
+}
+
+/** The transaction-local setting that identifies an STD transaction. */
+export const TRANSACTION_TOKEN_SETTING = "std.transaction_token";
 
 const maintenanceContext = (
   state: TransactionState,
@@ -148,6 +171,50 @@ const transactionContext = (
 ): Context.Context<TransactionServices> =>
   maintenanceContext(state, tracked, scope).pipe(
     Context.add(RequestRevision, configState)
+  );
+
+/**
+ * An exit that fails when the work or any of its cleanups failed.
+ * @param exit - The work's exit.
+ * @param cleanups - Exits of the cleanups that ran after it.
+ * @returns The work's exit, or a failure combining every failure.
+ */
+const withCleanups = <A, E>(
+  exit: Exit.Exit<A, E>,
+  cleanups: readonly Exit.Exit<void>[]
+): Exit.Exit<A, E> => {
+  let cause: Cause.Cause<E> = Exit.isFailure(exit) ? exit.cause : Cause.empty;
+  let failed = Exit.isFailure(exit);
+
+  for (const cleanup of cleanups) {
+    if (Exit.isFailure(cleanup)) {
+      cause = Cause.combine(cause, cleanup.cause);
+      failed = true;
+    }
+  }
+
+  return failed ? Exit.failCause(cause) : exit;
+};
+
+/**
+ * Runs the transaction's code and then closes its scope, in the code's own
+ * fiber, so finalizers run where the code ran. A failing finalizer makes
+ * the code fail.
+ * @param effect - The transaction's code.
+ * @param scope - The code's scope.
+ * @returns The code's exit combined with the scope's closing.
+ */
+const runAndCloseScope = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  scope: Scope.Closeable
+): Effect.Effect<A, E, R> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* runTransactionCode() {
+      const exit = yield* Effect.exit(restore(effect));
+      const closed = yield* Effect.exit(Scope.close(scope, exit));
+
+      return yield* withCleanups(exit, [closed]);
+    })
   );
 
 /**
@@ -187,14 +254,17 @@ const finish = <A, E>(
     return runActions(state.actions).pipe(Effect.as(outcome.value));
   }
 
-  if (outcome._tag === "Poisoned") {
-    const defect = new TransactionRefused({
-      detail: outcome.reason,
-      reason: "poisoned",
-    });
+  if (outcome._tag === "Poisoned" || outcome._tag === "Refused") {
+    const defect =
+      outcome._tag === "Refused"
+        ? outcome.defect
+        : new TransactionRefused({
+            detail: outcome.reason,
+            reason: "poisoned",
+          });
 
     return Effect.logError(
-      "Refused to commit a poisoned transaction; rolled back",
+      "Refused to commit an STD transaction; rolled back",
       defect
     ).pipe(Effect.andThen(Effect.die(defect)));
   }
@@ -202,44 +272,161 @@ const finish = <A, E>(
   return Effect.failCause(outcome.cause);
 };
 
+const decodeStart = decodeRows(Schema.Struct({ started: Schema.String }));
+
+const decodeCheck = decodeRows(
+  Schema.Struct({
+    isolation: Schema.String,
+    same_start: Schema.Boolean,
+    same_token: Schema.Boolean,
+  })
+);
+
+/**
+ * Marks the transaction: a random token in a transaction-local setting, and
+ * its `transaction_timestamp()`. A transaction the code might have started
+ * after a hidden `COMMIT` carries neither.
+ * @param connection - The reserved connection.
+ * @param state - The transaction.
+ * @returns An effect that records both in `state`.
+ */
+const markTransaction = (
+  connection: Connection,
+  state: TransactionState
+): Effect.Effect<void, SqlError> =>
+  Effect.gen(function* markTransactionStart() {
+    const token = randomUUID();
+
+    const rows = yield* control(
+      connection,
+      `SELECT set_config('${TRANSACTION_TOKEN_SETTING}', $1, true) AS token,
+              transaction_timestamp() AS started`,
+      [token]
+    );
+
+    const [row] = yield* decodeStart(rows);
+    state.token = token;
+    state.startedAt = row?.started ?? "";
+  });
+
+/**
+ * Checks, in one statement right before `COMMIT`, that the session is still
+ * in the transaction STD began (same token, same start time) and runs at
+ * READ COMMITTED.
+ * @param connection - The reserved connection.
+ * @param state - The transaction.
+ * @returns `undefined` when all holds, otherwise what does not.
+ */
+const verifyBeforeCommit = (
+  connection: Connection,
+  state: TransactionState
+): Effect.Effect<string | undefined, SqlError> =>
+  control(
+    connection,
+    `SELECT current_setting('${TRANSACTION_TOKEN_SETTING}', true) IS NOT DISTINCT FROM $1 AS same_token,
+            transaction_timestamp() = $2::timestamptz AS same_start,
+            current_setting('transaction_isolation') AS isolation`,
+    [state.token, state.startedAt]
+  ).pipe(
+    Effect.flatMap(decodeCheck),
+    Effect.map(([row]) => {
+      if (row === undefined || !row.same_token || !row.same_start) {
+        return "the session is no longer in the transaction STD began";
+      }
+
+      return row.isolation === REQUEST_ISOLATION
+        ? undefined
+        : `the transaction runs at ${row.isolation}`;
+    })
+  );
+
+const rollBack = (connection: Connection): Effect.Effect<boolean> =>
+  connection.executeRaw("ROLLBACK", []).pipe(
+    Effect.as(true),
+    Effect.catchCause(() =>
+      Effect.logWarning("ROLLBACK failed; the connection is discarded").pipe(
+        Effect.as(false)
+      )
+    )
+  );
+
+const commitChecked = <A, E>(
+  connection: Connection,
+  state: TransactionState,
+  value: A
+): Effect.Effect<Settled<A, E>> =>
+  Effect.gen(function* commitVerified() {
+    const verified = yield* Effect.exit(verifyBeforeCommit(connection, state));
+
+    if (Exit.isFailure(verified) || verified.value !== undefined) {
+      // The session may be in a transaction the code started; end it and
+      // discard the connection either way.
+      yield* rollBack(connection);
+
+      const detail = Exit.isFailure(verified)
+        ? "the check before COMMIT failed"
+        : (verified.value ?? "the check before COMMIT failed");
+
+      return {
+        clean: false,
+        outcome: {
+          _tag: "Refused",
+          defect: new TransactionRefused({
+            detail,
+            reason: "transaction-control",
+          }),
+        },
+      } as const;
+    }
+
+    const committed = yield* Effect.exit(commit(connection));
+
+    if (Exit.isFailure(committed)) {
+      return {
+        clean: false,
+        outcome: { _tag: "Failed", cause: committed.cause },
+      } as const;
+    }
+
+    return committed.value === "ROLLBACK"
+      ? ({
+          clean: true,
+          outcome: {
+            _tag: "Poisoned",
+            reason: "COMMIT rolled back an aborted transaction",
+          },
+        } as const)
+      : ({ clean: true, outcome: { _tag: "Committed", value } } as const);
+  });
+
 const settle = <A, E>(
   connection: Connection,
   state: TransactionState,
   exit: Exit.Exit<A, E | SqlError>
-): Effect.Effect<Outcome<A, E>> =>
+): Effect.Effect<Settled<A, E>> =>
   Effect.gen(function* settleTransaction() {
     if (Exit.isSuccess(exit) && state.poisoned === undefined) {
-      const committed = yield* Effect.exit(commit(connection));
-
-      if (Exit.isFailure(committed)) {
-        return { _tag: "Failed", cause: committed.cause } as const;
-      }
-
-      return committed.value === "ROLLBACK"
-        ? ({
-            _tag: "Poisoned",
-            reason: "COMMIT rolled back an aborted transaction",
-          } as const)
-        : ({ _tag: "Committed", value: exit.value } as const);
+      return yield* commitChecked<A, E>(connection, state, exit.value);
     }
 
-    const rolledBack = yield* Effect.exit(
-      connection.executeRaw("ROLLBACK", [])
-    );
-
-    if (Exit.isFailure(rolledBack)) {
-      yield* Effect.logWarning("ROLLBACK failed; the connection is discarded");
-    }
+    const clean = yield* rollBack(connection);
 
     return Exit.isSuccess(exit)
-      ? ({ _tag: "Poisoned", reason: state.poisoned ?? "poisoned" } as const)
-      : ({ _tag: "Failed", cause: exit.cause } as const);
+      ? ({
+          clean,
+          outcome: { _tag: "Poisoned", reason: state.poisoned ?? "poisoned" },
+        } as const)
+      : ({ clean, outcome: { _tag: "Failed", cause: exit.cause } } as const);
   });
 
 /**
  * Runs an outermost transaction on `state.client`: reserves a connection,
- * `BEGIN`, `setup`, the caller's `body`, then `COMMIT` or `ROLLBACK`, and
- * the post-commit actions after the connection is released.
+ * `BEGIN`, `setup`, the caller's `body` in its own fiber and scope, then
+ * interrupts every fiber that used the transaction and is still running,
+ * checks the session, and `COMMIT`s or `ROLLBACK`s. Every path then closes
+ * the transaction; a connection whose transaction could not be ended
+ * cleanly is discarded instead of returned to the pool. Post-commit actions
+ * run after the connection is released.
  * @param state - Fresh bookkeeping for the transaction.
  * @param setup - Statements after `BEGIN`; its result is passed to `body`.
  * @param body - The caller's code, given the setup result, the checked connection and the scope of the code.
@@ -255,36 +442,80 @@ export const runOutermost = <S, A, E, R>(
   ) => Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | SqlError, R> =>
   Effect.uninterruptibleMask((restore) =>
-    Effect.scoped(
-      Effect.gen(function* runTransaction() {
-        const connection = yield* state.client.reserve;
-        const tracked = trackConnection(connection, state);
-        const bodyScope = yield* Scope.make();
-        state.scope = bodyScope;
+    Effect.gen(function* runTransaction() {
+      const connectionScope = yield* Scope.make();
 
-        const work = Effect.gen(function* transactionWork() {
-          yield* control(connection, BEGIN_STATEMENT);
+      const reserved = yield* Effect.exit(
+        Scope.provide(state.client.reserve, connectionScope)
+      );
 
-          const setupResult = yield* setup(connection, state).pipe(
-            Effect.tapError(state.recordFailure)
+      if (Exit.isFailure(reserved)) {
+        state.closed = true;
+        yield* Scope.close(connectionScope, reserved);
+
+        return yield* Effect.failCause(reserved.cause);
+      }
+
+      const connection = reserved.value;
+      const tracked = trackConnection(connection, state);
+      const bodyScope = yield* Scope.make();
+      state.scope = bodyScope;
+
+      const work = Effect.gen(function* transactionWork() {
+        yield* control(connection, BEGIN_STATEMENT);
+
+        const setupResult = yield* setup(connection, state).pipe(
+          Effect.tapError(state.recordFailure)
+        );
+
+        yield* markTransaction(connection, state).pipe(
+          Effect.tapError(state.recordFailure)
+        );
+        state.tracked = tracked;
+
+        return yield* isolate(
+          runAndCloseScope(body(setupResult, tracked, bodyScope), bodyScope)
+        );
+      });
+
+      const settled = yield* Effect.exit(
+        Effect.gen(function* endTransaction() {
+          const workExit = yield* Effect.exit(
+            restore(work).pipe(
+              Effect.provideService(Scope.Scope, connectionScope)
+            )
           );
 
-          state.tracked = tracked;
+          state.sealed = true;
 
-          return yield* isolate(body(setupResult, tracked, bodyScope));
-        });
+          const swept = yield* Effect.exit(state.sweepFibers());
 
-        const exit = yield* Effect.exit(restore(work));
+          const scopeClosed = yield* Effect.exit(
+            Scope.close(bodyScope, workExit)
+          );
 
-        // Fibers forked into the code's scope end before the decision.
-        yield* Scope.close(bodyScope, exit);
+          return yield* settle(
+            connection,
+            state,
+            withCleanups(workExit, [swept, scopeClosed])
+          );
+        })
+      );
 
-        const outcome = yield* settle(connection, state, exit);
-        state.closed = true;
+      state.closed = true;
 
-        return outcome;
-      })
-    ).pipe(Effect.flatMap((outcome) => finish(state, outcome)))
+      if (Exit.isFailure(settled) || !settled.value.clean) {
+        yield* discardConnection(connection);
+      }
+
+      yield* Scope.close(connectionScope, Exit.void);
+
+      if (Exit.isFailure(settled)) {
+        return yield* Effect.failCause(settled.cause);
+      }
+
+      return yield* finish(state, settled.value.outcome);
+    })
   );
 
 /**
@@ -360,10 +591,6 @@ export const provideJoined = <A, E, R>(
 ): Effect.Effect<A, E, Exclude<R, TransactionServices>> => {
   const { configState, scope, tracked } = state;
 
-  if (state.closed) {
-    return state.closedRefusal("joining");
-  }
-
   if (
     configState === undefined ||
     tracked === undefined ||
@@ -377,13 +604,19 @@ export const provideJoined = <A, E, R>(
     );
   }
 
-  return joinTransaction(
-    state,
-    Effect.provideContext(
-      effect,
-      transactionContext(state, tracked, scope, configState)
-    )
-  );
+  return state
+    .enter("joining")
+    .pipe(
+      Effect.andThen(
+        joinTransaction(
+          state,
+          Effect.provideContext(
+            effect,
+            transactionContext(state, tracked, scope, configState)
+          )
+        )
+      )
+    );
 };
 
 /**

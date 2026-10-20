@@ -9,13 +9,16 @@
  *
  * - `readOnly(statement)`: the statement only reads. A nested unit whose
  *   statements were all marked read-only may fail without poisoning the
- *   transaction. Mark only statements you built as plain reads; a `SELECT`
- *   that calls a writing function is not one.
+ *   transaction. It takes one statement value, not an effect, and only one
+ *   starting with a read keyword. Mark only statements you built as plain
+ *   reads; a `SELECT` that calls a writing function is not one.
  * - `lockWaiting(statement)`: the statement is DDL run under the config
  *   commit's 2 s `lock_timeout`, so its lock timeout (SQLSTATE 55P03) makes
  *   the config commit roll back and retry (Contracts 1.4).
  */
-import { Context, Effect } from "effect";
+import { Context, Effect, Predicate } from "effect";
+import { Statement } from "effect/sql";
+import type { SqlError } from "effect/sql/SqlError";
 
 /** The marks of the statements an effect runs. */
 export interface StatementMarksValue {
@@ -46,13 +49,20 @@ const withMark = <A, E, R>(
   );
 
 /**
- * Marks the statements of `effect` as reads.
- * @param effect - Usually one statement the caller built as a plain `SELECT`.
- * @returns The same effect.
+ * Marks one statement as a read. Only a single statement built with the
+ * `SqlClient` tagged template (or `sql.unsafe`) is accepted, never an
+ * arbitrary effect, so the mark cannot spread over other statements; and
+ * the transaction refuses the mark unless the statement starts like a read
+ * (`SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`).
+ * @param statement - A statement the caller built as a plain read.
+ * @returns The statement, marked.
  */
-export const readOnly = <A, E, R>(
-  effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> => withMark(effect, { readOnly: true });
+export const readOnly = <A>(
+  statement: Statement.Statement<A>
+): Effect.Effect<readonly A[], SqlError> =>
+  Statement.isFragment(statement) && Predicate.hasProperty(statement, "compile")
+    ? withMark(statement, { readOnly: true })
+    : Effect.die(new TypeError("readOnly accepts a single SQL statement"));
 
 /**
  * Marks the statements of `effect` as DDL waiting for table locks under the

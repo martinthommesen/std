@@ -376,6 +376,9 @@ describe("driver-smoke-locks", () => {
             const before = yield* currentRevision;
             yield* sql`CREATE TABLE smoke_nowait (id int PRIMARY KEY)`;
             yield* sql`INSERT INTO smoke_nowait VALUES (1)`;
+            yield* sql`
+              CREATE FUNCTION smoke_raise_lock_timeout() RETURNS void LANGUAGE plpgsql AS
+              $$ BEGIN RAISE EXCEPTION 'raised' USING ERRCODE = '55P03'; END $$`;
 
             const holder = yield* database.session("smoke-row-holder");
             yield* holder.query("BEGIN");
@@ -383,7 +386,7 @@ describe("driver-smoke-locks", () => {
 
             const attempts = [
               sql`SELECT id FROM smoke_nowait FOR UPDATE NOWAIT`,
-              sql`DO $$ BEGIN RAISE EXCEPTION 'raised' USING ERRCODE = '55P03'; END $$`,
+              sql`SELECT smoke_raise_lock_timeout()`,
               sql`ALTER TABLE smoke_nowait ADD COLUMN extra int`,
             ];
 

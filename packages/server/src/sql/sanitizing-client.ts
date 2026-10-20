@@ -77,6 +77,30 @@ export const sanitizingConnection = (
     guard(connection.queryValues(sql, params, false)),
 });
 
+/** How to throw away each transaction connection instead of reusing it. */
+const discards = new WeakMap<Connection, Effect.Effect<void>>();
+
+/**
+ * Keeps a connection from being reused (the pool replaces it). Used when a
+ * transaction could not be ended cleanly, so its session state is unknown.
+ * Connections of single-connection clients cannot be replaced; for them this
+ * does nothing, and their next statement fails if the session is broken.
+ * @param connection - A connection from a sanitized client.
+ * @returns An effect that discards it.
+ */
+export const discardConnection = (
+  connection: Connection
+): Effect.Effect<void> => discards.get(connection) ?? Effect.void;
+
+const withDiscard = (
+  connection: Connection,
+  discard: Effect.Effect<void>
+): Connection => {
+  discards.set(connection, discard);
+
+  return connection;
+};
+
 /** The `PgJson` fragment the driver's compiler binds as `jsonb`. */
 type PgJson = Custom<"PgJson", unknown>;
 
@@ -194,7 +218,14 @@ export const makeSanitizedPool = (options: PgClient.PgPoolConfig) =>
       borrower,
       config: options,
       listenAcquirer: pool.reserve,
-      transactionAcquirer: pool.reserve.pipe(Effect.map(sanitizingConnection)),
+      transactionAcquirer: pool.reserve.pipe(
+        Effect.map((connection) =>
+          withDiscard(
+            sanitizingConnection(connection),
+            pool.invalidate(connection)
+          )
+        )
+      ),
     });
   });
 

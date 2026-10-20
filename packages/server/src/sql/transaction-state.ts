@@ -3,7 +3,7 @@
  * that checks and counts every statement the transaction's code sends.
  */
 import type { PgClient } from "@effect/sql-pg";
-import { Effect, Option, Schema, Stream } from "effect";
+import { Effect, Fiber, Option, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
@@ -15,6 +15,7 @@ import {
 } from "./errors.ts";
 import type { ConfigState } from "./request-revision.ts";
 import { analyzeStatement } from "./statement-lexer.ts";
+import type { LexedToken } from "./statement-lexer.ts";
 import { StatementMarks } from "./statement-marks.ts";
 import type { StatementMarksValue } from "./statement-marks.ts";
 import type {
@@ -23,100 +24,144 @@ import type {
 } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
 
-/** Leading words that end, nest or replace a transaction. */
-const CONTROL_WORDS = new Set([
-  "abort",
-  "begin",
-  "commit",
-  "end",
-  "rollback",
-  "start",
+/**
+ * The first keywords STD runs inside its transactions. An allowlist, not a
+ * denylist, so a form nobody thought of is refused rather than admitted:
+ *
+ * - `SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`: reads (and `WITH` writes).
+ * - `INSERT`, `UPDATE`, `DELETE`: record writes, journal and ledger rows.
+ * - `CREATE`, `ALTER`, `DROP`, `COMMENT`: DDL of change sets and platform
+ *   migrations (`CREATE INDEX CONCURRENTLY` fails inside a transaction).
+ * - `LOCK`: explicit table locks of the schema engine.
+ * - `NOTIFY`, `LISTEN`, `UNLISTEN`: notifications.
+ * - `EXPLAIN`, `ANALYZE`: query plans and statistics.
+ * - `SET`: only as `SET LOCAL <name> = ...` or `SET LOCAL <name> TO ...`
+ *   with `<name>` an unquoted word from `TRANSACTION_SETTINGS`.
+ *
+ * Everything else is refused, among it `BEGIN`, `START`, `COMMIT`, `END`,
+ * `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE`, `DO`, `CALL`,
+ * `RESET`, `DISCARD` and session-level `SET`.
+ */
+export const STATEMENT_KEYWORDS: ReadonlySet<string> = new Set([
+  "alter",
+  "analyze",
+  "comment",
+  "create",
+  "delete",
+  "drop",
+  "explain",
+  "insert",
+  "listen",
+  "lock",
+  "notify",
+  "select",
+  "set",
+  "show",
+  "table",
+  "unlisten",
+  "update",
+  "values",
+  "with",
 ]);
 
-/** Leading words that manage savepoints. */
+/**
+ * The settings the transaction's code may change with `SET LOCAL`: the
+ * timeouts (config commits and migrations adjust them).
+ */
+export const TRANSACTION_SETTINGS: ReadonlySet<string> = new Set([
+  "idle_in_transaction_session_timeout",
+  "lock_timeout",
+  "statement_timeout",
+]);
+
+/** First keywords of reads, the only statements `readOnly` may mark. */
+export const READ_KEYWORDS: ReadonlySet<string> = new Set([
+  "select",
+  "show",
+  "table",
+  "values",
+  "with",
+]);
+
+/** Words that suggest a statement changes the transaction's characteristics. */
+const ISOLATION_WORDS = new Set([
+  "characteristics",
+  "isolation",
+  "transaction",
+  "transaction_isolation",
+  "default_transaction_isolation",
+]);
+
 const SAVEPOINT_WORDS = new Set(["release", "savepoint"]);
 
-/** Settings that change a transaction's characteristics. */
-const TRANSACTION_SETTINGS = new Set([
-  "default_transaction_deferrable",
-  "default_transaction_isolation",
-  "default_transaction_read_only",
-  "transaction_deferrable",
-  "transaction_isolation",
-  "transaction_read_only",
-]);
-
-/** Modifiers between `SET` and the setting's name. */
-const SET_SCOPES = new Set(["local", "session"]);
+const INSIDE = " inside an STD transaction";
 
 type Refusal = readonly [reason: TransactionRefused["reason"], detail: string];
 
-const ISOLATION_LEVEL = "isolation-level";
-const TRANSACTION_CONTROL = "transaction-control";
+const CONTROL_REASON = "transaction-control";
 
-const refuseSet = (words: readonly string[]): Refusal | undefined => {
-  const [, second = "", third = ""] = words;
-  const name = SET_SCOPES.has(second) ? third : second;
+const isWord = (token: LexedToken | undefined, text: string): boolean =>
+  token?.kind === "word" && token.text === text;
 
-  if (name === "transaction") {
-    return [ISOLATION_LEVEL, "SET TRANSACTION inside an STD transaction"];
-  }
+const isAssignment = (token: LexedToken | undefined): boolean =>
+  (token?.kind === "other" && token.text === "=") || isWord(token, "to");
 
-  if (second === "session" && third === "characteristics") {
-    return [
-      ISOLATION_LEVEL,
-      "SET SESSION CHARACTERISTICS inside an STD transaction",
-    ];
-  }
+const isSetLocal = (tokens: readonly LexedToken[]): boolean => {
+  const [, scope, name, assign] = tokens;
+  const settable = name?.kind === "word" && TRANSACTION_SETTINGS.has(name.text);
 
-  if (TRANSACTION_SETTINGS.has(name)) {
-    return [ISOLATION_LEVEL, `SET ${name} inside an STD transaction`];
-  }
-
-  return undefined;
+  return isWord(scope, "local") && settable && isAssignment(assign);
 };
 
 /**
  * Why a statement from a transaction's code must not run, if it must not.
  * The text is lexed, so comments, punctuation and quoting cannot hide the
- * first keyword or a second statement.
+ * first keyword or a second statement; then the statement must be exactly
+ * one non-empty statement with no `;` at all, starting with a keyword from
+ * `STATEMENT_KEYWORDS`.
  * @param sql - The statement text.
  * @returns The refusal, or `undefined` when the statement may run.
  */
 export const refusalFor = (sql: string): Refusal | undefined => {
-  const { leadingWords, statements } = analyzeStatement(sql);
-  const [first = "", second = ""] = leadingWords;
+  const { leadingTokens, separators, statements } = analyzeStatement(sql);
 
-  if (statements > 1) {
-    return [TRANSACTION_CONTROL, "several statements in one text"];
+  if (separators > 0 || statements !== 1) {
+    return [CONTROL_REASON, "exactly one statement without `;` is allowed"];
   }
 
-  if (SAVEPOINT_WORDS.has(first) || (first === "rollback" && second === "to")) {
-    return ["savepoint", `${first.toUpperCase()} inside an STD transaction`];
-  }
+  const [first, second] = leadingTokens;
+  const keyword = first?.kind === "word" ? first.text : "";
 
-  if (
-    CONTROL_WORDS.has(first) ||
-    (first === "prepare" && second === "transaction")
-  ) {
+  if (keyword === "set") {
+    if (isSetLocal(leadingTokens)) {
+      return undefined;
+    }
+
+    const isolation = leadingTokens.some(
+      (token) => token.kind === "quoted" || ISOLATION_WORDS.has(token.text)
+    );
+
     return [
-      TRANSACTION_CONTROL,
-      `${first.toUpperCase()} inside an STD transaction`,
+      isolation ? "isolation-level" : CONTROL_REASON,
+      `SET other than SET LOCAL of a timeout${INSIDE}`,
     ];
   }
 
-  if (first === "set") {
-    return refuseSet(leadingWords);
+  if (STATEMENT_KEYWORDS.has(keyword)) {
+    return undefined;
   }
 
   if (
-    first === "reset" &&
-    (second === "all" || TRANSACTION_SETTINGS.has(second))
+    SAVEPOINT_WORDS.has(keyword) ||
+    (keyword === "rollback" && second?.kind === "word" && second.text === "to")
   ) {
-    return [TRANSACTION_CONTROL, `RESET ${second} inside an STD transaction`];
+    return ["savepoint", `${keyword.toUpperCase()}${INSIDE}`];
   }
 
-  return undefined;
+  return [
+    CONTROL_REASON,
+    `${keyword === "" ? "this statement" : keyword.toUpperCase()} is not a statement STD runs${INSIDE}`,
+  ];
 };
 
 const refusal = (
@@ -151,6 +196,17 @@ export class TransactionState implements TransactionHandle {
   scope: Scope.Scope | undefined;
   /** Post-commit actions, in registration order. */
   readonly actions: Effect.Effect<void>[] = [];
+  /**
+   * Every fiber that has used the transaction. Before the commit decision
+   * each one still running is interrupted and awaited.
+   */
+  readonly fibers = new Set<Fiber.Fiber<unknown, unknown>>();
+  /** Set when the transaction's code has ended; no new fiber may join. */
+  sealed = false;
+  /** Token set with `set_config(..., true)` at the start, checked before `COMMIT`. */
+  token = "";
+  /** `transaction_timestamp()` at the start, checked before `COMMIT`. */
+  startedAt = "";
 
   /**
    * @param kind - The outermost transaction's kind.
@@ -162,25 +218,81 @@ export class TransactionState implements TransactionHandle {
   }
 
   readonly afterCommit = (action: Effect.Effect<void>): Effect.Effect<void> =>
-    Effect.suspend(() => {
-      if (this.closed) {
-        return this.closedRefusal("afterCommit");
-      }
+    this.enter("afterCommit").pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          this.actions.push(action);
+        })
+      )
+    );
 
-      this.actions.push(action);
+  readonly markWrite: Effect.Effect<void> = Effect.suspend(() =>
+    this.enter("markWrite").pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          this.writes += 1;
+        })
+      )
+    )
+  );
 
-      return Effect.void;
-    });
-
-  readonly markWrite: Effect.Effect<void> = Effect.suspend(() => {
+  /**
+   * Why `fiber` may not use the transaction now, if it may not. A fiber is
+   * recorded on its first use; after the code ended (sealed) only recorded
+   * fibers may continue, and after the end nobody may.
+   * @param fiber - The fiber asking.
+   * @param what - What it attempts.
+   * @returns A refusal, or `Option.none()`.
+   */
+  entryRefusal(
+    fiber: Fiber.Fiber<unknown, unknown>,
+    what: string
+  ): Option.Option<Effect.Effect<never>> {
     if (this.closed) {
-      return this.closedRefusal("markWrite");
+      return Option.some(this.closedRefusal(what));
     }
 
-    this.writes += 1;
+    if (!this.fibers.has(fiber)) {
+      if (this.sealed) {
+        return Option.some(
+          refusal(
+            "foreignFiber",
+            `${what} from a fiber that joined after the ${this.kind} transaction's code ended`
+          )
+        );
+      }
 
-    return Effect.void;
-  });
+      this.fibers.add(fiber);
+    }
+
+    return Option.none();
+  }
+
+  /**
+   * Records the current fiber as a user of the transaction, or refuses it.
+   * @param what - What it attempts.
+   * @returns An effect that admits or refuses.
+   */
+  enter(what: string): Effect.Effect<void> {
+    return Effect.withFiber((fiber) =>
+      Option.getOrElse(this.entryRefusal(fiber, what), () => Effect.void)
+    );
+  }
+
+  /**
+   * Interrupts and awaits every recorded fiber that is still running, other
+   * than the caller.
+   * @returns An effect that ends when they have all ended.
+   */
+  sweepFibers(): Effect.Effect<void> {
+    return Effect.withFiber((current) =>
+      Fiber.interruptAll(
+        [...this.fibers].filter(
+          (fiber) => fiber !== current && fiber.pollUnsafe() === undefined
+        )
+      )
+    );
+  }
 
   readonly poisonReason: Effect.Effect<string | undefined> = Effect.sync(
     () => this.poisoned
@@ -265,14 +377,18 @@ export class TransactionState implements TransactionHandle {
    * Checks and counts a statement of the transaction's code before it is sent.
    * @param sql - The statement text.
    * @param marks - The statement's marks.
+   * @param fiber - The fiber running it.
    * @returns A refusal, or `Option.none()` when the statement may run.
    */
   admit(
     sql: string,
-    marks: StatementMarksValue
+    marks: StatementMarksValue,
+    fiber: Fiber.Fiber<unknown, unknown>
   ): Option.Option<Effect.Effect<never>> {
-    if (this.closed) {
-      return Option.some(this.closedRefusal("a statement"));
+    const entry = this.entryRefusal(fiber, "a statement");
+
+    if (Option.isSome(entry)) {
+      return entry;
     }
 
     const refused = refusalFor(sql);
@@ -283,20 +399,44 @@ export class TransactionState implements TransactionHandle {
 
     if (!marks.readOnly) {
       this.writes += 1;
+
+      return Option.none();
     }
 
-    return Option.none();
+    const [first] = analyzeStatement(sql).leadingTokens;
+
+    return first?.kind === "word" && READ_KEYWORDS.has(first.text)
+      ? Option.none()
+      : Option.some(
+          refusal(
+            "transaction-control",
+            "readOnly marks a statement that is not a read"
+          )
+        );
   }
 }
+
+/** The marks and fiber of the statement being run. */
+interface StatementContext {
+  readonly marks: StatementMarksValue;
+  readonly fiber: Fiber.Fiber<unknown, unknown>;
+}
+
+const statementContext: Effect.Effect<StatementContext> = Effect.withFiber(
+  (fiber) =>
+    StatementMarks.pipe(
+      Effect.map((marks): StatementContext => ({ fiber, marks }))
+    )
+);
 
 const tracked = <A>(
   state: TransactionState,
   sql: string,
   run: () => Effect.Effect<A, SqlError>
 ): Effect.Effect<A, SqlError> =>
-  StatementMarks.pipe(
-    Effect.flatMap((marks) =>
-      Option.match(state.admit(sql, marks), {
+  statementContext.pipe(
+    Effect.flatMap(({ fiber, marks }) =>
+      Option.match(state.admit(sql, marks, fiber), {
         onNone: () => run().pipe(Effect.tapError(state.failureRecorder(marks))),
         onSome: (refused) => refused,
       })
@@ -309,9 +449,9 @@ const trackedStream = <A>(
   open: () => Stream.Stream<A, SqlError>
 ): Stream.Stream<A, SqlError> =>
   Stream.unwrap(
-    StatementMarks.pipe(
-      Effect.flatMap((marks) =>
-        Option.match(state.admit(sql, marks), {
+    statementContext.pipe(
+      Effect.flatMap(({ fiber, marks }) =>
+        Option.match(state.admit(sql, marks, fiber), {
           onNone: () =>
             Effect.succeed(
               open().pipe(Stream.tapError(state.failureRecorder(marks)))

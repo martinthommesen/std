@@ -17,6 +17,8 @@ export const TransactionRefusal = Schema.Literals([
   "nesting",
   // Use of a transaction (its connection, handle or nesting) after it ended.
   "closed",
+  // Use of a transaction from a fiber that joined after its code ended.
+  "foreignFiber",
 ]);
 
 /**

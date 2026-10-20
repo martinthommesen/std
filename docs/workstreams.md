@@ -8,7 +8,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 1 | `ws/1d-values` | 1D (values) | `@std/values`: every field type's representation, canonical JSON, text, fold table, decimal, dates, Postgres text I/O | merged |
 | 1 | `ws/0e-bench` | 0E | storage benchmark at 1M and 10M, decision rule, committed results | in progress |
 | 1 | `ws/0a-sql-layer` | 0A (driver), 1A/1B groundwork | `@std/server` skeleton, SQL layer, platform migrations, `@std/testing`, driver smoke test | in review |
-| 2 | `ws/1d-conditions` | 0D, 1D (conditions) | `@std/conditions`: AST, checker, resolver, evaluators, SQL compiler, text syntax, differential test | in progress |
+| 2 | `ws/1d-conditions` | 0D, 1D (conditions) | `@std/conditions`: AST, checker, resolver, evaluators, SQL compiler, text syntax, differential test | merged |
 | 2 | `ws/0b-schema-core` | 0B, 1A (core) | `@std/definitions`, platform definition tables, catalog snapshots, change sets, class-table DDL, core definition set | in progress |
 | 2 | `ws/0f-probes` | 0F | Postgres behavior probes and measurements | in progress |
 | 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | planned |
