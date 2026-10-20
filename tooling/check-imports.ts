@@ -1,7 +1,10 @@
 /**
  * Limits what plain-profile packages import from Effect in `src/`: only the
- * Schema modules listed in `lib/plain-imports.ts`. Stability diagnostics
+ * Schema modules listed in `lib/plain-resolve.ts`. Stability diagnostics
  * cannot catch this, because `Effect`, `Layer` and `Stream` are stable.
+ * Every specifier is resolved to the module it loads, and `src/` may not
+ * reach files outside itself, so re-exports and relative paths into
+ * `node_modules` cannot route around the rule.
  *
  * Usage: `node tooling/check-imports.ts [package-dir ...]`. Without arguments
  * it checks every plain package in the workspace. Reports `file:line:column`.
@@ -23,10 +26,14 @@ const sourceGlob = "src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}";
 
 await runCheck(checkName, () => {
   const args = process.argv.slice(2);
+  const workspacePackages = listWorkspacePackages();
+  const selected = args.length > 0 ? packagesFromArgs(args) : workspacePackages;
 
-  const packages = (
-    args.length > 0 ? packagesFromArgs(args) : listWorkspacePackages()
-  ).filter((pkg) => pkg.profile === "plain");
+  const workspace = new Map(
+    [...workspacePackages, ...selected].map((pkg) => [pkg.name, pkg] as const)
+  );
+
+  const packages = selected.filter((pkg) => pkg.profile === "plain");
 
   let fileCount = 0;
 
@@ -40,7 +47,8 @@ await runCheck(checkName, () => {
 
         return findPlainImportProblems(
           filePath,
-          readFileSync(filePath, "utf-8")
+          readFileSync(filePath, "utf-8"),
+          { pkg, workspace }
         ).map(
           (problem) =>
             `${label}:${problem.line}:${problem.column}: ${problem.message}`

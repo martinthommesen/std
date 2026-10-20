@@ -1,34 +1,21 @@
+import type {
+  CallExpression,
+  ExportAllDeclaration,
+  ExportNamedDeclaration,
+  Expression,
+  ImportDeclaration,
+  ImportDeclarationSpecifier,
+  ImportExpression,
+  ModuleExportName,
+  TSExternalModuleReference,
+  TSImportType,
+} from "oxc-parser";
 import { parseSync, Visitor } from "oxc-parser";
 
-/**
- * The only `effect` modules a plain package's `src/` may import, by module
- * name. Reasons (also in `docs/decisions/0001-effect.md`):
- *
- * - `Schema` is the point of the rule; `SchemaAST`, `SchemaGetter`,
- *   `SchemaIssue`, `SchemaParser` and `SchemaTransformation` are the rest of
- *   the Schema API (transformations, custom checks and their issues, walking
- *   a schema, parsing without an Effect).
- * - `Option` and `Result` are the values Schema's synchronous decoders return
- *   (`decodeUnknownOption`, `decodeUnknownResult`) and that optional fields
- *   decode to, so pure code can consume them without throwing.
- *
- * Everything else (`Effect`, `Layer`, `Stream`, `Context`, every unstable
- * module and every `@effect/*` package) is refused.
- */
-export const plainEffectModules = [
-  "Schema",
-  "SchemaAST",
-  "SchemaGetter",
-  "SchemaIssue",
-  "SchemaParser",
-  "SchemaTransformation",
-  "Option",
-  "Result",
-] as const;
+import type { ImportedName, PlainContext } from "./plain-resolve.ts";
+import { checkSpecifier } from "./plain-resolve.ts";
 
-const allowedModules: ReadonlySet<string> = new Set(plainEffectModules);
-
-const allowedText = plainEffectModules.join(", ");
+export { plainEffectModules } from "./plain-resolve.ts";
 
 /** One refused import, with a 1-based position. */
 export interface ImportProblem {
@@ -37,67 +24,15 @@ export interface ImportProblem {
   readonly message: string;
 }
 
-/** A name imported from a module (`null` for `*`, default or `import()`). */
-interface ImportedName {
-  readonly name: string | null;
-  readonly offset: number;
-}
-
 interface Finding {
   readonly message: string;
   readonly offset: number;
 }
 
-// Checks one module specifier and the names imported from it.
-const checkSpecifier = (
-  specifier: string,
-  offset: number,
-  names: readonly ImportedName[]
-): Finding[] => {
-  if (specifier.startsWith("@effect/")) {
-    return [
-      {
-        message: `"${specifier}" is not allowed in a plain package (only Schema from "effect")`,
-        offset,
-      },
-    ];
-  }
-
-  if (specifier.startsWith("effect/")) {
-    return allowedModules.has(specifier.slice("effect/".length))
-      ? []
-      : [
-          {
-            message: `"${specifier}" is not allowed in a plain package (allowed: ${allowedText})`,
-            offset,
-          },
-        ];
-  }
-
-  if (specifier !== "effect") {
-    return [];
-  }
-
-  if (names.length === 0) {
-    return [
-      {
-        message: `import "effect" without named modules is not allowed in a plain package`,
-        offset,
-      },
-    ];
-  }
-
-  return names.flatMap(({ name, offset: at }) =>
-    name !== null && allowedModules.has(name)
-      ? []
-      : [
-          {
-            message: `${name ?? "*"} from "effect" is not allowed in a plain package (allowed: ${allowedText})`,
-            offset: at,
-          },
-        ]
-  );
-};
+interface Position {
+  readonly column: number;
+  readonly line: number;
+}
 
 const lineStarts = (source: string): number[] => {
   const starts = [0];
@@ -110,11 +45,6 @@ const lineStarts = (source: string): number[] => {
 
   return starts;
 };
-
-interface Position {
-  readonly column: number;
-  readonly line: number;
-}
 
 const positionOf = (starts: readonly number[], offset: number): Position => {
   let low = 0;
@@ -133,10 +63,36 @@ const positionOf = (starts: readonly number[], offset: number): Position => {
   return { column: offset - (starts[low] ?? 0) + 1, line: low + 1 };
 };
 
-const stringLiteral = /^(?<quote>["'`])(?<value>[^"'`]*)\k<quote>$/u;
+const exportName = (node: ModuleExportName): string =>
+  node.type === "Literal" ? node.value : node.name;
+
+const importedName = (specifier: ImportDeclarationSpecifier): ImportedName =>
+  specifier.type === "ImportSpecifier" ? exportName(specifier.imported) : null;
+
+// The decoded specifier of `import(...)` or `require(...)`: a string literal,
+// or a template literal without expressions. Anything else is computed.
+const literalSpecifier = (node: Expression | undefined): string | undefined => {
+  if (
+    node?.type === "Literal" &&
+    node.raw !== null &&
+    /^["']/u.test(node.raw)
+  ) {
+    return String(node.value);
+  }
+
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0]?.value.cooked ?? undefined;
+  }
+
+  return undefined;
+};
 
 // Collects the findings of one parsed file.
-const findingsOf = (fileName: string, source: string): Finding[] => {
+const findingsOf = (
+  fileName: string,
+  source: string,
+  context: PlainContext
+): Finding[] => {
   const parsed = parseSync(fileName, source, { sourceType: "module" });
 
   const findings: Finding[] = parsed.errors.map((error) => ({
@@ -144,64 +100,107 @@ const findingsOf = (fileName: string, source: string): Finding[] => {
     offset: error.labels[0]?.start ?? 0,
   }));
 
-  for (const statement of parsed.module.staticImports) {
-    const names = statement.entries.map((entry) => {
-      const kind: string = entry.importName.kind;
-
-      return {
-        name: kind === "Name" ? entry.importName.name : null,
-        offset: entry.importName.start ?? statement.start,
-      };
-    });
-
-    findings.push(
-      ...checkSpecifier(statement.moduleRequest.value, statement.start, names)
-    );
-  }
-
-  for (const statement of parsed.module.staticExports) {
-    for (const entry of statement.entries) {
-      if (entry.moduleRequest !== null) {
-        const kind: string = entry.importName.kind;
-        const name = kind === "Name" ? entry.importName.name : null;
-
-        findings.push(
-          ...checkSpecifier(entry.moduleRequest.value, entry.start, [
-            { name, offset: entry.start },
-          ])
-        );
-      }
+  const check = (
+    specifier: string,
+    names: readonly ImportedName[],
+    offset: number
+  ): void => {
+    for (const message of checkSpecifier(specifier, names, fileName, context)) {
+      findings.push({ message, offset });
     }
-  }
+  };
 
-  for (const expression of parsed.module.dynamicImports) {
-    const { end, start } = expression.moduleRequest;
-    const literal = stringLiteral.exec(source.slice(start, end))?.groups?.value;
+  const checkComputed = (
+    node: Expression | undefined,
+    offset: number,
+    what: string
+  ): void => {
+    const specifier = literalSpecifier(node);
 
-    if (literal === undefined) {
+    if (specifier === undefined) {
       findings.push({
-        message:
-          "dynamic import() with a computed specifier cannot be checked; use a string literal",
-        offset: expression.start,
+        message: `${what} with a computed specifier cannot be checked and is not allowed in a plain package; use a string literal`,
+        offset,
       });
     } else {
-      findings.push(
-        ...checkSpecifier(literal, expression.start, [
-          { name: null, offset: expression.start },
-        ])
+      check(specifier, [null], offset);
+    }
+  };
+
+  const onCall = (node: CallExpression): void => {
+    if (node.callee.type === "Identifier" && node.callee.name === "require") {
+      const [argument] = node.arguments;
+
+      checkComputed(
+        argument?.type === "SpreadElement" ? undefined : argument,
+        node.start,
+        "require()"
+      );
+    } else if (
+      node.callee.type === "MemberExpression" &&
+      node.callee.property.type === "Identifier" &&
+      node.callee.property.name === "getBuiltinModule"
+    ) {
+      findings.push({
+        message:
+          "getBuiltinModule() can load modules around this check and is not allowed in a plain package",
+        offset: node.start,
+      });
+    }
+  };
+
+  const onExportAll = (node: ExportAllDeclaration): void => {
+    check(node.source.value, [null], node.start);
+  };
+
+  const onExportNamed = (node: ExportNamedDeclaration): void => {
+    if (node.source === null) {
+      return;
+    }
+
+    for (const specifier of node.specifiers) {
+      check(node.source.value, [exportName(specifier.local)], specifier.start);
+    }
+
+    if (node.specifiers.length === 0) {
+      check(node.source.value, [], node.start);
+    }
+  };
+
+  const onImport = (node: ImportDeclaration): void => {
+    if (node.source.value === "effect" && node.specifiers.length > 0) {
+      for (const specifier of node.specifiers) {
+        check("effect", [importedName(specifier)], specifier.start);
+      }
+    } else {
+      check(
+        node.source.value,
+        node.specifiers.map((specifier) => importedName(specifier)),
+        node.start
       );
     }
-  }
+  };
+
+  const onImportExpression = (node: ImportExpression): void => {
+    checkComputed(node.source, node.start, "import()");
+  };
+
+  const onRequireReference = (node: TSExternalModuleReference): void => {
+    check(node.expression.value, [null], node.start);
+  };
+
+  const onImportType = (node: TSImportType): void => {
+    check(node.source.value, [null], node.start);
+  };
 
   new Visitor({
-    // oxlint-disable-next-line sonarjs/function-name -- oxc-parser's Visitor keys are AST node type names
-    TSImportType: (node) => {
-      findings.push(
-        ...checkSpecifier(node.source.value, node.start, [
-          { name: null, offset: node.start },
-        ])
-      );
-    },
+    CallExpression: onCall,
+    ExportAllDeclaration: onExportAll,
+    ExportNamedDeclaration: onExportNamed,
+    ImportDeclaration: onImport,
+    ImportExpression: onImportExpression,
+    TSExternalModuleReference: onRequireReference,
+    TSImportType: onImportType,
   }).visit(parsed.program);
 
   return findings;
@@ -209,20 +208,22 @@ const findingsOf = (fileName: string, source: string): Finding[] => {
 
 /**
  * Finds the imports a plain package's source file may not have: static
- * imports and re-exports, dynamic `import()` (which must use a literal), and
- * `import("...")` types.
+ * imports and re-exports, `import()`, `require()`, `import x = require()`
+ * and `import("...")` types, each resolved to the module it loads.
  *
- * @param fileName - The file's path; its extension selects the parser mode.
+ * @param fileName - The file's absolute path; its extension selects the parser mode.
  * @param source - The file's text.
+ * @param context - The owning plain package and the workspace.
  * @returns The problems, sorted by position.
  */
 export const findPlainImportProblems = (
   fileName: string,
-  source: string
+  source: string,
+  context: PlainContext
 ): ImportProblem[] => {
   const starts = lineStarts(source);
 
-  return findingsOf(fileName, source)
+  return findingsOf(fileName, source, context)
     .map(({ message, offset }) => ({ ...positionOf(starts, offset), message }))
     .toSorted((a, b) => a.line - b.line || a.column - b.column);
 };
