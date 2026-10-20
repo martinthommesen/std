@@ -1,0 +1,8 @@
+{
+  "name": "@std-canary/server-sql",
+  "private": true,
+  "type": "module",
+  "std": {
+    "profile": "server"
+  }
+}

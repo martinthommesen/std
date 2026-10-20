@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+
+catalog:
+  effect: 4.0.5
+  "@effect/sql-pg": 4.0.5
+  "@effect/tsgo": 0.54.1

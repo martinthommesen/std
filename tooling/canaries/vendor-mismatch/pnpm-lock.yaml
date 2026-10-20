@@ -1,0 +1,11 @@
+---
+lockfileVersion: '9.0'
+
+packages:
+
+  effect@4.0.5:
+    resolution: {integrity: sha512-AAAA}
+
+snapshots:
+
+  effect@4.0.5: {}

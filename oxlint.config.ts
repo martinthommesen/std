@@ -15,9 +15,10 @@ const jsPlugins = selectJsPlugins([
 ]);
 
 export default defineConfig({
-  env: core.env,
+  env: core.env ?? {},
   extends: [core, react, vitest, shadcn, antiSlop, jsPlugins],
-  ignorePatterns: core.ignorePatterns,
+  // vendor/ holds Effect's upstream source, read as reference only.
+  ignorePatterns: [...(core.ignorePatterns ?? []), "vendor/**"],
   jsPlugins: [...jsPlugins.jsPlugins, ...shadcn.jsPlugins],
   options: { typeAware: true },
   settings: jsPluginSettings,
