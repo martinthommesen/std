@@ -220,4 +220,28 @@ describe("plain-import-check", () => {
       ".constructor is not allowed in a plain package"
     );
   });
+
+  it("fails constructor reads by destructuring, nested or assignment patterns", () => {
+    expect(
+      [
+        "constructor-destructure.ts",
+        "constructor-nested.ts",
+        "constructor-assignment.ts",
+      ].map((file) =>
+        problemsFor(bypass, file).includes(".constructor is not allowed")
+      )
+    ).toStrictEqual([true, true, true]);
+  });
+
+  it("fails constructor reads by template or string keys", () => {
+    expect(
+      [
+        "constructor-template.ts",
+        "constructor-computed-pattern.ts",
+        "constructor-reflect.ts",
+      ].map((file) =>
+        problemsFor(bypass, file).includes(".constructor is not allowed")
+      )
+    ).toStrictEqual([true, true, true]);
+  });
 });

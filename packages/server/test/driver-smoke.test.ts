@@ -550,6 +550,31 @@ describe("driver-smoke", () => {
     );
 
     dbTest.effect(
+      "numeric reads of the largest and densest values equal Postgres text",
+      () =>
+        Effect.gen(function* maximumNumerics() {
+          const sql = yield* SqlClient.SqlClient;
+
+          const rows = yield* sql`
+            SELECT v::text AS t, v AS v FROM (VALUES
+              (repeat('9', 131072)::numeric),
+              (('0.' || repeat('9', 16383))::numeric),
+              ((repeat('9', 131072) || '.' || repeat('9', 16383))::numeric),
+              (('-' || repeat('1', 131072))::numeric),
+              (('1' || repeat('0', 131071))::numeric)
+            ) AS edge(v)`.pipe(Effect.flatMap(decodeTextRead));
+
+          assert.lengthOf(rows, 5);
+
+          for (const row of rows) {
+            assert.strictEqual(row.v, row.t);
+          }
+
+          assert.strictEqual(rows[0]?.v, "9".repeat(131_072));
+        })
+    );
+
+    dbTest.effect(
       "every session runs with TimeZone=UTC and DateStyle=ISO",
       () =>
         Effect.scoped(

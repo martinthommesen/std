@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import { PgConnection } from "@effect/sql-pg";
 /**
  * The test database harness: fresh migrated databases, fast creation,
@@ -13,10 +15,14 @@ import { Context, Effect, Exit, Layer, Redacted, Schema, Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
 import {
+  expiredHarnessDatabase,
   maintenanceUrl,
   runJanitor,
+  TEMPLATE_COMMENT_PREFIX,
+  TEMPLATE_LOCK_CLASS,
   TEMPLATE_PREFIX,
   templateName,
+  TEST_DATABASE_COMMENT_PREFIX,
   TEST_DATABASE_MAX_AGE_MS,
   TestDatabase,
   testDatabaseLayer,
@@ -111,25 +117,170 @@ describe("test-database", () => {
     })
   );
 
-  it.live("the janitor drops test databases older than three hours", () =>
+  it("the janitor recognizes only the harness's exact names with its ownership comment", () => {
+    const now = Date.now();
+    const old = new Date(now - TEST_DATABASE_MAX_AGE_MS - 60_000).toISOString();
+    const recent = new Date(now).toISOString();
+    const generated = `std_test_${(now - TEST_DATABASE_MAX_AGE_MS - 60_000).toString(36)}_1_deadbeef`;
+
+    assert.strictEqual(
+      expiredHarnessDatabase(
+        generated,
+        TEST_DATABASE_COMMENT_PREFIX + old,
+        now
+      ),
+      "test"
+    );
+    assert.isUndefined(
+      expiredHarnessDatabase(generated, "", now),
+      "no comment"
+    );
+    assert.isUndefined(
+      expiredHarnessDatabase(
+        generated,
+        TEST_DATABASE_COMMENT_PREFIX + recent,
+        now
+      )
+    );
+    assert.isUndefined(
+      expiredHarnessDatabase(
+        "std_test_1_accounts_backup",
+        TEST_DATABASE_COMMENT_PREFIX + old,
+        now
+      ),
+      "not the generated format"
+    );
+    assert.isUndefined(
+      expiredHarnessDatabase(
+        `${generated}_copy`,
+        TEST_DATABASE_COMMENT_PREFIX + old,
+        now
+      )
+    );
+    assert.strictEqual(
+      expiredHarnessDatabase(
+        `std_tpl_${"a".repeat(24)}`,
+        `${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z`,
+        now
+      ),
+      "template"
+    );
+    assert.isUndefined(
+      expiredHarnessDatabase(
+        "std_tpl_backup",
+        `${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z`,
+        now
+      )
+    );
+  });
+
+  it.live("the janitor drops only expired databases the harness created", () =>
     Effect.scoped(
       Effect.gen(function* janitor() {
         const connection = yield* admin;
         const now = Date.now();
-        const old = `std_test_${(now - TEST_DATABASE_MAX_AGE_MS - 60_000).toString(36)}_1_deadbeef`;
+        const oldStamp = now - TEST_DATABASE_MAX_AGE_MS - 60_000;
+        const owned = `std_test_${oldStamp.toString(36)}_1_deadbeef`;
+        const unmarked = `std_test_${oldStamp.toString(36)}_1_feedface`;
+        const foreign = `std_test_1_accounts_backup_${process.pid}`;
         const fresh = `std_test_${now.toString(36)}_1_cafebabe`;
-        yield* connection.query(`CREATE DATABASE "${old}" TEMPLATE template0`);
-        yield* connection.query(
-          `CREATE DATABASE "${fresh}" TEMPLATE template0`
+        const names = [owned, unmarked, foreign, fresh];
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* dropTestDatabases() {
+            for (const name of names) {
+              yield* Effect.ignore(
+                connection.query(
+                  `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`
+                )
+              );
+            }
+          })
         );
+
+        for (const name of names) {
+          yield* connection.query(
+            `CREATE DATABASE "${name}" TEMPLATE template0`
+          );
+        }
+
+        const comment = (name: string, at: number) =>
+          connection.query(
+            `COMMENT ON DATABASE "${name}" IS '${TEST_DATABASE_COMMENT_PREFIX}${new Date(at).toISOString()}'`
+          );
+
+        yield* comment(owned, oldStamp);
+        yield* comment(foreign, oldStamp);
+        yield* comment(fresh, now);
 
         yield* runJanitor(connection, templateName(PLATFORM_MIGRATIONS), now);
 
-        assert.isFalse(yield* databaseExists(old));
-        assert.isTrue(yield* databaseExists(fresh));
-        yield* connection.query(`DROP DATABASE "${fresh}" WITH (FORCE)`);
+        assert.isFalse(yield* databaseExists(owned));
+        assert.isTrue(yield* databaseExists(unmarked), "no ownership comment");
+        assert.isTrue(yield* databaseExists(foreign), "not a generated name");
+        assert.isTrue(yield* databaseExists(fresh), "not old enough");
       })
     )
+  );
+
+  it.live(
+    "the janitor never drops a template while a clone holds its shared lock",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* templateInUse() {
+          const connection = yield* admin;
+          const cloner = yield* admin;
+          const template = `std_tpl_${randomBytes(12).toString("hex")}`;
+
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(
+              connection
+                .query(`ALTER DATABASE "${template}" WITH IS_TEMPLATE false`)
+                .pipe(
+                  Effect.andThen(
+                    connection.query(
+                      `DROP DATABASE IF EXISTS "${template}" WITH (FORCE)`
+                    )
+                  )
+                )
+            )
+          );
+
+          yield* connection.query(
+            `CREATE DATABASE "${template}" TEMPLATE template0`
+          );
+          yield* connection.query(
+            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z'`
+          );
+          yield* connection.query(
+            `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
+          );
+
+          const lock = `(${TEMPLATE_LOCK_CLASS}, hashtext($1))`;
+          yield* cloner.query(`SELECT pg_advisory_lock_shared${lock}`, [
+            template,
+          ]);
+          yield* runJanitor(
+            connection,
+            templateName(PLATFORM_MIGRATIONS),
+            Date.now()
+          );
+          assert.isTrue(yield* databaseExists(template), "kept while in use");
+
+          yield* cloner.query(`SELECT pg_advisory_unlock_shared${lock}`, [
+            template,
+          ]);
+          yield* runJanitor(
+            connection,
+            templateName(PLATFORM_MIGRATIONS),
+            Date.now()
+          );
+          assert.isFalse(
+            yield* databaseExists(template),
+            "dropped once unused"
+          );
+        })
+      )
   );
 
   layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {

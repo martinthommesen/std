@@ -26,24 +26,31 @@
  *   `withTransaction` dies before sending anything inside an STD
  *   transaction (its savepoint path needs a semaphore that only its own
  *   outer `withTransaction` provides).
- * - Poisoning: when a nested unit fails after its first write, or any
- *   statement in the transaction fails (Postgres has then aborted the
- *   transaction), the transaction is poisoned. A poisoned transaction is
+ * - Poisoning: when a nested unit fails after one of its statements ran
+ *   (every statement counts as a potential write unless it is marked
+ *   `readOnly`, see `statement-marks.ts`), or any statement in the
+ *   transaction fails (Postgres has then aborted the transaction), the
+ *   transaction is poisoned. A poisoned transaction is
  *   never committed: it is rolled back and dies with a `TransactionRefused`
  *   defect (reason `poisoned`), which is logged, whether or not the caller
  *   handled the original error.
  * - Post-commit actions registered with `CurrentTransaction.afterCommit` run
  *   after the outermost transaction commits and its connection is released;
  *   their failures are logged, not raised.
- * - Driver errors leave as `DatabaseError` (SQLSTATE and constraint only).
- *
- * Writes are counted from the statement text (see `isWriteStatement`). A
- * `SELECT` that writes through a function must call
- * `CurrentTransaction.markWrite`.
+ * - The transaction's code runs in its own fiber with its own `Scope`.
+ *   Before the layer decides whether to commit, that fiber has ended, which
+ *   interrupts and awaits every fiber it forked, and the scope is closed,
+ *   which interrupts fibers forked into it. Once `COMMIT` or `ROLLBACK` has
+ *   run, the transaction is closed: its connection, its handle and joining
+ *   it are refused with `TransactionRefused` (reason `closed`).
+ * - Statement texts are lexed (`statement-lexer.ts`): transaction control,
+ *   savepoints, isolation changes and multi-statement texts are refused
+ *   before they are sent, whatever comments, quoting or punctuation they use.
+ * - Driver errors are sanitized at the statement (`sanitizing-client.ts`)
+ *   and leave as `DatabaseError` (SQLSTATE and constraint only).
  */
 import { PgClient } from "@effect/sql-pg";
-import { Cause, Context, Effect, Exit, Option } from "effect";
-import type { Scope } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Option, Scope } from "effect";
 import { SqlClient } from "effect/sql";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
@@ -88,7 +95,8 @@ export type MaintenanceServices =
   | CurrentTransaction
   | SqlClient.SqlClient
   | SqlClient.TransactionConnection
-  | PgClient.PgClient;
+  | PgClient.PgClient
+  | Scope.Scope;
 
 /** Services a request or config-commit transaction provides to its code. */
 export type TransactionServices = MaintenanceServices | RequestRevision;
@@ -122,21 +130,40 @@ type Outcome<A, E> =
 
 const maintenanceContext = (
   state: TransactionState,
-  tracked: Connection
+  tracked: Connection,
+  scope: Scope.Scope
 ): Context.Context<MaintenanceServices> =>
   Context.make(CurrentTransaction, state).pipe(
     Context.add(SqlClient.SqlClient, state.client),
     Context.add(PgClient.PgClient, state.client),
-    Context.add(state.client.transactionService, [tracked, 0])
+    Context.add(state.client.transactionService, [tracked, 0]),
+    Context.add(Scope.Scope, scope)
   );
 
 const transactionContext = (
   state: TransactionState,
   tracked: Connection,
+  scope: Scope.Scope,
   configState: ConfigState
 ): Context.Context<TransactionServices> =>
-  maintenanceContext(state, tracked).pipe(
+  maintenanceContext(state, tracked, scope).pipe(
     Context.add(RequestRevision, configState)
+  );
+
+/**
+ * Runs the transaction's code in its own fiber. When that fiber ends, every
+ * fiber it forked has been interrupted and has ended too; if the caller is
+ * interrupted, the fiber is interrupted and awaited.
+ * @param effect - The transaction's code.
+ * @returns Its result.
+ */
+const isolate = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Effect.forkChild(effect).pipe(
+    Effect.flatMap((fiber) =>
+      Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber)))
+    )
   );
 
 const runActions = (
@@ -215,19 +242,25 @@ const settle = <A, E>(
  * the post-commit actions after the connection is released.
  * @param state - Fresh bookkeeping for the transaction.
  * @param setup - Statements after `BEGIN`; its result is passed to `body`.
- * @param body - The caller's code, given the setup result and the checked connection.
+ * @param body - The caller's code, given the setup result, the checked connection and the scope of the code.
  * @returns The caller's result after commit.
  */
 export const runOutermost = <S, A, E, R>(
   state: TransactionState,
   setup: TransactionSetup<S>,
-  body: (setupResult: S, tracked: Connection) => Effect.Effect<A, E, R>
+  body: (
+    setupResult: S,
+    tracked: Connection,
+    scope: Scope.Scope
+  ) => Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | SqlError, R> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.scoped(
       Effect.gen(function* runTransaction() {
         const connection = yield* state.client.reserve;
         const tracked = trackConnection(connection, state);
+        const bodyScope = yield* Scope.make();
+        state.scope = bodyScope;
 
         const work = Effect.gen(function* transactionWork() {
           yield* control(connection, BEGIN_STATEMENT);
@@ -238,12 +271,18 @@ export const runOutermost = <S, A, E, R>(
 
           state.tracked = tracked;
 
-          return yield* body(setupResult, tracked);
+          return yield* isolate(body(setupResult, tracked, bodyScope));
         });
 
         const exit = yield* Effect.exit(restore(work));
 
-        return yield* settle(connection, state, exit);
+        // Fibers forked into the code's scope end before the decision.
+        yield* Scope.close(bodyScope, exit);
+
+        const outcome = yield* settle(connection, state, exit);
+        state.closed = true;
+
+        return outcome;
       })
     ).pipe(Effect.flatMap((outcome) => finish(state, outcome)))
   );
@@ -319,9 +358,17 @@ export const provideJoined = <A, E, R>(
   state: TransactionState,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, Exclude<R, TransactionServices>> => {
-  const { configState, tracked } = state;
+  const { configState, scope, tracked } = state;
 
-  if (configState === undefined || tracked === undefined) {
+  if (state.closed) {
+    return state.closedRefusal("joining");
+  }
+
+  if (
+    configState === undefined ||
+    tracked === undefined ||
+    scope === undefined
+  ) {
     return Effect.die(
       new TransactionRefused({
         detail: `a request inside a ${state.kind} transaction`,
@@ -334,7 +381,7 @@ export const provideJoined = <A, E, R>(
     state,
     Effect.provideContext(
       effect,
-      transactionContext(state, tracked, configState)
+      transactionContext(state, tracked, scope, configState)
     )
   );
 };
@@ -352,12 +399,12 @@ export const runAtConfigState = <A, E, R>(
   setup: TransactionSetup<ConfigState>,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | SqlError, Exclude<R, TransactionServices>> =>
-  runOutermost(state, setup, (configState, tracked) => {
+  runOutermost(state, setup, (configState, tracked, scope) => {
     state.configState = configState;
 
     return Effect.provideContext(
       effect,
-      transactionContext(state, tracked, configState)
+      transactionContext(state, tracked, scope, configState)
     );
   });
 
@@ -402,8 +449,8 @@ const runMaintenance = <A, E, R>(
 ): Effect.Effect<A, E | SqlError, Exclude<R, MaintenanceServices>> => {
   const state = new TransactionState("maintenance", client);
 
-  return runOutermost(state, maintenanceSetup(options), (_, tracked) =>
-    Effect.provideContext(effect, maintenanceContext(state, tracked))
+  return runOutermost(state, maintenanceSetup(options), (_, tracked, scope) =>
+    Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
   );
 };
 

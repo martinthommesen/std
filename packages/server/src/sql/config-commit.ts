@@ -9,10 +9,12 @@
  *    `pg_notify('std_config', '<revision>')`.
  * 4. `COMMIT`.
  *
- * On lock timeout (SQLSTATE 55P03, from the `CONFIG_KEY` wait or a DDL lock
- * wait) the transaction rolls back and is retried after 0.5, 1, 2 and 4 s
+ * When the `CONFIG_KEY` wait, or a DDL statement the caller marked with
+ * `lockWaiting` (`statement-marks.ts`), hits its lock timeout (SQLSTATE
+ * 55P03), the transaction rolls back and is retried after 0.5, 1, 2 and 4 s
  * with jitter, 5 attempts in total. Then it fails with `SchemaLockTimeout`
- * naming the sessions that blocked the last attempt.
+ * naming the sessions that blocked the last attempt. Every other failure,
+ * a 55P03 from any other statement included, propagates at once.
  */
 import type { PgClient } from "@effect/sql-pg";
 import {
@@ -230,7 +232,7 @@ const configSetup =
     monitor: PgClient.PgClient,
     blockers: Set<number>
   ): TransactionSetup<ConfigState> =>
-  (connection) =>
+  (connection, state) =>
     Effect.gen(function* beginConfigCommitSetup() {
       yield* control(
         connection,
@@ -245,7 +247,9 @@ const configSetup =
         );
       }
 
-      yield* control(connection, LOCK_CONFIG_KEY);
+      yield* control(connection, LOCK_CONFIG_KEY).pipe(
+        Effect.tapError(state.recordLockWaitFailure)
+      );
       yield* control(
         connection,
         `SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`
