@@ -24,6 +24,9 @@ import { convertLiteral, convertNeedleLiteral } from "@std/values/literal";
 
 import {
   decodeExpr,
+  exprDepth,
+  isExpr,
+  MAX_CONDITION_DEPTH,
   isCompare,
   isEmptyTest,
   isIn,
@@ -72,6 +75,18 @@ export const IN_LIST_MAX_ELEMENTS = 1000;
 
 /** The largest absolute offset of a relative date or period. [judgment] */
 export const MAX_RELATIVE_OFFSET = 100_000;
+
+const tooDeep = issue(
+  "tooDeep",
+  [],
+  `Conditions nest at most ${MAX_CONDITION_DEPTH} levels.`
+);
+
+const notAnAst = issue(
+  "malformed",
+  [],
+  "The value is not a condition AST (Contracts 5.2)."
+);
 
 /** What the checker checks against. */
 export interface CheckOptions {
@@ -316,7 +331,7 @@ const checkOffset = (
   offset: number,
   at: Segments
 ): boolean => {
-  if (Math.abs(offset) <= MAX_RELATIVE_OFFSET) {
+  if (Number.isSafeInteger(offset) && Math.abs(offset) <= MAX_RELATIVE_OFFSET) {
     return true;
   }
 
@@ -324,7 +339,7 @@ const checkOffset = (
     issue(
       "offsetOutOfRange",
       [...at, "offset"],
-      `Offsets are limited to ${MAX_RELATIVE_OFFSET} units.`
+      `Offsets are whole numbers of at most ${MAX_RELATIVE_OFFSET} units.`
     )
   );
 
@@ -742,6 +757,16 @@ export const checkCondition = (
   expr: Expr,
   options: CheckOptions
 ): ConditionResult<CheckedCondition> => {
+  if (exprDepth(expr) > MAX_CONDITION_DEPTH) {
+    return invalid([tooDeep]);
+  }
+
+  // Conditions built in code skip the JSON decoder; hold them to the same
+  // schema (integral offsets, known units, UUID field IDs, ...).
+  if (!isExpr(expr)) {
+    return invalid([notAnAst]);
+  }
+
   const checker: Checker = {
     issues: [],
     options,
@@ -776,13 +801,7 @@ export const checkConditionJson = (
   const decoded = decodeExpr(json);
 
   if (decoded._tag === "Failure") {
-    return invalid([
-      issue(
-        "malformed",
-        [],
-        "The value is not a condition AST (Contracts 5.2)."
-      ),
-    ]);
+    return invalid([decoded.failure === "tooDeep" ? tooDeep : notAnAst]);
   }
 
   return checkCondition(decoded.success, options);

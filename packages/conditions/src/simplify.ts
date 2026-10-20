@@ -13,7 +13,7 @@
  * | `eq(f, v)`, `lt`..`ge`, `in`, pattern operators, `inPeriod`, `changed` | `false` |
  * | `ne(f, v)`, `notIn`, `notContains` | `true` |
  * | `empty(f)` / `notEmpty(f)` | `true` / `false` |
- * | `eq(f, g)` with one side empty | `empty` of the other side (`false` for booleans) |
+ * | `eq(f, g)` with one side empty | `empty(g)`; for booleans `g != true and g != false` |
  * | `eq(f, g)` with both sides empty | `true` |
  *
  * Constant folding then removes `true` from `and` and `false` from `or`,
@@ -21,8 +21,16 @@
  * junctions, negates constants under `not`, and turns `in(f, [])` and
  * `notIn(f, [])` into `false` and `true`. The result is equivalent to the
  * input for every record on which the hidden fields are empty.
+ *
+ * Booleans are never null in storage, but they read as empty when masked,
+ * on a `previous` image at create, or through an empty reference, so the
+ * simplifier keeps their null-aware meaning. `empty` does not apply to
+ * booleans (Contracts 5.4), so "g is empty" is written
+ * `ne(g, true) and ne(g, false)`, its negation `eq(g, true) or eq(g, false)`.
  */
 import {
+  exprDepth,
+  MAX_CONDITION_DEPTH,
   isCompare,
   isEmptyTest,
   isIn,
@@ -33,14 +41,28 @@ import {
 } from "./ast.ts";
 import type { Compare, Expr, Path } from "./ast.ts";
 import type { ClassView, FieldInfo } from "./class-view.ts";
+import { ConditionDefectError } from "./defect.ts";
 
 /** What the simplifier knows about paths. */
 interface Rules {
   /** Whether a path reads a hidden field (so its value is empty). */
   readonly hidden: (path: Path) => boolean;
-  /** Whether a path's field can never be empty (booleans). */
-  readonly neverEmpty: (path: Path) => boolean;
+  /** Whether a path reads a boolean, which has no `empty` operator. */
+  readonly isBoolean: (path: Path) => boolean;
 }
+
+// "g is empty" for a boolean path g, or its negation.
+const booleanEmpty = (path: Path, negated: boolean): Expr => {
+  const op = negated ? "eq" : "ne";
+
+  return {
+    args: [
+      { left: path, op, right: { value: true } },
+      { left: path, op, right: { value: false } },
+    ],
+    op: negated ? "or" : "and",
+  };
+};
 
 const TRUE: Expr = { op: "true" };
 const FALSE: Expr = { op: "false" };
@@ -90,9 +112,8 @@ const emptyCompare = (expr: Compare, rules: Rules): Expr | undefined => {
 
   const other = leftEmpty ? rightPath : expr.left;
 
-  // A boolean is never empty, so comparing it with an empty side is false.
-  if (rules.neverEmpty(other)) {
-    return constant(negated);
+  if (rules.isBoolean(other)) {
+    return booleanEmpty(other, negated);
   }
 
   return { arg: other, op: negated ? "notEmpty" : "empty" };
@@ -187,11 +208,21 @@ const readsBoolean = (options: SimplifyOptions, path: Path): boolean => {
  * @returns An equivalent condition (for records where hidden fields are
  *   empty) that names no hidden field.
  */
-export const simplifyForCaller = (expr: Expr, options: SimplifyOptions): Expr =>
-  simplify(expr, {
+export const simplifyForCaller = (
+  expr: Expr,
+  options: SimplifyOptions
+): Expr => {
+  if (exprDepth(expr) > MAX_CONDITION_DEPTH) {
+    throw new ConditionDefectError(
+      "Simplify only conditions that passed the checker."
+    );
+  }
+
+  return simplify(expr, {
     hidden: (path) => path.path.some((id) => options.isHidden(id)),
-    neverEmpty: (path) => readsBoolean(options, path),
+    isBoolean: (path) => readsBoolean(options, path),
   });
+};
 
 /**
  * Folds constants only.
@@ -199,5 +230,12 @@ export const simplifyForCaller = (expr: Expr, options: SimplifyOptions): Expr =>
  * @param expr - The condition.
  * @returns An equivalent condition with constants folded.
  */
-export const foldConstants = (expr: Expr): Expr =>
-  simplify(expr, { hidden: () => false, neverEmpty: () => false });
+export const foldConstants = (expr: Expr): Expr => {
+  if (exprDepth(expr) > MAX_CONDITION_DEPTH) {
+    throw new ConditionDefectError(
+      "Fold only conditions that passed the checker."
+    );
+  }
+
+  return simplify(expr, { hidden: () => false, isBoolean: () => false });
+};

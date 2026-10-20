@@ -16,6 +16,7 @@ import type { FieldKind } from "@std/values/field-type";
 import { convertNumberText } from "@std/values/literal";
 
 import {
+  MAX_CONDITION_DEPTH,
   isCompare,
   isEmptyTest,
   isIn,
@@ -86,7 +87,17 @@ interface Parser {
   /** Spans by AST node: expressions, paths, values, lists and periods. */
   readonly spans: Map<object, Span>;
   index: number;
+  /** How many `not`s and parentheses enclose the current position. */
+  depth: number;
 }
+
+/**
+ * The deepest nesting of `not`, parentheses, `all(...)` and `any(...)` the
+ * parser follows. Printing a condition of the checker's depth limit nests at
+ * most twice as deep (a parenthesized junction costs two levels), so this
+ * keeps `parse(print(a)) = a` while bounding the parser's recursion.
+ */
+export const MAX_PARSE_NESTING = 2 * MAX_CONDITION_DEPTH + 2;
 
 const NOW_UNITS = new Map<string, NowUnit>([
   ["day", "day"],
@@ -730,16 +741,30 @@ const parsePrimary = (grammar: Grammar, parser: Parser): Expr => {
 };
 
 const parseNegation = (grammar: Grammar, parser: Parser): Expr => {
-  const { start } = peek(parser).span;
+  const token = peek(parser);
 
-  if (isWord(peek(parser), "not")) {
-    advance(parser);
-    const arg = parseNegation(grammar, parser);
-
-    return mark(parser, { arg, op: "not" }, start);
+  if (parser.depth >= MAX_PARSE_NESTING) {
+    throw new ParseFailureError(
+      "tooDeep",
+      token.span,
+      `Conditions nest at most ${MAX_PARSE_NESTING} levels of not and parentheses.`
+    );
   }
 
-  return mark(parser, parsePrimary(grammar, parser), start);
+  parser.depth += 1;
+
+  try {
+    if (isWord(token, "not")) {
+      advance(parser);
+      const arg = parseNegation(grammar, parser);
+
+      return mark(parser, { arg, op: "not" }, token.span.start);
+    }
+
+    return mark(parser, parsePrimary(grammar, parser), token.span.start);
+  } finally {
+    parser.depth -= 1;
+  }
 };
 
 const parseChain = (
@@ -852,6 +877,7 @@ export const parseCondition = (
   options: ParseOptions
 ): ConditionResult<ParsedCondition> => {
   const parser: Parser = {
+    depth: 0,
     index: 0,
     options,
     spans: new Map(),

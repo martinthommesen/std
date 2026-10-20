@@ -1,5 +1,5 @@
 import type { JsonValue } from "@std/values/json-value";
-import type { Result } from "effect";
+import { Result } from "effect";
 /**
  * The condition AST (Contracts 5.2) as TypeScript types, and an Effect Schema
  * for its JSON form, which is how conditions are stored (`condition` fields
@@ -18,6 +18,7 @@ import {
   Array as SchemaArray,
   decodeUnknownResult,
   Int,
+  is,
   isPattern,
   Json as JsonSchema,
   Literal,
@@ -308,16 +309,95 @@ const decodeStrict = decodeUnknownResult(ExprSchema, {
 });
 
 /**
+ * The deepest condition the engine accepts: nested `and`, `or` and `not`
+ * levels, counting the atom. Every recursive function of the engine stays
+ * far from the stack limit at this depth. [judgment]
+ */
+export const MAX_CONDITION_DEPTH = 64;
+
+/**
+ * The deepest JSON form `decodeExpr` hands to the schema decoder: enough for
+ * {@link MAX_CONDITION_DEPTH} levels (two JSON levels each) plus literals.
+ */
+export const MAX_CONDITION_JSON_DEPTH = 4 * MAX_CONDITION_DEPTH;
+
+/**
+ * The nesting depth of a JSON value, computed without recursion.
+ *
+ * @param json - Any JSON value.
+ * @returns 0 for scalars, 1 for a flat array or object, and so on.
+ */
+export const jsonDepth = (json: JsonValue): number => {
+  let deepest = 0;
+  const stack: [JsonValue, number][] = [[json, 0]];
+
+  for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
+    const [value, depth] = entry;
+
+    if (value !== null && value instanceof Object) {
+      deepest = Math.max(deepest, depth + 1);
+
+      for (const child of Object.values(value)) {
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+
+  return deepest;
+};
+
+const childrenOf = (expr: Expr): readonly Expr[] => {
+  if (expr.op === "and" || expr.op === "or") {
+    return expr.args;
+  }
+
+  return expr.op === "not" ? [expr.arg] : [];
+};
+
+/**
+ * The depth of a condition (an atom is 1), computed without recursion, so
+ * it is safe on any input.
+ *
+ * @param expr - A condition.
+ * @returns The number of nested levels.
+ */
+export const exprDepth = (expr: Expr): number => {
+  let deepest = 0;
+  const stack: [Expr, number][] = [[expr, 1]];
+
+  for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
+    const [node, depth] = entry;
+    deepest = Math.max(deepest, depth);
+
+    for (const child of childrenOf(node)) {
+      stack.push([child, depth + 1]);
+    }
+  }
+
+  return deepest;
+};
+
+/**
+ * Whether a typed value really is a condition AST, as the schema defines it
+ * (for conditions built in code rather than decoded from JSON).
+ */
+export const isExpr: (input: Expr) => boolean = is(ExprSchema);
+
+/**
  * Decodes the JSON form of a condition. Unknown keys are refused, so a stored
  * condition cannot carry data that the checker never looked at. This checks
  * the shape only; `checkCondition` checks it against a class and a profile.
  *
  * @param input - JSON parsed with `parseJson` (`@std/values/json`).
- * @returns The condition, or the schema error.
+ * @returns The condition, the schema error, or `"tooDeep"` when the JSON
+ *   nests deeper than {@link MAX_CONDITION_JSON_DEPTH}.
  */
 export const decodeExpr = (
   input: JsonValue
-): Result.Result<Expr, SchemaError> => decodeStrict(input);
+): Result.Result<Expr, SchemaError | "tooDeep"> =>
+  jsonDepth(input) > MAX_CONDITION_JSON_DEPTH
+    ? Result.fail("tooDeep")
+    : decodeStrict(input);
 
 /**
  * Whether a comparison's right side is a second path.

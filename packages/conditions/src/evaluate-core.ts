@@ -16,7 +16,7 @@ import type { ComparableValue, StoredOrPlaintext } from "@std/values/compare";
 import { isCaseSensitive } from "@std/values/field-type";
 import { isString } from "@std/values/field-value";
 import { matchesPattern } from "@std/values/like-pattern";
-import { isPlaintext } from "@std/values/write-only";
+import { isPlaintext, isSecretState } from "@std/values/write-only";
 
 import { ConditionDefectError } from "./defect.ts";
 import type { PositiveCompare, ResolvedNode, TypedPath } from "./typed.ts";
@@ -307,9 +307,29 @@ export interface ImageSource {
 export interface ReaderPolicy {
   /** A field missing from an image or a target not loaded. */
   readonly missing: (what: string) => Read;
-  /** Converts a value of the proposed image before it is compared. */
-  readonly proposed?: (path: TypedPath, value: StoredOrPlaintext) => Read;
+  /**
+   * Checks or converts the value a path reads before it is compared.
+   * `proposed` is true for the record's own fields in the proposed image
+   * (the values a user may have typed).
+   */
+  readonly terminal?: (
+    path: TypedPath,
+    value: StoredOrPlaintext,
+    proposed: boolean
+  ) => Read;
 }
+
+/**
+ * Normalizes write-only states: `{ set: false }` is the empty value of
+ * password and secret (Contracts 6.5), so it reads as null, as the column's
+ * NULL does in SQL.
+ *
+ * @param value - A value read from an image.
+ * @returns Null for an unset state, the value otherwise.
+ */
+export const normalizeWriteOnly = (
+  value: StoredOrPlaintext
+): StoredOrPlaintext => (isSecretState(value) && !value.set ? null : value);
 
 const imageValue = (
   image: RecordImage,
@@ -347,15 +367,17 @@ export const imageReader = (
       const last = index === path.ids.length - 1;
       const value = imageValue(current, fieldId, policy);
 
-      const convert =
-        last && index === 0 && image === "current"
-          ? policy.proposed
-          : undefined;
+      if (value === UNAVAILABLE) {
+        return value;
+      }
 
-      if (value === UNAVAILABLE || last) {
-        return value === UNAVAILABLE || convert === undefined
-          ? value
-          : convert(path, value);
+      if (last) {
+        const normalized = normalizeWriteOnly(value);
+        const proposed = index === 0 && image === "current";
+
+        return policy.terminal === undefined
+          ? normalized
+          : policy.terminal(path, normalized, proposed);
       }
 
       if (value === null) {

@@ -104,9 +104,21 @@ export const LAPTOP_FIELDS = {
 /** A retired field of `asset`, for the store-time check. */
 export const RETIRED_FIELD = field(ASSET, "legacy", { kind: "text" }, true);
 
+/**
+ * A boolean on the reference target, so booleans are also read through
+ * hidden and empty references. Declared after the others to keep their IDs.
+ */
+export const PERSON_VIP = field(PERSON, "vip", { kind: "boolean" });
+
+/** Every field of `person`. */
+export const PERSON_LIST: readonly FixtureField[] = [
+  ...Object.values(PERSON_FIELDS),
+  PERSON_VIP,
+];
+
 /** Every fixture field. */
 export const ALL_FIELDS: readonly FixtureField[] = [
-  ...Object.values(PERSON_FIELDS),
+  ...PERSON_LIST,
   ...Object.values(ASSET_FIELDS),
   ...Object.values(LAPTOP_FIELDS),
   RETIRED_FIELD,
@@ -114,7 +126,7 @@ export const ALL_FIELDS: readonly FixtureField[] = [
 
 /** The fixture class view. */
 export const fixtureView: ClassView = staticClassView([
-  { fields: Object.values(PERSON_FIELDS), id: PERSON, parentId: null },
+  { fields: PERSON_LIST, id: PERSON, parentId: null },
   {
     fields: [...Object.values(ASSET_FIELDS), RETIRED_FIELD],
     id: ASSET,

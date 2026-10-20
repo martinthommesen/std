@@ -128,6 +128,12 @@ const dateBound = (date: Temporal.PlainDate): Bound => {
 // Temporal throws RangeError beyond its own limits (about ±271,821 years);
 // such results are outside STD's range in the offset's direction.
 const guarded = (offset: number, compute: () => Bound): Bound => {
+  // The checker admits only safe integers; anything else is a caller bug,
+  // never a value outside the range.
+  if (!Number.isSafeInteger(offset)) {
+    throw new ConditionDefectError("An offset is not a whole number.");
+  }
+
   try {
     return compute();
   } catch (error) {

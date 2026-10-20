@@ -3,9 +3,10 @@
  * `"unknown"`), over partial records. Data is unavailable, and every atom that
  * reads it Unknown, when a field is not in the loaded record, a path's target
  * was not delivered (including a changed reference's new target), a context
- * value was not provided, or proposed text holds code points not assigned in
- * the fold table's Unicode version. `and`, `or` and `not` follow Kleene's
- * rules, which is sound because every atom is total.
+ * value was not provided, or text (proposed, previous or a delivered target's)
+ * holds code points not assigned in the fold table's Unicode version. `and`,
+ * `or` and `not` follow Kleene's rules, which is sound because every atom is
+ * total.
  *
  * Null is known data, and so is a field the caller cannot read, which the
  * caller passes as null (it counts as empty, Contracts 5.10). Proposed text
@@ -36,7 +37,9 @@ export interface PartialSource {
   readonly targets?: ReadonlyMap<string, RecordImage | null>;
 }
 
-const convertProposed = (path: TypedPath, value: Read): Read => {
+// Every text read is checked against the fold table's Unicode version;
+// only proposed text (typed by the user) gets the write conversion.
+const checkText = (path: TypedPath, value: Read, proposed: boolean): Read => {
   const { kind } = path.field.type;
 
   if (!isString(value) || (kind !== "text" && kind !== "longText")) {
@@ -45,6 +48,10 @@ const convertProposed = (path: TypedPath, value: Read): Read => {
 
   if (!isFullyAssignedInFoldTableVersion(value)) {
     return UNAVAILABLE;
+  }
+
+  if (!proposed) {
+    return value;
   }
 
   const converted =
@@ -70,6 +77,6 @@ export const evaluateInBrowser = (
     condition.root,
     imageReader(source, {
       missing: () => UNAVAILABLE,
-      proposed: convertProposed,
+      terminal: checkText,
     })
   );

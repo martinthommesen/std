@@ -46,6 +46,7 @@ export const IssueReasonSchema = Literals([
   "temporalUnavailable",
   "syntax",
   "unknownName",
+  "tooDeep",
 ]);
 
 /** A reason code. */

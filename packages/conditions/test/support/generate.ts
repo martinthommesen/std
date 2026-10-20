@@ -73,7 +73,7 @@ import {
   LAPTOP,
   LAPTOP_FIELDS,
   PERSON,
-  PERSON_FIELDS,
+  PERSON_LIST,
 } from "./schema.ts";
 import type { FixtureField } from "./schema.ts";
 
@@ -92,15 +92,16 @@ export interface PersonRow {
 export interface AssetRow {
   readonly id: string;
   readonly classId: string;
-  /** False: masked fields (`name`, `count`, `owner`) read as empty. */
+  /** False: masked fields (`active`, `name`, `count`, `owner`) read as empty. */
   readonly readable: boolean;
   readonly values: JsonImage;
   /** The stored image for form and record rules; null on create. */
   readonly previous: JsonImage | null;
 }
 
-/** The fields masked when a row is not readable. */
+/** The fields masked when a row is not readable (a boolean among them). */
 export const MASKED_FIELDS: ReadonlySet<string> = new Set([
+  ASSET_FIELDS.active.id,
   ASSET_FIELDS.name.id,
   ASSET_FIELDS.count.id,
   ASSET_FIELDS.owner.id,
@@ -229,8 +230,6 @@ const LAPTOP_LIST: readonly FixtureField[] = [
   ...ASSET_LIST,
   ...Object.values(LAPTOP_FIELDS),
 ];
-
-const PERSON_LIST: readonly FixtureField[] = Object.values(PERSON_FIELDS);
 
 /** Person rows: one per target ID. */
 export const personRowsArb: Arbitrary<readonly PersonRow[]> = tuple(

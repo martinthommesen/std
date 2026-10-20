@@ -14,6 +14,8 @@ import {
 } from "@std/values/json-value";
 
 import {
+  exprDepth,
+  MAX_CONDITION_DEPTH,
   isCompare,
   isEmptyTest,
   isIn,
@@ -360,6 +362,16 @@ export const printCondition = (
   expr: Expr,
   options: PrintOptions
 ): ConditionResult<string> => {
+  if (exprDepth(expr) > MAX_CONDITION_DEPTH) {
+    return invalid([
+      issue(
+        "tooDeep",
+        [],
+        `Conditions nest at most ${MAX_CONDITION_DEPTH} levels.`
+      ),
+    ]);
+  }
+
   try {
     return valid(printExpr(options, expr));
   } catch (error) {

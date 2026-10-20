@@ -62,13 +62,12 @@ import {
   fixtureView,
   LAPTOP,
   LAPTOP_FIELDS,
-  PERSON_FIELDS,
+  PERSON_LIST,
 } from "./schema.ts";
 import type { FixtureField } from "./schema.ts";
 
 const ASSET_LIST: readonly FixtureField[] = Object.values(ASSET_FIELDS);
 const LAPTOP_LIST: readonly FixtureField[] = Object.values(LAPTOP_FIELDS);
-const PERSON_LIST: readonly FixtureField[] = Object.values(PERSON_FIELDS);
 
 const columnType = (type: FieldType): string =>
   type.kind === "boolean" ? "boolean" : postgresColumn(type).sqlType;
@@ -264,16 +263,31 @@ const decoded = <A>(
   result: { readonly ok: true; readonly value: A } | { readonly ok: false }
 ): A => (result.ok ? result.value : fail("text"));
 
+// Unset write-only fields arrive in both forms an image may carry: null and
+// { set: false } (Contracts 6.5); both mean empty.
+const writeOnlyState = (
+  set: boolean,
+  unset: "null" | "state"
+): StoredOrPlaintext => {
+  if (set) {
+    return secretState(true);
+  }
+
+  return unset === "state" ? secretState(false) : null;
+};
+
 /**
  * Parses one read-back column into the value the evaluator compares.
  *
  * @param field - The field.
  * @param raw - The driver's value (text form for the text-read types).
+ * @param unset - How an unset password or secret is represented.
  * @returns The stored value.
  */
 export const readValue = (
   field: FieldInfo,
-  raw: DriverValue | undefined
+  raw: DriverValue | undefined,
+  unset: "null" | "state" = "null"
 ): StoredOrPlaintext => {
   if (raw === null || raw === undefined) {
     return null;
@@ -303,7 +317,7 @@ export const readValue = (
 
     case "password":
     case "secret": {
-      return raw === true ? secretState(true) : null;
+      return writeOnlyState(raw === true, unset);
     }
 
     case "integer": {
@@ -351,9 +365,13 @@ const selectList = (
     })
     .join(", ");
 
-const imageOf = (row: TextRow, fields: readonly FixtureField[]): RecordImage =>
+const imageOf = (
+  row: TextRow,
+  fields: readonly FixtureField[],
+  unset: "null" | "state" = "null"
+): RecordImage =>
   Object.fromEntries(
-    fields.map((field) => [field.id, readValue(field, row[field.id])])
+    fields.map((field) => [field.id, readValue(field, row[field.id], unset)])
   );
 
 /** The read-back images, keyed by record ID. */
@@ -404,7 +422,9 @@ export const readBack = (
     const sources = new Map<string, ImageSource>();
 
     for (const row of rows) {
-      const record = imageOf(row, own);
+      // Alternate the two representations of unset write-only fields.
+      const unset = sources.size % 2 === 0 ? "null" : "state";
+      const record = imageOf(row, own, unset);
 
       const masked: RecordImage =
         row.readable === true
@@ -421,7 +441,7 @@ export const readBack = (
           ? Object.fromEntries(
               own.map((field) => [
                 field.id,
-                readValue(field, row[`p_${field.id}`]),
+                readValue(field, row[`p_${field.id}`], unset),
               ])
             )
           : null;
