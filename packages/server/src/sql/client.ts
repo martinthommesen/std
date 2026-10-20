@@ -13,6 +13,7 @@ import type { SqlClient } from "effect/sql";
 import { DatabaseConfig } from "./database-config.ts";
 import { hygienic } from "./errors.ts";
 import type { DatabaseError } from "./errors.ts";
+import { makeSanitizedPool } from "./sanitizing-client.ts";
 import { connectionConfig } from "./session.ts";
 
 /** How long an idle pooled connection is kept before it is closed. */
@@ -37,7 +38,7 @@ export const PgLive: Layer.Layer<
 
     return PgClient.layerFrom(
       hygienic(
-        PgClient.make({
+        makeSanitizedPool({
           ...config,
           idleTimeout: POOL_IDLE_TIMEOUT,
           maxConnections: settings.maxConnections,
