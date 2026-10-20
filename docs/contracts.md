@@ -769,7 +769,7 @@ Write conversion, on the server in TypeScript, for stored values and `eq`/`in` t
 
 1. Refuse values that are not well-formed Unicode or contain U+0000 (Postgres `text` cannot hold it).
 2. Normalize to NFC. Postgres never normalizes.
-3. Single-line text: refuse CR, LF and C0/C1 controls other than tab; trim with the ECMAScript `trim()` set; `""` becomes null.
+3. Single-line text: refuse CR, LF, U+2028, U+2029 and control characters (C0, DEL and C1) other than tab; trim with the ECMAScript `trim()` set; `""` becomes null. [judgment: U+2028 and U+2029 are line breaks too; see `docs/decisions/0003-values.md`]
 4. Long text: CRLF and CR become LF; no trimming; whitespace-only becomes null.
 5. Count length in code points. Needles for `contains`, `startsWith`, `endsWith` get steps 1, 2 and 5 only.
 
@@ -781,25 +781,25 @@ The browser evaluator applies steps 1 to 4 to proposed text before evaluating fo
 
 - In Postgres: `casefold(x COLLATE pg_unicode_fast)`. The explicit collation pins the implementation, since under libc `casefold` is just `lower`. Postgres 18 ships Unicode 16.0.0 data [checked: [string functions](https://www.postgresql.org/docs/18/functions-string.html), [release notes](https://www.postgresql.org/docs/18/release-18.html)].
 - In TypeScript: a fold table generated at build time from Unicode 16.0.0, shipped to server and browser. `toLowerCase` differs (it keeps `ß` and maps final `Σ` to `ς`).
-- An exhaustive test over every scalar value proves the tables equal. Folding is context-free, so per-code-point equality implies string equality [spike: confirm with multi-character cases such as "ΣΑΣ"].
+- An exhaustive test over every scalar value proves the tables equal. Folding is context-free, so per-code-point equality implies string equality [checked: `fold-postgres.test.ts` compares every scalar value except U+0000 and surrogates, plus "ΣΑΣ", "Straße", "İ" and 10,000 generated strings, against Postgres 18.6; all equal; `docs/decisions/0003-values.md`].
 
 Why not a nondeterministic ICU collation [judgment]: ICU behavior changes with the ICU version Postgres is built against, Node and browsers ship their own ICU, nondeterministic collations lose B-tree deduplication, and `ILIKE`, `SIMILAR TO` and regular expressions do not support them [checked: [collation](https://www.postgresql.org/docs/18/collation.html), [pattern matching](https://www.postgresql.org/docs/18/functions-matching.html)]. A pinned fold table is reproducible and exhaustively testable.
 
 Deterministic but surprising, identical in both engines: `ß` ≡ `ss`, `ﬁ` ≡ `fi`, `σ` ≡ `ς` ≡ `Σ`; accent-sensitive (`é` is not `e`); no Turkish rule (`İ` folds to `i` plus U+0307); folding is not re-normalized; default-ignorable characters are not ignored.
 
-SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the literal folded in TypeScript; pattern operators use `LIKE $1` with a TypeScript-built pattern (fold, escape `\`, `%`, `_`, add `%`). Folded equality and uniqueness use an expression index on the casefold expression [spike: `casefold` is IMMUTABLE]. Unique text fields are unique by key [judgment]. A Postgres upgrade with new Unicode data can change folds for newly assigned code points, so the upgrade procedure regenerates the table and reindexes folded indexes, and `doctor` compares the fold table's version with `unicode_version()` [judgment].
+SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the literal folded in TypeScript; pattern operators use `LIKE $1` with a TypeScript-built pattern (fold, escape `\`, `%`, `_`, add `%`). Folded equality and uniqueness use an expression index on the casefold expression [checked: `casefold` is IMMUTABLE, `pg_proc.provolatile = 'i'` in Postgres 18.6]. Unique text fields are unique by key [judgment]. A Postgres upgrade with new Unicode data can change folds for newly assigned code points, so the upgrade procedure regenerates the table and reindexes folded indexes, and `doctor` compares the fold table's version with `unicode_version()` [judgment].
 
 ### 5.6 Numbers
 
 - Integer (`int4`) is a JS `number`; big integer (`int8`) is a `bigint`.
 - Decimal is `{ coefficient: bigint; scale: number }` in STD's values package; comparison rescales and compares bigints. A decimal library is chosen when arithmetic arrives and is tested against Postgres `numeric`. [judgment]
-- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date` and `timestamptz` as text and parses them itself, through the driver's `types` registry option [checked in the @effect/sql-pg 4.0.5 source] [spike: confirm the text-format reads in the 0A driver smoke test]. Reason: driver conversions can lose precision or shift dates. [judgment]
+- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date`, `timestamptz`, `json` and `jsonb` in Postgres's text form and parses them itself (`@std/values/postgres-text`). @effect/sql-pg 4.0.5 speaks only the binary format, so the text form comes from codecs registered through the driver's `types` registry option that render each binary value exactly as the type's output function does (the `@std/values` test helper is a working example, checked against `::text` casts) [checked: `PgTypes.ts` in @effect/sql-pg 4.0.5, `postgres-text.test.ts`]. The built-in codecs differ from the text form: `timestamptz` decodes to a `Date` truncated to milliseconds (sub-millisecond digits are lost silently, years outside JavaScript's range give an invalid `Date`), `date` uses astronomical years for BC, and `json`/`jsonb` go through `JSON.parse` (last duplicate wins, digits rounded); only `numeric` (a string) and `int8` (a `bigint`) are exact. Decimal literals are cast to unconstrained `numeric`, never `numeric(p, s)`, which would round. Reason: driver conversions can lose precision or shift dates. [judgment]
 - Literals must fit the type's range. Decimal literals have at most 100 digits [judgment]. NaN and infinities do not exist in STD.
 
 ### 5.7 Dates, date-times and time zones
 
 - **Date**: `YYYY-MM-DD`, years 0001 to 9999, proleptic Gregorian; kept as the canonical string, whose order equals date order.
-- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [spike: set through the driver's session parameters, confirmed in the 0A smoke test]. Kept as epoch milliseconds.
+- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [checked: the driver's `startupParameters: { TimeZone: "UTC", DateStyle: "ISO" }` sets both; `postgres-text.test.ts`]. Kept as epoch milliseconds.
 - A date never compares directly with a date-time.
 - The evaluation context carries `now`, `timeZone` (IANA) and `weekStart` (default Monday). Resolution in TypeScript turns `ctx` and `rel` into literals and `inPeriod` into `ge(f, start) and lt(f, end)`; day and larger offsets are calendar arithmetic in `timeZone`, minute and hour offsets exact durations. The resolver uses Temporal, enabled by default in Node 26 [checked: Node 26 release notes]; the web app uses a pinned polyfill where missing [unverified per browser].
 - Time zone: the filter profile uses the user's zone (falling back to the instance zone); every profile that decides what a save may do uses the instance zone. Reason: a preference must not change an access or validation outcome. [judgment] The browser never uses the device zone.
@@ -927,11 +927,11 @@ The representation of every type is fixed in Step 1, including types implemented
 | uuid | `uuid` | lowercase UUID | as reference | branded `string` | null |
 | password | `text`, one-way hash | `{"set": bool}` | plaintext, hashed by the service | not readable | `{"set": false}` |
 | secret | `bytea`, encrypted envelope, key outside the database | `{"set": bool}` | plaintext; `null` clears | not readable | `{"set": false}` |
-| json | `jsonb` | any JSON value, keys in jsonb's order | finite numbers exactly representable as a double, integers within ±(2^53 - 1), no duplicate keys, at most 1 MB [judgment]; `null` is SQL NULL | `unknown` | null |
+| json | `jsonb` | any JSON value, keys in jsonb's order | finite numbers exactly representable as a double, integers within ±(2^53 - 1), no duplicate keys, no U+0000, nesting at most 1,000 deep, at most 1 MiB of canonical UTF-8 text [judgment]; `null` is SQL NULL | `unknown` | null |
 | condition | `jsonb` | AST (5.2) | AST checked against the field's profile and class | `Expr` | null |
 
 - Big integer and decimal are strings because common JSON parsers lose precision; JSON numbers are refused, not converted [judgment].
-- Json: duplicate keys and numbers not exactly representable as a double are refused, because `jsonb` keeps the last duplicate and keeps digits that `JSON.parse` rounds. The canonical output is jsonb's key order. Both engines compare json values by jsonb equality. [judgment]
+- Json: duplicate keys and numbers not exactly representable as a double are refused, because `jsonb` keeps the last duplicate and keeps digits that `JSON.parse` rounds. The canonical output is jsonb's key order (shorter UTF-8 byte length first, then bytewise), written by `stringifyJson` because JS objects put integer-like keys first. A number is exactly representable when its literal denotes the same decimal value as the shortest round-trip form of the double it parses to, so `0.1` is accepted and `0.1000000000000000055511151231257827` is refused; integral values beyond ±(2^53 - 1), such as `1e300`, are refused as well. `jsonb` refuses `\u0000` itself. Both engines compare json values by jsonb equality. [judgment]
 - Choice keys: 1 to 63 characters of `[a-z0-9_]`, starting with a letter or digit; validated by the record service so lists change without DDL [judgment].
 - Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [spike: `relfilenode` unchanged, under 100 ms on 1M rows, `seq_scan` unchanged].
 - System date-times come from one clock reading per transaction, already in whole milliseconds.
