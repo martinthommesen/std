@@ -2,3 +2,4 @@
 # oxlint.config.ts, an ignore file stops Oxlint from descending into the
 # directory, so it never loads vendor/effect/.oxlintrc.json and its plugins.
 /vendor/
+/.claude/

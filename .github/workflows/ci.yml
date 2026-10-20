@@ -34,6 +34,9 @@ jobs:
       STD_DATABASE_URL: postgres://std:std@127.0.0.1:54329/std
     steps:
       - uses: actions/checkout@v5
+        with:
+          # check-vendor reads the git-subtree trailers of the vendoring commit.
+          fetch-depth: 0
       # Installs the pnpm version pinned by "packageManager" (pnpm@12.14.0).
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5

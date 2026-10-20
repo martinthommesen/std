@@ -73,10 +73,11 @@ describe("effect-stability-diagnostics", () => {
       fixture("web-sql"),
       fixture("outdated"),
       fixture("duplicate"),
+      fixture("plain-bypass"),
     ]);
 
     expect(result.output).toBe(
-      "check-tsconfig: 9 package(s) match their profiles\n"
+      "check-tsconfig: 10 package(s) match their profiles\n"
     );
     expect(result.code).toBe(0);
   });

@@ -13,6 +13,7 @@ import {
   checkJsonValue,
   checkNumberLiteral,
   JSON_MAX_DEPTH,
+  JSON_TRANSPORT_MAX_DEPTH,
   parseJson,
   stringifyJson,
 } from "../src/json.ts";
@@ -82,7 +83,19 @@ describe(parseJson, () => {
     assert.strictEqual(
       reason(
         parseJson(
-          `${"[".repeat(JSON_MAX_DEPTH + 1)}${"]".repeat(JSON_MAX_DEPTH + 1)}`
+          `${"[".repeat(JSON_TRANSPORT_MAX_DEPTH + 1)}${"]".repeat(JSON_TRANSPORT_MAX_DEPTH + 1)}`
+        )
+      ),
+      "tooDeep"
+    );
+    assert.strictEqual(
+      reason(
+        checkJsonValue(
+          getOrThrow(
+            parseJson(
+              `${"[".repeat(JSON_MAX_DEPTH + 1)}${"]".repeat(JSON_MAX_DEPTH + 1)}`
+            )
+          )
         )
       ),
       "tooDeep"

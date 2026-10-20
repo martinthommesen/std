@@ -18,7 +18,12 @@ import {
 import { getOrThrow } from "../src/field-error.ts";
 import { isJsonArray, isJsonObject } from "../src/json-value.ts";
 import type { JsonValue } from "../src/json-value.ts";
-import { JSON_MAX_DEPTH, parseJson, stringifyJson } from "../src/json.ts";
+import {
+  checkJsonValue,
+  JSON_MAX_DEPTH,
+  parseJson,
+  stringifyJson,
+} from "../src/json.ts";
 import { jsonbEquals, jsonbKeys } from "../src/jsonb.ts";
 import { PostgresTest } from "./support/postgres.ts";
 
@@ -268,7 +273,7 @@ layer(PostgresTest)("jsonb-postgres", (pg) => {
 
         assert.isTrue(Exit.isFailure(nul));
         assert.isTrue(parseJson(deep).ok);
-        assert.isFalse(parseJson(`[${deep}]`).ok);
+        assert.isFalse(checkJsonValue(getOrThrow(parseJson(`[${deep}]`))).ok);
         assert.strictEqual(row?.depth, "array");
       })
   );

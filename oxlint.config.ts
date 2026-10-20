@@ -17,8 +17,9 @@ const jsPlugins = selectJsPlugins([
 export default defineConfig({
   env: core.env ?? {},
   extends: [core, react, vitest, shadcn, antiSlop, jsPlugins],
-  // vendor/ holds Effect's upstream source, read as reference only.
-  ignorePatterns: [...(core.ignorePatterns ?? []), "vendor/**"],
+  // vendor/ holds Effect's upstream source, read as reference only; .claude/
+  // holds agent worktrees. .eslintignore also keeps Oxlint out of both.
+  ignorePatterns: [...(core.ignorePatterns ?? []), "vendor/**", ".claude/**"],
   jsPlugins: [...jsPlugins.jsPlugins, ...shadcn.jsPlugins],
   options: { typeAware: true },
   settings: jsPluginSettings,

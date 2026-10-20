@@ -5,8 +5,8 @@
     "plugins": [
       {
         "name": "@effect/language-service",
-        "allowedUnstableApis": [],
         "allowedExperimentalApis": [],
+        "allowedUnstableApis": [],
         "diagnosticSeverity": {
           "unstableApiUsage": "error",
           "experimentalApiUsage": "error",
@@ -18,11 +18,16 @@
         "ignoreEffectWarningsInTscExitCode": false,
         "overrides": [
           {
-            "include": ["test/**/*.ts"],
+            "include": ["test/**/*"],
             "options": {
               "allowedUnstableApis": [
                 "effect/sql",
+                "effect/http",
+                "effect/http-api",
+                "effect/observability",
                 "@effect/sql-pg",
+                "@effect/platform-node",
+                "@effect/opentelemetry",
                 "@effect/vitest"
               ]
             }

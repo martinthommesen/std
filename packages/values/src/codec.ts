@@ -35,6 +35,7 @@ import {
   isJsonNumber,
   isJsonObject,
   isJsonString,
+  isJsonValue,
 } from "./json-value.ts";
 import type { JsonValue } from "./json-value.ts";
 import { checkJsonValue } from "./json.ts";
@@ -337,27 +338,40 @@ export const decodeChoiceWrite = (
   return checkChoiceWrite(decoded.value, choices, stored);
 };
 
+// A stored value that does not belong to its field's kind is a defect in
+// the caller, never data to reinterpret; the message names the kind only.
+const kindMismatch = (kind: FieldKind): never => {
+  throw new TypeError(`encodeOut: the value is not a stored ${kind} value.`);
+};
+
+const encodeJsonKind = (kind: FieldKind, value: StoredValue): JsonValue =>
+  isJsonValue(value) ? value : kindMismatch(kind);
+
+// Dispatches on the field kind alone: a json value shaped like
+// {"set": true} must come out whole, so no branch looks at the shape.
 const encodePresent = (type: FieldType, value: StoredValue): JsonValue => {
-  if (isSecretState(value)) {
-    return { set: value.set };
+  const { kind } = type;
+
+  if (kind === "password" || kind === "secret") {
+    return isSecretState(value) ? { set: value.set } : kindMismatch(kind);
   }
 
-  if (isBigint(value)) {
-    return formatBigInteger(value);
+  if (kind === "bigInteger") {
+    return isBigint(value) ? formatBigInteger(value) : kindMismatch(kind);
   }
 
-  if (isDecimal(value)) {
-    const atScale =
-      type.kind === "decimal" ? rescaleDecimal(value, type.scale) : undefined;
-
-    return formatDecimal(atScale ?? value);
+  if (type.kind === "decimal") {
+    return isDecimal(value)
+      ? formatDecimal(rescaleDecimal(value, type.scale) ?? value)
+      : kindMismatch(kind);
   }
 
-  if (type.kind === "dateTime" && isNumber(value)) {
-    return formatDateTime(value);
+  if (kind === "dateTime") {
+    return isNumber(value) ? formatDateTime(value) : kindMismatch(kind);
   }
 
-  return value;
+  // Every other kind stores its canonical JSON as is.
+  return encodeJsonKind(kind, value);
 };
 
 /**

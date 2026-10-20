@@ -296,8 +296,8 @@ export const storedEquals = (
     return writeOnlyEquals(left, right);
   }
 
-  if (isDecimal(left) && isDecimal(right)) {
-    return decimalsEqual(left, right);
+  if (kind === "decimal") {
+    return isDecimal(left) && isDecimal(right) && decimalsEqual(left, right);
   }
 
   if (
