@@ -293,7 +293,7 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 
 ## Known risks
 
-- Every config commit briefly pauses all requests (one global lock). Per attempt, the pause is bounded by the `CONFIG_KEY` wait (200 ms) plus the DDL lock wait (2 s) plus the main transaction's time. Accepted for v0.1 and measured in Stage 0. Per-table locking is the fallback.
+- Every config commit briefly pauses all requests (one global lock). Per attempt, the pause is bounded by the `CONFIG_KEY` wait (200 ms) plus a 2 s lock budget for the whole attempt plus the main transaction's own work. `lock_timeout` applies to each lock separately, so the budget is enforced by taking every table lock explicitly with `LOCK TABLE` under the remaining budget, with `statement_timeout` as a backstop (Contracts 1.4). Accepted for v0.1 and measured in Stage 0 (decision 0007). Per-table locking is the fallback.
 - Many `ALTER TABLE` forms take `ACCESS EXCLUSIVE`, and a waiting lock request queues later conflicting requests behind it, plain reads included [checked: `waitMask` test in src/backend/storage/lmgr/lock.c, REL_18_STABLE]. Short lock timeouts with retry bound the wait. Adding a reference field locks writes to the target table briefly, which matters for `core.user`.
 - Postgres limits: 63-byte identifiers, and 1,600 columns per table with dropped columns still counted. `doctor` warns at 1,400.
 - Adding a class briefly locks every ancestor table. The fallback design (a stored class path) is in the contracts.
