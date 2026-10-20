@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch",
-    "typecheck": "pnpm -r --workspace-concurrency=8 run typecheck",
+    "typecheck": "node tooling/typecheck.ts",
     "test": "vitest run",
     "check": "ultracite check",
+    "check:tooling": "node tooling/check-tsconfig.ts",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down"
@@ -42,5 +43,8 @@
   "engines": {
     "node": ">=26.12.0"
   },
-  "packageManager": "pnpm@12.14.0"
+  "packageManager": "pnpm@12.14.0",
+  "std": {
+    "profile": "plain"
+  }
 }
