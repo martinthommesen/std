@@ -16,6 +16,7 @@ import { SqlClient } from "effect/sql";
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { readOnly } from "../sql/statement-marks.ts";
 import {
   DEFINITION_TABLES,
   definitionFromRow,
@@ -43,7 +44,7 @@ export const loadSnapshot = (
 
       for (const entry of DEFINITION_TABLES) {
         const decode = decoders.get(entry.kind);
-        const rows = yield* sql.unsafe(selectStatement(entry));
+        const rows = yield* readOnly(sql.unsafe(selectStatement(entry)));
         const decoded = decode === undefined ? [] : yield* decode(rows);
 
         for (const row of decoded) {

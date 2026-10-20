@@ -8,7 +8,11 @@ import type { Scope } from "effect";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { SQLSTATE_LOCK_NOT_AVAILABLE, sqlStateOf } from "./errors.ts";
+import {
+  SQLSTATE_LOCK_NOT_AVAILABLE,
+  SQLSTATE_QUERY_CANCELED,
+  sqlStateOf,
+} from "./errors.ts";
 import type { ConfigState } from "./request-revision.ts";
 import { analyzeStatement } from "./statement-lexer.ts";
 import { StatementMarks } from "./statement-marks.ts";
@@ -204,14 +208,21 @@ export class TransactionState implements TransactionHandle {
 
   /**
    * Records a failed statement: Postgres has aborted the transaction. A lock
-   * timeout is retryable only for statements marked `lockWaiting`.
+   * timeout is retryable only for statements marked `lockWaiting`; for them
+   * a statement timeout counts as one too, because the schema engine sets
+   * `statement_timeout` to the attempt's remaining lock budget as a
+   * backstop for lock waits it did not take explicitly.
    * @param failure - The driver error.
    * @param marks - The statement's marks.
    */
   statementFailed(failure: SqlError, marks: StatementMarksValue): void {
     const sqlState = sqlStateOf(failure);
 
-    if (marks.lockWaiting && sqlState === SQLSTATE_LOCK_NOT_AVAILABLE) {
+    if (
+      marks.lockWaiting &&
+      (sqlState === SQLSTATE_LOCK_NOT_AVAILABLE ||
+        sqlState === SQLSTATE_QUERY_CANCELED)
+    ) {
       this.lockTimedOut = true;
     }
 

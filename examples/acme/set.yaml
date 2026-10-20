@@ -1,0 +1,22 @@
+# The acme example (Contracts 3.3): assets, laptops and monitors, and the
+# two roles of the two-user example. Load it with
+#   pnpm std upgrade --set examples/acme
+set:
+  id: 5e1e31c0-1b73-46a8-86e4-e2500ddf8a76
+  name: acme
+  layer: app
+  version: 1
+  requires: [core]
+
+namespaces:
+  - id: 639583a8-9b13-4227-94b1-5cae597ac5f5
+    name: acme
+    label: Acme
+
+roles:
+  - id: 081e3ce8-26a8-43a2-bc58-838d40b4c22d
+    name: asset_manager
+    label: Asset manager
+  - id: 29e6b30c-84cd-4f18-96a4-9ee11fe1db7b
+    name: employee
+    label: Employee

@@ -1,0 +1,109 @@
+# The 13 access rules of Contracts 3.3. Conditions are condition ASTs
+# whose paths hold field IDs: owner 6a373fb5, status 5ed5f951, cost 6dfdc15e.
+accessRules:
+  - id: 7a0fb5a6-e342-4167-a0a8-49c042d8f8aa
+    description: "1: asset managers may do everything with assets"
+    effect: allow
+    roles: [asset_manager]
+    table: acme.asset
+    target: records
+    actions: [read, create, update, delete]
+  - id: 606c8857-0b95-46ab-8bcb-f1998ab8d9d3
+    description: "2a: asset managers may read and write every asset field"
+    effect: allow
+    roles: [asset_manager]
+    table: acme.asset
+    target: fields
+    fields: "*"
+    actions: [read, create, update]
+  - id: 8d210eb6-7f76-469a-b61d-67a9f574adcc
+    description: "2b: asset managers may read and write every laptop field"
+    effect: allow
+    roles: [asset_manager]
+    table: acme.laptop
+    target: fields
+    fields: "*"
+    actions: [read, create, update]
+  - id: 2fe924c5-1d91-463d-b45b-044715a7eee3
+    description: "2c: asset managers may read and write every monitor field"
+    effect: allow
+    roles: [asset_manager]
+    table: acme.monitor
+    target: fields
+    fields: "*"
+    actions: [read, create, update]
+  - id: 4579c71d-2bf3-4784-a6a9-b5a777f66677
+    description: "3: employees may read, create and update their own assets"
+    effect: allow
+    roles: [employee]
+    table: acme.asset
+    target: records
+    actions: [read, create, update]
+    condition:
+      op: eq
+      left: { path: [6a373fb5-bd18-4d7f-b0b4-182470f5421e] }
+      right: { ctx: me }
+  - id: f079f79a-0575-4eb9-93c0-6fc93457f780
+    description: "4: employees may read every asset field"
+    effect: allow
+    roles: [employee]
+    table: acme.asset
+    target: fields
+    fields: "*"
+    actions: [read]
+  - id: 49bb7831-2761-4d26-859d-a0f0c1207b39
+    description: "5: employees never read cost"
+    effect: deny
+    roles: [employee]
+    table: acme.asset
+    target: fields
+    fields: [cost]
+    actions: [read]
+  - id: 51ea7452-4596-4f5c-bc1c-64170b739f99
+    description: "6: employees do not read purchased_on of lost assets"
+    effect: deny
+    roles: [employee]
+    table: acme.asset
+    target: fields
+    fields: [purchased_on]
+    actions: [read]
+    condition:
+      op: eq
+      left: { path: [5ed5f951-f6da-47ed-967a-c726af083d44] }
+      right: { value: lost }
+  - id: 71fc933a-24a4-4573-8c96-13eb2650dc10
+    description: "7: employees may write name, status, owner and docked_to"
+    effect: allow
+    roles: [employee]
+    table: acme.asset
+    target: fields
+    fields: [name, status, owner, docked_to]
+    actions: [create, update]
+  - id: f1b90fc1-bc73-452e-b120-2caf6e2cf69f
+    description: "8: employees may read a laptop's serial"
+    effect: allow
+    roles: [employee]
+    table: acme.laptop
+    target: fields
+    fields: [serial]
+    actions: [read]
+  - id: 8bcafd59-f17e-4c44-8d06-ae1ca34cacbc
+    description: "9: employees may not change a laptop's status"
+    effect: deny
+    roles: [employee]
+    table: acme.laptop
+    target: fields
+    fields: [status]
+    actions: [update]
+  - id: 70aa3177-5c27-4708-a725-d68c63bbe22c
+    description: "10: employees do not see docked_to of assets costing over 2000"
+    effect: deny
+    roles: [employee]
+    table: acme.asset
+    target: fields
+    fields: [docked_to]
+    actions: [read]
+    condition:
+      op: gt
+      left: { path: [6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717] }
+      right: { value: "2000" }

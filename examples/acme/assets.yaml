@@ -1,0 +1,50 @@
+tables:
+  - id: 989151bb-a69f-4b18-b73d-9e19a4e7514c
+    name: acme.asset
+    label: Asset
+    displayField: name
+    fields:
+      - id: 6438aa02-739d-46c0-94cc-ecea44488210
+        name: name
+        type: { kind: text, maxLength: 120 }
+        required: true
+      - id: 6a373fb5-bd18-4d7f-b0b4-182470f5421e
+        name: owner
+        type: { kind: reference, target: core.user }
+      - id: 5ed5f951-f6da-47ed-967a-c726af083d44
+        name: status
+        type: { kind: text, maxLength: 32 }
+      - id: 6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717
+        name: cost
+        type: { kind: decimal, precision: 12, scale: 2 }
+      - id: 4da75c5e-eb4d-499d-ae10-ed167bfb3185
+        name: purchased_on
+        type: date
+      - id: 83ec3835-6898-46f3-ae2e-afdbc3f5d407
+        name: docked_to
+        type: { kind: reference, target: acme.asset }
+
+  - id: 6a365314-6d1b-4e4d-b166-73f29f808504
+    name: acme.laptop
+    label: Laptop
+    extends: acme.asset
+    fields:
+      - id: 35989424-54b4-4d99-adfe-649cb4bac237
+        name: serial
+        type: { kind: text, maxLength: 64 }
+      - id: 6972d40e-504c-492c-ae3c-3b2021f6e21f
+        name: disk_key
+        type: { kind: text, maxLength: 128, caseSensitive: true }
+    overrides:
+      - id: 8c8bcc5d-5818-45f6-92dc-3e2e43749e84
+        field: purchased_on
+        required: true
+
+  - id: 87363f0e-8122-4569-8fc8-ec8c5277a71b
+    name: acme.monitor
+    label: Monitor
+    extends: acme.asset
+    fields:
+      - id: 9ecc19c5-8401-4887-ac05-d5dbdd937297
+        name: size_inches
+        type: integer

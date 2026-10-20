@@ -1,4 +1,3 @@
-import type { PgClient } from "@effect/sql-pg";
 /**
  * The per-process configuration cache (Contracts 1.3).
  *
@@ -19,6 +18,7 @@ import type { PgClient } from "@effect/sql-pg";
  * another process commits, including after its listener connection was
  * lost and re-established.
  */
+import type { PgClient } from "@effect/sql-pg";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Context, Effect, Layer, Option, Ref, Semaphore, Stream } from "effect";
 import type { Scope } from "effect";

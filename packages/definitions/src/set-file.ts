@@ -1,4 +1,3 @@
-import { FieldTypeSchema } from "@std/values/field-type";
 /**
  * The definition set file format (Contracts 1.8, 8.1, 8.3), after YAML
  * parsing.
@@ -35,6 +34,7 @@ import { FieldTypeSchema } from "@std/values/field-type";
  * subscriptions: []
  * ```
  */
+import { FieldTypeSchema } from "@std/values/field-type";
 import {
   Array as SchemaArray,
   Boolean as SchemaBoolean,
