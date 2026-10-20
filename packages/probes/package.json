@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "probes": "node src/main.ts"
+    "probes": "node src/main.ts",
+    "render": "node src/render.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

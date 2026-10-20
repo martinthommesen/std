@@ -25,7 +25,7 @@ import type { Summary } from "./stats.ts";
 export const ADD_COLUMN_BOUND_MS = 100;
 
 /** Round trips and polling allowed on top of the lock budget. */
-export const BUDGET_SLACK_MS = 500;
+export const BUDGET_SLACK_MS = 100;
 
 /** One probe's result with the conditions it ran under. */
 export interface ProbeRecord<T> {
@@ -182,7 +182,7 @@ const renderConfigPause = (record: ProbeRecord<ConfigPauseResult>): string => {
     "",
     `Long request: PID ${result.longRequest.longRequestPid}, ${result.longRequest.longRequestOutcome} after ${ms(result.longRequest.longRequestMs)}; still running when the config commit gave up: ${yesNo(result.longRequest.longRequestRunningAtEnd)}. The write batch inserted ${result.longRequest.batchRows} rows.`,
     "",
-    `Contract bound per attempt (CONFIG_KEY wait 200 ms + DDL lock wait 2 s + main transaction p95): ${ms(result.boundMs)}. Worst stall in the single-commit scenarios: ${ms(worstStall)}. ${verdict(worstStall <= result.boundMs)}`,
+    `Contract bound per attempt (CONFIG_KEY wait 200 ms + DDL lock budget 2 s + main transaction p95): ${ms(result.boundMs)}. Worst stall in the single-commit scenarios: ${ms(worstStall)}. ${verdict(worstStall <= result.boundMs)}`,
     "",
     `A config commit that has to wait for the 30 s request: longest request or gap while it tried ${ms(longPause)}, and it ended with ${result.longRequest.commit.outcome}. ${verdict(longPause < result.boundMs && result.longRequest.commit.outcome === "SchemaLockTimeout")}`,
   ].join("\n");
