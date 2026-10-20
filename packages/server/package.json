@@ -14,6 +14,8 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
+    "@std/definitions": "workspace:*",
+    "@std/values": "workspace:*",
     "effect": "catalog:",
     "yaml": "2.9.1"
   },

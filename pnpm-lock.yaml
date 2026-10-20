@@ -287,6 +287,12 @@ importers:
       '@effect/sql-pg':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)
+      '@std/definitions':
+        specifier: workspace:*
+        version: link:../definitions
+      '@std/values':
+        specifier: workspace:*
+        version: link:../values
       effect:
         specifier: 'catalog:'
         version: 4.0.5
