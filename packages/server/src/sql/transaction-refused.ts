@@ -15,6 +15,8 @@ export const TransactionRefusal = Schema.Literals([
   "transaction-control",
   // A nesting STD does not allow (for example a config commit inside a request).
   "nesting",
+  // Use of a transaction (its connection, handle or nesting) after it ended.
+  "closed",
 ]);
 
 /**

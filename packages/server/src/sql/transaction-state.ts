@@ -4,91 +4,115 @@
  */
 import type { PgClient } from "@effect/sql-pg";
 import { Effect, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { SQLSTATE_LOCK_NOT_AVAILABLE, sqlStateOf } from "./errors.ts";
 import type { ConfigState } from "./request-revision.ts";
+import { analyzeStatement } from "./statement-lexer.ts";
+import { StatementMarks } from "./statement-marks.ts";
+import type { StatementMarksValue } from "./statement-marks.ts";
 import type {
   TransactionHandle,
   TransactionKind,
 } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
 
-const FIRST_WORD = /^[a-z]+/u;
-const ANALYZE_WORD = /\banaly[sz]e\b/u;
-const DATA_MODIFYING = /\b(?:insert|update|delete|merge)\b/u;
-const WORD_SEPARATOR = /\s+/u;
-const HEAD_LENGTH = 512;
-
-const READ_ONLY_WORDS = new Set([
-  "fetch",
-  "lock",
-  "reset",
-  "select",
-  "set",
-  "show",
-  "table",
-  "values",
-]);
-
+/** Leading words that end, nest or replace a transaction. */
 const CONTROL_WORDS = new Set([
   "abort",
   "begin",
   "commit",
   "end",
-  "prepare",
   "rollback",
   "start",
 ]);
 
-/**
- * The statement text without leading whitespace and comments, lower-cased
- * and cut to its first `HEAD_LENGTH` characters.
- * @param sql - A statement.
- * @returns Its head.
- */
-const statementHead = (sql: string): string => {
-  let rest = sql.trimStart();
+/** Leading words that manage savepoints. */
+const SAVEPOINT_WORDS = new Set(["release", "savepoint"]);
 
-  while (rest.startsWith("--") || rest.startsWith("/*")) {
-    const end = rest.startsWith("--")
-      ? rest.indexOf("\n")
-      : rest.indexOf("*/") + 1;
+/** Settings that change a transaction's characteristics. */
+const TRANSACTION_SETTINGS = new Set([
+  "default_transaction_deferrable",
+  "default_transaction_isolation",
+  "default_transaction_read_only",
+  "transaction_deferrable",
+  "transaction_isolation",
+  "transaction_read_only",
+]);
 
-    rest = end <= 0 ? "" : rest.slice(end + 1).trimStart();
+/** Modifiers between `SET` and the setting's name. */
+const SET_SCOPES = new Set(["local", "session"]);
+
+type Refusal = readonly [reason: TransactionRefused["reason"], detail: string];
+
+const ISOLATION_LEVEL = "isolation-level";
+const TRANSACTION_CONTROL = "transaction-control";
+
+const refuseSet = (words: readonly string[]): Refusal | undefined => {
+  const [, second = "", third = ""] = words;
+  const name = SET_SCOPES.has(second) ? third : second;
+
+  if (name === "transaction") {
+    return [ISOLATION_LEVEL, "SET TRANSACTION inside an STD transaction"];
   }
 
-  return rest.slice(0, HEAD_LENGTH).toLowerCase();
+  if (second === "session" && third === "characteristics") {
+    return [
+      ISOLATION_LEVEL,
+      "SET SESSION CHARACTERISTICS inside an STD transaction",
+    ];
+  }
+
+  if (TRANSACTION_SETTINGS.has(name)) {
+    return [ISOLATION_LEVEL, `SET ${name} inside an STD transaction`];
+  }
+
+  return undefined;
 };
 
-const wordsOf = (head: string): readonly string[] =>
-  head.split(WORD_SEPARATOR, 4);
-
 /**
- * Whether a statement counts as a write for poisoning: everything except
- * `SELECT`, `SHOW`, `VALUES`, `TABLE`, `FETCH`, `SET`, `RESET`, `LOCK`,
- * `EXPLAIN` without `ANALYZE`, and `WITH` without a data-modifying clause.
+ * Why a statement from a transaction's code must not run, if it must not.
+ * The text is lexed, so comments, punctuation and quoting cannot hide the
+ * first keyword or a second statement.
  * @param sql - The statement text.
- * @returns `false` for the read-only forms.
+ * @returns The refusal, or `undefined` when the statement may run.
  */
-export const isWriteStatement = (sql: string): boolean => {
-  const head = statementHead(sql);
-  const first = FIRST_WORD.exec(head)?.[0] ?? "";
+export const refusalFor = (sql: string): Refusal | undefined => {
+  const { leadingWords, statements } = analyzeStatement(sql);
+  const [first = "", second = ""] = leadingWords;
 
-  if (READ_ONLY_WORDS.has(first)) {
-    return false;
+  if (statements > 1) {
+    return [TRANSACTION_CONTROL, "several statements in one text"];
   }
 
-  if (first === "explain") {
-    return ANALYZE_WORD.test(head);
+  if (SAVEPOINT_WORDS.has(first) || (first === "rollback" && second === "to")) {
+    return ["savepoint", `${first.toUpperCase()} inside an STD transaction`];
   }
 
-  if (first === "with") {
-    return DATA_MODIFYING.test(head);
+  if (
+    CONTROL_WORDS.has(first) ||
+    (first === "prepare" && second === "transaction")
+  ) {
+    return [
+      TRANSACTION_CONTROL,
+      `${first.toUpperCase()} inside an STD transaction`,
+    ];
   }
 
-  return true;
+  if (first === "set") {
+    return refuseSet(leadingWords);
+  }
+
+  if (
+    first === "reset" &&
+    (second === "all" || TRANSACTION_SETTINGS.has(second))
+  ) {
+    return [TRANSACTION_CONTROL, `RESET ${second} inside an STD transaction`];
+  }
+
+  return undefined;
 };
 
 const refusal = (
@@ -98,64 +122,29 @@ const refusal = (
   Effect.die(new TransactionRefused({ detail, reason }));
 
 /**
- * Checks a statement from a transaction's code before it is sent.
- * @param sql - The statement text.
- * @returns A refusal, or `Option.none()` when the statement may run.
- */
-const refusalFor = (sql: string): Option.Option<Effect.Effect<never>> => {
-  const head = statementHead(sql);
-  const [first = "", second = "", third = ""] = wordsOf(head);
-
-  if (
-    first === "savepoint" ||
-    first === "release" ||
-    (first === "rollback" && second === "to")
-  ) {
-    return Option.some(
-      refusal("savepoint", `${first.toUpperCase()} inside an STD transaction`)
-    );
-  }
-
-  const setsTransaction =
-    first === "set" &&
-    (second === "transaction" ||
-      (second === "session" && third === "characteristics"));
-
-  if (setsTransaction && head.includes("isolation")) {
-    return Option.some(
-      refusal("isolation-level", "SET TRANSACTION ISOLATION LEVEL")
-    );
-  }
-
-  if (CONTROL_WORDS.has(first)) {
-    return Option.some(
-      refusal(
-        "transaction-control",
-        `${first.toUpperCase()} inside an STD transaction`
-      )
-    );
-  }
-
-  return Option.none();
-};
-
-/**
  * Mutable bookkeeping of one outermost transaction. It is also the
  * `CurrentTransaction` value, so nested units find it.
  */
 export class TransactionState implements TransactionHandle {
   readonly kind: TransactionKind;
   readonly client: PgClient.PgClient;
-  /** Statements counted as writes so far. */
+  /**
+   * Statements of the transaction's code that may have written: every one
+   * not marked `readOnly`, plus `markWrite` calls.
+   */
   writes = 0;
   /** Why the transaction must not commit. */
   poisoned: string | undefined;
-  /** Whether a statement failed with `lock_timeout` (SQLSTATE 55P03). */
+  /** Whether a retryable lock wait (the `CONFIG_KEY` wait or `lockWaiting` DDL) timed out. */
   lockTimedOut = false;
+  /** Set once `COMMIT` or `ROLLBACK` has run; every later use is refused. */
+  closed = false;
   /** The state the transaction runs at, once set up. */
   configState: ConfigState | undefined;
   /** The checked connection the transaction's code uses, once set up. */
   tracked: Connection | undefined;
+  /** The scope of the transaction's code, closed before the transaction ends. */
+  scope: Scope.Scope | undefined;
   /** Post-commit actions, in registration order. */
   readonly actions: Effect.Effect<void>[] = [];
 
@@ -169,17 +158,41 @@ export class TransactionState implements TransactionHandle {
   }
 
   readonly afterCommit = (action: Effect.Effect<void>): Effect.Effect<void> =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
+      if (this.closed) {
+        return this.closedRefusal("afterCommit");
+      }
+
       this.actions.push(action);
+
+      return Effect.void;
     });
 
-  readonly markWrite: Effect.Effect<void> = Effect.sync(() => {
+  readonly markWrite: Effect.Effect<void> = Effect.suspend(() => {
+    if (this.closed) {
+      return this.closedRefusal("markWrite");
+    }
+
     this.writes += 1;
+
+    return Effect.void;
   });
 
   readonly poisonReason: Effect.Effect<string | undefined> = Effect.sync(
     () => this.poisoned
   );
+
+  /**
+   * The refusal for any use after the transaction ended.
+   * @param what - What was attempted.
+   * @returns A `TransactionRefused` defect.
+   */
+  closedRefusal(what: string): Effect.Effect<never> {
+    return refusal(
+      "closed",
+      `${what} after the ${this.kind} transaction ended`
+    );
+  }
 
   /**
    * Marks the transaction poisoned; the first reason wins.
@@ -190,13 +203,15 @@ export class TransactionState implements TransactionHandle {
   }
 
   /**
-   * Records a failed statement: Postgres has aborted the transaction.
+   * Records a failed statement: Postgres has aborted the transaction. A lock
+   * timeout is retryable only for statements marked `lockWaiting`.
    * @param failure - The driver error.
+   * @param marks - The statement's marks.
    */
-  statementFailed(failure: SqlError): void {
+  statementFailed(failure: SqlError, marks: StatementMarksValue): void {
     const sqlState = sqlStateOf(failure);
 
-    if (sqlState === SQLSTATE_LOCK_NOT_AVAILABLE) {
+    if (marks.lockWaiting && sqlState === SQLSTATE_LOCK_NOT_AVAILABLE) {
       this.lockTimedOut = true;
     }
 
@@ -204,28 +219,62 @@ export class TransactionState implements TransactionHandle {
   }
 
   /**
-   * `statementFailed` as an effect, for `tapError`.
+   * `statementFailed` for statements with the given marks, for `tapError`.
+   * @param marks - The statements' marks.
+   * @returns A function recording a failure.
+   */
+  readonly failureRecorder =
+    (marks: StatementMarksValue) =>
+    (failure: SqlError): Effect.Effect<void> =>
+      Effect.sync(() => {
+        this.statementFailed(failure, marks);
+      });
+
+  /**
+   * Records that the `CONFIG_KEY` wait timed out (or failed otherwise).
+   * @param failure - The driver error of the lock statement.
+   * @returns An effect that records it.
+   */
+  readonly recordLockWaitFailure = (failure: SqlError): Effect.Effect<void> =>
+    Effect.sync(() => {
+      this.statementFailed(failure, { lockWaiting: true, readOnly: false });
+    });
+
+  /**
+   * `statementFailed` for the transaction machinery's own statements.
    * @param failure - The driver error.
    * @returns An effect that records the failure.
    */
   readonly recordFailure = (failure: SqlError): Effect.Effect<void> =>
     Effect.sync(() => {
-      this.statementFailed(failure);
+      this.statementFailed(failure, { lockWaiting: false, readOnly: false });
     });
 
   /**
-   * Checks and counts a statement before it is sent.
+   * Checks and counts a statement of the transaction's code before it is sent.
    * @param sql - The statement text.
+   * @param marks - The statement's marks.
    * @returns A refusal, or `Option.none()` when the statement may run.
    */
-  admit(sql: string): Option.Option<Effect.Effect<never>> {
+  admit(
+    sql: string,
+    marks: StatementMarksValue
+  ): Option.Option<Effect.Effect<never>> {
+    if (this.closed) {
+      return Option.some(this.closedRefusal("a statement"));
+    }
+
     const refused = refusalFor(sql);
 
-    if (Option.isNone(refused) && isWriteStatement(sql)) {
+    if (refused !== undefined) {
+      return Option.some(refusal(...refused));
+    }
+
+    if (!marks.readOnly) {
       this.writes += 1;
     }
 
-    return refused;
+    return Option.none();
   }
 }
 
@@ -234,11 +283,13 @@ const tracked = <A>(
   sql: string,
   run: () => Effect.Effect<A, SqlError>
 ): Effect.Effect<A, SqlError> =>
-  Effect.suspend(() =>
-    Option.match(state.admit(sql), {
-      onNone: () => run().pipe(Effect.tapError(state.recordFailure)),
-      onSome: (refused) => refused,
-    })
+  StatementMarks.pipe(
+    Effect.flatMap((marks) =>
+      Option.match(state.admit(sql, marks), {
+        onNone: () => run().pipe(Effect.tapError(state.failureRecorder(marks))),
+        onSome: (refused) => refused,
+      })
+    )
   );
 
 const trackedStream = <A>(
@@ -247,12 +298,16 @@ const trackedStream = <A>(
   open: () => Stream.Stream<A, SqlError>
 ): Stream.Stream<A, SqlError> =>
   Stream.unwrap(
-    Effect.suspend(() =>
-      Option.match(state.admit(sql), {
-        onNone: () =>
-          Effect.succeed(open().pipe(Stream.tapError(state.recordFailure))),
-        onSome: (refused) => refused,
-      })
+    StatementMarks.pipe(
+      Effect.flatMap((marks) =>
+        Option.match(state.admit(sql, marks), {
+          onNone: () =>
+            Effect.succeed(
+              open().pipe(Stream.tapError(state.failureRecorder(marks)))
+            ),
+          onSome: (refused) => refused,
+        })
+      )
     )
   );
 
