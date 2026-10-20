@@ -144,6 +144,7 @@ WHERE a.pid <> pg_backend_pid()
        OR (cardinality($1::int4[]) = 0 AND a.pid IN (
          SELECT pid FROM pg_locks
          WHERE locktype = 'advisory' AND granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
            AND classid = $2::oid AND objid = $3::oid AND objsubid = 1)))
 GROUP BY a.pid, a.application_name, a.client_addr, a.state
 ORDER BY a.pid`;

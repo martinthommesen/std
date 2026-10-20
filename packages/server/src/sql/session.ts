@@ -9,7 +9,11 @@ import type { PgConnection } from "@effect/sql-pg";
 import { Duration, Effect, Redacted } from "effect";
 import type { Types } from "effect";
 
-import { makeFrontendTap, StatementObserver } from "./statement-log.ts";
+import {
+  ignoreStatements,
+  makeFrontendTap,
+  StatementObserver,
+} from "./statement-log.ts";
 import type { StatementObserverFn } from "./statement-log.ts";
 import { makeTextRegistry } from "./text-codecs.ts";
 
@@ -171,7 +175,7 @@ export const connectionConfig = (
         config.keepAlive = CLIENT_KEEPALIVE;
       }
 
-      if (observer !== undefined) {
+      if (observer !== ignoreStatements) {
         config.stream = tappedStreamFactory(
           Redacted.value(setup.url),
           observer,

@@ -231,7 +231,11 @@ export const runOutermost = <S, A, E, R>(
 
         const work = Effect.gen(function* transactionWork() {
           yield* control(connection, BEGIN_STATEMENT);
-          const setupResult = yield* setup(connection, state);
+
+          const setupResult = yield* setup(connection, state).pipe(
+            Effect.tapError(state.recordFailure)
+          );
+
           state.tracked = tracked;
 
           return yield* body(setupResult, tracked);

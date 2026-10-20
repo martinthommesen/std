@@ -46,7 +46,12 @@ import type { DatabaseError } from "@std/server/sql/errors";
 import { SqlLayer } from "@std/server/sql/layer";
 import type { SqlServices } from "@std/server/sql/layer";
 import { decodeRows } from "@std/server/sql/rows";
-import { StatementLog } from "@std/server/sql/statement-log";
+import { connectionConfig } from "@std/server/sql/session";
+import {
+  ignoreStatements,
+  StatementLog,
+  StatementObserver,
+} from "@std/server/sql/statement-log";
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import type { Scope } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -116,6 +121,11 @@ export interface TestDatabaseOptions {
   readonly maxConnections?: number;
   /** Create an empty database instead of cloning a migrated template. */
   readonly empty?: boolean;
+  /**
+   * Create an empty database with this encoding and locale `C`, for tests
+   * of the UTF8 checks. Implies `empty`.
+   */
+  readonly encoding?: "SQL_ASCII" | "LATIN1";
 }
 
 const quote = (identifier: string): string =>
@@ -158,6 +168,22 @@ const connect = (
   applicationName: string
 ): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
   hygienic(PgConnection.make({ applicationName, url: Redacted.make(url) }));
+
+/**
+ * An extra session with STD's session parameters and text reads, never
+ * tapped by the statement log.
+ * @param url - The test database URL.
+ * @param applicationName - Its `application_name`.
+ * @returns The session; it closes with the scope.
+ */
+const openSession = (
+  url: string,
+  applicationName: string
+): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
+  connectionConfig({ applicationName, url: Redacted.make(url) }).pipe(
+    Effect.provideService(StatementObserver, ignoreStatements),
+    Effect.flatMap((config) => hygienic(PgConnection.make(config)))
+  );
 
 const query = (
   connection: PgConnection.PgConnection,
@@ -340,13 +366,19 @@ const createTestDatabase = (
     Effect.gen(function* cloneTemplate() {
       const admin = yield* connect(adminUrl, HARNESS_APPLICATION_NAME);
 
-      const source =
-        options.empty === true
-          ? "template0"
-          : yield* ensureTemplate(
-              admin,
-              options.migrations ?? PLATFORM_MIGRATIONS
-            );
+      const empty = options.empty === true || options.encoding !== undefined;
+
+      const source = empty
+        ? "template0"
+        : yield* ensureTemplate(
+            admin,
+            options.migrations ?? PLATFORM_MIGRATIONS
+          );
+
+      const encoding =
+        options.encoding === undefined
+          ? ""
+          : ` ENCODING '${options.encoding}' LOCALE 'C'`;
 
       if (!janitorRan) {
         janitorRan = true;
@@ -354,7 +386,10 @@ const createTestDatabase = (
       }
 
       yield* hygienic(
-        query(admin, `CREATE DATABASE ${quote(name)} TEMPLATE ${quote(source)}`)
+        query(
+          admin,
+          `CREATE DATABASE ${quote(name)} TEMPLATE ${quote(source)}${encoding}`
+        )
       );
 
       return source;
@@ -399,7 +434,7 @@ export const testDatabaseService = (
       return TestDatabase.of({
         name,
         session: (applicationName = `${TEST_APPLICATION_NAME}-session`) =>
-          connect(url, applicationName),
+          openSession(url, applicationName),
         template: source,
         url,
       });

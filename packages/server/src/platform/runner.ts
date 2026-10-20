@@ -201,6 +201,7 @@ const schemaBusy = (
     .execute(
       `SELECT pid FROM pg_locks
        WHERE locktype = 'advisory' AND granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
          AND classid = $1::oid AND objid = $2::oid AND objsubid = 1`,
       [
         String(advisoryClassId(SCHEMA_KEY)),

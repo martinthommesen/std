@@ -12,7 +12,7 @@
  * The tap only works on plaintext connections; it stops at an `SSLRequest`.
  */
 import { Context, Effect, Layer } from "effect";
-import { constUndefined } from "effect/Function";
+import { constVoid } from "effect/Function";
 
 /** One executed statement. */
 export interface LoggedStatement {
@@ -25,15 +25,17 @@ export interface LoggedStatement {
 /** Receives every executed statement; installed by `StatementLog.layer`. */
 export type StatementObserverFn = (statement: LoggedStatement) => void;
 
+/** The observer that records nothing: connections are not tapped. */
+export const ignoreStatements: StatementObserverFn = constVoid;
+
 /**
- * The observer the SQL client layers install on their sockets, if any.
- * Absent in production.
+ * The observer the SQL client layers install on their sockets.
+ * `ignoreStatements` (the default, and production) means no tap at all.
  */
-export const StatementObserver = Context.Reference<
-  StatementObserverFn | undefined
->("@std/server/sql/statement-log/StatementObserver", {
-  defaultValue: constUndefined,
-});
+export const StatementObserver = Context.Reference<StatementObserverFn>(
+  "@std/server/sql/statement-log/StatementObserver",
+  { defaultValue: () => ignoreStatements }
+);
 
 /** The statement log service. */
 export class StatementLog extends Context.Service<
