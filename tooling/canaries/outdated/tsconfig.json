@@ -1,0 +1,39 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "allowedExperimentalApis": [],
+        "allowedUnstableApis": [],
+        "diagnosticSeverity": {
+          "unstableApiUsage": "error",
+          "experimentalApiUsage": "error",
+          "outdatedApi": "error",
+          "obsoleteSchemaImport": "error",
+          "duplicatePackage": "error",
+          "floatingEffect": "error"
+        },
+        "ignoreEffectWarningsInTscExitCode": false,
+        "overrides": [
+          {
+            "include": ["test/**/*"],
+            "options": {
+              "allowedUnstableApis": [
+                "effect/sql",
+                "effect/http",
+                "effect/http-api",
+                "effect/observability",
+                "@effect/sql-pg",
+                "@effect/platform-node",
+                "@effect/opentelemetry",
+                "@effect/vitest"
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "include": ["src", "test"]
+}

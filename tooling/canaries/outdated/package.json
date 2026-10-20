@@ -1,0 +1,8 @@
+{
+  "name": "@std-canary/outdated",
+  "private": true,
+  "type": "module",
+  "std": {
+    "profile": "plain"
+  }
+}

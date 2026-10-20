@@ -1,0 +1,9 @@
+{
+  "packages": {
+    "allowed-wrapper": "canary: reaches effect through an alias of a transitive dependency",
+    "clean-lib": "canary: a dependency graph without Effect, with a cycle",
+    "fx": "canary: an npm alias of effect",
+    "fx-wrapper": "canary: depends on effect directly",
+    "optional-wrapper": "canary: an optional @effect dependency"
+  }
+}
