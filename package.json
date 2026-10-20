@@ -9,7 +9,9 @@
     "test": "vitest run",
     "test:canaries": "vitest run --config tooling/vitest.config.ts",
     "check": "ultracite check",
+    "check:postgres": "node tooling/check-postgres.ts",
     "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts && node tooling/check-vendor.ts",
+    "ci:local": "node tooling/ci-local.ts",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down"
