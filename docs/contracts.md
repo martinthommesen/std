@@ -58,7 +58,7 @@ Covers how definitions change without breaking references, stalling the applicat
 - Every config commit takes `pg_advisory_xact_lock(CONFIG_KEY)` exclusively first. So no request overlaps a config commit, and each request runs at one revision.
 - Derived artifacts (per-class Effect Schemas, generated SQL, OpenAPI, metadata) are cached under `(revision, change_set_id)`. A process whose cache differs loads the new snapshot before compiling; one load at a time per process. Including `change_set_id` catches a restored database that reaches the same number through different changes. [judgment]
 - Every config commit runs `pg_notify('std_config', '<revision>')` inside its transaction, delivered only on commit [checked: [NOTIFY](https://www.postgresql.org/docs/18/sql-notify.html)]. This is acceptable because config commits are serialized anyway (see 4.1 for why saves do not). Processes LISTEN and reload early. Correctness comes from `begin_request()`, not from NOTIFY.
-- The `listen` stream does not reconnect by itself [checked in effect-smol `main` before 4.0; re-check against the pinned 4.0.5 source]. STD wraps it with retry and re-reads the revision after reconnecting.
+- The `listen` stream does not reconnect by itself [checked: in `@effect/sql-pg` 4.0.5 a lost connection fails every listen queue (`PgConnection.ts` `fatal`) and `LISTEN` is issued once (`listenChannel`); decision 0002]. STD wraps it with retry and re-reads the revision after reconnecting; the 0A smoke test kills the listener with `pg_terminate_backend`.
 - Request transactions set `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 10s` [judgment on values], so an abandoned request cannot hold back a change for long.
 - Long jobs run in batches, each with its own transaction and `begin_request()` (7.6).
 - Every API response carries the revision it was served at (6.2).
@@ -76,7 +76,7 @@ Covers how definitions change without breaking references, stalling the applicat
 
 - `SCHEMA_KEY` is taken with `pg_try_advisory_lock`, never a blocking call under `lock_timeout`. Reason: a timed-out advisory lock request was reported to fail although the lock was granted ([pgsql-bugs #17686](https://www.postgresql.org/message-id/17686-fb1fa3870138e394%40postgresql.org)) [checked the report, not whether it is fixed]. For `CONFIG_KEY` that race does no harm: the timeout aborts the transaction, which releases a transaction-level lock.
 - If another change set holds it, the caller gets `SchemaBusy` (503 with `Retry-After`) naming that change set. No queue in v0.1.
-- The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [spike: the Effect API for a dedicated connection]
+- The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [checked: `PgClient.makeClient` in `@effect/sql-pg` 4.0.5 is a client over one `PgConnection`, outside any pool; decision 0002]
 - Changes without DDL or data preflight (labels, layouts, rules, access rules) take only `CONFIG_KEY`.
 - Lock order is always `SCHEMA_KEY`, `CONFIG_KEY`, table locks. Requests take `CONFIG_KEY` before any table lock. So STD sessions cannot deadlock on these.
 - Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`.
@@ -141,7 +141,7 @@ Tightening on a table with rows (required, unique, max length, and child-class o
 
 Coordinator connection:
 
-- It runs `SET tcp_keepalives_idle = 30, tcp_keepalives_interval = 10, tcp_keepalives_count = 3` [judgment on values]. Reason: after a network partition or a host crash with no TCP reset, an idle backend otherwise keeps `SCHEMA_KEY` until the OS keepalive fires, often after 2 hours.
+- It sets `tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10` and `tcp_keepalives_count = 3` as startup parameters, so `RESET ALL` keeps them [judgment on values]. Reason: after a network partition or a host crash with no TCP reset, an idle backend otherwise keeps `SCHEMA_KEY` until the OS keepalive fires, often after 2 hours.
 - STD assumes `client_connection_check_interval = 0` (the default), so a running build is not cancelled when its client disappears. `doctor` reports a different setting.
 - `std schema status` shows the lock holder's PID and client address.
 
@@ -198,7 +198,7 @@ Resume:
 
 - **Platform tables** (`core.config_state`, definition tables, `core.definition_revision`, journal, config layer tables, migration ledger, outbox, import bookkeeping) are owned by platform migrations. Core definition files describe them so they appear in the API; the loader verifies them and never changes them. Reason: a change set cannot create the tables it writes into.
 - **Core definition tables** (for example `core.user`) are ordinary STD tables loaded through change sets.
-- Migrations are numbered, forward-only files, recorded in `core.platform_migration (id, checksum, std_version, applied_at)`. No down migrations; rollback is restoring the backup taken before the upgrade. Reason: down migrations are rarely tested and lose data.
+- Migrations are numbered, forward-only files (TypeScript modules that list their statements one by one, because the driver has no simple-query protocol to run a multi-statement script), recorded in `core.platform_migration (id, checksum, std_version, applied_at)`. No down migrations; rollback is restoring the backup taken before the upgrade. Reason: down migrations are rarely tested and lose data.
 - Kind `tx` (default) runs in one transaction with its ledger row. Kind `concurrent_index` is one `CREATE INDEX CONCURRENTLY` with a fixed name: the runner probes `pg_index` (valid: record; invalid: drop and rebuild; missing: build).
 - Migrations follow the DDL table and timeouts in 1.4.
 - The server refuses to start if a migration is pending, if the ledger holds one the code does not know, or if an applied checksum differs.
@@ -567,7 +567,7 @@ Hooks and record rules are selected by the record's concrete class: those attach
 - Nesting depth is capped at 8 (`HookDepthExceeded`), also along after-commit `cause` chains. [judgment]
 - **After-commit effects (decision):** when an effect only writes through the record service, its writes and the fenced `done` update commit in one transaction, so in-database effects happen exactly once. External calls stay at least once, run outside any transaction, and receive `change_id` as their idempotency key. Reason: admins configure after-commit rules without code, so they cannot make them idempotent.
 - Record rules (Step 3): a "before" rule is before-write; an "after" rule chooses after-write (synchronous, can fail the save) or after-commit (asynchronous, cannot).
-- A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued.
+- A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued. Inside an STD transaction, Effect's nested `withTransaction` dies before it sends anything, and the SQL layer refuses `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` statements [checked: 0A smoke test].
 
 ### 4.2 Change entries
 
@@ -793,13 +793,13 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 
 - Integer (`int4`) is a JS `number`; big integer (`int8`) is a `bigint`.
 - Decimal is `{ coefficient: bigint; scale: number }` in STD's values package; comparison rescales and compares bigints. A decimal library is chosen when arithmetic arrives and is tested against Postgres `numeric`. [judgment]
-- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date` and `timestamptz` as text and parses them itself, through the driver's `types` registry option [checked in the @effect/sql-pg 4.0.5 source] [spike: confirm the text-format reads in the 0A driver smoke test]. Reason: driver conversions can lose precision or shift dates. [judgment]
+- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date`, `timestamp`, `timestamptz`, `json` and `jsonb` as the exact text Postgres prints and parses them itself. `@effect/sql-pg` 4.0.5 asks for every result column in binary format and has no text-format path, so STD registers codecs in the driver's `types` registry that render the binary value as Postgres's text output under `DateStyle = ISO` and `TimeZone = UTC` [checked: the 0A smoke test compares every read with Postgres's own `::text`, edge values included; decision 0002]. Reason: driver conversions can lose precision or shift dates. [judgment]
 - Literals must fit the type's range. Decimal literals have at most 100 digits [judgment]. NaN and infinities do not exist in STD.
 
 ### 5.7 Dates, date-times and time zones
 
 - **Date**: `YYYY-MM-DD`, years 0001 to 9999, proleptic Gregorian; kept as the canonical string, whose order equals date order.
-- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [spike: set through the driver's session parameters, confirmed in the 0A smoke test]. Kept as epoch milliseconds.
+- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [checked: sent as `startupParameters` in every connection's startup packet; the 0A smoke test confirms them on pooled and dedicated connections and after `RESET ALL`]. Kept as epoch milliseconds.
 - A date never compares directly with a date-time.
 - The evaluation context carries `now`, `timeZone` (IANA) and `weekStart` (default Monday). Resolution in TypeScript turns `ctx` and `rel` into literals and `inPeriod` into `ge(f, start) and lt(f, end)`; day and larger offsets are calendar arithmetic in `timeZone`, minute and hour offsets exact durations. The resolver uses Temporal, enabled by default in Node 26 [checked: Node 26 release notes]; the web app uses a pinned polyfill where missing [unverified per browser].
 - Time zone: the filter profile uses the user's zone (falling back to the instance zone); every profile that decides what a save may do uses the instance zone. Reason: a preference must not change an access or validation outcome. [judgment] The browser never uses the device zone.
