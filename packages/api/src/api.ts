@@ -14,6 +14,12 @@ import { SessionGroup } from "./session.ts";
 /** The response and request header carrying the schema revision. */
 export const SCHEMA_REVISION_HEADER = "std-schema-revision";
 
+/**
+ * Where the server serves the OpenAPI 3.1 document generated from this
+ * definition (`OpenApi.fromApi`), without a session.
+ */
+export const OPENAPI_PATH = "/api/v1/openapi.json";
+
 /** The STD API. */
 export class StdApi extends HttpApi.make("std")
   .add(SignInGroup)

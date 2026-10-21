@@ -8,7 +8,7 @@
  * `InstanceSettings`; `std serve` puts it on a Node HTTP server, tests turn
  * it into a web handler (`@std/testing/http-client`).
  */
-import { StdApi } from "@std/api/api";
+import { OPENAPI_PATH, StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
@@ -32,8 +32,14 @@ export const ApiHandlers = Layer.mergeAll(
  */
 const SaveServices = Layer.mergeAll(SaveHooks.none, WriteOnlyValues.scrypt);
 
-/** The API routes with their handlers and middleware. */
-export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
+/**
+ * The API routes with their handlers and middleware, plus the OpenAPI 3.1
+ * document generated from the shared definition (Contracts 6.1) at
+ * `GET /api/v1/openapi.json`, served without a session.
+ */
+export const ApiRoutes = HttpApiBuilder.layer(StdApi, {
+  openapiPath: OPENAPI_PATH,
+}).pipe(
   Layer.provide(ApiHandlers),
   Layer.provide(SaveServices),
   Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))

@@ -5,19 +5,24 @@
  * handlers to the `records` group.
  */
 import { StdApi } from "@std/api/api";
+import type { HeldRole } from "@std/api/session";
 import { SessionToken } from "@std/api/session-token";
+import type { DefinitionId } from "@std/definitions/ids";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { formatDateTime } from "@std/values/date-time";
 import { Plaintext } from "@std/values/write-only";
 import { Effect, Redacted } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
 
+import { Actor } from "../auth/actor.ts";
 import { signIn, signOut } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
 import { SaveHooks } from "../records/save-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
+import { RequestRevision } from "../sql/request-revision.ts";
 import { Transactions } from "../sql/transactions.ts";
 import {
   createInRequest,
@@ -32,7 +37,30 @@ import {
   inRequestTransaction,
   jsonResponse,
 } from "./request-scope.ts";
-import { checkRequestRevision, parseRequestRevision } from "./stale-request.ts";
+import {
+  checkRequestRevision,
+  checkUnscopedRevision,
+  parseRequestRevision,
+} from "./stale-request.ts";
+
+/**
+ * The roles of an actor as `auth/me` shows them.
+ *
+ * @param snapshot - The configuration.
+ * @param roleIds - The actor's effective role IDs.
+ * @returns ID, name and label of each.
+ */
+const heldRoles = (
+  snapshot: ConfigSnapshot,
+  roleIds: readonly DefinitionId[]
+): HeldRole[] =>
+  roleIds.flatMap((roleId) => {
+    const role = snapshot.role(roleId);
+
+    return role === undefined
+      ? []
+      : [{ id: role.id, label: role.label, name: role.name }];
+  });
 
 /** `POST /api/v1/auth/sign-in`. */
 export const SignInHandlers = HttpApiBuilder.group(
@@ -43,30 +71,36 @@ export const SignInHandlers = HttpApiBuilder.group(
     const catalog = yield* Catalog;
 
     return handlers.handle("signIn", ({ payload, request }) =>
-      inRequestTransaction(
-        transactions,
-        request,
-        Effect.gen(function* signInRequest() {
-          const snapshot = yield* catalog.current;
+      Effect.gen(function* signInHandler() {
+        const stated = yield* parseRequestRevision(request);
 
-          const session = yield* signIn(
-            snapshot,
-            payload.login,
-            new Plaintext(payload.password)
-          );
+        return yield* inRequestTransaction(
+          transactions,
+          request,
+          Effect.gen(function* signInRequest() {
+            yield* checkUnscopedRevision(stated);
 
-          return {
-            expiresAt: formatDateTime(session.expiresAt),
-            token: Redacted.value(session.token),
-            userId: session.userId,
-          };
-        })
-      )
+            const snapshot = yield* catalog.current;
+
+            const session = yield* signIn(
+              snapshot,
+              payload.login,
+              new Plaintext(payload.password)
+            );
+
+            return {
+              expiresAt: formatDateTime(session.expiresAt),
+              token: Redacted.value(session.token),
+              userId: session.userId,
+            };
+          })
+        );
+      })
     );
   })
 );
 
-/** `POST /api/v1/auth/sign-out`. */
+/** `GET /api/v1/auth/me` and `POST /api/v1/auth/sign-out`. */
 export const SessionHandlers = HttpApiBuilder.group(
   StdApi,
   "session",
@@ -74,19 +108,50 @@ export const SessionHandlers = HttpApiBuilder.group(
     const transactions = yield* Transactions;
     const catalog = yield* Catalog;
 
-    return handlers.handle("signOut", ({ request }) =>
-      inRequestTransaction(
-        transactions,
-        request,
-        asActor(
-          Effect.gen(function* signOutRequest() {
-            yield* signOut(yield* SessionToken);
+    return handlers
+      .handle("me", ({ request }) =>
+        Effect.gen(function* meHandler() {
+          const stated = yield* parseRequestRevision(request);
 
-            return HttpServerResponse.empty({ status: 204 });
-          })
-        ).pipe(Effect.provideService(Catalog, catalog))
+          return yield* inRequestTransaction(
+            transactions,
+            request,
+            asActor(
+              Effect.gen(function* meRequest() {
+                yield* checkUnscopedRevision(stated);
+
+                const actor = yield* Actor;
+                const snapshot = yield* catalog.current;
+                const { revision } = yield* RequestRevision;
+
+                return {
+                  roles: heldRoles(snapshot, actor.roleIds),
+                  schemaRevision: revision,
+                  userId: actor.userId,
+                };
+              })
+            )
+          );
+        }).pipe(Effect.provideService(Catalog, catalog))
       )
-    );
+      .handle("signOut", ({ request }) =>
+        Effect.gen(function* signOutHandler() {
+          // The format is checked; staleness never keeps a session alive.
+          yield* parseRequestRevision(request);
+
+          return yield* inRequestTransaction(
+            transactions,
+            request,
+            asActor(
+              Effect.gen(function* signOutRequest() {
+                yield* signOut(yield* SessionToken);
+
+                return HttpServerResponse.empty({ status: 204 });
+              })
+            )
+          );
+        }).pipe(Effect.provideService(Catalog, catalog))
+      );
   })
 );
 

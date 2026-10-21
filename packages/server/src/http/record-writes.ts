@@ -223,7 +223,8 @@ export const deleteInRequest = Effect.fn("Http.delete")(function* deleteIn(
     readonly expectedVersion: number;
   }
 ) {
-  yield* checkRequestRevision(stated, request.table, {});
+  // A delete names no field: only changes to the table are relevant (6.4).
+  yield* checkRequestRevision(stated, request.table, { fields: "" });
 
   const classId = yield* resolveTable(yield* currentReadScope(), request.table);
   const { revision } = yield* RequestRevision;
@@ -259,7 +260,13 @@ export const historyInRequest = Effect.fn("Http.history")(function* historyIn(
   stated: StatedRevision,
   request: HistoryRequest
 ) {
-  yield* checkRequestRevision(stated, request.table, {});
+  // History shows the record's fields by name, like a read's default
+  // selection, and its `field` filter names fields by ID (6.4).
+  yield* checkRequestRevision(
+    stated,
+    request.table,
+    request.field === undefined ? {} : { fieldIds: request.field }
+  );
 
   return jsonWithStatus(yield* recordHistory(request), 200);
 });
