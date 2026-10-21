@@ -31,9 +31,11 @@ import {
   updateRecord,
 } from "../records/save-pipeline.ts";
 import { RuleWriteAccess } from "../records/write-access-rules.ts";
+import { SYSTEM_FIELD_NAMES } from "../records/write-body.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { checkRequestRevision } from "./stale-request.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
+import type { ScopeParameters } from "./stale-scope.ts";
 
 /** The revision a request stated, as `parseRequestRevision` read it. */
 type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
@@ -129,10 +131,15 @@ const writeOnlyFailures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     })
   );
 
-// Body names, for the stale-request check (6.4).
+// The stale-request scope of a write (6.4): every field the body names,
+// resolved at the request's revision like a read's selection.
 const namesOf = (
   body: Readonly<Record<string, JsonValue>>
-): readonly string[] => [Object.keys(body).join(" ")];
+): ScopeParameters => ({
+  fields: Object.keys(body)
+    .filter((name) => !SYSTEM_FIELD_NAMES.has(name))
+    .join(","),
+});
 
 /**
  * `POST .../records`, inside the request transaction as the `Actor`.
@@ -212,7 +219,7 @@ export const deleteInRequest = Effect.fn("Http.delete")(function* deleteIn(
     readonly expectedVersion: number;
   }
 ) {
-  yield* checkRequestRevision(stated, request.table, []);
+  yield* checkRequestRevision(stated, request.table, {});
 
   const classId = yield* resolveTable(yield* currentReadScope(), request.table);
   const { revision } = yield* RequestRevision;
@@ -248,7 +255,7 @@ export const historyInRequest = Effect.fn("Http.history")(function* historyIn(
   stated: StatedRevision,
   request: HistoryRequest
 ) {
-  yield* checkRequestRevision(stated, request.table, []);
+  yield* checkRequestRevision(stated, request.table, {});
 
   return jsonWithStatus(yield* recordHistory(request), 200);
 });

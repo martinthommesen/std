@@ -11,7 +11,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { listPath, readsTestLayer, tagOf } from "./reads-support.ts";
-import { ACME, change } from "./schema-support.ts";
+import { ACME, addField, change } from "./schema-support.ts";
 
 const ChangedBodySchema = Schema.Struct({
   changes: Schema.Array(
@@ -26,6 +26,7 @@ const decodeChanged = Schema.decodeUnknownEffect(ChangedBodySchema);
 
 const FILTER_ON_STATUS = listPath("acme.asset", { filter: 'status = "lost"' });
 const SORT_BY_NAME = listPath("acme.asset", { sort: "name" });
+const NAME_ONLY = listPath("acme.asset", { fields: "name", sort: "name" });
 
 describe("stale-request", () => {
   it("writes the header as <revision>.<change set ID>", () => {
@@ -78,12 +79,12 @@ describe("stale-request", () => {
         );
 
         assert.strictEqual(restored.status, 409);
-        assert.deepStrictEqual(
-          (yield* decodeChanged(restored.json)).changes.map(
-            (entry) => entry.kind
-          ),
-          ["unknown"]
-        );
+        // Every field in scope (the filter's and the default selection's)
+        // counts as changed, with kind unknown.
+        const unknown = (yield* decodeChanged(restored.json)).changes;
+        assert.isTrue(unknown.every((entry) => entry.kind === "unknown"));
+        assert.isTrue(unknown.some((entry) => entry.field === "status"));
+        assert.isFalse(unknown.some((entry) => entry.field === "cost"));
 
         // A label change is not relevant.
         const status = built.field(ACME.status);
@@ -124,7 +125,82 @@ describe("stale-request", () => {
           )
         );
 
-        assert.strictEqual((yield* at(stated, SORT_BY_NAME)).status, 200);
+        // The default selection names status too (no `fields`).
+        const byDefault = yield* at(stated, SORT_BY_NAME);
+        assert.strictEqual(byDefault.status, 409);
+        assert.isTrue(
+          (yield* decodeChanged(byDefault.json)).changes.some(
+            (entry) => entry.field === "status"
+          )
+        );
+
+        // An explicit selection without status is not affected.
+        assert.strictEqual((yield* at(stated, NAME_ONLY)).status, 200);
+      }).pipe(Effect.orDie)
+    );
+
+    dbTest.effect("checks the fields of reference targets", () =>
+      Effect.gen(function* targetFields() {
+        const http = yield* TestHttpClient;
+        const catalog = yield* Catalog;
+        const token = yield* http.signIn("bob", "bob-password");
+
+        const laptopRef = addField(ACME.asset, "laptop_ref", {
+          kind: "reference",
+          targetClassId: ACME.laptop,
+        });
+
+        yield* change([laptopRef.op]);
+
+        const built = yield* catalog.refresh;
+        const stated = revisionHeaderValue(built);
+
+        const at = (query: Readonly<Record<string, string>>) =>
+          http.get(listPath("acme.asset", query), {
+            headers: { "std-schema-revision": stated },
+            token,
+          });
+
+        const path = { fields: "name,laptop_ref.serial" };
+        const labelled = { fields: "name,docked_to", labels: "true" };
+
+        assert.strictEqual((yield* at(path)).status, 200);
+
+        yield* change([
+          {
+            changes: { readOnly: true },
+            id: ACME.serial,
+            op: "update",
+            version: built.field(ACME.serial)?.version ?? 1,
+          },
+        ]);
+
+        const stale = yield* at(path);
+        assert.strictEqual(stale.status, 409);
+        assert.deepStrictEqual(
+          (yield* decodeChanged(stale.json)).changes.map((entry) => [
+            entry.field,
+            entry.kind,
+          ]),
+          [["serial", "readOnlyChanged"]]
+        );
+
+        // A label reads the target's display field: name.
+        assert.strictEqual((yield* at(labelled)).status, 200);
+
+        const relabel = yield* catalog.refresh;
+
+        yield* change([
+          {
+            changes: { readOnly: true },
+            id: ACME.name,
+            op: "update",
+            version: relabel.field(ACME.name)?.version ?? 1,
+          },
+        ]);
+
+        const label = yield* at({ fields: "docked_to", labels: "true" });
+        assert.strictEqual(label.status, 409);
       }).pipe(Effect.orDie)
     );
   });

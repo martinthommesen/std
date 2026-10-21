@@ -85,6 +85,40 @@ describe("sign-in", () => {
         })
     );
 
+    dbTest.effect("malformed requests get a tagged InvalidRequest", () =>
+      Effect.gen(function* malformed() {
+        const http = yield* TestHttpClient;
+        const token = yield* http.signIn("bob", "bob-password");
+
+        const bodies = [
+          { rawBody: "{not json" },
+          { body: { login: "bob" } },
+          { body: { login: "bob", password: 42 } },
+          { body: ["bob", "bob-password"] },
+        ];
+
+        for (const options of bodies) {
+          const response = yield* http.request(
+            "POST",
+            "/api/v1/auth/sign-in",
+            options
+          );
+
+          assert.strictEqual(response.status, 400);
+          assert.strictEqual(
+            response.text,
+            '{"_tag":"InvalidRequest","message":"The request body does not match this endpoint.","parameter":"body"}'
+          );
+        }
+
+        const query = yield* http.get(`${ASSETS}?limit=1&limit=2`, { token });
+
+        assert.strictEqual(query.status, 400);
+        assert.strictEqual(yield* tagOf(query), "InvalidRequest");
+        assert.notInclude(query.text, "limit=");
+      })
+    );
+
     dbTest.effect("stores only a hash of the token", () =>
       Effect.gen(function* hashOnly() {
         const http = yield* TestHttpClient;
@@ -133,7 +167,7 @@ describe("sign-in", () => {
       })
     );
 
-    dbTest.effect("deactivating a user ends their sessions and roles", () =>
+    dbTest.effect("deactivating a user ends their sessions for good", () =>
       Effect.gen(function* deactivate() {
         const http = yield* TestHttpClient;
         const fixture = yield* AcmeFixture;
@@ -148,12 +182,27 @@ describe("sign-in", () => {
 
         const after = yield* http.get(ASSETS, { token });
 
+        const sessions = yield* values(
+          "SELECT count(*)::text AS value FROM core.session WHERE user_id = $1::uuid",
+          [fixture.alice.id]
+        );
+
         yield* values(
           `UPDATE core."user" SET active = true WHERE id = $1::uuid RETURNING id::text AS value`,
           [fixture.alice.id]
         );
 
+        const reactivated = yield* http.get(ASSETS, { token });
+        const again = yield* http.signIn("alice", "alice-password");
+
         assert.strictEqual(after.status, 401);
+        assert.deepStrictEqual(sessions, ["0"]);
+        // Reactivation does not revive the old session: sign in again.
+        assert.strictEqual(reactivated.status, 401);
+        assert.strictEqual(
+          (yield* http.get(ASSETS, { token: again })).status,
+          200
+        );
       })
     );
 

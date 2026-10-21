@@ -36,6 +36,8 @@ export interface TestRequestOptions {
   readonly headers?: Readonly<Record<string, string>>;
   /** A JSON body. */
   readonly body?: JsonValue;
+  /** A body sent as is with `content-type: application/json`, such as malformed JSON. */
+  readonly rawBody?: string;
 }
 
 /** The client. */
@@ -66,13 +68,16 @@ const bodyJson = (text: string): JsonValue | undefined => {
 const requestInit = (
   method: string,
   headers: Headers,
-  body: JsonValue | undefined
+  options: TestRequestOptions
 ): RequestInit => {
   const init: RequestInit = { headers, method };
 
-  if (body !== undefined) {
+  const text =
+    options.body === undefined ? options.rawBody : JSON.stringify(options.body);
+
+  if (text !== undefined) {
     headers.set("content-type", "application/json");
-    init.body = JSON.stringify(body);
+    init.body = text;
   }
 
   return init;
@@ -109,7 +114,7 @@ export class TestHttpClient extends Context.Service<
           headers.set("authorization", `Bearer ${options.token}`);
         }
 
-        const init = requestInit(method, headers, options.body);
+        const init = requestInit(method, headers, options);
 
         const response = yield* Effect.promise(
           async () => await handler(new Request(`${BASE}${path}`, init))

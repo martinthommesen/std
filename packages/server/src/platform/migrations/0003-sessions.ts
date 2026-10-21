@@ -11,6 +11,12 @@
  * whose user is gone or inactive never authenticates, because every lookup
  * joins `core.user` and requires `active`.
  *
+ * `core.end_user_sessions()` deletes a user's sessions. The change set that
+ * creates `core.user` attaches it as an `AFTER UPDATE` row trigger that
+ * fires when `active` turns false (`auth/session-revocation.ts`), so every
+ * path that deactivates a user, the record service or plain SQL, ends the
+ * user's sessions in the same transaction (Contracts 3.10).
+ *
  * This file is frozen once applied: the ledger records its checksum.
  */
 import type { TxMigration } from "../migration.ts";
@@ -29,6 +35,17 @@ export const migration0003: TxMigration = {
   CHECK (expires_at > created_at)
 )`,
     "CREATE INDEX session_by_user ON core.session (user_id)",
+    `CREATE FUNCTION core.end_user_sessions()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  DELETE FROM core.session WHERE user_id = NEW.id;
+  RETURN NULL;
+END
+$$`,
+    `COMMENT ON FUNCTION core.end_user_sessions() IS
+  'AFTER UPDATE row trigger of core.user, WHEN the user is deactivated: ends every session of the user.'`,
     `COMMENT ON TABLE core.session IS
   'Sign-in sessions: SHA-256 of the bearer token, never the token. Internal platform table (no id column).'`,
   ],

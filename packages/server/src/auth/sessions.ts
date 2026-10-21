@@ -11,8 +11,9 @@
  *   (migration 0003), with an expiry. [judgment: 12 hours]
  * - Every request presents the token as `Authorization: Bearer <token>`;
  *   `authenticate` turns it into the actor inside the request's own
- *   transaction. A session whose user is inactive does not authenticate,
- *   so deactivating a user ends their sessions at once.
+ *   transaction. Deactivating a user deletes their sessions in the same
+ *   transaction (a trigger, `session-revocation.ts`), and a session whose
+ *   user is inactive never authenticates.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -171,18 +172,3 @@ export const signOut = Effect.fn("Sessions.signOut")(function* signOut(
     sql`DELETE FROM "core"."session" WHERE "token_hash" = ${tokenHashParameter(Redacted.value(token))}`
   );
 });
-
-/**
- * Ends every session of a user, for deactivation (Contracts 3.10). Sessions
- * of an inactive user never authenticate anyway; this removes the rows.
- *
- * @param userId - The user.
- * @returns Nothing.
- */
-export const endSessionsOf = Effect.fn("Sessions.endSessionsOf")(
-  function* endSessionsOf(userId: DefinitionId) {
-    yield* writeRows(
-      sql`DELETE FROM "core"."session" WHERE "user_id" = ${textParameter(userId, "uuid")}`
-    );
-  }
-);

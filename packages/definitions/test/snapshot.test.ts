@@ -203,6 +203,21 @@ describe("definitions-snapshot", () => {
     );
   });
 
+  it("refuses a password or secret display field", () => {
+    const ns = namespace("acme");
+    const account = table(ns, "account");
+    const secret = field(account, "pin", { kind: "password" });
+    const name = field(account, "name");
+
+    const codes = (displayFieldId: string) =>
+      validateSnapshot(
+        snapshotOf([ns, { ...account, displayFieldId }, secret, name])
+      ).map((p) => p.code);
+
+    assert.deepStrictEqual(codes(secret.id), ["invalidDisplayField"]);
+    assert.deepStrictEqual(codes(name.id), []);
+  });
+
   it("refuses extends cycles, reserved names and bad defaults", () => {
     const ns = namespace("acme");
     const a = table(ns, "a");

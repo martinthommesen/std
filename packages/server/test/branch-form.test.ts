@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Expr } from "@std/conditions/ast";
+import { rawSql } from "@std/conditions/sql-fragment";
 import type { AccessRuleDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -43,6 +44,8 @@ import type { InstanceSettings } from "../src/config/instance-settings.ts";
 import { branchesSql } from "../src/records/access-sql.ts";
 import { listRecords } from "../src/records/read-records.ts";
 import type { ListRequest, ListResult } from "../src/records/read-records.ts";
+import { withBranchTuning } from "../src/records/read-tuning.ts";
+import { readRows } from "../src/records/sql-run.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -420,10 +423,60 @@ describe("branch-form", () => {
 
           assert.strictEqual(compared, RUNS);
 
+          // Each branch-form page ran between the tuning and the restore.
           const texts = yield* (yield* StatementLog).texts;
-          assert.isTrue(texts.some((text) => text.includes(" UNION ALL ")));
+
+          const pageAt = texts.findIndex((text) =>
+            text.includes(" UNION ALL ")
+          );
+
+          assert.isTrue(pageAt > 1);
+          assert.include(
+            texts[pageAt - 2] ?? "",
+            "SET LOCAL max_parallel_workers_per_gather = 0"
+          );
+          assert.include(
+            texts[pageAt - 1] ?? "",
+            "SET LOCAL plan_cache_mode = force_custom_plan"
+          );
+          assert.include(
+            texts[pageAt + 1] ?? "",
+            "SET LOCAL max_parallel_workers_per_gather = "
+          );
         }),
       { timeout: 300_000 }
+    );
+
+    dbTest.effect(
+      "the page query sees custom plans and no parallel workers; later statements the defaults",
+      () =>
+        Effect.gen(function* tuning() {
+          const { request } = yield* Transactions;
+
+          const show = Effect.all([
+            readRows(rawSql("SHOW max_parallel_workers_per_gather")),
+            readRows(rawSql("SHOW plan_cache_mode")),
+          ]).pipe(
+            Effect.map(([workers, mode]) => [
+              workers[0]?.max_parallel_workers_per_gather,
+              mode[0]?.plan_cache_mode,
+            ])
+          );
+
+          const [before, inside, after] = yield* request(
+            Effect.gen(function* inOneTransaction() {
+              const defaults = yield* show;
+              const tuned = yield* withBranchTuning(show);
+              const restored = yield* show;
+
+              return [defaults, tuned, restored] as const;
+            })
+          );
+
+          assert.deepStrictEqual(inside, ["0", "force_custom_plan"]);
+          assert.deepStrictEqual(after, before);
+          assert.notDeepEqual(before, inside);
+        })
     );
   });
 });

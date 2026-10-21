@@ -8,6 +8,7 @@ import { HttpApi } from "effect/http-api";
 
 import { SignInGroup } from "./auth.ts";
 import { RecordsGroup } from "./records.ts";
+import { RequestDecoding } from "./request-decoding.ts";
 import { SessionGroup } from "./session.ts";
 
 /** The response and request header carrying the schema revision. */
@@ -18,4 +19,5 @@ export class StdApi extends HttpApi.make("std")
   .add(SignInGroup)
   .add(SessionGroup)
   .add(RecordsGroup)
+  .middleware(RequestDecoding)
   .prefix("/api/v1") {}

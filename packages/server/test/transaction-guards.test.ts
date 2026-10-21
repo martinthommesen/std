@@ -77,6 +77,28 @@ const REFUSED: readonly (readonly [string, string | undefined])[] = [
   ["SELECT 1; COMMIT", "transaction-control"],
   ["SELECT 1;SELECT 2", "transaction-control"],
   ["SELECT '\\';COMMIT'", "transaction-control"],
+  // Read-tuning settings: SET LOCAL only, unquoted name, exactly one valid value.
+  ["SET max_parallel_workers_per_gather = 0", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather = -1", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather = 1025", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather = 2.5", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather = '2'", "transaction-control"],
+  [
+    "SET LOCAL max_parallel_workers_per_gather = DEFAULT",
+    "transaction-control",
+  ],
+  ["SET LOCAL max_parallel_workers_per_gather = 2 3", "transaction-control"],
+  ["SET LOCAL max_parallel_workers_per_gather = $1", "transaction-control"],
+  ['SET LOCAL "max_parallel_workers_per_gather" = 0', undefined],
+  ["SET LOCAL plan_cache_mode = custom", "transaction-control"],
+  ["SET LOCAL plan_cache_mode = 'force_custom_plan'", "transaction-control"],
+  [
+    "SET LOCAL plan_cache_mode = force_custom_plan, auto",
+    "transaction-control",
+  ],
+  ["SET LOCAL plan_cache_mode = auto -- ok\n, auto", "transaction-control"],
+  ["SET SESSION plan_cache_mode = auto", "transaction-control"],
 ];
 
 const ALLOWED: readonly string[] = [
@@ -101,6 +123,12 @@ const ALLOWED: readonly string[] = [
   "SET LOCAL lock_timeout = '1s'",
   "INSERT INTO t VALUES (1)",
   "SELECT 1 /* ; COMMIT */",
+  "SET LOCAL max_parallel_workers_per_gather = 0",
+  "SET LOCAL max_parallel_workers_per_gather TO 1024",
+  "set local max_parallel_workers_per_gather to 4 -- trailing comment",
+  "SET LOCAL plan_cache_mode = force_custom_plan",
+  "SET LOCAL plan_cache_mode TO force_generic_plan",
+  "set local plan_cache_mode = AUTO",
 ];
 
 const blockForever = Effect.never;

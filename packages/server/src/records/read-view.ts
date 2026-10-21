@@ -97,7 +97,11 @@ const classNameExpression = (
       sql`WHEN ${textParameter(classId, "uuid")} THEN ${textParameter(snapshot.qualifiedNameOf(classId) ?? "", "text")}`
   );
 
-  return sql`(CASE ${identSql(alias, "class_id")} ${joinSql(branches, " ")} END)`;
+  // A view with no known class has no rows to name: a typed NULL, since
+  // `CASE x END` without a branch is a syntax error.
+  return branches.length === 0
+    ? rawSql("CAST(NULL AS text)")
+    : sql`(CASE ${identSql(alias, "class_id")} ${joinSql(branches, " ")} END)`;
 };
 
 const makeView = (

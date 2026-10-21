@@ -16,6 +16,7 @@ import { SaveHooks } from "../records/save-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
+import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 
 /** Every group's handlers. */
@@ -35,7 +36,7 @@ const SaveServices = Layer.mergeAll(SaveHooks.none, WriteOnlyValues.scrypt);
 export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(ApiHandlers),
   Layer.provide(SaveServices),
-  Layer.provide(AuthenticationLayer)
+  Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))
 );
 
 /** The routes plus the global revision header. */
