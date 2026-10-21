@@ -20,7 +20,12 @@ import {
   recreateDatabase,
   serverConfig,
 } from "./database.ts";
-import { decide, explainStep } from "./decision.ts";
+import {
+  decide,
+  explainStep,
+  fallbackDecision,
+  summarize,
+} from "./decision.ts";
 import type { LoadWindow } from "./environment.ts";
 import { hostInfo, postgresInfo, withLoadWindow } from "./environment.ts";
 import { checkBranchedEquivalence, checkEquivalence } from "./equivalence.ts";
@@ -36,13 +41,7 @@ import type { ReadResult } from "./measure.ts";
 import { measureRead } from "./measure.ts";
 import { modelById } from "./models/registry.ts";
 import { writeReport } from "./report.ts";
-import type {
-  BenchReport,
-  Decision,
-  DecisionStep,
-  ModelRun,
-  Scale,
-} from "./results.ts";
+import type { BenchReport, Decision, ModelRun, Scale } from "./results.ts";
 import type { TableSize } from "./sizes.ts";
 import { schemaSizes } from "./sizes.ts";
 import type { ModelContext, ModelId, StorageModel } from "./storage-model.ts";
@@ -417,28 +416,6 @@ const runSmoke: (
   }
 );
 
-const verdicts: Readonly<Record<Decision["outcome"], string>> = {
-  "invalid-measurement":
-    "The runs cannot be judged: the decision rule needs complete, error-free measurements, so it was not applied. Fix the problems below and rerun.",
-  "keep-class-table": "Class-table storage is kept.",
-  "keep-class-table-with-mitigations":
-    "Class-table storage is kept, with the class_id-led mitigation indexes.",
-  reopen:
-    "Class-table storage does not satisfy the decision rule, with or without the class_id index mitigations. " +
-    "The other two models were benchmarked and the storage decision is reopened: Stage 0 stops here for Martin's decision.",
-};
-
-const summarize = (
-  outcome: Decision["outcome"],
-  steps: readonly DecisionStep[]
-): Decision => ({
-  outcome,
-  steps,
-  summary: [verdicts[outcome], ...steps.map((step) => explainStep(step))].join(
-    " "
-  ),
-});
-
 const runner =
   (server: ServerConfig, options: Options) =>
   (
@@ -512,7 +489,11 @@ const runStage0: (
     const concreteRun = yield* run("concrete-table", large, false);
 
     return {
-      decision: summarize("reopen", [first, second]),
+      decision: fallbackDecision(
+        [first, second],
+        [partitionedRun, concreteRun],
+        options.writeSeconds
+      ),
       equivalence: null,
       runs: [...runs, mitigatedRun, partitionedRun, concreteRun],
     };

@@ -83,6 +83,8 @@ export type Outcome = (typeof outcomes)[number];
 export interface Decision {
   readonly outcome: Outcome;
   readonly steps: readonly DecisionStep[];
+  /** Problems of runs outside the steps (the fallback models); any of them makes the outcome invalid. */
+  readonly problems: readonly string[];
   readonly summary: string;
 }
 
