@@ -40,7 +40,7 @@ import type { ScopeParameters } from "./stale-scope.ts";
 /** The revision a request stated, as `parseRequestRevision` read it. */
 type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
 
-const IF_MATCH = /^"(?<version>[1-9]\d{0,15})"$/u;
+const IF_MATCH = /^"(?<version>0|[1-9]\d{0,15})"$/u;
 
 /**
  * A JSON response with a status, written with `stringifyJson`.
