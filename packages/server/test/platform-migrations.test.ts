@@ -31,6 +31,7 @@ import type { UpgradeError } from "../src/platform/runner.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
 import { SCHEMA_KEY } from "../src/sql/locks.ts";
 import { decodeRows } from "../src/sql/rows.ts";
+import { killAndAwait, runCli } from "./cli-support.ts";
 import {
   CHILD_APPLICATION_NAME,
   ITEM_INDEX_MIGRATIONS,
@@ -51,10 +52,6 @@ const stateRefusal = (
 
 const CHILD_SCRIPT = fileURLToPath(
   new URL("fixtures/run-migrations.ts", import.meta.url)
-);
-
-const CLI_SCRIPT = fileURLToPath(
-  new URL("../src/cli/main.ts", import.meta.url)
 );
 
 const decodeIds = decodeRows(Schema.Struct({ id: Schema.Int }));
@@ -106,28 +103,6 @@ const childGone = childBackends("").pipe(
 );
 
 /**
- * Kills a child process and waits until it has exited.
- * @param child - The child.
- * @returns Succeeds once the child is gone.
- */
-const killAndAwait = (child: ChildProcess): Effect.Effect<void> =>
-  Effect.callback<boolean>((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resume(Effect.succeed(true));
-
-      return;
-    }
-
-    const done = () => {
-      resume(Effect.succeed(true));
-    };
-
-    child.once("exit", done);
-    child.once("error", done);
-    child.kill("SIGKILL");
-  }).pipe(Effect.asVoid);
-
-/**
  * Starts the migration child process; it is killed, and awaited, when the
  * scope closes.
  * @param url - The database to migrate.
@@ -147,43 +122,6 @@ const startChild = (
     ),
     killAndAwait
   );
-
-/** The output and exit code of one `std` command. */
-interface CliResult {
-  readonly code: number | null;
-  readonly output: string;
-}
-
-/**
- * Runs `std <args>` against a database. Interrupting it kills the command
- * and waits for it to exit.
- * @param url - The database.
- * @param args - The command line.
- * @returns Exit code and combined output.
- */
-const runCli = (url: string, args: readonly string[]) =>
-  Effect.callback<CliResult>((resume) => {
-    const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      env: { ...process.env, STD_DATABASE_URL: url },
-    });
-
-    const chunks: string[] = [];
-
-    const collect = (chunk: Uint8Array) => {
-      chunks.push(String(chunk));
-    };
-
-    child.stdout.on("data", collect);
-    child.stderr.on("data", collect);
-    child.once("error", (error) => {
-      resume(Effect.die(error));
-    });
-    child.on("close", (code) => {
-      resume(Effect.succeed({ code, output: chunks.join("") }));
-    });
-
-    return killAndAwait(child);
-  });
 
 describe("platform-migrations", () => {
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
