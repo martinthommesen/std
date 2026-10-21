@@ -1,0 +1,430 @@
+/**
+ * Recovery from interrupted schema changes (Contracts 1.5, 8.7): the
+ * watchdog reports a build blocked by an idle-in-transaction session and
+ * cancels nothing; a duplicate inserted during a unique build leaves
+ * `needs_attention`, which refuses further DDL until `abandon` drops the
+ * invalid index or `resume` finishes it after the cause is fixed; the
+ * periodic resumer finishes a change set left `applying`; `std schema`
+ * runs as a command.
+ */
+import { spawn } from "node:child_process";
+
+import { assert, describe, it, layer } from "@effect/vitest";
+import { generatedName } from "@std/definitions/ids";
+import { Duration, Effect, Fiber, Layer, Schema } from "effect";
+
+import { TestDatabase } from "../../testing/src/test-database.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import {
+  RecoverySettings,
+  StepBoundary,
+} from "../src/schema/recovery-settings.ts";
+import {
+  abandonChangeSet,
+  resumeOnRequest,
+  SchemaResumer,
+} from "../src/schema/recovery.ts";
+import { schemaStatus } from "../src/schema/status.ts";
+import { decodeRows } from "../src/sql/rows.ts";
+import { catalogDrift } from "./catalog-drift.ts";
+import {
+  addField,
+  addIndex,
+  change,
+  createClass,
+  currentRevision,
+  insertRecords,
+  insertRecordsSql,
+  loadCoreAndAcme,
+  schemaTestLayer,
+  values,
+} from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
+
+const FAST_WATCHDOG = {
+  resumeInterval: Duration.millis(200),
+  watchdogAfter: Duration.millis(500),
+  watchdogPoll: Duration.millis(100),
+};
+
+const CLI_SCRIPT = new URL("../src/cli/main.ts", import.meta.url).pathname;
+
+const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
+
+const changeSetState = (id: string) =>
+  values(
+    `SELECT state AS value FROM core."schema_change" WHERE id = $1::uuid`,
+    [id]
+  ).pipe(Effect.map(([state]) => state));
+
+const indexValidity = (schema: string, name: string) =>
+  values(
+    `SELECT i.indisvalid::text AS value FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2`,
+    [schema, name]
+  ).pipe(Effect.map(([valid]) => valid ?? "absent"));
+
+const applyingChangeSet = values(
+  `SELECT id::text AS value FROM core."schema_change" WHERE state IN ('applying', 'needs_attention')`
+).pipe(Effect.map(([id]) => id ?? ""));
+
+/**
+ * A table of stamps with distinct codes, and an open transaction on another
+ * session that inserts a duplicate code: the unique build waits for it,
+ * then meets the duplicate once it commits.
+ * @param name - The table name.
+ * @returns The class, the field, the blocking session and the change set fiber.
+ */
+const duplicateDuringBuild = (name: string) =>
+  Effect.gen(function* startBuild() {
+    const stamp = createClass(name);
+    const code = addField(stamp.id, "code", { kind: "text" });
+    const table = `"site"."${name}"`;
+
+    yield* change([stamp.op, code.op]);
+    yield* insertRecords([table], stamp.id, 5, { code: "'c' || g" });
+
+    const database = yield* TestDatabase;
+    const writer = yield* database.session(`${name}-writer`);
+
+    yield* writer.query("BEGIN");
+    yield* writer.query(
+      insertRecordsSql([table], stamp.id, 1, { code: "'c1'" })
+    );
+
+    const unique = addIndex(stamp.id, [code.id], true);
+    const build = yield* Effect.forkChild(change([unique.op]));
+
+    yield* waitUntil(
+      values(
+        `SELECT count(*)::text AS value FROM pg_stat_progress_create_index p
+         JOIN pg_stat_activity a ON a.pid = p.pid WHERE a.datname = current_database()`
+      ).pipe(Effect.map(([count]) => count !== "0"))
+    );
+    yield* writer.query("COMMIT");
+
+    const result = yield* Fiber.join(build);
+
+    return { code, result, stamp, table, unique };
+  });
+
+/** The output and exit code of one `std` command. */
+interface CliResult {
+  readonly code: number | null;
+  readonly output: string;
+}
+
+/**
+ * Runs `std <args>` against a database.
+ * @param url - The database.
+ * @param args - The command line.
+ * @returns Exit code and combined output.
+ */
+const runCli = (url: string, args: readonly string[]) =>
+  Effect.callback<CliResult>((resume) => {
+    const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
+      env: { ...process.env, STD_DATABASE_URL: url },
+    });
+
+    const chunks: string[] = [];
+
+    const collect = (chunk: Uint8Array) => {
+      chunks.push(String(chunk));
+    };
+
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.on("close", (code) => {
+      resume(Effect.succeed({ code, output: chunks.join("") }));
+    });
+  });
+
+describe("schema-recovery", () => {
+  it("the watchdog reports after 10 minutes by default", () => {
+    assert.strictEqual(
+      Duration.toMinutes(RecoverySettings.defaultValue().watchdogAfter),
+      10
+    );
+    assert.strictEqual(
+      Duration.toSeconds(RecoverySettings.defaultValue().resumeInterval),
+      30
+    );
+  });
+
+  layer(schemaTestLayer({ maxConnections: 12 }), {
+    excludeTestServices: true,
+    timeout: 180_000,
+  })((dbTest) => {
+    dbTest.effect(
+      "an index build blocked by an idle-in-transaction session is reported by the watchdog and not cancelled",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* watchdog() {
+            yield* loadCoreAndAcme;
+
+            const crate = createClass("crate_w");
+            const size = addField(crate.id, "size", { kind: "integer" });
+
+            yield* change([crate.op, size.op]);
+            yield* insertRecords(['"site"."crate_w"'], crate.id, 20, {
+              size: "g",
+            });
+
+            const database = yield* TestDatabase;
+            const idle = yield* database.session("idle-writer");
+
+            const [blocker] = yield* decodePid(
+              (yield* idle.query("SELECT pg_backend_pid() AS pid")).rows
+            );
+
+            yield* idle.query("BEGIN");
+            yield* idle.query(
+              insertRecordsSql(['"site"."crate_w"'], crate.id, 1, { size: "0" })
+            );
+
+            const index = addIndex(crate.id, [size.id], false);
+
+            const build = yield* Effect.forkChild(
+              change([index.op]).pipe(
+                Effect.provideService(RecoverySettings, FAST_WATCHDOG)
+              )
+            );
+
+            const reported = values(
+              `SELECT coalesce(last_error, '') AS value FROM core."schema_change_step"
+               WHERE target_id = $1::uuid`,
+              [index.id]
+            ).pipe(
+              Effect.map(([error]) =>
+                (error ?? "").includes(`for PIDs ${blocker?.pid ?? -1}`)
+              )
+            );
+
+            yield* waitUntil(reported);
+
+            const status = yield* schemaStatus();
+            const [open] = status.changeSets;
+
+            const running = open?.steps.find(
+              (step) => step.state === "running"
+            );
+
+            assert.strictEqual(open?.state, "applying");
+            assert.include(running?.waitingFor ?? [], blocker?.pid ?? -1);
+            assert.include(running?.lastError ?? "", "Watchdog");
+            assert.isNotNull(running?.progress);
+            assert.lengthOf(status.holders, 1);
+            assert.strictEqual(status.holders[0]?.pid, open?.coordinatorPid);
+
+            // Nothing was cancelled: the blocker is alive and its commit
+            // lets the build finish.
+            yield* idle.query("COMMIT");
+
+            const result = yield* Fiber.join(build);
+
+            assert.strictEqual(result.state, "completed");
+            assert.strictEqual(
+              yield* indexValidity("site", generatedName("ix", index.id)),
+              "true"
+            );
+          })
+        )
+    );
+
+    dbTest.effect(
+      "a duplicate inserted during a unique build leaves needs_attention; abandon drops the invalid index",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* abandonBuild() {
+            yield* loadCoreAndAcme;
+
+            const built = yield* duplicateDuringBuild("stamp_a");
+            const id = built.result.changeSetId ?? "";
+            const indexName = generatedName("ix", built.unique.id);
+
+            assert.strictEqual(built.result.state, "needs_attention");
+            assert.strictEqual(yield* changeSetState(id), "needs_attention");
+            assert.strictEqual(
+              yield* indexValidity("site", indexName),
+              "false"
+            );
+
+            // DDL waits for an operator; a label change does not.
+            const blocked = yield* Effect.flip(
+              change([addField(built.stamp.id, "extra", { kind: "text" }).op])
+            );
+
+            assert.strictEqual(blocked._tag, "SchemaNeedsAttention");
+
+            const relabel = yield* change([
+              {
+                changes: { label: "Code" },
+                id: built.code.id,
+                op: "update",
+                version: 1,
+              },
+            ]);
+
+            assert.strictEqual(relabel.state, "completed");
+
+            const status = yield* schemaStatus();
+
+            assert.strictEqual(status.changeSets[0]?.state, "needs_attention");
+            assert.include(status.changeSets[0]?.error ?? "", "failed 3 times");
+
+            const revision = yield* currentRevision;
+            const abandoned = yield* abandonChangeSet(id);
+
+            assert.strictEqual(abandoned.revision, revision + 1);
+            assert.strictEqual(yield* changeSetState(id), "abandoned");
+            assert.strictEqual(
+              yield* indexValidity("site", indexName),
+              "absent"
+            );
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).getKind(
+                "index",
+                built.unique.id
+              )?.enforcement,
+              "failed"
+            );
+            assert.lengthOf((yield* schemaStatus()).changeSets, 0);
+            assert.deepStrictEqual(yield* catalogDrift, []);
+
+            // DDL works again.
+            const extra = yield* change([
+              addField(built.stamp.id, "extra", { kind: "text" }).op,
+            ]);
+
+            assert.strictEqual(extra.state, "completed");
+          })
+        )
+    );
+
+    dbTest.effect(
+      "after the duplicate is removed, resume completes the unique build",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* resumeBuild() {
+            yield* loadCoreAndAcme;
+
+            const built = yield* duplicateDuringBuild("stamp_r");
+            const id = built.result.changeSetId ?? "";
+
+            assert.strictEqual(built.result.state, "needs_attention");
+
+            yield* values(
+              `DELETE FROM ${built.table} WHERE id IN (SELECT id FROM ${built.table} WHERE code = 'c1' ORDER BY id DESC LIMIT 1) RETURNING id::text AS value`
+            );
+
+            const resumed = yield* resumeOnRequest(id);
+
+            assert.strictEqual(resumed.state, "completed");
+            assert.strictEqual(yield* changeSetState(id), "completed");
+            assert.strictEqual(
+              yield* indexValidity(
+                "site",
+                generatedName("ix", built.unique.id)
+              ),
+              "true"
+            );
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).getKind(
+                "index",
+                built.unique.id
+              )?.enforcement,
+              "enforced"
+            );
+            assert.deepStrictEqual(yield* catalogDrift, []);
+          })
+        )
+    );
+
+    dbTest.effect(
+      "the resumer of a process finishes a change set its coordinator left applying",
+      () =>
+        Effect.gen(function* resumer() {
+          yield* loadCoreAndAcme;
+
+          const bale = createClass("bale");
+          const weight = addField(bale.id, "weight", { kind: "integer" });
+
+          yield* change([bale.op, weight.op]);
+          yield* insertRecords(['"site"."bale"'], bale.id, 10, { weight: "g" });
+
+          const index = addIndex(bale.id, [weight.id], false);
+
+          // The coordinator stops right after its main commit, as if its
+          // process died there: its scope closes, which releases SCHEMA_KEY.
+          const stopped = yield* Effect.exit(
+            change([index.op]).pipe(
+              Effect.provideService(StepBoundary, (label) =>
+                label === "committed" ? Effect.interrupt : Effect.void
+              )
+            )
+          );
+
+          assert.isTrue(stopped._tag === "Failure");
+
+          const id = yield* applyingChangeSet;
+
+          assert.strictEqual(yield* changeSetState(id), "applying");
+
+          yield* Effect.scoped(
+            Layer.build(SchemaResumer).pipe(
+              Effect.andThen(
+                waitUntil(
+                  changeSetState(id).pipe(
+                    Effect.map((state) => state === "completed")
+                  )
+                )
+              ),
+              Effect.provideService(RecoverySettings, FAST_WATCHDOG)
+            )
+          );
+
+          assert.strictEqual(
+            yield* indexValidity("site", generatedName("ix", index.id)),
+            "true"
+          );
+        })
+    );
+
+    dbTest.effect("std schema status and abandon run as commands", () =>
+      Effect.gen(function* commands() {
+        yield* loadCoreAndAcme;
+
+        const database = yield* TestDatabase;
+
+        const status = yield* runCli(database.url, [
+          "schema",
+          "status",
+          "--json",
+        ]);
+
+        assert.strictEqual(status.code, 0, status.output);
+        assert.deepStrictEqual(JSON.parse(status.output), {
+          changeSets: [],
+          holders: [],
+        });
+
+        const text = yield* runCli(database.url, ["schema", "status"]);
+
+        assert.include(text.output, "No open change sets.");
+
+        const missing = yield* runCli(database.url, [
+          "schema",
+          "abandon",
+          "00000000-0000-4000-8000-000000000000",
+        ]);
+
+        assert.strictEqual(missing.code, 1);
+        assert.include(missing.output, "is not applying or needs_attention");
+
+        const usage = yield* runCli(database.url, ["schema", "resume"]);
+
+        assert.strictEqual(usage.code, 2);
+      })
+    );
+  });
+});
