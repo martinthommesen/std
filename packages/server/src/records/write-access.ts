@@ -19,6 +19,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { encodeOut } from "@std/values/codec";
 import { formatDateTime } from "@std/values/date-time";
+import type { DecodedInput } from "@std/values/field-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import type { Option } from "effect";
 import { Context, Effect, Layer } from "effect";
@@ -66,6 +67,17 @@ export interface TargetCheck {
   readonly ids: readonly string[];
 }
 
+/** A record as a write proposes it, before any row is written. */
+export interface ProposalCheck {
+  readonly snapshot: ConfigSnapshot;
+  /** The record's concrete class. */
+  readonly classId: DefinitionId;
+  /** The stored record an update starts from; null for a create. */
+  readonly existing: StoredRecord | null;
+  /** The proposed values by field ID (unchanged fields keep `existing`). */
+  readonly values: ReadonlyMap<DefinitionId, DecodedInput>;
+}
+
 /** The saved record, to project for the response. */
 export interface ProjectionInput {
   readonly snapshot: ConfigSnapshot;
@@ -101,6 +113,14 @@ export interface WriteAccessApi {
     SqlError,
     InTransaction
   >;
+  /**
+   * The fields the caller could read on the proposed record (record and
+   * field read rules on the candidate values), so validation errors name
+   * no field the caller can neither read nor supplied (3.8).
+   */
+  readonly readableOnProposal: (
+    input: ProposalCheck
+  ) => Effect.Effect<ReadonlySet<DefinitionId>, SqlError, InTransaction>;
   /** Record and field rules on the existing state (`NotAllowed`). */
   readonly checkExisting: (
     input: ExistingActionCheck
@@ -180,6 +200,10 @@ export class WriteAccess extends Context.Service<WriteAccess, WriteAccessApi>()(
       checkProposed: () => Effect.void,
       nameable: (input) => input.snapshot.fields(input.endpointClassId),
       project: (input) => Effect.succeed(projectAll(input)),
+      readableOnProposal: (input) =>
+        Effect.succeed(
+          new Set(input.snapshot.fields(input.classId).map((field) => field.id))
+        ),
       visibility: (input) =>
         Effect.succeedSome<ReadonlySet<DefinitionId>>(
           new Set(

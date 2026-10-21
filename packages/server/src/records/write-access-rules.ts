@@ -23,7 +23,6 @@
  * - `nameable`: the fields of the endpoint's lineage that the caller can
  *   read or write there.
  */
-import { fieldDecision } from "@std/access/rules";
 import type { FieldAction } from "@std/access/rules";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import {
@@ -45,7 +44,12 @@ import { fieldPredicate, recordPredicate } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
 import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
-import { readableOnRecord, truthColumn } from "./record-access.ts";
+import {
+  isNameable,
+  readableOnProposal,
+  readableOnRecord,
+  truthColumn,
+} from "./record-access.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import { WriteAccess } from "./write-access.ts";
@@ -157,26 +161,12 @@ ${byId(check.snapshot, check.classId, check.id)}`
         }),
       checkProposed: (input) => allowed(proposedCheck(input)),
       nameable: (input) => {
-        const view = scopeOf(input.snapshot).view(input.endpointClassId);
-
-        const classIds =
-          input.action === "create" ? [input.endpointClassId] : view.classIds;
+        const scope = scopeOf(input.snapshot);
 
         return input.snapshot
           .fields(input.endpointClassId)
-          .filter(
-            (field) =>
-              view.byId(field.id) !== undefined ||
-              classIds.some(
-                (classId) =>
-                  fieldDecision(
-                    input.snapshot,
-                    actor,
-                    input.action,
-                    classId,
-                    field.id
-                  ).kind !== "never"
-              )
+          .filter((field) =>
+            isNameable(scope, input.endpointClassId, input.action, field.id)
           );
       },
       project: Effect.fn("WriteAccess.project")(function* project(input) {
@@ -203,6 +193,13 @@ ${byId(check.snapshot, check.classId, check.id)}`
           version: input.record.version,
         }));
       }),
+      readableOnProposal: (input) =>
+        readableOnProposal(scopeOf(input.snapshot), {
+          actorId: actor.userId,
+          classId: input.classId,
+          existing: input.existing,
+          values: input.values,
+        }),
       visibility: (input) =>
         readableOnRecord(
           scopeOf(input.snapshot),

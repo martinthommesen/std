@@ -1,3 +1,4 @@
+import { isSystemFieldName } from "@std/access/visible-schema";
 /**
  * The scope of a stale read (Contracts 6.4): the fields a request names,
  * resolved against the definitions at the request's revision R, the way the
@@ -22,7 +23,7 @@
  * reference's target class. Names that resolve to nothing at R are kept as
  * names, so a field added later under such a name is relevant too.
  */
-import { isSystemFieldName } from "@std/access/visible-schema";
+import type { SchemaChangeKind } from "@std/api/errors/schemas";
 import { isCompare, isJunction, isPath } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import type { FieldInfo } from "@std/conditions/class-view";
@@ -70,6 +71,12 @@ export interface ScopeEntry {
   readonly fieldId: DefinitionId;
   /** The endpoint's class, or the reference target's class. */
   readonly classId: DefinitionId;
+  /**
+   * The only change kinds relevant for this entry; all kinds when absent.
+   * A create's required fields the body leaves out are relevant only when
+   * they became required (or were added) without a default (6.4).
+   */
+  readonly kinds?: readonly SchemaChangeKind[];
 }
 
 /** A name the request used, with the class it was looked up on. */

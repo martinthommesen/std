@@ -24,25 +24,29 @@ import { NotFound } from "@std/api/errors/not-found";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import {
   arrayParameter,
+  identSql,
+  joinSql,
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
+import type { SqlFragment } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import { RequestRevision } from "../sql/request-revision.ts";
+import { FALSE_SQL, TRUE_SQL } from "./access-sql.ts";
 import { ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeKind } from "./change-entry.ts";
-import { readHistory } from "./history-query.ts";
+import { EntryRowSchema, entryOfRow, readHistory } from "./history-query.ts";
 import type { HistoryEntry, HistoryFilter } from "./history-query.ts";
 import { currentReadScope, resolveTable } from "./read-records.ts";
 import type { ReadScope } from "./read-view.ts";
-import { readableOnRecord } from "./record-access.ts";
+import { truthColumn } from "./record-access.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 
@@ -234,40 +238,190 @@ LIMIT 1`
     : Option.some({ classId: logged.class_id, deleted: true });
 });
 
-// The fields whose changes the caller may see, or none: `NotFound`.
-const readableHistory = Effect.fn("History.readable")(function* readable(
+const ALIAS = "r";
+const CHANGE = "c";
+
+const CHANGE_COLUMNS = [
+  "id",
+  "operation_id",
+  "record_version",
+  "kind",
+  "actor_id",
+  "occurred_at",
+  "schema_revision",
+  "cause",
+  "fields",
+] as const;
+
+const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
+
+// The filters as SQL over the joined entry, the field filter limited to
+// fields readable on the same row (`readableSql`).
+const filterSql = (
+  filter: HistoryFilter,
+  readableSql: (fieldId: DefinitionId) => SqlFragment
+): readonly SqlFragment[] => {
+  const clauses: SqlFragment[] = [];
+
+  if (filter.since !== undefined) {
+    clauses.push(
+      sql`${identSql(CHANGE, "occurred_at")} >= ${textParameter(formatDateTime(filter.since), "timestamptz")}`
+    );
+  }
+
+  if (filter.until !== undefined) {
+    clauses.push(
+      sql`${identSql(CHANGE, "occurred_at")} < ${textParameter(formatDateTime(filter.until), "timestamptz")}`
+    );
+  }
+
+  if (filter.actorIds !== undefined) {
+    clauses.push(
+      sql`${identSql(CHANGE, "actor_id")} = ANY(${arrayParameter(filter.actorIds, "uuid")})`
+    );
+  }
+
+  if (filter.kinds !== undefined) {
+    clauses.push(
+      sql`${identSql(CHANGE, "kind")} = ANY(${arrayParameter(filter.kinds, "text")})`
+    );
+  }
+
+  if (filter.fieldIds !== undefined) {
+    const changed = filter.fieldIds.map(
+      (fieldId) =>
+        sql`(jsonb_exists(${identSql(CHANGE, "fields")}, ${textParameter(fieldId, "text")}) AND ${readableSql(fieldId)})`
+    );
+
+    clauses.push(
+      changed.length === 0 ? FALSE_SQL : sql`(${joinSql(changed, " OR ")})`
+    );
+  }
+
+  return clauses;
+};
+
+/**
+ * A live record's history in one statement (3.7): the record's visibility,
+ * the readability of each field on its current row and the entries are
+ * read under one snapshot, so a concurrent change can never pair new
+ * entries with old permissions.
+ *
+ * @returns The entries, `NotFound` when the record is not visible, or none
+ *   when the record has no row any more.
+ */
+const liveHistory = Effect.fn("History.live")(function* liveHistory(
   scope: ReadScope,
-  endpointClassId: DefinitionId,
-  id: string
+  classId: DefinitionId,
+  id: string,
+  filter: HistoryFilter,
+  purged: readonly DefinitionId[]
 ) {
-  const found = yield* classOfRecord(scope, endpointClassId, id);
+  const view = scope.view(classId, true);
+  const fields = scope.snapshot.fields(classId);
+  const purgedSet = new Set(purged);
 
-  if (Option.isNone(found)) {
-    return Option.none<ReadonlySet<DefinitionId>>();
-  }
+  const readableSql = (fieldId: DefinitionId): SqlFragment => {
+    if (purgedSet.has(fieldId)) {
+      return TRUE_SQL;
+    }
 
-  const { classId, deleted } = found.value;
-  const admin = readsChangeLog(scope);
-  const purged = admin ? purgedFields(scope.snapshot, classId) : [];
+    const field = view.byId(fieldId);
 
-  if (deleted) {
-    return admin
-      ? Option.some<ReadonlySet<DefinitionId>>(
-          new Set([
-            ...scope.snapshot.fields(classId).map((field) => field.id),
-            ...purged,
-          ])
-        )
-      : Option.none<ReadonlySet<DefinitionId>>();
-  }
+    return field === undefined ? FALSE_SQL : view.readable(ALIAS, field);
+  };
 
-  const live = yield* readableOnRecord(scope, classId, id);
+  const columns = [
+    truthColumn(view.visibility(ALIAS), "visible"),
+    ...fields.map((field, index) =>
+      truthColumn(readableSql(field.id), `f${index}`)
+    ),
+    ...CHANGE_COLUMNS.map(
+      (column) => sql`${identSql(CHANGE, column)}::text AS ${identSql(column)}`
+    ),
+  ];
 
-  return live.pipe(
-    Option.map(
-      (fields): ReadonlySet<DefinitionId> => new Set([...fields, ...purged])
-    )
+  const joined = [
+    sql`${identSql(CHANGE, "record_id")} = ${identSql(ALIAS, "id")}`,
+    ...filterSql(filter, readableSql),
+  ];
+
+  const rows = yield* readRows(
+    sql`SELECT ${joinSql(columns, ", ")}
+FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql(ALIAS)}
+LEFT JOIN core."change" AS ${identSql(CHANGE)} ON ${joinSql(joined, " AND ")}
+WHERE ${identSql(ALIAS, "id")} = ${textParameter(id, "uuid")}
+ORDER BY ${identSql(CHANGE, "record_version")}`
   );
+
+  const [first] = rows;
+
+  if (first === undefined) {
+    return Option.none<readonly HistoryEntry[]>();
+  }
+
+  if (first.visible !== "true") {
+    return yield* new NotFound();
+  }
+
+  const readable: ReadonlySet<DefinitionId> = new Set([
+    ...fields.flatMap((field, index) =>
+      first[`f${index}`] === "true" ? [field.id] : []
+    ),
+    ...purged,
+  ]);
+
+  const entries: HistoryEntry[] = [];
+
+  for (const row of rows) {
+    if (row.id !== null && row.id !== undefined) {
+      const decoded = yield* decodeEntryRow(row).pipe(Effect.orDie);
+      entries.push(yield* entryOfRow(decoded, readable));
+    }
+  }
+
+  return Option.some<readonly HistoryEntry[]>(entries);
+});
+
+// The fields a field filter may name on a live record: those the caller
+// can ever read on its class, and purged ones for admins.
+const filterableLive = (
+  scope: ReadScope,
+  classId: DefinitionId,
+  purged: readonly DefinitionId[]
+): ReadonlySet<DefinitionId> => {
+  const view = scope.view(classId, true);
+
+  return new Set([
+    ...scope.snapshot
+      .fields(classId)
+      .flatMap((field) =>
+        view.byId(field.id) === undefined ? [] : [field.id]
+      ),
+    ...purged,
+  ]);
+};
+
+// Deleted records' history: admin-only, every field (purged ones too).
+const deletedHistory = Effect.fn("History.deleted")(function* deletedHistory(
+  scope: ReadScope,
+  request: HistoryRequest,
+  classId: DefinitionId,
+  id: string,
+  purged: readonly DefinitionId[]
+) {
+  if (!readsChangeLog(scope)) {
+    return yield* new NotFound();
+  }
+
+  const readable: ReadonlySet<DefinitionId> = new Set([
+    ...scope.snapshot.fields(classId).map((field) => field.id),
+    ...purged,
+  ]);
+
+  const filter = yield* filterOf(request, readable);
+
+  return yield* readHistory({ filter, readable, recordId: id });
 });
 
 const entryJson = (
@@ -311,19 +465,53 @@ export const recordHistory = Effect.fn("Records.history")(
       return yield* new NotFound();
     }
 
-    const readable = yield* readableHistory(scope, classId, parsedId.value);
+    const found = yield* classOfRecord(scope, classId, parsedId.value);
 
-    if (Option.isNone(readable)) {
+    if (Option.isNone(found)) {
       return yield* new NotFound();
     }
 
-    const filter = yield* filterOf(request, readable.value);
+    const concrete = found.value.classId;
 
-    const entries = yield* readHistory({
-      filter,
-      readable: readable.value,
-      recordId: parsedId.value,
-    });
+    const purged = readsChangeLog(scope)
+      ? purgedFields(scope.snapshot, concrete)
+      : [];
+
+    let entries: readonly HistoryEntry[];
+
+    if (found.value.deleted) {
+      entries = yield* deletedHistory(
+        scope,
+        request,
+        concrete,
+        parsedId.value,
+        purged
+      );
+    } else {
+      const filter = yield* filterOf(
+        request,
+        filterableLive(scope, concrete, purged)
+      );
+
+      const live = yield* liveHistory(
+        scope,
+        concrete,
+        parsedId.value,
+        filter,
+        purged
+      );
+
+      // Deleted between the class lookup and the read: as a deleted record.
+      entries = Option.isSome(live)
+        ? live.value
+        : yield* deletedHistory(
+            scope,
+            request,
+            concrete,
+            parsedId.value,
+            purged
+          );
+    }
 
     return {
       entries: entries.map((entry) => entryJson(scope.snapshot, entry)),

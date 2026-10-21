@@ -162,6 +162,12 @@ The record must be visible through E now; the fields shown are those readable on
 ### Deviations and open items
 
 - `field-rule-states` replaces rule 7 for `name` with a local rule through a change set (an update of rule 7's target plus a new allow conditioned on `status = "in_use"`).
-- The stale-request check of creates does not yet report fields that became required without a default (6.4); only fields the body names are checked.
 - `RecordInSave` and `InvalidBody` cannot occur at the HTTP edge today and are defects there; `Referenced` only on deletes.
 - History entries key changes by the current field name; reading old values at their revision through `core.definition_revision` (4.4) is the Step 2 history panel's job.
+
+## Phase 2 review
+
+- **History under one snapshot (3.7).** A live record's history is one statement: `recordRelation(C)` with the record's visibility and each field's readability flag, `LEFT JOIN core."change"` on the record with the filters (the field filter also needs the field readable on the same row). Permissions and entries can no longer come from different snapshots. `write-leaks.test.ts` holds Alice's transaction (M made `lost` with a new `purchased_on`, `core.change` locked) until Bob's history statement waits on the lock (observed in `pg_stat_activity`), then commits: Bob's response holds neither the date nor `purchased_on`. Deleted records keep the admin-only path.
+- **Validation names only shown fields (3.8).** The full candidate is still validated; the errors returned name only fields the caller supplied or could read on the proposed record (`WriteAccess.readableOnProposal`: the record's visibility and each field's read rule evaluated in SQL over a one-row relation of the candidate values, `proposedRelation`). When every failing field is hidden, `ValidationFailed` lists no field: that reveals only that some hidden validation failed. Tested with a lost laptop missing `purchased_on` and with `cost` made required for laptops (never readable to Bob).
+- **Stale creates (6.4).** A create's stale scope adds every field of E's lineage that is required without a default at C (overrides included), relevant only for `fieldAdded` and `requiredChanged`; a create built before `status` became required gets `409 SchemaChanged` before validation.
+- **Write nameability in stale checks (3.4, 6.4).** `checkRequestRevision` takes the write action: changes are listed for fields the caller can read or write at C (`isNameable`, shared with `WriteAccess.nameable`), so a field Bob may update but not read that became read-only gives `409 SchemaChanged`, not `422`.

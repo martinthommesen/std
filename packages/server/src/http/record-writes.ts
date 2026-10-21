@@ -154,7 +154,9 @@ export const createInRequest = Effect.fn("Http.create")(function* createIn(
   table: string,
   body: Readonly<Record<string, JsonValue>>
 ) {
-  yield* checkRequestRevision(stated, table, namesOf(body));
+  yield* checkRequestRevision(stated, table, namesOf(body), {
+    action: "create",
+  });
 
   const classId = yield* resolveTable(yield* currentReadScope(), table);
   const { revision } = yield* RequestRevision;
@@ -186,7 +188,9 @@ export const updateInRequest = Effect.fn("Http.update")(function* updateIn(
     readonly body: Readonly<Record<string, JsonValue>>;
   }
 ) {
-  yield* checkRequestRevision(stated, request.table, namesOf(request.body));
+  yield* checkRequestRevision(stated, request.table, namesOf(request.body), {
+    action: "update",
+  });
 
   const classId = yield* resolveTable(yield* currentReadScope(), request.table);
   const { revision } = yield* RequestRevision;

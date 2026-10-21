@@ -32,6 +32,7 @@ import { InvalidSchemaRevision } from "@std/api/errors/invalid-schema-revision";
 import { SchemaChanged } from "@std/api/errors/schema-changed";
 import type { SchemaChange, SchemaChangeKind } from "@std/api/errors/schemas";
 import { sql, textParameter } from "@std/conditions/sql-fragment";
+import { effectiveFields } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
@@ -41,6 +42,8 @@ import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { currentReadScope, resolveTable } from "../records/read-records.ts";
 import type { ReadScope } from "../records/read-view.ts";
+import { isNameable } from "../records/record-access.ts";
+import type { WriteAction } from "../records/record-access.ts";
 import { readRows } from "../records/sql-run.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
@@ -181,6 +184,31 @@ const overrideKinds = (entry: DefinitionHistory): SchemaChangeKind[] => {
   return kinds;
 };
 
+/**
+ * The fields of E's lineage that are required at C without a default
+ * (overrides included): a create that leaves them out fails, so their
+ * becoming required, or being added, since R is relevant (6.4).
+ *
+ * @param readScope - The caller's scope at C.
+ * @param classId - The endpoint's class.
+ * @returns Scope entries limited to `fieldAdded` and `requiredChanged`.
+ */
+const requiredWithoutDefault = (
+  readScope: ReadScope,
+  classId: DefinitionId
+): readonly ScopeEntry[] =>
+  effectiveFields(readScope.snapshot, classId).flatMap((field) =>
+    field.required && field.default === null && field.field.state === "active"
+      ? [
+          {
+            classId,
+            fieldId: field.field.id,
+            kinds: ["fieldAdded", "requiredChanged"],
+          },
+        ]
+      : []
+  );
+
 const readHistory = Effect.fn("StaleRequest.readHistory")(function* readHistory(
   stated: ConfigState,
   current: ConfigState
@@ -295,19 +323,43 @@ WHERE "id" = ${textParameter(stated.changeSetId, "uuid")}
   }
 );
 
+/**
+ * Whether the caller can name a field on a class at C: readable for reads;
+ * readable or writable for writes (Contracts 3.4).
+ */
+type Nameable = (classId: DefinitionId, fieldId: DefinitionId) => boolean;
+
+/** What a write adds to the stale check. */
+export interface WriteCheck {
+  readonly action: WriteAction;
+}
+
+const readNameable =
+  (readScope: ReadScope): Nameable =>
+  (classId, fieldId) =>
+    readScope.view(classId).byId(fieldId) !== undefined;
+
+const writeNameable =
+  (readScope: ReadScope, action: WriteAction): Nameable =>
+  (classId, fieldId) =>
+    isNameable(readScope, classId, action, fieldId);
+
 const visibleEntries = (
   readScope: ReadScope,
-  scope: StaleScope
+  scope: StaleScope,
+  nameable: Nameable
 ): {
   readonly entry: ScopeEntry;
   readonly name: string;
   readonly table: string;
 }[] =>
   scope.entries.flatMap((entry) => {
-    const field = readScope.view(entry.classId).byId(entry.fieldId);
+    const field = readScope.snapshot.field(entry.fieldId);
     const table = readScope.snapshot.qualifiedNameOf(entry.classId);
 
-    return field === undefined || table === undefined
+    return field === undefined ||
+      table === undefined ||
+      !nameable(entry.classId, entry.fieldId)
       ? []
       : [{ entry, name: field.name, table }];
   });
@@ -315,9 +367,10 @@ const visibleEntries = (
 const unknownChanges = (
   table: string,
   readScope: ReadScope,
-  scope: StaleScope
+  scope: StaleScope,
+  nameable: Nameable
 ): SchemaChange[] => {
-  const named = visibleEntries(readScope, scope);
+  const named = visibleEntries(readScope, scope, nameable);
 
   return named.length === 0
     ? [{ field: null, fieldId: null, kind: "unknown", revision: null, table }]
@@ -458,12 +511,14 @@ const touched = (
  * @param readScope - The caller's scope at C.
  * @param scope - The request's scope at R.
  * @param operations - The journal's operations in (R, C].
+ * @param nameable - Whether the caller can name a field at C.
  * @returns The changes, for fields the caller can name at C.
  */
 const journalChanges = (
   readScope: ReadScope,
   scope: StaleScope,
-  operations: readonly JournalOperation[]
+  operations: readonly JournalOperation[],
+  nameable: Nameable
 ): SchemaChange[] =>
   operations.flatMap((operation): SchemaChange[] => {
     const field = readScope.snapshot.field(operation.targetId);
@@ -482,10 +537,14 @@ const journalChanges = (
       operation.newName,
     ]);
 
-    return visibleEntries(readScope, {
-      ...scope,
-      entries: readOns.map((classId) => ({ classId, fieldId: field.id })),
-    }).map(({ entry, name, table }) => ({
+    return visibleEntries(
+      readScope,
+      {
+        ...scope,
+        entries: readOns.map((classId) => ({ classId, fieldId: field.id })),
+      },
+      nameable
+    ).map(({ entry, name, table }) => ({
       field: name,
       fieldId: entry.fieldId,
       kind,
@@ -498,11 +557,12 @@ const relevantChanges = (
   readScope: ReadScope,
   scope: StaleScope,
   history: readonly DefinitionHistory[],
-  operations: readonly JournalOperation[]
+  operations: readonly JournalOperation[],
+  nameable: Nameable
 ): SchemaChange[] => {
   const changes = new Map<string, SchemaChange>();
 
-  for (const change of journalChanges(readScope, scope, operations)) {
+  for (const change of journalChanges(readScope, scope, operations, nameable)) {
     changes.set(
       `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
       change
@@ -513,20 +573,27 @@ const relevantChanges = (
     const found =
       entry.kind === "class"
         ? classChanges(readScope, scope, entry)
-        : visibleEntries(readScope, {
-            ...scope,
-            entries: touched(readScope, scope, entry),
-          }).flatMap(({ entry: scoped, name, table }) =>
+        : visibleEntries(
+            readScope,
+            { ...scope, entries: touched(readScope, scope, entry) },
+            nameable
+          ).flatMap(({ entry: scoped, name, table }) =>
             (entry.kind === "field"
               ? fieldKinds(entry)
               : overrideKinds(entry)
-            ).map((kind): SchemaChange => ({
-              field: name,
-              fieldId: scoped.fieldId,
-              kind,
-              revision: entry.revision,
-              table,
-            }))
+            ).flatMap((kind): SchemaChange[] =>
+              scoped.kinds === undefined || scoped.kinds.includes(kind)
+                ? [
+                    {
+                      field: name,
+                      fieldId: scoped.fieldId,
+                      kind,
+                      revision: entry.revision,
+                      table,
+                    },
+                  ]
+                : []
+            )
           );
 
     for (const change of found) {
@@ -547,14 +614,19 @@ const relevantChanges = (
  *
  * @param statedRevision - The request's revision, if it sent one.
  * @param table - The endpoint's table name.
- * @param parameters - The request's filter, sort, fields and labels.
+ * @param parameters - The request's filter, sort, fields and labels; for
+ *   a write, the body's field names as `fields`.
+ * @param write - For a write: the action, which makes fields the caller
+ *   can write nameable (3.4) and, for a create, adds the endpoint's fields
+ *   that became required without a default.
  * @returns Nothing, or `SchemaChanged`.
  */
 export const checkRequestRevision = Effect.fn("StaleRequest.check")(
   function* checkRequestRevision(
     statedRevision: Option.Option<ConfigState>,
     table: string,
-    parameters: ScopeParameters
+    parameters: ScopeParameters,
+    write?: WriteCheck
   ) {
     if (Option.isNone(statedRevision)) {
       return yield* Effect.void;
@@ -573,6 +645,22 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     const readScope = yield* currentReadScope();
     const classId = yield* resolveTable(readScope, table);
 
+    const nameable =
+      write === undefined
+        ? readNameable(readScope)
+        : writeNameable(readScope, write.action);
+
+    const withRequired = (scope: StaleScope): StaleScope =>
+      write?.action === "create"
+        ? {
+            ...scope,
+            entries: [
+              ...scope.entries,
+              ...requiredWithoutDefault(readScope, classId),
+            ],
+          }
+        : scope;
+
     const failure = (changes: SchemaChange[]) =>
       new SchemaChanged({
         changes,
@@ -587,15 +675,27 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
       const atC = yield* definitionsAt(current.revision);
 
       return yield* failure(
-        unknownChanges(table, readScope, staleScope(atC, classId, parameters))
+        unknownChanges(
+          table,
+          readScope,
+          withRequired(staleScope(atC, classId, parameters)),
+          nameable
+        )
       );
     }
 
     const atR = yield* definitionsAt(stated.revision);
-    const scope = staleScope(atR, classId, parameters);
+    const scope = withRequired(staleScope(atR, classId, parameters));
     const history = yield* readHistory(stated, current);
     const operations = yield* readJournal(stated, current);
-    const changes = relevantChanges(readScope, scope, history, operations);
+
+    const changes = relevantChanges(
+      readScope,
+      scope,
+      history,
+      operations,
+      nameable
+    );
 
     if (changes.length > 0) {
       return yield* failure(changes);

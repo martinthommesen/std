@@ -164,16 +164,45 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
     : yield* resolved.failure;
 });
 
+/**
+ * Validates the final candidate, then names only fields the caller
+ * supplied or could read on the proposed record (3.8). When every failing
+ * field is hidden the error lists none: that reveals only that some hidden
+ * validation failed.
+ */
 const failIfInvalid = Effect.fn("Records.validate")(function* validate(
-  input: ValidationInput
+  snapshot: ConfigSnapshot,
+  input: ValidationInput & {
+    readonly classId: DefinitionId;
+    readonly supplied: ReadonlySet<DefinitionId>;
+  }
 ) {
   const errors = validateProposal(input);
 
-  if (errors.length > 0) {
-    return yield* new ValidationFailed({ errors });
+  if (errors.length === 0) {
+    return yield* Effect.void;
   }
 
-  return yield* Effect.void;
+  const access = yield* WriteAccess;
+
+  const readable = yield* access.readableOnProposal({
+    classId: input.classId,
+    existing: input.existing,
+    snapshot,
+    values: input.proposal.values,
+  });
+
+  const shown = new Set(
+    [...input.fields.values()].flatMap((field) =>
+      input.supplied.has(field.field.id) || readable.has(field.field.id)
+        ? [field.field.name]
+        : []
+    )
+  );
+
+  return yield* new ValidationFailed({
+    errors: errors.filter((error) => shown.has(error.field)),
+  });
 });
 
 /**
@@ -396,10 +425,12 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       })
     );
 
-    yield* failIfInvalid({
+    yield* failIfInvalid(snapshot, {
+      classId,
       existing: null,
       fields,
       proposal,
+      supplied: new Set(resolved.entries.keys()),
       written,
     });
     yield* checkReferences(snapshot, fields, proposal.values, supplied);
@@ -677,7 +708,14 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    yield* failIfInvalid({ existing: record, fields, proposal, written });
+    yield* failIfInvalid(snapshot, {
+      classId,
+      existing: record,
+      fields,
+      proposal,
+      supplied: new Set(resolved.entries.keys()),
+      written,
+    });
     yield* checkReferences(snapshot, fields, proposal.values, written);
 
     const changes = changedValues(fields, proposal.values, record);

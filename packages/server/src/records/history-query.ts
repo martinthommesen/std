@@ -65,19 +65,26 @@ export interface HistoryEntry {
   readonly fields: JsonObject;
 }
 
-const decodeEntryRows = decodeRows(
-  Schema.Struct({
-    actor_id: Schema.String,
-    cause: Schema.String,
-    fields: Schema.String,
-    id: Schema.String,
-    kind: ChangeKindSchema,
-    occurred_at: Schema.String,
-    operation_id: Schema.String,
-    record_version: Schema.String,
-    schema_revision: Schema.String,
-  })
-);
+/**
+ * One `core.change` row as text: `id`, `operation_id`, `record_version`,
+ * `kind`, `actor_id`, `occurred_at`, `schema_revision`, `cause`, `fields`.
+ */
+export const EntryRowSchema = Schema.Struct({
+  actor_id: Schema.String,
+  cause: Schema.String,
+  fields: Schema.String,
+  id: Schema.String,
+  kind: ChangeKindSchema,
+  occurred_at: Schema.String,
+  operation_id: Schema.String,
+  record_version: Schema.String,
+  schema_revision: Schema.String,
+});
+
+/** One `core.change` row as text. */
+export type EntryRow = typeof EntryRowSchema.Type;
+
+const decodeEntryRows = decodeRows(EntryRowSchema);
 
 const decodeCause = Schema.decodeUnknownEffect(ChangeCauseSchema);
 
@@ -103,6 +110,39 @@ const readableFields = (
     Object.entries(stored).filter(([fieldId]) => readable.has(fieldId))
   );
 };
+
+/**
+ * A history entry from its row, with only the readable fields' changes.
+ *
+ * @param row - The `core.change` row as text.
+ * @param readable - The fields whose changes the caller may see.
+ * @returns The entry.
+ */
+export const entryOfRow = Effect.fn("Records.historyEntry")(
+  function* entryOfRow(row: EntryRow, readable: ReadonlySet<DefinitionId>) {
+    const occurredAt = parseTimestamptzText(row.occurred_at);
+
+    if (!occurredAt.ok) {
+      return yield* Effect.die(
+        new RangeError("A stored change time is out of range")
+      );
+    }
+
+    const entry: HistoryEntry = {
+      actorId: row.actor_id,
+      cause: yield* decodeCause(jsonOf(row.cause)).pipe(Effect.orDie),
+      changeId: row.id,
+      fields: readableFields(jsonOf(row.fields), readable),
+      kind: row.kind,
+      occurredAt: occurredAt.value,
+      operationId: row.operation_id,
+      schemaRevision: Number(row.schema_revision),
+      version: Number(row.record_version),
+    };
+
+    return entry;
+  }
+);
 
 // Builds the WHERE clause of the filters, binding every value.
 const filterClauses = (
@@ -191,25 +231,7 @@ export const readHistory = Effect.fn("Records.readHistory")(
         const entries: HistoryEntry[] = [];
 
         for (const row of yield* decodeEntryRows(rows)) {
-          const occurredAt = parseTimestamptzText(row.occurred_at);
-
-          if (!occurredAt.ok) {
-            return yield* Effect.die(
-              new RangeError("A stored change time is out of range")
-            );
-          }
-
-          entries.push({
-            actorId: row.actor_id,
-            cause: yield* decodeCause(jsonOf(row.cause)).pipe(Effect.orDie),
-            changeId: row.id,
-            fields: readableFields(jsonOf(row.fields), input.readable),
-            kind: row.kind,
-            occurredAt: occurredAt.value,
-            operationId: row.operation_id,
-            schemaRevision: Number(row.schema_revision),
-            version: Number(row.record_version),
-          });
+          entries.push(yield* entryOfRow(row, input.readable));
         }
 
         return entries;
