@@ -32,14 +32,12 @@ import { VersionConflict } from "./errors/version-conflict.ts";
 /** `Retry-After` of `SchemaLockTimeout`, in seconds [judgment]. */
 export const LOCK_TIMEOUT_RETRY_AFTER_SECONDS = 5;
 
-const busyBody = Schema.Struct({
-  _tag: Schema.Literal("SchemaBusy"),
+const busyBody = Schema.TaggedStruct("SchemaBusy", {
   changeSetId: Schema.NullOr(Schema.String),
   retryAfterSeconds: Schema.Int,
 });
 
-const lockTimeoutBody = Schema.Struct({
-  _tag: Schema.Literal("SchemaLockTimeout"),
+const lockTimeoutBody = Schema.TaggedStruct("SchemaLockTimeout", {
   attempts: Schema.Int,
 });
 
