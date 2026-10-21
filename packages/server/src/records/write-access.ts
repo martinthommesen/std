@@ -111,8 +111,10 @@ export interface WriteAccessApi {
 }
 
 /**
- * Every field of a record in canonical JSON, keyed by field name, in the
- * record JSON shape of Contracts 6.6 (no labels, nothing withheld).
+ * Every field of a record that its endpoint shows (the fields of the
+ * endpoint's class and its ancestors, Contracts 2.3) in canonical JSON,
+ * keyed by field name, in the record JSON shape of Contracts 6.6 (no
+ * labels, nothing withheld). `class` stays the concrete class.
  *
  * @param input - The snapshot, endpoint and record.
  * @returns `{ id, class, version, values }`.
@@ -120,7 +122,7 @@ export interface WriteAccessApi {
 export const projectAll = (input: ProjectionInput): JsonObject => {
   const values: Record<string, JsonValue> = {};
 
-  for (const field of input.snapshot.fields(input.record.classId)) {
+  for (const field of input.snapshot.fields(input.endpointClassId)) {
     values[field.name] = encodeOut(
       field.type,
       input.record.values.get(field.id) ?? null

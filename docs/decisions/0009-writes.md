@@ -10,16 +10,16 @@ Phase 1 builds everything that needs no access rules, actor service or HTTP. Aut
 | --- | --- |
 | `records/save-pipeline` | `createRecord`, `updateRecord`, `deleteRecord` (`Effect.fn`), each one request transaction (joined when nested); `SaveInput` (`endpointClassId`, `actorId`, `cause?`, `nameable?`), `SaveResult` (`outcome`, `id`, `classId`, `version`, `changeId`, `record`) |
 | `records/write-body` | `decodeWriteBody` (unknown input to a JSON object, `InvalidBody`), `resolveWriteBody` (names to fields, `UnknownField`, system members `ReadOnlyField`), `SYSTEM_FIELD_NAMES` |
-| `records/write-validation` | `proposeCreate`, `proposeUpdate` (6.7 absent vs null, defaults, `@std/values` conversion under the effective type), `validateProposal` |
+| `records/write-validation` | `proposeCreate`, `proposeUpdate` (6.7 absent vs null, defaults, `@std/values` conversion under the effective type), `finalizeCreate`, `finalizeUpdate`, `recheckValue` (the final candidate after hooks), `validateProposal` |
 | `records/field-errors` | the field errors of `ValidationFailed` as `Schema.TaggedStruct`s; `InvalidValue` reasons are `@std/values`'s plus `notUnique` |
 | `records/save-sql` | `lockRoot`, `loadRecord`, `insertRecord`, `updateRecord` (rows), `deleteRecordRows`, `existingTargets`, `updateLock`, `NOW` |
 | `records/save-constraints` | `constraintFailure`, `mapConstraints`: constraint violations to API errors by generated name |
-| `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry` |
+| `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry`, `OPERATION_SETTING` |
 | `records/history-query` | `readHistory` with an explicit readable-field set and filters |
 | `records/write-access` | `WriteAccess` seam; `WriteAccess.allowAll`, `projectAll` |
 | `records/save-hooks` | `SaveHooks` seam (`beforeWrite`, `deliveries`, `afterWrite`); `SaveHooks.none` |
 | `records/write-only-values` | `WriteOnlyValues` seam (`hashPassword`); `WriteOnlyValues.unavailable` |
-| `records/save-stack` | `SaveStack` reference: operation ID and records of enclosing saves (`RecordInSave`) |
+| `records/save-stack` | `SaveStack` reference: records of enclosing saves (`RecordInSave`) |
 | `records/stored-values` | `columnText`, `parseStoredText` (Postgres text to `@std/values`), `bindValue` (text parameters with casts) |
 | errors | `ValidationFailed`, `VersionConflict` (`currentVersion`), `NotFound`, `NotAllowed`, `UnknownField` (`field`), `InvalidReference` (`field`), `Referenced`, `RecordInSave`, `InvalidBody`; one file each |
 
@@ -32,14 +32,14 @@ Update:
 3. Next statements: load all level rows (inner joins), `WriteAccess.visibility` (`None` is `NotFound`), then the version (`VersionConflict` with the current version). Visibility comes first, so an invisible record never yields `VersionConflict`.
 4. Convert the body under the concrete class's effective schema; written fields = unreadable, invalid, or `!storedEquals`. `WriteAccess.checkExisting` (`NotAllowed`).
 5. No-op (no written field): project and return `unchanged`; no hooks, writes or entry.
-6. `SaveHooks.beforeWrite`, then the no-op check again with hook changes.
-7. `validateProposal` (`ValidationFailed`, all field errors together), then reference targets via `WriteAccess.visibleTargets` (`InvalidReference`).
+6. `SaveHooks.beforeWrite`. The final candidate (`finalizeUpdate`) rechecks every value the save sets, the hooks' included, under the effective type (through canonical JSON and `decodeIn`, so type, length and bounds apply as to body values). The written fields are recomputed from it, with the same rule (unreadable, invalid or changed): if hooks added fields, `checkExisting` runs again with the full set; if nothing is written any more (a hook restored the value), the save is a no-op.
+7. `validateProposal` over the whole record as it would be stored (`ValidationFailed`, all field errors together; `Required` for every required field of the concrete class), then reference targets via `WriteAccess.visibleTargets` (`InvalidReference`).
 8. `UPDATE <root> SET version = version + 1, updated_at, updated_by, ... WHERE id AND version = $expected`, then each level whose columns changed, top down.
 9. Reload, `WriteAccess.checkProposed` (`NotAllowed` fails the save; the transaction rolls back).
 10. `core.change` entry, `SaveHooks.deliveries` (outbox, 1E), `SaveHooks.afterWrite` with the save on the stack.
 11. `WriteAccess.project`.
 
-Create: steps 1, 6, 7, then `INSERT` root (`uuidv7()`, version 1, audit columns) and each level row in order, then 9 to 11. Every live field is written: the payload value, else the constant default, else the empty value (false for boolean). Read-only and retired fields count as written on create only when their value differs from that.
+Create: steps 1, 6, 7, then `INSERT` root (`uuidv7()`, version 1, audit columns) and each level row in order, then 9 to 11. Every live field is written: the payload value, else the constant default, else the empty value (false for boolean); a field a hook drops gets the same (`finalizeCreate`). The supplied fields (for `checkProposed`) are the body's plus those hooks set or changed. Read-only and retired fields count as written for validation only when their value differs from what the create stores without them.
 
 Delete: steps 1 to 3 with `FOR UPDATE`, `checkExisting(delete)`, `beforeWrite`, `DELETE FROM <root> WHERE id AND version` (level FKs cascade), entry at current version + 1 with every non-empty `before`.
 
@@ -47,7 +47,7 @@ System times are `date_trunc('milliseconds', transaction_timestamp())`: one cloc
 
 ## Seams for phase 2
 
-- `WriteAccess` (per request, built from the `Actor`): `visibility` returns the readable field IDs or `None`; `checkExisting` and `checkProposed` re-read through the reads' compiled predicates; `visibleTargets` applies the target's visibility; `project` produces the response with the caller's read rights. Its methods use the transaction's `SqlClient` (the `leakingRequirements` suggestion is intended).
+- `WriteAccess` (per request, built from the `Actor`): `visibility` returns the readable field IDs or `None`; `checkExisting` and `checkProposed` re-read through the reads' compiled predicates; `visibleTargets` applies the target's visibility; `project` produces the response with the caller's read rights for the endpoint (its fields and its ancestors', Contracts 2.3; `projectAll` does the same without rules, `class` stays the concrete class). Its methods use the transaction's `SqlClient` (the `leakingRequirements` suggestion is intended).
 - `nameable` on `SaveInput`: the caller's readable or writable fields at the endpoint (3.4).
 - `actorId` on `SaveInput` becomes the `Actor` service.
 - `readHistory`'s `readable`: the fields the caller can currently read on the current record.
@@ -62,7 +62,7 @@ Laid out like the 0002 platform tables and described in `definitions/core/platfo
 | `id` | change ID, UUIDv7 |
 | `class_id`, `version` | platform class of `core.change`; always 1 (entries never change) |
 | `created_*`, `updated_*` | equal `occurred_at` and `actor_id` (CHECK `change_audit`) |
-| `operation_id` | the outermost save's change ID; nested saves inherit it via `SaveStack` |
+| `operation_id` | one per transaction: the first entry's change ID, kept in the transaction-local setting `std.operation_id` (`set_config(..., true)` in the entry's `INSERT`), which every later entry of the transaction reads |
 | `record_id`, `record_class_id`, `record_version` | the logical record; `UNIQUE (record_id, record_version)` |
 | `kind` | `create`, `update`, `delete` |
 | `actor_id`, `cause` (jsonb), `schema_revision`, `occurred_at` | 4.2 |
@@ -88,10 +88,18 @@ Everything else stays `DatabaseError` (SQLSTATE, constraint name, diagnostic ID)
 
 ## Tests
 
-`record-writes.test.ts`, `record-history.test.ts`, `version-invariant.test.ts` against the core and acme sets loaded through the real loader, Alice and Bob inserted as table owner: delete through asset and laptop endpoints (no rows, one entry at n+1), serial update bumps the root version by 1 and sets `updated_by`, a stale version is `VersionConflict` with nothing changed, `purchased_on` null refused for a laptop and accepted for a monitor, `Referenced`, `InvalidReference` on create and update, unique violation on `core.user.login`, body envelope members, unknown and child-only names, subtree `NotFound` identical to a random ID, no-op, history field filtering and filters, delete entries, error hygiene (no Postgres text, values or IDs in `Cause.pretty`, `inspect` or JSON), and the fast-check version invariant (25 runs of up to 25 random creates, updates, stale updates and deletes through all three endpoints).
+`record-writes.test.ts`, `record-history.test.ts`, `version-invariant.test.ts` against the core and acme sets loaded through the real loader, Alice and Bob inserted as table owner: delete through asset and laptop endpoints (no rows, one entry at n+1), serial update bumps the root version by 1 and sets `updated_by`, a stale version is `VersionConflict` with nothing changed, `purchased_on` null refused for a laptop and accepted for a monitor, `Referenced`, `InvalidReference` on create and update, unique violation on `core.user.login`, body envelope members, unknown and child-only names, subtree `NotFound` identical to a random ID, no-op, history field filtering and filters, delete entries, error hygiene (no Postgres text, values or IDs in `Cause.pretty`, `inspect` or JSON), and the fast-check version invariant (25 runs of up to 25 random creates, updates, stale updates and deletes through all three endpoints). `save-hook-points.test.ts` (review round 1): hook values over a max length, of the wrong kind or dropping a required field are refused; a field a hook adds reaches `checkExisting` and its refusal writes nothing; a hook restoring the stored value is a no-op; two saves in one transaction share one operation ID; the projection through `acme.asset` leaves out `serial` and `disk_key`.
 
 ## Open items
 
 - Phase 2: the real `WriteAccess`, `Actor`, HTTP routes (`If-Match`, `VersionRequired`), `SchemaChanged` checks (6.4) and the Contracts 3 write tests.
 - Choice validation against choice lists (Step 2), secret encryption, retired classes, and `RecordInSave` across `saveBatch` (Step 3).
 - Hook failures have no typed error yet; Step 3 adds one to `SaveHooks`.
+
+## Review round 1
+
+- Values after before-write hooks are rechecked under the effective type, and required fields are checked over the complete final record (create: dropped fields get their absent value).
+- Fields hooks add go through `checkExisting` before any write.
+- The written fields, and so the second no-op check, are recomputed from the final candidate.
+- `operation_id` is transaction-scoped (`std.operation_id`), not tied to the hook stack; `SaveStack` keeps only record IDs, and `ChangeEntryInput` no longer has `operationId`.
+- `projectAll` projects the endpoint's lineage.

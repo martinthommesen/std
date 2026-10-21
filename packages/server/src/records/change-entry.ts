@@ -57,6 +57,12 @@ export const ChangeKindSchema = Schema.Literals(["create", "update", "delete"]);
 /** A kind of change. */
 export type ChangeKind = typeof ChangeKindSchema.Type;
 
+/**
+ * The transaction-local setting holding the operation ID of the running
+ * transaction (Contracts 4.2).
+ */
+export const OPERATION_SETTING = "std.operation_id";
+
 /** The `{"changed": true}` marker of a password or secret field. */
 export const WRITE_ONLY_CHANGE: JsonObject = { changed: true };
 
@@ -68,14 +74,13 @@ export interface ChangeEntryInput {
   readonly recordVersion: number;
   readonly actorId: string;
   readonly cause: ChangeCause;
-  /** The operation of the enclosing save, or none for the outermost one. */
-  readonly operationId: string | null;
   readonly fields: JsonObject;
 }
 
 /** A written change entry. */
 export interface ChangeEntry extends ChangeEntryInput {
   readonly changeId: string;
+  /** The transaction's operation: the change ID of its first entry. */
   readonly operationId: string;
   readonly schemaRevision: number;
 }
@@ -130,9 +135,13 @@ const decodeInserted = decodeRows(
 );
 
 /**
- * Inserts a change entry with a new UUIDv7 change ID. The outermost save
- * of a transaction uses its own change ID as the operation ID; nested
- * saves pass it on.
+ * Inserts a change entry with a new UUIDv7 change ID.
+ *
+ * The operation ID is transaction-scoped (Contracts 4.2: one per outermost
+ * transaction): the first entry of a transaction uses its own change ID and
+ * stores it in the transaction-local setting `std.operation_id`; every
+ * later entry of the same transaction, nested in a hook or not, reads it
+ * back. The setting ends with the transaction.
  *
  * @param input - The change.
  * @returns The written entry.
@@ -143,20 +152,25 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
     const { revision } = yield* RequestRevision;
 
     const rows = yield* sql.unsafe(
-      `WITH n AS (SELECT uuidv7() AS id)
+      `WITH n AS (SELECT uuidv7() AS id),
+       op AS (
+         SELECT coalesce(nullif(current_setting('${OPERATION_SETTING}', true), '')::uuid, n.id) AS id
+         FROM n),
+       remembered AS (
+         SELECT set_config('${OPERATION_SETTING}', op.id::text, true) AS id
+         FROM op)
        INSERT INTO core."change" (
          id, class_id, version, created_at, created_by, updated_at, updated_by,
          operation_id, record_id, record_class_id, record_version, kind,
          actor_id, cause, schema_revision, occurred_at, fields)
        SELECT n.id, $1::uuid, 1, ${NOW}, $2::uuid, ${NOW}, $2::uuid,
-         coalesce($3::uuid, n.id), $4::uuid, $5::uuid, $6::int8, $7::text,
-         $2::uuid, $8::jsonb, $9::int8, ${NOW}, $10::jsonb
-       FROM n
+         remembered.id::uuid, $3::uuid, $4::uuid, $5::int8, $6::text,
+         $2::uuid, $7::jsonb, $8::int8, ${NOW}, $9::jsonb
+       FROM n, remembered
        RETURNING id::text AS id, operation_id::text AS operation_id`,
       [
         PLATFORM_CLASS_IDS.change,
         input.actorId,
-        input.operationId,
         input.recordId,
         input.recordClassId,
         String(input.recordVersion),

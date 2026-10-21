@@ -16,17 +16,27 @@
  * On create, an absent field gets its constant default, otherwise its empty
  * value (false for boolean, null otherwise); an explicit `null` skips the
  * default. On update, an absent field is unchanged.
+ *
+ * Validation runs after before-write hooks (Contracts 4.1 step 6), on the
+ * final candidate: `finalizeCreate` and `finalizeUpdate` recheck every
+ * value, the hooks' included, under the effective type, and
+ * `validateProposal` checks required fields over the whole record.
  */
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
-import { decodeIn } from "@std/values/codec";
-import type { InvalidValue } from "@std/values/field-error";
+import { decodeIn, encodeOut } from "@std/values/codec";
+import type { StoredOrPlaintext } from "@std/values/compare";
+import { ok, refuse } from "@std/values/field-error";
+import type { Decoded, InvalidValue } from "@std/values/field-error";
 import type { DecodedInput } from "@std/values/field-value";
 import { planCreate, planUpdate } from "@std/values/write";
 import type { PayloadEntry } from "@std/values/write";
+import { isPlaintext } from "@std/values/write-only";
 
 import { invalidValue } from "./field-errors.ts";
 import type { FieldError } from "./field-errors.ts";
+import type { StoredRecord } from "./stored-record.ts";
+import { isInputOfKind } from "./stored-values.ts";
 import type { WriteBody } from "./write-body.ts";
 
 /** The values a write proposes, before validation. */
@@ -157,18 +167,123 @@ export const proposeUpdate = (
   return { invalid, values };
 };
 
+const notOfType = refuse(
+  "wrongJsonType",
+  "The value is not of this field's type."
+);
+
+/**
+ * Rechecks one final value under the field's effective type: the value a
+ * hook proposed must meet the same type, length and bound rules as one
+ * from the body. The value goes through its canonical JSON and back, which
+ * also normalizes it (text conversion, decimal scale).
+ *
+ * @param field - The effective field.
+ * @param value - The final input value.
+ * @returns The normalized value, or the refusal.
+ */
+export const recheckValue = (
+  field: EffectiveField,
+  value: DecodedInput
+): Decoded<DecodedInput> => {
+  const { type } = field;
+
+  if (value === null) {
+    return decodeIn(type, null);
+  }
+
+  if (!isInputOfKind(type.kind, value)) {
+    return notOfType;
+  }
+
+  return isPlaintext(value)
+    ? ok(value)
+    : decodeIn(type, encodeOut(type, value));
+};
+
+const recheckAll = (
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  proposal: Proposal,
+  values: Iterable<readonly [DefinitionId, DecodedInput]>
+): Proposal => {
+  const checked = new Map<DefinitionId, DecodedInput>();
+  const invalid = new Map(proposal.invalid);
+
+  for (const [fieldId, value] of values) {
+    const field = fields.get(fieldId);
+
+    if (field === undefined) {
+      // Hooks and bodies only name fields of the record's class.
+      throw new RangeError(`Field ${fieldId} is not a field of the record`);
+    }
+
+    const rechecked = recheckValue(field, value);
+
+    if (!invalid.has(fieldId)) {
+      if (rechecked.ok) {
+        checked.set(fieldId, rechecked.value);
+      } else {
+        invalid.set(fieldId, rechecked.error);
+      }
+    }
+  }
+
+  return { invalid, values: checked };
+};
+
+/**
+ * The final candidate of a create, after before-write hooks: every live
+ * field has a value (a field the hooks dropped gets what a create stores
+ * without it), and every value is rechecked under its effective type.
+ *
+ * @param fields - The effective fields of the class, by ID.
+ * @param proposal - The body's refusals and the hooks' values.
+ * @returns The final proposal.
+ */
+export const finalizeCreate = (
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  proposal: Proposal
+): Proposal => {
+  const complete = new Map(proposal.values);
+
+  for (const [fieldId, field] of fields) {
+    if (field.field.state === "active" && !complete.has(fieldId)) {
+      complete.set(fieldId, absentCreateValue(field));
+    }
+  }
+
+  return recheckAll(fields, proposal, complete);
+};
+
+/**
+ * The final candidate of an update, after before-write hooks: every value
+ * the update sets, rechecked under its effective type. Fields it does not
+ * set keep their stored values.
+ *
+ * @param fields - The effective fields of the class, by ID.
+ * @param proposal - The body's refusals and the hooks' values.
+ * @returns The final proposal.
+ */
+export const finalizeUpdate = (
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  proposal: Proposal
+): Proposal => recheckAll(fields, proposal, proposal.values);
+
 /** What validation needs besides the proposal. */
 export interface ValidationInput {
   /** The effective fields of the record's concrete class, by ID. */
   readonly fields: ReadonlyMap<DefinitionId, EffectiveField>;
+  /** The final proposal (see `finalizeCreate`, `finalizeUpdate`). */
   readonly proposal: Proposal;
   /** The fields the write changes (Contracts 3.9). */
   readonly written: ReadonlySet<DefinitionId>;
+  /** The stored record an update starts from; null for a create. */
+  readonly existing: StoredRecord | null;
 }
 
 const fieldErrorsOf = (
   field: EffectiveField,
-  value: DecodedInput,
+  candidate: StoredOrPlaintext | undefined,
   written: boolean
 ): readonly FieldError[] => {
   const { name } = field.field;
@@ -180,7 +295,9 @@ const fieldErrorsOf = (
     errors.push({ _tag: "ReadOnlyField", field: name });
   }
 
-  if (value === null && field.required && field.field.state === "active") {
+  const empty = candidate === null || candidate === undefined;
+
+  if (empty && field.required && field.field.state === "active") {
     errors.push({ _tag: "Required", field: name });
   }
 
@@ -188,10 +305,12 @@ const fieldErrorsOf = (
 };
 
 /**
- * Validates a proposal against the effective schema of the record's
- * concrete class.
+ * Validates the complete final candidate against the effective schema of
+ * the record's concrete class: refused values, written read-only and
+ * retired fields, and every required field (with stacked overrides) of
+ * the record as it would be stored.
  *
- * @param input - Fields, proposal and written fields.
+ * @param input - Fields, final proposal, written fields, existing record.
  * @returns Every field error, in field order; empty when valid.
  */
 export const validateProposal = (
@@ -203,11 +322,13 @@ export const validateProposal = (
     const refused = input.proposal.invalid.get(fieldId);
 
     if (refused === undefined) {
-      const value = input.proposal.values.get(fieldId);
+      const candidate = input.proposal.values.has(fieldId)
+        ? input.proposal.values.get(fieldId)
+        : input.existing?.values.get(fieldId);
 
-      if (value !== undefined) {
-        errors.push(...fieldErrorsOf(field, value, input.written.has(fieldId)));
-      }
+      errors.push(
+        ...fieldErrorsOf(field, candidate, input.written.has(fieldId))
+      );
     } else {
       errors.push(invalidValue(field.field.name, refused));
     }

@@ -76,11 +76,13 @@ import type { WriteBody } from "./write-body.ts";
 import { WriteOnlyValues } from "./write-only-values.ts";
 import {
   absentCreateValue,
+  finalizeCreate,
+  finalizeUpdate,
   proposeCreate,
   proposeUpdate,
   validateProposal,
 } from "./write-validation.ts";
-import type { Proposal } from "./write-validation.ts";
+import type { Proposal, ValidationInput } from "./write-validation.ts";
 
 /** Which fields a caller may name in a write body at an endpoint (3.4). */
 export type NameableFields = (
@@ -176,11 +178,9 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
 });
 
 const failIfInvalid = Effect.fn("Records.validate")(function* validate(
-  fields: ReadonlyMap<DefinitionId, EffectiveField>,
-  proposal: Proposal,
-  written: ReadonlySet<DefinitionId>
+  input: ValidationInput
 ) {
-  const errors = validateProposal({ fields, proposal, written });
+  const errors = validateProposal(input);
 
   if (errors.length > 0) {
     return yield* new ValidationFailed({ errors });
@@ -317,7 +317,6 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
       writeOnlySet: change.writeOnly,
     }),
     kind: change.kind,
-    operationId: stack.operationId,
     recordClassId: change.classId,
     recordId: change.recordId,
     recordVersion: change.version,
@@ -331,10 +330,7 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   };
 
   yield* hooks.deliveries(hookInput);
-  yield* withinSave(hooks.afterWrite(hookInput), stack, {
-    operationId: entry.operationId,
-    recordId: change.recordId,
-  });
+  yield* withinSave(hooks.afterWrite(hookInput), stack, change.recordId);
 
   return entry;
 });
@@ -348,6 +344,24 @@ const project = Effect.fn("Records.project")(function* project(
 
   return yield* access.project({ endpointClassId, record, snapshot });
 });
+
+// The fields whose value the before-write hooks set or changed.
+const hookChanges = (
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  before: ReadonlyMap<DefinitionId, DecodedInput>,
+  after: ReadonlyMap<DefinitionId, DecodedInput>
+): readonly DefinitionId[] =>
+  [...after].flatMap(([fieldId, value]) => {
+    const field = fields.get(fieldId);
+    const previous = before.get(fieldId);
+
+    const same =
+      field !== undefined &&
+      previous !== undefined &&
+      storedEquals(field.type.kind, previous, value);
+
+    return same ? [] : [fieldId];
+  });
 
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInTransaction(input: CreateInput, body: JsonObject) {
@@ -367,15 +381,24 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       values: proposed.values,
     });
 
-    const proposal: Proposal = { invalid: proposed.invalid, values };
-    const supplied = new Set(resolved.entries.keys());
+    const proposal = finalizeCreate(fields, {
+      invalid: proposed.invalid,
+      values,
+    });
 
-    // Read-only and retired fields count as written on create when their
-    // value differs from what the create stores without them.
+    // The fields the create sets: those the body supplied and those the
+    // hooks changed. Read-only and retired ones count as written for
+    // validation when their value differs from what the create stores
+    // without them.
+    const supplied = new Set([
+      ...resolved.entries.keys(),
+      ...hookChanges(fields, proposed.values, proposal.values),
+    ]);
+
     const written = new Set(
       [...supplied].filter((fieldId) => {
         const field = fields.get(fieldId);
-        const value = values.get(fieldId);
+        const value = proposal.values.get(fieldId);
 
         return (
           field === undefined ||
@@ -386,10 +409,15 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       })
     );
 
-    yield* failIfInvalid(fields, proposal, written);
-    yield* checkReferences(snapshot, fields, values, supplied);
+    yield* failIfInvalid({
+      existing: null,
+      fields,
+      proposal,
+      written,
+    });
+    yield* checkReferences(snapshot, fields, proposal.values, supplied);
 
-    const writes = yield* columnWrites(fields, values);
+    const writes = yield* columnWrites(fields, proposal.values);
 
     const id = yield* insertRecord(
       snapshot,
@@ -417,7 +445,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       kind: "create",
       recordId: id,
       version: after.version,
-      writeOnly: writeOnlySet(fields, values, null),
+      writeOnly: writeOnlySet(fields, proposal.values, null),
     });
 
     const result: SaveResult = {
@@ -507,30 +535,32 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   return { readable: readable.value, record };
 });
 
-// Fields the update writes (3.9): unreadable, invalid or changed.
+// Fields the update writes (3.9): of the fields it sets, those the caller
+// cannot read, whose value is invalid, or whose value changes.
 const writtenFields = (
   fields: ReadonlyMap<DefinitionId, EffectiveField>,
   proposal: Proposal,
   existing: StoredRecord,
-  readable: ReadonlySet<DefinitionId>,
-  named: Iterable<DefinitionId>
+  readable: ReadonlySet<DefinitionId>
 ): Set<DefinitionId> =>
   new Set(
-    [...named].filter((fieldId) => {
-      const field = fields.get(fieldId);
-      const value = proposal.values.get(fieldId);
-      const before: StoredValue | null = existing.values.get(fieldId) ?? null;
+    [...proposal.values.keys(), ...proposal.invalid.keys()].filter(
+      (fieldId) => {
+        const field = fields.get(fieldId);
+        const value = proposal.values.get(fieldId);
+        const before: StoredValue | null = existing.values.get(fieldId) ?? null;
 
-      const unreadableOrInvalid =
-        !readable.has(fieldId) || proposal.invalid.has(fieldId);
+        const unreadableOrInvalid =
+          !readable.has(fieldId) || proposal.invalid.has(fieldId);
 
-      const changed =
-        field === undefined ||
-        value === undefined ||
-        !storedEquals(field.type.kind, before, value);
+        const changed =
+          field === undefined ||
+          value === undefined ||
+          !storedEquals(field.type.kind, before, value);
 
-      return unreadableOrInvalid || changed;
-    })
+        return unreadableOrInvalid || changed;
+      }
+    )
   );
 
 // The values whose columns change (written fields with a new value).
@@ -610,19 +640,17 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     const fields = effectiveById(snapshot, classId);
     const proposed = proposeUpdate([...fields.values()], resolved);
 
-    const bodyWritten = writtenFields(
-      fields,
-      proposed,
-      record,
-      readable,
-      resolved.entries.keys()
-    );
-
-    yield* access.checkExisting({
-      action: "update",
+    const existingCheck = {
       endpointClassId: input.endpointClassId,
       record,
       snapshot,
+    };
+
+    const bodyWritten = writtenFields(fields, proposed, record, readable);
+
+    yield* access.checkExisting({
+      ...existingCheck,
+      action: "update",
       written: bodyWritten,
     });
 
@@ -630,18 +658,28 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    const proposal = yield* hookedProposal(snapshot, record, proposed);
+    const proposal = finalizeUpdate(
+      fields,
+      yield* hookedProposal(snapshot, record, proposed)
+    );
 
-    const written = new Set([
-      ...bodyWritten,
-      ...changedValues(fields, proposal.values, record).keys(),
-    ]);
+    // Recomputed from the final candidate: a hook may restore a value
+    // (no-op again) or add fields, which the existing state must allow too.
+    const written = writtenFields(fields, proposal, record, readable);
+
+    if ([...written].some((fieldId) => !bodyWritten.has(fieldId))) {
+      yield* access.checkExisting({
+        ...existingCheck,
+        action: "update",
+        written,
+      });
+    }
 
     if (written.size === 0) {
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    yield* failIfInvalid(fields, proposal, written);
+    yield* failIfInvalid({ existing: record, fields, proposal, written });
     yield* checkReferences(snapshot, fields, proposal.values, written);
 
     const changes = changedValues(fields, proposal.values, record);
