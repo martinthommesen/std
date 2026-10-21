@@ -13,8 +13,12 @@
  *   when `fields` is absent), reference targets' fields on one-hop paths,
  *   and labels' display fields. Definition revisions in (R, C] of those
  *   fields, of overrides of them on the classes they are read on, and of
- *   those classes are compared with their state at R; a field added later
- *   under a name the request used is relevant too. Relevant kinds:
+ *   those classes are compared with their state at R. A field whose old or
+ *   new name (from definition revisions and the journal's `oldName` and
+ *   `newName`, Contracts 1.5) is a name the request used on a class it
+ *   affects is relevant too: renamed into or out of it, or added under it.
+ *   Names are class-qualified: a name used on one class never matches a
+ *   field of an unrelated class. Relevant kinds:
  *   `fieldAdded`, `fieldRenamed`, `fieldRetired`, `fieldPurged`,
  *   `typeChanged`, `settingsChanged`, `requiredChanged`, `readOnlyChanged`,
  *   `tableRetired`. Labels' texts, display field choice and access rules
@@ -32,7 +36,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { parseJsonbText } from "@std/values/postgres-text";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { currentReadScope, resolveTable } from "../records/read-records.ts";
@@ -218,6 +222,66 @@ JOIN LATERAL (
   });
 });
 
+/** One field operation of the journal (Contracts 1.5). */
+interface JournalOperation {
+  readonly targetId: DefinitionId;
+  readonly oldName: string | null;
+  readonly newName: string | null;
+  readonly revision: number;
+}
+
+const JournalOperationsSchema = Schema.Array(
+  Schema.Struct({
+    kind: Schema.NullOr(Schema.String),
+    newName: Schema.NullOr(Schema.String),
+    oldName: Schema.NullOr(Schema.String),
+    targetId: Schema.String,
+  })
+);
+
+const decodeOperations = Schema.decodeUnknownOption(
+  Schema.fromJsonString(JournalOperationsSchema)
+);
+
+/**
+ * The field operations the journal records in (R, C], with their names.
+ *
+ * @param stated - R.
+ * @param current - C.
+ * @returns The operations on fields, in revision order.
+ */
+const readJournal = Effect.fn("StaleRequest.readJournal")(function* readJournal(
+  stated: ConfigState,
+  current: ConfigState
+) {
+  const rows = yield* readRows(
+    sql`SELECT "first_revision"::text AS "revision", "operations"::text AS "operations"
+FROM "core"."schema_change"
+WHERE "first_revision" > ${textParameter(String(stated.revision), "int8")}
+  AND "first_revision" <= ${textParameter(String(current.revision), "int8")}
+ORDER BY "first_revision"`
+  );
+
+  return rows.flatMap((row): JournalOperation[] =>
+    Option.match(decodeOperations(row.operations ?? ""), {
+      onNone: () => [],
+      onSome: (operations) =>
+        operations.flatMap((operation) =>
+          operation.kind === "field"
+            ? [
+                {
+                  newName: operation.newName,
+                  oldName: operation.oldName,
+                  revision: Number(row.revision),
+                  targetId: operation.targetId,
+                },
+              ]
+            : []
+        ),
+    })
+  );
+});
+
 const journalReaches = Effect.fn("StaleRequest.journalReaches")(
   function* journalReaches(stated: ConfigState) {
     const rows = yield* readRows(
@@ -314,9 +378,39 @@ const classChanges = (
 };
 
 /**
+ * The classes on which a field of `fieldClass`, named any of `names` before
+ * or after a change, takes a name the request used (Contracts 1.5, 6.4).
+ *
+ * @param readScope - The caller's scope at C.
+ * @param scope - The request's scope at R.
+ * @param fieldClass - The class that declares the field.
+ * @param names - The field's old and new names.
+ * @returns The classes the request read the name on.
+ */
+const nameMatches = (
+  readScope: ReadScope,
+  scope: StaleScope,
+  fieldClass: DefinitionId,
+  names: readonly (string | undefined | null)[]
+): DefinitionId[] => {
+  const wanted = new Set(names);
+
+  return [
+    ...new Set(
+      scope.names.flatMap((scoped) =>
+        wanted.has(scoped.name) &&
+        affects(readScope, fieldClass, scoped.classId)
+          ? [scoped.classId]
+          : []
+      )
+    ),
+  ];
+};
+
+/**
  * The scope entries a field or override definition change touches: the
- * field read on a class it affects, or a new field taking a name the
- * request used.
+ * field read on a class it affects, or a field whose old or new name the
+ * request used there.
  *
  * @param readScope - The caller's scope at C.
  * @param scope - The request's scope at R.
@@ -342,29 +436,78 @@ const touched = (
       scoped.fieldId === fieldId && affects(readScope, classId, scoped.classId)
   );
 
-  const name = textOf(entry.after, "name");
-
-  const isNew = entry.kind === "field" && entry.before === undefined;
-  const takesName = name !== undefined && scope.names.has(name);
-
-  const added =
-    isNew && takesName
-      ? [...scope.classes].flatMap((readOn) =>
-          affects(readScope, classId, readOn)
-            ? [{ classId: readOn, fieldId }]
-            : []
-        )
+  // A field whose name at R or at C is a name the request used on a class
+  // it affects (renamed into or out of the name, or added under it).
+  const names =
+    entry.kind === "field"
+      ? [textOf(entry.before, "name"), textOf(entry.after, "name")]
       : [];
 
-  return [...direct, ...added];
+  const byName = nameMatches(readScope, scope, classId, names).map(
+    (readOn) => ({ classId: readOn, fieldId })
+  );
+
+  return [...direct, ...byName];
 };
+
+/**
+ * Changes the journal records by name (Contracts 1.5): an operation on a
+ * field whose old or new name the request used on a class it affects is
+ * `fieldRenamed` when the names differ and `fieldAdded` when it had none.
+ *
+ * @param readScope - The caller's scope at C.
+ * @param scope - The request's scope at R.
+ * @param operations - The journal's operations in (R, C].
+ * @returns The changes, for fields the caller can name at C.
+ */
+const journalChanges = (
+  readScope: ReadScope,
+  scope: StaleScope,
+  operations: readonly JournalOperation[]
+): SchemaChange[] =>
+  operations.flatMap((operation): SchemaChange[] => {
+    const field = readScope.snapshot.field(operation.targetId);
+
+    const renamed =
+      operation.oldName !== null && operation.oldName !== operation.newName;
+
+    const kind = operation.oldName === null ? "fieldAdded" : "fieldRenamed";
+
+    if (field === undefined || (!renamed && operation.oldName !== null)) {
+      return [];
+    }
+
+    const readOns = nameMatches(readScope, scope, field.classId, [
+      operation.oldName,
+      operation.newName,
+    ]);
+
+    return visibleEntries(readScope, {
+      ...scope,
+      entries: readOns.map((classId) => ({ classId, fieldId: field.id })),
+    }).map(({ entry, name, table }) => ({
+      field: name,
+      fieldId: entry.fieldId,
+      kind,
+      revision: operation.revision,
+      table,
+    }));
+  });
 
 const relevantChanges = (
   readScope: ReadScope,
   scope: StaleScope,
-  history: readonly DefinitionHistory[]
+  history: readonly DefinitionHistory[],
+  operations: readonly JournalOperation[]
 ): SchemaChange[] => {
   const changes = new Map<string, SchemaChange>();
+
+  for (const change of journalChanges(readScope, scope, operations)) {
+    changes.set(
+      `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
+      change
+    );
+  }
 
   for (const entry of history) {
     const found =
@@ -451,7 +594,8 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     const atR = yield* definitionsAt(stated.revision);
     const scope = staleScope(atR, classId, parameters);
     const history = yield* readHistory(stated, current);
-    const changes = relevantChanges(readScope, scope, history);
+    const operations = yield* readJournal(stated, current);
+    const changes = relevantChanges(readScope, scope, history, operations);
 
     if (changes.length > 0) {
       return yield* failure(changes);

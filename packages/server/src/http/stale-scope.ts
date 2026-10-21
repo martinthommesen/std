@@ -3,6 +3,10 @@
  * resolved against the definitions at the request's revision R, the way the
  * request was built.
  *
+ * Names are kept with the class they were looked up on (the endpoint's
+ * class, or a reference's target class), so a change matches a request
+ * name only on that class's lineage or subtree.
+ *
  * - Definitions at R come from `core.definition_revision`: for every field
  *   and class, its effective JSON at the latest revision up to R.
  * - `filter` is parsed in the condition text syntax with names resolved at
@@ -68,11 +72,18 @@ export interface ScopeEntry {
   readonly classId: DefinitionId;
 }
 
+/** A name the request used, with the class it was looked up on. */
+export interface ScopeName {
+  readonly name: string;
+  /** The endpoint's class, or the reference target's class. */
+  readonly classId: DefinitionId;
+}
+
 /** What a stale read is checked against. */
 export interface StaleScope {
   readonly entries: readonly ScopeEntry[];
-  /** Every name the request used, resolved or not. */
-  readonly names: ReadonlySet<string>;
+  /** Every name the request used, resolved or not, class-qualified. */
+  readonly names: readonly ScopeName[];
   /** The endpoint's class and every reference target class in scope. */
   readonly classes: ReadonlySet<DefinitionId>;
 }
@@ -205,9 +216,14 @@ interface Collector {
   readonly definitions: DefinitionsAtR;
   readonly endpoint: DefinitionId;
   readonly entries: ScopeEntry[];
-  readonly names: Set<string>;
+  readonly names: ScopeName[];
   readonly classes: Set<DefinitionId>;
 }
+
+const named = (collector: Collector, classId: DefinitionId, name: string) => {
+  collector.names.push({ classId, name });
+  collector.classes.add(classId);
+};
 
 const add = (
   collector: Collector,
@@ -230,7 +246,7 @@ const resolvePath = (
   path: readonly string[]
 ): FieldAtR | undefined => {
   const [name = "", targetName] = path;
-  collector.names.add(name);
+  named(collector, collector.endpoint, name);
 
   const field = fieldByNameAt(collector.definitions, collector.endpoint, name);
   const target = AUDIT_REFERENCES.has(name) ? USER_CLASS_ID : targetOf(field);
@@ -240,7 +256,9 @@ const resolvePath = (
   }
 
   if (targetName !== undefined && target !== undefined) {
-    collector.names.add(targetName);
+    // Registered before the lookup: a field added later under this name
+    // on the target is relevant even though it did not resolve at R.
+    named(collector, target, targetName);
 
     const targetField = fieldByNameAt(
       collector.definitions,
@@ -290,7 +308,7 @@ const addFilter = (collector: Collector, filter: string): void => {
   const parsed = parseCondition(filter, {
     classId: collector.endpoint,
     resolveName: (classId, name) => {
-      collector.names.add(name);
+      named(collector, classId, name);
 
       if (isSystemFieldName(name)) {
         return fieldInfoOf(systemField(name, classId));
@@ -396,7 +414,7 @@ export const staleScope = (
     definitions,
     endpoint,
     entries: [],
-    names: new Set(),
+    names: [],
   };
 
   if (parameters.filter !== undefined) {

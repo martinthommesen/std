@@ -138,6 +138,7 @@ The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parall
 
 - `POST /api/v1/auth/sign-in` `{login, password}`: the login is compared by `casefold(login COLLATE pg_unicode_fast)` (the unique index's key). An unknown login still runs one scrypt derivation against a dummy hash. Unknown login, wrong password and deactivated user give the same `401 InvalidCredentials`.
 - Passwords: `$scrypt$ln=15,r=8,p=1$<salt>$<hash>` (16-byte salt, 32-byte key, unpadded base64), compared with `timingSafeEqual`. The parameters travel with the hash. [judgment]
+- Sign-in reads the user row `FOR SHARE`, which conflicts with the deactivating `UPDATE`: a concurrent deactivation either commits first (the row is re-read, `active` is false, sign-in is refused) or waits for the sign-in to commit (its trigger then deletes the new session).
 - Deactivation ends sessions in the same transaction: the change set that creates `core.user` attaches `core.end_user_sessions()` (migration 0003) as `AFTER UPDATE ... WHEN (OLD.active AND NOT NEW.active)`. A trigger rather than a save-pipeline hook [judgment]: users are also deactivated by tooling, imports and by hand, and no path may leave a session behind. Reactivation does not revive a session; the user signs in again.
 - Tokens: 32 random bytes, unpadded base64url (43 characters), returned once. `core.session` (migration 0003) stores `sha256(token)` as `bytea`, the user, `created_at` and `expires_at` (12 hours [judgment]). It has no `id`, so it is internal and not described by the core set.
 - `Authorization: Bearer <token>`: the middleware only refuses a missing token; the handler checks the token inside its request transaction (`authenticate` joins `core.user` and requires `active`), so the session, roles and records are read at one revision. `POST /api/v1/auth/sign-out` deletes the presented session.
@@ -166,6 +167,12 @@ The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parall
 - Branch-form pages run with the read-tuning settings, unprepared, restored afterwards.
 - Filters use the instance time zone; the user preference arrives with user settings.
 - Read statements return every value as text, one string per column; a list of 100 rows with 20 fields decodes 2,000 strings. Not measured yet.
+
+## Review round 2
+
+- Sign-in locks the user row `FOR SHARE`; a deterministic test holds a deactivation open, sees the sign-in blocked (`pg_blocking_pids`), commits, and finds no session.
+- Stale-scope names are class-qualified (`ScopeName`): a name matches a field only on the class it was used on (its lineage and subtree), and an unresolved target field name is registered on the target class before the lookup, in selections and filters.
+- Renames: old and new names from definition revisions and from the journal's operations (`oldName`, `newName`) both match request names; a rename is `fieldRenamed`, a field with no old name `fieldAdded`. Tested with a planted journal entry.
 
 ## Where the writes workstream meets these APIs (decision 0009)
 

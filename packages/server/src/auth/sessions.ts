@@ -79,11 +79,16 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
   const tables = userTables(snapshot);
   const key = textKey(login.normalize("NFC").trim(), false);
 
+  // FOR SHARE conflicts with the UPDATE that deactivates the user: a
+  // concurrent deactivation either commits first (the row is re-read and
+  // `active` is false) or waits for this sign-in to commit (its trigger then
+  // deletes the new session). No session survives a deactivation.
   const [user] = yield* readRows(
     sql`SELECT "u"."id"::text AS "id", "u".${rawSql(quoteIdent(tables.password))} AS "password",
   "u".${rawSql(quoteIdent(tables.active))}::text AS "active"
 FROM ${tables.user} AS "u"
-WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}`
+WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
+FOR SHARE OF "u"`
   );
 
   const verified = yield* verifyPassword(password, user?.password ?? null);
