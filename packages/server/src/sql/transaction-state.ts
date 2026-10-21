@@ -435,7 +435,7 @@ export class TransactionState implements TransactionHandle {
     const isRead =
       first?.kind === "word" &&
       READ_KEYWORDS.has(first.text) &&
-      !lexed.dataModifying;
+      !lexed.writeClause;
 
     return isRead
       ? Option.none()

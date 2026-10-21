@@ -292,43 +292,119 @@ describe("transaction-lifetime", () => {
         );
         assert.strictEqual(yield* countRows("lifetime_read_only"), 0);
 
-        // A locking clause is still a read.
+        const writingCtes = [
+          "WITH x AS (SELECT 1) SELECT * INTO lifetime_read_only_copy FROM x",
+          "WITH x AS MATERIALIZED (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH RECURSIVE r(n) AS (SELECT 1), d AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
+        ];
+
+        for (const text of writingCtes) {
+          const refused = yield* Effect.exit(
+            request(readOnly(sql.unsafe(text)))
+          );
+
+          assert.strictEqual(
+            refusalOf(refused)?.reason,
+            "transaction-control",
+            text
+          );
+        }
+
+        // Locking clauses, and command words used as names, are reads.
         yield* sql`INSERT INTO lifetime_read_only VALUES (3)`;
-        yield* request(
-          readOnly(sql`SELECT id FROM lifetime_read_only FOR UPDATE`).pipe(
-            Effect.andThen(
-              readOnly(sql`SELECT id FROM lifetime_read_only FOR NO KEY UPDATE`)
-            )
-          )
-        );
+        yield* sql`CREATE FUNCTION insert() RETURNS int LANGUAGE sql AS 'SELECT 1'`;
+
+        const reads = [
+          'SELECT id FROM "lifetime_read_only" FOR UPDATE',
+          "SELECT 1 FOR UPDATE",
+          "SELECT id FROM lifetime_read_only t FOR NO KEY UPDATE OF t SKIP LOCKED",
+          "SELECT update, delete, insert, merge FROM (SELECT 1 AS update, 2 AS delete, 3 AS insert, 4 AS merge) s",
+          "SELECT 1 AS update",
+          "SELECT insert()",
+          "WITH RECURSIVE r(n) AS NOT MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SEARCH DEPTH FIRST BY n SET ord CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT n FROM r",
+        ];
+
+        for (const text of reads) {
+          yield* request(readOnly(sql.unsafe(text)));
+        }
+
+        assert.strictEqual(yield* countRows("lifetime_read_only"), 1);
       })
+    );
+
+    dbTest.effect(
+      "readOnly refuses SELECT INTO, so a caught nested failure cannot commit its table",
+      () =>
+        Effect.gen(function* selectInto() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+
+          const outcome = yield* Effect.exit(
+            request(
+              request(
+                readOnly(
+                  sql.unsafe("SELECT 42 AS id INTO lifetime_select_into")
+                ).pipe(Effect.andThen(Effect.fail("nested failure" as const)))
+              ).pipe(Effect.ignore)
+            )
+          );
+
+          assert.strictEqual(refusalOf(outcome)?.reason, "transaction-control");
+          assert.strictEqual(
+            yield* countRows("pg_class WHERE relname = 'lifetime_select_into'"),
+            0
+          );
+        })
     );
   });
 
-  it("the lexer flags data-modifying words outside strings, comments and quoted names", () => {
-    const modifying = [
+  it("the lexer finds write clauses by structure, not by command words", () => {
+    const writing = [
+      "SELECT 42 AS id INTO t",
+      "SELECT 1 INTO TEMP t",
+      "WITH x AS (SELECT 1) SELECT * INTO t FROM x",
       "WITH x AS (INSERT INTO t VALUES (1) RETURNING 1) SELECT * FROM x",
       "WITH x AS (UPDATE t SET a = 1 RETURNING 1) SELECT * FROM x",
       "WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x",
-      "WITH x AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1",
+      "WITH x AS MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH x AS NOT MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH RECURSIVE r AS (SELECT 1), d AS (DELETE FROM t RETURNING 1) SELECT 1",
+      'WITH "x" (a, b) AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1',
+      "WITH x AS (SELECT 1) UPDATE t SET a = 1",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH DEPTH FIRST BY n SET o DELETE FROM t",
+      "WITH RECURSIVE r(n) AS (SELECT 1) CYCLE n SET c USING p DELETE FROM t",
+      "WITH x AS (SELECT 1)",
+      "WITH x AS SELECT 1",
+      "WITH /* a */ x -- b\n AS ( /* c */ DELETE FROM t) SELECT 1",
     ];
 
     const reads = [
       "SELECT id FROM t FOR UPDATE",
-      "SELECT id FROM t FOR NO KEY UPDATE SKIP LOCKED",
+      'SELECT id FROM "t" FOR UPDATE',
+      "SELECT 1 FOR UPDATE",
+      "SELECT id FROM t FOR NO KEY UPDATE OF t SKIP LOCKED",
       "SELECT id FROM t FOR SHARE",
+      "SELECT update, delete, insert, merge FROM t",
+      "SELECT 1 AS update",
+      "SELECT insert()",
       "SELECT 'insert into t' AS s",
-      'SELECT "update" FROM t',
-      "SELECT 1 -- delete from t",
-      "SELECT $$update t$$",
+      'SELECT "into" FROM t',
+      "SELECT 1 -- into t",
+      "SELECT $$into t$$",
+      "WITH x AS (SELECT 1), y AS ((SELECT 2)) SELECT * FROM x, y",
+      "WITH x AS (WITH y AS (SELECT 1) SELECT * FROM y) TABLE x",
+      "WITH x AS (VALUES (1)) (SELECT * FROM x)",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH BREADTH FIRST BY n SET o CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT * FROM r",
+      'WITH "update" AS (SELECT 1) SELECT * FROM "update"',
     ];
 
-    for (const sql of modifying) {
-      assert.isTrue(analyzeStatement(sql).dataModifying, sql);
+    for (const sql of writing) {
+      assert.isTrue(analyzeStatement(sql).writeClause, sql);
     }
 
     for (const sql of reads) {
-      assert.isFalse(analyzeStatement(sql).dataModifying, sql);
+      assert.isFalse(analyzeStatement(sql).writeClause, sql);
     }
   });
 
