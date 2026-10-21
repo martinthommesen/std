@@ -1,14 +1,14 @@
 # 0009. Record writes: save pipeline, change entries, history
 
-Status: phase 1 accepted, 2026-10-21 (workstreams 0B logical records, 0C writes, 1E history). Code: `packages/server/src/records/{save-*,write-*,change-entry,history-query,stored-*}.ts`, `packages/server/src/platform/migrations/0004-history.ts`.
+Status: accepted, 2026-10-21 (workstreams 0B logical records, 0C writes, 1E history). Code: `packages/server/src/records/{save-*,write-*,change-entry,history-*,record-access,stored-*}.ts`, `packages/server/src/http/record-writes.ts`, `packages/api/src/errors/*`, `packages/server/src/platform/migrations/0004-history.ts`, `examples/acme/src/{demo,main}.ts`.
 
-Phase 1 builds everything that needs no access rules, actor service or HTTP. Authorization, hooks and password hashing are typed seams; phase 2 (after `ws/0c-reads`) plugs in `@std/access`, the `Actor` service and the routes.
+Phase 1 built everything that needs no access rules, actor service or HTTP, with authorization, hooks and password hashing as typed seams. Phase 2 plugs in `@std/access` and the read compiler (`RuleWriteAccess`), the `Actor` service, scrypt hashing, the HTTP routes, the acme fixture through the pipeline and `pnpm spike:demo` (see "Phase 2").
 
 ## Modules
 
 | Module | What it provides |
 | --- | --- |
-| `records/save-pipeline` | `createRecord`, `updateRecord`, `deleteRecord` (`Effect.fn`), each one request transaction (joined when nested); `SaveInput` (`endpointClassId`, `actorId`, `cause?`, `nameable?`), `SaveResult` (`outcome`, `id`, `classId`, `version`, `changeId`, `record`) |
+| `records/save-pipeline` | `createRecord`, `updateRecord`, `deleteRecord` (`Effect.fn`), each one request transaction (joined when nested), acting as the `Actor` in the environment; `SaveInput` (`endpointClassId`, `cause?`), `SaveResult` (`outcome`, `id`, `classId`, `version`, `changeId`, `record`) |
 | `records/write-body` | `decodeWriteBody` (unknown input to a JSON object, `InvalidBody`), `resolveWriteBody` (names to fields, `UnknownField`, system members `ReadOnlyField`), `SYSTEM_FIELD_NAMES` |
 | `records/write-validation` | `proposeCreate`, `proposeUpdate` (6.7 absent vs null, defaults, `@std/values` conversion under the effective type), `finalizeCreate`, `finalizeUpdate`, `recheckValue` (the final candidate after hooks), `validateProposal` |
 | `records/field-errors` | the field errors of `ValidationFailed` as `Schema.TaggedStruct`s; `InvalidValue` reasons are `@std/values`'s plus `notUnique` |
@@ -16,12 +16,16 @@ Phase 1 builds everything that needs no access rules, actor service or HTTP. Aut
 | `records/save-constraints` | `constraintFailure`, `mapConstraints`: constraint violations to API errors by generated name |
 | `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry` |
 | `records/history-query` | `readHistory` with an explicit readable-field set and filters |
-| `records/write-access` | `WriteAccess` seam; `WriteAccess.allowAll`, `projectAll` |
+| `records/write-access` | `WriteAccess` seam (`nameable`, `visibility`, `checkExisting`, `checkProposed`, `visibleTargets`, `project`); `WriteAccess.allowAll` (seeding, tests), `projectAll` |
+| `records/write-access-rules` | `RuleWriteAccess`: the seam for the request's `Actor` over the read compiler |
+| `records/record-access` | `readableOnRecord`, `truthColumn`: one record's visibility and readable fields in SQL |
+| `records/history-endpoint` | `recordHistory`: the history route's service (visibility through E, readable fields, admin-only deleted and purged history, filters) |
+| `http/record-writes` | `writeBodyOf`, `expectedVersionOf` (`If-Match`), `createInRequest`, `updateInRequest`, `deleteInRequest`, `historyInRequest` |
 | `records/save-hooks` | `SaveHooks` seam (`beforeWrite`, `deliveries`, `afterWrite`); `SaveHooks.none` |
-| `records/write-only-values` | `WriteOnlyValues` seam (`hashPassword`); `WriteOnlyValues.unavailable` |
+| `records/write-only-values` | `WriteOnlyValues` seam (`hashPassword`); `WriteOnlyValues.scrypt` (sign-in's hashing), `WriteOnlyValues.unavailable` |
 | `records/save-stack` | `SaveStack` reference: records of enclosing saves (`RecordInSave`) |
 | `records/stored-values` | `columnText`, `parseStoredText` (Postgres text to `@std/values`), `bindValue` (text parameters with casts) |
-| errors | `ValidationFailed`, `VersionConflict` (`currentVersion`), `NotFound`, `NotAllowed`, `UnknownField` (`field`), `InvalidReference` (`field`), `Referenced`, `RecordInSave`, `InvalidBody`; one file each |
+| errors | In `@std/api/errors` with their HTTP status: `ValidationFailed` 422 (field errors in `field-errors`), `VersionConflict` 409 (`currentVersion`), `VersionRequired` 428, `InvalidReference` 422 (`field`), `Referenced` 409, `NotAllowed` 403, plus the reads' `NotFound` and `UnknownField`. Server-only: `RecordInSave`, `InvalidBody` |
 
 ## Pipeline order (Contracts 4.1)
 
@@ -45,11 +49,11 @@ Delete: steps 1 to 3 with `FOR UPDATE`, `checkExisting(delete)`, `beforeWrite`, 
 
 System times are `date_trunc('milliseconds', transaction_timestamp())`: one clock reading per transaction in whole milliseconds. The root lock and the plain loads are marked `readOnly` (the SQL layer accepts locking clauses as reads); inserts, updates, deletes and the entry count as writes.
 
-## Seams for phase 2
+## Seams (filled in phase 2)
 
-- `WriteAccess` (per request, built from the `Actor`): `visibility` returns the readable field IDs or `None`; `checkExisting` and `checkProposed` re-read through the reads' compiled predicates; `visibleTargets` applies the target's visibility; `project` produces the response with the caller's read rights for the endpoint (its fields and its ancestors', Contracts 2.3; `projectAll` does the same without rules, `class` stays the concrete class). Its methods use the transaction's `SqlClient` (the `leakingRequirements` suggestion is intended).
-- `nameable` on `SaveInput`: the caller's readable or writable fields at the endpoint (3.4).
-- `actorId` on `SaveInput` becomes the `Actor` service.
+- `WriteAccess` (per request, built from the `Actor`; `RuleWriteAccess`): `visibility` returns the readable field IDs or `None`; `checkExisting` and `checkProposed` re-read through the reads' compiled predicates; `visibleTargets` applies the target's visibility; `project` produces the response with the caller's read rights for the endpoint (its fields and its ancestors', Contracts 2.3; `projectAll` does the same without rules, `class` stays the concrete class). Its methods use the transaction's `SqlClient` and `RequestRevision` (the `leakingRequirements` suggestion is intended).
+- `WriteAccess.nameable` (phase 1: a `nameable` input): the caller's readable or writable fields at the endpoint (3.4).
+- The `Actor` service (phase 1: an `actorId` input).
 - `readHistory`'s `readable`: the fields the caller can currently read on the current record.
 - `SaveHooks` for Step 3 hooks and 1E delivery rows; `WriteOnlyValues.hashPassword` for the auth layer's hash.
 
@@ -62,7 +66,7 @@ Laid out like the 0002 platform tables and described in `definitions/core/platfo
 | `id` | change ID, UUIDv7 |
 | `class_id`, `version` | platform class of `core.change`; always 1 (entries never change) |
 | `created_*`, `updated_*` | equal `occurred_at` and `actor_id` (CHECK `change_audit`) |
-| `operation_id` | one per transaction attempt: the first entry's change ID, kept in process memory in a `WeakMap` keyed by the attempt's `CurrentTransaction` handle (fresh per outermost transaction and per config-commit retry, shared by joined units), so no SQL a caller runs can change or forge it |
+| `operation_id` | one per transaction attempt: a UUIDv7 created in TypeScript and stored in a `WeakMap` keyed by the attempt's `CurrentTransaction` handle in one synchronous step on first use (fresh per outermost transaction and per config-commit retry, shared by joined and concurrent units), so no SQL a caller runs can change or forge it |
 | `record_id`, `record_class_id`, `record_version` | the logical record; `UNIQUE (record_id, record_version)` |
 | `kind` | `create`, `update`, `delete` |
 | `actor_id`, `cause` (jsonb), `schema_revision`, `occurred_at` | 4.2 |
@@ -108,3 +112,56 @@ Everything else stays `DatabaseError` (SQLSTATE, constraint name, diagnostic ID)
 
 - The operation ID moved from the SQL setting `std.operation_id` to a `WeakMap` keyed by the transaction attempt's `CurrentTransaction`: a caller's `set_config` can neither split nor forge it, and the change-entry `INSERT` no longer calls `set_config`.
 - Plaintext a hook supplies for a password or secret is checked like body input (`decodeIn` of the revealed text: non-empty, well-formed, no U+0000); refusals carry no value.
+
+## Review round 3
+
+- The operation ID is created in TypeScript (`uuidv7At`) and stored in the same synchronous step that finds none, so concurrent saves joined to one request cannot start two operations. Every entry, the first included, uses it; it is no longer the first change ID.
+
+## Phase 2
+
+### Authorization (`RuleWriteAccess`)
+
+Per request, from the `Actor`, the `Catalog`, the `InstanceSettings` and one clock reading (`me`, `now`, the instance zone):
+
+| Seam | SQL |
+| --- | --- |
+| `nameable(E, action)` | (no SQL) the fields of E's lineage that the caller can read through E's view, or for which some row-visible class of subtree(E) (create: E) has a non-never field decision for the action |
+| `visibility` | `readableOnRecord`: over `recordRelation(C)` of the concrete class C with C's exact view, `visible` and one readability flag per field of C, in the statement after the record load (the root is locked) |
+| `checkExisting` | `SELECT COALESCE(record(action) AND field(update, f1) AND ..., false)` over `recordRelation(C)` for the record, before any write |
+| `checkProposed` | the same with `create`/`update` for the record and each written or supplied field, after the row writes; `NotAllowed` fails the save, so the request transaction rolls back |
+| `visibleTargets` | `relation(T) WHERE id = ANY($ids) AND visibility(T)` |
+| `project` | `getRecord` through E with the caller's read view; `NotFound` (no longer visible) becomes `{ id, version }` |
+
+### HTTP
+
+| Route | Success | Errors |
+| --- | --- | --- |
+| `POST /api/v1/tables/{table}/records` | 201 `{ schemaRevision, record }` | `UnknownTable`, `UnknownField`, `ValidationFailed`, `InvalidReference`, `NotAllowed`, `InvalidRequest`, `SchemaChanged` |
+| `PATCH .../records/{id}` (`If-Match: "<version>"`) | 200 `{ schemaRevision, record }` (a no-op returns the record unchanged) | the above, `NotFound`, `VersionRequired` 428, `VersionConflict` 409 |
+| `DELETE .../records/{id}` (`If-Match`) | 200 `{ schemaRevision, id, version }` (the delete's entry version) | `NotFound`, `NotAllowed`, `Referenced`, `VersionRequired`, `VersionConflict` |
+| `GET .../records/{id}/history?since&until&actor&kind&field` | 200 `{ schemaRevision, entries: [{ changeId, operationId, version, kind, actor, occurredAt, schemaRevision, cause, changes }] }`, `changes` keyed by current field name | `NotFound`, `UnknownField` (a field filter the caller cannot read), `InvalidRequest` |
+
+- Bodies are read as text and parsed with `@std/values/json` `parseJson` (duplicate keys and inexact numbers refused); an unparsable body or a non-object is `400 InvalidRequest` (as the reads' `RequestDecoding` middleware does for undecodable requests), while a value that does not convert for its field is `422 ValidationFailed`.
+- `If-Match` is checked before the transaction: missing is 428 and changes nothing; malformed is `InvalidRequest`. An ID that is not a UUID is `NotFound`.
+- The stale-request check (6.4) resolves the body's field names at the request's revision as a `fields` scope (`stale-scope.ts`).
+- Handlers stay thin: they parse, run `inRequestTransaction(…, asActor(…))` and call `createInRequest` and friends, which provide `RuleWriteAccess` to the pipeline. `SaveHooks.none` and `WriteOnlyValues.scrypt` are provided to the routes in `http/app.ts`.
+
+### History access
+
+The record must be visible through E now; the fields shown are those readable on the current record over its concrete class, so child-only fields appear through a parent endpoint (2.3, 3.7). A caller with always-readable `core.change` records and `fields` (only the admin rule gives that) also sees deleted records' history (found through `core.change` with `record_class_id` in subtree(E)) and purged fields' changes.
+
+### Fixture and demo
+
+- The acme fixture (`@std/testing/acme-fixture`) creates users (with scrypt passwords), role assignments and records through `createRecord` with `WriteAccess.allowAll` (`seedRecord`, `createFixtureUser`): users and roles as the system user, each asset as its owner. Every fixture record has its change entry. Bulk test data in `cursor-nulls` and `branch-form` still uses table-owner inserts.
+- `pnpm spike:demo` runs `examples/acme/src/main.ts`: a fresh database from the migrated template, the fixture, the HTTP app in process; it prints what Alice and Bob see and are refused through `/acme.asset` and `/acme.laptop`, the two-user write scenario and L's history. `examples/acme/test/demo.test.ts` runs the same program in CI.
+
+### Tests (phase 2)
+
+`write-authorization.test.ts`: `ownership`, `child-rule-parent-endpoint`, `child-fields`, `written-fields`, `references`, `history` and `history-endpoint`, `referenced`, `invisible-404` (PATCH, never `VersionConflict` on an invisible record), If-Match 428 and 409, 400 versus 422. `two-user-write.test.ts`: `two-user-write` through both endpoints and both users' histories, the 2.2 delete and serial-version tests over HTTP, `field-rule-states` with rule 7 replaced for `name`, a stale-revision write, no password in history. `save-operations.test.ts`: concurrent joined saves share one operation.
+
+### Deviations and open items
+
+- `field-rule-states` replaces rule 7 for `name` with a local rule through a change set (an update of rule 7's target plus a new allow conditioned on `status = "in_use"`).
+- The stale-request check of creates does not yet report fields that became required without a default (6.4); only fields the body names are checked.
+- `RecordInSave` and `InvalidBody` cannot occur at the HTTP edge today and are defects there; `Referenced` only on deletes.
+- History entries key changes by the current field name; reading old values at their revision through `core.definition_revision` (4.4) is the Step 2 history panel's job.

@@ -154,7 +154,7 @@ The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parall
 ## Deviations and open items
 
 - Q7 (a filter through a reference, restricted caller) is a known gap of the storage benchmark.
-- **TEMPORARY fixture inserts.** `@std/testing/owner-records` inserts users, roles and records as table owner; the writes workstream replaces them with record-service creates.
+- **Fixture inserts.** The acme fixture now creates users, role assignments and records through the save pipeline (decision 0009). `@std/testing/owner-records` remains only for the bulk data of `cursor-nulls` and `branch-form` (thousands of rows, inserted as table owner).
 - A filter that does not parse at R contributes the names the parser saw before it stopped.
 
 ## Review round 1
@@ -166,3 +166,8 @@ The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parall
 - Branch-form pages run with the read-tuning settings, unprepared, restored afterwards.
 - Filters use the instance time zone; the user preference arrives with user settings.
 - Read statements return every value as text, one string per column; a list of 100 rows with 20 fields decodes 2,000 strings. Not measured yet.
+
+## Where the writes workstream meets these APIs (decision 0009)
+
+- `records/write-access-rules.ts` (`RuleWriteAccess`) builds on `makeReadScope`, `recordRelation`, `recordPredicate` and `fieldPredicate`: one evaluator for reads, existing-state and proposed-state checks. The projection after a write is `getRecord` through the endpoint.
+- The write and history routes live in the `records` group (`create`, `update`, `remove`, `history`) and use `inRequestTransaction` and `asActor`; their stale check passes the body's field names as `fields` to `stale-scope.ts`.
