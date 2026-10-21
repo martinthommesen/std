@@ -26,8 +26,14 @@
 #   STD_ADMIN_PASSWORD   its password             quickstart-admin-password
 #   STD_DOCTOR_COMMAND   how to run `std doctor`  docker compose exec -T server pnpm --silent std doctor
 #   QUICKSTART_RUN       tag for this run's data  the current UTC time
+#   QUICKSTART_ALICE_PASSWORD, QUICKSTART_BOB_PASSWORD
+#                        the demo users' passwords alice-quickstart-password, bob-quickstart-password
 #
 # Every password here is a disposable demo credential. Never reuse them.
+#
+# Every refusal it shows is checked (status and error tag), and so are the
+# facts it prints (what each user sees, who sees cost, the versions in the
+# history): anything unexpected stops it with FAILED and exit 1.
 set -euo pipefail
 shopt -s inherit_errexit 2>/dev/null || true # bash 4.4 and later
 
@@ -37,8 +43,8 @@ STD_ADMIN_PASSWORD=${STD_ADMIN_PASSWORD:-quickstart-admin-password}
 STD_DOCTOR_COMMAND=${STD_DOCTOR_COMMAND:-docker compose exec -T server pnpm --silent std doctor}
 RUN=${QUICKSTART_RUN:-$(date -u +%Y%m%d-%H%M%S)}
 
-ALICE_PASSWORD=alice-quickstart-password
-BOB_PASSWORD=bob-quickstart-password
+ALICE_PASSWORD=${QUICKSTART_ALICE_PASSWORD:-alice-quickstart-password}
+BOB_PASSWORD=${QUICKSTART_BOB_PASSWORD:-bob-quickstart-password}
 
 # Stable IDs of everything the quickstart defines, as a definition set would
 # fix them (Contracts 1.1). Rules and conditions refer to fields by ID.
@@ -68,19 +74,31 @@ CORE_USER=da385db7-b2b7-4a1d-a1a9-42e8e0bb7992
 
 API="$STD_URL/api/v1"
 BODY_FILE=$(mktemp)
-trap 'rm -f "$BODY_FILE"' EXIT
+HEADER_FILE=$(mktemp)
+trap 'rm -f "$BODY_FILE" "$HEADER_FILE"' EXIT
 
 # --- HTTP helpers -----------------------------------------------------------
+#
+# Credentials never go into a command's arguments, where any local user can
+# read them (`ps`, /proc/<pid>/cmdline): request bodies reach curl on stdin,
+# the session token reaches it through a header file, and passwords reach jq
+# on stdin (`jq -R`). Builtins such as `printf` start no process.
+
+fail() {
+  echo "FAILED: $*" >&2
+  exit 1
+}
 
 # request METHOD PATH [BODY]: sends one request as $TOKEN (if set), with
 # If-Match: "$IF_MATCH" (if set). Sets STATUS and BODY; never fails on an
-# HTTP error, so the caller can show an expected refusal.
+# HTTP error, so the caller can check an expected refusal.
 request() {
   local method=$1 path=$2 body=${3:-}
   local args=(-sS -o "$BODY_FILE" -w '%{http_code}' -X "$method")
 
   if [[ -n ${TOKEN:-} ]]; then
-    args+=(-H "authorization: Bearer $TOKEN")
+    printf 'authorization: Bearer %s\n' "$TOKEN" >"$HEADER_FILE"
+    args+=(-H "@$HEADER_FILE")
   fi
 
   if [[ -n ${IF_MATCH:-} ]]; then
@@ -88,7 +106,6 @@ request() {
   fi
 
   if [[ -n $body ]]; then
-    # The body goes through stdin, so passwords stay out of process listings.
     args+=(-H 'content-type: application/json' --data-binary @-)
   fi
 
@@ -102,8 +119,7 @@ ok() {
   request "$@"
 
   if [[ $STATUS != 2?? ]]; then
-    echo "FAILED: $1 $2 -> $STATUS $BODY" >&2
-    exit 1
+    fail "$1 $2 -> $STATUS $BODY"
   fi
 
   printf '%s\n' "$BODY"
@@ -114,6 +130,23 @@ outcome() {
   printf '%s %s' "$STATUS" "$(jq -r '._tag // empty' <<<"$BODY" 2>/dev/null || true)"
 }
 
+# refused STATUS TAG METHOD PATH [BODY]: a request that must be refused with
+# exactly this status and error tag; anything else stops the script.
+refused() {
+  local status=$1 tag=$2
+  shift 2
+  request "$@"
+
+  if [[ $(outcome) != "$status $tag" ]]; then
+    fail "$1 $2: expected $status $tag, got $STATUS $BODY"
+  fi
+}
+
+# expect JSON FILTER WHAT: stops the script unless the jq FILTER is true.
+expect() {
+  jq -e "$2" >/dev/null <<<"$1" || fail "expected $3; got $1"
+}
+
 # exists TABLE ID: whether the record is there (as the current user).
 exists() {
   request GET "/tables/$1/records/$2"
@@ -121,10 +154,7 @@ exists() {
   case $STATUS in
     200) return 0 ;;
     404) return 1 ;;
-    *)
-      echo "FAILED: GET $1/$2 -> $STATUS $BODY" >&2
-      exit 1
-      ;;
+    *) fail "GET $1/$2 -> $STATUS $BODY" ;;
   esac
 }
 
@@ -133,11 +163,11 @@ uri() {
   jq -rn --arg text "$1" '$text | @uri'
 }
 
+# sign_in LOGIN PASSWORD: prints a session token.
 sign_in() {
-  local token
-  token=$(TOKEN='' ok POST /auth/sign-in "$(jq -nc --arg login "$1" --arg password "$2" \
-    '{login: $login, password: $password}')" | jq -r .token)
-  printf '%s' "$token"
+  local body
+  body=$(printf '%s' "$2" | jq -Rsc --arg login "$1" '{login: $login, password: .}')
+  TOKEN='' ok POST /auth/sign-in "$body" | jq -r .token
 }
 
 heading() {
@@ -247,21 +277,31 @@ fi
 # --- 3. Users ----------------------------------------------------------------
 
 heading "Create users Alice (asset_manager) and Bob (employee)"
-# user LOGIN NAME PASSWORD ROLE: creates the user and its role assignment
-# unless the login exists; prints the user's ID.
+# user LOGIN NAME PASSWORD ROLE_ID ROLE_NAME: makes sure the user exists and
+# holds the role, each checked on its own, so a run that stopped between the
+# two is completed. An existing user's password is never changed. Prints the
+# user's ID.
 user() {
-  local id
+  local id body count
   id=$(ok GET "/tables/core.user/records?filter=$(uri "login = \"$1\"")" | jq -r '.records[0].id // empty')
 
   if [[ -n $id ]]; then
-    echo "$1 already exists" >&2
+    echo "  $1 exists (password left alone)" >&2
   else
-    id=$(ok POST /tables/core.user/records "$(jq -nc --arg login "$1" --arg name "$2" \
-      --arg password "$3" '{login: $login, name: $name, password: $password, active: true}')" |
-      jq -r .record.id)
+    body=$(printf '%s' "$3" | jq -Rsc --arg login "$1" --arg name "$2" \
+      '{login: $login, name: $name, password: ., active: true}')
+    id=$(ok POST /tables/core.user/records "$body" | jq -r .record.id)
+    echo "  created $1" >&2
+  fi
+
+  count=$(ok GET "/tables/core.user_role/records?count=true&filter=$(uri "user = \"$id\" and role = \"$4\"")" | jq .count)
+
+  if [[ $count == 0 ]]; then
     ok POST /tables/core.user_role/records "$(jq -nc --arg user "$id" --arg role "$4" \
       '{user: $user, role: $role}')" >/dev/null
-    echo "created $1 with role $5" >&2
+    echo "  assigned $5 to $1" >&2
+  else
+    echo "  $1 holds $5" >&2
   fi
 
   printf '%s' "$id"
@@ -283,12 +323,13 @@ heading "Alice adds two laptops and a plain asset (run $RUN)"
 TOKEN=$ALICE
 # add TABLE JSON: creates a record as Alice and prints its ID.
 add() {
-  local body=$2
+  local body=$2 saved
   if [[ $NOTES_STATE != active ]]; then
     body=$(jq -c 'del(.notes)' <<<"$body")
   fi
-  ok POST "/tables/$1/records" "$body" | jq -r '.record | "  created \(.values.name) (\(.class) v\(.version))" , .id' |
-    { IFS= read -r line; echo "$line" >&2; read -r id; printf '%s' "$id"; }
+  saved=$(ok POST "/tables/$1/records" "$body")
+  jq -r '.record | "  created \(.values.name) (\(.class) v\(.version))"' <<<"$saved" >&2
+  jq -r .record.id <<<"$saved"
 }
 BOB_LAPTOP=$(add acme.laptop "$(jq -nc --arg run "$RUN" --arg owner "$BOB_ID" --arg serial "$SERIAL" \
   '{name: "Bob laptop \($run)", owner: $owner, status: "in_use", cost: "1200.00",
@@ -301,11 +342,13 @@ add acme.asset "$(jq -nc --arg run "$RUN" --arg owner "$BOB_ID" \
     purchased_on: "2025-06-01"}')" >/dev/null
 
 heading "Two updates for the history: Alice changes the cost, Bob renames his laptop"
-IF_MATCH=1 ok PATCH "/tables/acme.asset/records/$BOB_LAPTOP" '{"cost": "1150.00", "status": "repair"}' |
-  jq -r '"  alice PATCH /acme.asset {cost, status} -> version \(.record.version)"'
+saved=$(IF_MATCH=1 ok PATCH "/tables/acme.asset/records/$BOB_LAPTOP" '{"cost": "1150.00", "status": "repair"}')
+expect "$saved" '.record.version == 2' "version 2 after Alice's update"
+echo "  alice PATCH /acme.asset {cost, status} -> version 2"
 TOKEN=$BOB
-IF_MATCH=2 ok PATCH "/tables/acme.laptop/records/$BOB_LAPTOP" "$(jq -nc --arg run "$RUN" '{name: "Bob travel laptop \($run)"}')" |
-  jq -r '"  bob PATCH /acme.laptop {name} -> version \(.record.version)"'
+saved=$(IF_MATCH=2 ok PATCH "/tables/acme.laptop/records/$BOB_LAPTOP" "$(jq -nc --arg run "$RUN" '{name: "Bob travel laptop \($run)"}')")
+expect "$saved" '.record.version == 3' "version 3 after Bob's update"
+echo "  bob PATCH /acme.laptop {name} -> version 3"
 
 # --- 5. Rename and retire -----------------------------------------------------
 
@@ -319,10 +362,11 @@ else
     '{operations: [{op: "rename", id: $id, version: $version, name: "serial_number"}]}')" |
     jq -r '"change set \(.changeSet.id): \(.changeSet.state) at revision \(.changeSet.revision)"'
 fi
-request GET "/tables/acme.laptop/records/$BOB_LAPTOP?fields=serial"
+refused 400 UnknownField GET "/tables/acme.laptop/records/$BOB_LAPTOP?fields=serial"
 echo "  the old name: GET ?fields=serial -> $(outcome) (no aliases)"
-ok GET "/tables/acme.laptop/records/$BOB_LAPTOP?fields=serial_number" |
-  jq -r '"  the new name: GET ?fields=serial_number -> serial_number=\(.record.values.serial_number)"'
+read_back=$(ok GET "/tables/acme.laptop/records/$BOB_LAPTOP?fields=serial_number")
+expect "$read_back" ".record.values.serial_number == \"SN-B-$RUN\"" "the serial under its new name"
+echo "  the new name: GET ?fields=serial_number -> serial_number=SN-B-$RUN"
 
 heading "Retire the field acme.asset.notes (a change set; the data stays)"
 if [[ $NOTES_STATE != active ]]; then
@@ -333,41 +377,49 @@ else
     '{operations: [{op: "retire", id: $id, version: $version}]}')" |
     jq -r '"change set \(.changeSet.id): \(.changeSet.state) at revision \(.changeSet.revision)"'
 fi
-ok GET "/tables/acme.laptop/records/$ALICE_LAPTOP" |
-  jq -r '"  default selection: \(.record.values | keys | map(select(test("^(created|updated)_") | not)) | join(", "))"'
-ok GET "/tables/acme.laptop/records/$ALICE_LAPTOP?fields=name,notes" |
-  jq -r '"  selected explicitly: notes=\(.record.values.notes)"'
-IF_MATCH=1 request PATCH "/tables/acme.laptop/records/$ALICE_LAPTOP" '{"notes": "new note"}'
-echo "  writing it: PATCH {notes} -> $(outcome) ($(jq -r '[.errors[]? | "\(.field): \(._tag)"] | join(", ")' <<<"$BODY"))"
+read_back=$(ok GET "/tables/acme.laptop/records/$ALICE_LAPTOP")
+expect "$read_back" '.record.values | has("notes") | not' "notes left out of the default selection"
+jq -r '"  default selection: \(.record.values | keys | map(select(test("^(created|updated)_") | not)) | join(", "))"' <<<"$read_back"
+read_back=$(ok GET "/tables/acme.laptop/records/$ALICE_LAPTOP?fields=name,notes")
+expect "$read_back" '.record.values | has("notes")' "notes returned when selected explicitly"
+jq -r '"  selected explicitly: notes=\(.record.values.notes)"' <<<"$read_back"
+IF_MATCH=1 refused 422 ValidationFailed PATCH "/tables/acme.laptop/records/$ALICE_LAPTOP" '{"notes": "new note"}'
+expect "$BODY" 'any(.errors[]; ._tag == "DefinitionRetired" and .field == "notes")' "DefinitionRetired on notes"
+echo "  writing it: PATCH {notes} -> $(outcome) (notes: DefinitionRetired)"
 
 # --- 6. What each user sees ---------------------------------------------------
 
-# show NAME TOKEN TABLE: this run's records of TABLE as one user sees them.
+# show NAME TOKEN TABLE COUNT: this run's records of TABLE as one user sees
+# them; there must be COUNT.
 show() {
-  TOKEN=$2 ok GET "/tables/$3/records?labels=true&count=true&sort=name&filter=$(uri "name contains \"$RUN\"")" |
-    jq -r --arg who "$1" --arg table "$3" '
-      "  \($who) via /\($table): records from this run: \(.count)",
-      (.records[] | . as $r |
-        "    \(.values.name) (\(.class) v\(.version)): " +
-        ([.values | to_entries[]
-          | select(.key != "name" and (.key | test("^(created|updated)_") | not))
-          | "\(.key)=\(if .key == "owner" then ($r.labels.owner // .value) else .value end)"]
-          | join(", ")) +
-        (if (.withheld // []) == [] then "" else " [withheld: \(.withheld | join(", "))]" end))'
+  local list
+  list=$(TOKEN=$2 ok GET "/tables/$3/records?labels=true&count=true&sort=name&filter=$(uri "name contains \"$RUN\"")")
+  expect "$list" ".count == $4 and (.records | length) == $4" "$1 to see $4 records of this run via /$3"
+  jq -r --arg who "$1" --arg table "$3" '
+    "  \($who) via /\($table): records from this run: \(.count)",
+    (.records[] | . as $r |
+      "    \(.values.name) (\(.class) v\(.version)): " +
+      ([.values | to_entries[]
+        | select(.key != "name" and (.key | test("^(created|updated)_") | not))
+        | "\(.key)=\(if .key == "owner" then ($r.labels.owner // .value) else .value end)"]
+        | join(", ")) +
+      (if (.withheld // []) == [] then "" else " [withheld: \(.withheld | join(", "))]" end))' <<<"$list"
+  LIST=$list
 }
 
 heading "What Alice (asset_manager) and Bob (employee) see"
-for who in alice bob; do
-  if [[ $who == alice ]]; then token=$ALICE; else token=$BOB; fi
-  for table in acme.asset acme.laptop; do
-    show "$who" "$token" "$table"
-  done
-done
+show alice "$ALICE" acme.asset 3
+expect "$LIST" 'all(.records[]; .values | has("cost"))' "Alice to see every cost"
+show alice "$ALICE" acme.laptop 2
+show bob "$BOB" acme.asset 2
+expect "$LIST" "all(.records[]; .values.owner == \"$BOB_ID\" and (.values | has(\"cost\") | not))" "Bob to see only his own assets, without cost"
+show bob "$BOB" acme.laptop 1
+expect "$LIST" ".records[0].id == \"$BOB_LAPTOP\" and (.records[0].values | has(\"cost\") | not)" "Bob to see only his laptop, without cost"
 
 heading "What Bob is refused"
-TOKEN=$BOB request GET "/tables/acme.laptop/records/$ALICE_LAPTOP"
+TOKEN=$BOB refused 404 NotFound GET "/tables/acme.laptop/records/$ALICE_LAPTOP"
 echo "  bob GET /acme.laptop/{Alice's laptop} -> $(outcome) (the same as an unknown ID)"
-TOKEN=$BOB request GET "/tables/acme.asset/records?filter=$(uri 'cost > 0')"
+TOKEN=$BOB refused 400 UnknownField GET "/tables/acme.asset/records?filter=$(uri 'cost > 0')"
 echo "  bob filter \"cost > 0\" -> $(outcome) (cost is never readable for him)"
 
 # --- 7. History ---------------------------------------------------------------
@@ -375,17 +427,25 @@ echo "  bob filter \"cost > 0\" -> $(outcome) (cost is never readable for him)"
 heading "History of Bob's laptop, as each user sees it (fields under their current names)"
 for who in alice bob; do
   if [[ $who == alice ]]; then token=$ALICE; else token=$BOB; fi
-  TOKEN=$token ok GET "/tables/acme.asset/records/$BOB_LAPTOP/history" |
-    jq -r --arg who "$who" --arg alice "$ALICE_ID" --arg bob "$BOB_ID" '
-      def person: if . == $alice then "alice" elif . == $bob then "bob" else . end;
-      def shown: if . == null then "null" elif (type == "string") then (person) else tojson end;
-      "  as \($who), via /acme.asset:",
-      (.entries[] | . as $entry |
-        "    v\(.version) \(.kind) by \(.actor | person): " +
-        ([.changes | to_entries[] | select(.key | test("^(created|updated)_") | not)
-          | if $entry.kind == "create" then "\(.key)=\(.value.after | shown)"
-            else "\(.key) \(.value.before | shown) -> \(.value.after | shown)" end]
-          | join(", ")))'
+  history=$(TOKEN=$token ok GET "/tables/acme.asset/records/$BOB_LAPTOP/history")
+  expect "$history" '[.entries[].version] == [1, 2, 3]' "versions 1, 2 and 3 in $who's history"
+
+  if [[ $who == alice ]]; then
+    expect "$history" '.entries[0].changes | has("cost")' "cost in Alice's history"
+  else
+    expect "$history" 'all(.entries[]; .changes | has("cost") | not)' "no cost in Bob's history"
+  fi
+
+  jq -r --arg who "$who" --arg alice "$ALICE_ID" --arg bob "$BOB_ID" '
+    def person: if . == $alice then "alice" elif . == $bob then "bob" else . end;
+    def shown: if . == null then "null" elif (type == "string") then (person) else tojson end;
+    "  as \($who), via /acme.asset:",
+    (.entries[] | . as $entry |
+      "    v\(.version) \(.kind) by \(.actor | person): " +
+      ([.changes | to_entries[] | select(.key | test("^(created|updated)_") | not)
+        | if $entry.kind == "create" then "\(.key)=\(.value.after | shown)"
+          else "\(.key) \(.value.before | shown) -> \(.value.after | shown)" end]
+        | join(", ")))' <<<"$history"
 done
 
 # --- 8. doctor ----------------------------------------------------------------

@@ -25,7 +25,7 @@ examples/quickstart.sh                     # in a second terminal, from the repo
 4. It signs in as Alice and as Bob and prints what each sees through `/acme.asset` and `/acme.laptop`: Bob sees only his own assets, never their cost.
 5. It prints a laptop's history as each of them, and ends with `std doctor`, exiting with its status.
 
-Each step prints a heading, and the script stops at the first failure. You can run it again against the same database: definitions, roles, rules and users are created only when missing, and each run adds and shows its own laptops, tagged with the run's time.
+Each step prints a heading. Every refusal it shows is checked for its exact status and error tag, and so are the facts it prints; anything unexpected stops it with `FAILED`. You can run it again against the same database: definitions, roles, rules, users and their role assignments are created only when missing (an existing user's password is never changed), and each run adds and shows its own laptops, tagged with the run's time.
 
 | Setting | Default | Used by |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ Each step prints a heading, and the script stops at the first failure. You can r
 | `STD_URL` | `http://127.0.0.1:8080` | the script |
 | `STD_DOCTOR_COMMAND` | `docker compose exec -T server pnpm --silent std doctor` | the script |
 
-The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` for anything but a demo. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT` and `STD_TIME_ZONE` (UTC by default). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
+The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` (and `QUICKSTART_ALICE_PASSWORD`, `QUICKSTART_BOB_PASSWORD`) for anything but a demo. The script never puts a password or a session token into a command's arguments. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT` and `STD_TIME_ZONE` (UTC by default). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
 
 The compose image (`docker/quickstart.Dockerfile`) is a development image that runs the TypeScript sources; the release image comes in Step 4. Without Docker, `pnpm quickstart:ci` runs the same script against `std serve` on a disposable database, as CI does.
 
