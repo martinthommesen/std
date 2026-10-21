@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 
-const TEST_TIMEOUT_MS = 60_000;
+// Suites share the Postgres server with other runs, so creating a database
+// (in setup hooks and in the harness's own tests) can be slow under load.
+const TEST_TIMEOUT_MS = 120_000;
 const HOOK_TIMEOUT_MS = 120_000;
 
 export default defineConfig({

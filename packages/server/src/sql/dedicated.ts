@@ -79,60 +79,66 @@ const autocommitRefused = Effect.die(
  * @param options - An optional application name.
  * @returns The connection.
  */
-export const makeDedicatedConnection = (
+export const makeDedicatedConnection: (
   options?: DedicatedOptions
-): Effect.Effect<
+) => Effect.Effect<
   DedicatedConnection,
   DatabaseError,
   Scope.Scope | DatabaseConfig | PgClient.PgClient
-> =>
-  Effect.gen(function* openDedicatedConnection() {
-    const settings = yield* DatabaseConfig;
-    const monitor = yield* PgClient.PgClient;
+> = Effect.fn("DedicatedConnection.open")(function* openDedicatedConnection(
+  options?: DedicatedOptions
+) {
+  const settings = yield* DatabaseConfig;
+  const monitor = yield* PgClient.PgClient;
 
-    const config = yield* connectionConfig({
-      applicationName: options?.applicationName ?? settings.applicationName,
-      keepAlive: true,
-      startupParameters: COORDINATOR_KEEPALIVE_PARAMETERS,
-      url: settings.directUrl,
-    });
-
-    const context = yield* hygienic(
-      Layer.build(PgClient.layerFrom(makeSanitizedConnection(config)))
-    );
-
-    const client = Context.get(context, PgClient.PgClient);
-
-    const execute = (
-      sql: string,
-      params: readonly unknown[] = []
-    ): Effect.Effect<readonly unknown[], DatabaseError> =>
-      hygienic(
-        currentState.pipe(
-          Effect.flatMap((current) =>
-            Option.isSome(current) && current.value.client === client
-              ? autocommitRefused
-              : client.unsafe(sql, params).unprepared
-          )
-        )
-      );
-
-    const lockCall = (call: string, key: bigint) =>
-      execute(`SELECT ${call}(${key.toString()}) AS result`).pipe(
-        Effect.flatMap(decodeResult),
-        Effect.map(([row]) => row?.result === true)
-      );
-
-    const [backend] = yield* execute("SELECT pg_backend_pid() AS pid").pipe(
-      Effect.flatMap(decodePid)
-    );
-
-    return {
-      advisoryUnlock: (key) => lockCall("pg_advisory_unlock", key),
-      client,
-      execute,
-      processId: backend?.pid ?? 0,
-      transactions: makeTransactions(client, monitor),
-      tryAdvisoryLock: (key) => lockCall("pg_try_advisory_lock", key),
-    };
+  const config = yield* connectionConfig({
+    applicationName: options?.applicationName ?? settings.applicationName,
+    keepAlive: true,
+    startupParameters: COORDINATOR_KEEPALIVE_PARAMETERS,
+    url: settings.directUrl,
   });
+
+  const context = yield* hygienic(
+    Layer.build(PgClient.layerFrom(makeSanitizedConnection(config)))
+  );
+
+  const client = Context.get(context, PgClient.PgClient);
+
+  const execute = Effect.fn("DedicatedConnection.execute")(
+    function* executeAutocommit(sql: string, params: readonly unknown[] = []) {
+      const current = yield* currentState;
+
+      return Option.isSome(current) && current.value.client === client
+        ? yield* autocommitRefused
+        : yield* client.unsafe(sql, params).unprepared;
+    },
+    (effect) => hygienic(effect)
+  );
+
+  const lockCall = (call: string, key: bigint) =>
+    execute(`SELECT ${call}(${key.toString()}) AS result`).pipe(
+      Effect.flatMap(decodeResult),
+      Effect.map(([row]) => row?.result === true)
+    );
+
+  const tryAdvisoryLock = Effect.fn("DedicatedConnection.tryAdvisoryLock")(
+    (key: bigint) => lockCall("pg_try_advisory_lock", key)
+  );
+
+  const advisoryUnlock = Effect.fn("DedicatedConnection.advisoryUnlock")(
+    (key: bigint) => lockCall("pg_advisory_unlock", key)
+  );
+
+  const [backend] = yield* execute("SELECT pg_backend_pid() AS pid").pipe(
+    Effect.flatMap(decodePid)
+  );
+
+  return {
+    advisoryUnlock,
+    client,
+    execute,
+    processId: backend?.pid ?? 0,
+    transactions: makeTransactions(client, monitor),
+    tryAdvisoryLock,
+  };
+});

@@ -126,26 +126,28 @@ const decodeValidity = decodeRows(Schema.Struct({ valid: Schema.Boolean }));
  * @param migrations - The code's migrations (default: all platform migrations).
  * @returns Succeeds only when the ledger matches the code exactly.
  */
-export const checkPlatformMigrations = (
-  migrations: readonly PlatformMigration[] = PLATFORM_MIGRATIONS
-): Effect.Effect<
+export const checkPlatformMigrations: (
+  migrations?: readonly PlatformMigration[]
+) => Effect.Effect<
   void,
   MigrationStateRefused | DatabaseError,
   SqlClient.SqlClient
-> =>
-  hygienic(
-    Effect.gen(function* checkLedgerAtStartup() {
-      const sql = yield* SqlClient.SqlClient;
-      const ledger = yield* readLedger(sql);
-      const refusal = refusalOf(compareLedger(migrations, ledger), false);
+> = Effect.fn("Platform.checkMigrations")(
+  function* checkLedgerAtStartup(
+    migrations: readonly PlatformMigration[] = PLATFORM_MIGRATIONS
+  ) {
+    const sql = yield* SqlClient.SqlClient;
+    const ledger = yield* readLedger(sql);
+    const refusal = refusalOf(compareLedger(migrations, ledger), false);
 
-      if (refusal !== undefined) {
-        return yield* refusal;
-      }
+    if (refusal !== undefined) {
+      return yield* refusal;
+    }
 
-      return yield* Effect.void;
-    })
-  );
+    return yield* Effect.void;
+  },
+  (effect) => hygienic(effect)
+);
 
 /**
  * Refuses the upgrade on a non-UTF8 database or while `std-server` sessions
@@ -153,46 +155,48 @@ export const checkPlatformMigrations = (
  * @param sql - A client connected to the database.
  * @returns Succeeds when the upgrade may run.
  */
-export const checkUpgradePreconditions = (
+export const checkUpgradePreconditions: (
   sql: SqlClient.SqlClient
-): Effect.Effect<void, UpgradeRefused | DatabaseError> =>
-  hygienic(
-    Effect.gen(function* checkUpgradeGuards() {
-      const [database] = yield* sql`
+) => Effect.Effect<void, UpgradeRefused | DatabaseError> = Effect.fn(
+  "Platform.checkUpgradePreconditions"
+)(
+  function* checkUpgradeGuards(sql: SqlClient.SqlClient) {
+    const [database] = yield* sql`
         SELECT pg_encoding_to_char(encoding) AS encoding,
                encoding = pg_char_to_encoding('UTF8') AS utf8
         FROM pg_database WHERE datname = current_database()`.pipe(
-        Effect.flatMap(decodeEncoding)
-      );
+      Effect.flatMap(decodeEncoding)
+    );
 
-      const encoding = database?.encoding ?? "unknown";
+    const encoding = database?.encoding ?? "unknown";
 
-      if (database?.utf8 !== true) {
-        return yield* new UpgradeRefused({
-          encoding,
-          reason: ENCODING_REFUSAL,
-          sessions: [],
-        });
-      }
+    if (database?.utf8 !== true) {
+      return yield* new UpgradeRefused({
+        encoding,
+        reason: ENCODING_REFUSAL,
+        sessions: [],
+      });
+    }
 
-      const servers = yield* sql`
+    const servers = yield* sql`
         SELECT pid FROM pg_stat_activity
         WHERE datname = current_database()
           AND application_name = ${SERVER_APPLICATION_NAME}
           AND pid <> pg_backend_pid()
         ORDER BY pid`.pipe(Effect.flatMap(decodePids));
 
-      if (servers.length > 0) {
-        return yield* new UpgradeRefused({
-          encoding,
-          reason: SERVERS_REFUSAL,
-          sessions: servers.map((row) => row.pid),
-        });
-      }
+    if (servers.length > 0) {
+      return yield* new UpgradeRefused({
+        encoding,
+        reason: SERVERS_REFUSAL,
+        sessions: servers.map((row) => row.pid),
+      });
+    }
 
-      return yield* Effect.void;
-    })
-  );
+    return yield* Effect.void;
+  },
+  (effect) => hygienic(effect)
+);
 
 const schemaBusy = (
   connection: DedicatedConnection
@@ -287,68 +291,72 @@ const applyConcurrentIndex = (
     return outcome;
   });
 
-const applyMigration = (
+const applyMigration: (
   connection: DedicatedConnection,
   migration: PlatformMigration
-): Effect.Effect<MigrationOutcome, DatabaseError> =>
-  Effect.gen(function* applyPlatformMigration() {
-    yield* Effect.logInfo(
-      `Applying platform migration ${migration.id} (${migration.name})`
-    );
+) => Effect.Effect<MigrationOutcome, DatabaseError> = Effect.fn(
+  "Platform.applyMigration"
+)(function* applyPlatformMigration(
+  connection: DedicatedConnection,
+  migration: PlatformMigration
+) {
+  yield* Effect.logInfo(
+    `Applying platform migration ${migration.id} (${migration.name})`
+  );
 
-    const outcome =
-      migration.kind === "tx"
-        ? yield* applyTx(connection, migration).pipe(
-            Effect.as("applied" as const)
-          )
-        : yield* applyConcurrentIndex(connection, migration);
+  const outcome =
+    migration.kind === "tx"
+      ? yield* applyTx(connection, migration).pipe(
+          Effect.as("applied" as const)
+        )
+      : yield* applyConcurrentIndex(connection, migration);
 
-    return {
-      id: migration.id,
-      kind: migration.kind,
-      name: migration.name,
-      outcome,
-    };
-  });
+  return {
+    id: migration.id,
+    kind: migration.kind,
+    name: migration.name,
+    outcome,
+  };
+});
 
 /**
  * The migration step of `std upgrade`.
  * @param migrations - The code's migrations (default: all platform migrations).
  * @returns What happened to each pending migration, in order.
  */
-export const runPlatformMigrations = (
-  migrations: readonly PlatformMigration[] = PLATFORM_MIGRATIONS
-): Effect.Effect<readonly MigrationOutcome[], UpgradeError, UpgradeServices> =>
-  Effect.scoped(
-    Effect.gen(function* upgradePlatform(): Effect.fn.Return<
-      readonly MigrationOutcome[],
-      UpgradeError,
-      Scope.Scope | UpgradeServices
-    > {
-      const pool = yield* SqlClient.SqlClient;
-      yield* checkUpgradePreconditions(pool);
-      const connection = yield* makeDedicatedConnection();
+export const runPlatformMigrations: (
+  migrations?: readonly PlatformMigration[]
+) => Effect.Effect<readonly MigrationOutcome[], UpgradeError, UpgradeServices> =
+  Effect.fn("Platform.runMigrations")(function* upgradePlatform(
+    migrations: readonly PlatformMigration[] = PLATFORM_MIGRATIONS
+  ): Effect.fn.Return<
+    readonly MigrationOutcome[],
+    UpgradeError,
+    Scope.Scope | UpgradeServices
+  > {
+    const pool = yield* SqlClient.SqlClient;
+    yield* checkUpgradePreconditions(pool);
+    const connection = yield* makeDedicatedConnection();
 
-      if (!(yield* connection.tryAdvisoryLock(SCHEMA_KEY))) {
-        return yield* schemaBusy(connection).pipe(Effect.flatMap(Effect.fail));
-      }
+    if (!(yield* connection.tryAdvisoryLock(SCHEMA_KEY))) {
+      return yield* schemaBusy(connection).pipe(Effect.flatMap(Effect.fail));
+    }
 
-      const ledger = yield* hygienic(readLedger(connection.client));
-      const comparison = compareLedger(migrations, ledger);
-      const refusal = refusalOf(comparison, true);
+    const ledger = yield* hygienic(readLedger(connection.client));
+    const comparison = compareLedger(migrations, ledger);
+    const refusal = refusalOf(comparison, true);
 
-      if (refusal !== undefined) {
-        return yield* refusal;
-      }
+    if (refusal !== undefined) {
+      return yield* refusal;
+    }
 
-      const outcomes: MigrationOutcome[] = [];
+    const outcomes: MigrationOutcome[] = [];
 
-      for (const migration of comparison.pending) {
-        outcomes.push(yield* applyMigration(connection, migration));
-      }
+    for (const migration of comparison.pending) {
+      outcomes.push(yield* applyMigration(connection, migration));
+    }
 
-      yield* connection.advisoryUnlock(SCHEMA_KEY);
+    yield* connection.advisoryUnlock(SCHEMA_KEY);
 
-      return outcomes;
-    })
-  );
+    return outcomes;
+  }, Effect.scoped);

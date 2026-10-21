@@ -40,7 +40,7 @@ import { runPlatformMigrations } from "@std/server/platform/runner";
 import type { UpgradeError } from "@std/server/platform/runner";
 import {
   DatabaseConfig,
-  DEFAULT_DATABASE_URL,
+  databaseUrlConfig,
   DEFAULT_MAX_CONNECTIONS,
   withDatabase,
 } from "@std/server/sql/database-config";
@@ -56,7 +56,7 @@ import {
   StatementObserver,
 } from "@std/server/sql/statement-log";
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
-import type { Scope } from "effect";
+import type { Config, Scope } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
 /** `application_name` of the harness's own maintenance connections. */
@@ -147,11 +147,13 @@ const quote = (identifier: string): string =>
   `"${identifier.replaceAll('"', '""')}"`;
 
 /**
- * The maintenance database URL.
- * @returns `STD_DATABASE_URL`, or the default URL.
+ * The maintenance database URL: `STD_DATABASE_URL`, or the default URL.
+ * Test databases are created next to it.
  */
-export const maintenanceUrl = (): string =>
-  process.env.STD_DATABASE_URL ?? DEFAULT_DATABASE_URL;
+export const maintenanceUrl: Effect.Effect<string, Config.ConfigError> =
+  Effect.gen(function* readMaintenanceUrl() {
+    return Redacted.value(yield* databaseUrlConfig);
+  });
 
 /**
  * The template name for a migration list.
@@ -381,8 +383,12 @@ export const runJanitor = (
       }
     }
   }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Test database janitor failed", cause)
+    // Typed recovery only: the janitor is best effort, so a SQL failure
+    // (a database another process dropped first, a lost connection) is
+    // logged and ignored. A row that does not decode is a defect and fails
+    // the layer, as does interruption.
+    Effect.catchTag("SqlError", (failure) =>
+      Effect.logWarning("Test database janitor failed", failure)
     )
   );
 
@@ -423,12 +429,14 @@ const migrateDatabase = (
 /**
  * Builds a template; run only under its exclusive lock.
  * @param admin - A connection to the maintenance database.
+ * @param adminUrl - The maintenance database URL, for connecting to the template.
  * @param name - The template name.
  * @param migrations - The template's migrations.
  * @returns An effect that leaves a ready template.
  */
 const buildTemplate = (
   admin: PgConnection.PgConnection,
+  adminUrl: string,
   name: string,
   migrations: readonly PlatformMigration[]
 ): Effect.Effect<void, SqlError | UpgradeError> =>
@@ -439,7 +447,7 @@ const buildTemplate = (
 
     yield* dropDatabase(admin, name);
     yield* query(admin, `CREATE DATABASE ${quote(name)}`);
-    yield* migrateDatabase(withDatabase(maintenanceUrl(), name), migrations);
+    yield* migrateDatabase(withDatabase(adminUrl, name), migrations);
     yield* query(
       admin,
       `COMMENT ON DATABASE ${quote(name)} IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
@@ -455,11 +463,13 @@ const buildTemplate = (
  * template's exclusive lock; a half-built template left by a crashed process
  * is dropped and rebuilt.
  * @param admin - A connection to the maintenance database.
+ * @param adminUrl - The maintenance database URL.
  * @param migrations - The template's migrations.
  * @returns The template name.
  */
 export const ensureTemplate = (
   admin: PgConnection.PgConnection,
+  adminUrl: string,
   migrations: readonly PlatformMigration[]
 ): Effect.Effect<string, DatabaseError | UpgradeError> => {
   const name = templateName(migrations);
@@ -469,7 +479,7 @@ export const ensureTemplate = (
       admin,
       name,
       "exclusive",
-      buildTemplate(admin, name, migrations)
+      buildTemplate(admin, adminUrl, name, migrations)
     ).pipe(Effect.as(name))
   );
 };
@@ -479,12 +489,14 @@ export const ensureTemplate = (
  * needed. The template's shared lock is held from the readiness check
  * through `CREATE DATABASE`, so the template cannot be dropped in between.
  * @param admin - A connection to the maintenance database.
+ * @param adminUrl - The maintenance database URL.
  * @param database - The new database's name.
  * @param migrations - The template's migrations.
  * @returns The template name.
  */
 const cloneTemplate = (
   admin: PgConnection.PgConnection,
+  adminUrl: string,
   database: string,
   migrations: readonly PlatformMigration[]
 ): Effect.Effect<string, DatabaseError | UpgradeError> => {
@@ -513,7 +525,7 @@ const cloneTemplate = (
           return template;
         }
 
-        yield* ensureTemplate(admin, migrations);
+        yield* ensureTemplate(admin, adminUrl, migrations);
       }
 
       return yield* Effect.die(
@@ -556,7 +568,7 @@ const createTestDatabase = (
           )
         );
       } else {
-        source = yield* cloneTemplate(admin, name, migrations);
+        source = yield* cloneTemplate(admin, adminUrl, name, migrations);
       }
 
       yield* hygienic(
@@ -579,8 +591,10 @@ const removeTestDatabase = (
       Effect.flatMap((admin) => dropDatabase(admin, name))
     )
   ).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning(`Could not drop ${name}`, cause)
+    // Typed recovery only: a database that cannot be dropped now is left to
+    // the janitor of a later run; defects still surface.
+    Effect.catchTag(["DatabaseError", "SqlError"], (failure) =>
+      Effect.logWarning(`Could not drop ${name}`, failure)
     )
   );
 
@@ -592,11 +606,14 @@ const removeTestDatabase = (
  */
 export const testDatabaseService = (
   options: TestDatabaseOptions = {}
-): Layer.Layer<TestDatabase, DatabaseError | UpgradeError> =>
+): Layer.Layer<
+  TestDatabase,
+  DatabaseError | UpgradeError | Config.ConfigError
+> =>
   Layer.effect(
     TestDatabase,
     Effect.gen(function* provideTestDatabase() {
-      const adminUrl = maintenanceUrl();
+      const adminUrl = yield* maintenanceUrl;
       const name = testDatabaseName();
       const url = withDatabase(adminUrl, name);
 
@@ -630,7 +647,10 @@ export type TestDatabaseServices =
  */
 export const testDatabaseLayer = (
   options: TestDatabaseOptions = {}
-): Layer.Layer<TestDatabaseServices, DatabaseError | UpgradeError> => {
+): Layer.Layer<
+  TestDatabaseServices,
+  DatabaseError | UpgradeError | Config.ConfigError
+> => {
   const config = Layer.effect(
     DatabaseConfig,
     TestDatabase.pipe(
