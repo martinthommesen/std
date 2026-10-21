@@ -31,7 +31,7 @@ Each step prints a heading, and the script stops at the first failure. You can r
 | --- | --- | --- |
 | `STD_HTTP_PORT` | `8080` | compose (host port of the server) |
 | `STD_POSTGRES_PORT` | `54329` | compose (host port of Postgres) |
-| `STD_ADMIN_LOGIN`, `STD_ADMIN_PASSWORD` | `admin`, `quickstart-admin-password` | compose (the first administrator) and the script |
+| `STD_ADMIN_LOGIN`, `STD_ADMIN_PASSWORD` | `administrator`, `quickstart-admin-password` | compose (the first administrator) and the script |
 | `STD_URL` | `http://127.0.0.1:8080` | the script |
 | `STD_DOCTOR_COMMAND` | `docker compose exec -T server pnpm --silent std doctor` | the script |
 

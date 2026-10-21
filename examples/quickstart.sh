@@ -22,16 +22,17 @@
 #
 # Settings (environment variables, with defaults):
 #   STD_URL              the server               http://127.0.0.1:8080
-#   STD_ADMIN_LOGIN      the first administrator  admin
+#   STD_ADMIN_LOGIN      the first administrator  administrator
 #   STD_ADMIN_PASSWORD   its password             quickstart-admin-password
 #   STD_DOCTOR_COMMAND   how to run `std doctor`  docker compose exec -T server pnpm --silent std doctor
 #   QUICKSTART_RUN       tag for this run's data  the current UTC time
 #
 # Every password here is a disposable demo credential. Never reuse them.
 set -euo pipefail
+shopt -s inherit_errexit 2>/dev/null || true # bash 4.4 and later
 
 STD_URL=${STD_URL:-http://127.0.0.1:8080}
-STD_ADMIN_LOGIN=${STD_ADMIN_LOGIN:-admin}
+STD_ADMIN_LOGIN=${STD_ADMIN_LOGIN:-administrator}
 STD_ADMIN_PASSWORD=${STD_ADMIN_PASSWORD:-quickstart-admin-password}
 STD_DOCTOR_COMMAND=${STD_DOCTOR_COMMAND:-docker compose exec -T server pnpm --silent std doctor}
 RUN=${QUICKSTART_RUN:-$(date -u +%Y%m%d-%H%M%S)}
@@ -87,10 +88,11 @@ request() {
   fi
 
   if [[ -n $body ]]; then
-    args+=(-H 'content-type: application/json' --data-binary "$body")
+    # The body goes through stdin, so passwords stay out of process listings.
+    args+=(-H 'content-type: application/json' --data-binary @-)
   fi
 
-  STATUS=$(curl "${args[@]}" "$API$path")
+  STATUS=$(printf '%s' "$body" | curl "${args[@]}" "$API$path")
   BODY=$(cat "$BODY_FILE")
 }
 

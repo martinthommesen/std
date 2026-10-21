@@ -43,7 +43,7 @@ services:
       ]
     environment:
       STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
-      STD_ADMIN_LOGIN: ${STD_ADMIN_LOGIN:-admin}
+      STD_ADMIN_LOGIN: ${STD_ADMIN_LOGIN:-administrator}
       # A disposable demo credential; set your own for anything but a demo.
       STD_ADMIN_PASSWORD: ${STD_ADMIN_PASSWORD:-quickstart-admin-password}
     depends_on:

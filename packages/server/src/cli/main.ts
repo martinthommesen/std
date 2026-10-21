@@ -24,7 +24,7 @@
  *   steps, then `complete`.
  * - `std bootstrap-admin`: creates the first administrator, an active user
  *   with the built-in `admin` role, unless a user with its login exists
- *   (decision 0016). `STD_ADMIN_LOGIN` (default `admin`), `STD_ADMIN_NAME`
+ *   (decision 0016). `STD_ADMIN_LOGIN` (default `administrator`), `STD_ADMIN_NAME`
  *   (default `Administrator`) and `STD_ADMIN_PASSWORD` (required; read from
  *   the environment, never from the command line, so it stays out of
  *   process listings).
@@ -306,7 +306,9 @@ const doctor = (json: boolean) =>
 
 /** The administrator `std bootstrap-admin` creates, from the environment. */
 const adminAccountConfig = Config.all({
-  login: Config.String("STD_ADMIN_LOGIN").pipe(Config.withDefault("admin")),
+  login: Config.String("STD_ADMIN_LOGIN").pipe(
+    Config.withDefault("administrator")
+  ),
   name: Config.String("STD_ADMIN_NAME").pipe(
     Config.withDefault("Administrator")
   ),

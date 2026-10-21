@@ -29,7 +29,10 @@ const CLI = fileURLToPath(
 const SCRIPT = fileURLToPath(new URL("../../quickstart.sh", import.meta.url));
 
 /** Disposable credentials of the administrator the quickstart signs in as. */
-const ADMIN = { login: "admin", password: "quickstart-ci-admin-password" };
+const ADMIN = {
+  login: "administrator",
+  password: "quickstart-ci-admin-password",
+};
 
 /** How long `std serve` may take to listen: 150 polls, 200 ms apart. */
 const LISTEN_POLLS = 150;
