@@ -319,6 +319,8 @@ describe("transaction-lifetime", () => {
           "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
           `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1`,
           "SELECT U&'x' UESCAPE '!' INTO lifetime_read_only_copy",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
         ];
 
         for (const text of writingCtes) {
@@ -348,6 +350,8 @@ describe("transaction-lifetime", () => {
           `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
           `WITH U&"!0078" /* c */ UESCAPE -- d\n '!' AS (SELECT 1 AS n) SELECT n FROM x`,
           "SELECT U&'d!0061t!+000061' UESCAPE '!' AS c",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
           'SELECT s.into FROM (SELECT 1 AS "into") s',
           'SELECT s. into FROM (SELECT 1 AS "into") s',
           "SELECT E'a'\n'\\' into' AS c",
@@ -451,6 +455,8 @@ describe("transaction-lifetime", () => {
       `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM t RETURNING 1) SELECT 1`,
       "SELECT U&'x' UESCAPE '!' INTO t",
       "SELECT U&'x'\nUESCAPE '!' INTO t",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM t RETURNING 1) SELECT 1',
     ];
 
     const reads = [
@@ -485,6 +491,8 @@ describe("transaction-lifetime", () => {
       `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
       `WITH U&"!0078" /* c */ uescape -- d\n '!' AS (SELECT 1) TABLE x`,
       "SELECT U&'d!0061t' UESCAPE '!' AS c",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
     ];
 
     for (const sql of writing) {

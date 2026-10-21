@@ -385,6 +385,12 @@ const afterUescape = (sql: string, end: number): number => {
     return stringEnd(sql, literal, false);
   }
 
+  if (sql[literal] === "$") {
+    const dollarQuoted = dollarToken(sql, literal);
+
+    return dollarQuoted.kind === "literal" ? dollarQuoted.end : end;
+  }
+
   const escapePrefix = sql[literal] === "e" || sql[literal] === "E";
 
   return escapePrefix && sql[literal + 1] === "'"
