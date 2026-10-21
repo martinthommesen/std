@@ -34,7 +34,7 @@ import type { Arbitrary } from "fast-check";
 import {
   ACME,
   AcmeFixture,
-  insertUserAsOwner,
+  createFixtureUser,
 } from "../../testing/src/acme-fixture.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import type { OwnerRecord } from "../../testing/src/owner-records.ts";
@@ -282,7 +282,7 @@ const insertData = Effect.fn("BranchForm.insertData")(function* insertData(
     Effect.gen(function* insertInTransaction() {
       const snapshot = yield* catalog.current;
 
-      const user = yield* insertUserAsOwner(snapshot, {
+      const user = yield* createFixtureUser(snapshot, {
         active: true,
         login: "dana",
         name: "Dana",

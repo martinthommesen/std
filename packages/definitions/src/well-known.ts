@@ -16,6 +16,7 @@ export const CORE_NAMESPACE_ID: DefinitionId =
 /** Class IDs of the platform tables, by table name in the `core` schema. */
 export const PLATFORM_CLASS_IDS = {
   access_rule: "051b98ff-3fc2-4155-a6e8-b3d9053a5b9e",
+  change: "edde151d-f204-4639-bcbf-a4793f86a219",
   class: "7a8a7202-1e01-4d77-bf6f-4ff80876bef6",
   field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
   field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",

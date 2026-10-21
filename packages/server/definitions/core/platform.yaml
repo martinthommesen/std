@@ -520,3 +520,50 @@ tables:
       - id: 976ddb1b-8039-4ca2-b41b-12c072def543
         name: finished_at
         type: dateTime
+  # Change entries (Contracts 4.2), created by platform migration 0004.
+  # Admin-only: others read history through the record history endpoint.
+  - id: edde151d-f204-4639-bcbf-a4793f86a219
+    name: core.change
+    label: Change entry
+    storage: platform
+    fields:
+      - id: f9ca81dc-4fe3-458e-a123-ebd2b4bb943b
+        name: operation_id
+        type: uuid
+        required: true
+      - id: d85fa58a-08e0-41d9-8aa2-212fe38b29ad
+        name: record_id
+        type: uuid
+        required: true
+      - id: 79bb4b97-f9ef-44f1-8430-3eb7a452eb8d
+        name: record_class_id
+        type: uuid
+        required: true
+      - id: 3009476a-8961-40e4-ba12-3bc6d03e0c93
+        name: record_version
+        type: bigInteger
+        required: true
+      - id: b9f55252-2096-4484-ab0a-231779f00c4c
+        name: kind
+        type: text
+        required: true
+      - id: 8a115e60-f76b-4509-b18a-d8dffeb888e3
+        name: actor_id
+        type: uuid
+        required: true
+      - id: 972840ff-53ba-4d4f-ad9e-200ab55b8582
+        name: cause
+        type: json
+        required: true
+      - id: 5b06f89a-ca44-4932-8c3f-7bd54fa712ad
+        name: schema_revision
+        type: bigInteger
+        required: true
+      - id: 5fb1098b-1c46-4da7-a358-4129b565c5f9
+        name: occurred_at
+        type: dateTime
+        required: true
+      - id: e972d8bd-d3e2-4195-9ec0-8c79edc4955a
+        name: fields
+        type: json
+        required: true
