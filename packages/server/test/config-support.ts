@@ -9,6 +9,7 @@ import path from "node:path";
 
 import type {
   FieldEntry,
+  IndexEntry,
   NamedSetFile,
   SetFile,
   TableEntry,
@@ -70,6 +71,8 @@ export interface SetVariant {
   readonly types?: Readonly<Record<string, TypeEntry>>;
   /** Fields appended to every table. */
   readonly addFields?: readonly FieldEntry[];
+  /** Indexes appended to every table. */
+  readonly addIndexes?: readonly IndexEntry[];
   /** Access rules to leave out, by ID. */
   readonly dropRules?: readonly string[];
   /** Roles to leave out, by name. */
@@ -91,6 +94,7 @@ const changeTable = (table: TableEntry, variant: SetVariant): TableEntry => ({
     ...(table.fields ?? []).map((field) => changeField(field, variant)),
     ...(variant.addFields ?? []),
   ],
+  indexes: [...(table.indexes ?? []), ...(variant.addIndexes ?? [])],
 });
 
 const changeFile = (content: SetFile, variant: SetVariant): SetFile => {

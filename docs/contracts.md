@@ -219,7 +219,7 @@ Resume:
 
 ### 1.10 `doctor`
 
-`std doctor [--json]` only reads. Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
+`std doctor [--json]` only reads: one REPEATABLE READ READ ONLY transaction without advisory locks, so it never waits for a config commit or a running schema change (decision 0002). Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
 
 Checks:
 
@@ -1189,8 +1189,8 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 
 - Offline in v0.1: stop servers, run `std upgrade`, start servers. It refuses to run while any session with `application_name = 'std-server'` is connected, and when the database encoding is not UTF8 (5.5). Reason: rolling upgrades need expand-and-contract rules, which come with high availability.
 - Order: take `SCHEMA_KEY`; compare versions; run platform migrations; resume interrupted change sets; load core; load app sets; write the report.
-- `--plan` (and `--json`) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes, with a hash over all of them and the configuration state they start from. It runs while servers are connected and reports them as a warning. The real run applies that plan and stops if the database changed since: `--expect <hash>` refuses before anything runs when the plan differs; each set is planned again before it applies and must equal its plan; and its main transaction checks that no other config commit came first (decision 0012).
-- After a failure, rerunning continues from the last committed migration or change set.
+- `--plan` (and `--json`, which implies it) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes, with a hash over all of them and the configuration state they start from. It runs while servers are connected and reports them as a warning. The real run applies that plan and stops if the database changed since: `--expect <hash>` refuses before anything runs when the plan differs; each set is planned again before it applies and must equal its plan; and its main transaction checks that no other config commit came first (decision 0012).
+- After a failure, rerunning continues from the last committed migration or change set. A change set that ends in `needs_attention` stops the run with an error naming it, and every later run refuses until an admin resumes or abandons it, so unfinished change sets never look upgraded.
 
 ### 8.6 Backup and restore
 

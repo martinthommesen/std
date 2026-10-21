@@ -137,21 +137,23 @@ const upgrade = (args: UpgradeArguments) => {
       ? { sets: args.sets }
       : { expectedPlanHash: args.expect, sets: args.sets };
 
-  const run = args.plan
-    ? planUpgrade(options).pipe(
-        Effect.map((plan) => ({
-          lines: planLines(plan),
-          refused: plan.refusals.length > 0,
-          text: JSON.stringify(plan, null, 2),
-        }))
-      )
-    : runUpgrade(options).pipe(
-        Effect.map((report) => ({
-          lines: reportLines(report),
-          refused: false,
-          text: JSON.stringify(report, null, 2),
-        }))
-      );
+  // `--json` alone plans too (Contracts 8.5: `--plan` and `--json` change nothing).
+  const run =
+    args.plan || args.json
+      ? planUpgrade(options).pipe(
+          Effect.map((plan) => ({
+            lines: planLines(plan),
+            refused: plan.refusals.length > 0,
+            text: JSON.stringify(plan, null, 2),
+          }))
+        )
+      : runUpgrade(options).pipe(
+          Effect.map((report) => ({
+            lines: reportLines(report),
+            refused: false,
+            text: JSON.stringify(report, null, 2),
+          }))
+        );
 
   return run.pipe(
     Effect.tap((output) =>

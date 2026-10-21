@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { planLines } from "../src/cli/format.ts";
@@ -43,15 +43,20 @@ import {
   createRole,
   currentRevision,
   FAST_RETRIES,
+  insertRecords,
+  insertRecordsSql,
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
-import { errorOf } from "./support.ts";
+import { errorOf, waitUntil } from "./support.ts";
 
 /** A second app set of the rerun test. */
 const OTHER_SET = "5c8ff7e6-8faa-4e64-a6e9-dad8efdbb09a";
 
 const OTHER_NAMESPACE = "0dcbd1b3-5d75-4b07-a5e6-17dc5fedec58";
+
+/** A unique index a fixture variant adds on `fx.item.x`. */
+const UNIQUE_X = "d136ff65-5a71-4e1d-a886-4f6aaeabd746";
 
 /** A field a later fixture version adds. */
 const EXTRA_FIELD = "d7a38eb2-3d98-4e4f-97e6-0e15c87f2329";
@@ -475,6 +480,133 @@ describe("upgrade", () => {
               ]
             );
             assert.strictEqual(yield* installedVersion("fx"), "2");
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a set whose index build fails stops the upgrade, and the rerun refuses until the change set is resolved",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* failedFollowUp() {
+            yield* runUpgrade({ sets: [FIXTURE.v1] });
+            yield* insertRecords(['"fx"."item"'], FX.item, 3, {
+              x: "'v' || g",
+            });
+
+            const unique = yield* writeSetDirectory(
+              variantOf(yield* readSetDirectory(FIXTURE.v1), {
+                addIndexes: [{ fields: ["x"], id: UNIQUE_X, unique: true }],
+                version: 2,
+              })
+            );
+
+            const database = yield* TestDatabase;
+            const writer = yield* database.session("late-writer");
+
+            yield* writer.query("BEGIN");
+            yield* writer.query(
+              insertRecordsSql(['"fx"."item"'], FX.item, 1, { x: "'v1'" })
+            );
+
+            const upgrade = yield* Effect.forkChild(
+              Effect.exit(runUpgrade({ sets: [unique] }))
+            );
+
+            yield* waitUntil(
+              values(
+                `SELECT count(*)::text AS value FROM pg_stat_progress_create_index
+                 WHERE datid = (SELECT oid FROM pg_database WHERE datname = current_database())`
+              ).pipe(Effect.map(([count]) => count !== "0"))
+            );
+            yield* writer.query("COMMIT");
+
+            const failed = errorOf(yield* Fiber.join(upgrade));
+
+            assert.strictEqual(failed?._tag, "UpgradeIncomplete");
+            assert.include(failed?.message ?? "", "std schema resume");
+
+            const [changeSet = ""] = yield* values(
+              `SELECT id::text AS value FROM core."schema_change" WHERE state = 'needs_attention'`
+            );
+
+            assert.include(failed?.message ?? "", changeSet);
+
+            const rerun = yield* refusalsOf(runUpgrade({ sets: [unique] }));
+
+            assert.deepStrictEqual(
+              rerun.map(([code]) => code),
+              ["unfinishedChangeSet"]
+            );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a set requiring itself, or a cycle through installed sets, is refused",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* cycles() {
+            const v1 = yield* readSetDirectory(FIXTURE.v1);
+
+            const header = {
+              id: FX.set,
+              layer: "app",
+              name: "fx",
+              version: 2,
+            } as const;
+
+            const selfRequiring = variantOf(v1, {
+              replace: { set: { ...header, requires: ["core", "fx"] } },
+              version: 2,
+            });
+
+            assert.deepStrictEqual(
+              (yield* planUpgrade({
+                sets: [yield* writeSetDirectory(selfRequiring)],
+              })).refusals.map((entry) => [entry.code, entry.set]),
+              [["setCycle", "fx"]]
+            );
+
+            const other = variantOf(v1, {
+              replace: {
+                accessRules: [],
+                namespaces: [{ id: OTHER_NAMESPACE, name: "other" }],
+                roles: [],
+                set: {
+                  id: OTHER_SET,
+                  layer: "app",
+                  name: "other",
+                  requires: ["core", "fx"],
+                  version: 1,
+                },
+                tables: [],
+              },
+              version: 1,
+            });
+
+            yield* runUpgrade({
+              sets: [FIXTURE.v1, yield* writeSetDirectory(other)],
+            });
+
+            const requiringOther = variantOf(v1, {
+              replace: { set: { ...header, requires: ["core", "other"] } },
+              version: 2,
+            });
+
+            assert.deepStrictEqual(
+              (yield* planUpgrade({
+                sets: [yield* writeSetDirectory(requiringOther)],
+              })).refusals.map((entry) => [entry.code, entry.set]),
+              [
+                ["setCycle", "fx"],
+                ["setCycle", "other"],
+              ]
+            );
           })
         )
     );

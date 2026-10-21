@@ -15,6 +15,7 @@ import {
   editDefinition,
   resolveConflict,
 } from "../src/config/config-service.ts";
+import { readSetDirectory } from "../src/config/set-files.ts";
 import { planUpgrade, runUpgrade } from "../src/config/upgrade.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { exitCodeOf, finding } from "../src/doctor/finding.ts";
@@ -29,6 +30,8 @@ import {
   latestRevisionLabel,
   openConflictIds,
   overridesOf,
+  variantOf,
+  writeSetDirectory,
 } from "./config-support.ts";
 import { currentRevision, schemaTestLayer, values } from "./schema-support.ts";
 
@@ -199,6 +202,44 @@ describe("config-upgrade", () => {
             exitCode: 0,
           });
         })
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "an unresolved conflict that changes again holds the latest plan's old, new and local values",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* successiveConflicts() {
+            yield* runUpgrade({ sets: [FIXTURE.v1] });
+            yield* insertAdmin;
+            yield* labelOverride(FX.x, "X local");
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+
+            const v3 = variantOf(yield* readSetDirectory(FIXTURE.v2), {
+              labels: { x: "X v3" },
+              version: 3,
+            });
+
+            const report = yield* runUpgrade({
+              sets: [yield* writeSetDirectory(v3)],
+            });
+
+            assert.deepStrictEqual(
+              report.plan.sets
+                .find((set) => set.name === "fx")
+                ?.conflicts.map((entry) => [
+                  entry.oldShipped,
+                  entry.newShipped,
+                  entry.local,
+                ]),
+              [["X v2", "X v3", "X local"]]
+            );
+            assert.deepStrictEqual(yield* conflictsOf(FX.x), [
+              "open - label X v2>X v3 X local",
+            ]);
+          })
+        )
     );
   });
 });

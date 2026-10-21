@@ -26,6 +26,7 @@
  * the last committed migration or change set: committed sets plan nothing.
  */
 import type { Owner } from "@std/definitions/definition";
+import type { LayerState } from "@std/definitions/layers";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { NamedSetFile, SetHeader } from "@std/definitions/set-file";
 import type { LifecycleOperations } from "@std/definitions/set-upgrade";
@@ -80,6 +81,7 @@ import {
 import type { PlannedSetLoad } from "./load-set.ts";
 import { CORE_SET_DIRECTORY, readSetDirectory } from "./set-files.ts";
 import type { SetRefused } from "./set-refused.ts";
+import { UpgradeIncomplete } from "./upgrade-incomplete.ts";
 import { UpgradePlanStale } from "./upgrade-plan-stale.ts";
 
 /** Options of `std upgrade`. */
@@ -159,6 +161,7 @@ type PlanServices = ChangeSetServices | Scope.Scope;
 
 /** Errors of `std upgrade`. */
 export type UpgradeError =
+  | UpgradeIncomplete
   | UpgradeRefused
   | MigrationStateRefused
   | UpgradePlanStale
@@ -227,29 +230,91 @@ const isReady = (
   given: ReadonlySet<string>
 ): boolean =>
   (source.header.requires ?? []).every(
-    (name) => done.has(name) || !given.has(name) || name === source.header.name
+    (name) => done.has(name) || !given.has(name)
   );
 
-const cycleRefusals = (pending: readonly SetSource[]): readonly Refusal[] => {
-  const names = pending.map((entry) => entry.header.name).join(", ");
+/**
+ * The sets that lie on a `requires` cycle, a set requiring itself
+ * included.
+ *
+ * @param requires - Every set's required set names.
+ * @returns The names on a cycle.
+ */
+const cyclicSets = (
+  requires: ReadonlyMap<string, readonly string[]>
+): ReadonlySet<string> => {
+  const reaches = (from: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [...(requires.get(from) ?? [])];
 
-  return pending.map((source) => ({
+    while (stack.length > 0) {
+      const next = stack.pop() ?? "";
+
+      if (next === target) {
+        return true;
+      }
+
+      if (!seen.has(next)) {
+        seen.add(next);
+        stack.push(...(requires.get(next) ?? []));
+      }
+    }
+
+    return false;
+  };
+
+  return new Set([...requires.keys()].filter((name) => reaches(name, name)));
+};
+
+const cycleRefusals = (
+  cyclic: ReadonlySet<string>,
+  requires: ReadonlyMap<string, readonly string[]>,
+  ids: ReadonlyMap<string, string>
+): readonly Refusal[] => {
+  const names = [...cyclic].toSorted().join(", ");
+
+  return [...cyclic].toSorted().map((name) => ({
     code: "setCycle",
-    definitionId: source.header.id,
-    details: { requires: source.header.requires ?? [] },
-    message: `The set ${source.header.name} requires sets that require it in turn: ${names}.`,
-    set: source.header.name,
+    definitionId: ids.get(name) ?? null,
+    details: { requires: requires.get(name) ?? [] },
+    message: `The set ${name} requires itself through these sets: ${names}.`,
+    set: name,
   }));
 };
 
 /**
  * Orders sets for loading (Contracts 8.3 step 7): core first, then app sets
- * after the sets they require (ties in the given order); a cycle refuses.
+ * after the sets they require (ties in the given order). The whole
+ * dependency graph is checked first, installed sets included: any cycle,
+ * a set requiring itself included, refuses.
  *
  * @param sources - The core set first, then the app sets as given.
- * @returns The order, or refusals naming the sets in a cycle.
+ * @param installed - The installed sets.
+ * @returns The order, or refusals naming the sets on a cycle.
  */
-const orderSets = (sources: readonly SetSource[]): SetOrder => {
+const orderSets = (
+  sources: readonly SetSource[],
+  installed: LayerState["sets"]
+): SetOrder => {
+  const requires = new Map<string, readonly string[]>();
+  const ids = new Map<string, string>();
+
+  for (const set of installed.values()) {
+    requires.set(set.name, set.requires);
+    ids.set(set.name, set.id);
+  }
+
+  for (const source of sources) {
+    requires.set(source.header.name, source.header.requires ?? []);
+    ids.set(source.header.name, source.header.id);
+  }
+
+  const cyclic = cyclicSets(requires);
+
+  if (cyclic.size > 0) {
+    return { order: [], refusals: cycleRefusals(cyclic, requires, ids) };
+  }
+
   const given = new Set(sources.map((source) => source.header.name));
   const done = new Set<string>();
   const order: SetSource[] = [];
@@ -257,14 +322,10 @@ const orderSets = (sources: readonly SetSource[]): SetOrder => {
 
   for (;;) {
     const index = pending.findIndex((source) => isReady(source, done, given));
-
     const ready = pending[index];
 
     if (ready === undefined) {
-      return {
-        order,
-        refusals: pending.length === 0 ? [] : cycleRefusals(pending),
-      };
+      return { order, refusals: [] };
     }
 
     order.push(ready);
@@ -322,6 +383,30 @@ const pendingMigrations = Effect.fn("Config.pendingMigrations")(
     }));
   }
 );
+
+/**
+ * Change sets that wait for an admin refuse the upgrade: a database with
+ * unfinished change sets must never look upgraded.
+ *
+ * @param open - The open change sets.
+ * @returns One refusal per change set in `needs_attention`.
+ */
+const unfinishedRefusals = (
+  open: readonly OpenChangeSet[]
+): readonly Refusal[] =>
+  open.flatMap((changeSet) =>
+    changeSet.state === "needs_attention"
+      ? [
+          {
+            code: "unfinishedChangeSet",
+            definitionId: changeSet.id,
+            details: {},
+            message: `Change set ${changeSet.id} needs attention; fix the cause and run std schema resume ${changeSet.id}, or std schema abandon ${changeSet.id}, then rerun std upgrade.`,
+            set: "journal",
+          } satisfies Refusal,
+        ]
+      : []
+  );
 
 /** The state carried from one planned set to the next. */
 interface Chain {
@@ -404,7 +489,10 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     ...(options.sets ?? []),
   ]);
 
-  const { order, refusals: orderRefusals } = orderSets(sources);
+  const { order, refusals: orderRefusals } = orderSets(
+    sources,
+    installed.layers.sets
+  );
 
   const sets =
     orderRefusals.length > 0
@@ -422,7 +510,11 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
       revision: installed.state?.revision ?? null,
     },
     migrations,
-    refusals: [...orderRefusals, ...sets.flatMap((set) => set.refusals)],
+    refusals: [
+      ...unfinishedRefusals(resume),
+      ...orderRefusals,
+      ...sets.flatMap((set) => set.refusals),
+    ],
     resume,
     security: sets.flatMap((set) =>
       set.security.map((change) => ({ ...change, set: set.name }))
@@ -522,17 +614,23 @@ const applySets = Effect.fn("Config.applySets")(function* applySets(
       });
     }
 
+    const { header } = planned;
+
     const result = yield* applySetLoad(planned, {
       ...options,
       coordinator: connection,
     });
 
-    owners.set(planned.header.name, planned.owner);
-    outcomes.push({
-      name: planned.header.name,
-      result,
-      version: planned.header.version,
-    });
+    if (result.state === "needs_attention") {
+      return yield* new UpgradeIncomplete({
+        changeSetId: result.changeSetId ?? "",
+        error: result.error,
+        set: header.name,
+      });
+    }
+
+    owners.set(header.name, planned.owner);
+    outcomes.push({ name: header.name, result, version: header.version });
   }
 
   return outcomes;
@@ -584,6 +682,19 @@ export const runUpgrade: (
     );
 
     const resumed = yield* resumeInterrupted(connection, plan.resume, options);
+
+    const stuck = resumed.find(
+      (entry) => entry.outcome.state === "needs_attention"
+    );
+
+    if (stuck !== undefined) {
+      return yield* new UpgradeIncomplete({
+        changeSetId: stuck.id,
+        error: stuck.outcome.error,
+        set: null,
+      });
+    }
+
     const sets = yield* applySets(connection, computed, options);
 
     return { migrations, plan, resumed, sets };

@@ -27,6 +27,7 @@ export type RefusalCode =
   | "dataViolation"
   | "invalid"
   | "setCycle"
+  | "unfinishedChangeSet"
   | "unknownSet";
 
 /** One refusal. */

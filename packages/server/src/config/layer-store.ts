@@ -353,7 +353,8 @@ const openConflicts = Effect.fn("Config.openConflicts")(function* openConflicts(
     ON CONFLICT (record_id, property) WHERE state = 'open' DO UPDATE SET version = core."config_conflict".version + 1,
       updated_at = now(), updated_by = EXCLUDED.updated_by, set_id = EXCLUDED.set_id,
       set_version = EXCLUDED.set_version, change_set_id = EXCLUDED.change_set_id,
-      new_shipped = EXCLUDED.new_shipped, local_value = EXCLUDED.local_value`;
+      old_shipped = EXCLUDED.old_shipped, new_shipped = EXCLUDED.new_shipped,
+      local_value = EXCLUDED.local_value`;
 });
 
 const recordConverged = Effect.fn("Config.recordConverged")(
