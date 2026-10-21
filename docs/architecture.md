@@ -8,8 +8,9 @@ This is the working brief for everyone writing STD code, human or agent. The pro
 - pnpm 12 workspace. Versions come from the `catalog:` in `pnpm-workspace.yaml`. Effect runtime packages are pinned to exactly 4.0.5. Never install `@effect/sql` or `@effect/platform` (Effect 3-era packages).
 - TypeScript 7.0.2, patched by `effect-tsgo patch` (root `prepare` script) so plain `tsc` reports Effect diagnostics. Each package type-checks with `pnpm --filter <pkg> typecheck` (`tsc -p tsconfig.json`, `noEmit`); `pnpm typecheck` runs `tsc -p` on the root project and on every workspace package, whether or not it has that script.
 - Lint and format: Ultracite (Oxlint + Oxfmt) with type-aware rules and every JS plugin. `pnpm check` must pass; `pnpm fix` auto-fixes. The lefthook pre-commit hook runs `ultracite fix` on staged files. Never commit with `--no-verify`, and never weaken `oxlint.config.ts`. A rule may be disabled only on a single line with an `oxlint-disable-next-line <rule> -- <reason>` comment, and only when the rule is genuinely wrong for that line.
+- Foldkit tooling: `@foldkit/oxlint-plugin` (exact pin) runs its `all` preset, including the preset's own overrides, on `apps/web/**` only; the plugin loads once from `oxlint.config.ts`, and the `foldkit-oxlint-scope` canary keeps it off the server and plain packages. Foldkit's agent skills (`foldkit`, `generate-program`, `audit-program`) link from `.agents/skills/` and `.claude/skills/` into `repos/foldkit/skills/`, and `FOLDKIT.md` is Foldkit's own agent guide, copied verbatim from the vendored template (`docs/decisions/0010-foldkit-tooling.md`).
 - Tests: Vitest 5 with `@effect/vitest`, against a real Postgres 18.
-- Effect documentation: read `node_modules/effect/AGENTS.md` and `node_modules/effect/ai-docs/` before writing Effect code. The source is the reference, not memory: most training data is Effect 3, and Effect 4 renamed and moved many APIs. `vendor/effect` holds Effect's repository at the tag matching the lockfile (all packages, tests, `MIGRATION.md` and the rename map `migration/v3-to-v4.md`).
+- Effect documentation: read `node_modules/effect/AGENTS.md` and `node_modules/effect/ai-docs/` before writing Effect code. The source is the reference, not memory: most training data is Effect 3, and Effect 4 renamed and moved many APIs. `repos/effect` holds Effect's repository at the tag matching the lockfile (all packages, tests, `MIGRATION.md` and the rename map `migration/v3-to-v4.md`).
 
 ## Database for development and tests
 
@@ -38,6 +39,8 @@ examples/
   helpdesk/      Step 2 and 3 example app definition set, import sample
 bench/           Stage 0 inheritance benchmark, Step 4 rerun
 docs/            plan, contracts, architecture, decisions/, servicenow-mapping.md, runbooks
+repos/           read-only upstream source: effect/ (effect@<lockfile version>), foldkit/ (foldkit@<pinned tag>)
+FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from repos/foldkit
 ```
 
 ### Dependency rules
@@ -55,7 +58,7 @@ docs/            plan, contracts, architecture, decisions/, servicenow-mapping.m
 - File names are kebab-case. Exported functions, classes and constants carry a JSDoc comment (`jsdoc/require-jsdoc`).
 - Errors are `Schema.TaggedError` classes with PascalCase tags that match Contracts 3.8 where they are API errors.
 
-## Tooling, CI and the vendored Effect source
+## Tooling, CI and the vendored source
 
 ### tsconfig profiles
 
@@ -77,16 +80,16 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm check` / `pnpm fix` | Ultracite (Oxlint type-aware, Oxfmt) |
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
 | `pnpm test` | Vitest, one project per workspace package |
-| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored tag equals the lockfile) |
+| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template) |
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
 | `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 
-### Vendored Effect source
+### Vendored source (`repos/`)
 
-`vendor/effect` is Effect's repository at the `effect@<version>` tag that matches the lockfile, imported as a squashed subtree by `tooling/vendor-effect.ts` and recorded in `vendor/effect-version.json` with the tag's commit and tree hash; `check-vendor` compares the committed tree with that hash. It is reference material only: not a workspace package, and excluded from lint (`.eslintignore`), formatting (`oxfmt.config.ts`), type checks and tests. Agent worktrees under `.claude/` are excluded the same way. The upgrade procedure is in `docs/decisions/0001-effect.md`.
+`repos/effect` is Effect's repository at the `effect@<version>` tag that matches the lockfile; `repos/foldkit` is Foldkit's at the `foldkit@<version>` tag that the web app installs. `tooling/vendor.ts effect|foldkit <version>` imports each as a squashed subtree (a signed-off squash commit with `git-subtree-dir` and `git-subtree-split` trailers, merged in, as `git subtree add --squash` would) without fetching upstream history into the repository, and records it in `repos/<package>-version.json` with the tag's commit and tree hash; `check-vendor` compares each committed tree with its hash. Both are reference material only: never imported, not workspace packages, and excluded from lint (`.eslintignore`, `oxlint.config.ts`), formatting (`.prettierignore`, `oxfmt.config.ts`), the pre-commit hook (`lefthook.yml`), type checks, tests and the pnpm workspace. Their own `package.json`, pnpm workspace, tsconfig and Oxlint files are never read. `.ignore` keeps `repos/` out of editor file trees and root-level ripgrep searches; search them by explicit path (`rg <pattern> repos/effect/packages`). Agent worktrees under `.claude/` are excluded the same way. The upgrade procedures are in `docs/decisions/0001-effect.md` and `docs/decisions/0010-foldkit-tooling.md`.
 
 ## Server structure (`packages/server/src`)
 

@@ -1,0 +1,5 @@
+# Read by Oxfmt (its default ignore files are .gitignore and .prettierignore).
+# Unlike ignorePatterns in oxfmt.config.ts, an ignore file stops Oxfmt from
+# descending into the directory, so it never picks up an upstream repository's
+# own config (repos/foldkit/.oxfmtrc.jsonc) as a nested config.
+/repos/
