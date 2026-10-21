@@ -17,6 +17,13 @@
  * B's listener is told apart from A's by start order: B starts first and
  * its `LISTEN` backend is the only one, then A starts. The kill names that
  * backend's PID, in this database, with B's `application_name`.
+ *
+ * B reaches Postgres through a proxy that can hold back `LISTEN`
+ * (`listen-gate.ts`). The gate closes before the kill, and B's reconnect is
+ * held there until B has answered the request after the next change. So
+ * that request cannot be served from a snapshot the listener reloaded,
+ * however slow it is; only the request's own revision can make it right.
+ * Then the gate opens and B's listener must come back.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
@@ -30,6 +37,7 @@ import { TestDatabase } from "../../testing/src/test-database.ts";
 import { SERVER_APPLICATION_NAME } from "../src/sql/database-config.ts";
 import { startServe } from "./cli-support.ts";
 import type { ServeProcess } from "./cli-support.ts";
+import { listenGate } from "./listen-gate.ts";
 import { listPath } from "./reads-support.ts";
 import {
   ACME,
@@ -227,7 +235,9 @@ describe("cross-process", () => {
             const database = yield* TestDatabase;
 
             // B first, so the only listener is B's; then A.
-            const b = yield* startServe(database.url);
+            // B reaches Postgres through the LISTEN gate; A directly.
+            const gate = yield* listenGate(database.url);
+            const b = yield* startServe(gate.url);
 
             const [bListener = ""] = yield* listenersWhen(
               (pids) => pids.length === 1
@@ -276,8 +286,11 @@ describe("cross-process", () => {
               "A, first change"
             );
 
-            // 2. Kill B's listener: this database, B's application name,
-            // B's listening backend.
+            // 2. Close the gate, then kill B's listener: this database, B's
+            // application name, B's listening backend. B's reconnect is held
+            // at the gate, so B has no listener and cannot reload early.
+            yield* gate.close;
+
             const killed = yield* values(
               `SELECT pg_terminate_backend(pid)::text AS value
                FROM pg_stat_activity
@@ -288,18 +301,26 @@ describe("cross-process", () => {
 
             assert.deepStrictEqual(killed, ["true"]);
 
-            // Committed while B may have no listener at all: B's next
-            // request uses it anyway.
+            // B tried to listen again and is held.
+            yield* gate.awaitHeld;
+
             const second = yield* addAssetField("cross_second");
 
             yield* assertServedWith(
               yield* list(b, "cross_second"),
               second,
               "cross_second",
-              "B, right after its listener was killed"
+              "B, while its listener is down"
             );
 
-            // 3. B's listener comes back as a new backend; A's never left.
+            // Through that request B had no listener; only A listens.
+            assert.deepStrictEqual(yield* serverListeners, [aListener]);
+            assert.strictEqual(yield* gate.heldCount, 1);
+
+            // 3. Open the gate: B's listener comes back as a new backend;
+            // A's never left.
+            yield* gate.open;
+
             const reconnected = yield* listenersWhen(
               (pids) =>
                 pids.length === 2 &&

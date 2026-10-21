@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { RecordJson } from "@std/api/records";
 import { stringifyJson } from "@std/values/json";
-import { isJsonString } from "@std/values/json-value";
+import { isJsonNumber, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -473,19 +473,103 @@ describe("references", () => {
             [{ id: records.L, labels: asBob.labels }]
           );
 
-          // Through the monitor endpoint: Bob's M, and Alice's AM is a 404.
-          const monitor = yield* labelled(bob, MONITOR, records.M);
-
-          assert.strictEqual(monitor.labels?.owner, "Bob");
-          assert.strictEqual(monitor.values.docked_to, null);
-          assert.notProperty(monitor.labels ?? {}, "docked_to");
-
+          // Through the monitor endpoint, Alice's AM is a 404 for Bob.
           const hiddenMonitor = yield* http.get(
             recordPath(MONITOR, records.AM, labels),
             { token: bob }
           );
 
           assert.strictEqual(hiddenMonitor.status, 404);
+        })
+    );
+
+    dbTest.effect(
+      "through /acme.monitor a docked_to whose target Bob cannot see has no label and paths through it are empty",
+      () =>
+        Effect.gen(function* monitorReferences() {
+          const http = yield* TestHttpClient;
+          const { records } = yield* AcmeFixture;
+          const bob = yield* http.signIn("bob", "bob-password");
+          const alice = yield* http.signIn("alice", "alice-password");
+
+          // Bob's monitor M (cost 300, so docked_to is readable to him) is
+          // docked to Alice's monitor AM, which he cannot see.
+          yield* setAsset("docked_to = $2::uuid", records.M, [records.AM]);
+
+          const asBob = yield* labelled(bob, MONITOR, records.M);
+          const asAlice = yield* labelled(alice, MONITOR, records.M);
+
+          assert.strictEqual(asBob.values.docked_to, records.AM);
+          assert.notInclude(asBob.withheld ?? [], "docked_to");
+          assert.notProperty(asBob.labels ?? {}, "docked_to");
+          assert.strictEqual(asBob.labels?.owner, "Bob");
+          assert.strictEqual(asAlice.values.docked_to, records.AM);
+          assert.strictEqual(asAlice.labels?.docked_to, "Alice monitor");
+
+          // Lists label the same way as single reads.
+          for (const [token, expected] of [
+            [bob, asBob],
+            [alice, asAlice],
+          ] as const) {
+            const page = yield* listOf(
+              yield* http.get(
+                listPath(MONITOR, { filter: 'name = "M"', labels: "true" }),
+                { token }
+              )
+            );
+
+            assert.deepStrictEqual(
+              page.records.map((record) => record.labels),
+              [expected.labels]
+            );
+          }
+
+          // One-hop paths in the selection.
+          const fields = "name,docked_to.name,owner.name";
+
+          const paths = (token: string) =>
+            http
+              .get(recordPath(MONITOR, records.M, { fields }), { token })
+              .pipe(Effect.flatMap(recordOf));
+
+          const bobPaths = yield* paths(bob);
+          const alicePaths = yield* paths(alice);
+
+          assert.strictEqual(bobPaths.values["docked_to.name"], null);
+          assert.strictEqual(bobPaths.values["owner.name"], "Bob");
+          assert.strictEqual(
+            alicePaths.values["docked_to.name"],
+            "Alice monitor"
+          );
+          assert.strictEqual(alicePaths.values["owner.name"], "Bob");
+
+          // One-hop paths in filters: the hidden target is an empty one.
+          const filter = (token: string, text: string) =>
+            idsOf(token, MONITOR, { filter: text });
+
+          assert.deepStrictEqual(
+            yield* filter(bob, 'docked_to.name = "Alice monitor"'),
+            []
+          );
+          assert.deepStrictEqual(
+            yield* filter(alice, 'docked_to.name = "Alice monitor"'),
+            [records.M]
+          );
+          assert.deepStrictEqual(
+            yield* filter(bob, "docked_to.name is empty"),
+            [records.M]
+          );
+          assert.deepStrictEqual(
+            yield* filter(alice, "docked_to.name is empty"),
+            [records.AM]
+          );
+          // The reference itself is readable, so its value still filters.
+          assert.deepStrictEqual(
+            yield* filter(bob, `docked_to = "${records.AM}"`),
+            [records.M]
+          );
+
+          yield* setAsset("docked_to = NULL", records.M);
         })
     );
 
@@ -652,8 +736,12 @@ describe("references", () => {
 
 // Sorting and keyset cursors through /acme.laptop (Contracts 3.5).
 
-const BOB_LAPTOPS = 150;
-const ALICE_LAPTOPS = 60;
+/** Bulk records per child endpoint and owner. */
+const BULK_ROWS = {
+  [LAPTOP]: { alice: 60, bob: 150 },
+  [MONITOR]: { alice: 50, bob: 120 },
+} as const;
+
 const PAGE = "7";
 const MULTIPLIER = 1_103_515_245;
 const INCREMENT = 12_345;
@@ -663,6 +751,9 @@ const SERIALS = 40;
 const MAX_COST = 3000;
 const LOST_SHARE = 0.5;
 const DOCKED_SHARE = 0.6;
+const UNDATED_SHARE = 0.15;
+const MIN_SIZE = 19;
+const SIZES = 16;
 
 /**
  * A deterministic sequence of pseudo-random numbers.
@@ -682,62 +773,108 @@ const sequence = (seed: number) => {
 const pick = (random: () => number, count: number): number =>
   Math.floor(random() * count);
 
+/** A child endpoint with bulk records. */
+type Child = typeof LAPTOP | typeof MONITOR;
+
 /**
- * Bulk laptops of one owner: about half lost (their `purchased_on` hidden
- * from Bob), costs up to 3000 (over 2000, rule 10 hides `docked_to` from
- * Bob), many equal dates and serials, some docked to a monitor.
+ * The child-level values of one bulk record: a laptop's serial (many
+ * equal) and required date; a monitor's size (many equal) and a date that
+ * is sometimes empty.
+ * @param child - The endpoint.
+ * @param random - The number source.
+ * @returns The values.
+ */
+const childValues = (
+  child: Child,
+  random: () => number
+): Record<string, string | null> => {
+  const date = `2024-02-${String(1 + pick(random, DAYS)).padStart(2, "0")}`;
+
+  return child === LAPTOP
+    ? {
+        purchased_on: date,
+        serial: `SN-${String(pick(random, SERIALS)).padStart(3, "0")}`,
+      }
+    : {
+        purchased_on: random() < UNDATED_SHARE ? null : date,
+        size_inches: String(MIN_SIZE + pick(random, SIZES)),
+      };
+};
+
+/**
+ * Bulk records of one child class and owner: about half lost (their
+ * `purchased_on` hidden from Bob), costs up to 3000 (over 2000, rule 10
+ * hides `docked_to` from Bob), many equal keys, some docked to a target
+ * Bob can see and some to one he cannot.
+ * @param child - The endpoint.
  * @param prefix - Starts each name, after `bulk-`.
  * @param owner - The owner.
- * @param targets - Monitors to dock to.
+ * @param targets - Assets to dock to.
  * @param random - The number source.
- * @param count - How many.
  * @returns The records.
  */
-const bulkLaptops = (
+const bulkRecords = (
+  child: Child,
   prefix: string,
-  owner: string,
+  owner: { readonly id: string; readonly who: "alice" | "bob" },
   targets: readonly string[],
-  random: () => number,
-  count: number
+  random: () => number
 ): OwnerRecord[] =>
-  Array.from({ length: count }, (_, index) => ({
-    by: owner,
+  Array.from({ length: BULK_ROWS[child][owner.who] }, (_, index) => ({
+    by: owner.id,
     values: {
+      ...childValues(child, random),
       cost: String(pick(random, MAX_COST)),
       docked_to:
         random() < DOCKED_SHARE
           ? (targets[pick(random, targets.length)] ?? null)
           : null,
       name: `bulk-${prefix}-${String(index).padStart(4, "0")}`,
-      owner,
-      purchased_on: `2024-02-${String(1 + pick(random, DAYS)).padStart(2, "0")}`,
-      serial: `SN-${String(pick(random, SERIALS)).padStart(3, "0")}`,
+      owner: owner.id,
       status: random() < LOST_SHARE ? "lost" : "in_use",
     },
   }));
 
-/** The sorts: masked fields, a child-level field, parent-level fields. */
-const SORTS = [
-  "purchased_on",
-  "-purchased_on",
-  "docked_to",
-  "-docked_to",
-  "serial",
-  "-serial",
-  "serial,-purchased_on",
-  "-serial,docked_to",
-  "name",
-  "-status,purchased_on,name",
-  "status,-docked_to",
-];
+/** Per endpoint: masked fields, a child-level field, parent-level fields. */
+const SORTS: Readonly<Record<Child, readonly string[]>> = {
+  [LAPTOP]: [
+    "purchased_on",
+    "-purchased_on",
+    "docked_to",
+    "-docked_to",
+    "serial",
+    "-serial",
+    "serial,-purchased_on",
+    "-serial,docked_to",
+    "name",
+    "-status,purchased_on,name",
+    "status,-docked_to",
+  ],
+  [MONITOR]: [
+    "purchased_on",
+    "-purchased_on",
+    "docked_to",
+    "-docked_to",
+    "size_inches",
+    "-size_inches",
+    "size_inches,-purchased_on",
+    "-size_inches,docked_to",
+    "name",
+    "-status,purchased_on,name",
+    "status,-docked_to",
+  ],
+};
+
+/** A non-empty sort key: a number, or a text compared by code point. */
+type SortKeyValue = { readonly number: number } | { readonly text: string };
 
 /**
  * A record's sort key as the caller sees it: absent or withheld is empty.
  * @param record - The record.
  * @param name - The field.
- * @returns The key text, or null for empty.
+ * @returns The number, the key text, or null for empty.
  */
-const keyOf = (record: RecordJson, name: string): string | null => {
+const keyOf = (record: RecordJson, name: string): SortKeyValue | null => {
   const value: JsonValue | undefined = record.values[name];
 
   if (
@@ -748,8 +885,14 @@ const keyOf = (record: RecordJson, name: string): string | null => {
     return null;
   }
 
+  if (isJsonNumber(value)) {
+    return { number: value };
+  }
+
   // Text keys compare by casefold; these keys are ASCII.
-  return isJsonString(value) ? value.toLowerCase() : stringifyJson(value);
+  return {
+    text: isJsonString(value) ? value.toLowerCase() : stringifyJson(value),
+  };
 };
 
 /**
@@ -765,6 +908,47 @@ const compareText = (left: string, right: string): number => {
   }
 
   return left < right ? -1 : 1;
+};
+
+/**
+ * Compares two non-empty keys: numbers by value, texts by code point.
+ * @param left - A key.
+ * @param right - Another.
+ * @returns Negative, zero or positive.
+ */
+const compareKeys = (left: SortKeyValue, right: SortKeyValue): number => {
+  if ("number" in left && "number" in right) {
+    return left.number - right.number;
+  }
+
+  return compareText(
+    "text" in left ? left.text : String(left.number),
+    "text" in right ? right.text : String(right.number)
+  );
+};
+
+/**
+ * Compares two keys of one sort key: empty last ascending, first
+ * descending.
+ * @param left - A key, or null for empty.
+ * @param right - Another.
+ * @param descending - The direction.
+ * @returns Negative, zero or positive.
+ */
+const compareNullable = (
+  left: SortKeyValue | null,
+  right: SortKeyValue | null,
+  descending: boolean
+): number => {
+  if (left === null || right === null) {
+    if (left === right) {
+      return 0;
+    }
+
+    return (left === null) === descending ? -1 : 1;
+  }
+
+  return descending ? compareKeys(right, left) : compareKeys(left, right);
 };
 
 /**
@@ -785,19 +969,14 @@ const expectedOrder = (
 
   const compare = (left: RecordJson, right: RecordJson): number => {
     for (const { descending, name } of keys) {
-      const a = keyOf(left, name);
-      const b = keyOf(right, name);
+      const order = compareNullable(
+        keyOf(left, name),
+        keyOf(right, name),
+        descending
+      );
 
-      if (a !== b) {
-        if (a === null) {
-          return descending ? -1 : 1;
-        }
-
-        if (b === null) {
-          return descending ? 1 : -1;
-        }
-
-        return descending ? compareText(b, a) : compareText(a, b);
+      if (order !== 0) {
+        return order;
       }
     }
 
@@ -807,7 +986,45 @@ const expectedOrder = (
   return records.toSorted(compare).map((record) => record.id);
 };
 
-/** The filter selecting the bulk laptops. */
+/**
+ * A monitor with only a size, for the order computation's own test.
+ * @param id - Its ID.
+ * @param size - Its `size_inches`.
+ * @returns The record.
+ */
+const sized = (id: string, size: number): RecordJson => ({
+  class: MONITOR,
+  id,
+  values: { size_inches: size },
+  version: 1,
+});
+
+/**
+ * How many bulk records of an endpoint a caller sees: Bob his own, Alice
+ * every one.
+ * @param table - The endpoint.
+ * @param who - The caller.
+ * @returns The count.
+ */
+const visibleBulkRows = (table: Child, who: "alice" | "bob"): number =>
+  who === "bob"
+    ? BULK_ROWS[table].bob
+    : BULK_ROWS[table].bob + BULK_ROWS[table].alice;
+
+/**
+ * The sorts a caller can make on an endpoint: Bob cannot read a monitor's
+ * own field (rule 4 grants asset fields only), so he gets no
+ * `size_inches` sorts; Alice gets every one.
+ * @param table - The endpoint.
+ * @param who - The caller.
+ * @returns The sorts.
+ */
+const sortsFor = (table: Child, who: "alice" | "bob"): readonly string[] =>
+  who === "bob" && table === MONITOR
+    ? SORTS[table].filter((sort) => !sort.includes("size_inches"))
+    : SORTS[table];
+
+/** The filter selecting the bulk records. */
 const BULK = 'name starts with "bulk-"';
 
 /**
@@ -820,26 +1037,32 @@ const withheldCount = (records: readonly RecordJson[], name: string): number =>
   records.filter((record) => (record.withheld ?? []).includes(name)).length;
 
 /**
- * One sort of the bulk laptops through `/acme.laptop`: asserts that pages
- * of 7 return every row once, in the order of one unpaged query, which is
- * the order Contracts 3.5 fixes over what the caller can read.
+ * One sort of the bulk records through a child endpoint: asserts that
+ * pages of 7 return every row once, in the order of one unpaged query,
+ * which is the order Contracts 3.5 fixes over what the caller can read.
+ * @param table - The endpoint.
  * @param token - The session token.
  * @param sort - The sort parameter.
- * @param rows - How many bulk laptops the caller sees.
+ * @param rows - How many bulk records the caller sees there.
  * @returns The text of every page.
  */
 const sortedPages = Effect.fn("ChildEndpointReads.sortedPages")(
-  function* sortedPages(token: string, sort: string, rows: number) {
+  function* sortedPages(
+    table: Child,
+    token: string,
+    sort: string,
+    rows: number
+  ) {
     const http = yield* TestHttpClient;
 
     const unpaged = yield* listOf(
       yield* http.get(
-        listPath(LAPTOP, { count: "true", filter: BULK, limit: "1000", sort }),
+        listPath(table, { count: "true", filter: BULK, limit: "1000", sort }),
         { token }
       )
     );
 
-    const paged = yield* allPages(token, LAPTOP, {
+    const paged = yield* allPages(token, table, {
       filter: BULK,
       limit: PAGE,
       sort,
@@ -847,15 +1070,16 @@ const sortedPages = Effect.fn("ChildEndpointReads.sortedPages")(
 
     const expected = unpaged.records.map((record) => record.id);
     const actual = paged.records.map((record) => record.id);
+    const label = `${table} ${sort}`;
 
-    assert.strictEqual(expected.length, rows, sort);
-    assert.strictEqual(unpaged.count, rows, sort);
-    assert.strictEqual(new Set(actual).size, actual.length, sort);
-    assert.deepStrictEqual(actual, expected, sort);
+    assert.strictEqual(expected.length, rows, label);
+    assert.strictEqual(unpaged.count, rows, label);
+    assert.strictEqual(new Set(actual).size, actual.length, label);
+    assert.deepStrictEqual(actual, expected, label);
     assert.deepStrictEqual(
       expected,
       expectedOrder(unpaged.records, sort),
-      sort
+      label
     );
 
     return paged.texts;
@@ -901,27 +1125,46 @@ describe("cursor-nulls", () => {
       "00000000-0000-7000-8000-000000000005",
       "00000000-0000-7000-8000-000000000002",
     ]);
+
+    assert.deepStrictEqual(
+      expectedOrder(
+        [
+          sized("00000000-0000-7000-8000-000000000001", 24),
+          sized("00000000-0000-7000-8000-000000000002", 9),
+          sized("00000000-0000-7000-8000-000000000003", 100),
+        ],
+        "size_inches"
+      ),
+      [
+        "00000000-0000-7000-8000-000000000002",
+        "00000000-0000-7000-8000-000000000001",
+        "00000000-0000-7000-8000-000000000003",
+      ]
+    );
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "through /acme.laptop keyset pages over masked, child and parent keys return every row once, in order",
+      "through /acme.laptop and /acme.monitor keyset pages over masked, child and parent keys return every row once, in order",
       () =>
         Effect.gen(function* sortsChild() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
           const random = sequence(11);
-          const { AM, M } = fixture.records;
+          const { AM, K, L, M } = fixture.records;
+          const bob = { id: fixture.bob.id, who: "bob" } as const;
+          const alice = { id: fixture.alice.id, who: "alice" } as const;
+
+          // Targets Bob can see (L, M) and cannot (AM, K).
+          const targets = [AM, K, L, M];
 
           yield* insert(ACME.laptop, [
-            ...bulkLaptops("b", fixture.bob.id, [AM, M], random, BOB_LAPTOPS),
-            ...bulkLaptops(
-              "a",
-              fixture.alice.id,
-              [AM, M],
-              random,
-              ALICE_LAPTOPS
-            ),
+            ...bulkRecords(LAPTOP, "bl", bob, targets, random),
+            ...bulkRecords(LAPTOP, "al", alice, targets, random),
+          ]);
+          yield* insert(ACME.monitor, [
+            ...bulkRecords(MONITOR, "bm", bob, targets, random),
+            ...bulkRecords(MONITOR, "am", alice, targets, random),
           ]);
 
           const tokens = {
@@ -929,15 +1172,21 @@ describe("cursor-nulls", () => {
             bob: yield* http.signIn("bob", "bob-password"),
           };
 
-          const filter = BULK;
-          const rows = { alice: BOB_LAPTOPS + ALICE_LAPTOPS, bob: BOB_LAPTOPS };
-
           const sortAll = Effect.fn("ChildEndpointReads.sortAll")(
             function* sortAll(who: "alice" | "bob") {
               const texts: string[][] = [];
 
-              for (const sort of SORTS) {
-                texts.push(yield* sortedPages(tokens[who], sort, rows[who]));
+              for (const table of [LAPTOP, MONITOR] as const) {
+                for (const sort of sortsFor(table, who)) {
+                  texts.push(
+                    yield* sortedPages(
+                      table,
+                      tokens[who],
+                      sort,
+                      visibleBulkRows(table, who)
+                    )
+                  );
+                }
               }
 
               return texts;
@@ -948,22 +1197,44 @@ describe("cursor-nulls", () => {
 
           const bobBefore = yield* sortAll("bob");
 
-          // Bob's masked keys: some hidden dates and docked_to values exist.
-          const bobRecords = yield* listOf(
-            yield* http.get(listPath(LAPTOP, { filter, limit: "1000" }), {
-              token: tokens.bob,
-            })
+          // A monitor's own field is never readable to Bob: its sort is
+          // refused like a misspelled name.
+          const bySize = yield* http.get(
+            listPath(MONITOR, { filter: BULK, sort: "size_inches" }),
+            { token: tokens.bob }
           );
 
-          assert.isAbove(withheldCount(bobRecords.records, "purchased_on"), 0);
-          assert.isAbove(withheldCount(bobRecords.records, "docked_to"), 0);
+          assert.strictEqual(bySize.status, 400);
+          assert.strictEqual(yield* tagOf(bySize), "UnknownField");
+
+          // Bob's masked keys: some hidden dates and docked_to values exist
+          // on both endpoints.
+          for (const table of [LAPTOP, MONITOR] as const) {
+            const bobRecords = yield* listOf(
+              yield* http.get(
+                listPath(table, { filter: BULK, limit: "1000" }),
+                {
+                  token: tokens.bob,
+                }
+              )
+            );
+
+            for (const name of ["purchased_on", "docked_to"]) {
+              assert.isAbove(
+                withheldCount(bobRecords.records, name),
+                0,
+                `${table} ${name}`
+              );
+            }
+          }
 
           // Changing only values Bob cannot read, without changing any rule
           // outcome, changes no byte of any page: not the order, not the
           // cursors.
           yield* values(
             `UPDATE acme.asset SET purchased_on = purchased_on - 400
-             WHERE status = 'lost' AND name LIKE 'bulk-%' RETURNING id::text AS value`
+             WHERE status = 'lost' AND purchased_on IS NOT NULL
+               AND name LIKE 'bulk-%' RETURNING id::text AS value`
           );
           yield* values(
             `UPDATE acme.asset
@@ -975,7 +1246,7 @@ describe("cursor-nulls", () => {
 
           assert.deepStrictEqual(yield* sortAll("bob"), bobBefore);
         }),
-      { timeout: 240_000 }
+      { timeout: 300_000 }
     );
 
     dbTest.effect(
