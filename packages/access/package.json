@@ -1,0 +1,30 @@
+{
+  "name": "@std/access",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@std/conditions": "workspace:*",
+    "@std/definitions": "workspace:*",
+    "@std/values": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "yaml": "2.9.1"
+  },
+  "std": {
+    "profile": "plain"
+  }
+}

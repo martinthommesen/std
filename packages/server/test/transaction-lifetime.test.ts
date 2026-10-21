@@ -1,0 +1,765 @@
+import { PgClient } from "@effect/sql-pg";
+/**
+ * Review round 2 reproductions: statements the allowlist refuses at run
+ * time, a dying scope finalizer, detached fibers, the pre-COMMIT backstop,
+ * a failed COMMIT, and `readOnly` on a write.
+ */
+import { assert, describe, it, layer } from "@effect/vitest";
+import { Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
+import { SqlClient } from "effect/sql";
+
+import { testDatabaseLayer } from "../../testing/src/test-database.ts";
+import { DatabaseError } from "../src/sql/errors.ts";
+import { decodeRows } from "../src/sql/rows.ts";
+import { analyzeStatement } from "../src/sql/statement-lexer.ts";
+import { readOnly } from "../src/sql/statement-marks.ts";
+import { CurrentTransaction } from "../src/sql/transaction-context.ts";
+import type { TransactionHandle } from "../src/sql/transaction-context.ts";
+import {
+  READ_KEYWORDS,
+  READ_TUNING_SETTINGS,
+  STATEMENT_KEYWORDS,
+  TRANSACTION_SETTINGS,
+  TransactionState,
+} from "../src/sql/transaction-state.ts";
+import { Transactions } from "../src/sql/transactions.ts";
+import { errorOf, refusalOf } from "./support.ts";
+
+const decodeCount = decodeRows(Schema.Struct({ n: Schema.Int }));
+
+const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
+
+const decodeIsolation = decodeRows(
+  Schema.Struct({ transaction_isolation: Schema.String })
+);
+
+const countRows = (table: string) =>
+  SqlClient.SqlClient.pipe(
+    Effect.flatMap((sql) =>
+      sql.unsafe(`SELECT count(*)::int AS n FROM ${table}`)
+    ),
+    Effect.flatMap(decodeCount),
+    Effect.map(([row]) => row?.n ?? -1)
+  );
+
+const backendPid = Transactions.pipe(
+  Effect.flatMap(({ request }) =>
+    request(
+      SqlClient.SqlClient.pipe(
+        Effect.flatMap((sql) => sql`SELECT pg_backend_pid() AS pid`)
+      )
+    )
+  ),
+  Effect.flatMap(decodePid),
+  Effect.map(([row]) => row?.pid ?? -1)
+);
+
+const UNICODE_ISOLATION =
+  "SET LOCAL U&\"transaction_\\0069solation\" = 'serializable'";
+
+/**
+ * A request whose body detaches a nested unit that writes, signals, and then
+ * waits for a release that never comes; the body returns as soon as the
+ * write happened. The writer reports how it ended.
+ * @returns The request's exit, and an effect awaiting whether the writer was interrupted.
+ */
+const detachedWriter = Effect.gen(function* detachWriter() {
+  const sql = yield* SqlClient.SqlClient;
+  const { request } = yield* Transactions;
+  const wrote = yield* Deferred.make<boolean>();
+  const neverReleased = yield* Deferred.make<boolean>();
+  const writerEnded = yield* Deferred.make<boolean>();
+
+  const writer = request(
+    sql`INSERT INTO lifetime_detached VALUES (1)`.pipe(
+      Effect.andThen(Deferred.succeed(wrote, true)),
+      Effect.andThen(Deferred.await(neverReleased)),
+      Effect.andThen(Effect.fail("late failure" as const))
+    )
+  ).pipe(
+    Effect.onExit((exit) =>
+      Deferred.succeed(writerEnded, Exit.hasInterrupts(exit))
+    ),
+    Effect.ignore
+  );
+
+  const exit = yield* Effect.exit(
+    request(
+      Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+    )
+  );
+
+  return {
+    exit,
+    writerInterrupted: Deferred.await(writerEnded).pipe(
+      Effect.timeout(Duration.seconds(10))
+    ),
+  };
+});
+
+describe("transaction-lifetime", () => {
+  layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a leading empty statement or a CR-ended comment cannot hide COMMIT",
+      () =>
+        Effect.gen(function* hiddenCommits() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_hidden (id int PRIMARY KEY)`;
+
+          for (const hidden of [";COMMIT", "-- comment\rCOMMIT"]) {
+            const exit = yield* Effect.exit(
+              request(
+                sql`INSERT INTO lifetime_hidden VALUES (1)`.pipe(
+                  Effect.andThen(sql.unsafe(hidden)),
+                  Effect.andThen(Effect.fail("then fail" as const))
+                )
+              )
+            );
+
+            assert.strictEqual(
+              refusalOf(exit)?.reason,
+              "transaction-control",
+              hidden
+            );
+          }
+
+          assert.strictEqual(yield* countRows("lifetime_hidden"), 0);
+        })
+    );
+
+    dbTest.effect(
+      "SET LOCAL of a U& quoted name is refused and the isolation stays READ COMMITTED",
+      () =>
+        Effect.gen(function* unicodeSet() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+
+          const isolation = yield* request(
+            Effect.gen(function* tryUnicodeSet() {
+              const refused = yield* Effect.exit(sql.unsafe(UNICODE_ISOLATION));
+              assert.isDefined(refusalOf(refused));
+
+              const [row] = yield* sql`SHOW transaction_isolation`.pipe(
+                Effect.flatMap(decodeIsolation)
+              );
+
+              return row?.transaction_isolation;
+            })
+          );
+
+          assert.strictEqual(isolation, "read committed");
+        })
+    );
+
+    dbTest.effect(
+      "a detached fiber that wrote is interrupted before the commit decision",
+      () =>
+        Effect.gen(function* detachedFiber() {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TABLE lifetime_detached (id int PRIMARY KEY)`;
+
+          const { exit, writerInterrupted } = yield* detachedWriter;
+
+          assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
+          assert.isTrue(
+            yield* writerInterrupted,
+            "the sweep interrupted the writer"
+          );
+          assert.strictEqual(yield* countRows("lifetime_detached"), 0);
+        })
+    );
+
+    dbTest.effect(
+      "only fibers of the transaction's code enroll, and not after it ended",
+      () =>
+        Effect.gen(function* foreignFiber() {
+          const client = yield* PgClient.PgClient;
+          const state = new TransactionState("request", client);
+
+          const asOwner = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.provideService(effect, CurrentTransaction, state);
+
+          yield* Effect.withFiber((fiber) => {
+            state.bodyFiberId = fiber.id;
+
+            return Effect.void;
+          });
+          yield* asOwner(state.enter("the owner"));
+
+          const outsider = yield* Effect.exit(
+            Effect.forkChild(state.enter("a fiber without the context")).pipe(
+              Effect.flatMap(Fiber.join)
+            )
+          );
+
+          assert.strictEqual(refusalOf(outsider)?.reason, "foreignFiber");
+
+          state.sealed = true;
+          yield* asOwner(state.enter("the owner again"));
+
+          const late = yield* Effect.exit(
+            Effect.forkChild(
+              asOwner(state.enter("a child after the seal"))
+            ).pipe(Effect.flatMap(Fiber.join))
+          );
+
+          assert.strictEqual(refusalOf(late)?.reason, "foreignFiber");
+
+          state.closed = true;
+
+          const closed = yield* Effect.exit(
+            asOwner(state.enter("the owner, late"))
+          );
+
+          assert.strictEqual(refusalOf(closed)?.reason, "closed");
+        })
+    );
+
+    dbTest.effect(
+      "an ancestor holding the transaction's handle is refused at once and the transaction settles",
+      () =>
+        Effect.gen(function* ancestorHandle() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_ancestor (id int PRIMARY KEY)`;
+
+          const handed = yield* Deferred.make<TransactionHandle>();
+          const released = yield* Deferred.make<boolean>();
+          const ran: string[] = [];
+
+          const transaction = yield* Effect.forkChild(
+            request(
+              Effect.gen(function* handOutHandle() {
+                yield* sql`INSERT INTO lifetime_ancestor VALUES (1)`;
+                yield* Deferred.succeed(handed, yield* CurrentTransaction);
+                yield* Deferred.await(released);
+              })
+            )
+          );
+
+          const handle = yield* Deferred.await(handed);
+
+          const registered = yield* Effect.exit(
+            handle.afterCommit(
+              Effect.sync(() => {
+                ran.push("foreign action");
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(registered)?.reason, "foreignFiber");
+
+          yield* Deferred.succeed(released, true);
+          yield* Fiber.join(transaction).pipe(
+            Effect.timeout(Duration.seconds(10))
+          );
+
+          assert.deepStrictEqual(ran, [], "the foreign action never ran");
+          assert.strictEqual(yield* countRows("lifetime_ancestor"), 1);
+        }),
+      { timeout: 20_000 }
+    );
+
+    dbTest.effect(
+      "the check before COMMIT rolls back when the transaction's mark changed",
+      () =>
+        Effect.gen(function* backstop() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_backstop (id int PRIMARY KEY)`;
+
+          const exit = yield* Effect.exit(
+            request(
+              sql`INSERT INTO lifetime_backstop VALUES (1)`.pipe(
+                Effect.andThen(
+                  sql`SELECT set_config('std.transaction_token', 'forged', true)`
+                )
+              )
+            )
+          );
+
+          const refused = refusalOf(exit);
+
+          assert.strictEqual(refused?.reason, "transaction-control");
+          assert.include(refused?.detail ?? "", "no longer in the transaction");
+          assert.strictEqual(yield* countRows("lifetime_backstop"), 0);
+        })
+    );
+
+    dbTest.effect("readOnly refuses a statement that is not a read", () =>
+      Effect.gen(function* readOnlyWrite() {
+        const sql = yield* SqlClient.SqlClient;
+        const { request } = yield* Transactions;
+        yield* sql`CREATE TABLE lifetime_read_only (id int PRIMARY KEY)`;
+
+        const exit = yield* Effect.exit(
+          request(readOnly(sql`INSERT INTO lifetime_read_only VALUES (1)`))
+        );
+
+        assert.strictEqual(refusalOf(exit)?.reason, "transaction-control");
+
+        const writingWith = yield* Effect.exit(
+          request(
+            readOnly(
+              sql`WITH x AS (INSERT INTO lifetime_read_only VALUES (2) RETURNING 1) SELECT * FROM x`
+            )
+          )
+        );
+
+        assert.strictEqual(
+          refusalOf(writingWith)?.reason,
+          "transaction-control"
+        );
+        assert.strictEqual(yield* countRows("lifetime_read_only"), 0);
+
+        const writingCtes = [
+          "WITH x AS (SELECT 1) SELECT * INTO lifetime_read_only_copy FROM x",
+          "WITH x AS MATERIALIZED (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH RECURSIVE r(n) AS (SELECT 1), d AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
+          `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1`,
+          "SELECT U&'x' UESCAPE '!' INTO lifetime_read_only_copy",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+        ];
+
+        for (const text of writingCtes) {
+          const refused = yield* Effect.exit(
+            request(readOnly(sql.unsafe(text)))
+          );
+
+          assert.strictEqual(
+            refusalOf(refused)?.reason,
+            "transaction-control",
+            text
+          );
+        }
+
+        // Locking clauses, and command words used as names, are reads.
+        yield* sql`INSERT INTO lifetime_read_only VALUES (3)`;
+        yield* sql`CREATE FUNCTION insert() RETURNS int LANGUAGE sql AS 'SELECT 1'`;
+
+        const reads = [
+          'SELECT id FROM "lifetime_read_only" FOR UPDATE',
+          "SELECT 1 FOR UPDATE",
+          "SELECT id FROM lifetime_read_only t FOR NO KEY UPDATE OF t SKIP LOCKED",
+          "SELECT update, delete, insert, merge FROM (SELECT 1 AS update, 2 AS delete, 3 AS insert, 4 AS merge) s",
+          "SELECT 1 AS update",
+          "SELECT insert()",
+          "SELECT 1 AS into",
+          `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          `WITH U&"!0078" /* c */ UESCAPE -- d\n '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          "SELECT U&'d!0061t!+000061' UESCAPE '!' AS c",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'SELECT s.into FROM (SELECT 1 AS "into") s',
+          'SELECT s. into FROM (SELECT 1 AS "into") s',
+          "SELECT E'a'\n'\\' into' AS c",
+          "WITH RECURSIVE r(n) AS NOT MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SEARCH DEPTH FIRST BY n SET ord CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT n FROM r",
+        ];
+
+        for (const text of reads) {
+          yield* request(readOnly(sql.unsafe(text)));
+        }
+
+        assert.strictEqual(yield* countRows("lifetime_read_only"), 1);
+      })
+    );
+
+    dbTest.effect(
+      "planner settings take effect, and a failed nested unit that only set them does not poison",
+      () =>
+        Effect.gen(function* readTuning() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_tuning (id int PRIMARY KEY)`;
+
+          const settings = yield* request(
+            Effect.gen(function* tuneAndRead() {
+              yield* sql`INSERT INTO lifetime_tuning VALUES (1)`;
+              yield* request(
+                sql`SET LOCAL max_parallel_workers_per_gather = 0`.pipe(
+                  Effect.andThen(
+                    sql`SET LOCAL plan_cache_mode = force_custom_plan`
+                  ),
+                  Effect.andThen(Effect.fail("nested failure" as const))
+                )
+              ).pipe(Effect.ignore);
+
+              const [workers] =
+                yield* sql`SHOW max_parallel_workers_per_gather`;
+
+              const [mode] = yield* sql`SHOW plan_cache_mode`;
+
+              return [workers, mode];
+            })
+          );
+
+          assert.deepStrictEqual(settings, [
+            { max_parallel_workers_per_gather: "0" },
+            { plan_cache_mode: "force_custom_plan" },
+          ]);
+          assert.strictEqual(yield* countRows("lifetime_tuning"), 1);
+
+          const refused = yield* Effect.exit(
+            request(sql.unsafe("SET LOCAL plan_cache_mode = 'auto'"))
+          );
+
+          assert.strictEqual(refusalOf(refused)?.reason, "transaction-control");
+        })
+    );
+
+    dbTest.effect(
+      "a failed nested unit that set a timeout poisons the request",
+      () =>
+        Effect.gen(function* timeoutPoisons() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_timeout_poison (id int PRIMARY KEY)`;
+
+          for (const setting of [
+            "SET LOCAL statement_timeout = '1ms'",
+            "SET LOCAL lock_timeout = 0",
+            "SET LOCAL idle_in_transaction_session_timeout = 0",
+          ]) {
+            const exit = yield* Effect.exit(
+              request(
+                Effect.gen(function* setThenFail() {
+                  yield* sql`INSERT INTO lifetime_timeout_poison VALUES (1)`;
+                  yield* request(
+                    sql
+                      .unsafe(setting)
+                      .pipe(
+                        Effect.andThen(Effect.fail("nested failure" as const))
+                      )
+                  ).pipe(Effect.ignore);
+                })
+              )
+            );
+
+            assert.strictEqual(refusalOf(exit)?.reason, "poisoned", setting);
+            assert.strictEqual(
+              yield* countRows("lifetime_timeout_poison"),
+              0,
+              setting
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "a config commit whose failed nested unit dropped its timeouts does not commit",
+      () =>
+        Effect.gen(function* configTimeoutsPoison() {
+          const sql = yield* SqlClient.SqlClient;
+          const { configCommit } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_config_poison (id int PRIMARY KEY)`;
+
+          const exit = yield* Effect.exit(
+            configCommit(
+              Effect.gen(function* dropBudgetsThenWrite() {
+                yield* configCommit(
+                  sql`SET LOCAL lock_timeout = 0`.pipe(
+                    Effect.andThen(sql`SET LOCAL statement_timeout = 0`),
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore);
+                yield* sql`INSERT INTO lifetime_config_poison VALUES (1)`;
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
+          assert.strictEqual(yield* countRows("lifetime_config_poison"), 0);
+        })
+    );
+
+    dbTest.effect(
+      "readOnly runs an unprepared read and refuses an unprepared write",
+      () =>
+        Effect.gen(function* unpreparedReads() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_unprepared (id int PRIMARY KEY)`;
+          yield* sql`INSERT INTO lifetime_unprepared VALUES (1), (2)`;
+
+          const rows = yield* request(
+            readOnly(
+              sql`SELECT id FROM lifetime_unprepared WHERE id > ${1} ORDER BY id`,
+              { unprepared: true }
+            )
+          );
+
+          assert.deepStrictEqual(rows, [{ id: 2 }]);
+
+          for (const text of [
+            "WITH x AS (DELETE FROM lifetime_unprepared RETURNING 1) SELECT * FROM x",
+            "SELECT 1 AS id INTO lifetime_unprepared_copy",
+            "DELETE FROM lifetime_unprepared",
+          ]) {
+            const refused = yield* Effect.exit(
+              request(readOnly(sql.unsafe(text), { unprepared: true }))
+            );
+
+            assert.strictEqual(
+              refusalOf(refused)?.reason,
+              "transaction-control",
+              text
+            );
+          }
+
+          assert.strictEqual(yield* countRows("lifetime_unprepared"), 2);
+        })
+    );
+
+    dbTest.effect(
+      "readOnly refuses SELECT INTO, so a caught nested failure cannot commit its table",
+      () =>
+        Effect.gen(function* selectInto() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+
+          const selectsInto = [
+            "SELECT 42 AS id INTO lifetime_select_into",
+            // An escape string continued on the next line keeps its mode, so
+            // `\'` is an escaped quote and INTO lies outside the constant.
+            "SELECT E'a'\n'\\'x' AS c INTO lifetime_select_into",
+            "SELECT E'a' -- note\n'\\'x' AS c INTO lifetime_select_into",
+            // The `.` of a numeric literal does not qualify a name.
+            "SELECT 1. INTO lifetime_select_into",
+            "SELECT 1_000. INTO lifetime_select_into",
+          ];
+
+          for (const text of selectsInto) {
+            const outcome = yield* Effect.exit(
+              request(
+                request(
+                  readOnly(sql.unsafe(text)).pipe(
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore)
+              )
+            );
+
+            assert.strictEqual(
+              refusalOf(outcome)?.reason,
+              "transaction-control",
+              text
+            );
+            assert.strictEqual(
+              yield* countRows(
+                "pg_class WHERE relname = 'lifetime_select_into'"
+              ),
+              0,
+              text
+            );
+          }
+
+          // Without readOnly the same statements run, so each is SELECT INTO.
+          for (const text of selectsInto) {
+            yield* request(sql.unsafe(text));
+            yield* sql`DROP TABLE lifetime_select_into`;
+          }
+        })
+    );
+  });
+
+  it("the lexer finds write clauses by structure, not by command words", () => {
+    const writing = [
+      "SELECT 42 AS id INTO t",
+      "SELECT 1 INTO TEMP t",
+      "WITH x AS (SELECT 1) SELECT * INTO t FROM x",
+      "WITH x AS (INSERT INTO t VALUES (1) RETURNING 1) SELECT * FROM x",
+      "WITH x AS (UPDATE t SET a = 1 RETURNING 1) SELECT * FROM x",
+      "WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x",
+      "WITH x AS MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH x AS NOT MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH RECURSIVE r AS (SELECT 1), d AS (DELETE FROM t RETURNING 1) SELECT 1",
+      'WITH "x" (a, b) AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1',
+      "WITH x AS (SELECT 1) UPDATE t SET a = 1",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH DEPTH FIRST BY n SET o DELETE FROM t",
+      "WITH RECURSIVE r(n) AS (SELECT 1) CYCLE n SET c USING p DELETE FROM t",
+      "WITH x AS (SELECT 1)",
+      "WITH x AS SELECT 1",
+      "WITH /* a */ x -- b\n AS ( /* c */ DELETE FROM t) SELECT 1",
+      // String continuations keep the first segment's mode.
+      "SELECT E'a'\n'\\'x' AS c INTO t",
+      "SELECT E'a'\r\n  \t'\\'x' INTO t",
+      "SELECT E'a' -- c\n-- d\n'\\'x' INTO t",
+      "SELECT U&'a'\n'\\' INTO t",
+      "SELECT 'a'\n'\\' INTO t",
+      // A block comment ends the constant, so the next segment is plain.
+      "SELECT E'a' /* c */\n'\\' INTO t",
+      "SELECT E'a'\n/* c */ '\\' INTO t",
+      // INTO stays a clause after a number's `.` or a quoted "as".
+      "SELECT 1. INTO t",
+      "SELECT 1_000. INTO t",
+      "SELECT .5 INTO t",
+      "SELECT 1.5e3 INTO t",
+      'SELECT "as" INTO t',
+      // A UESCAPE clause belongs to its U& token and hides nothing after it.
+      `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM t RETURNING 1) SELECT 1`,
+      "SELECT U&'x' UESCAPE '!' INTO t",
+      "SELECT U&'x'\nUESCAPE '!' INTO t",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+    ];
+
+    const reads = [
+      "SELECT id FROM t FOR UPDATE",
+      'SELECT id FROM "t" FOR UPDATE',
+      "SELECT 1 FOR UPDATE",
+      "SELECT id FROM t FOR NO KEY UPDATE OF t SKIP LOCKED",
+      "SELECT id FROM t FOR SHARE",
+      "SELECT update, delete, insert, merge FROM t",
+      "SELECT 1 AS update",
+      "SELECT insert()",
+      "SELECT 'insert into t' AS s",
+      'SELECT "into" FROM t',
+      "SELECT 1 -- into t",
+      "SELECT $$into t$$",
+      "WITH x AS (SELECT 1), y AS ((SELECT 2)) SELECT * FROM x, y",
+      "WITH x AS (WITH y AS (SELECT 1) SELECT * FROM y) TABLE x",
+      "WITH x AS (VALUES (1)) (SELECT * FROM x)",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH BREADTH FIRST BY n SET o CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT * FROM r",
+      'WITH "update" AS (SELECT 1) SELECT * FROM "update"',
+      // INTO as a column label or attribute name.
+      "SELECT 1 AS into",
+      "SELECT s.into FROM t s",
+      "SELECT s. into FROM t s",
+      "SELECT (s).into FROM t",
+      "SELECT $1.into",
+      // Inside continued constants.
+      "SELECT E'a'\n'\\' into' AS c",
+      "SELECT 'a' -- c\n'into t'",
+      "SELECT U&'a'\n\v'into t'",
+      // UESCAPE clauses, with blanks and comments in between.
+      `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+      `WITH U&"!0078" /* c */ uescape -- d\n '!' AS (SELECT 1) TABLE x`,
+      "SELECT U&'d!0061t' UESCAPE '!' AS c",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
+    ];
+
+    for (const sql of writing) {
+      assert.isTrue(analyzeStatement(sql).writeClause, sql);
+    }
+
+    for (const sql of reads) {
+      assert.isFalse(analyzeStatement(sql).writeClause, sql);
+    }
+  });
+
+  it("the allowlist admits no transaction control and SET LOCAL only for timeouts and read tuning", () => {
+    for (const keyword of [
+      "begin",
+      "commit",
+      "rollback",
+      "savepoint",
+      "release",
+      "prepare",
+      "do",
+      "call",
+      "reset",
+      "discard",
+      "start",
+      "end",
+      "abort",
+    ]) {
+      assert.isFalse(STATEMENT_KEYWORDS.has(keyword), keyword);
+    }
+
+    assert.deepStrictEqual([...TRANSACTION_SETTINGS].toSorted(), [
+      "idle_in_transaction_session_timeout",
+      "lock_timeout",
+      "statement_timeout",
+    ]);
+    assert.deepStrictEqual([...READ_TUNING_SETTINGS.keys()].toSorted(), [
+      "max_parallel_workers_per_gather",
+      "plan_cache_mode",
+    ]);
+    assert.deepStrictEqual([...READ_KEYWORDS].toSorted(), [
+      "select",
+      "show",
+      "table",
+      "values",
+      "with",
+    ]);
+  });
+
+  layer(testDatabaseLayer({ maxConnections: 1 }), {
+    excludeTestServices: true,
+  })((dbTest) => {
+    dbTest.effect(
+      "a dying scope finalizer rolls back and leaves the one pooled connection clean",
+      () =>
+        Effect.gen(function* dyingFinalizer() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_finalizer (id int PRIMARY KEY)`;
+
+          const exit = yield* Effect.exit(
+            request(
+              sql`INSERT INTO lifetime_finalizer VALUES (1)`.pipe(
+                Effect.andThen(
+                  Effect.addFinalizer(() =>
+                    Effect.die(new Error("the finalizer fails"))
+                  )
+                )
+              )
+            )
+          );
+
+          assert.isTrue(exit._tag === "Failure");
+          yield* request(sql`INSERT INTO lifetime_finalizer VALUES (2)`);
+
+          const [idle] = yield* sql`
+            SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database() AND state = 'idle in transaction'`.pipe(
+            Effect.flatMap(decodeCount)
+          );
+
+          const rows =
+            yield* sql`SELECT id FROM lifetime_finalizer ORDER BY id`;
+
+          assert.strictEqual(idle?.n, 0);
+          assert.deepStrictEqual(rows, [{ id: 2 }]);
+        })
+    );
+
+    dbTest.effect(
+      "a failed COMMIT discards the connection instead of reusing it",
+      () =>
+        Effect.gen(function* failedCommit() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`
+            CREATE TABLE lifetime_deferred (
+              id int CONSTRAINT lifetime_deferred_id UNIQUE DEFERRABLE INITIALLY DEFERRED
+            )`;
+
+          const before = yield* backendPid;
+
+          const failure = errorOf(
+            yield* Effect.exit(
+              request(
+                sql`INSERT INTO lifetime_deferred VALUES (1), (1)`.pipe(
+                  Effect.asVoid
+                )
+              )
+            )
+          );
+
+          const after = yield* backendPid;
+
+          assert.instanceOf(failure, DatabaseError);
+          assert.strictEqual(
+            failure instanceof DatabaseError ? failure.sqlState : "",
+            "23505"
+          );
+          assert.notStrictEqual(after, before, "a new connection");
+        })
+    );
+  });
+});

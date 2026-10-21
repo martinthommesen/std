@@ -1,0 +1,79 @@
+/**
+ * Stable IDs that code refers to directly. They are fixed in the `core`
+ * definition set files (`packages/server/definitions/core/`) as well, and a
+ * test checks both agree. Platform migrations use the platform class IDs in
+ * the subtree CHECK of each platform table, so these values never change.
+ */
+import type { DefinitionId } from "./ids.ts";
+
+/** The `core` definition set. */
+export const CORE_SET_ID: DefinitionId = "9ca926e7-2dc2-46e6-af99-af0638e5d3ea";
+
+/** The `core` namespace (the `core` Postgres schema, created by migration 0001). */
+export const CORE_NAMESPACE_ID: DefinitionId =
+  "dd189f1d-099a-428c-8a56-ab94b60c933e";
+
+/** Class IDs of the platform tables, by table name in the `core` schema. */
+export const PLATFORM_CLASS_IDS = {
+  access_rule: "051b98ff-3fc2-4155-a6e8-b3d9053a5b9e",
+  change: "edde151d-f204-4639-bcbf-a4793f86a219",
+  class: "7a8a7202-1e01-4d77-bf6f-4ff80876bef6",
+  field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
+  field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",
+  index: "3e7e3e31-2fef-4414-9c85-e37a441a8809",
+  namespace: "53500c6c-063b-423a-b626-a6a938649162",
+  permission: "0d6333e6-d241-4da7-a456-5cafd70db0a4",
+  role: "a425953f-b934-47d6-8ff1-4bbeca1b9370",
+  role_permission: "b16789cc-353b-4f92-9f9a-3683a7f8ec0e",
+  schema_change: "b176d598-bd9d-4b4d-8dd9-87b52eaf992e",
+  schema_change_step: "3d49bff3-7640-48b7-9030-d37b68f8b639",
+  subscription: "31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** A platform table name. */
+export type PlatformTable = keyof typeof PLATFORM_CLASS_IDS;
+
+/** `core.user`, created by the core set. */
+export const USER_CLASS_ID: DefinitionId =
+  "da385db7-b2b7-4a1d-a1a9-42e8e0bb7992";
+
+/** `core.user_role`, created by the core set. */
+export const USER_ROLE_CLASS_ID: DefinitionId =
+  "cc91a08a-b885-4878-ad82-dd4a806bc787";
+
+/**
+ * The system user: the actor of bootstrap and definition loading
+ * (Contracts 3.1). Its `core.user` row is inserted in the change set that
+ * creates `core.user`; it is inactive and cannot sign in.
+ */
+export const SYSTEM_USER_ID: DefinitionId =
+  "1970f1d9-a830-4414-ba8e-210e07952a85";
+
+/** Built-in roles (Contracts 3.1). */
+export const BUILT_IN_ROLE_IDS = {
+  admin: "8e67ee7f-106e-48f9-a8ff-b494fd0999e5",
+  authenticated: "400765a2-d13e-4926-bbf5-b89fd448054c",
+  schema_purger: "e5798e3e-7bbb-46e5-94a1-5e94be04c372",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Built-in permissions (Contracts 3.1), checked by ID. */
+export const PERMISSION_IDS = {
+  "rules.run_as": "6de89171-f738-4ade-aa1b-2817f848899c",
+  "schema.purge": "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9",
+  "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.user` that code reads (sign-in, sessions, labels). */
+export const USER_FIELD_IDS = {
+  active: "df9bb372-d557-445c-a173-66ab4e7a9c7c",
+  login: "b3cabaa4-77cb-4845-9221-2105b21425eb",
+  name: "13160bfb-1a94-4f0b-a29b-bccf701673c0",
+  // oxlint-disable-next-line sonarjs/no-hardcoded-passwords -- a field's stable ID, not a password
+  password: "e122cfbe-11ea-4469-8c9b-14f4eab4aa74",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.user_role` that code reads (effective roles). */
+export const USER_ROLE_FIELD_IDS = {
+  role: "9640bd3e-c66e-4b43-8b4c-31489d37dfc8",
+  user: "f60c3043-b965-42f2-b9ea-a81c3f3ee84d",
+} as const satisfies Readonly<Record<string, DefinitionId>>;

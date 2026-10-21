@@ -1,0 +1,569 @@
+# Platform tables (Contracts 1.9): created by platform migrations, described
+# here so they appear in the API. The loader verifies these descriptions
+# against the tables and never changes the tables.
+tables:
+  - id: 53500c6c-063b-423a-b626-a6a938649162
+    name: core.namespace
+    label: Namespace
+    storage: platform
+    displayField: name
+    fields:
+      - id: cd2b0888-d054-4f9a-b008-6e121088fdae
+        name: owner_layer
+        type: text
+        required: true
+      - id: aa6154ff-ae70-4f10-95e7-f87812f7344a
+        name: owner_set_id
+        type: uuid
+      - id: e181f0e2-6d24-4f2c-8499-4ca689421c82
+        name: state
+        type: text
+        required: true
+      - id: e0854d3b-40c4-416d-b490-6edc04cb23e7
+        name: protected
+        type: boolean
+      - id: c5baf3e8-c28a-47c2-a2e0-aa17d36fa8fc
+        name: name
+        type: text
+        required: true
+      - id: fbdc3dc3-039b-449d-9ff7-ebb32cd0c296
+        name: label
+        type: text
+        required: true
+      - id: 55daf1ef-b572-465d-b6d0-1baf95c58dec
+        name: help_text
+        type: longText
+      - id: 906b7593-22dc-4f2e-9424-192eeba7092a
+        name: storage
+        type: text
+        required: true
+      - id: 0c0d173b-37ab-4a70-ad30-52a4af3cf3b4
+        name: extensible
+        type: boolean
+  - id: 7a8a7202-1e01-4d77-bf6f-4ff80876bef6
+    name: core.class
+    label: Table
+    storage: platform
+    displayField: name
+    fields:
+      - id: c1f3de41-2ce9-4638-a4a2-de31f31a9ec1
+        name: owner_layer
+        type: text
+        required: true
+      - id: e79ffe3c-e5bd-44cf-b33e-9e717d95f7c3
+        name: owner_set_id
+        type: uuid
+      - id: 09f01237-3120-42af-a61b-44e6177e546d
+        name: state
+        type: text
+        required: true
+      - id: af2416a0-c3da-434e-995b-ed39d068331d
+        name: protected
+        type: boolean
+      - id: 17698a0f-6508-44ac-8879-2e4df20138e3
+        name: enforcement
+        type: text
+        required: true
+      - id: 1cabead2-2155-4133-b57d-157b991c4b24
+        name: enforcement_note
+        type: longText
+      - id: 182f3a84-d6c5-4c1d-81bc-a8fe9c2d126a
+        name: namespace_id
+        type: { kind: reference, target: core.namespace }
+        required: true
+      - id: f2443362-d695-4926-87ad-745ccfaa9232
+        name: name
+        type: text
+        required: true
+      - id: dbf4b2c8-f014-4250-bd09-e271a4a91c90
+        name: label
+        type: text
+        required: true
+      - id: 98f79b89-abec-4960-9937-37334fe13440
+        name: help_text
+        type: longText
+      - id: ac088945-b7e1-46a5-a88b-2ff7b2651236
+        name: parent_id
+        type: { kind: reference, target: core.class }
+      - id: 7feed989-1cab-4dd9-8108-292181b9073b
+        name: display_field_id
+        type: { kind: reference, target: core.field }
+      - id: 63a0ec0f-e133-4843-901d-0861697b7192
+        name: storage
+        type: text
+        required: true
+      - id: a9b914f8-3854-4c65-860a-49d97b9137d0
+        name: extensible
+        type: boolean
+  - id: de5ad84a-87aa-45a0-b76b-2ce287e306c2
+    name: core.field
+    label: Field
+    storage: platform
+    displayField: name
+    fields:
+      - id: 9c2fb144-ad40-48c0-98d5-020ab5866dbe
+        name: owner_layer
+        type: text
+        required: true
+      - id: 3e334221-96b6-4a9e-996b-405f604726c1
+        name: owner_set_id
+        type: uuid
+      - id: 29248446-fff8-4662-b26f-20d0802dfa84
+        name: state
+        type: text
+        required: true
+      - id: 4438a729-7d23-4e26-83b8-606a856f2615
+        name: protected
+        type: boolean
+      - id: bcc3314c-e465-4430-8e71-ea5a82eede44
+        name: enforcement
+        type: text
+        required: true
+      - id: 45e9ec6c-601a-4300-a18c-626b341b389e
+        name: enforcement_note
+        type: longText
+      - id: 9b5838af-ffa5-49b0-9161-3875b8376e46
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 27c7a397-d28c-4d55-afec-d2dadb7ef8d7
+        name: name
+        type: text
+        required: true
+      - id: f3557dad-eff9-45c5-9ab7-903d26f65390
+        name: label
+        type: text
+        required: true
+      - id: c9da67ab-31b6-4418-96c7-84c86ce43769
+        name: help_text
+        type: longText
+      - id: 3c633100-5555-412c-972e-c495c98b13e4
+        name: type
+        type: json
+        required: true
+      - id: 8fbb76c6-dc12-4b75-b67a-ef3a8690768a
+        name: required
+        type: boolean
+      - id: 1fe2021b-6a95-4347-abff-354c09656975
+        name: read_only
+        type: boolean
+      - id: 94111e4d-b899-4179-9f6c-81963209e5f5
+        name: default_value
+        type: json
+  - id: e29c0472-668e-40ff-bb0c-8ffa8e8b6f37
+    name: core.field_override
+    label: Field override
+    storage: platform
+    fields:
+      - id: 3b3e2d8f-057f-444b-9545-af6863bac1f7
+        name: owner_layer
+        type: text
+        required: true
+      - id: bd92ba8b-cf20-42da-ae6e-8dbdff4f12e0
+        name: owner_set_id
+        type: uuid
+      - id: 56eef8fa-571a-43ec-b334-991b9c48fe25
+        name: state
+        type: text
+        required: true
+      - id: b6d30b86-c87c-48e7-a8cd-f797562521cf
+        name: protected
+        type: boolean
+      - id: 4486ad0d-77f9-4796-bf31-3c95c8f6fd2b
+        name: enforcement
+        type: text
+        required: true
+      - id: a8448e4a-177c-4b29-9378-638e25ec5532
+        name: enforcement_note
+        type: longText
+      - id: 285e2256-974a-4eb0-ae17-3d312c9c654d
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 7f086ebb-5b4a-4390-adcc-4c3555d7d305
+        name: field_id
+        type: { kind: reference, target: core.field }
+        required: true
+      - id: 3fb343c3-ea8c-4d87-ba21-e17a8aa41bc9
+        name: label
+        type: text
+      - id: 8d081dfb-4ba1-41eb-aa0b-f0ebc29ab409
+        name: help_text
+        type: longText
+      - id: f45b2a18-6f73-4183-9e7a-faf9270b07fb
+        name: required
+        type: json
+      - id: 4094cb59-6912-4dee-b464-29dcfeb7a52a
+        name: read_only
+        type: json
+      - id: 8b7f8d5a-76e7-4a25-8e18-380955bc1528
+        name: max_length
+        type: integer
+      - id: 85b44399-00cf-4859-8f3c-6c87485f1f23
+        name: min_value
+        type: json
+      - id: 5515d3f1-5c73-4143-b460-e22088e7d727
+        name: max_value
+        type: json
+      - id: 1494a398-6d35-4464-833b-83e621a1534b
+        name: default_value
+        type: json
+  - id: 3e7e3e31-2fef-4414-9c85-e37a441a8809
+    name: core.index
+    label: Index
+    storage: platform
+    fields:
+      - id: 9ac81105-135c-48ee-a3c2-32bfa0f798c2
+        name: owner_layer
+        type: text
+        required: true
+      - id: 971708d1-6911-45e6-a95a-46fdb77de975
+        name: owner_set_id
+        type: uuid
+      - id: 3bca0895-2476-4118-a041-0eb7aa1869aa
+        name: state
+        type: text
+        required: true
+      - id: 9efdeb6f-ad4f-45bf-b897-9e1ee453fe17
+        name: protected
+        type: boolean
+      - id: 4209aaf2-aeca-42db-9b7b-4e6f9942dcc5
+        name: enforcement
+        type: text
+        required: true
+      - id: 9b4f997e-70e6-45cf-89be-d46b17114f74
+        name: enforcement_note
+        type: longText
+      - id: 71fd403e-b159-4991-a75e-4e0f039630f8
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: f44f33ed-a62e-47e5-a537-786bcf4499f7
+        name: field_ids
+        type: json
+        required: true
+      - id: e4f761f2-0c33-47e2-8fc4-182a28518e96
+        name: is_unique
+        type: boolean
+  - id: a425953f-b934-47d6-8ff1-4bbeca1b9370
+    name: core.role
+    label: Role
+    storage: platform
+    displayField: name
+    fields:
+      - id: 1aac4a8c-3765-44ff-89ef-01278d8247f7
+        name: owner_layer
+        type: text
+        required: true
+      - id: 5deedff1-fd35-415a-bd3c-ad16e55b6e3d
+        name: owner_set_id
+        type: uuid
+      - id: b1196e8a-ad3b-4f9e-91e9-ad14fae2c915
+        name: state
+        type: text
+        required: true
+      - id: 354e4493-c6e6-4cff-b95b-603671fc4306
+        name: protected
+        type: boolean
+      - id: 1a1c9315-bb43-4dec-9fad-d1cac91f3f0e
+        name: name
+        type: text
+        required: true
+      - id: 56e03835-f7fe-4849-99bf-d277b002b121
+        name: label
+        type: text
+        required: true
+      - id: 18bb769a-deaa-4fff-a4a7-52c3a04ab1ab
+        name: help_text
+        type: longText
+  - id: 0d6333e6-d241-4da7-a456-5cafd70db0a4
+    name: core.permission
+    label: Permission
+    storage: platform
+    displayField: name
+    fields:
+      - id: f3e16b0f-db6e-4f6b-b409-be1bff20d0ea
+        name: owner_layer
+        type: text
+        required: true
+      - id: ba3dcf2c-8e57-4c47-869b-c97e338ec57f
+        name: owner_set_id
+        type: uuid
+      - id: bab6908a-fa9f-4169-9c87-1e8c8f5b31b8
+        name: state
+        type: text
+        required: true
+      - id: b396638e-14fb-4acb-bc90-6aa7a6009041
+        name: protected
+        type: boolean
+      - id: e7200dde-e4a4-4921-acde-14df169da900
+        name: name
+        type: text
+        required: true
+      - id: fa8a95a1-fbea-4258-8eb1-1f26aff96f69
+        name: label
+        type: text
+        required: true
+      - id: e6778995-81c1-469b-ae72-37899aeabd28
+        name: help_text
+        type: longText
+  - id: b16789cc-353b-4f92-9f9a-3683a7f8ec0e
+    name: core.role_permission
+    label: Role permission
+    storage: platform
+    fields:
+      - id: 5194e09b-c10b-4587-afde-736ae332f9b9
+        name: owner_layer
+        type: text
+        required: true
+      - id: 487e60d8-57c6-4b87-a9ea-afd19c856bbb
+        name: owner_set_id
+        type: uuid
+      - id: 7848f106-6c64-4bc1-8d43-2c9d56336f2b
+        name: state
+        type: text
+        required: true
+      - id: 4b45eb1d-f471-40bf-a4dc-9e47f9bcc5c4
+        name: protected
+        type: boolean
+      - id: 5d128e84-b5f5-4834-8d8e-740aec7c14bc
+        name: role_id
+        type: { kind: reference, target: core.role }
+        required: true
+      - id: 33eac68c-d013-47fa-9ab6-809f1fbe7e47
+        name: permission_id
+        type: { kind: reference, target: core.permission }
+        required: true
+  - id: 051b98ff-3fc2-4155-a6e8-b3d9053a5b9e
+    name: core.access_rule
+    label: Access rule
+    storage: platform
+    fields:
+      - id: 7e8403f8-2216-4de9-81ef-401c0fae3f7a
+        name: owner_layer
+        type: text
+        required: true
+      - id: 3e643aef-6508-471c-925f-62b7af40b457
+        name: owner_set_id
+        type: uuid
+      - id: 3f2f3fca-6951-49b7-9e54-54af693eb91f
+        name: state
+        type: text
+        required: true
+      - id: 9b26559b-84f9-4f06-9c3a-6976eec049f4
+        name: protected
+        type: boolean
+      - id: 915bc33c-d77f-4869-b774-7f5ed9c3c0f2
+        name: description
+        type: longText
+      - id: 58e42d19-249c-4f88-b061-ae7731062be9
+        name: effect
+        type: text
+        required: true
+      - id: 689f37e3-9894-405e-8293-e5a60a991fb3
+        name: role_ids
+        type: json
+        required: true
+      - id: 0e964078-cfa5-429c-a0be-a3651ee56ab7
+        name: table_id
+        type: { kind: reference, target: core.class }
+      - id: 3db52576-4320-498c-9bad-fb9cc4f8a697
+        name: target
+        type: text
+        required: true
+      - id: 2668dd6a-6130-459e-8ae9-0997f35a7356
+        name: fields
+        type: json
+      - id: 684008d2-ee43-478b-aff9-154f1a8fb4d9
+        name: actions
+        type: json
+        required: true
+      - id: aaba4d11-eea4-4ed8-adbd-af58d590fef0
+        name: condition
+        type: json
+      - id: 3a56d726-a984-4b43-9614-10a8401c6e0c
+        name: active
+        type: boolean
+  - id: 31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e
+    name: core.subscription
+    label: Subscription
+    storage: platform
+    displayField: name
+    fields:
+      - id: 9249757f-b40b-4854-9da2-9beb86e1aa27
+        name: owner_layer
+        type: text
+        required: true
+      - id: f3d72d33-6877-48d0-a63b-2ef92f3298d6
+        name: owner_set_id
+        type: uuid
+      - id: 3fbbdd93-4119-4773-8d7d-14fd9b5d834b
+        name: state
+        type: text
+        required: true
+      - id: bc5dabac-546f-42fe-b154-d9c97a34a517
+        name: protected
+        type: boolean
+      - id: 6d4becf3-5ef3-4749-8bab-8376cc1a8d8d
+        name: name
+        type: text
+        required: true
+      - id: 91ec4d4c-db3d-4141-a291-bc4323c93a89
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 516a237b-7224-4448-9906-cacc08d82116
+        name: operations
+        type: json
+        required: true
+      - id: 609cb4fc-bb95-41c1-ba7f-bf2de6f72256
+        name: condition
+        type: json
+      - id: c338a6e1-e988-4e82-9bb2-ba9893094aa4
+        name: identity_id
+        type: uuid
+        required: true
+      - id: 316ac0a0-a4f9-4fcd-88ec-1030e16a80db
+        name: max_attempts
+        type: integer
+        required: true
+      - id: 869bccdd-6944-48de-8e05-d9edf218dd47
+        name: dead_letter
+        type: text
+        required: true
+      - id: 5a3872ba-63e6-467c-a020-543ec92e999f
+        name: enabled
+        type: boolean
+  - id: b176d598-bd9d-4b4d-8dd9-87b52eaf992e
+    name: core.schema_change
+    label: Schema change
+    storage: platform
+    fields:
+      - id: 9ff59bed-7b0c-4a9e-af8b-25cd58467452
+        name: requester_id
+        type: uuid
+        required: true
+      - id: a695d07a-9cf2-4f7e-8119-971a8d40022c
+        name: source
+        type: json
+        required: true
+      - id: 9e846611-ea80-4eee-8df7-3a8bf043e03b
+        name: operations
+        type: json
+        required: true
+      - id: 4a256acc-a7ea-435e-94fb-433de93366c8
+        name: state
+        type: text
+        required: true
+      - id: 56e05af0-c8b9-4b38-b87e-4ebba19df65d
+        name: first_revision
+        type: bigInteger
+      - id: 1f31f5b0-ebf7-48ea-b026-f82f08cd9a31
+        name: last_revision
+        type: bigInteger
+      - id: a5fe4bda-4a78-4c2b-bee8-a098b42ea2c1
+        name: error
+        type: longText
+      - id: e0914ade-387a-4e90-96f9-d6e0c2a2a4c8
+        name: coordinator_pid
+        type: integer
+      - id: 3dc0afae-1127-41c8-8616-b04cfc90c030
+        name: committed_at
+        type: dateTime
+      - id: e97856b5-1fe6-4bed-bb4c-eaa6671db1d7
+        name: completed_at
+        type: dateTime
+  - id: 3d49bff3-7640-48b7-9030-d37b68f8b639
+    name: core.schema_change_step
+    label: Schema change step
+    storage: platform
+    fields:
+      - id: 41a958f3-6286-41ae-b05c-73d013b1255a
+        name: change_id
+        type: { kind: reference, target: core.schema_change }
+        required: true
+      - id: 90dbcbbe-c989-4eca-aec0-9ad615c370b7
+        name: ordinal
+        type: integer
+        required: true
+      - id: 314c95aa-da6a-4f67-9b1c-a0d37c7bf65b
+        name: kind
+        type: text
+        required: true
+      - id: fa4d5cd1-35ba-49d9-bc37-0492fee7da37
+        name: target_id
+        type: uuid
+      - id: 1e59d441-5345-48db-8f6a-fd29a530ac58
+        name: sql
+        type: longText
+      - id: 53f16620-14ae-4df6-ae40-00805d6b6713
+        name: details
+        type: json
+        required: true
+      - id: 8ce59f34-afc2-4c73-a705-f7c54e7f36db
+        name: state
+        type: text
+        required: true
+      - id: 958f9c03-45c0-4638-91f6-99f62265668a
+        name: attempts
+        type: integer
+        required: true
+      - id: da1017ea-423a-4b94-8be8-26fdd4618144
+        name: last_error
+        type: longText
+      - id: 294b8987-513d-4367-913e-e4cf5e768e43
+        name: backend_pid
+        type: integer
+      - id: 8cf21f6a-bf8b-4e26-bd1c-e4bcbfd3f736
+        name: started_at
+        type: dateTime
+      - id: 976ddb1b-8039-4ca2-b41b-12c072def543
+        name: finished_at
+        type: dateTime
+  # Change entries (Contracts 4.2), created by platform migration 0004.
+  # Admin-only: others read history through the record history endpoint.
+  - id: edde151d-f204-4639-bcbf-a4793f86a219
+    name: core.change
+    label: Change entry
+    storage: platform
+    fields:
+      - id: f9ca81dc-4fe3-458e-a123-ebd2b4bb943b
+        name: operation_id
+        type: uuid
+        required: true
+      - id: d85fa58a-08e0-41d9-8aa2-212fe38b29ad
+        name: record_id
+        type: uuid
+        required: true
+      - id: 79bb4b97-f9ef-44f1-8430-3eb7a452eb8d
+        name: record_class_id
+        type: uuid
+        required: true
+      - id: 3009476a-8961-40e4-ba12-3bc6d03e0c93
+        name: record_version
+        type: bigInteger
+        required: true
+      - id: b9f55252-2096-4484-ab0a-231779f00c4c
+        name: kind
+        type: text
+        required: true
+      - id: 8a115e60-f76b-4509-b18a-d8dffeb888e3
+        name: actor_id
+        type: uuid
+        required: true
+      - id: 972840ff-53ba-4d4f-ad9e-200ab55b8582
+        name: cause
+        type: json
+        required: true
+      - id: 5b06f89a-ca44-4932-8c3f-7bd54fa712ad
+        name: schema_revision
+        type: bigInteger
+        required: true
+      - id: 5fb1098b-1c46-4da7-a358-4129b565c5f9
+        name: occurred_at
+        type: dateTime
+        required: true
+      - id: e972d8bd-d3e2-4195-9ec0-8c79edc4955a
+        name: fields
+        type: json
+        required: true

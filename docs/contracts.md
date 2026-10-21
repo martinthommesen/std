@@ -54,11 +54,11 @@ Covers how definitions change without breaking references, stalling the applicat
 ### 1.3 How requests and caches see a revision
 
 - Every record-service call, reads included, runs in one READ COMMITTED transaction whose first statement is `SELECT revision, change_set_id FROM core.begin_request()`. The SQL layer refuses isolation levels other than READ COMMITTED for request, batch and worker transactions. Reason: under REPEATABLE READ the snapshot is taken before the lock wait.
-- `core.begin_request()` is a VOLATILE PL/pgSQL function. It takes `pg_advisory_xact_lock_shared(CONFIG_KEY)`, then reads `(revision, change_set_id)`. A VOLATILE function takes a fresh snapshot per query, so the read sees a config commit that finished while the lock call waited [checked: [function volatility](https://www.postgresql.org/docs/18/xfunc-volatility.html)].
+- `core.begin_request()` is a VOLATILE PL/pgSQL function. It takes `pg_advisory_xact_lock_shared(CONFIG_KEY)`, then reads `(revision, change_set_id)`. A VOLATILE function takes a fresh snapshot per query, so the read sees a config commit that finished while the lock call waited [checked: [function volatility](https://www.postgresql.org/docs/18/xfunc-volatility.html)]. Cost: from asking for a request transaction until `begin_request()` returned, p50 0.3 ms and p95 0.5 ms at 15,100 requests/s, and p50 0.4 ms, p95 0.8 ms while 9.6 config commits per second ran [checked: 0F probe 1, decision 0007].
 - Every config commit takes `pg_advisory_xact_lock(CONFIG_KEY)` exclusively first. So no request overlaps a config commit, and each request runs at one revision.
 - Derived artifacts (per-class Effect Schemas, generated SQL, OpenAPI, metadata) are cached under `(revision, change_set_id)`. A process whose cache differs loads the new snapshot before compiling; one load at a time per process. Including `change_set_id` catches a restored database that reaches the same number through different changes. [judgment]
 - Every config commit runs `pg_notify('std_config', '<revision>')` inside its transaction, delivered only on commit [checked: [NOTIFY](https://www.postgresql.org/docs/18/sql-notify.html)]. This is acceptable because config commits are serialized anyway (see 4.1 for why saves do not). Processes LISTEN and reload early. Correctness comes from `begin_request()`, not from NOTIFY.
-- The `listen` stream does not reconnect by itself [checked in effect-smol `main` before 4.0; re-check against the pinned 4.0.5 source]. STD wraps it with retry and re-reads the revision after reconnecting.
+- The `listen` stream does not reconnect by itself [checked: in `@effect/sql-pg` 4.0.5 a lost connection fails every listen queue (`PgConnection.ts` `fatal`) and `LISTEN` is issued once (`listenChannel`); decision 0002]. STD wraps it with retry and re-reads the revision after reconnecting; the 0A smoke test kills the listener with `pg_terminate_backend`.
 - Request transactions set `statement_timeout = 30s` and `idle_in_transaction_session_timeout = 10s` [judgment on values], so an abandoned request cannot hold back a change for long.
 - Long jobs run in batches, each with its own transaction and `begin_request()` (7.6).
 - Every API response carries the revision it was served at (6.2).
@@ -76,7 +76,7 @@ Covers how definitions change without breaking references, stalling the applicat
 
 - `SCHEMA_KEY` is taken with `pg_try_advisory_lock`, never a blocking call under `lock_timeout`. Reason: a timed-out advisory lock request was reported to fail although the lock was granted ([pgsql-bugs #17686](https://www.postgresql.org/message-id/17686-fb1fa3870138e394%40postgresql.org)) [checked the report, not whether it is fixed]. For `CONFIG_KEY` that race does no harm: the timeout aborts the transaction, which releases a transaction-level lock.
 - If another change set holds it, the caller gets `SchemaBusy` (503 with `Retry-After`) naming that change set. No queue in v0.1.
-- The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [spike: the Effect API for a dedicated connection]
+- The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [checked: `PgClient.makeClient` in `@effect/sql-pg` 4.0.5 is a client over one `PgConnection`, outside any pool; decision 0002]
 - Changes without DDL or data preflight (labels, layouts, rules, access rules) take only `CONFIG_KEY`.
 - Lock order is always `SCHEMA_KEY`, `CONFIG_KEY`, table locks. Requests take `CONFIG_KEY` before any table lock. So STD sessions cannot deadlock on these.
 - Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`.
@@ -84,7 +84,14 @@ Covers how definitions change without breaking references, stalling the applicat
 Main transaction of a change set:
 
 1. `BEGIN`; `SET LOCAL lock_timeout = '200ms'` [judgment]; `pg_advisory_xact_lock(CONFIG_KEY)`, which also drains STD requests.
-2. `SET LOCAL lock_timeout = '2s'`; `SET LOCAL statement_timeout = '15s'` [judgment on values].
+2. `SET LOCAL lock_timeout = '2s'`; `SET LOCAL statement_timeout = '15s'` [judgment on values]. The 2 s is a lock budget for the whole attempt, not a limit per lock: Postgres applies `lock_timeout` to each lock acquisition separately, also within one statement, so a statement or a sequence of statements that needs k locks could otherwise wait nearly k × 2 s while every request waits behind `CONFIG_KEY` [checked: [client defaults](https://www.postgresql.org/docs/18/runtime-config-client.html); 0F probe 3b: one `CREATE TABLE` with two foreign keys, each referenced table held by a writer for 1.2 s, committed in a single attempt that held `CONFIG_KEY` 2.44 s under `lock_timeout = '2s'`; probe 3: two `ALTER TABLE`s likewise, 2.44 s]. The budget is enforced like this [judgment]:
+   - Before each DDL statement, the transaction takes every table lock the statement needs explicitly and one at a time, `LOCK TABLE <t> IN <mode> MODE`, root first (the writers' lock order, 2.2 item 3), each after `SET LOCAL lock_timeout = '<remaining budget>ms'`. The locks are the "Explicit locks taken first" column of the DDL table below. The explicit locks are marked `lockWaiting`, so a 55P03 from a `LOCK TABLE` rolls the attempt back and retries it.
+   - Then `SET LOCAL lock_timeout = '<remaining budget>ms'` once more, and the DDL statement runs, also marked `lockWaiting`. There is no statement-level backstop: DDL is catalog work and can legitimately take long (review of 0F measured a `CREATE TABLE` with 1,200 reference columns at 986 ms with its locks held), and a `statement_timeout` would cancel it and misreport it as lock contention.
+   - What the budget covers: every inventoried table lock. Application traffic, STD's own sessions and STD's follow-up steps lock a table before its indexes and take only non-conflicting locks (ACCESS SHARE) on system catalogs, so contention from all of them is fully covered by the explicit locks [checked: 0F probe 3c: for every form in the table, with the listed locks taken first, the DDL holds no relation lock beyond them, its own new relations, indexes of the locked tables and system catalogs; with the target's lock left out of "purge reference field", the guard reports `ACCESS EXCLUSIVE` on the target]. A new DDL form needs its row here and in the guard's inventory.
+   - What it does not cover: the DDL also locks indexes of the locked tables and system catalogs internally, and Postgres cannot `LOCK TABLE` an index, nor is budgeting catalog locks practical. Only sessions that lock an index or a catalog directly contend these: `ALTER INDEX`, `REINDEX`, amcheck, an explicit `LOCK` on a catalog, `VACUUM FULL` or `CLUSTER` of a catalog. The remaining budget is recomputed before each explicit `LOCK TABLE` and once more before each DDL statement, and the value set before a statement is reused for every internal acquisition within it, so each internal wait is capped at the remainder computed when its statement started. The lock-wait time of one attempt is therefore at most the budget × (1 + N), where N counts the contended internal acquisition attempts, reacquisitions included (not distinct relations or blocker sessions); the attempt's ordinary transaction work comes on top [checked: 0F probe 3d: with two open `ALTER INDEX ... RENAME`s on the indexes of a purged reference column, and with SHARE locks on `pg_class` and `pg_type` while a table is created, the DDL waited on each (requesting ACCESS EXCLUSIVE on the indexes, ROW EXCLUSIVE on the catalogs); released after 1.2 s each, one attempt held `CONFIG_KEY` about 2.4 s, within 3 × 2 s; held on, the first wait timed out at the remaining budget (about 2.0 s) and the retry committed. After an explicit `LOCK TABLE` had waited 1.2 s for a reader, an internal index wait timed out after 780 ms, the remainder, and the attempt rolled back at 2,001 ms, near the original 2 s deadline rather than 3.2 s]. Some catalog locks are released before the transaction ends, so sampling `pg_locks` after a statement cannot show every lock it took.
+   - Runbook rule: do not run index or catalog maintenance (`REINDEX`, `ALTER INDEX`, amcheck, `VACUUM FULL` or `CLUSTER` of a catalog) while schema changes are applied.
+   - STD-generated tables have no owned sequences (IDs come from `uuidv7()`), so DDL never locks a sequence; the guard reports any sequence lock as a violation.
+   - [checked: 0F probe 3b with explicit locks: writers on both referenced tables of one `CREATE TABLE` made the first attempt stop at the budget (it held `CONFIG_KEY` 2,001 ms) and the retry committed; an STD request issued during the wait took 1,992 ms. Probe 3: the same with two `ALTER TABLE`s.]
 3. Load definitions, validate, run dependency checks (1.7), in memory.
 4. Run the DDL, only in the forms below.
 5. Write definition rows, definition revisions (4.4), the dependency index, the journal and the audit entry.
@@ -92,24 +99,29 @@ Main transaction of a change set:
 7. `pg_notify`, `COMMIT`.
 
 - Locks are held until the end of the transaction [checked: [explicit locking](https://www.postgresql.org/docs/18/explicit-locking.html)], and without `lock_timeout` a request waits indefinitely [checked: [client defaults](https://www.postgresql.org/docs/18/runtime-config-client.html)].
-- Postgres queues a new lock request behind any waiting request it conflicts with [checked: `waitMask` test in src/backend/storage/lmgr/lock.c, REL_18_STABLE]. So while a config commit waits for `CONFIG_KEY`, new STD requests wait too, and while its DDL waits for a table lock, later requests on that table wait, plain reads included. Per attempt, the request pause is at most the `CONFIG_KEY` wait (200 ms) plus the DDL lock wait (2 s) plus the main transaction's time. Between attempts requests run normally.
-- On lock timeout the transaction rolls back and retries after 0.5, 1, 2 and 4 s with jitter, 5 attempts in total [judgment]. Then `SchemaLockTimeout`, naming the sessions holding conflicting locks (from `pg_locks` and `pg_stat_activity`). Nothing applied, revision unchanged.
+- Postgres queues a new lock request behind any waiting request it conflicts with [checked: `waitMask` test in src/backend/storage/lmgr/lock.c, REL_18_STABLE]. So while a config commit waits for `CONFIG_KEY`, new STD requests wait too, and while its DDL waits for a table lock, later requests on that table wait, plain reads included. Per attempt, the request pause is at most the `CONFIG_KEY` wait (200 ms) plus the DDL lock budget (2 s, enforced as in step 2) plus the main transaction's own work, as long as no session locks an index or a catalog directly; such sessions add up to the remaining budget per contended internal lock (step 2). Between attempts requests run normally. [checked: 0F probe 1 with 8 clients: a small DDL change set holds `CONFIG_KEY` p50 2.9 ms, p95 5.1 ms; a commit blocked by a 30 s request stalled requests 200 ms per attempt (max 205 ms) and gave up after 5 attempts and 8.0 s with `SchemaLockTimeout`, the 30 s request undisturbed; DDL waiting for a table lock held by a plain session stalled requests 2,004 ms, then the retry committed; probe 3: a plain `SELECT` was observed queued behind a waiting `ALTER TABLE` (`pg_blocking_pids`) for 1,989 ms and completed once the attempt rolled back; decision 0007]
+- On lock timeout of the `CONFIG_KEY` wait or of a DDL statement the schema engine marks as lock-waiting, the transaction rolls back and retries after 0.5, 1, 2 and 4 s with jitter, 5 attempts in total [judgment]. Any other lock timeout (`NOWAIT`, a function raising 55P03) fails the change set at once. Then `SchemaLockTimeout`, naming the sessions holding conflicting locks (from `pg_locks` and `pg_stat_activity`). Nothing applied, revision unchanged.
 
 DDL forms STD generates [checked: [ALTER TABLE](https://www.postgresql.org/docs/18/sql-altertable.html), [CREATE INDEX](https://www.postgresql.org/docs/18/sql-createindex.html)]. ALTER TABLE takes `ACCESS EXCLUSIVE` unless the page notes a lower lock, and that is the only mode that blocks plain `SELECT`.
 
-| Operation | Postgres form | Lock | Rewrite or scan | Runs in |
-| --- | --- | --- | --- | --- |
-| Create table (including child table and level FK) | `CREATE TABLE`, plain `CREATE INDEX` | new table invisible until commit; FK takes SHARE ROW EXCLUSIVE on the parent | none | main |
-| Add field | `ADD COLUMN`, no default or a constant default | ACCESS EXCLUSIVE | none: a non-volatile default is stored in the catalog | main |
-| Add reference field | `ADD COLUMN` without `REFERENCES`, then `ADD CONSTRAINT ... FOREIGN KEY ... NOT VALID` | ACCESS EXCLUSIVE on the table; SHARE ROW EXCLUSIVE on both tables for the FK, which blocks writes to the target briefly | none; `VALIDATE` scans | main, then validate as follow-up |
-| Rename | `RENAME`, `RENAME COLUMN` (cannot combine with other subcommands) | ACCESS EXCLUSIVE | none | main |
-| Set or drop default | `ALTER COLUMN SET/DROP DEFAULT` | ACCESS EXCLUSIVE | none | main |
-| Retire a required field | `ALTER COLUMN DROP NOT NULL` | ACCESS EXCLUSIVE | none | main |
-| Purge field | `DROP COLUMN` | ACCESS EXCLUSIVE | none; column becomes invisible, its indexes and constraints are dropped | main |
-| Make required on a table with rows | `ADD CONSTRAINT std_nn_<id> NOT NULL col NOT VALID`, then `VALIDATE CONSTRAINT` (new in 18) | add: ACCESS EXCLUSIVE; validate: SHARE UPDATE EXCLUSIVE | validate scans without blocking reads or writes | add in main, validate as follow-up |
-| Check constraint (max length) | `ADD CONSTRAINT ... CHECK (...) NOT VALID`, then `VALIDATE` | as above | as above | as above |
-| Index or unique index on a table with rows | `CREATE [UNIQUE] INDEX CONCURRENTLY` | SHARE UPDATE EXCLUSIVE | two scans | follow-up, outside any transaction |
-| Drop index | `DROP INDEX CONCURRENTLY` | does not block reads or writes [checked: [DROP INDEX](https://www.postgresql.org/docs/18/sql-dropindex.html)] | none | follow-up, outside any transaction |
+| Operation | Postgres form | Lock | Explicit locks taken first (1.4 step 2) | Rewrite or scan | Runs in |
+| --- | --- | --- | --- | --- | --- |
+| Create root table | `CREATE TABLE` with its unique and check constraints | new table invisible until commit | none | none | main |
+| Create child table with level FK | `CREATE TABLE ... FOREIGN KEY (id, class_id) REFERENCES <parent>` | new table invisible until commit; SHARE ROW EXCLUSIVE on the parent [checked: 0F probe 3] | parent SHARE ROW EXCLUSIVE | none: the FK of a new table is not validated by a scan [checked: 0F probe 3] | main |
+| Class-change trigger | `CREATE TRIGGER ... BEFORE UPDATE` | SHARE ROW EXCLUSIVE on the table (none extra on a table created in the same transaction) | the table SHARE ROW EXCLUSIVE, unless created in this transaction | none | main |
+| Widen an ancestor's subtree check (2.4) | `DROP CONSTRAINT <check>, ADD CONSTRAINT <check> CHECK (...) NOT VALID` | ACCESS EXCLUSIVE | the ancestor ACCESS EXCLUSIVE, root first | none [checked: 0F probe 3] | main |
+| Add field | `ADD COLUMN`, no default or a constant default | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE | none: a non-volatile default is stored in the catalog [checked: 0F probe 5, also with `NOT NULL`] | main |
+| Add reference field | `ADD COLUMN` without `REFERENCES`, then `ADD CONSTRAINT ... FOREIGN KEY ... NOT VALID` | ACCESS EXCLUSIVE on the table for the column; SHARE ROW EXCLUSIVE on both tables for the FK, which blocks writes to the target briefly | column: the table ACCESS EXCLUSIVE; FK: the table, then the target, SHARE ROW EXCLUSIVE | none; `VALIDATE` scans | main, then validate as follow-up |
+| Drop a reference FK | `DROP CONSTRAINT <fk>` | ACCESS EXCLUSIVE on the table and on the target (its FK triggers are dropped) [checked: 0F probe 3c] | the table, then the target, ACCESS EXCLUSIVE | none | main |
+| Rename | `RENAME`, `RENAME COLUMN` (cannot combine with other subcommands) | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE (also when FKs reference it) | none | main |
+| Set or drop default | `ALTER COLUMN SET/DROP DEFAULT` | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE | none | main |
+| Retire a required field | `ALTER COLUMN DROP NOT NULL` | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE | none | main |
+| Purge field | `DROP COLUMN` | ACCESS EXCLUSIVE; its indexes and constraints are dropped under it | the table ACCESS EXCLUSIVE | none; column becomes invisible | main |
+| Purge reference field | `DROP COLUMN` of a column with an FK | ACCESS EXCLUSIVE on the table and on the target (the FK's triggers on the target are dropped) [checked: 0F probe 3c] | the table, then the target, ACCESS EXCLUSIVE | none | main |
+| Make required on a table with rows | `ADD CONSTRAINT std_nn_<id> NOT NULL col NOT VALID`, then `VALIDATE CONSTRAINT` (new in 18) | add: ACCESS EXCLUSIVE; validate: SHARE UPDATE EXCLUSIVE | add: the table ACCESS EXCLUSIVE; validate: n/a (follow-up) | validate scans without blocking reads or writes | add in main, validate as follow-up |
+| Check constraint (max length) | `ADD CONSTRAINT ... CHECK (...) NOT VALID`, then `VALIDATE`; `DROP CONSTRAINT` to remove it | as above; drop: ACCESS EXCLUSIVE | add and drop: the table ACCESS EXCLUSIVE | as above | as above |
+| Index or unique index on a table with rows | `CREATE [UNIQUE] INDEX CONCURRENTLY` | SHARE UPDATE EXCLUSIVE | n/a: follow-up, no `CONFIG_KEY`, `lock_timeout = 0` with the watchdog (1.5) | two scans | follow-up, outside any transaction |
+| Drop index | `DROP INDEX CONCURRENTLY` | does not block reads or writes [checked: [DROP INDEX](https://www.postgresql.org/docs/18/sql-dropindex.html)] | n/a: follow-up (1.5) | none | follow-up, outside any transaction |
 
 - STD adds a reference's FK constraint separately as `NOT VALID`, so no validation scan runs under ACCESS EXCLUSIVE.
 - Refused in v0.1, because each rewrites or scans under ACCESS EXCLUSIVE [checked]: `ADD COLUMN` with a volatile default, identity, stored generated column or constrained domain; `ALTER COLUMN TYPE`; `SET NOT NULL` without a validated constraint that proves it.
@@ -141,15 +153,15 @@ Tightening on a table with rows (required, unique, max length, and child-class o
 
 Coordinator connection:
 
-- It runs `SET tcp_keepalives_idle = 30, tcp_keepalives_interval = 10, tcp_keepalives_count = 3` [judgment on values]. Reason: after a network partition or a host crash with no TCP reset, an idle backend otherwise keeps `SCHEMA_KEY` until the OS keepalive fires, often after 2 hours.
-- STD assumes `client_connection_check_interval = 0` (the default), so a running build is not cancelled when its client disappears. `doctor` reports a different setting.
+- It sets `tcp_keepalives_idle = 30`, `tcp_keepalives_interval = 10` and `tcp_keepalives_count = 3` as startup parameters, so `RESET ALL` keeps them [judgment on values]. Reason: after a network partition or a host crash with no TCP reset, an idle backend otherwise keeps `SCHEMA_KEY` until the OS keepalive fires, often after 2 hours.
+- STD assumes `client_connection_check_interval = 0` (the default), so a running build is not cancelled when its client disappears. `doctor` reports a different setting. [checked: 0F probe 2: with 250 ms the backend of a build whose client process was killed exits 241 to 295 ms after the kill, in a lock wait or mid-scan, leaving an invalid index and releasing `SCHEMA_KEY`; resume would rebuild it]
 - `std schema status` shows the lock holder's PID and client address.
 
 Resume:
 
 - Each server process and `std upgrade` tries `pg_try_advisory_lock(SCHEMA_KEY)` at startup and every 30 s [judgment], on a dedicated connection. Getting it proves no coordinator is alive, because a session lock is released when its backend ends. If nothing is open, it releases the lock at once.
 - The holder resumes change sets in `applying`, probing each unfinished step: `done` is recorded; `partial` is cleaned up and rerun (an invalid index is dropped first, as the docs recommend); `not_started` runs.
-- A build runs on the backend holding `SCHEMA_KEY`, so if the coordinator process dies mid-build, the lock stays held until the build ends and no resume can race it.
+- A build runs on the backend holding `SCHEMA_KEY`, so if the coordinator process dies mid-build, the lock stays held until the build ends and no resume can race it. [checked: 0F probe 2, SIGKILL of the client process with interval 0: the backend kept `SCHEMA_KEY` (another session's `pg_try_advisory_lock` failed) through a 3 s wait and a 2.0 s scan of 10M rows, then left a valid index, or an invalid one (`indisvalid = false`) when a duplicate broke a unique build, and released the lock within 35 ms of the build's end]
 - A step that errors is retried 3 times [judgment], then the change set moves to `needs_attention` and `doctor` reports it. An admin fixes the cause and runs `std schema resume <id>`, or runs `std schema abandon <id>` (abandon actions plus `complete`).
 - A failed concurrent unique build leaves an invalid index that still enforces uniqueness [checked], so abandon drops it at once.
 
@@ -170,7 +182,7 @@ Resume:
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), each registered when its feature lands.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
 
 | Operation | Refused when | Reported but allowed |
@@ -197,8 +209,9 @@ Resume:
 ### 1.9 Minimal migration mechanism
 
 - **Platform tables** (`core.config_state`, definition tables, `core.definition_revision`, journal, config layer tables, migration ledger, outbox, import bookkeeping) are owned by platform migrations. Core definition files describe them so they appear in the API; the loader verifies them and never changes them. Reason: a change set cannot create the tables it writes into.
+- Platform tables laid out like root classes keep `created_by` and `updated_by` without a foreign key: `core.user` is created later, by the core set. Set loads write the system user's ID (a fixed ID, inserted into `core.user` by the change set that creates it); `doctor` checks that every audit ID on a platform table exists in `core.user`. Tables without `id` (`core.config_state`, `core.config_dependency`, `core.definition_revision`, the ledger) are internal and not described as classes. [judgment, decision 0006]
 - **Core definition tables** (for example `core.user`) are ordinary STD tables loaded through change sets.
-- Migrations are numbered, forward-only files, recorded in `core.platform_migration (id, checksum, std_version, applied_at)`. No down migrations; rollback is restoring the backup taken before the upgrade. Reason: down migrations are rarely tested and lose data.
+- Migrations are numbered, forward-only files (TypeScript modules that list their statements one by one, because the driver has no simple-query protocol to run a multi-statement script), recorded in `core.platform_migration (id, checksum, std_version, applied_at)`. No down migrations; rollback is restoring the backup taken before the upgrade. Reason: down migrations are rarely tested and lose data.
 - Kind `tx` (default) runs in one transaction with its ledger row. Kind `concurrent_index` is one `CREATE INDEX CONCURRENTLY` with a fixed name: the runner probes `pg_index` (valid: record; invalid: drop and rebuild; missing: build).
 - Migrations follow the DDL table and timeouts in 1.4.
 - The server refuses to start if a migration is pending, if the ledger holds one the code does not know, or if an applied checksum differs.
@@ -244,7 +257,7 @@ Checks:
 - Adding a field with a constant default to a 1,000,000-row table leaves `relfilenode` unchanged, finishes under 100 ms [judgment] and does not increase `pg_stat_user_tables.seq_scan`. Adding a required field without a default to a table with rows is refused with `ExistingDataViolates` before any SQL runs.
 - Every DDL statement in the SQL snapshots matches the 1.4 table; volatile defaults, type changes and direct `SET NOT NULL` are refused before any SQL runs.
 - While psql holds an open transaction on `acme.asset`, adding a field fails after 5 attempts with `SchemaLockTimeout` naming its PID; nothing applied; per attempt no STD request waits longer than the `CONFIG_KEY` wait plus the DDL lock wait plus the main transaction's time.
-- Request latency is measured during a config commit while a 30 s request and an import batch are in flight; the result is committed with the 0F probes.
+- Request latency is measured during a config commit while a 30 s request and an import batch are in flight; the result is committed with the 0F probes [done: `packages/probes/results/2026-10-21.md`, decision 0007; the CI test `probe-config-pause` keeps the 30 s case].
 - Tightening an override on a 1,000,000-row subtree: the request pause is measured and does not include the preflight scan; rows written during the window are reported and the `validate_override` step ends `enforced` or `failed`.
 - A second DDL change set during the first one's follow-up phase gets `SchemaBusy`, while a label change at the same moment succeeds.
 - Making a field required on a table with nulls is refused with count and samples; after a backfill it succeeds with a validated constraint.
@@ -314,7 +327,9 @@ Runs as a change set (1.4), ancestors altered root first, the same order writers
 
 1. For each ancestor, `DROP CONSTRAINT <subtree check>, ADD CONSTRAINT ... CHECK (...) NOT VALID`. ACCESS EXCLUSIVE, but no scan, so brief.
 2. Create the child table with its level FK (SHARE ROW EXCLUSIVE on the parent).
-3. No VALIDATE. The NOT VALID check already applies to new rows, and the old validated check implies the new one, so a scan of every ancestor would gain nothing. The widened check is recorded as `enforced` with a note saying so, and `doctor` check 3 accepts that state. [judgment]
+3. No VALIDATE. The NOT VALID check already applies to new rows, and the old validated check implies the new one, so a scan of every ancestor would gain nothing. The widened check is recorded as `enforced` with a note saying so, and `doctor` check 3 accepts that state. [judgment; checked: `inheritance.test.ts` adds a grandchild to a hierarchy of 2,000 records, `seq_scan` of both ancestors unchanged, `convalidated` false]
+
+Measured [checked: 0F probe 3, a grandchild added to a 1,000,000-record hierarchy]: the main transaction took 6.6 ms (each widened check 0.3 to 0.4 ms); it held ACCESS EXCLUSIVE on the root and the parent and SHARE ROW EXCLUSIVE on the parent; no ancestor was scanned (`pg_stat_xact_user_tables.seq_scan` 0) or rewritten (`relfilenode` unchanged). A reader holding an ancestor past 2 s makes the attempt time out (after 2,001 ms), roll back with the revision unchanged, and retry.
 
 Accepted cost: adding a class briefly locks every ancestor. Rejected alternatives [judgment]: a shared `core.class_ancestry` table with an FK from every level row (hot row under concurrent inserts), and the root-to-class path stored on every row (wider rows and indexes; the fallback if ancestor locks are a problem).
 
@@ -411,6 +426,8 @@ Built-in rules: allow `admin` everything on `*`; allow `authenticated` read on `
 - Alice has role `asset_manager`; Bob has `employee`.
 - Fixture: Bob owns laptop L (cost 1200, docked to Alice's monitor), monitor M (cost 300, not docked) and plain asset S (cost 2500, status `lost`). Alice owns that monitor and a laptop K.
 
+The rule numbers run 1, 2a to 2c and 3 to 10: twelve rules (`examples/acme/access.yaml`).
+
 | # | Effect | Role | Class and target | Actions | Condition |
 | --- | --- | --- | --- | --- | --- |
 | 1 | allow | asset_manager | asset records | all |  |
@@ -445,6 +462,8 @@ It exercises row visibility, a never-readable field, a conditionally readable fi
 - **Non-interference guarantee:** the rows, their order, the count and which fields are present depend only on values the caller can read and on the outcomes of the access-rule conditions that apply to the caller. Equivalently: for fixed rule outcomes (which records are visible, which fields are withheld on each), they depend only on values the caller can read.
 - A rule condition may read fields the caller cannot read (rule 10). That disclosure is the rule author's choice, and the rule editor warns when a condition reads a field that some role it applies to cannot read [judgment].
 - Cost: masked expressions cannot use a plain index; always fields compile bare. [judgment]
+- Sorts on text compare the field's comparison key (`casefold` for case-insensitive text) under `pg_unicode_fast`, so the order is by code point, independent of the database's default collation; password, secret, json and condition fields cannot be sorted. [judgment, decision 0008]
+- Branch form: when the caller's visibility has several top-level ORs (class groups or allow conditions), a page is a `UNION ALL` of disjoint branches (`AND NOT COALESCE(<earlier branches>, false)`), each with the full filter, cursor, `ORDER BY` and `LIMIT`, merged by the same order and limit; results equal the plain form's (property-tested). Counts use the plain form. Branch-form pages run unprepared with custom plans and no parallel workers (decision 0008).
 - Counts use the same `FROM` and `WHERE` as the page and are returned only on request (6.6). No total or "has more" flag comes from an unrestricted query.
 
 ### 3.6 References
@@ -480,6 +499,9 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `SchemaChanged` | 409 | see 6.4 |
 | `InvalidReference` | 422 | target does not exist or is not visible; identical |
 | `Referenced` | 409 | delete refused because other records reference it; no count or names |
+| `Unauthenticated` | 401 | no bearer token, an unknown or expired one, or an inactive user |
+| `InvalidCredentials` | 401 | sign-in refused; unknown login, wrong password and deactivated user alike |
+| `InvalidRequest`, `InvalidFilter`, `InvalidCursor` | 400 | a malformed query parameter, a filter that does not parse or check (after names resolve), a cursor not issued for this sort |
 
 - Raw Postgres error text is never returned (constraint details contain values); it goes to server logs only. Constraint names encode IDs, so violations map to fields without parsing messages.
 - Accepted leaks: a unique conflict reveals a value is taken; `Referenced` reveals some reference exists. Timing channels are out of scope for v0.1.
@@ -546,12 +568,12 @@ Every save (create, update, delete; single or batch) runs in one transaction:
 8. Proposed-state access checks (`NotAllowed`, rollback).
 9. Write the change entry (4.2) and one delivery row per matching subscription (4.6).
 10. After-write hooks.
-11. If outermost, commit. After commit, outside the transaction, send a worker wake-up, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE].
+11. If outermost, commit. After commit, outside the transaction, send a worker wake-up if the transaction wrote a delivery row, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE; 0F probe 6, 16 clients of small saves for 60 s: after-commit wake-up 2,643 saves/s at p95 10.1 ms, in-transaction `pg_notify` 296 saves/s at p95 103.5 ms, 11% of the throughput].
 
 Nested saves:
 
 - A nested save joins the outer transaction and never opens a savepoint.
-- If a nested save fails after its first write, the transaction is poisoned. The SQL layer refuses to commit a poisoned transaction (it rolls back and logs a defect), whether or not the caller handled the error. The same rule applies to hooked rows in `saveBatch` (7.7).
+- If a nested save fails after its first write, the transaction is poisoned. The SQL layer counts every statement as a potential write unless the code that built it marks it read-only, so it never infers a write from statement text. The SQL layer refuses to commit a poisoned transaction (it rolls back and logs a defect), whether or not the caller handled the error. The same rule applies to hooked rows in `saveBatch` (7.7).
 - The record service tracks which records are in the current save stack and refuses a nested save to any of them with `RecordInSave`, which fails the outer save. Reason: otherwise a hook that writes B, whose hook writes A, changes A after A's proposed-state check.
 
 Hooks and record rules are selected by the record's concrete class: those attached to it and to every ancestor run, whichever endpoint is used. Order: by order number, then stable hook ID.
@@ -567,13 +589,13 @@ Hooks and record rules are selected by the record's concrete class: those attach
 - Nesting depth is capped at 8 (`HookDepthExceeded`), also along after-commit `cause` chains. [judgment]
 - **After-commit effects (decision):** when an effect only writes through the record service, its writes and the fenced `done` update commit in one transaction, so in-database effects happen exactly once. External calls stay at least once, run outside any transaction, and receive `change_id` as their idempotency key. Reason: admins configure after-commit rules without code, so they cannot make them idempotent.
 - Record rules (Step 3): a "before" rule is before-write; an "after" rule chooses after-write (synchronous, can fail the save) or after-commit (asynchronous, cannot).
-- A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued.
+- A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued. Inside an STD transaction, Effect's nested `withTransaction` dies before it sends anything, and the SQL layer refuses `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` statements [checked: 0A smoke test].
 
 ### 4.2 Change entries
 
 Each committed version of a logical record has exactly one change entry, written in step 9. A no-op writes none. A delete's change entry and its deliveries carry `record_version` = current version + 1.
 
-`core.change` columns: `change_id` (UUIDv7, the idempotency key everywhere); `operation_id` (one per outermost transaction); `record_id`; `class_id`; `record_version`; `kind` (`create`, `update`, `delete`); `actor_id`; `cause` (`api`, `ui`, `import` with job and row, `hook` with hook and parent change, `after_commit` with subscription and parent change, `system`); `schema_revision`; `occurred_at` (informational, never used for ordering); `fields`, a map from field ID to `{before, after}` in canonical JSON (create: all non-empty `after`; update: changed fields; delete: all `before`). References store the ID only, never a label.
+`core.change` columns: `change_id` (UUIDv7, the idempotency key everywhere); `operation_id` (one per outermost transaction); `record_id`; `class_id` (column `record_class_id`, because `core.change` is laid out like a platform table whose own `class_id` is its platform class; decision 0009); `record_version`; `kind` (`create`, `update`, `delete`); `actor_id`; `cause` (`api`, `ui`, `import` with job and row, `hook` with hook and parent change, `after_commit` with subscription and parent change, `system`); `schema_revision`; `occurred_at` (informational, never used for ordering); `fields`, a map from field ID to `{before, after}` in canonical JSON (create: all non-empty `after`; update: changed fields; delete: all `before`). References store the ID only, never a label.
 
 - `UNIQUE (record_id, record_version)`: every version bump, and every delete, has exactly one entry, whichever endpoint the save came through.
 - Writes to other records in the same transaction are separate entries with the same `operation_id`.
@@ -605,8 +627,8 @@ Delivery payloads are filtered for the subscription's identity on the version's 
 
 Producer side (Step 1):
 
-- `core.subscription` is a config record (stable ID, owner layer): class (descendants included), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy.
-- In step 9 each enabled subscription for the class is evaluated in TypeScript on `after` (on `before` for delete). Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`. The payload is built from the change entry at delivery time (4.5).
+- `core.subscription` is a config record (stable ID, owner layer), written through change sets: class (descendants included; never a platform table, whose rows do not pass the save pipeline), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy, `enabled`.
+- In step 9 each active, enabled subscription of the record's concrete class or an ancestor that lists the operation is evaluated in TypeScript on `after` (on `before` for delete), with the request's snapshot. A stored condition that no longer checks against the snapshot is a defect and fails the save. Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`; `subscription_id` and `change_id` are `NO ACTION` foreign keys (3.10, 4.8), and a lease exists exactly while a row is `in_flight`. A row holds IDs only; the payload is built from the change entry at delivery time (4.5). Decision 0013.
 
 Worker (Step 3):
 
@@ -614,7 +636,7 @@ Worker (Step 3):
 - Fencing: the done and failure updates are `WHERE id = $1 AND lease_token = $2 AND status = 'in_flight'`. If 0 rows change, the worker has lost the lease and discards its result; in a delivery transaction that holds record writes, it rolls the whole transaction back. Expired leases are claimable again, and each claim writes a new token.
 - The worker interrupts its effect before `lease_until`. The lease must exceed the effect timeout plus a margin [judgment].
 - Record-service effects run in one delivery transaction that ends with the fenced `done` update (4.1). External calls run outside any transaction, then the fenced `done` update commits.
-- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h [judgment]. After `max_attempts` (default 10 [judgment]) it is `dead`, shown in an admin view and a metric, for an operator to retry or discard.
+- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]), or the expiry of the last allowed claim's lease (dead-lettered by the next claim), makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
 - Wake-ups (4.1 step 11) only wake workers; they also poll.
 - `done` rows are deleted after 7 days [judgment]; `dead` rows stay.
 - A new subscription receives changes committed after it is created; a change in flight at that moment may or may not get a row [judgment]. Backfill is later.
@@ -634,7 +656,7 @@ order by p.id limit $2
 for update skip locked
 ```
 
-Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven by the SQL-level claim tests and the soak test]
+Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`; the plan uses it both for the claimed rows and for the ordering check [checked: EXPLAIN in the `outbox-claims` test, decision 0013]. The claim commits in its own transaction before the effect starts. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven at SQL level by the `outbox-claims` tests (decision 0013); the soak test is Step 3]
 
 **Considered: a commit-visibility feed** that reads entries stamped with `pg_current_xact_id()` below `pg_snapshot_xmin(pg_current_snapshot())`. This is a safe visibility watermark but gives first-write order, not commit order [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html), [transaction IDs](https://www.postgresql.org/docs/18/transaction-id.html)]. Rejected because one long or idle-in-transaction session anywhere in the cluster stalls every consumer, consumers would still need record versions and per-consumer retry state, and stored XIDs mean nothing after a logical restore into a new cluster [judgment].
 
@@ -787,19 +809,19 @@ Why not a nondeterministic ICU collation [judgment]: ICU behavior changes with t
 
 Deterministic but surprising, identical in both engines: `ß` ≡ `ss`, `ﬁ` ≡ `fi`, `σ` ≡ `ς` ≡ `Σ`; accent-sensitive (`é` is not `e`); no Turkish rule (`İ` folds to `i` plus U+0307); folding is not re-normalized; default-ignorable characters are not ignored.
 
-SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the literal folded in TypeScript; pattern operators use `LIKE $1` with a TypeScript-built pattern (fold, escape `\`, `%`, `_`, add `%`). Folded equality and uniqueness use an expression index on the casefold expression [checked: `casefold` is IMMUTABLE, `pg_proc.provolatile = 'i'` in Postgres 18.6]. Unique text fields are unique by key [judgment]. A Postgres upgrade with new Unicode data can change folds for newly assigned code points, so the upgrade procedure regenerates the table and reindexes folded indexes, and `doctor` compares the fold table's version with `unicode_version()` [judgment].
+SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the literal folded in TypeScript; pattern operators use `LIKE $1` with a TypeScript-built pattern (fold, escape `\`, `%`, `_`, add `%`). Folded equality and uniqueness use an expression index on the casefold expression [checked: `casefold` is IMMUTABLE, `pg_proc.provolatile = 'i'` in Postgres 18.6; 0F probe 4: the index is built concurrently, used by bound-parameter equality (idx_scan, no seq_scan), and as a unique index refuses `STRASSE` after `Straße` and `σας` after `ΣΑΣ`]. Unique text fields are unique by key [judgment]. A Postgres upgrade with new Unicode data can change folds for newly assigned code points, so the upgrade procedure regenerates the table and reindexes folded indexes, and `doctor` compares the fold table's version with `unicode_version()` [judgment].
 
 ### 5.6 Numbers
 
 - Integer (`int4`) is a JS `number`; big integer (`int8`) is a `bigint`.
 - Decimal is `{ coefficient: bigint; scale: number }` in STD's values package; comparison rescales and compares bigints. A decimal library is chosen when arithmetic arrives and is tested against Postgres `numeric`. [judgment]
-- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date`, `timestamptz`, `json` and `jsonb` in Postgres's text form and parses them itself (`@std/values/postgres-text`). @effect/sql-pg 4.0.5 speaks only the binary format, so the text form comes from codecs registered through the driver's `types` registry option that render each binary value exactly as the type's output function does (the `@std/values` test helper is a working example, checked against `::text` casts) [checked: `PgTypes.ts` in @effect/sql-pg 4.0.5, `postgres-text.test.ts`]. The built-in codecs differ from the text form: `timestamptz` decodes to a `Date` truncated to milliseconds (sub-millisecond digits are lost silently, years outside JavaScript's range give an invalid `Date`), `date` uses astronomical years for BC, and `json`/`jsonb` go through `JSON.parse` (last duplicate wins, digits rounded); only `numeric` (a string) and `int8` (a `bigint`) are exact. Decimal literals are cast to unconstrained `numeric`, never `numeric(p, s)`, which would round. Reason: driver conversions can lose precision or shift dates. [judgment]
+- SQL literals are bound as text with casts (`$1::numeric`). STD's SQL layer reads `numeric`, `int8`, `date`, `timestamp`, `timestamptz`, `json` and `jsonb` in Postgres's text form and parses them itself (`@std/values/postgres-text`). @effect/sql-pg 4.0.5 speaks only the binary format, so STD's SQL layer registers codecs through the driver's `types` registry option that render each binary value exactly as the type's output function does under `DateStyle = ISO` and `TimeZone = UTC` (`@std/server/sql/text-codecs`) [checked: `PgTypes.ts` in @effect/sql-pg 4.0.5, `postgres-text.test.ts`; the 0A smoke test compares every read with `::text`, edge values included; decision 0002]. The built-in codecs differ from the text form: `timestamptz` decodes to a `Date` truncated to milliseconds (sub-millisecond digits are lost silently, years outside JavaScript's range give an invalid `Date`), `date` uses astronomical years for BC, and `json`/`jsonb` go through `JSON.parse` (last duplicate wins, digits rounded); only `numeric` (a string) and `int8` (a `bigint`) are exact. Decimal literals are cast to unconstrained `numeric`, never `numeric(p, s)`, which would round. Reason: driver conversions can lose precision or shift dates. [judgment]
 - Literals must fit the type's range. Decimal literals have at most 100 digits [judgment]. NaN and infinities do not exist in STD.
 
 ### 5.7 Dates, date-times and time zones
 
 - **Date**: `YYYY-MM-DD`, years 0001 to 9999, proleptic Gregorian; kept as the canonical string, whose order equals date order.
-- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [checked: the driver's `startupParameters: { TimeZone: "UTC", DateStyle: "ISO" }` sets both; `postgres-text.test.ts`]. Kept as epoch milliseconds.
+- **Date-time**: UTC instant with millisecond precision, `timestamptz(3)`. Sessions run with `TimeZone=UTC`, `DateStyle=ISO` [checked: the driver's `startupParameters: { TimeZone: "UTC", DateStyle: "ISO" }` sets both in every connection's startup packet; `postgres-text.test.ts`; the 0A smoke test confirms them on pooled and dedicated connections and after `RESET ALL`]. Kept as epoch milliseconds.
 - A date never compares directly with a date-time.
 - The evaluation context carries `now`, `timeZone` (IANA) and `weekStart` (default Monday). Resolution in TypeScript turns `ctx` and `rel` into literals and `inPeriod` into `ge(f, start) and lt(f, end)`; day and larger offsets are calendar arithmetic in `timeZone`, minute and hour offsets exact durations. The resolver uses Temporal, enabled by default in Node 26 [checked: Node 26 release notes]; the web app uses a pinned polyfill where missing [unverified per browser].
 - Time zone: the filter profile uses the user's zone (falling back to the instance zone); every profile that decides what a save may do uses the instance zone. Reason: a preference must not change an access or validation outcome. [judgment] The browser never uses the device zone.
@@ -933,7 +955,7 @@ The representation of every type is fixed in Step 1, including types implemented
 - Big integer and decimal are strings because common JSON parsers lose precision; JSON numbers are refused, not converted [judgment].
 - Json: duplicate keys and numbers not exactly representable as a double are refused, because `jsonb` keeps the last duplicate and keeps digits that `JSON.parse` rounds. The canonical output is jsonb's key order (shorter UTF-8 byte length first, then bytewise), written by `stringifyJson` because JS objects put integer-like keys first. A number is exactly representable when its literal denotes the same decimal value as the shortest round-trip form of the double it parses to, so `0.1` is accepted and `0.1000000000000000055511151231257827` is refused; integral values beyond ±(2^53 - 1), such as `1e300`, are refused as well. `jsonb` refuses `\u0000` itself. Both engines compare json values by jsonb equality. [judgment]
 - Choice keys: 1 to 63 characters of `[a-z0-9_]`, starting with a letter or digit; validated by the record service so lists change without DDL [judgment].
-- Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [spike: `relfilenode` unchanged, under 100 ms on 1M rows, `seq_scan` unchanged].
+- Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [checked: 0F probe 5 on 1,000,000 rows: `relfilenode` unchanged, 0.4 ms for the statement and 4.1 ms for the config commit, `seq_scan` unchanged; a volatile default rewrote the table in 448 ms; checked: `change-sets.test.ts` on 1,000,000 rows, also for `integer NOT NULL DEFAULT 1`: `relfilenode` unchanged, `seq_scan` unchanged, main transaction 3 ms; decision 0006].
 - System date-times come from one clock reading per transaction, already in whole milliseconds.
 - Password and secret conditions may use only `empty` and `notEmpty`, server-side.
 - History stores canonical JSON with the schema revision (4.2).
@@ -966,7 +988,9 @@ The representation of every type is fixed in Step 1, including types implemented
 
 - `id`, `class` (concrete class) and `version` are envelope members; filters reach them as paths. A write body naming them gets `ReadOnlyField`. The expected version travels in `If-Match` (6.7).
 - `values` is keyed by field name; a followed reference appears under its dotted path. A value's shape depends only on its type.
-- `labels` only on request; absent when not permitted (3.6), never a placeholder.
+- `labels` only on request (`labels=true`); absent when not permitted (3.6), never a placeholder.
+- A path value (`docked_to.name`) is null when the reference is empty or its target or field is hidden, like a label it does not tell these apart; the key is absent only when the reference itself is withheld. [judgment, decision 0008]
+- Through a parent endpoint, single reads show the endpoint's fields too (2.3); `class` names the concrete class.
 - An absent key means "not delivered". `withheld` lists selected fields omitted by access rules on this record, so the UI shows "restricted"; it reveals nothing the absent key does not. `null` always means a stored empty.
 - Lists: `{ "schemaRevision", "records", "nextCursor", "count" }`. `nextCursor` is null on the last page. `count` is present only on request (`count=true`) and is computed with the page's `FROM` and `WHERE` (3.5).
 
@@ -1234,7 +1258,7 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 
 ## Open questions for Martin
 
-1. **Global pause on config commits.** Every config commit, including a label edit, briefly pauses all requests through the exclusive `CONFIG_KEY`. Per attempt the pause is bounded by the `CONFIG_KEY` wait (200 ms) plus the DDL lock wait (2 s) plus the main transaction's time. Default: accept for v0.1 and measure the pause in Stage 0; per-table locking only if measured pauses are a problem.
+1. **Global pause on config commits.** Every config commit, including a label edit, briefly pauses all requests through the exclusive `CONFIG_KEY`. Per attempt the pause is bounded by the `CONFIG_KEY` wait (200 ms) plus the 2 s DDL lock budget (1.4 step 2) plus the main transaction's own work; index or catalog maintenance running at the same time can add up to the remaining budget per internal lock it contends. Default: accept for v0.1 and measure the pause in Stage 0; per-table locking only if measured pauses are a problem. Measured (decision 0007): a small change set pauses requests about 3 ms (p95 5 ms); a commit blocked by a long request costs 200 ms per attempt, 5 attempts; DDL waiting for a lock held outside STD costs up to the 2 s lock budget per attempt, which 1.4 now enforces per attempt by taking every table lock of a DDL statement explicitly under the remaining budget, from an inventory a CI guard keeps complete (`lock_timeout` alone is per lock); index and catalog locks taken inside the DDL are capped at the remaining budget each, and only direct index or catalog maintenance contends them. Recommendation: accept, and keep index and catalog maintenance out of schema-change windows.
 2. **Offline upgrades.** Default: v0.1 upgrades run with servers stopped. The alternative, rolling upgrades now, needs expand-and-contract rules for every migration and definition change.
 3. **Case-insensitive text by default.** Default: yes, Unicode full case folding, accent-sensitive, with a per-field `caseSensitive` opt-out.
 4. **One access-rule condition for both states.** Default: one condition is checked against the existing and the proposed record, for record and field rules alike, so handing a record to someone else needs a broader rule. The alternative is a separate proposed-state condition, like RLS `WITH CHECK`.

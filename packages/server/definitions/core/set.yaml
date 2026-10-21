@@ -1,0 +1,16 @@
+# The core definition set (Contracts 1.8, 3.1). Every definition is
+# protected: it accepts no local change except label and help-text
+# overrides. IDs are fixed here, so every install has the same ones.
+set:
+  id: 9ca926e7-2dc2-46e6-af99-af0638e5d3ea
+  name: core
+  layer: core
+  version: 1
+  protected: true
+
+namespaces:
+  # The `core` schema itself is created by platform migration 0001.
+  - id: dd189f1d-099a-428c-8a56-ab94b60c933e
+    name: core
+    label: Core
+    storage: platform

@@ -1,0 +1,99 @@
+/**
+ * Explicit marks on statements run inside an STD transaction.
+ *
+ * The transaction layer never infers what a statement does from its text.
+ * By default every statement the transaction's code runs counts as a
+ * potential write (so a nested unit that fails after it is poisoned) and a
+ * lock timeout it raises is not retried. Code that constructs a statement
+ * itself and knows better says so:
+ *
+ * - `readOnly(statement)`: the statement only reads. A nested unit whose
+ *   statements were all marked read-only may fail without poisoning the
+ *   transaction. It takes one statement value, not an effect, and only one
+ *   starting with a read keyword. Mark only statements you built as plain
+ *   reads; a `SELECT` that calls a writing function is not one. With
+ *   `{ unprepared: true }` the statement runs unprepared, so Postgres plans
+ *   it for its actual parameters instead of reusing a generic plan.
+ * - `lockWaiting(statement)`: the statement is DDL run under the config
+ *   commit's 2 s `lock_timeout`, so its lock timeout (SQLSTATE 55P03) makes
+ *   the config commit roll back and retry (Contracts 1.4).
+ */
+import { Context, Effect, Predicate } from "effect";
+import { Statement } from "effect/sql";
+import type { SqlError } from "effect/sql/SqlError";
+
+/** Options of `readOnly`. */
+export interface ReadOnlyOptions {
+  /**
+   * Run the statement unprepared (`Statement.unprepared`). The read rules
+   * are the same; only how the statement is sent changes.
+   */
+  readonly unprepared?: boolean;
+}
+
+/** The marks of the statements an effect runs. */
+export interface StatementMarksValue {
+  readonly readOnly: boolean;
+  readonly lockWaiting: boolean;
+}
+
+/** No marks: a potential write whose lock timeout is not retried. */
+export const NO_STATEMENT_MARKS: StatementMarksValue = {
+  lockWaiting: false,
+  readOnly: false,
+};
+
+/** The marks in effect for the statements of the current fiber. */
+export const StatementMarks = Context.Reference<StatementMarksValue>(
+  "@std/server/sql/statement-marks/StatementMarks",
+  { defaultValue: () => NO_STATEMENT_MARKS }
+);
+
+const withMark = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  mark: Partial<StatementMarksValue>
+): Effect.Effect<A, E, R> =>
+  StatementMarks.pipe(
+    Effect.flatMap((marks) =>
+      Effect.provideService(effect, StatementMarks, { ...marks, ...mark })
+    )
+  );
+
+/**
+ * Marks one statement as a read. Only a single statement built with the
+ * `SqlClient` tagged template (or `sql.unsafe`) is accepted, never an
+ * arbitrary effect, so the mark cannot spread over other statements; and
+ * the transaction refuses the mark unless the statement starts like a read
+ * (`SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`) and holds no write clause.
+ * @param statement - A statement the caller built as a plain read.
+ * @param options - `unprepared` to send it unprepared.
+ * @returns The statement, marked.
+ */
+export const readOnly = <A>(
+  statement: Statement.Statement<A>,
+  options?: ReadOnlyOptions
+): Effect.Effect<readonly A[], SqlError> => {
+  if (
+    !Statement.isFragment(statement) ||
+    !Predicate.hasProperty(statement, "compile")
+  ) {
+    return Effect.die(new TypeError("readOnly accepts a single SQL statement"));
+  }
+
+  return withMark(
+    options?.unprepared === true ? statement.unprepared : statement,
+    {
+      readOnly: true,
+    }
+  );
+};
+
+/**
+ * Marks the statements of `effect` as DDL waiting for table locks under the
+ * config commit's `lock_timeout`, whose timeout is retried.
+ * @param effect - Usually one DDL statement of a config commit.
+ * @returns The same effect.
+ */
+export const lockWaiting = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> => withMark(effect, { lockWaiting: true });

@@ -1,0 +1,47 @@
+# Users and their roles (Contracts 3.1). `core.user` is an ordinary STD
+# table created by this set; admins may add local fields to it
+# (`extensible`). User-role assignments are data, not configuration.
+tables:
+  - id: da385db7-b2b7-4a1d-a1a9-42e8e0bb7992
+    name: core.user
+    label: User
+    displayField: name
+    extensible: true
+    fields:
+      - id: 13160bfb-1a94-4f0b-a29b-bccf701673c0
+        name: name
+        type: text
+        required: true
+      - id: b3cabaa4-77cb-4845-9221-2105b21425eb
+        name: login
+        type: { kind: text, maxLength: 100 }
+        required: true
+        helpText: Unique, compared without regard to case.
+      - id: e122cfbe-11ea-4469-8c9b-14f4eab4aa74
+        name: password
+        type: password
+      - id: df9bb372-d557-445c-a173-66ab4e7a9c7c
+        name: active
+        type: boolean
+        helpText: Inactive users cannot sign in and hold no roles.
+    indexes:
+      - id: 4941e670-8c9b-4a1a-a758-93854cef07bb
+        fields: [login]
+        unique: true
+
+  - id: cc91a08a-b885-4878-ad82-dd4a806bc787
+    name: core.user_role
+    label: User role
+    fields:
+      - id: f60c3043-b965-42f2-b9ea-a81c3f3ee84d
+        name: user
+        type: { kind: reference, target: core.user }
+        required: true
+      - id: 9640bd3e-c66e-4b43-8b4c-31489d37dfc8
+        name: role
+        type: { kind: reference, target: core.role }
+        required: true
+    indexes:
+      - id: 71629390-8e5a-4990-9bf1-46e9c8abd338
+        fields: [user, role]
+        unique: true
