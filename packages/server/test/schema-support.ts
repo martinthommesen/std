@@ -5,7 +5,9 @@
 import { randomUUID } from "node:crypto";
 
 import type { PgConnection } from "@effect/sql-pg";
+import type { Condition } from "@std/definitions/condition";
 import type {
+  AccessRuleDraft,
   ClassDraft,
   FieldDraft,
   IndexDraft,
@@ -261,6 +263,56 @@ export const createRole = (name: string): Operation => ({
   },
   op: "createRole",
 });
+
+/**
+ * Creates a role and returns its ID.
+ * @param name - The role name.
+ * @returns The operation and the role ID.
+ */
+export const addRole = (name: string): BuiltOperation => {
+  const operation = createRole(name);
+
+  return {
+    id: "definition" in operation ? operation.definition.id : "",
+    op: operation,
+  };
+};
+
+/**
+ * Creates an access rule.
+ * @param classId - Its class.
+ * @param roleIds - The roles it names.
+ * @param options - Target fields, a condition and a description.
+ * @returns The operation and the rule ID.
+ */
+export const addAccessRule = (
+  classId: string,
+  roleIds: readonly string[],
+  options: {
+    readonly fields?: readonly string[];
+    readonly condition?: Condition;
+    readonly description?: string;
+  } = {}
+): BuiltOperation => {
+  const definition: AccessRuleDraft = {
+    ...local,
+    actions: ["read"],
+    active: true,
+    classId,
+    condition: options.condition ?? null,
+    description: options.description ?? null,
+    effect: "allow",
+    id: freshId(),
+    kind: "accessRule",
+    roleIds,
+    target:
+      options.fields === undefined
+        ? { kind: "records" }
+        : { fields: options.fields, kind: "fields" },
+  };
+
+  return { id: definition.id, op: { definition, op: "createAccessRule" } };
+};
 
 /**
  * Applies operations as one change set.

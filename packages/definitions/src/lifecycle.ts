@@ -157,6 +157,12 @@ export const rename = (work: Work, operation: Op<"rename">): void => {
     return;
   }
 
+  const allowed = guardChange(work, current, "rename");
+
+  if (allowed === undefined) {
+    return;
+  }
+
   if (!(RENAMABLE.has(current.kind) && isLive(current))) {
     unsupported(
       work,
@@ -164,12 +170,6 @@ export const rename = (work: Work, operation: Op<"rename">): void => {
       `A ${current.kind} ${current.state === "purged" ? "tombstone " : ""}cannot be renamed.`
     );
 
-    return;
-  }
-
-  const allowed = guardChange(work, current, "rename");
-
-  if (allowed === undefined) {
     return;
   }
 
@@ -301,6 +301,12 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
     return;
   }
 
+  const allowed = guardChange(work, current, "retire");
+
+  if (allowed === undefined) {
+    return;
+  }
+
   if (!RETIRABLE.has(current.kind) || !isActive(current)) {
     unsupported(
       work,
@@ -308,12 +314,6 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
       `This ${current.kind} is ${current.state} and cannot be retired.`
     );
 
-    return;
-  }
-
-  const allowed = guardChange(work, current, "retire");
-
-  if (allowed === undefined) {
     return;
   }
 
@@ -352,7 +352,12 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
 export const reactivate = (work: Work, operation: Op<"reactivate">): void => {
   const current = checkVersion(work, operation.id, operation.version);
 
-  if (current === undefined) {
+  const allowed =
+    current === undefined
+      ? undefined
+      : guardChange(work, current, "reactivate");
+
+  if (current === undefined || allowed === undefined) {
     return;
   }
 
@@ -381,14 +386,9 @@ export const reactivate = (work: Work, operation: Op<"reactivate">): void => {
     return;
   }
 
-  const allowed = guardChange(work, current, "reactivate");
+  const next = withChanges(work, current, { state: "active" });
 
-  const next =
-    allowed === undefined
-      ? undefined
-      : withChanges(work, current, { state: "active" });
-
-  if (allowed !== undefined && next !== undefined) {
+  if (next !== undefined) {
     record(work, operation, next, note(allowed.localOverride));
   }
 };
@@ -555,6 +555,12 @@ export const purge = (work: Work, operation: Op<"purge">): void => {
     return;
   }
 
+  const allowed = guardChange(work, current, "purge");
+
+  if (allowed === undefined) {
+    return;
+  }
+
   if (!PURGEABLE.has(current.kind) || current.state === "purged") {
     unsupported(
       work,
@@ -565,9 +571,7 @@ export const purge = (work: Work, operation: Op<"purge">): void => {
     return;
   }
 
-  const allowed = guardChange(work, current, "purge");
-
-  if (allowed === undefined || !purgePreconditions(work, operation, current)) {
+  if (!purgePreconditions(work, operation, current)) {
     return;
   }
 
