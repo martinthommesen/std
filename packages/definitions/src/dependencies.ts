@@ -10,23 +10,58 @@
  */
 import { conditionFieldIds } from "./condition.ts";
 import type { Condition } from "./condition.ts";
-import type { AccessTarget, Definition } from "./definition.ts";
+import type {
+  AccessRuleDraft,
+  AccessTarget,
+  ClassDraft,
+  Definition,
+  FieldDraft,
+  GrantDraft,
+  IndexDraft,
+  NamespaceDraft,
+  OverrideDraft,
+  PermissionDraft,
+  RoleDraft,
+  SubscriptionDraft,
+} from "./definition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
 
 /** Dependency kinds that exist in this version. */
-export type DependencyKind =
-  | "extends"
-  | "field_of"
-  | "references_table"
-  | "index_on"
-  | "display_field"
-  | "access_rule_on"
-  | "rule_role"
-  | "overrides"
-  | "condition_reads"
-  | "subscription_on"
-  | "grant_of";
+export const DEPENDENCY_KINDS = [
+  "extends",
+  "field_of",
+  "references_table",
+  "index_on",
+  "display_field",
+  "access_rule_on",
+  "rule_role",
+  "overrides",
+  "condition_reads",
+  "subscription_on",
+  "grant_of",
+] as const;
+
+/** A dependency kind. */
+export type DependencyKind = (typeof DEPENDENCY_KINDS)[number];
+
+/**
+ * What references are read from: a stored definition, or a create's draft
+ * (the same properties, before the engine adds state, version and
+ * enforcement).
+ */
+export type Referencing =
+  | Definition
+  | NamespaceDraft
+  | ClassDraft
+  | FieldDraft
+  | OverrideDraft
+  | IndexDraft
+  | RoleDraft
+  | PermissionDraft
+  | GrantDraft
+  | AccessRuleDraft
+  | SubscriptionDraft;
 
 /** One dependency: `from` refers to `to`. */
 export interface Dependency {
@@ -60,7 +95,7 @@ const targetEdges = (
     ? target.fields.map((fieldId) => edge(id, fieldId, "access_rule_on"))
     : [];
 
-const edgesOf = (definition: Definition): readonly Dependency[] => {
+const edgesOf = (definition: Referencing): readonly Dependency[] => {
   const { id } = definition;
 
   if (definition.kind === "class") {
@@ -158,3 +193,23 @@ export const dependenciesOf = (
       compareIds(left.kind, right.kind) || compareIds(left.toId, right.toId)
   );
 };
+
+/**
+ * Every definition a definition or draft refers to: the targets of the
+ * edges the dependency index records for it, and a class's namespace
+ * (which the index leaves out: a namespace is never deleted while it holds
+ * classes). Callers that must see what a change set refers to (the HTTP
+ * visibility check, Contracts 3.8) use this, so they and the index cannot
+ * drift apart.
+ *
+ * @param definition - A definition or a create's draft.
+ * @returns The referenced IDs, without duplicates.
+ */
+export const referencedIds = (
+  definition: Referencing
+): readonly DefinitionId[] => [
+  ...new Set([
+    ...(definition.kind === "class" ? [definition.namespaceId] : []),
+    ...edgesOf(definition).map((entry) => entry.toId),
+  ]),
+];

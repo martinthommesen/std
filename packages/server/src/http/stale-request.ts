@@ -608,6 +608,47 @@ const relevantChanges = (
 };
 
 /**
+ * Checks only the stated revision's identity (Contracts 6.4): the same
+ * state as the transaction's, or an older revision whose change set the
+ * journal records at that number. Anything else (a number above the
+ * current one, another change set at that number, a journal that no longer
+ * reaches it) is `SchemaChanged` with no change listed, whatever the
+ * request names: the client's revision does not describe this database.
+ * Used where the request's scope must not be looked up first (the
+ * change-set endpoint, whose targets may be hidden).
+ *
+ * @param statedRevision - The request's revision, if it sent one.
+ * @returns Nothing, or `SchemaChanged`.
+ */
+export const checkRevisionIdentity = Effect.fn("StaleRequest.identity")(
+  function* checkRevisionIdentity(statedRevision: Option.Option<ConfigState>) {
+    if (Option.isNone(statedRevision)) {
+      return yield* Effect.void;
+    }
+
+    const stated = statedRevision.value;
+    const current = yield* RequestRevision;
+
+    const unchanged =
+      stated.revision === current.revision &&
+      stated.changeSetId === current.changeSetId;
+
+    if (
+      unchanged ||
+      (stated.revision < current.revision && (yield* journalReaches(stated)))
+    ) {
+      return yield* Effect.void;
+    }
+
+    return yield* new SchemaChanged({
+      changes: [],
+      currentRevision: revisionHeaderValue(current),
+      requestRevision: revisionHeaderValue(stated),
+    });
+  }
+);
+
+/**
  * Checks a stated revision against the transaction's (Contracts 6.4). Runs
  * inside the request transaction, for the acting user, before the request's
  * names are resolved at C.

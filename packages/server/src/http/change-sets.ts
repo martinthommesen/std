@@ -24,22 +24,25 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import { SchemaBusy } from "@std/api/errors/schema-busy";
 import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
-import { DEFINITION_KINDS } from "@std/definitions/definition";
+import {
+  DEFINITION_KINDS,
+  DefinitionSchema,
+} from "@std/definitions/definition";
 import type {
   AccessAction,
   DefinitionKind,
   Definition,
 } from "@std/definitions/definition";
+import { referencedIds } from "@std/definitions/dependencies";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
-import { draftDependencies } from "@std/definitions/set-plan";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 
 import type { ActingUser } from "../auth/actor.ts";
@@ -58,7 +61,10 @@ import type {
   ChangeSetRequest,
 } from "../schema/change-set.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
-import { checkRequestRevision } from "./stale-request.ts";
+import {
+  checkRequestRevision,
+  checkRevisionIdentity,
+} from "./stale-request.ts";
 
 /** The platform table of each definition kind. */
 export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
@@ -192,24 +198,53 @@ export const writtenColumns = (
   );
 };
 
+const decodeDefinition = Schema.decodeUnknownOption(DefinitionSchema);
+
 /**
- * The definitions an operation needs to see: its target, and for a create
- * (or a replaced override) the definitions it references (namespace,
- * parent class, field, role, permission).
+ * A definition as an `update` would leave it, for its references: the
+ * stored one with the changes over it, or the stored one when that does
+ * not decode (the engine refuses the update then).
  *
+ * @param current - The stored definition.
+ * @param changes - The update's changes.
+ * @returns The definition after the update.
+ */
+const updated = (current: Definition, changes: JsonObject): Definition => {
+  const stored: JsonObject = current;
+
+  return Option.getOrElse(
+    decodeDefinition({ ...stored, ...changes }),
+    () => current
+  );
+};
+
+/**
+ * The definitions an operation needs to see: its target, and every
+ * definition it refers to after it, as the dependency index records them
+ * (`referencedIds`): a create's references, and the references an update
+ * introduces or keeps.
+ *
+ * @param snapshot - The configuration the operation applies to.
  * @param operation - The operation.
  * @returns Their IDs.
  */
-const neededIds = (operation: Operation): readonly DefinitionId[] => {
-  if (!("definition" in operation)) {
-    return [operation.id];
+const neededIds = (
+  snapshot: ConfigSnapshot,
+  operation: Operation
+): readonly DefinitionId[] => {
+  if ("definition" in operation) {
+    const references = referencedIds(operation.definition);
+
+    return operation.op === "setOverride" && operation.version !== null
+      ? [operation.definition.id, ...references]
+      : references;
   }
 
-  const references = draftDependencies(operation.definition);
+  const current = snapshot.get(operation.id);
 
-  return operation.op === "setOverride" && operation.version !== null
-    ? [operation.definition.id, ...references]
-    : references;
+  return operation.op === "update" && current !== undefined
+    ? [operation.id, ...referencedIds(updated(current, operation.changes))]
+    : [operation.id];
 };
 
 const unknownDefinition = (id: DefinitionId) =>
@@ -252,7 +287,7 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
   const hidden: DefinitionId[] = [];
 
   for (const operation of operations) {
-    for (const id of neededIds(operation)) {
+    for (const id of neededIds(scope.snapshot, operation)) {
       const target = scope.snapshot.get(id);
 
       if (!created.has(id)) {
@@ -417,8 +452,10 @@ export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
  * Everything the change-set endpoint checks about its request before the
  * schema engine sees it, in the request transaction and again wherever
  * the change set validates or commits (`ChangeSetRequest.authorize`): the
- * stated revision (6.4), the access rules (with hidden targets treated as
- * missing), then every target's existence and visibility.
+ * stated revision's identity (does this database have it), the access
+ * rules (with hidden targets treated as missing), every target's existence
+ * and visibility (a hidden one refused like a missing one), and only then
+ * the per-table checks of 6.4 for the visible targets.
  *
  * @param stated - The revision the request stated, if any.
  * @param operations - The operations.
@@ -429,7 +466,9 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
     stated: Option.Option<ConfigState>,
     operations: readonly Operation[]
   ) {
-    yield* checkChangeSetRevision(stated, operations);
+    // Whether this database has the stated revision at all, before any
+    // target is looked up (6.4).
+    yield* checkRevisionIdentity(stated);
 
     const hidden = yield* hiddenTargets(operations);
     const actor = yield* Actor;
@@ -445,9 +484,12 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
 
     const [first] = hidden;
 
-    return first === undefined
-      ? yield* Effect.void
-      : yield* unknownDefinition(first);
+    if (first !== undefined) {
+      return yield* unknownDefinition(first);
+    }
+
+    // The per-table checks of 6.4, only for targets the caller can see.
+    return yield* checkChangeSetRevision(stated, operations);
   }
 );
 

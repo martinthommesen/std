@@ -6,17 +6,31 @@
  * and retired fields through the read compiler and the save pipeline.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { DEPENDENCY_KINDS } from "@std/definitions/dependencies";
+import type { DependencyKind } from "@std/definitions/dependencies";
 import type { Operation } from "@std/definitions/operation";
 import {
   BUILT_IN_ROLE_IDS,
   CORE_NAMESPACE_ID,
+  PERMISSION_IDS,
   PLATFORM_CLASS_IDS,
+  SYSTEM_USER_ID,
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
+import type { PlatformTable } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+} from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -43,10 +57,13 @@ import {
   ACME_SET_DIRECTORY,
   addAccessRule,
   addField,
+  addIndex,
+  addOverride,
   addRole,
   change,
   createClass,
   ensureSite,
+  freshId,
   values,
 } from "./schema-support.ts";
 import { errorOf, waitUntil } from "./support.ts";
@@ -82,23 +99,25 @@ const asMissing = (response: TestResponse, id: string): string =>
   response.text.replaceAll(id, "<id>");
 
 /**
- * A read-deny rule hiding one role, by name, from admins.
- * @param nameFieldId - The ID of `core.role.name`.
- * @param roleName - The role to hide.
+ * A read-deny rule hiding definition records of one table, by name, from
+ * admins.
+ * @param classId - The definition table's class.
+ * @param nameFieldId - The ID of its `name` field.
+ * @param name - The name to hide.
  * @returns The operation.
  */
-const hideRole = (nameFieldId: string, roleName: string): Operation => {
-  const deny = addAccessRule(
-    PLATFORM_CLASS_IDS.role,
-    [BUILT_IN_ROLE_IDS.admin],
-    {
-      condition: {
-        left: { path: [nameFieldId] },
-        op: "eq",
-        right: { value: roleName },
-      },
-    }
-  );
+const hideByName = (
+  classId: string,
+  nameFieldId: string,
+  name: string
+): Operation => {
+  const deny = addAccessRule(classId, [BUILT_IN_ROLE_IDS.admin], {
+    condition: {
+      left: { path: [nameFieldId] },
+      op: "eq",
+      right: { value: name },
+    },
+  });
 
   return deny.op.op === "createAccessRule"
     ? {
@@ -111,6 +130,15 @@ const hideRole = (nameFieldId: string, roleName: string): Operation => {
       }
     : deny.op;
 };
+
+/**
+ * A read-deny rule hiding one role, by name, from admins.
+ * @param nameFieldId - The ID of `core.role.name`.
+ * @param roleName - The role to hide.
+ * @returns The operation.
+ */
+const hideRole = (nameFieldId: string, roleName: string): Operation =>
+  hideByName(PLATFORM_CLASS_IDS.role, nameFieldId, roleName);
 
 /**
  * A definition's field at a revision: its latest definition revision at or
@@ -215,45 +243,255 @@ const appendResponse =
     [endpoint, response],
   ];
 
-/**
- * Holds a generic definition write between its request checks and its
- * change set (`definition-write:prepared`) until the test releases it.
- */
-class PreparedGate extends Context.Service<
-  PreparedGate,
-  {
-    readonly reached: Deferred.Deferred<boolean>;
-    readonly release: Deferred.Deferred<boolean>;
-  }
->()("test/schema-http/PreparedGate") {
-  /** The gate and the step-boundary hook that waits on it. */
-  static readonly layer = Layer.effect(
-    StepBoundary,
-    Effect.gen(function* hook() {
-      const gate = yield* PreparedGate;
-
-      return (label: string) =>
-        label === "definition-write:prepared"
-          ? Deferred.succeed(gate.reached, true).pipe(
-              Effect.andThen(Deferred.await(gate.release)),
-              Effect.asVoid
-            )
-          : Effect.void;
-    })
-  ).pipe(
-    Layer.provideMerge(
-      Layer.effect(
-        PreparedGate,
-        Effect.gen(function* gate() {
-          return PreparedGate.of({
-            reached: yield* Deferred.make<boolean>(),
-            release: yield* Deferred.make<boolean>(),
-          });
-        })
-      )
-    )
-  );
+/** One armed stop: reached by the server, released by the test. */
+interface Stop {
+  readonly reached: Deferred.Deferred<boolean>;
+  readonly release: Deferred.Deferred<boolean>;
 }
+
+/**
+ * Stops the server once at a step boundary (`StepBoundary`), after the
+ * test arms it, until the test releases it: a deterministic interleaving.
+ */
+class Gate extends Context.Service<
+  Gate,
+  {
+    readonly label: string;
+    readonly armed: Ref.Ref<Option.Option<Stop>>;
+  }
+>()("test/schema-http/Gate") {
+  /**
+   * The gate and the hook that waits on it.
+   * @param label - The boundary to stop at.
+   * @returns The layer.
+   */
+  static readonly at = (label: string) =>
+    Layer.effect(
+      StepBoundary,
+      Effect.gen(function* hook() {
+        const gate = yield* Gate;
+
+        return (reached: string) =>
+          reached === gate.label
+            ? Ref.getAndSet(gate.armed, Option.none()).pipe(
+                Effect.flatMap((stop) =>
+                  Option.isNone(stop)
+                    ? Effect.void
+                    : Deferred.succeed(stop.value.reached, true).pipe(
+                        Effect.andThen(Deferred.await(stop.value.release)),
+                        Effect.asVoid
+                      )
+                )
+              )
+            : Effect.void;
+      })
+    ).pipe(
+      Layer.provideMerge(
+        Layer.effect(
+          Gate,
+          Effect.gen(function* gate() {
+            return Gate.of({
+              armed: yield* Ref.make(Option.none<Stop>()),
+              label,
+            });
+          })
+        )
+      )
+    );
+}
+
+/**
+ * Arms the gate for the next time the server reaches its boundary.
+ * @returns The stop.
+ */
+const armGate = Effect.gen(function* arm() {
+  const gate = yield* Gate;
+
+  const stop: Stop = {
+    reached: yield* Deferred.make<boolean>(),
+    release: yield* Deferred.make<boolean>(),
+  };
+
+  yield* Ref.set(gate.armed, Option.some(stop));
+
+  return stop;
+});
+
+/** The definitions the reference walk hides from admins, by kind. */
+interface Hidden {
+  readonly namespace: string;
+  readonly class: string;
+  readonly field: string;
+  readonly role: string;
+  readonly permission: string;
+}
+
+/**
+ * Creates one definition of each referenced kind and hides each from
+ * admins with a read-deny rule on its definition table.
+ * @returns Their IDs.
+ */
+const createHidden = Effect.gen(function* createHidden() {
+  yield* ensureSite;
+
+  const namespace = freshId();
+  const permission = freshId();
+  const hiddenClass = createClass("hidden_cls");
+  const field = addField(ACME.asset, "hidden_fld", { kind: "text" });
+  const role = addRole("hidden_r");
+
+  yield* change([
+    {
+      definition: {
+        extensible: false,
+        helpText: null,
+        id: namespace,
+        kind: "namespace",
+        label: "Hidden",
+        name: "hidden_ns",
+        owner: { layer: "local" },
+        protected: false,
+        storage: "standard",
+      },
+      op: "createNamespace",
+    },
+    hiddenClass.op,
+    field.op,
+    role.op,
+    {
+      definition: {
+        helpText: null,
+        id: permission,
+        kind: "permission",
+        label: "Hidden",
+        name: "hidden.p",
+        owner: { layer: "local" },
+        protected: false,
+      },
+      op: "createPermission",
+    },
+  ]);
+
+  const snapshot = yield* (yield* Catalog).refresh;
+
+  const hide = (table: PlatformTable, name: string) =>
+    hideByName(
+      PLATFORM_CLASS_IDS[table],
+      snapshot.fieldByName(PLATFORM_CLASS_IDS[table], "name")?.id ?? "",
+      name
+    );
+
+  yield* change([
+    hide("namespace", "hidden_ns"),
+    hide("class", "hidden_cls"),
+    hide("field", "hidden_fld"),
+    hide("role", "hidden_r"),
+    hide("permission", "hidden.p"),
+  ]);
+
+  return {
+    class: hiddenClass.id,
+    field: field.id,
+    namespace,
+    permission,
+    role: role.id,
+  } satisfies Hidden;
+});
+
+/** A case of the reference walk: operations that name `id`. */
+type ReferenceCase = (id: string) => readonly Operation[];
+
+/**
+ * For every reference kind the dependency index records, operations whose
+ * only reference of that kind is the given ID, and which kind of hidden
+ * definition it must be.
+ */
+const REFERENCE_CASES: Readonly<
+  Record<DependencyKind, readonly [keyof Hidden, ReferenceCase]>
+> = {
+  access_rule_on: [
+    "field",
+    (id) => [
+      addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], { fields: [id] }).op,
+    ],
+  ],
+  condition_reads: [
+    "field",
+    (id) => [
+      addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], {
+        condition: { arg: { path: [id] }, op: "empty" },
+      }).op,
+    ],
+  ],
+  display_field: [
+    "field",
+    (id) => {
+      const created = createClass("k_display").op;
+
+      return created.op === "createClass"
+        ? [
+            {
+              ...created,
+              definition: { ...created.definition, displayFieldId: id },
+            },
+          ]
+        : [created];
+    },
+  ],
+  extends: ["class", (id) => [createClass("k_ext", { parentId: id }).op]],
+  field_of: ["class", (id) => [addField(id, "k_fo", { kind: "text" }).op]],
+  grant_of: [
+    "role",
+    (id) => [
+      {
+        definition: {
+          id: freshId(),
+          kind: "grant",
+          owner: { layer: "local" },
+          permissionId: PERMISSION_IDS["schema.purge"],
+          protected: false,
+          roleId: id,
+        },
+        op: "createGrant",
+      },
+    ],
+  ],
+  index_on: ["field", (id) => [addIndex(ACME.asset, [id], false).op]],
+  overrides: [
+    "field",
+    (id) => [addOverride(ACME.laptop, id, { required: true }).op],
+  ],
+  references_table: [
+    "class",
+    (id) => [
+      addField(ACME.asset, "k_ref", { kind: "reference", targetClassId: id })
+        .op,
+    ],
+  ],
+  rule_role: ["role", (id) => [addAccessRule(ACME.asset, [id]).op]],
+  subscription_on: [
+    "class",
+    (id) => [
+      {
+        definition: {
+          classId: id,
+          condition: null,
+          deadLetter: "block",
+          enabled: true,
+          id: freshId(),
+          identityId: SYSTEM_USER_ID,
+          kind: "subscription",
+          maxAttempts: 10,
+          name: "k_sub",
+          operations: ["create"],
+          owner: { layer: "local" },
+          protected: false,
+        },
+        op: "createSubscription",
+      },
+    ],
+  ],
+};
 
 describe("schema-http", () => {
   it("change sets live under /api/v1/schema", () => {
@@ -748,6 +986,146 @@ describe("schema-http", () => {
               after.roleByName("bystander"),
               "the whole batch failed"
             );
+          })
+      );
+
+      dbTest.effect(
+        "every reference the dependency index knows, in creates and updates, to a hidden definition is refused like one to a missing definition",
+        () =>
+          Effect.gen(function* referenceWalk() {
+            const admin = yield* adminToken;
+            const hidden = yield* createHidden;
+
+            // A grant also names a permission; a class also its namespace.
+            const cases: (readonly [string, string, ReferenceCase])[] = [
+              ...Object.entries(REFERENCE_CASES).map(
+                ([kind, [hiddenKind, build]]) =>
+                  [kind, hidden[hiddenKind], build] as const
+              ),
+              [
+                "grant_of (permission)",
+                hidden.permission,
+                (id) => [
+                  {
+                    definition: {
+                      id: freshId(),
+                      kind: "grant",
+                      owner: { layer: "local" },
+                      permissionId: id,
+                      protected: false,
+                      roleId: BUILT_IN_ROLE_IDS.admin,
+                    },
+                    op: "createGrant",
+                  },
+                ],
+              ],
+              [
+                "class namespace",
+                hidden.namespace,
+                (id) => [createClass("k_ns", { namespaceId: id }).op],
+              ],
+            ];
+
+            assert.sameMembers(Object.keys(REFERENCE_CASES), [
+              ...DEPENDENCY_KINDS,
+            ]);
+
+            for (const [kind, id, build] of cases) {
+              const toHidden = yield* postChangeSet(admin, build(id));
+              const toMissing = yield* postChangeSet(admin, build(MISSING_ID));
+
+              assert.strictEqual(
+                toHidden.status,
+                422,
+                `${kind}: ${toHidden.text}`
+              );
+              assert.strictEqual(
+                asMissing(toHidden, id),
+                asMissing(toMissing, MISSING_ID),
+                kind
+              );
+            }
+
+            // An update that makes a visible rule name a hidden role.
+            const visible = addAccessRule(ACME.asset, [
+              BUILT_IN_ROLE_IDS.admin,
+            ]);
+
+            yield* change([visible.op]);
+
+            const update = (roleId: string): Operation[] => [
+              {
+                changes: { roleIds: [roleId] },
+                id: visible.id,
+                op: "update",
+                version: 1,
+              },
+            ];
+
+            const toHidden = yield* postChangeSet(admin, update(hidden.role));
+            const toMissing = yield* postChangeSet(admin, update(MISSING_ID));
+
+            assert.strictEqual(toHidden.status, 422, toHidden.text);
+            assert.strictEqual(
+              asMissing(toHidden, hidden.role),
+              asMissing(toMissing, MISSING_ID)
+            );
+            assert.deepStrictEqual(
+              (yield* (yield* Catalog).refresh)
+                .accessRules()
+                .find((rule) => rule.id === visible.id)?.roleIds,
+              [BUILT_IN_ROLE_IDS.admin]
+            );
+          })
+      );
+
+      dbTest.effect(
+        "under a future and a past STD-Schema-Revision, a hidden target gets exactly what a missing one gets",
+        () =>
+          Effect.gen(function* revisionHidden() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const target = addRole("revision_hidden");
+
+            yield* change([target.op]);
+
+            const snapshot = yield* (yield* Catalog).refresh;
+            const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+
+            yield* change([hideRole(name?.id ?? "", "revision_hidden")]);
+
+            const past = snapshot.key;
+            const current = (yield* (yield* Catalog).refresh).key;
+
+            const post = (header: string, id: string) =>
+              http.request("POST", CHANGE_SETS, {
+                body: {
+                  operations: [
+                    { changes: { label: "x" }, id, op: "update", version: 1 },
+                  ],
+                },
+                headers: { "std-schema-revision": header },
+                token: admin,
+              });
+
+            for (const [header, status] of [
+              [`${current.revision + 5}.${current.changeSetId}`, 409],
+              [`${past.revision}.${past.changeSetId}`, 422],
+            ] as const) {
+              const hiddenResponse = yield* post(header, target.id);
+              const missingResponse = yield* post(header, MISSING_ID);
+
+              assert.strictEqual(
+                hiddenResponse.status,
+                status,
+                hiddenResponse.text
+              );
+              assert.strictEqual(
+                asMissing(hiddenResponse, target.id),
+                asMissing(missingResponse, MISSING_ID),
+                header
+              );
+            }
           })
       );
 
@@ -1438,19 +1816,25 @@ describe("schema-http", () => {
     }
   );
 
-  layer(readsTestLayer().pipe(Layer.provideMerge(PreparedGate.layer)), {
-    excludeTestServices: true,
-    timeout: 300_000,
-  })((dbTest) => {
+  layer(
+    readsTestLayer().pipe(
+      Layer.provideMerge(Gate.at("definition-write:prepared"))
+    ),
+    {
+      excludeTestServices: true,
+      timeout: 300_000,
+    }
+  )((dbTest) => {
     dbTest.effect(
       "a target updated and hidden between a generic write's checks and its change set is NotFound, with no version",
       () =>
         Effect.gen(function* hiddenMeanwhile() {
           const admin = yield* adminToken;
-          const gate = yield* PreparedGate;
           const target = addRole("race_target");
 
           yield* change([target.op]);
+
+          const gate = yield* armGate;
 
           const write = yield* Effect.forkChild(
             patch(admin, "core.role", target.id, 1, { label: "Mine" })
@@ -1483,6 +1867,78 @@ describe("schema-http", () => {
             (yield* (yield* Catalog).refresh).role(target.id)?.label,
             "Theirs"
           );
+        })
+    );
+  });
+
+  layer(
+    readsTestLayer().pipe(Layer.provideMerge(Gate.at("before:preflight"))),
+    {
+      excludeTestServices: true,
+      timeout: 300_000,
+    }
+  )((dbTest) => {
+    dbTest.effect(
+      "a target hidden while its preflight scans wait gets NotFound or unknownDefinition, never the scans' counts",
+      () =>
+        Effect.gen(function* preflightHidden() {
+          const admin = yield* adminToken;
+          const field = addField(ACME.asset, "strict_fld", { kind: "text" });
+
+          yield* change([field.op]);
+
+          // Existing assets have no value: making it required would be
+          // refused with ExistingDataViolates (count and sample IDs).
+          const generic = yield* armGate;
+
+          const write = yield* Effect.forkChild(
+            patch(admin, "core.field", field.id, 1, { required: true })
+          );
+
+          yield* Deferred.await(generic.reached);
+
+          const snapshot = yield* (yield* Catalog).refresh;
+          const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.field, "name");
+
+          yield* change([
+            hideByName(PLATFORM_CLASS_IDS.field, name?.id ?? "", "strict_fld"),
+          ]);
+          yield* Deferred.succeed(generic.release, true);
+
+          const patched = yield* Fiber.join(write);
+
+          assert.strictEqual(patched.status, 404, patched.text);
+          assert.strictEqual(yield* tagOf(patched), "NotFound");
+
+          // The change-set endpoint, in the same interleaving.
+          const second = addField(ACME.asset, "strict_two", { kind: "text" });
+
+          yield* change([second.op]);
+
+          const batch = yield* armGate;
+
+          const posted = yield* Effect.forkChild(
+            postChangeSet(admin, [
+              {
+                changes: { required: true },
+                id: second.id,
+                op: "update",
+                version: 1,
+              },
+            ])
+          );
+
+          yield* Deferred.await(batch.reached);
+          yield* change([
+            hideByName(PLATFORM_CLASS_IDS.field, name?.id ?? "", "strict_two"),
+          ]);
+          yield* Deferred.succeed(batch.release, true);
+
+          const response = yield* Fiber.join(posted);
+
+          assert.strictEqual(response.status, 422, response.text);
+          assert.include(response.text, "unknownDefinition");
+          assert.notInclude(response.text, "sampleIds");
         })
     );
   });

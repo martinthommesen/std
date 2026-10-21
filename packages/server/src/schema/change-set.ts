@@ -382,6 +382,49 @@ const validate = Effect.fn("Schema.validate")(function* validate(
 });
 
 /**
+ * Runs the request's check alone, in a read transaction at the current
+ * snapshot.
+ *
+ * @param request - The change set.
+ * @returns Fails with the check's refusal.
+ */
+const recheck = Effect.fn("Schema.recheck")(function* recheck(
+  request: ChangeSetRequest
+) {
+  const { authorize } = request;
+
+  if (authorize === undefined) {
+    return yield* Effect.void;
+  }
+
+  const catalog = yield* Catalog;
+  const transactions = yield* Transactions;
+
+  return yield* transactions.request(
+    Effect.gen(function* checkNow() {
+      yield* authorize(yield* catalog.at(yield* RequestRevision));
+    })
+  );
+});
+
+/**
+ * Preflight work outside `CONFIG_KEY` (existence, violation and purge
+ * scans, which can take long and must not hold it): any refusal it ends in
+ * may carry target data (counts, sample record IDs), so the request's
+ * check runs again at the then-current snapshot first, and its refusal
+ * wins (Contracts 3.8: a target hidden meanwhile is reported like a
+ * missing one).
+ *
+ * @param request - The change set.
+ * @returns The combinator.
+ */
+const checkedPreflight =
+  (request: ChangeSetRequest) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    // A refusal of the check replaces the preflight's own.
+    effect.pipe(Effect.tapError(() => recheck(request)));
+
+/**
  * Checks statements against the allowed DDL forms.
  *
  * @param statements - Generated DDL.
@@ -791,14 +834,23 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
     yield* settleOpenChangeSets(connection, options);
 
     const applied = yield* validate(request, changeSetId);
-    const preflight = yield* checkExistence(connection, applied);
-    const plan = planChangeSet(applied, preflight);
 
-    for (const check of plan.violations) {
-      yield* countViolations(connection, check);
-    }
+    yield* stepBoundary("before:preflight");
 
-    const destroyed = yield* countPurges(connection, plan);
+    const { destroyed, plan, preflight } = yield* Effect.gen(function* scans() {
+      const existence = yield* checkExistence(connection, applied);
+      const planned = planChangeSet(applied, existence);
+
+      for (const check of planned.violations) {
+        yield* countViolations(connection, check);
+      }
+
+      return {
+        destroyed: yield* countPurges(connection, planned),
+        plan: planned,
+        preflight: existence,
+      };
+    }).pipe(checkedPreflight(request));
 
     yield* guardPlan(plan);
 
