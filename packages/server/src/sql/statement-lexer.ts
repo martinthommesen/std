@@ -339,6 +339,60 @@ const dollarToken = (sql: string, start: number): Token => {
 };
 
 /**
+ * The offset after the blanks and comments starting at `start`.
+ * @param sql - The text.
+ * @param start - Where the blanks may start.
+ * @returns The offset of the next token, or the text's length.
+ */
+const skipBlanks = (sql: string, start: number): number => {
+  let index = start;
+
+  for (;;) {
+    if (isBlank(codeAt(sql, index))) {
+      index += 1;
+    } else if (sql.startsWith("--", index)) {
+      index = lineEnd(sql, index);
+    } else if (sql.startsWith("/*", index)) {
+      index = blockCommentEnd(sql, index);
+    } else {
+      return index;
+    }
+  }
+};
+
+/**
+ * The end of an optional `UESCAPE '<char>'` clause after a `U&` string or
+ * identifier. Postgres's parser reads it as part of that token, with any
+ * blanks and comments in between.
+ * @param sql - The text.
+ * @param end - Offset just after the `U&` string or identifier.
+ * @returns The offset after the clause, or `end` when there is none.
+ */
+const afterUescape = (sql: string, end: number): number => {
+  const keyword = skipBlanks(sql, end);
+  const afterKeyword = keyword + "uescape".length;
+
+  if (
+    sql.slice(keyword, afterKeyword).toLowerCase() !== "uescape" ||
+    isWordPart(codeAt(sql, afterKeyword))
+  ) {
+    return end;
+  }
+
+  const literal = skipBlanks(sql, afterKeyword);
+
+  if (sql[literal] === "'") {
+    return stringEnd(sql, literal, false);
+  }
+
+  const escapePrefix = sql[literal] === "e" || sql[literal] === "E";
+
+  return escapePrefix && sql[literal + 1] === "'"
+    ? stringEnd(sql, literal + 1, true)
+    : end;
+};
+
+/**
  * A word, or an escape string when the word is a lone `E` before `'`.
  * @param sql - The text.
  * @param start - Offset of the word.
@@ -361,14 +415,17 @@ const wordToken = (sql: string, start: number): Token => {
 
   if ((word === "u" || word === "U") && sql[index] === "&") {
     if (unicodeQuote === "'") {
-      return { end: stringEnd(sql, index + 1, false), kind: "literal" };
+      return {
+        end: afterUescape(sql, stringEnd(sql, index + 1, false)),
+        kind: "literal",
+      };
     }
 
     if (unicodeQuote === '"') {
       const end = quotedEnd(sql, index + 1, '"', false);
 
       return {
-        end,
+        end: afterUescape(sql, end),
         kind: "quoted",
         name: sql.slice(index + 2, end - 1).toLowerCase(),
       };

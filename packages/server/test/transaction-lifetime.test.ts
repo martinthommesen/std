@@ -317,6 +317,8 @@ describe("transaction-lifetime", () => {
           "WITH x AS MATERIALIZED (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
           "WITH RECURSIVE r(n) AS (SELECT 1), d AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
           "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
+          `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1`,
+          "SELECT U&'x' UESCAPE '!' INTO lifetime_read_only_copy",
         ];
 
         for (const text of writingCtes) {
@@ -343,6 +345,9 @@ describe("transaction-lifetime", () => {
           "SELECT 1 AS update",
           "SELECT insert()",
           "SELECT 1 AS into",
+          `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          `WITH U&"!0078" /* c */ UESCAPE -- d\n '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          "SELECT U&'d!0061t!+000061' UESCAPE '!' AS c",
           'SELECT s.into FROM (SELECT 1 AS "into") s',
           'SELECT s. into FROM (SELECT 1 AS "into") s',
           "SELECT E'a'\n'\\' into' AS c",
@@ -442,6 +447,10 @@ describe("transaction-lifetime", () => {
       "SELECT .5 INTO t",
       "SELECT 1.5e3 INTO t",
       'SELECT "as" INTO t',
+      // A UESCAPE clause belongs to its U& token and hides nothing after it.
+      `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM t RETURNING 1) SELECT 1`,
+      "SELECT U&'x' UESCAPE '!' INTO t",
+      "SELECT U&'x'\nUESCAPE '!' INTO t",
     ];
 
     const reads = [
@@ -472,6 +481,10 @@ describe("transaction-lifetime", () => {
       "SELECT E'a'\n'\\' into' AS c",
       "SELECT 'a' -- c\n'into t'",
       "SELECT U&'a'\n\v'into t'",
+      // UESCAPE clauses, with blanks and comments in between.
+      `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+      `WITH U&"!0078" /* c */ uescape -- d\n '!' AS (SELECT 1) TABLE x`,
+      "SELECT U&'d!0061t' UESCAPE '!' AS c",
     ];
 
     for (const sql of writing) {

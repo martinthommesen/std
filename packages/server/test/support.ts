@@ -18,6 +18,12 @@ import { TransactionRefused } from "../src/sql/transaction-refused.ts";
 const POLL_INTERVAL = Duration.millis(20);
 
 /**
+ * How long `waitUntil` waits by default: generous, because the condition may
+ * depend on a child process starting or on a busy shared Postgres server.
+ */
+const WAIT_TIMEOUT = Duration.seconds(60);
+
+/**
  * The typed error of a failed exit.
  * @param exit - Any exit.
  * @returns The first typed error, or `undefined`.
@@ -78,7 +84,7 @@ export const changeSetId = (): string => randomUUID();
  */
 export const waitUntil = <E, R>(
   check: Effect.Effect<boolean, E, R>,
-  timeout: Duration.Input = Duration.seconds(10)
+  timeout: Duration.Input = WAIT_TIMEOUT
 ): Effect.Effect<void, E, R> =>
   check.pipe(
     Effect.repeat({

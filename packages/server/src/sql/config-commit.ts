@@ -20,13 +20,27 @@
  * included, propagates at once.
  */
 import type { PgClient } from "@effect/sql-pg";
-import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 import { SqlClient } from "effect/sql";
+import { isSqlError } from "effect/sql/SqlError";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { AttemptLockTimedOut } from "./attempt-lock-timed-out.ts";
-import { hygienic } from "./errors.ts";
-import type { DatabaseError, HygienicError } from "./errors.ts";
+import {
+  DatabaseError,
+  hygienic,
+  SQLSTATE_LOCK_NOT_AVAILABLE,
+  sqlStateOf,
+} from "./errors.ts";
+import type { HygienicError } from "./errors.ts";
 import { advisoryClassId, advisoryObjectId, CONFIG_KEY } from "./locks.ts";
 import { parseConfigState } from "./request-revision.ts";
 import type { ConfigState } from "./request-revision.ts";
@@ -100,6 +114,35 @@ export class SchemaLockTimeout extends Schema.TaggedError<SchemaLockTimeout>()(
     return `Schema lock timeout after ${this.attempts} attempts; blocked by ${blockers}`;
   }
 }
+
+/**
+ * Whether an attempt's cause holds nothing but lock timeouts. Only then is
+ * the attempt retried; a defect, an interruption or any other failure next
+ * to the timeout (a failing error handler, a dying finalizer) propagates
+ * with its cause intact.
+ * @param cause - The cause of a failed attempt.
+ * @returns `true` when every reason is a failure with SQLSTATE 55P03, raw
+ *   (`SqlError`) or sanitized (`DatabaseError`).
+ */
+const onlyLockTimeouts = <E>(cause: Cause.Cause<E>): boolean =>
+  cause.reasons.length > 0 &&
+  cause.reasons.every((reason) => {
+    if (!Cause.isFailReason(reason)) {
+      return false;
+    }
+
+    const failure = reason.error;
+
+    const raw =
+      isSqlError(failure) &&
+      sqlStateOf(failure) === SQLSTATE_LOCK_NOT_AVAILABLE;
+
+    const sanitized =
+      failure instanceof DatabaseError &&
+      failure.sqlState === SQLSTATE_LOCK_NOT_AVAILABLE;
+
+    return raw || sanitized;
+  });
 
 /**
  * The retry policy of a config commit before jitter: one recurrence after
@@ -326,7 +369,11 @@ export const makeConfigCommit = (
         runAtConfigState(state, configSetup(monitor, blockers), effect)
       );
 
-      if (Exit.isFailure(exit) && state.lockTimedOut) {
+      if (
+        Exit.isFailure(exit) &&
+        state.lockTimedOut &&
+        onlyLockTimeouts(exit.cause)
+      ) {
         return yield* new AttemptLockTimedOut({ blockers: [...blockers] });
       }
 

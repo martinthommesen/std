@@ -34,7 +34,7 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { changeSetId, errorOf, waitUntil } from "./support.ts";
+import { changeSetId, defectTextOf, errorOf, waitUntil } from "./support.ts";
 
 const FAST_RETRIES = [
   Duration.millis(50),
@@ -492,6 +492,70 @@ describe("driver-smoke-locks", () => {
             );
 
             assert.strictEqual(column?.n, 0);
+            assert.strictEqual(yield* currentRevision, before);
+          })
+        ),
+      { timeout: 30_000 }
+    );
+
+    dbTest.effect(
+      "a defect next to a lock timeout is not retried and keeps its cause",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* defectNextToLockTimeout() {
+            const sql = yield* SqlClient.SqlClient;
+            const { configCommit } = yield* Transactions;
+            const database = yield* TestDatabase;
+            const log = yield* StatementLog;
+            const before = yield* currentRevision;
+            yield* sql`CREATE TABLE smoke_defect (id int)`;
+
+            const blocker = yield* database.session("smoke-defect-reader");
+            yield* blocker.query("BEGIN");
+            yield* blocker.query("SELECT count(*) FROM smoke_defect");
+
+            const alter = lockWaiting(
+              sql`ALTER TABLE smoke_defect ADD COLUMN extra int`
+            );
+
+            // The error handler of the timed-out DDL dies.
+            yield* log.clear;
+
+            const handlerDied = yield* Effect.exit(
+              configCommit(
+                alter.pipe(
+                  Effect.catchTag("SqlError", () =>
+                    Effect.die(new Error("handler defect"))
+                  )
+                ),
+                { retryDelays: FAST_RETRIES }
+              )
+            );
+
+            assert.notInstanceOf(errorOf(handlerDied), SchemaLockTimeout);
+            assert.include(defectTextOf(handlerDied) ?? "", "handler defect");
+            assert.strictEqual(yield* lockAttempts, 1, "no retry");
+
+            // A scope finalizer of the transaction's code dies after the timeout.
+            yield* log.clear;
+
+            const finalizerDied = yield* Effect.exit(
+              configCommit(
+                Effect.addFinalizer(() =>
+                  Effect.die(new Error("finalizer defect"))
+                ).pipe(Effect.andThen(alter)),
+                { retryDelays: FAST_RETRIES }
+              )
+            );
+
+            assert.notInstanceOf(errorOf(finalizerDied), SchemaLockTimeout);
+            assert.include(
+              defectTextOf(finalizerDied) ?? "",
+              "finalizer defect"
+            );
+            assert.strictEqual(yield* lockAttempts, 1, "no retry");
+
+            yield* blocker.query("ROLLBACK");
             assert.strictEqual(yield* currentRevision, before);
           })
         ),

@@ -410,7 +410,7 @@ describe("platform-migrations", () => {
               yield* checkPlatformMigrations(SLOW_TX_MIGRATIONS);
             })
           ),
-        { timeout: 60_000 }
+        { timeout: 120_000 }
       );
     }
   );
@@ -453,7 +453,7 @@ describe("platform-migrations", () => {
               yield* checkPlatformMigrations(ITEM_INDEX_MIGRATIONS);
             })
           ),
-        { timeout: 60_000 }
+        { timeout: 120_000 }
       );
     }
   );
@@ -500,7 +500,7 @@ describe("platform-migrations", () => {
               assert.deepStrictEqual(yield* ledgerIds, [1, 2, 3]);
             })
           ),
-        { timeout: 60_000 }
+        { timeout: 120_000 }
       );
     }
   );

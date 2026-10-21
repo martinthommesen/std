@@ -170,6 +170,13 @@ Checked against the `effect` skill (`.agents/skills/effect`) and the 4.0.5 sourc
 - `makeWorkerWakeup(notify)` builds the wake-up over any notify effect; `WorkerWakeupLayer` uses it with the pooled client.
 - Tests: the debounce runs under `TestClock` with a stub notify; registering wake-ups after commit uses a counting stub, and delivery waits on the LISTEN queue; the detached writer is coordinated with `Deferred`s and its interruption is awaited; `waitUntil` is a `Schedule.spaced` repeat with `Effect.timeoutOrElse`; child processes are killed and awaited on release and on interruption; the retry delays are checked under `TestClock`; the retry-until-free test releases the lock once the second attempt is observed. One test still measures wall time: the full default schedule against a real lock (bounds 7 to 12 s), because the 200 ms lock timeouts run in Postgres.
 
+## Review round 6 (API changes)
+
+- A config commit attempt is retried only when its lock timed out and its cause holds nothing but lock timeouts (failures with SQLSTATE 55P03, raw or as `DatabaseError`). A defect, an interruption or another failure next to the timeout (a failing error handler, a dying scope finalizer) propagates with the whole cause.
+- `hygienic` now replaces driver errors reason by reason (`sanitizeCause`) and keeps every other reason. It used to recover the first `SqlError` failure, which dropped any defect beside it.
+- The lexer reads an optional `UESCAPE '<char>'` clause, with blanks and comments before it, as part of a `U&` identifier or string, as Postgres's parser does, so `WITH U&"!0078" UESCAPE '!' AS (...)` parses as a CTE.
+- Test robustness under a shared, busy Postgres: the `@std/server` and `@std/testing` suites allow 120 s per test and per hook; the harness tests check that a database was cloned from the existing template instead of bounding creation by wall time; concurrent creations start at a `Deferred` gate and are released with the test's scope; `waitUntil` waits up to 60 s by default.
+
 ## Open items
 
 - The root `vitest.config.ts` lists `bench`, which does not exist on this branch, so `pnpm test` from the root fails to start until the benchmark workstream lands; `pnpm -r test` runs both packages.
