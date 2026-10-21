@@ -46,6 +46,23 @@ describe("effect-stability-diagnostics", () => {
     );
   });
 
+  // Contracts 6 "Acceptance tests": client code written against the shared
+  // `@std/api` definition type-checks, and the same code fails `tsc` once
+  // an endpoint changes incompatibly (sign-in's `login` renamed).
+  it("fails client code after an incompatible endpoint change", async () => {
+    const [compatible, drifted] = await Promise.all([
+      runTsc("api-compatible"),
+      runTsc("api-drift"),
+    ]);
+
+    expect([compatible.code, compatible.output]).toStrictEqual([0, ""]);
+    expect(drifted.code).toBe(1);
+    expect(drifted.output).toContain("api-drift/src/client.ts");
+    expect(drifted.output).toContain(
+      "'login' does not exist in type '{ readonly password: string; readonly username: string; }'"
+    );
+  });
+
   it("fails effect/sql in the web profile", async () => {
     const result = await runTsc("web-sql");
 
@@ -74,10 +91,12 @@ describe("effect-stability-diagnostics", () => {
       fixture("outdated"),
       fixture("duplicate"),
       fixture("plain-bypass"),
+      fixture("api-compatible"),
+      fixture("api-drift"),
     ]);
 
     expect(result.output).toBe(
-      "check-tsconfig: 10 package(s) match their profiles\n"
+      "check-tsconfig: 12 package(s) match their profiles\n"
     );
     expect(result.code).toBe(0);
   });

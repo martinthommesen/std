@@ -61,12 +61,19 @@ export const makeStdClient = (options: StdClientOptions) => {
 
 /**
  * The client side of the `Authentication` middleware: sends the session
- * token as `Authorization: Bearer <token>`.
+ * token as `Authorization: Bearer <token>`. `HttpApiClient.make` needs it
+ * for every client of the API; a client built before sign-in passes no
+ * token and sends no header (the server answers `Unauthenticated` on
+ * endpoints that need a session).
  *
- * @param token - The token sign-in returned.
+ * @param token - The token sign-in returned, if any.
  * @returns The client middleware layer.
  */
-export const authenticationClient = (token: Redacted.Redacted) =>
+export const authenticationClient = (token?: Redacted.Redacted) =>
   HttpApiMiddleware.layerClient(Authentication, ({ next, request }) =>
-    next(HttpClientRequest.bearerToken(request, token))
+    next(
+      token === undefined
+        ? request
+        : HttpClientRequest.bearerToken(request, token)
+    )
   );
