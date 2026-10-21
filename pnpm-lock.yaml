@@ -293,6 +293,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@std/values':
+        specifier: workspace:*
+        version: link:../values
       effect:
         specifier: 'catalog:'
         version: 4.0.5

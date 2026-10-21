@@ -1,3 +1,5 @@
+import { invalidValue } from "@std/api/errors/field-errors";
+import type { FieldError } from "@std/api/errors/field-errors";
 /**
  * Proposed values and their validation (Contracts 2.5, 3.8, 6.5, 6.7).
  *
@@ -33,8 +35,6 @@ import { planCreate, planUpdate } from "@std/values/write";
 import type { PayloadEntry } from "@std/values/write";
 import { isPlaintext } from "@std/values/write-only";
 
-import { invalidValue } from "./field-errors.ts";
-import type { FieldError } from "./field-errors.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { isInputOfKind } from "./stored-values.ts";
 import type { WriteBody } from "./write-body.ts";

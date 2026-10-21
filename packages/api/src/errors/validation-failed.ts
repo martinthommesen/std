@@ -14,7 +14,11 @@ import { FieldErrorSchema } from "./field-errors.ts";
 export class ValidationFailed extends Schema.TaggedError<
   ValidationFailed,
   { readonly brand: unique symbol }
->()("ValidationFailed", { errors: Schema.Array(FieldErrorSchema) }) {
+>()(
+  "ValidationFailed",
+  { errors: Schema.Array(FieldErrorSchema) },
+  { httpApiStatus: 422 }
+) {
   /**
    * Names the fields and error kinds, never a value.
    * @returns The message.

@@ -11,7 +11,7 @@ import { Schema } from "effect";
 export class Referenced extends Schema.TaggedError<
   Referenced,
   { readonly brand: unique symbol }
->()("Referenced", {}) {
+>()("Referenced", {}, { httpApiStatus: 409 }) {
   /** A fixed message that names nothing. */
   override readonly message = "Other records refer to this record";
 }

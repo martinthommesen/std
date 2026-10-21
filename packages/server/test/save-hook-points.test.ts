@@ -6,12 +6,12 @@
  * projection shows only the endpoint's fields.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { DefinitionId } from "@std/definitions/ids";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { DecodedInput } from "@std/values/field-value";
 import { Effect, Ref } from "effect";
 
-import { NotAllowed } from "../src/records/not-allowed.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { BeforeWriteInput } from "../src/records/save-hooks.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";

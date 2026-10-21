@@ -1,3 +1,4 @@
+import type { NotAllowed } from "@std/api/errors/not-allowed";
 /**
  * The authorization seam of the save pipeline (Contracts 3.2, 3.6, 3.9).
  *
@@ -23,7 +24,6 @@ import { Context, Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
-import type { NotAllowed } from "./not-allowed.ts";
 import { existingTargets } from "./save-sql.ts";
 import type { StoredRecord } from "./stored-record.ts";
 

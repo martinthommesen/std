@@ -11,7 +11,7 @@ import { Schema } from "effect";
 export class NotAllowed extends Schema.TaggedError<
   NotAllowed,
   { readonly brand: unique symbol }
->()("NotAllowed", {}) {
+>()("NotAllowed", {}, { httpApiStatus: 403 }) {
   /** A fixed message that names nothing. */
   override readonly message = "The operation is not allowed";
 }

@@ -11,10 +11,14 @@ import { Schema } from "effect";
 export class VersionConflict extends Schema.TaggedError<
   VersionConflict,
   { readonly brand: unique symbol }
->()("VersionConflict", {
-  /** The version the record has now. */
-  currentVersion: Schema.Int,
-}) {
+>()(
+  "VersionConflict",
+  {
+    /** The version the record has now. */
+    currentVersion: Schema.Int,
+  },
+  { httpApiStatus: 409 }
+) {
   /**
    * Names the current version.
    * @returns The message.

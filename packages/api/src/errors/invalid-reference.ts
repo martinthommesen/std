@@ -11,10 +11,14 @@ import { Schema } from "effect";
 export class InvalidReference extends Schema.TaggedError<
   InvalidReference,
   { readonly brand: unique symbol }
->()("InvalidReference", {
-  /** The reference field's API name. */
-  field: Schema.String,
-}) {
+>()(
+  "InvalidReference",
+  {
+    /** The reference field's API name. */
+    field: Schema.String,
+  },
+  { httpApiStatus: 422 }
+) {
   /**
    * Names the field, never the target.
    * @returns The message.
