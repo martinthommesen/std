@@ -99,8 +99,11 @@ describe("write-leaks", () => {
                 expectedVersion: version,
                 id: M,
               }).pipe(
-                Effect.provide(RuleWriteAccess),
-                Effect.provide(Actor.forUser(fixture.alice.id))
+                Effect.provide(
+                  RuleWriteAccess.pipe(
+                    Layer.provideMerge(Actor.forUser(fixture.alice.id))
+                  )
+                )
               );
 
               const sql = yield* SqlClient.SqlClient;
