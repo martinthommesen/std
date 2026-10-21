@@ -24,6 +24,7 @@ import { runUpgrade } from "../src/config/upgrade.ts";
 import { unicodeMajorMinor } from "../src/doctor/check-server.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import type { Finding, Severity } from "../src/doctor/finding.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { SqlLayer } from "../src/sql/layer.ts";
 import { CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
@@ -36,6 +37,9 @@ import {
   insertRecordsSql,
   schemaTestLayer,
 } from "./schema-support.ts";
+
+/** A local override making `acme.asset.cost` read-only on laptops. */
+const COST_OVERRIDE = "5d3f0f3e-3d77-4f0a-9d0c-6f1f3a1c2b44";
 
 /** `acme.asset.owner`, a reference to `core.user`. */
 const ASSET_OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
@@ -296,6 +300,37 @@ const DRIFTS: readonly Drift[] = [
     ],
   },
   {
+    expected: expect(2, "error", "tableMissing", "core.namespace"),
+    name: "a dropped platform table",
+    statements: ["DROP TABLE core.namespace CASCADE"],
+  },
+  {
+    expected: expect(
+      2,
+      "error",
+      "constraintMismatch",
+      `acme.asset/${name("sc", ACME.asset)}`
+    ),
+    name: "a subtree CHECK turned from IN to NOT IN",
+    statements: [
+      `ALTER TABLE acme.asset DROP CONSTRAINT ${name("sc", ACME.asset)},
+         ADD CONSTRAINT ${name("sc", ACME.asset)} CHECK (class_id NOT IN ('${ACME.asset}'::uuid, '${ACME.laptop}'::uuid, '${ACME.monitor}'::uuid)) NOT VALID`,
+    ],
+  },
+  {
+    expected: expect(
+      2,
+      "error",
+      "constraintMismatch",
+      `fx.item/${name("ck", FX.x)}`
+    ),
+    name: "a max-length CHECK weakened with OR true",
+    statements: [
+      `ALTER TABLE fx.item DROP CONSTRAINT ${name("ck", FX.x)},
+         ADD CONSTRAINT ${name("ck", FX.x)} CHECK (char_length(x) <= 255 OR true)`,
+    ],
+  },
+  {
     expected: expect(11, "warning", "columnHeadroom", "fx.wide"),
     name: "1,400 columns",
     statements: [
@@ -479,6 +514,118 @@ describe("doctor", () => {
               ),
               []
             );
+          })
+        )
+    );
+
+    dbTest.effect(
+      "a valid override with nothing to violate, and a search_path that qualifies differently, keep doctor clean",
+      () =>
+        Effect.gen(function* valid() {
+          yield* applyChangeSet({
+            operations: [
+              {
+                definition: {
+                  classId: ACME.laptop,
+                  default: null,
+                  fieldId: ACME.cost,
+                  helpText: null,
+                  id: COST_OVERRIDE,
+                  kind: "override",
+                  label: null,
+                  max: null,
+                  maxLength: null,
+                  min: null,
+                  owner: { layer: "local" },
+                  protected: false,
+                  readOnly: true,
+                  required: null,
+                },
+                op: "setOverride",
+                version: null,
+              },
+            ],
+          });
+
+          const database = yield* TestDatabase;
+
+          yield* run(
+            `ALTER DATABASE "${database.name}" SET search_path = core, public`
+          );
+
+          const qualified = yield* doctorOnFreshPool(database.url);
+
+          yield* run(`ALTER DATABASE "${database.name}" RESET search_path`);
+
+          assert.deepStrictEqual(notInfo(qualified.findings), []);
+          assert.strictEqual((yield* runDoctor()).exitCode, 0);
+        })
+    );
+
+    dbTest.effect(
+      "definitions are read from their tables, not from the cache: a direct edit without a revision is seen",
+      () =>
+        Effect.gen(function* uncached() {
+          assert.strictEqual((yield* runDoctor()).exitCode, 0);
+
+          yield* run(
+            `UPDATE core.field SET label = 'Edited by hand' WHERE id = '${FX.x}'::uuid`
+          );
+
+          const edited = yield* runDoctor();
+
+          yield* run(
+            `UPDATE core.field SET label = 'X v1' WHERE id = '${FX.x}'::uuid`
+          );
+
+          assert.isTrue(
+            edited.findings.some(
+              (entry) =>
+                entry.code === "effectiveMismatch" && entry.subject === FX.x
+            )
+          );
+          assert.isTrue(
+            edited.findings.some(
+              (entry) =>
+                entry.code === "definitionRevisionStale" &&
+                entry.subject === FX.x
+            )
+          );
+          assert.strictEqual(edited.exitCode, 1);
+        })
+    );
+
+    dbTest.effect(
+      "a table lock held past the diagnostic lock timeout gives a diagnosticTimeout finding and exit 1",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* locked() {
+            const database = yield* TestDatabase;
+            const holder = yield* database.session("table-locker");
+
+            yield* holder.query("BEGIN");
+            yield* holder.query(
+              "LOCK TABLE core.config_state IN ACCESS EXCLUSIVE MODE"
+            );
+
+            const report = yield* runDoctor();
+
+            yield* holder.query("ROLLBACK");
+
+            assert.deepStrictEqual(
+              report.findings.map((entry) => [
+                entry.check,
+                entry.severity,
+                entry.code,
+                entry.subject,
+              ]),
+              [[0, "error", "diagnosticTimeout", "core.config_state"]]
+            );
+            assert.include(
+              report.findings[0]?.message ?? "",
+              `pid ${holder.processId}`
+            );
+            assert.strictEqual(report.exitCode, 1);
           })
         )
     );

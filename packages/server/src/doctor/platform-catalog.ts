@@ -1,8 +1,13 @@
 /**
  * The expected catalog of the platform tables (Contracts 1.9): what the
  * platform migrations create, recorded from a freshly migrated database in
- * `platform-catalog.json` (columns with types, nullability and defaults;
- * constraints, indexes and triggers with their definitions and validity).
+ * `platform-catalog.json`: columns with types, nullability and defaults;
+ * constraints by kind, columns, referenced table and columns, actions,
+ * deferrability, validity and, for CHECKs, their deparsed expression;
+ * indexes by method, keys, predicate, uniqueness and validity; triggers by
+ * function, type bits, enabled state and `WHEN` condition. Everything is
+ * structural or names no relation, so the record does not depend on the
+ * session's `search_path`.
  * The ledger's checksums prove which migrations ran, not that their objects
  * are intact; `doctor` compares the live catalog with this record.
  *
@@ -25,23 +30,34 @@ const ColumnSchema = Schema.Struct({
 });
 
 const ConstraintSchema = Schema.Struct({
+  check: Schema.NullOr(Schema.String),
+  columns: Schema.Array(Schema.String),
   deferrable: Schema.Boolean,
   deferred: Schema.Boolean,
-  definition: Schema.String,
+  deleteAction: Schema.String,
   name: Schema.String,
+  referencedColumns: Schema.Array(Schema.String),
+  references: Schema.NullOr(Schema.String),
   type: Schema.String,
+  updateAction: Schema.String,
   validated: Schema.Boolean,
 });
 
 const IndexSchema = Schema.Struct({
-  definition: Schema.String,
+  keys: Schema.Array(Schema.String),
+  method: Schema.String,
   name: Schema.String,
+  predicate: Schema.NullOr(Schema.String),
+  unique: Schema.Boolean,
   valid: Schema.Boolean,
 });
 
 const TriggerSchema = Schema.Struct({
-  definition: Schema.String,
+  enabled: Schema.String,
+  function: Schema.String,
   name: Schema.String,
+  type: Schema.Int,
+  when: Schema.NullOr(Schema.String),
 });
 
 /** The expected catalog of one platform table. */
@@ -92,24 +108,43 @@ export const describeTable = (facts: TableFacts): PlatformTable => ({
           },
         ]
   ),
+  // Structural columns only: deparsed definitions of keys, references and
+  // indexes qualify relation names according to the session's search_path.
+  // A CHECK's definition names no relation, so it is kept as deparsed.
   constraints: byName(
     facts.constraints.map((entry) => ({
+      check: entry.type === "c" ? entry.definition : null,
+      columns: entry.columns,
       deferrable: entry.deferrable,
       deferred: entry.deferred,
-      definition: entry.definition,
+      deleteAction: entry.deleteAction,
       name: entry.name,
+      referencedColumns: entry.referencedColumns,
+      references: entry.references,
       type: entry.type,
+      updateAction: entry.updateAction,
       validated: entry.validated,
     }))
   ),
   indexes: byName(
     facts.indexes.map((entry) => ({
-      definition: entry.definition,
+      keys: entry.keys,
+      method: entry.method,
       name: entry.name,
+      predicate: entry.predicate,
+      unique: entry.unique,
       valid: entry.valid,
     }))
   ),
-  triggers: byName(facts.triggers),
+  triggers: byName(
+    facts.triggers.map((entry) => ({
+      enabled: entry.enabled,
+      function: entry.function,
+      name: entry.name,
+      type: entry.type,
+      when: entry.when,
+    }))
+  ),
 });
 
 /**

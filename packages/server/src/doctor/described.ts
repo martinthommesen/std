@@ -90,9 +90,10 @@ const LEVEL_SYSTEM: readonly (readonly [string, string])[] = [
   ["class_id", "uuid"],
 ];
 
-const UUID = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gu;
-
 const IDENTIFIER_QUOTES = /"/gu;
+
+/** The suffix `pg_get_constraintdef` adds to a constraint not validated yet. */
+const NOT_VALID = / NOT VALID$/u;
 
 /**
  * The table of every class (tombstones included).
@@ -176,30 +177,49 @@ export const describedColumns = (
 const always = (): boolean => true;
 
 /**
- * Whether a CHECK lists exactly the subtree's class IDs.
+ * The definition Postgres 18 deparses a subtree CHECK to
+ * (`pg_get_constraintdef`), from the class IDs in the order the DDL lists
+ * them: `class_id = 'x'::uuid` for one, `class_id = ANY (ARRAY[...])` for
+ * several.
  *
- * @param subtreeIds - The class IDs of the subtree.
- * @returns A test of `pg_get_constraintdef`.
+ * @param subtreeIds - The class IDs of the subtree, in DDL order.
+ * @returns The canonical definition.
  */
-const listsSubtree =
-  (subtreeIds: readonly string[]) =>
-  (definition: string): boolean =>
-    [...new Set(definition.match(UUID))].toSorted().join(",") ===
-    [...subtreeIds].toSorted().join(",");
+export const subtreeCheckDefinition = (
+  subtreeIds: readonly string[]
+): string => {
+  const literals = subtreeIds.map((id) => `'${id}'::uuid`);
+
+  return literals.length === 1
+    ? `CHECK ((class_id = ${literals[0] ?? ""}))`
+    : `CHECK ((class_id = ANY (ARRAY[${literals.join(", ")}])))`;
+};
 
 /**
- * Whether a CHECK limits a column to a maximum length.
+ * The definition Postgres 18 deparses a max-length CHECK to, with the
+ * column unquoted.
  *
  * @param column - The column.
  * @param length - The maximum length in code points.
+ * @returns The canonical definition.
+ */
+export const lengthCheckDefinition = (column: string, length: number): string =>
+  `CHECK ((char_length(${column}) <= ${length}))`;
+
+/**
+ * Whether a live CHECK is exactly the canonical one (its validity is
+ * checked separately, so a `NOT VALID` suffix is ignored). Postgres quotes an
+ * identifier only when it must (`"user"`), so identifier quotes are removed
+ * before comparing; the expressions STD generates hold no other `"`.
+ *
+ * @param expected - The canonical definition.
  * @returns A test of `pg_get_constraintdef`.
  */
-const limitsLength =
-  (column: string, length: number) =>
+const isExactly =
+  (expected: string) =>
   (definition: string): boolean =>
-    definition
-      .replaceAll(IDENTIFIER_QUOTES, "")
-      .includes(`char_length(${column}) <= ${length}`);
+    definition.replaceAll(IDENTIFIER_QUOTES, "").replace(NOT_VALID, "") ===
+    expected;
 
 const key = (
   name: string,
@@ -276,7 +296,7 @@ const classConstraints = (
         definition.enforcementNote === WIDENED_CHECK_NOTE
           ? "widened"
           : "enforced",
-      matches: listsSubtree(snapshot.subtreeIds(id)),
+      matches: isExactly(subtreeCheckDefinition(snapshot.subtreeIds(id))),
       name: generatedName("sc", id),
       references: null,
       type: "c",
@@ -326,7 +346,9 @@ const fieldConstraints = (
       columns: [field.name],
       deleteAction: null,
       enforcement,
-      matches: limitsLength(field.name, maxLengthOf(field.type)),
+      matches: isExactly(
+        lengthCheckDefinition(field.name, maxLengthOf(field.type))
+      ),
       name: generatedName("ck", field.id),
       references: null,
       type: "c",

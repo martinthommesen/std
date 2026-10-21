@@ -471,6 +471,10 @@ const overrideViolations = Effect.fn("Doctor.overrideViolations")(
 
         const subtree = snapshot.subtreeIds(override.classId);
 
+        if (predicates.length === 0) {
+          continue;
+        }
+
         const [row] = yield* readOnly(
           sql.unsafe(
             `SELECT count(*)::text AS n,
@@ -488,7 +492,7 @@ const overrideViolations = Effect.fn("Doctor.overrideViolations")(
 
         const count = Number(row?.n ?? "0");
 
-        if (predicates.length > 0 && count > 0) {
+        if (count > 0) {
           found.push(
             finding(
               8,

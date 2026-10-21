@@ -28,7 +28,7 @@ import type { DefinitionInvalid } from "@std/definitions/problems";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { Catalog } from "../catalog/catalog.ts";
+import { loadSnapshot } from "../catalog/load.ts";
 import { layerTablesExist, readLayerState } from "../config/layer-store.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
@@ -36,6 +36,7 @@ import type { DatabaseError } from "../sql/errors.ts";
 import { parseConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import { DIAGNOSTIC_LOCK_TIMEOUT } from "../sql/transaction.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { readCatalogFacts, tableKey } from "./catalog-facts.ts";
 import {
@@ -64,8 +65,10 @@ import {
   checkServerSettings,
   checkUnicodeVersion,
 } from "./check-server.ts";
-import { exitCodeOf } from "./finding.ts";
+import { migrationTables } from "./described.ts";
+import { exitCodeOf, finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
+import { checkPlatformTables } from "./platform-catalog.ts";
 
 /** Options of a `doctor` run. */
 export interface DoctorOptions {
@@ -86,24 +89,23 @@ export interface DoctorReport {
 const byCheck = (findings: readonly Finding[]): readonly Finding[] =>
   findings.toSorted((left, right) => left.check - right.check);
 
-const decodePresence = decodeRows(Schema.Struct({ present: Schema.Boolean }));
+const decodeLocks = decodeRows(
+  Schema.Struct({
+    mode: Schema.String,
+    pid: Schema.Int,
+    relation: Schema.String,
+  })
+);
 
 /**
- * The configuration state and snapshot in the diagnostic transaction, read
- * from `core.config_state` without `begin_request()` (no advisory lock);
- * none before the platform migrations created the definition tables.
+ * The configuration state and snapshot in the diagnostic transaction: the
+ * state read from `core.config_state` without `begin_request()` (no
+ * advisory lock), and the definitions loaded from their tables in this
+ * transaction, never from the runtime's cache, so drift that bypassed a
+ * revision bump is seen.
  */
 const diagnosticState = Effect.gen(function* diagnosticState() {
   const sql = yield* SqlClient.SqlClient;
-  const catalog = yield* Catalog;
-
-  const [presence] = yield* readOnly(
-    sql`SELECT to_regclass('core.namespace') IS NOT NULL AND to_regclass('core.config_state') IS NOT NULL AS present`
-  ).pipe(Effect.flatMap(decodePresence));
-
-  if (presence?.present !== true) {
-    return null;
-  }
 
   const state = yield* parseConfigState(
     yield* readOnly(
@@ -113,7 +115,7 @@ const diagnosticState = Effect.gen(function* diagnosticState() {
 
   return {
     layers: yield* readLayerState,
-    snapshot: yield* catalog.at(state),
+    snapshot: yield* loadSnapshot(state),
   };
 });
 
@@ -126,13 +128,16 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkServerSettings),
   ];
 
-  const installed = yield* diagnosticState;
+  // The platform tables are compared with their migrations first and on
+  // their own: definitions can only be loaded when all of them exist.
+  const core = yield* readCatalogFacts(["core"]);
+  const platformComplete = [...migrationTables()].every((key) => core.has(key));
 
-  if (installed === null) {
-    return server;
+  if (!platformComplete) {
+    return [...server, ...checkPlatformTables(core)];
   }
 
-  const { snapshot, layers } = installed;
+  const { snapshot, layers } = yield* diagnosticState;
   const catalog = yield* readCatalogFacts(stdSchemas(snapshot));
 
   const exists = (classId: string): boolean => {
@@ -171,11 +176,57 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
   ];
 });
 
+/** SQLSTATE of a lock timeout. */
+const LOCK_NOT_AVAILABLE = "55P03";
+
+/**
+ * The finding for a diagnostic transaction that timed out waiting for a
+ * table lock, naming the strong locks other sessions hold, read after the
+ * rollback in a second short diagnostic transaction.
+ *
+ * @returns One `diagnosticTimeout` error.
+ */
+const lockTimeoutFinding = Effect.gen(function* lockTimeoutFinding() {
+  const { diagnostic } = yield* Transactions;
+
+  const locks = yield* diagnostic(
+    SqlClient.SqlClient.pipe(
+      Effect.flatMap((sql) =>
+        readOnly(sql`
+          SELECT l.relation::regclass::text AS relation, l.pid, l.mode
+          FROM pg_locks l
+          WHERE l.locktype = 'relation' AND l.granted AND l.pid <> pg_backend_pid()
+            AND l.mode IN ('AccessExclusiveLock', 'ExclusiveLock')
+            AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+          ORDER BY 1, 2`)
+      ),
+      Effect.flatMap(decodeLocks)
+    )
+  ).pipe(Effect.orElseSucceed(() => []));
+
+  const holders =
+    locks.length === 0
+      ? "no strong lock was visible afterwards"
+      : locks
+          .map((lock) => `${lock.relation} (${lock.mode}, pid ${lock.pid})`)
+          .join(", ");
+
+  return finding(
+    0,
+    "error",
+    "diagnosticTimeout",
+    `doctor could not finish: a table it reads stayed locked longer than ${DIAGNOSTIC_LOCK_TIMEOUT}; locks held: ${holders}. Rerun doctor when the schema change or session ends.`,
+    locks[0]?.relation ?? null
+  );
+});
+
 /**
  * Runs every check in one diagnostic transaction (`Transactions.diagnostic`:
  * REPEATABLE READ READ ONLY, one snapshot, no advisory locks, every
  * statement marked read-only), so it neither changes anything nor waits
- * for a config commit or a schema change's coordinator.
+ * for a config commit or a schema change's coordinator. If a table read
+ * waits longer than the diagnostic lock timeout, the transaction rolls back
+ * and the report holds one `diagnosticTimeout` error (check 0) instead.
  *
  * @param options - Migrations and the core set to compare with.
  * @returns The findings and the exit code.
@@ -185,10 +236,19 @@ export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
 ): Effect.fn.Return<
   DoctorReport,
   DatabaseError | DefinitionInvalid,
-  Catalog | Transactions
+  Transactions
 > {
   const { diagnostic } = yield* Transactions;
-  const findings = byCheck(yield* diagnostic(allChecks(options)));
+
+  const findings = byCheck(
+    yield* diagnostic(allChecks(options)).pipe(
+      Effect.catchTag("DatabaseError", (failure) =>
+        failure.sqlState === LOCK_NOT_AVAILABLE
+          ? lockTimeoutFinding.pipe(Effect.map((entry) => [entry]))
+          : Effect.fail(failure)
+      )
+    )
+  );
 
   return { exitCode: exitCodeOf(findings), findings };
 });

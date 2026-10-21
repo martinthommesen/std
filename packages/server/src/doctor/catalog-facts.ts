@@ -44,20 +44,34 @@ export interface ConstraintFact {
   readonly definition: string;
 }
 
-/** An index of a table. */
+/**
+ * An index of a table, described structurally, so the description does
+ * not depend on the session's `search_path` (which changes how Postgres
+ * qualifies relation names in `pg_get_indexdef`).
+ */
 export interface IndexFact {
   readonly name: string;
   readonly valid: boolean;
   readonly unique: boolean;
-  /** `pg_get_indexdef`. */
-  readonly definition: string;
+  /** The access method, for example `btree`. */
+  readonly method: string;
+  /** Each key and included column or expression (`pg_get_indexdef(oid, k, true)`). */
+  readonly keys: readonly string[];
+  /** The partial index's predicate, or null. */
+  readonly predicate: string | null;
 }
 
-/** A trigger of a table. */
+/** A trigger of a table, described structurally. */
 export interface TriggerFact {
   readonly name: string;
-  /** `pg_get_triggerdef`. */
-  readonly definition: string;
+  /** The trigger function, `schema.name`. */
+  readonly function: string;
+  /** `pg_trigger.tgtype`: timing, level and events as bits. */
+  readonly type: number;
+  /** `pg_trigger.tgenabled`. */
+  readonly enabled: string;
+  /** The `WHEN` condition, or null. */
+  readonly when: string | null;
 }
 
 /** One table and everything on it. */
@@ -110,8 +124,10 @@ const decodeConstraints = decodeRows(
 
 const decodeIndexes = decodeRows(
   Schema.Struct({
-    definition: Schema.String,
+    keys: Names,
+    method: Schema.String,
     name: Schema.String,
+    predicate: Schema.NullOr(Schema.String),
     schema: Schema.String,
     table: Schema.String,
     unique: Schema.Boolean,
@@ -121,10 +137,13 @@ const decodeIndexes = decodeRows(
 
 const decodeTriggers = decodeRows(
   Schema.Struct({
-    definition: Schema.String,
+    enabled: Schema.String,
+    function: Schema.String,
     name: Schema.String,
     schema: Schema.String,
     table: Schema.String,
+    type: Schema.Int,
+    when: Schema.NullOr(Schema.String),
   })
 );
 
@@ -189,18 +208,25 @@ const CONSTRAINTS_QUERY = `SELECT n.nspname AS schema, c.relname AS table, con.c
   WHERE ${IN_SCHEMAS}`;
 
 const INDEXES_QUERY = `SELECT n.nspname AS schema, t.relname AS table, i.relname AS name,
-    x.indisvalid AS valid, x.indisunique AS unique, pg_get_indexdef(x.indexrelid) AS definition
+    x.indisvalid AS valid, x.indisunique AS unique, am.amname AS method,
+    coalesce((SELECT json_agg(pg_get_indexdef(x.indexrelid, k, true) ORDER BY k)
+      FROM generate_series(1, x.indnatts) AS k), '[]')::text AS keys,
+    pg_get_expr(x.indpred, x.indrelid, true) AS predicate
   FROM pg_index x
   JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_am am ON am.oid = i.relam
   JOIN pg_class t ON t.oid = x.indrelid
   JOIN pg_namespace n ON n.oid = t.relnamespace
   WHERE ${IN_SCHEMAS}`;
 
 const TRIGGERS_QUERY = `SELECT n.nspname AS schema, c.relname AS table, t.tgname AS name,
-    pg_get_triggerdef(t.oid) AS definition
+    fn.nspname || '.' || p.proname AS function, t.tgtype::int4 AS type, t.tgenabled::text AS enabled,
+    substring(pg_get_triggerdef(t.oid, true) from 'WHEN \\((.*)\\) EXECUTE ') AS when
   FROM pg_trigger t
   JOIN pg_class c ON c.oid = t.tgrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_proc p ON p.oid = t.tgfoid
+  JOIN pg_namespace fn ON fn.oid = p.pronamespace
   WHERE NOT t.tgisinternal AND ${IN_SCHEMAS}`;
 
 /**
@@ -257,14 +283,19 @@ export const readCatalogFacts = Effect.fn("Doctor.readCatalogFacts")(
             validated: entry.validated,
           })),
           indexes: (indexes.get(key) ?? []).map((entry) => ({
-            definition: entry.definition,
+            keys: entry.keys,
+            method: entry.method,
             name: entry.name,
+            predicate: entry.predicate,
             unique: entry.unique,
             valid: entry.valid,
           })),
           triggers: (triggers.get(key) ?? []).map((entry) => ({
-            definition: entry.definition,
+            enabled: entry.enabled,
+            function: entry.function,
             name: entry.name,
+            type: entry.type,
+            when: entry.when,
           })),
         };
 
