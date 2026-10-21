@@ -8,10 +8,13 @@ import type { PgClient } from "@effect/sql-pg/PgClient";
 import { Effect } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
+import { compileBranchedList } from "./compile.ts";
 import { BenchError } from "./errors.ts";
 import { CountRow, decodeRows, IdRow } from "./execute.ts";
 import type { PlannedModel } from "./generate.ts";
 import { instancesOf, runRequest } from "./measure.ts";
+import type { Compiled } from "./sql-text.ts";
+import type { ModelContext, StorageModel } from "./storage-model.ts";
 import type { ReadDef, ReadInstance, Samples } from "./workload.ts";
 import { compileInstance, reads } from "./workload.ts";
 
@@ -118,4 +121,74 @@ export const checkEquivalence = (
     }
 
     return results.flatMap((result) => result.checked);
+  });
+
+const idsOf = (
+  statements: readonly Compiled[]
+): Effect.Effect<string, SqlError | BenchError, PgClient> =>
+  Effect.gen(function* readIds() {
+    const results = yield* runRequest(statements);
+    const page = results.at(-1) ?? [];
+    const rows = yield* decodeRows(IdRow, page);
+
+    return rows.map((row) => row.id).join(",");
+  });
+
+/**
+ * Checks that the branch form returns the same rows in the same order as
+ * the plain form, for every restricted first-page list read.
+ *
+ * @param model - The storage model.
+ * @param ctx - Its schema and sizes.
+ * @param samples - Parameter samples.
+ * @param seed - The run's seed.
+ * @param count - Instances per read.
+ * @returns One line per checked read; fails on any difference.
+ */
+export const checkBranchedEquivalence = (
+  model: StorageModel,
+  ctx: ModelContext,
+  samples: Samples,
+  seed: number,
+  count: number
+): Effect.Effect<readonly string[], SqlError | BenchError, PgClient> =>
+  Effect.gen(function* checkBranched() {
+    const lines: string[] = [];
+
+    for (const def of reads) {
+      const instances = instancesOf(def, samples, seed, count).filter(
+        (instance) =>
+          instance.kind === "list" &&
+          instance.depth === 0 &&
+          instance.caller.kind === "restricted"
+      );
+
+      for (const [index, instance] of instances.entries()) {
+        const expected = yield* idsOf(
+          yield* compileInstance(model, ctx, instance)
+        );
+
+        const actual =
+          instance.kind === "list"
+            ? yield* idsOf([
+                compileBranchedList(
+                  { caller: instance.caller, ctx, model },
+                  instance.query
+                ),
+              ])
+            : expected;
+
+        if (expected !== actual) {
+          return yield* new BenchError({
+            message: `${model.id}: branch form differs from plain form on ${def.name} #${index}`,
+          });
+        }
+      }
+
+      if (instances.length > 0) {
+        lines.push(`${def.name}: ${instances.length} requests agree`);
+      }
+    }
+
+    return lines;
   });

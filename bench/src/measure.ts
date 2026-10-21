@@ -119,14 +119,46 @@ const explain = (
     return lines.map((line) => line["QUERY PLAN"]).join("\n");
   });
 
-const planOf = (
-  statement: Compiled
-): Effect.Effect<StatementPlan, SqlError | BenchError, PgClient> =>
-  Effect.map(explain(statement), (plan) => ({
-    params: statement.params,
-    plan,
-    text: statement.text,
-  }));
+const isSetting = (statement: Compiled): boolean =>
+  statement.text.startsWith("SET ");
+
+// Explains a request's statements in one transaction; `SET LOCAL` statements run, the others are explained.
+const plansOf = (
+  statements: readonly Compiled[]
+): Effect.Effect<readonly StatementPlan[], SqlError | BenchError, PgClient> =>
+  Effect.gen(function* explainRequest() {
+    const sql = yield* PgClient;
+
+    const explainAll = Effect.gen(function* explainInTransaction() {
+      const plans: StatementPlan[] = [];
+
+      for (const statement of statements) {
+        if (isSetting(statement)) {
+          yield* execute(statement);
+        } else {
+          plans.push({
+            params: statement.params,
+            plan: yield* explain(statement),
+            text: statement.text,
+          });
+        }
+      }
+
+      return plans;
+    });
+
+    return yield* sql.withTransaction(explainAll);
+  });
+
+/** How a request is compiled, and which instances it draws. */
+export interface ReadVariant {
+  /** Compiles one instance; defaults to the plain form. */
+  readonly compile?: (
+    instance: ReadInstance
+  ) => Effect.Effect<readonly Compiled[], SqlError | BenchError, PgClient>;
+  /** Draw the instances of this read instead, so variants share parameters. */
+  readonly seedName?: string;
+}
 
 /**
  * Measures one read against one model.
@@ -134,14 +166,21 @@ const planOf = (
  * @param target - The model, its context and the samples.
  * @param def - The read.
  * @param config - Warm-up runs, measured runs and seed.
+ * @param variant - How to compile the request and which read's parameters to draw (defaults to the plain form).
  * @returns p50, p95 and the median run's plans.
  */
 export const measureRead = (
   target: ReadTarget,
   def: ReadDef,
-  config: ReadConfig
+  config: ReadConfig,
+  variant: ReadVariant = {}
 ): Effect.Effect<ReadResult, SqlError | BenchError, PgClient> =>
   Effect.gen(function* measureOneRead() {
+    const compile =
+      variant.compile ??
+      ((instance: ReadInstance) =>
+        compileInstance(target.model, target.ctx, instance));
+
     const warmup = def.decisive
       ? config.warmup
       : Math.min(config.warmup, supplementaryWarmup);
@@ -151,17 +190,13 @@ export const measureRead = (
       : Math.min(config.runs, supplementaryRuns);
 
     const instances = instancesOf(
-      def,
+      { ...def, name: variant.seedName ?? def.name },
       target.samples,
       config.seed,
       warmup + runs
     );
 
-    const requests = yield* Effect.all(
-      instances.map((instance) =>
-        compileInstance(target.model, target.ctx, instance)
-      )
-    );
+    const requests = yield* Effect.all(instances.map(compile));
 
     for (const request of requests.slice(0, warmup)) {
       yield* runRequest(request);
@@ -172,7 +207,13 @@ export const measureRead = (
 
     for (const request of requests.slice(warmup)) {
       const begin = performance.now();
-      const [page = []] = yield* runRequest(request);
+      const results = yield* runRequest(request);
+
+      const page =
+        results.find(
+          (_rows, index) =>
+            !isSetting(request[index] ?? { params: [], text: "" })
+        ) ?? [];
 
       timings.push(performance.now() - begin);
       rows += page.length;
@@ -180,7 +221,7 @@ export const measureRead = (
 
     const median = medianIndex(timings);
     const medianRequest = requests[warmup + median] ?? [];
-    const plans = yield* Effect.all(medianRequest.map(planOf));
+    const plans = yield* plansOf(medianRequest);
 
     return {
       caller: def.caller,

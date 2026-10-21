@@ -22,7 +22,7 @@ import {
 import { decide, explainStep } from "./decision.ts";
 import type { LoadWindow } from "./environment.ts";
 import { hostInfo, postgresInfo, withLoadWindow } from "./environment.ts";
-import { checkEquivalence } from "./equivalence.ts";
+import { checkBranchedEquivalence, checkEquivalence } from "./equivalence.ts";
 import type { BenchError } from "./errors.ts";
 import type {
   GenerationPlan,
@@ -52,6 +52,7 @@ import type { WriteResult } from "./writes.ts";
 import { measureWrites } from "./writes.ts";
 
 const sampleCount = 5000;
+const smokeBranchInstances = 5;
 const loadParallelism = 6;
 const millisecondsPerSecond = 1000;
 const classTable: ModelId = "class-table";
@@ -188,11 +189,50 @@ const measureModel = (
     };
   });
 
-interface RunSpec {
+/** One model at one scale. */
+export interface RunSpec {
   readonly model: ModelId;
   readonly scale: Scale;
   readonly mitigations: boolean;
 }
+
+/** A generated database for one model. */
+export interface PreparedModel {
+  readonly database: string;
+  readonly ctx: ModelContext;
+  readonly model: StorageModel;
+  readonly generation: GenerationReport;
+}
+
+/**
+ * Generates (or, with `--reuse`, reuses) the database of one model at one scale.
+ *
+ * @param server - The bench server.
+ * @param options - Parsed options (`--reuse`).
+ * @param spec - Model, scale and mitigations.
+ * @returns The database, its context and the generation times.
+ */
+export const prepareModel = (
+  server: ServerConfig,
+  options: Options,
+  spec: RunSpec
+): Effect.Effect<PreparedModel, PipelineError> =>
+  Effect.gen(function* prepareOneModel() {
+    const model = modelById(spec.model);
+    const database = databaseFor(spec.model, spec.scale, spec.mitigations);
+    const ctx = contextFor(spec.scale, "bench", spec.mitigations);
+
+    const generation = yield* prepareDatabase(
+      server,
+      planFor(database, spec.scale, [{ ctx, model }]),
+      options.reuse
+    );
+
+    return { ctx, database, generation, model };
+  });
+
+/** Parameter samples drawn per run. */
+export const samplesPerRun = sampleCount;
 
 const runModel = (
   server: ServerConfig,
@@ -263,7 +303,23 @@ const smokeRuns = (
   Effect.gen(function* measureSmoke() {
     const { generation, options, planned } = smoke;
     const samples = yield* loadSamples(options.seed, sampleCount);
-    const equivalence = yield* checkEquivalence(planned, samples, options.seed);
+    const crossModel = yield* checkEquivalence(planned, samples, options.seed);
+
+    const equivalence = [...crossModel];
+
+    for (const { ctx, model } of planned) {
+      const lines = yield* checkBranchedEquivalence(
+        model,
+        ctx,
+        samples,
+        options.seed,
+        smokeBranchInstances
+      );
+
+      for (const line of lines) {
+        equivalence.push(`${model.id} branch form, ${line}`);
+      }
+    }
 
     yield* Effect.logInfo(
       `equivalence: ${equivalence.length} requests agree across ${planned.length} models`

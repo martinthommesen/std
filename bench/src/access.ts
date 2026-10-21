@@ -177,3 +177,80 @@ export const ticketVisibility = (
 
   return `(${notConfidential} OR ${alias}.opened_by = ${params.bind(caller.userId, "uuid")})`;
 };
+
+/**
+ * The shared row rule split into disjoint branches, for the branch form of
+ * the read compiler: branch k is disjunct k of rule 1 AND the negations (in
+ * negation normal form) of the disjuncts before it, so each record falls in
+ * exactly one branch and each branch can use its own index.
+ *
+ * @param relation - The relation the branch reads.
+ * @param caller - Who reads.
+ * @param params - Where rule constants are bound.
+ * @returns The branch predicates, or `null` for the admin.
+ */
+export const ruleBranches = (
+  relation: Relation,
+  caller: Caller,
+  params: Params
+): readonly string[] | null => {
+  if (caller.kind === "admin") {
+    return null;
+  }
+
+  const owner = relation.column("item", "owner");
+  const status = relation.column("item", "status");
+  const me = params.bind(caller.userId, "uuid");
+  const shared = params.bind(restrictedRules.sharedStatus, "text");
+
+  return [
+    `${owner} = ${me}`,
+    `(${status} = ${shared} AND (${owner} <> ${me} OR ${owner} IS NULL))`,
+  ];
+};
+
+/**
+ * The per-class part of row visibility once the shared rule is factored out:
+ * `(class_id IN (others) OR (class_id = laptop AND NOT denied))`. Together
+ * with the shared rule it equals `recordVisibility`, since every record's
+ * class is in subtree(endpoint).
+ *
+ * @param relation - The relation the branch reads.
+ * @param endpoint - The endpoint's class.
+ * @param caller - Who reads.
+ * @param params - Where rule constants are bound.
+ * @returns The guard, or `null` when no class-specific rule applies.
+ */
+export const classGuard = (
+  relation: Relation,
+  endpoint: ClassName,
+  caller: Caller,
+  params: Params
+): string | null => {
+  const members = subtree(endpoint);
+
+  if (
+    caller.kind === "admin" ||
+    !members.some((member) => member.name === restrictedClass)
+  ) {
+    return null;
+  }
+
+  const notDenied = laptopNotDenied(relation, params);
+  const others: string[] = [];
+
+  for (const member of members) {
+    if (member.name !== restrictedClass) {
+      others.push(member.id);
+    }
+  }
+
+  if (others.length === 0) {
+    return notDenied;
+  }
+
+  const classId = relation.system("class_id");
+  const laptopGroup = `(${classIn(classId, [classDef(restrictedClass).id])} AND ${notDenied})`;
+
+  return `(${classIn(classId, others)} OR ${laptopGroup})`;
+};

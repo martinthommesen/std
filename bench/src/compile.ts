@@ -7,9 +7,11 @@
  */
 import type { Caller } from "./access.ts";
 import {
+  classGuard,
   fieldReadable,
   recordVisibility,
   recordWriteAllowed,
+  ruleBranches,
   ticketVisibility,
 } from "./access.ts";
 import type { ClassName } from "./hierarchy.ts";
@@ -100,6 +102,8 @@ interface Scope {
   readonly id: string;
   /** Read last: column lookups may add joins. */
   readonly from: () => string;
+  /** The endpoint's relation (for tickets: the item relation). */
+  readonly relation: Relation;
 }
 
 const masked = (column: string, readable: string | null): string =>
@@ -167,10 +171,11 @@ const hierarchyCast = (path: Path): string => {
 const hierarchyScope = (
   target: Target,
   endpoint: ClassName,
-  params: Params
+  params: Params,
+  alias = "i"
 ): Scope => {
   const { caller } = target;
-  const relation = target.model.relation(target.ctx, endpoint, "i");
+  const relation = target.model.relation(target.ctx, endpoint, alias);
 
   const expression = (path: Path): string => {
     switch (path.kind) {
@@ -210,6 +215,7 @@ const hierarchyScope = (
     from: () =>
       `${relation.from()} LEFT JOIN ${userTable} ou ON ou.id = ${owner}`,
     id: relation.system("id"),
+    relation,
     selection: () => [
       ...systemSelection(relation.system),
       ...fieldSelection(relation, caller, params, endpoint),
@@ -244,13 +250,9 @@ const ticketCast = (path: Path): string => {
   }
 };
 
-const ticketScope = (target: Target, params: Params): Scope => {
-  const { caller } = target;
-  const alias = "t";
-  const item = target.model.relation(target.ctx, "item", "ti");
-  const guard = recordVisibility(item, "item", caller, params);
-
-  const expression = (path: Path): string => {
+const ticketExpression =
+  (alias: string, item: Relation, caller: Caller, params: Params) =>
+  (path: Path): string => {
     switch (path.kind) {
       case "ticket": {
         return `${alias}.${q(path.field)}`;
@@ -277,6 +279,13 @@ const ticketScope = (target: Target, params: Params): Scope => {
     }
   };
 
+const ticketScope = (target: Target, params: Params): Scope => {
+  const { caller } = target;
+  const alias = "t";
+  const item = target.model.relation(target.ctx, "item", "ti");
+  const guard = recordVisibility(item, "item", caller, params);
+  const expression = ticketExpression(alias, item, caller, params);
+
   const label = item.column("item", "name");
 
   const from = (): string => {
@@ -295,6 +304,7 @@ const ticketScope = (target: Target, params: Params): Scope => {
     expression,
     from,
     id: `${alias}.id`,
+    relation: item,
     selection: () => [
       ...systemSelection((column) => `${alias}.${column}`),
       ...ticketClass.fields.map(
@@ -328,7 +338,11 @@ const arrayElement = (value: string): string => {
 const arrayLiteral = (values: readonly string[]): string =>
   `{${values.map((value) => arrayElement(value)).join(",")}}`;
 
-const atomSql = (scope: Scope, atom: Atom, params: Params): string => {
+const atomSql = (
+  scope: Pick<Scope, "expression" | "cast">,
+  atom: Atom,
+  params: Params
+): string => {
   const expression = scope.expression(atom.path);
   const cast = scope.cast(atom.path);
 
@@ -512,6 +526,134 @@ export const compileGet = (
   );
 
   const text = `SELECT ${selection} FROM ${scope.from()}${whereClause([idCondition, scope.endpointFilter])}`;
+
+  return { params: params.values(), text };
+};
+
+interface BranchKey {
+  readonly expression: string;
+  readonly direction: "asc" | "desc";
+}
+
+const orderClause = (keys: readonly BranchKey[], id: string): string => {
+  const items = [
+    ...keys.map((key) => orderItem(key.expression, key.direction)),
+    orderItem(id, keys[0]?.direction ?? "asc"),
+  ];
+
+  return ` ORDER BY ${items.join(", ")}`;
+};
+
+const keysOf = (
+  expression: (path: Path) => string,
+  query: ListQuery
+): readonly BranchKey[] =>
+  query.sort.map((key) => ({
+    direction: key.direction,
+    expression: expression(key.path),
+  }));
+
+const branchCount = (target: Target): number => {
+  const probe = target.model.relation(target.ctx, "item", "probe");
+
+  return ruleBranches(probe, target.caller, makeParams())?.length ?? 0;
+};
+
+const hierarchyBranch = (
+  target: Target,
+  query: ListQuery,
+  params: Params,
+  index: number,
+  endpoint: ClassName
+): string => {
+  const scope = hierarchyScope(target, endpoint, params);
+  const { relation } = scope;
+
+  const predicate =
+    ruleBranches(relation, target.caller, params)?.[index] ?? null;
+
+  const guard = classGuard(relation, endpoint, target.caller, params);
+  const filters = query.filters.map((atom) => atomSql(scope, atom, params));
+  const orderBy = orderClause(keysOf(scope.expression, query), scope.id);
+
+  const where = whereClause([
+    relation.endpointFilter(),
+    predicate,
+    guard,
+    ...filters,
+  ]);
+
+  return `SELECT ${scope.id} AS id FROM ${scope.from()}${where}${orderBy} LIMIT ${query.limit}`;
+};
+
+const ticketBranch = (
+  target: Target,
+  query: ListQuery,
+  params: Params,
+  index: number
+): string => {
+  const alias = "t";
+  const item = target.model.relation(target.ctx, "item", "ti");
+  const expression = ticketExpression(alias, item, target.caller, params);
+  const predicate = ruleBranches(item, target.caller, params)?.[index] ?? null;
+  const guard = classGuard(item, "item", target.caller, params);
+  const visibility = ticketVisibility(alias, target.caller, params);
+
+  const filters = query.filters.map((atom) =>
+    atomSql({ cast: ticketCast, expression }, atom, params)
+  );
+
+  const orderBy = orderClause(keysOf(expression, query), `${alias}.id`);
+  const where = whereClause([visibility, predicate, guard, ...filters]);
+  const from = `${ticketTable(target.ctx)} ${alias} JOIN ${item.from()} ON ${target.model.ticketItemJoin(alias, item)}`;
+
+  return `SELECT ${alias}.id AS id FROM ${from}${where}${orderBy} LIMIT ${query.limit}`;
+};
+
+/**
+ * The branch form of a list request for a restricted caller, which STD's
+ * read compiler can generate mechanically from the rule and the request:
+ * the row rule's OR is split into disjoint branches (`ruleBranches`), each
+ * branch applies the per-class guard, the request's filters and its sort and
+ * keeps the first page, and the union is sorted again and joined back for
+ * the selection and labels. Each branch can then use its own index. For a
+ * reference filter (Q7) the branches reach tickets through the item rule's
+ * disjuncts the same way. First pages only; the admin gets the plain form.
+ *
+ * @param target - Model, context and caller.
+ * @param query - The request (no cursor).
+ * @returns The statement.
+ */
+export const compileBranchedList = (
+  target: Target,
+  query: ListQuery
+): Compiled => {
+  const branches = branchCount(target);
+
+  if (branches === 0) {
+    return compileList(target, query);
+  }
+
+  if (query.cursor !== undefined) {
+    throw new Error("the branch form is measured for first pages only");
+  }
+
+  const params = makeParams();
+  const { endpoint } = query;
+  const indexes = Array.from({ length: branches }, (_unused, index) => index);
+
+  const parts =
+    endpoint === "ticket"
+      ? indexes.map((index) => ticketBranch(target, query, params, index))
+      : indexes.map((index) =>
+          hierarchyBranch(target, query, params, index, endpoint)
+        );
+
+  const outer = makeScope(target, endpoint, params);
+  const selection = outer.selection().join(", ");
+  const orderBy = orderClause(keysOf(outer.expression, query), outer.id);
+  const page = parts.map((part) => `(${part})`).join(" UNION ALL ");
+  const text = `WITH page AS (${page}) SELECT ${selection} FROM ${outer.from()} JOIN page p ON p.id = ${outer.id}${orderBy} LIMIT ${query.limit}`;
 
   return { params: params.values(), text };
 };

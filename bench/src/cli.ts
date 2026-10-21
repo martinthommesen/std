@@ -4,6 +4,8 @@
  * - no options: the Stage 0 run (class-table at 1M and 10M, one table per
  *   hierarchy at 10M, the decision rule, and the follow-ups it asks for);
  * - `--scale 1m|10m|<n>k|<n>m` and `--model <id>[,<id>]|all`: custom runs;
+ * - `--rewrites`: Q6 and Q7 in the read compiler's branch form on class-table
+ *   at `--scale` (default 10m), against the plain form (`rewrites.ts`);
  * - `--smoke`: all four models at 50k records in one fresh database, a
  *   cross-model equivalence check and a short measurement (for CI);
  * - `--mitigations` (class-table with the class_id-led indexes), `--reuse`
@@ -17,9 +19,15 @@ import type { Scale } from "./results.ts";
 import type { ModelId } from "./storage-model.ts";
 import { modelIds } from "./storage-model.ts";
 
+/** The run modes of `pnpm bench`. */
+export const modes = ["stage0", "custom", "smoke", "rewrites"] as const;
+
+/** One run mode. */
+export type Mode = (typeof modes)[number];
+
 /** Parsed options. */
 export interface Options {
-  readonly mode: "stage0" | "custom" | "smoke";
+  readonly mode: Mode;
   readonly models: readonly ModelId[];
   readonly scales: readonly Scale[];
   readonly mitigations: boolean;
@@ -124,9 +132,17 @@ const numberOption = (
   return parsed;
 };
 
-const modeOf = (smoke: boolean, custom: boolean): Options["mode"] => {
+const modeOf = (
+  smoke: boolean,
+  custom: boolean,
+  rewrites: boolean
+): Options["mode"] => {
   if (smoke) {
     return "smoke";
+  }
+
+  if (rewrites) {
+    return "rewrites";
   }
 
   return custom ? "custom" : "stage0";
@@ -150,6 +166,7 @@ export const parseOptions = (argv: readonly string[]): Options => {
       "no-writes": { type: "boolean" },
       out: { type: "string" },
       reuse: { type: "boolean" },
+      rewrites: { type: "boolean" },
       runs: { type: "string" },
       scale: { type: "string" },
       seed: { type: "string" },
@@ -173,7 +190,7 @@ export const parseOptions = (argv: readonly string[]): Options => {
     database: values.database,
     keep: values.keep === true,
     mitigations: values.mitigations === true,
-    mode: modeOf(smoke, custom),
+    mode: modeOf(smoke, custom, values.rewrites === true),
     models: smoke ? modelIds : parseModels(values.model ?? "class-table"),
     out: values.out ?? defaults.out,
     reuse: values.reuse === true,
