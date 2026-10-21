@@ -1,10 +1,6 @@
 pre-commit:
   jobs:
     - run: pnpm exec ultracite fix {staged_files}
-      # vendor/ is upstream Effect source, ignored by Oxlint and Oxfmt; a merge
-      # that brings it in must not hand its files to the fixer.
-      exclude:
-        - "vendor/**"
       glob:
         - "*.js"
         - "*.jsx"
@@ -29,4 +25,11 @@ pre-commit:
         - "*.yml"
         - "*.graphql"
         - "*.gql"
+      # Vendored Effect source carries its own Oxlint config with plugins we do not install;
+      # .agents/ and skills-lock.json are third-party agent skills pinned by hash.
+      exclude:
+        - "vendor/**"
+        - ".claude/**"
+        - ".agents/**"
+        - "skills-lock.json"
       stage_fixed: true

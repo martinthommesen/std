@@ -136,9 +136,18 @@ Read `docs/architecture.md` first. It fixes the toolchain, layout, package bound
 - Postgres 18 for tests: `pnpm db:up` (127.0.0.1:54329, std/std).
 - Commit with `git commit -s`. Never use `--no-verify`. Never weaken `oxlint.config.ts` or a tsconfig's strictness or Effect allow lists.
 
+## Effect skills: always use them
+
+The repo ships Effect agent skills in `.agents/skills/` (linked into `.claude/skills/`, pinned in `skills-lock.json`). **Always use them when you write, change or review Effect code**, in every package, test and script:
+
+1. Load the `effect` skill before touching Effect code (Claude Code: the Skill tool; other agents: read `.agents/skills/effect/SKILL.md`). Then read every `references/*.md` file its branch chooser matches for the task (services and layers, schema, config, scheduling, caching, streams, HTTP clients, testing) before editing.
+2. When an API may be an Effect 3 name, or you are unsure it exists in v4, follow the `effect-v3-to-v4` skill's lookup discipline (`.agents/skills/effect-v3-to-v4/SKILL.md`) against `vendor/effect/MIGRATION.md` and `vendor/effect/migration/v3-to-v4.md`: search the reference, never read it whole, and never invent an API.
+3. Reviewers check Effect code against the `effect` skill's Core Defaults, Boundary Rules and Do Nots, as well as the rules below.
+4. The skills were reviewed against Effect 4.0.0. Where they differ from the pinned 4.0.5 source or from this file, the source and this file win. Plain packages keep their import limits (only the `effect` modules listed below), so skill advice that needs `Data`, `Config`, `Context` or `Stream` applies to `server`, `api`, `web` and tests, not to plain `src/`.
+
 ## Effect 4 idioms
 
-Effect 4.0.5 is installed, but most published Effect material and most model memory is Effect 3. Check every API before you use it: `node_modules/effect/AGENTS.md` and `node_modules/effect/ai-docs/src/` first, then the source at `vendor/effect/packages/*/src` (the `effect@4.0.5` tag) and the v3-to-v4 rename map in `vendor/effect/migration/v3-to-v4.md`.
+This repository uses the Effect TypeScript library. Effect 4.0.5 is installed, but most published Effect material and most model memory is Effect 3. Before writing any Effect code, first read `node_modules/effect/AGENTS.md` **completely**, and follow the links in the file when required. If you need to learn more about particular Effect APIs and concepts that the guide doesn't cover, search the source in `node_modules/effect/src` (also at `vendor/effect/packages/*/src`, the `effect@4.0.5` tag), `node_modules/effect/ai-docs/src/`, and the v3-to-v4 rename map in `vendor/effect/migration/v3-to-v4.md`. Check every API before you use it.
 
 - Inline code: `Effect.gen(function* () { ... })`. Reusable functions: `Effect.fn("name")(function* (...) { ... }, ...combinators)` (combinators as extra arguments, not `.pipe`), or `Effect.fnUntraced` on hot paths.
 - Errors: `class X extends Schema.TaggedError<X>()("X", { ... }) {}`, failed with `return yield* new X({ ... })`, handled with `Effect.catch`, `Effect.catchTag` or `Effect.catchTags`.
