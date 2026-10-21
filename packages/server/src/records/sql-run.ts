@@ -22,19 +22,30 @@ export type TextRow = typeof TextRowSchema.Type;
 
 const decodeTextRows = decodeRows(TextRowSchema);
 
+/** How a read statement is sent. */
+export interface ReadRowsOptions {
+  /** Send it unprepared, so Postgres plans it for its actual parameters. */
+  readonly unprepared?: boolean;
+}
+
 /**
  * Runs a read statement and decodes its rows. The statement is marked
  * `readOnly`: it must be a plain `SELECT` that calls no writing function.
  *
  * @param fragment - The statement.
+ * @param options - `unprepared` for a custom plan.
  * @returns The rows, every column as text or null.
  */
 export const readRows = Effect.fn("Records.readRows")(function* readRows(
-  fragment: SqlFragment
+  fragment: SqlFragment,
+  options: ReadRowsOptions = {}
 ) {
   const sql = yield* SqlClient.SqlClient;
   const { text, values } = renderSql(fragment);
-  const rows = yield* readOnly(sql.unsafe<object>(text, values));
+
+  const rows = yield* readOnly(sql.unsafe<object>(text, values), {
+    unprepared: options.unprepared === true,
+  });
 
   return yield* decodeTextRows(rows);
 });

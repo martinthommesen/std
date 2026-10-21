@@ -14,6 +14,7 @@ import { HttpApiBuilder } from "effect/http-api";
 
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
+import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 
 /** Every group's handlers. */
@@ -26,7 +27,7 @@ export const ApiHandlers = Layer.mergeAll(
 /** The API routes with their handlers and middleware. */
 export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(ApiHandlers),
-  Layer.provide(AuthenticationLayer)
+  Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))
 );
 
 /** The routes plus the global revision header. */

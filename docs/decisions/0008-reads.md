@@ -10,11 +10,12 @@ Status: accepted, 2026-10-21 (workstream 0C, read side). Code: `packages/access`
 | `@std/access/rules` | `Caller` (role IDs), `recordRules`, `fieldRules`, `recordDecision`, `fieldDecision`, `knowsTable` |
 | `@std/access/visible-schema` | `groupClasses`, `recordGroups`, `fieldGroups`, `readabilityOf`, `visibleSchema(snapshot, caller, classId, { exact? })`, `SYSTEM_FIELD_NAMES` |
 | `@std/api/api` | `StdApi` (`/api/v1`): groups `signIn`, `session`, `records`; `SCHEMA_REVISION_HEADER` |
-| `@std/api/{auth,session,records,authentication,session-token}` | endpoint definitions, record JSON schemas, the bearer `Authentication` middleware, `SessionToken` |
+| `@std/api/{auth,session,records,authentication,session-token,request-decoding}` | endpoint definitions, record JSON schemas, the bearer `Authentication` middleware, `SessionToken` |
 | `@std/api/errors/*` | one tagged error per file: `UnknownTable` 404, `UnknownField` 400, `NotFound` 404, `Unauthenticated` 401, `InvalidCredentials` 401, `InvalidRequest` 400, `InvalidCursor` 400, `InvalidFilter` 400, `InvalidSchemaRevision` 400, `SchemaChanged` 409; `errors/schemas` (filter issues, schema changes) |
 | `server/auth/actor` | `Actor` service (`userId`, `roleIds`), `Actor.forUser`, `effectiveRoles`, `loadActor`, `readUserRoles` |
 | `server/auth/password` | `hashPassword`, `verifyPassword` (scrypt, PHC string) |
-| `server/auth/sessions` | `signIn`, `authenticate`, `signOut`, `endSessionsOf`, `SESSION_LIFETIME` |
+| `server/auth/sessions` | `signIn`, `authenticate`, `signOut`, `SESSION_LIFETIME` |
+| `server/auth/session-revocation` | `installSessionRevocation`, `sessionEndTrigger`: the `core.user` trigger that ends sessions on deactivation |
 | `server/auth/dev-password` | `setPasswordForDevelopment` (table owner; fixtures and demo only) |
 | `server/auth/user-table` | where `core.user` and `core.user_role` live, by well-known field IDs |
 | `server/records/relation` | `recordRelation(snapshot, classId)`: one row per logical record with every column by name |
@@ -31,6 +32,9 @@ Status: accepted, 2026-10-21 (workstream 0C, read side). Code: `packages/access`
 | `server/http/request-scope` | `inRequestTransaction`, `asActor`, `jsonResponse` |
 | `server/http/schema-revision-header` | `SchemaRevisionHeaderLayer` (global middleware), `recordServedRevision`, `revisionHeaderValue` |
 | `server/http/stale-request` | `parseRequestRevision`, `checkRequestRevision` |
+| `server/http/stale-scope` | `definitionsAt`, `staleScope`: a read's fields resolved at the request's revision |
+| `server/http/request-decoding` | `RequestDecodingLayer`: decoding failures as `InvalidRequest` |
+| `server/records/read-tuning` | `withBranchTuning`: planner settings around branch-form page queries |
 | `server/http/authentication` | `AuthenticationLayer` |
 | `server/http/serve` | `ServerLayer` (`std serve`) |
 | `server/config/instance-settings` | `InstanceSettings` (`STD_TIME_ZONE`, default `UTC`) |
@@ -91,8 +95,9 @@ SELECT "r"."id"::text AS "id", "r"."class_id"::text AS "class_id", "r"."version"
 - Always-readable fields and system fields are bare columns; conditional ones `CASE WHEN <mask> THEN col END` plus a `w<n>` flag; a `false` flag leaves the key out and lists it in `withheld`. Password and secret select `col IS NOT NULL` under the mask, never the column.
 - `class` is a `CASE class_id WHEN ... THEN '<qualified name>' END` over subtree(E), as a case-sensitive text field: filters `class = "acme.laptop"` and `class in (...)` and sorts work on it.
 - Every value is selected `::text` and decoded by field type (`record-json`), so a row is always `Record<string, string | null>`.
-- Labels: the target's display field (the nearest one on its lineage), masked by the target's rules, over a join whose condition is the masked reference and the target's visibility. A label is present only when the reference is readable, the target visible and the display field readable on it.
-- One-hop paths in `fields` use the same join; a path's value is null when the reference is empty or the target or field is hidden (like a label, it does not tell those apart), and absent only when the reference itself is withheld.
+- Labels: the target's display field (the nearest one on its lineage; never a password or secret, which `@std/definitions` refuses as a display field and the compiler skips), masked by the target's rules, over a join whose condition is the masked reference and the target's visibility. A label is present only when the reference is readable, the target visible and the display field readable on it.
+- One-hop paths in `fields` use the same join; a path's value is null when the reference is empty or the target or field is hidden (like a label, it does not tell those apart; a `p<n>` column carries that presence, so a hidden password path is null, not `{"set": false}`), and absent only when the reference itself is withheld.
+- `class` of a target class the caller has no allow on is a typed `CAST(NULL AS text)`.
 - Counts: `SELECT count(*)::text FROM <relation(E)> AS "r" <filter joins> WHERE <visibility> AND <filter>` (no cursor), only with `count=true`.
 - Get by ID: one statement over `relation(E)` with `"r"."id" = $id` and E's visibility, the same projection as a list (E's lineage fields only, Contracts 2.3). An ID that is not a UUID, does not exist, is outside subtree(E) or is not visible gives the same `NotFound` body.
 - Sort keys: masked expressions; text and long text by `casefold(e COLLATE pg_unicode_fast) COLLATE pg_unicode_fast` (case-sensitive text and choice: `e COLLATE pg_unicode_fast`), so text sorts by code point of the comparison key, independent of the database's default collation. Password, secret, json and condition fields cannot be sorted (`InvalidRequest`). [judgment]
@@ -110,7 +115,7 @@ SELECT "u"."id", ..., "u"."k0" FROM (
 ) AS "u" ORDER BY "u"."o0" ASC NULLS LAST, ..., "u"."oid" ASC LIMIT n
 ```
 
-A branch is a group's membership and one allow disjunct with the group's denies; `NOT` is applied only to `COALESCE(..., false)`, which is never NULL (5.9). Counts keep the plain form. `branch-form.test.ts` compares both forms page for page through keyset cursors over generated filters, sorts, page sizes and endpoints, for a caller with three branches. `ListRequest.form = "plain"` forces the plain form.
+The branch-form page query runs inside `withBranchTuning`: `SET LOCAL max_parallel_workers_per_gather = 0` and `SET LOCAL plan_cache_mode = force_custom_plan` (decision 0002, "Read tuning"), sent unprepared (`readOnly(..., { unprepared: true })`), then both settings are set back to the values read before, so counts and later statements run with the defaults. A branch is a group's membership and one allow disjunct with the group's denies; `NOT` is applied only to `COALESCE(..., false)`, which is never NULL (5.9). Counts keep the plain form. `branch-form.test.ts` compares both forms page for page through keyset cursors over generated filters, sorts, page sizes and endpoints, for a caller with three branches. `ListRequest.form = "plain"` forces the plain form.
 
 ### Filters, names and errors
 
@@ -133,8 +138,9 @@ A branch is a group's membership and one allow disjunct with the group's denies;
 
 - `POST /api/v1/auth/sign-in` `{login, password}`: the login is compared by `casefold(login COLLATE pg_unicode_fast)` (the unique index's key). An unknown login still runs one scrypt derivation against a dummy hash. Unknown login, wrong password and deactivated user give the same `401 InvalidCredentials`.
 - Passwords: `$scrypt$ln=15,r=8,p=1$<salt>$<hash>` (16-byte salt, 32-byte key, unpadded base64), compared with `timingSafeEqual`. The parameters travel with the hash. [judgment]
+- Deactivation ends sessions in the same transaction: the change set that creates `core.user` attaches `core.end_user_sessions()` (migration 0003) as `AFTER UPDATE ... WHEN (OLD.active AND NOT NEW.active)`. A trigger rather than a save-pipeline hook [judgment]: users are also deactivated by tooling, imports and by hand, and no path may leave a session behind. Reactivation does not revive a session; the user signs in again.
 - Tokens: 32 random bytes, unpadded base64url (43 characters), returned once. `core.session` (migration 0003) stores `sha256(token)` as `bytea`, the user, `created_at` and `expires_at` (12 hours [judgment]). It has no `id`, so it is internal and not described by the core set.
-- `Authorization: Bearer <token>`: the middleware only refuses a missing token; the handler checks the token inside its request transaction (`authenticate` joins `core.user` and requires `active`), so a deactivated user's sessions stop working at once and the session, roles and records are read at one revision. `POST /api/v1/auth/sign-out` deletes the presented session.
+- `Authorization: Bearer <token>`: the middleware only refuses a missing token; the handler checks the token inside its request transaction (`authenticate` joins `core.user` and requires `active`), so the session, roles and records are read at one revision. `POST /api/v1/auth/sign-out` deletes the presented session.
 - Effective roles: `authenticated` plus `core.user_role` rows naming a live role; none for an inactive user. No code checks a role name.
 
 ### HTTP
@@ -142,13 +148,21 @@ A branch is a group's membership and one allow disjunct with the group's denies;
 - One request transaction per request (`inRequestTransaction`); its revision is recorded per request and written as `STD-Schema-Revision: <n>.<change_set_id>` by a global router middleware just before the response is sent. Responses no transaction served (no token, unknown route, undecodable payload) get the current revision from a separate `begin_request()`.
 - Record bodies are written with `stringifyJson` (raw `HttpServerResponse`), so json values keep jsonb's key order; the `HttpApi` schemas describe the same shape for clients.
 - Typed errors carry their status (`httpApiStatus`); `DatabaseError` becomes a defect, which the HTTP layer answers with an empty 500. Raw Postgres text is never in a response.
-- Stale requests (6.4, reads): see `http/stale-request.ts`. Relevance is decided from `core.definition_revision` in (R, C] for the endpoint's lineage, its fields and overrides, matched against the words of `filter`, `sort` and `fields`; `changes` lists only fields the caller can name at C.
+- Request decoding: the `RequestDecoding` middleware on every endpoint turns path, query, header and body decoding failures (malformed JSON included) into `400 InvalidRequest` with the part's name and a fixed message, never the decoder's text.
+- Stale requests (6.4, reads): the request's scope is resolved at R from `core.definition_revision` (`stale-scope.ts`): filter paths through the condition parser, sort and selection names, the default selection when `fields` is absent, one-hop target fields and labels' display fields. Changes in (R, C] to those fields, to their overrides on the classes they are read on, to those classes, and fields added under a name the request used are relevant; `changes` lists only fields the caller can name at C.
 
 ## Deviations and open items
 
-- **Branch form settings.** The SQL layer's `SET LOCAL` allowlist (`TRANSACTION_SETTINGS`) holds only `lock_timeout`, `statement_timeout` and `idle_in_transaction_session_timeout`, so `max_parallel_workers_per_gather = 0` and `plan_cache_mode = force_custom_plan` cannot be set per transaction yet. `readOnly` accepts only a `Statement`, not `statement.unprepared`, so read statements are prepared (the driver's cache) and Postgres may switch them to a generic plan after five executions. Both need a SQL-layer decision (0A owner). Q7 (filter through a reference, restricted) is a known gap.
+- Q7 (a filter through a reference, restricted caller) is a known gap of the storage benchmark.
 - **TEMPORARY fixture inserts.** `@std/testing/owner-records` inserts users, roles and records as table owner; the writes workstream replaces them with record-service creates.
-- Stale checks do not yet cover fields named through reference paths, and names are extracted word by word. [judgment]
-- A malformed sign-in payload gets Effect's empty `400` (`HttpApiSchemaError`), not a tagged STD error.
+- A filter that does not parse at R contributes the names the parser saw before it stopped.
+
+## Review round 1
+
+- Deactivation deletes the user's sessions through a trigger (above); `endSessionsOf` is gone.
+- Stale checks resolve the request at R, include reference targets, default selections and label display fields.
+- `RequestDecoding` maps decoding failures to `InvalidRequest` on every endpoint.
+- Password and secret display fields are refused by `@std/definitions` validation (`invalidDisplayField`) and skipped by the compiler; hidden password paths are null; `class` of an unknown target is a typed null.
+- Branch-form pages run with the read-tuning settings, unprepared, restored afterwards.
 - Filters use the instance time zone; the user preference arrives with user settings.
 - Read statements return every value as text, one string per column; a list of 100 rows with 20 fields decodes 2,000 strings. Not measured yet.

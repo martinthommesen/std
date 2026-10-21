@@ -8,22 +8,20 @@
  * - R above C, R's change set ID differing from C's at the same number, or
  *   a journal that does not record R's change set at R:
  *   `409 SchemaChanged` with kind `unknown`.
- * - R below C: the definition revisions in (R, C] of the endpoint's class,
- *   its ancestors, their fields and overrides are compared with their state
- *   at R. A field change is relevant when the field's name at R or at C is
- *   a name the request uses (in `filter`, `sort` or `fields`); a retired
- *   table always is. Relevant kinds: `fieldAdded`, `fieldRenamed`,
- *   `fieldRetired`, `fieldPurged`, `typeChanged`, `settingsChanged`,
- *   `requiredChanged`, `readOnlyChanged`, `tableRetired`. Labels, display
- *   field and access rules are not relevant.
+ * - R below C: the request's scope is resolved at R (`stale-scope.ts`):
+ *   the fields its filter, sort and selection name (the default selection
+ *   when `fields` is absent), reference targets' fields on one-hop paths,
+ *   and labels' display fields. Definition revisions in (R, C] of those
+ *   fields, of overrides of them on the classes they are read on, and of
+ *   those classes are compared with their state at R; a field added later
+ *   under a name the request used is relevant too. Relevant kinds:
+ *   `fieldAdded`, `fieldRenamed`, `fieldRetired`, `fieldPurged`,
+ *   `typeChanged`, `settingsChanged`, `requiredChanged`, `readOnlyChanged`,
+ *   `tableRetired`. Labels' texts, display field choice and access rules
+ *   are not relevant.
  * - `changes` lists only fields the caller can name at C; when nothing
  *   relevant is left the request proceeds, and names that resolve to no
  *   readable field get `UnknownField` as usual.
- *
- * Names are taken from the parameters word by word, so an extra word (a
- * keyword, a string's content) can only make more changes relevant, never
- * fewer. [judgment] Fields of reference targets named through paths are
- * not checked yet.
  */
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
 import { InvalidSchemaRevision } from "@std/api/errors/invalid-schema-revision";
@@ -38,16 +36,16 @@ import { Effect, Option } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { currentReadScope, resolveTable } from "../records/read-records.ts";
-import type { ReadView } from "../records/read-view.ts";
+import type { ReadScope } from "../records/read-view.ts";
 import { readRows } from "../records/sql-run.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { revisionHeaderValue } from "./schema-revision-header.ts";
+import { definitionsAt, staleScope } from "./stale-scope.ts";
+import type { ScopeEntry, ScopeParameters, StaleScope } from "./stale-scope.ts";
 
 const HEADER =
   /^(?<revision>0|[1-9]\d{0,14})\.(?<changeSet>[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/u;
-
-const NAME = /[A-Z_a-z]\w*/gu;
 
 /**
  * Reads the request's `STD-Schema-Revision` header.
@@ -76,13 +74,6 @@ export const parseRequestRevision = Effect.fn("StaleRequest.parseHeader")(
     });
   }
 );
-
-const namesIn = (texts: readonly (string | undefined)[]): ReadonlySet<string> =>
-  new Set(
-    texts.flatMap((text) =>
-      text === undefined ? [] : (text.match(NAME) ?? [])
-    )
-  );
 
 interface DefinitionHistory {
   readonly id: DefinitionId;
@@ -240,102 +231,187 @@ WHERE "id" = ${textParameter(stated.changeSetId, "uuid")}
   }
 );
 
+const visibleEntries = (
+  readScope: ReadScope,
+  scope: StaleScope
+): {
+  readonly entry: ScopeEntry;
+  readonly name: string;
+  readonly table: string;
+}[] =>
+  scope.entries.flatMap((entry) => {
+    const field = readScope.view(entry.classId).byId(entry.fieldId);
+    const table = readScope.snapshot.qualifiedNameOf(entry.classId);
+
+    return field === undefined || table === undefined
+      ? []
+      : [{ entry, name: field.name, table }];
+  });
+
 const unknownChanges = (
   table: string,
-  view: ReadView,
-  names: ReadonlySet<string>
+  readScope: ReadScope,
+  scope: StaleScope
 ): SchemaChange[] => {
-  const named = view.fields.filter(
-    (field) => field.system === undefined && names.has(field.name)
-  );
+  const named = visibleEntries(readScope, scope);
 
   return named.length === 0
     ? [{ field: null, fieldId: null, kind: "unknown", revision: null, table }]
-    : named.map((field) => ({
-        field: field.name,
-        fieldId: field.id,
+    : named.map(({ entry, name, table: entryTable }) => ({
+        field: name,
+        fieldId: entry.fieldId,
         kind: "unknown",
         revision: null,
-        table,
+        table: entryTable,
       }));
 };
 
-const relevantChanges = (
-  table: string,
-  view: ReadView,
-  lineage: ReadonlySet<DefinitionId>,
-  names: ReadonlySet<string>,
-  history: readonly DefinitionHistory[]
-): SchemaChange[] =>
-  history.flatMap((entry): SchemaChange[] => {
-    const { after, before } = entry;
-    const classId = textOf(after, "classId");
+/**
+ * Whether a definition on `classId` affects records read on `readOn`: it
+ * is on the class, an ancestor or a descendant.
+ *
+ * @param readScope - The caller's scope at C.
+ * @param classId - The definition's class.
+ * @param readOn - The class the field is read on.
+ * @returns True when it applies.
+ */
+const affects = (
+  readScope: ReadScope,
+  classId: DefinitionId,
+  readOn: DefinitionId
+): boolean =>
+  readScope.snapshot.lineage(readOn).some((level) => level.id === classId) ||
+  readScope.snapshot.subtreeIds(readOn).includes(classId);
 
-    if (entry.kind === "class") {
-      return lineage.has(entry.id) &&
-        textOf(after, "state") === "retired" &&
-        textOf(before, "state") !== "retired"
-        ? [
-            {
-              field: null,
-              fieldId: null,
-              kind: "tableRetired",
+const classChanges = (
+  readScope: ReadScope,
+  scope: StaleScope,
+  entry: DefinitionHistory
+): SchemaChange[] => {
+  const retired =
+    textOf(entry.after, "state") === "retired" &&
+    textOf(entry.before, "state") !== "retired";
+
+  return [...scope.classes].flatMap((classId): SchemaChange[] => {
+    const table = readScope.snapshot.qualifiedNameOf(classId);
+
+    const inLineage = readScope.snapshot
+      .lineage(classId)
+      .some((level) => level.id === entry.id);
+
+    return retired && inLineage && table !== undefined
+      ? [
+          {
+            field: null,
+            fieldId: null,
+            kind: "tableRetired",
+            revision: entry.revision,
+            table,
+          },
+        ]
+      : [];
+  });
+};
+
+/**
+ * The scope entries a field or override definition change touches: the
+ * field read on a class it affects, or a new field taking a name the
+ * request used.
+ *
+ * @param readScope - The caller's scope at C.
+ * @param scope - The request's scope at R.
+ * @param entry - The definition's history in (R, C].
+ * @returns The touched entries.
+ */
+const touched = (
+  readScope: ReadScope,
+  scope: StaleScope,
+  entry: DefinitionHistory
+): readonly ScopeEntry[] => {
+  const classId = textOf(entry.after, "classId");
+
+  const fieldId =
+    entry.kind === "field" ? entry.id : textOf(entry.after, "fieldId");
+
+  if (classId === undefined || fieldId === undefined) {
+    return [];
+  }
+
+  const direct = scope.entries.filter(
+    (scoped) =>
+      scoped.fieldId === fieldId && affects(readScope, classId, scoped.classId)
+  );
+
+  const name = textOf(entry.after, "name");
+
+  const isNew = entry.kind === "field" && entry.before === undefined;
+  const takesName = name !== undefined && scope.names.has(name);
+
+  const added =
+    isNew && takesName
+      ? [...scope.classes].flatMap((readOn) =>
+          affects(readScope, classId, readOn)
+            ? [{ classId: readOn, fieldId }]
+            : []
+        )
+      : [];
+
+  return [...direct, ...added];
+};
+
+const relevantChanges = (
+  readScope: ReadScope,
+  scope: StaleScope,
+  history: readonly DefinitionHistory[]
+): SchemaChange[] => {
+  const changes = new Map<string, SchemaChange>();
+
+  for (const entry of history) {
+    const found =
+      entry.kind === "class"
+        ? classChanges(readScope, scope, entry)
+        : visibleEntries(readScope, {
+            ...scope,
+            entries: touched(readScope, scope, entry),
+          }).flatMap(({ entry: scoped, name, table }) =>
+            (entry.kind === "field"
+              ? fieldKinds(entry)
+              : overrideKinds(entry)
+            ).map((kind): SchemaChange => ({
+              field: name,
+              fieldId: scoped.fieldId,
+              kind,
               revision: entry.revision,
               table,
-            },
-          ]
-        : [];
+            }))
+          );
+
+    for (const change of found) {
+      changes.set(
+        `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
+        change
+      );
     }
+  }
 
-    if (classId === undefined || !lineage.has(classId)) {
-      return [];
-    }
-
-    const fieldId =
-      entry.kind === "field" ? entry.id : textOf(after, "fieldId");
-
-    const field = fieldId === undefined ? undefined : view.byId(fieldId);
-
-    if (field === undefined) {
-      return [];
-    }
-
-    const named =
-      names.has(field.name) ||
-      names.has(textOf(before, "name") ?? "") ||
-      names.has(textOf(after, "name") ?? "");
-
-    if (!named) {
-      return [];
-    }
-
-    const kinds =
-      entry.kind === "field" ? fieldKinds(entry) : overrideKinds(entry);
-
-    return kinds.map((kind) => ({
-      field: field.name,
-      fieldId: field.id,
-      kind,
-      revision: entry.revision,
-      table,
-    }));
-  });
+  return [...changes.values()];
+};
 
 /**
  * Checks a stated revision against the transaction's (Contracts 6.4). Runs
  * inside the request transaction, for the acting user, before the request's
- * names are resolved.
+ * names are resolved at C.
  *
  * @param statedRevision - The request's revision, if it sent one.
  * @param table - The endpoint's table name.
- * @param parameters - The texts that name fields.
+ * @param parameters - The request's filter, sort, fields and labels.
  * @returns Nothing, or `SchemaChanged`.
  */
 export const checkRequestRevision = Effect.fn("StaleRequest.check")(
   function* checkRequestRevision(
     statedRevision: Option.Option<ConfigState>,
     table: string,
-    parameters: readonly (string | undefined)[]
+    parameters: ScopeParameters
   ) {
     if (Option.isNone(statedRevision)) {
       return yield* Effect.void;
@@ -351,10 +427,8 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
       return yield* Effect.void;
     }
 
-    const scope = yield* currentReadScope();
-    const classId = yield* resolveTable(scope, table);
-    const view = scope.view(classId);
-    const names = namesIn(parameters);
+    const readScope = yield* currentReadScope();
+    const classId = yield* resolveTable(readScope, table);
 
     const failure = (changes: SchemaChange[]) =>
       new SchemaChanged({
@@ -367,15 +441,17 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
       stated.revision >= current.revision || !(yield* journalReaches(stated));
 
     if (unreachable) {
-      return yield* failure(unknownChanges(table, view, names));
+      const atC = yield* definitionsAt(current.revision);
+
+      return yield* failure(
+        unknownChanges(table, readScope, staleScope(atC, classId, parameters))
+      );
     }
 
-    const lineage = new Set(
-      scope.snapshot.lineage(classId).map((level) => level.id)
-    );
-
+    const atR = yield* definitionsAt(stated.revision);
+    const scope = staleScope(atR, classId, parameters);
     const history = yield* readHistory(stated, current);
-    const changes = relevantChanges(table, view, lineage, names, history);
+    const changes = relevantChanges(readScope, scope, history);
 
     if (changes.length > 0) {
       return yield* failure(changes);

@@ -63,6 +63,7 @@ import {
   parseSort,
 } from "./read-query.ts";
 import type { SelectedValue } from "./read-query.ts";
+import { withBranchTuning } from "./read-tuning.ts";
 import { makeReadScope } from "./read-view.ts";
 import type { ReadScope, ReadView } from "./read-view.ts";
 import { encodeTextValue, recordJson } from "./record-json.ts";
@@ -172,6 +173,12 @@ interface Column {
   readonly value: string;
   /** The readability flag column, `w<n>`; null for always-readable fields. */
   readonly flag: string | null;
+  /**
+   * For a path: the column, `p<n>`, telling whether the target is there,
+   * visible and its field readable. Otherwise the value is null whatever
+   * its type, never `{"set": false}` (Contracts 6.6).
+   */
+  readonly present: string | null;
 }
 
 interface Label {
@@ -281,7 +288,12 @@ const addLabel = (
   const displayId = displayFieldOf(builder.scope.snapshot, targetId);
   const display = displayId === undefined ? undefined : target.byId(displayId);
 
-  if (display === undefined) {
+  // A password or secret never labels a record, even if a definition set
+  // made it a display field: its stored value is never returned (6.5).
+  const writeOnly =
+    display?.type.kind === "password" || display?.type.kind === "secret";
+
+  if (display === undefined || writeOnly) {
     return false;
   }
 
@@ -302,13 +314,15 @@ const decodeRow =
     const withheld: string[] = [];
 
     for (const column of values) {
-      if (isTrue(row, column.flag)) {
+      if (!isTrue(row, column.flag)) {
+        withheld.push(column.key);
+      } else if (column.present !== null && row[column.present] !== "true") {
+        delivered[column.key] = null;
+      } else {
         delivered[column.key] = encodeTextValue(
           column.field.type,
           row[column.value] ?? null
         );
-      } else {
-        withheld.push(column.key);
       }
     }
 
@@ -371,16 +385,22 @@ const project = (
     const flag = flagOf(view, item.field, BASE_ALIAS);
     const flagColumn = flag === undefined ? null : `w${index}`;
 
-    addColumn(
-      builder,
-      item.through === undefined
-        ? view.output(BASE_ALIAS, item.field)
-        : item.through.view.output(
-            joinTarget(builder, item.field),
-            item.through.field
-          ),
-      value
-    );
+    const { through } = item;
+    const present = through === undefined ? null : `p${index}`;
+
+    if (through === undefined || present === null) {
+      addColumn(builder, view.output(BASE_ALIAS, item.field), value);
+    } else {
+      const alias = joinTarget(builder, item.field);
+      const target = through.field;
+
+      addColumn(builder, through.view.output(alias, target), value);
+      addColumn(
+        builder,
+        sql`COALESCE(${identSql(alias, "id")} IS NOT NULL AND ${through.view.readable(alias, target)}, false)`,
+        present
+      );
+    }
 
     if (flag !== undefined && flagColumn !== null) {
       addColumn(builder, flag, flagColumn);
@@ -390,6 +410,7 @@ const project = (
       field: item.through?.field ?? item.field,
       flag: flagColumn,
       key: item.key,
+      present,
       value,
     });
 
@@ -521,15 +542,6 @@ LIMIT ${textParameter(String(parts.limit), "int8")}`;
 };
 
 /**
- * The page statement in the form the visibility calls for.
- *
- * @param parts - The page's parts.
- * @returns The plain form for at most one branch, else the branch form.
- */
-const pageStatement = (parts: PageParts): SqlFragment =>
-  parts.branches.length > 1 ? branchedPage(parts) : plainPage(parts);
-
-/**
  * Lists records through endpoint E (Contracts 3.5, 6.6).
  *
  * @param request - Table and query parameters.
@@ -581,22 +593,30 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
 
   const projection = project(scope, view, selection, withLabels);
 
-  const page = yield* readRows(
-    pageStatement({
-      branches:
-        request.form === "plain" ? [] : view.visibilityBranches(BASE_ALIAS),
-      conditions:
-        position === undefined
-          ? conditions
-          : [...conditions, cursorPredicate(keys, position, ID)],
-      joins: [...filterJoins, ...projection.joins],
-      keys,
-      limit: limit + 1,
-      membership: view.membership(BASE_ALIAS),
-      projection,
-      relation,
-    })
-  );
+  const parts: PageParts = {
+    branches:
+      request.form === "plain" ? [] : view.visibilityBranches(BASE_ALIAS),
+    conditions:
+      position === undefined
+        ? conditions
+        : [...conditions, cursorPredicate(keys, position, ID)],
+    joins: [...filterJoins, ...projection.joins],
+    keys,
+    limit: limit + 1,
+    membership: view.membership(BASE_ALIAS),
+    projection,
+    relation,
+  };
+
+  // The branch form runs with custom plans and no parallel workers, the
+  // plan the storage benchmark measured; the settings are restored before
+  // any other statement (decision 0008).
+  const page =
+    parts.branches.length > 1
+      ? yield* withBranchTuning(
+          readRows(branchedPage(parts), { unprepared: true })
+        )
+      : yield* readRows(plainPage(parts));
 
   const rows = page.slice(0, limit);
   const last = rows.at(-1);

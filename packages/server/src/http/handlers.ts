@@ -99,11 +99,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             request,
             asActor(
               Effect.gen(function* listInTransaction() {
-                yield* checkRequestRevision(stated, params.table, [
-                  query.filter,
-                  query.sort,
-                  query.fields,
-                ]);
+                yield* checkRequestRevision(stated, params.table, query);
 
                 return jsonResponse(
                   yield* listRecords({ ...query, table: params.table })
@@ -125,9 +121,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             request,
             asActor(
               Effect.gen(function* getInTransaction() {
-                yield* checkRequestRevision(stated, params.table, [
-                  query.fields,
-                ]);
+                yield* checkRequestRevision(stated, params.table, query);
 
                 return jsonResponse(
                   yield* getRecord({

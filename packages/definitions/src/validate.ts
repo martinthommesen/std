@@ -327,6 +327,20 @@ const checkDisplayField = (
         `The display field ${definition.displayFieldId} is not an active field of the class or its ancestors.`
       )
     );
+
+    return;
+  }
+
+  // Labels show the display field's value (Contracts 3.6); a password or
+  // secret value is never returned (6.5), so it cannot label a record.
+  if (field.type.kind === "password" || field.type.kind === "secret") {
+    problems.push(
+      problem(
+        "invalidDisplayField",
+        definition.id,
+        "A password or secret field cannot be a display field."
+      )
+    );
   }
 };
 
