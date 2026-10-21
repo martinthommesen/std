@@ -20,6 +20,8 @@ export interface ColumnFact {
   /** `pg_get_expr` of the default, or null. */
   readonly default: string | null;
   readonly dropped: boolean;
+  /** The name as Postgres prints it in expressions (`quote_ident`). */
+  readonly quoted: string;
 }
 
 /** A constraint of a table. */
@@ -55,8 +57,10 @@ export interface IndexFact {
   readonly unique: boolean;
   /** The access method, for example `btree`. */
   readonly method: string;
-  /** Each key and included column or expression (`pg_get_indexdef(oid, k, true)`). */
+  /** The key columns or expressions (`pg_get_indexdef(oid, k, true)`), in order. */
   readonly keys: readonly string[];
+  /** The non-key columns of `INCLUDE`, in order. */
+  readonly included: readonly string[];
   /** The partial index's predicate, or null. */
   readonly predicate: string | null;
 }
@@ -97,6 +101,7 @@ const decodeColumns = decodeRows(
     dropped: Schema.Boolean,
     name: Schema.String,
     not_null: Schema.Boolean,
+    quoted: Schema.String,
     schema: Schema.String,
     table: Schema.String,
     type: Schema.String,
@@ -124,6 +129,7 @@ const decodeConstraints = decodeRows(
 
 const decodeIndexes = decodeRows(
   Schema.Struct({
+    included: Names,
     keys: Names,
     method: Schema.String,
     name: Schema.String,
@@ -184,7 +190,8 @@ const TABLES_QUERY = `SELECT n.nspname AS schema, c.relname AS table
 
 const COLUMNS_QUERY = `SELECT n.nspname AS schema, c.relname AS table, a.attname AS name,
     format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS not_null,
-    pg_get_expr(d.adbin, d.adrelid) AS default, a.attisdropped AS dropped
+    pg_get_expr(d.adbin, d.adrelid) AS default, a.attisdropped AS dropped,
+    quote_ident(a.attname) AS quoted
   FROM pg_attribute a
   JOIN pg_class c ON c.oid = a.attrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -210,7 +217,9 @@ const CONSTRAINTS_QUERY = `SELECT n.nspname AS schema, c.relname AS table, con.c
 const INDEXES_QUERY = `SELECT n.nspname AS schema, t.relname AS table, i.relname AS name,
     x.indisvalid AS valid, x.indisunique AS unique, am.amname AS method,
     coalesce((SELECT json_agg(pg_get_indexdef(x.indexrelid, k, true) ORDER BY k)
-      FROM generate_series(1, x.indnatts) AS k), '[]')::text AS keys,
+      FROM generate_series(1, x.indnkeyatts) AS k), '[]')::text AS keys,
+    coalesce((SELECT json_agg(pg_get_indexdef(x.indexrelid, k, true) ORDER BY k)
+      FROM generate_series(x.indnkeyatts + 1, x.indnatts) AS k), '[]')::text AS included,
     pg_get_expr(x.indpred, x.indrelid, true) AS predicate
   FROM pg_index x
   JOIN pg_class i ON i.oid = x.indexrelid
@@ -264,6 +273,7 @@ export const readCatalogFacts = Effect.fn("Doctor.readCatalogFacts")(
             dropped: column.dropped,
             name: column.name,
             notNull: column.not_null,
+            quoted: column.quoted,
             type: column.type,
           })),
           constraints: (constraints.get(key) ?? []).map((entry) => ({
@@ -283,6 +293,7 @@ export const readCatalogFacts = Effect.fn("Doctor.readCatalogFacts")(
             validated: entry.validated,
           })),
           indexes: (indexes.get(key) ?? []).map((entry) => ({
+            included: entry.included,
             keys: entry.keys,
             method: entry.method,
             name: entry.name,

@@ -23,6 +23,7 @@ import {
   migrationTables,
 } from "./described.ts";
 import type {
+  QuoteColumn,
   DescribedConstraint,
   DescribedIndex,
   DescribedTable,
@@ -146,11 +147,13 @@ const sameList = (left: readonly string[], right: readonly string[]): boolean =>
  *
  * @param expected - The described constraint.
  * @param actual - The live constraint.
+ * @param quote - How Postgres prints each column.
  * @returns What differs, or an empty list.
  */
 const structureDifferences = (
   expected: DescribedConstraint,
-  actual: ConstraintFact
+  actual: ConstraintFact,
+  quote: QuoteColumn
 ): readonly string[] => {
   const { references } = expected;
 
@@ -174,13 +177,24 @@ const structureDifferences = (
       : `references ${actual.references ?? "nothing"} (${actual.referencedColumns.join(", ")})`,
     actionsMatch ? "" : `actions ${actual.deleteAction}/${actual.updateAction}`,
     actual.deferrable ? "deferrable" : "",
-    expected.matches(actual.definition)
+    expected.matches(actual.definition, quote)
       ? ""
       : `definition ${actual.definition}`,
   ];
 
   return differences.filter((entry) => entry !== "");
 };
+
+/**
+ * How Postgres prints a column of a table (`quote_ident`).
+ *
+ * @param facts - The table's catalog facts.
+ * @param column - The column.
+ * @returns The printed name; a column missing from the table is quoted.
+ */
+const quoteOf = (facts: TableFacts, column: string): string =>
+  facts.columns.find((entry) => entry.name === column && !entry.dropped)
+    ?.quoted ?? `"${column.replaceAll('"', '""')}"`;
 
 const constraintFinding = (
   key: string,
@@ -216,7 +230,9 @@ const constraintFinding = (
         ];
   }
 
-  const differences = structureDifferences(expected, actual);
+  const differences = structureDifferences(expected, actual, (column) =>
+    quoteOf(facts, column)
+  );
 
   if (differences.length > 0) {
     return [

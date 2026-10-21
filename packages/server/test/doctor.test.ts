@@ -44,6 +44,9 @@ const COST_OVERRIDE = "5d3f0f3e-3d77-4f0a-9d0c-6f1f3a1c2b44";
 /** `acme.asset.owner`, a reference to `core.user`. */
 const ASSET_OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
 
+/** `core.user.name`. */
+const USER_NAME = "13160bfb-1a94-4f0b-a29b-bccf701673c0";
+
 /** The unique index on `core.user.login`. */
 const LOGIN_INDEX = "4941e670-8c9b-4a1a-a758-93854cef07bb";
 
@@ -328,6 +331,87 @@ const DRIFTS: readonly Drift[] = [
     statements: [
       `ALTER TABLE fx.item DROP CONSTRAINT ${name("ck", FX.x)},
          ADD CONSTRAINT ${name("ck", FX.x)} CHECK (char_length(x) <= 255 OR true)`,
+    ],
+  },
+  {
+    expected: expect(
+      2,
+      "error",
+      "constraintMismatch",
+      `core.user/${name("ck", USER_NAME)}`
+    ),
+    name: "a max-length CHECK calling a look-alike quoted function",
+    statements: [
+      `CREATE FUNCTION public."char_""length"(text) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 0'`,
+      `ALTER TABLE core."user" DROP CONSTRAINT ${name("ck", USER_NAME)},
+         ADD CONSTRAINT ${name("ck", USER_NAME)} CHECK ("char_""length"(name) <= 255)`,
+    ],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMismatch",
+      "core.config_conflict/config_conflict_open"
+    ),
+    name: "a platform unique index whose key column became an included column",
+    statements: [
+      "DROP INDEX core.config_conflict_open",
+      `CREATE UNIQUE INDEX config_conflict_open ON core."config_conflict" (record_id) INCLUDE (property) WHERE state = 'open'`,
+    ],
+  },
+  {
+    expected: expect(12, "error", "fkAction", "core.delivery/delivery_change"),
+    name: "a core.delivery FK that cascades",
+    statements: [
+      `ALTER TABLE core.delivery DROP CONSTRAINT delivery_change,
+         ADD CONSTRAINT delivery_change FOREIGN KEY (change_id) REFERENCES core."change" (id) ON DELETE CASCADE`,
+    ],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.delivery/delivery_order"
+    ),
+    name: "a dropped core.delivery index",
+    statements: ["DROP INDEX core.delivery_order"],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMismatch",
+      "core.delivery/delivery_order"
+    ),
+    name: "a core.delivery partial index with another predicate",
+    statements: [
+      "DROP INDEX core.delivery_order",
+      "CREATE INDEX delivery_order ON core.delivery (subscription_id, record_id, record_version) WHERE status = 'pending'",
+    ],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.delivery/delivery_lease"
+    ),
+    name: "a dropped core.delivery lease CHECK",
+    statements: ["ALTER TABLE core.delivery DROP CONSTRAINT delivery_lease"],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMismatch",
+      "core.delivery/delivery_lease"
+    ),
+    name: "a core.delivery lease CHECK weakened with OR true",
+    statements: [
+      `ALTER TABLE core.delivery DROP CONSTRAINT delivery_lease,
+         ADD CONSTRAINT delivery_lease CHECK ((status = 'in_flight') = (lease_until IS NOT NULL) OR true)`,
     ],
   },
   {

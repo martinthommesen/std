@@ -61,7 +61,7 @@ export interface DescribedConstraint {
   /** Whether it may be NOT VALID, and why (its enforcement state). */
   readonly enforcement: Enforcement | "widened";
   /** Key or check structure the definition must show. */
-  readonly matches: (definition: string) => boolean;
+  readonly matches: (definition: string, quote: QuoteColumn) => boolean;
   /** Which check reports a missing one: 2 for keys, 3 for field constraints. */
   readonly check: 2 | 3;
 }
@@ -89,8 +89,6 @@ const LEVEL_SYSTEM: readonly (readonly [string, string])[] = [
   ["id", "uuid"],
   ["class_id", "uuid"],
 ];
-
-const IDENTIFIER_QUOTES = /"/gu;
 
 /** The suffix `pg_get_constraintdef` adds to a constraint not validated yet. */
 const NOT_VALID = / NOT VALID$/u;
@@ -176,6 +174,9 @@ export const describedColumns = (
 
 const always = (): boolean => true;
 
+/** Renders a column as Postgres prints it (`quote_ident`). */
+export type QuoteColumn = (column: string) => string;
+
 /**
  * The definition Postgres 18 deparses a subtree CHECK to
  * (`pg_get_constraintdef`), from the class IDs in the order the DDL lists
@@ -183,43 +184,49 @@ const always = (): boolean => true;
  * several.
  *
  * @param subtreeIds - The class IDs of the subtree, in DDL order.
+ * @param quote - How the column is printed.
  * @returns The canonical definition.
  */
 export const subtreeCheckDefinition = (
-  subtreeIds: readonly string[]
+  subtreeIds: readonly string[],
+  quote: QuoteColumn
 ): string => {
+  const column = quote("class_id");
   const literals = subtreeIds.map((id) => `'${id}'::uuid`);
 
   return literals.length === 1
-    ? `CHECK ((class_id = ${literals[0] ?? ""}))`
-    : `CHECK ((class_id = ANY (ARRAY[${literals.join(", ")}])))`;
+    ? `CHECK ((${column} = ${literals[0] ?? ""}))`
+    : `CHECK ((${column} = ANY (ARRAY[${literals.join(", ")}])))`;
 };
 
 /**
- * The definition Postgres 18 deparses a max-length CHECK to, with the
- * column unquoted.
+ * The definition Postgres 18 deparses a max-length CHECK to.
  *
  * @param column - The column.
  * @param length - The maximum length in code points.
+ * @param quote - How the column is printed.
  * @returns The canonical definition.
  */
-export const lengthCheckDefinition = (column: string, length: number): string =>
-  `CHECK ((char_length(${column}) <= ${length}))`;
+export const lengthCheckDefinition = (
+  column: string,
+  length: number,
+  quote: QuoteColumn
+): string => `CHECK ((char_length(${quote(column)}) <= ${length}))`;
 
 /**
- * Whether a live CHECK is exactly the canonical one (its validity is
- * checked separately, so a `NOT VALID` suffix is ignored). Postgres quotes an
- * identifier only when it must (`"user"`), so identifier quotes are removed
- * before comparing; the expressions STD generates hold no other `"`.
+ * Whether a live CHECK is exactly the canonical one, compared as text with
+ * nothing removed but a `NOT VALID` suffix (validity is checked
+ * separately). The column is rendered the way Postgres prints it
+ * (`quote_ident`, read from the catalog), so a quoted identifier matches
+ * only that column: `"char_""length"` is not `char_length`.
  *
- * @param expected - The canonical definition.
+ * @param render - The canonical definition for a column renderer.
  * @returns A test of `pg_get_constraintdef`.
  */
 const isExactly =
-  (expected: string) =>
-  (definition: string): boolean =>
-    definition.replaceAll(IDENTIFIER_QUOTES, "").replace(NOT_VALID, "") ===
-    expected;
+  (render: (quote: QuoteColumn) => string) =>
+  (definition: string, quote: QuoteColumn): boolean =>
+    definition.replace(NOT_VALID, "") === render(quote);
 
 const key = (
   name: string,
@@ -296,7 +303,9 @@ const classConstraints = (
         definition.enforcementNote === WIDENED_CHECK_NOTE
           ? "widened"
           : "enforced",
-      matches: isExactly(subtreeCheckDefinition(snapshot.subtreeIds(id))),
+      matches: isExactly((quote) =>
+        subtreeCheckDefinition(snapshot.subtreeIds(id), quote)
+      ),
       name: generatedName("sc", id),
       references: null,
       type: "c",
@@ -341,13 +350,15 @@ const fieldConstraints = (
   }
 
   if (field.type.kind === "text") {
+    const length = maxLengthOf(field.type);
+
     constraints.push({
       check: 3,
       columns: [field.name],
       deleteAction: null,
       enforcement,
-      matches: isExactly(
-        lengthCheckDefinition(field.name, maxLengthOf(field.type))
+      matches: isExactly((quote) =>
+        lengthCheckDefinition(field.name, length, quote)
       ),
       name: generatedName("ck", field.id),
       references: null,

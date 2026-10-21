@@ -4,7 +4,8 @@
  * `platform-catalog.json`: columns with types, nullability and defaults;
  * constraints by kind, columns, referenced table and columns, actions,
  * deferrability, validity and, for CHECKs, their deparsed expression;
- * indexes by method, keys, predicate, uniqueness and validity; triggers by
+ * indexes by method, key columns, included columns, predicate, uniqueness
+ * and validity; triggers by
  * function, type bits, enabled state and `WHEN` condition. Everything is
  * structural or names no relation, so the record does not depend on the
  * session's `search_path`.
@@ -44,6 +45,7 @@ const ConstraintSchema = Schema.Struct({
 });
 
 const IndexSchema = Schema.Struct({
+  included: Schema.Array(Schema.String),
   keys: Schema.Array(Schema.String),
   method: Schema.String,
   name: Schema.String,
@@ -128,6 +130,7 @@ export const describeTable = (facts: TableFacts): PlatformTable => ({
   ),
   indexes: byName(
     facts.indexes.map((entry) => ({
+      included: entry.included,
       keys: entry.keys,
       method: entry.method,
       name: entry.name,

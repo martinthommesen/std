@@ -464,6 +464,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["table_id"],
         "method": "btree",
         "name": "access_rule_table",
@@ -472,6 +473,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_051b98ff3fc24155a6e8b3d9053a5b9e",
@@ -480,6 +482,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_051b98ff3fc24155a6e8b3d9053a5b9e",
@@ -978,6 +981,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["operation_id"],
         "method": "btree",
         "name": "change_operation",
@@ -986,6 +990,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["record_id", "record_version"],
         "method": "btree",
         "name": "change_record_version",
@@ -994,6 +999,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_edde151df2044639bcbfa4793f86a219",
@@ -1002,6 +1008,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_edde151df2044639bcbfa4793f86a219",
@@ -1517,6 +1524,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["namespace_id", "name"],
         "method": "btree",
         "name": "class_name_live",
@@ -1525,6 +1533,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["parent_id"],
         "method": "btree",
         "name": "class_parent",
@@ -1533,6 +1542,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_7a8a72021e014d77bf6f4ff80876bef6",
@@ -1541,6 +1551,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_7a8a72021e014d77bf6f4ff80876bef6",
@@ -1891,6 +1902,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["set_id"],
         "method": "btree",
         "name": "config_base_set",
@@ -1899,6 +1911,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_aa13ec55456b415baab5ef9c42438f16",
@@ -1907,6 +1920,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_aa13ec55456b415baab5ef9c42438f16",
@@ -2377,6 +2391,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["record_id", "property"],
         "method": "btree",
         "name": "config_conflict_open",
@@ -2385,6 +2400,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["record_id"],
         "method": "btree",
         "name": "config_conflict_record",
@@ -2393,6 +2409,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_b7281780944146f39d58f14b812a59c2",
@@ -2401,6 +2418,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_b7281780944146f39d58f14b812a59c2",
@@ -2496,6 +2514,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["from_id", "kind", "to_id"],
         "method": "btree",
         "name": "config_dependency_pkey",
@@ -2504,6 +2523,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["to_id"],
         "method": "btree",
         "name": "config_dependency_to",
@@ -2846,6 +2866,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["record_id", "property"],
         "method": "btree",
         "name": "config_override_record_id_property_key",
@@ -2854,6 +2875,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_225c71f0e4114e5ea01caebdd779a2c5",
@@ -2862,6 +2884,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_225c71f0e4114e5ea01caebdd779a2c5",
@@ -3193,6 +3216,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["name"],
         "method": "btree",
         "name": "config_set_name",
@@ -3201,6 +3225,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_0b70df4dc0004b9aaa7f8b5b92f1afce",
@@ -3209,6 +3234,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_0b70df4dc0004b9aaa7f8b5b92f1afce",
@@ -3330,6 +3356,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["singleton"],
         "method": "btree",
         "name": "config_state_pkey",
@@ -3449,9 +3476,320 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["definition_id", "revision"],
         "method": "btree",
         "name": "definition_revision_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.delivery": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "subscription_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "change_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "status",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "attempts",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "next_attempt_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "lease_until",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "lease_token",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "last_error",
+        "notNull": false,
+        "type": "text"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK ((attempts >= 0))",
+        "columns": ["attempts"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_attempts_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["attempts"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_attempts_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": "a",
+        "name": "delivery_change",
+        "referencedColumns": ["id"],
+        "references": "core.change",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_change_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((((status = 'in_flight'::text) = (lease_until IS NOT NULL)) AND ((status = 'in_flight'::text) = (lease_token IS NOT NULL))))",
+        "columns": ["status", "lease_until", "lease_token"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_lease",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["next_attempt_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_next_attempt_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["record_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_record_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((record_version > 0))",
+        "columns": ["record_version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_record_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["record_version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_record_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((status = ANY (ARRAY['pending'::text, 'in_flight'::text, 'done'::text, 'dead'::text])))",
+        "columns": ["status"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_status_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["status"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_status_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": "a",
+        "name": "delivery_subscription",
+        "referencedColumns": ["id"],
+        "references": "core.subscription",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id", "change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_subscription_change",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_subscription_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["subscription_id", "record_id", "record_version"],
+        "method": "btree",
+        "name": "delivery_order",
+        "predicate": "status <> 'done'::text",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "delivery_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["subscription_id", "change_id"],
+        "method": "btree",
+        "name": "delivery_subscription_change",
         "predicate": null,
         "unique": true,
         "valid": true
@@ -3930,6 +4268,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["table_id", "name"],
         "method": "btree",
         "name": "field_name_live",
@@ -3938,6 +4277,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_de5ad84a87aa45a0b76b2ce287e306c2",
@@ -3946,6 +4286,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_de5ad84a87aa45a0b76b2ce287e306c2",
@@ -4408,6 +4749,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["table_id", "field_id"],
         "method": "btree",
         "name": "field_override_live",
@@ -4416,6 +4758,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_e29c0472668e40ffbb0c8ffa8e8b6f37",
@@ -4424,6 +4767,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_e29c0472668e40ffbb0c8ffa8e8b6f37",
@@ -4844,6 +5188,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["table_id"],
         "method": "btree",
         "name": "index_table",
@@ -4852,6 +5197,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_3e7e3e312fef44149c85e37a441a8809",
@@ -4860,6 +5206,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_3e7e3e312fef44149c85e37a441a8809",
@@ -5267,6 +5614,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["name"],
         "method": "btree",
         "name": "namespace_name_live",
@@ -5275,6 +5623,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_53500c6c063b423ab626a6a938649162",
@@ -5283,6 +5632,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_53500c6c063b423ab626a6a938649162",
@@ -5639,6 +5989,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["name"],
         "method": "btree",
         "name": "permission_name_live",
@@ -5647,6 +5998,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_0d6333e6d2414da7a4565cafd70db0a4",
@@ -5655,6 +6007,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_0d6333e6d2414da7a4565cafd70db0a4",
@@ -5782,6 +6135,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "platform_migration_pkey",
@@ -6130,6 +6484,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["name"],
         "method": "btree",
         "name": "role_name_live",
@@ -6138,6 +6493,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_a425953fb93447d68ff14bbeca1b9370",
@@ -6146,6 +6502,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_a425953fb93447d68ff14bbeca1b9370",
@@ -6522,6 +6879,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["role_id", "permission_id"],
         "method": "btree",
         "name": "role_permission_live",
@@ -6530,6 +6888,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_b16789cc353b4f929f9a3683a7f8ec0e",
@@ -6538,6 +6897,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_b16789cc353b4f929f9a3683a7f8ec0e",
@@ -6873,6 +7233,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["first_revision"],
         "method": "btree",
         "name": "schema_change_first_revision",
@@ -6881,6 +7242,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["state"],
         "method": "btree",
         "name": "schema_change_open",
@@ -6889,6 +7251,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_b176d598bd9d4b4d8dd987b52eaf992e",
@@ -6897,6 +7260,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_b176d598bd9d4b4d8dd987b52eaf992e",
@@ -7335,6 +7699,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["change_id", "ordinal"],
         "method": "btree",
         "name": "schema_change_step_change_id_ordinal_key",
@@ -7343,6 +7708,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_3d49bff3764048b79030d37b68f8b639",
@@ -7351,6 +7717,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_3d49bff3764048b79030d37b68f8b639",
@@ -7491,6 +7858,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["user_id"],
         "method": "btree",
         "name": "session_by_user",
@@ -7499,6 +7867,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["token_hash"],
         "method": "btree",
         "name": "session_pkey",
@@ -7981,6 +8350,7 @@
     ],
     "indexes": [
       {
+        "included": [],
         "keys": ["id"],
         "method": "btree",
         "name": "std_pk_31446f0c7ec74e5aa1b4f4a4686bca0e",
@@ -7989,6 +8359,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["id", "class_id"],
         "method": "btree",
         "name": "std_uq_31446f0c7ec74e5aa1b4f4a4686bca0e",
@@ -7997,6 +8368,7 @@
         "valid": true
       },
       {
+        "included": [],
         "keys": ["name"],
         "method": "btree",
         "name": "subscription_name_live",
