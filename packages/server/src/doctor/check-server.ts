@@ -137,7 +137,11 @@ export const checkUnicodeVersion = Effect.gen(function* checkUnicodeVersion() {
 });
 
 const decodeSettings = decodeRows(
-  Schema.Struct({ check_interval: Schema.String, encoding: Schema.String })
+  Schema.Struct({
+    check_interval: Schema.String,
+    encoding: Schema.String,
+    utf8: Schema.Boolean,
+  })
 );
 
 /**
@@ -150,7 +154,8 @@ export const checkServerSettings = Effect.gen(function* checkServerSettings() {
   const sql = yield* SqlClient.SqlClient;
 
   const [row] = yield* sql`
-    SELECT pg_encoding_to_char(d.encoding) AS encoding,
+    SELECT pg_encoding_to_char(d.encoding)::text AS encoding,
+           d.encoding = pg_char_to_encoding('UTF8') AS utf8,
            current_setting('client_connection_check_interval') AS check_interval
     FROM pg_database d WHERE d.datname = current_database()`.pipe(
     Effect.flatMap(decodeSettings)
@@ -158,7 +163,7 @@ export const checkServerSettings = Effect.gen(function* checkServerSettings() {
 
   const findings: Finding[] = [];
 
-  if (row?.encoding !== "utf-8") {
+  if (row?.utf8 !== true) {
     findings.push(
       finding(
         15,
