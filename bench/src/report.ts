@@ -281,6 +281,7 @@ const loadRows = (runs: readonly ModelRun[]): readonly (readonly string[])[] =>
       `${window.otherCores ?? "n/a"}`,
       `${window.loadAverageStart.join(" ")} -> ${window.loadAverageEnd.join(" ")}`,
       `${window.containerThrottledPeriods ?? "n/a"}`,
+      `${window.hostWriteIops ?? "n/a"} / ${window.benchWriteIops ?? "n/a"} / ${window.otherWriteIops ?? "n/a"}`,
     ])
   );
 
@@ -324,7 +325,7 @@ const environmentSection = (report: BenchReport): string => {
     "",
     `Other containers on the host during the run: ${others}.`,
     "",
-    'CPU use per phase in cores (CPU-seconds per second). "Other" is host busy time minus the bench container and this harness: load from other work on this shared machine.',
+    'CPU use per phase in cores (CPU-seconds per second). "Other" is host busy time minus the bench container and this harness: load from other work on this shared machine. Disk write IOs per second are counted on the host\'s md (RAID 1) devices, which every container shares; "other" writes compete with the benchmark\'s WAL flushes and slow commit-bound writes.',
     "",
     table(
       [
@@ -337,6 +338,7 @@ const environmentSection = (report: BenchReport): string => {
         "Other",
         "Load average",
         "Throttled periods",
+        "Disk write IOs/s: host / bench / other",
       ],
       loadRows(report.runs)
     ),

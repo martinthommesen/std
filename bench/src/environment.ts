@@ -57,6 +57,12 @@ export interface LoadWindow {
   readonly otherCores: number | null;
   /** CFS periods in which the bench container hit its 8-CPU quota. */
   readonly containerThrottledPeriods: number | null;
+  /** Write I/Os per second to the host's md (RAID) devices, which every container shares. */
+  readonly hostWriteIops: number | null;
+  /** The bench container's share of them. */
+  readonly benchWriteIops: number | null;
+  /** The rest: concurrent writes from other work, which compete with the benchmark's WAL flushes. */
+  readonly otherWriteIops: number | null;
 }
 
 const nanosPerCpu = 1e9;
@@ -182,7 +188,47 @@ interface CpuSnapshot {
   readonly throttled: number | null;
   readonly harness: number;
   readonly loadAverage: readonly number[];
+  readonly hostWrites: number | null;
+  readonly containerWrites: number | null;
 }
+
+// /proc/diskstats: major minor name reads ... ; writes completed is the fifth field after the name.
+const writesCompletedField = 7;
+const mdDevice = /^md\d+$/u;
+const mdMajor = "9:";
+const writeIosPattern = /wios=(?<writes>\d+)/u;
+
+const hostMdWrites = (diskstats: string): number | null => {
+  let total = 0;
+  let found = false;
+
+  for (const line of diskstats.split("\n")) {
+    const fields = line.trim().split(whitespace);
+
+    if (mdDevice.test(fields[2] ?? "")) {
+      total += Number(fields[writesCompletedField] ?? "0");
+      found = true;
+    }
+  }
+
+  return found ? total : null;
+};
+
+const containerMdWrites = (iostat: string): number | null => {
+  let total = 0;
+  let found = false;
+
+  for (const line of iostat.split("\n")) {
+    const writes = writeIosPattern.exec(line)?.groups?.writes;
+
+    if (line.startsWith(mdMajor) && writes !== undefined) {
+      total += Number(writes);
+      found = true;
+    }
+  }
+
+  return found ? total : null;
+};
 
 const containerCgroup: Effect.Effect<string | null> = command("docker", [
   "inspect",
@@ -219,12 +265,20 @@ const snapshot: (cgroup: string | null) => Effect.Effect<CpuSnapshot> =
     const usage = usagePattern.exec(cgroupText)?.groups?.usage;
     const throttled = throttledPattern.exec(cgroupText)?.groups?.throttled;
     const harness = process.cpuUsage();
+    const diskstats = yield* optional(readText("/proc/diskstats"));
+
+    const iostat =
+      cgroup === null
+        ? unavailable
+        : yield* optional(readText(cgroup.replace("cpu.stat", "io.stat")));
 
     return {
       at: performance.now(),
       container: usage === undefined ? null : Number(usage) / microsPerSecond,
+      containerWrites: containerMdWrites(iostat),
       harness: (harness.user + harness.system) / microsPerSecond,
       hostBusy: sumBusy(fields),
+      hostWrites: hostMdWrites(diskstats),
       loadAverage: loadavg.split(" ").slice(0, loadAverageFields).map(Number),
       throttled: throttled === undefined ? null : Number(throttled),
     };
@@ -255,14 +309,27 @@ const windowOf = (
       ? null
       : round3(Math.max(0, hostBusyCores - benchContainerCores - harnessCores));
 
+  const hostWrites = difference(end.hostWrites, start.hostWrites);
+  const benchWrites = difference(end.containerWrites, start.containerWrites);
+  const hostWriteIops = hostWrites === null ? null : per(hostWrites);
+  const benchWriteIops = benchWrites === null ? null : per(benchWrites);
+
+  const otherWriteIops =
+    hostWriteIops === null || benchWriteIops === null
+      ? null
+      : round3(Math.max(0, hostWriteIops - benchWriteIops));
+
   return {
     benchContainerCores,
+    benchWriteIops,
     containerThrottledPeriods: difference(end.throttled, start.throttled),
     harnessCores,
     hostBusyCores,
+    hostWriteIops,
     loadAverageEnd: end.loadAverage,
     loadAverageStart: start.loadAverage,
     otherCores,
+    otherWriteIops,
     phase,
     seconds: round3(seconds),
   };
