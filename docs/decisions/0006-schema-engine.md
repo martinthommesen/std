@@ -16,14 +16,14 @@ Status: accepted, 2026-10-21 (workstreams 0B storage side and 1A core). Code: `p
 | `@std/definitions/validate` | `validateSnapshot`: names, uniqueness scopes, references, `extends` cycles, types and constant defaults, overrides, indexes, grants, access rules, subscriptions |
 | `@std/definitions/problems` | `DefinitionProblem` and the `DefinitionInvalid` error |
 | `@std/definitions/effective-json` | the effective JSON of a definition (for `core.definition_revision`) |
-| `@std/definitions/dependencies` | dependency edges of a definition (1.7 kinds that exist now) |
+| `@std/definitions/dependencies` | dependency edges of a definition (1.7 kinds that exist now; an access rule has `access_rule_on` edges to its class and to every field it targets by ID) |
 | `@std/definitions/operation` | the change-set operation model and the updatable properties per kind |
 | `@std/definitions/apply` | `applyOperations`: in-memory application with version checks and validation |
 | `@std/definitions/set-file`, `set-resolve`, `set-plan` | the set file format, name resolution, and phase-ordered planning against the installed definitions |
 | `@std/definitions/well-known` | IDs code relies on (platform classes, `core.user`, the system user, built-in roles and permissions) |
 | `server/catalog/definition-tables` | one `(property, column, codec)` list per kind, used to read and to write definition rows |
 | `server/catalog/load` | `loadSnapshot` in the caller's transaction |
-| `server/catalog/catalog` | the `Catalog` service: cache keyed by `(revision, change_set_id)`, one load at a time, `refresh`, `followSignals` and `Catalog.listening` |
+| `server/catalog/catalog` | the `Catalog` service: an `effect/Cache` keyed by `(revision, change_set_id)` (capacity 4, successes kept, failures not, lookup services from the caller's transaction), one load at a time, `refresh`, `followSignals`; `catalogLayer` and `listeningCatalogLayer` |
 | `server/schema/ddl-forms` | the DDL forms of Contracts 1.4, `checkDdl`, lock modes and per-statement lock inventories |
 | `server/schema/ddl` | class-table DDL builders, each statement with its lock inventory |
 | `server/schema/plan` | `planChangeSet`: DDL, follow-up steps, enforcement states, preflight checks, platform tables to verify, lock inventory; `requiresSchemaKey` |
@@ -86,7 +86,9 @@ The journal records per operation `{op, kind, targetId, oldName, newName, versio
 | `dropColumn` of a reference field, `dropConstraint` of an FK | `ACCESS EXCLUSIVE` on both tables (FK trigger removal) |
 | `createSchema`, follow-up forms | none (follow-ups run outside the budget with `lock_timeout = 0`) |
 
-`lock-inventory.test.ts` takes each statement's inventory, runs it and checks `pg_locks`: the only extra relation locks are `ACCESS SHARE` on indexes of locked tables (FK creation and `CREATE TABLE` with a level FK read the referenced unique index). They conflict only with `ACCESS EXCLUSIVE` on that index, which only STD's own `DROP INDEX CONCURRENTLY` takes, under `SCHEMA_KEY`; the test counts them as covered.
+`lock-inventory.test.ts` runs every generated form in its own committed transaction on a separate session, after taking the statement's inventory, and classifies each relation lock the statement adds like the 0F probe: system catalogs and relations the statement creates need no budget; a listed table must be held in a mode that covers the added one (it conflicts with everything the added mode conflicts with); an index or TOAST table of a listed table is an **unbudgeted** lock, allowed only in a mode the table's listed mode covers, because Postgres cannot `LOCK TABLE` an index; anything else fails the test. The unbudgeted locks seen are `ACCESS SHARE` on the referenced unique index (FK creation, `CREATE TABLE` with a level FK); they conflict only with `ACCESS EXCLUSIVE` on that index, which only STD's own `DROP INDEX CONCURRENTLY` takes, under `SCHEMA_KEY`. A deliberately understated inventory is detected.
+
+**Preflight data checks** (under `SCHEMA_KEY`, before `CONFIG_KEY`): a required field without a column default (booleans default to `false`) on a table with rows; a field made required; a new or tightened override, over the subtree (for a field added in the same change set, against the new column's default, rechecked by `validate_override` after the commit); a unique index on a table with rows, counting rows whose key (the index's own expressions, casefolded for case-insensitive text) occurs more than once, a key with a NULL never counting. The DDL guard masks string literals and quoted identifiers before it looks for keywords, so a default `'SET NOT NULL'` is data.
 
 ## Step model
 
@@ -100,7 +102,7 @@ The journal records per operation `{op, kind, targetId, oldName, newName, versio
 | `drop_index_concurrently` | missing = done | `DROP INDEX CONCURRENTLY IF EXISTS` | none |
 | `complete` | change set `completed` | config commit: enforcement from step outcomes, change set `completed`, `last_revision`, revision bump | (1A: abandon actions, then `complete`) |
 
-Steps run on the coordinator's connection in autocommit with `lock_timeout = 0` and `statement_timeout = 0`, marked `running` (attempts, backend PID) and `done` (details merged). A step failing 3 times is `failed` and the change set `needs_attention`. Resume, abandon and the watchdog (1A) build on the probes and abandon actions.
+Steps run on the coordinator's connection in autocommit with `lock_timeout = 0` and `statement_timeout = 0`, marked `running` (attempts, backend PID) and `done` (details merged). Only typed database failures are retried (`Effect.retryOrElse` with `Schedule.recurs(2)`); a step failing 3 times is `failed` and the change set `needs_attention`. Defects and interruption propagate. Resume, abandon and the watchdog (1A) build on the probes and abandon actions.
 
 ## Set file format
 
@@ -126,6 +128,8 @@ A set is a directory of `.yaml` files (YAML 1.2 core schema, unique keys, unknow
 - Protected definitions are flagged but not yet enforced against admin edits (1A), and the core namespace's reservation is not enforced.
 - `std upgrade` loads each set as its own change set and does not yet hold `SCHEMA_KEY` across the whole upgrade (1B).
 - Text fields without `maxLength` get the 255 code-point CHECK of `@std/values`; platform text columns have no CHECK, and verification compares types and nullability only.
+- The catalog uses `effect/Cache` for its snapshots: a cache built once per catalog, keyed by the state's text form, and a permit around `Cache.get` inside the caller's transaction. Cache's built-in shared lookup is not relied on for serialization; the permit is, so a pending lookup never outlives its transaction.
+- Service layers are module exports (`catalogLayer`, `listeningCatalogLayer`) rather than static members: `makeCatalog` returns `Catalog.of(...)`, so the class must be defined first.
 - The engine needs nothing from the SQL layer beyond the round-2 allowlist: `CREATE`, `ALTER`, `LOCK`, `INSERT`, `UPDATE`, `DELETE`, `SELECT` and `SET LOCAL lock_timeout` inside transactions; `SET`/`RESET enable_seqscan`, `SET lock_timeout|statement_timeout` and concurrent index statements only in autocommit on the coordinator's connection.
 
 ## For the next workstreams

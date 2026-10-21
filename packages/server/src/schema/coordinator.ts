@@ -15,7 +15,7 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson, stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Schedule, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -45,40 +45,39 @@ const decodePids = decodeRows(Schema.Struct({ pid: Schema.Int }));
 
 const decodeChangeIds = decodeRows(Schema.Struct({ id: Schema.String }));
 
-const schemaBusy = (
+const schemaBusy = Effect.fn("Schema.schemaBusy")(function* schemaBusy(
   connection: DedicatedConnection
-): Effect.Effect<SchemaBusy, DatabaseError> =>
-  Effect.gen(function* describeSchemaKeyHolder() {
-    const pids = yield* connection
-      .execute(
-        `SELECT pid FROM pg_locks
+): Effect.fn.Return<SchemaBusy, DatabaseError> {
+  const pids = yield* connection
+    .execute(
+      `SELECT pid FROM pg_locks
          WHERE locktype = 'advisory' AND granted
            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
            AND classid = $1::oid AND objid = $2::oid AND objsubid = 1`,
-        [
-          String(advisoryClassId(SCHEMA_KEY)),
-          String(advisoryObjectId(SCHEMA_KEY)),
-        ]
-      )
-      .pipe(Effect.flatMap(decodePids));
+      [
+        String(advisoryClassId(SCHEMA_KEY)),
+        String(advisoryObjectId(SCHEMA_KEY)),
+      ]
+    )
+    .pipe(Effect.flatMap(decodePids));
 
-    const holderPids = pids.map((row) => row.pid);
+  const holderPids = pids.map((row) => row.pid);
 
-    const [change] = yield* connection
-      .execute(
-        `SELECT id::text AS id FROM core."schema_change"
+  const [change] = yield* connection
+    .execute(
+      `SELECT id::text AS id FROM core."schema_change"
          WHERE state = 'applying' AND coordinator_pid = ANY($1::int4[])
          ORDER BY created_at DESC LIMIT 1`,
-        [`{${holderPids.join(",")}}`]
-      )
-      .pipe(Effect.flatMap(decodeChangeIds));
+      [`{${holderPids.join(",")}}`]
+    )
+    .pipe(Effect.flatMap(decodeChangeIds));
 
-    return new SchemaBusy({
-      changeSetId: change?.id ?? null,
-      holderPids,
-      retryAfterSeconds: SCHEMA_BUSY_RETRY_AFTER_SECONDS,
-    });
+  return new SchemaBusy({
+    changeSetId: change?.id ?? null,
+    holderPids,
+    retryAfterSeconds: SCHEMA_BUSY_RETRY_AFTER_SECONDS,
   });
+});
 
 /**
  * Opens the coordinator's dedicated connection and takes `SCHEMA_KEY` with
@@ -220,47 +219,63 @@ export interface FollowUpOutcome {
   readonly error: string | null;
 }
 
-const runStep = (
+/** How the attempts of one step ended. */
+type StepAttempts =
+  | { readonly _tag: "Done"; readonly details: JsonObject }
+  | { readonly _tag: "Failed"; readonly error: DatabaseError };
+
+/**
+ * Runs one step: records it `done` at once when its probe finds it done,
+ * otherwise runs its action up to `STEP_ATTEMPTS` times. Only typed
+ * database failures are retried and recorded; defects and interruption
+ * propagate.
+ *
+ * @param connection - The coordinator's connection.
+ * @param step - The step.
+ * @returns A failure report after the last attempt, or null.
+ */
+const runStep = Effect.fn("Schema.runStep")(function* runStep(
   connection: DedicatedConnection,
   step: StepRow
-): Effect.Effect<string | null, DatabaseError> =>
-  Effect.gen(function* runOneStep() {
-    if (step.kind === "complete") {
-      return null;
-    }
+): Effect.fn.Return<string | null, DatabaseError> {
+  if (step.kind === "complete") {
+    return null;
+  }
 
-    const spec = STEP_SPECS[step.kind];
-    const probed = yield* spec.probe(connection, step);
+  const spec = STEP_SPECS[step.kind];
 
-    if (probed === "done") {
-      yield* markDone(connection, step, {});
+  if ((yield* spec.probe(connection, step)) === "done") {
+    yield* markDone(connection, step, {});
 
-      return null;
-    }
+    return null;
+  }
 
-    let error = "";
+  const attempt = markRunning(connection, step).pipe(
+    Effect.andThen(spec.action(connection, step)),
+    Effect.tapError((failure) =>
+      markFailedAttempt(connection, step, failure.message, false)
+    )
+  );
 
-    for (let attempt = 1; attempt <= STEP_ATTEMPTS; attempt += 1) {
-      yield* markRunning(connection, step);
-      const exit = yield* Effect.exit(spec.action(connection, step));
+  const attempts = yield* attempt.pipe(
+    Effect.map((details): StepAttempts => ({ _tag: "Done", details })),
+    Effect.retryOrElse(Schedule.recurs(STEP_ATTEMPTS - 1), (failure) =>
+      Effect.succeed<StepAttempts>({ _tag: "Failed", error: failure })
+    )
+  );
 
-      if (Exit.isSuccess(exit)) {
-        yield* markDone(connection, step, exit.value);
+  if (attempts._tag === "Done") {
+    yield* markDone(connection, step, attempts.details);
 
-        return null;
-      }
+    return null;
+  }
 
-      error = Exit.isFailure(exit) ? String(exit.cause) : "";
-      yield* markFailedAttempt(
-        connection,
-        step,
-        error,
-        attempt === STEP_ATTEMPTS
-      );
-    }
+  const report = `Step ${step.ordinal} (${step.kind}) failed ${STEP_ATTEMPTS} times: ${attempts.error.message}`;
 
-    return `Step ${step.ordinal} (${step.kind}) failed ${STEP_ATTEMPTS} times: ${error}`;
-  });
+  yield* markFailedAttempt(connection, step, report, true);
+
+  return report;
+});
 
 const ENFORCED_TABLES = new Map<string, string>([
   ["create_index_concurrently", "index"],
@@ -268,8 +283,8 @@ const ENFORCED_TABLES = new Map<string, string>([
   ["validate_override", "field_override"],
 ]);
 
-const completeChangeSet = (changeSetId: string) =>
-  Effect.gen(function* completeInConfigCommit() {
+const completeChangeSet = Effect.fn("Schema.completeChangeSet")(
+  function* completeChangeSet(changeSetId: string) {
     const sql = yield* SqlClient.SqlClient;
     const { revision } = yield* RequestRevision;
 
@@ -308,7 +323,8 @@ const completeChangeSet = (changeSetId: string) =>
       WHERE id = ${changeSetId}::uuid`;
 
     return yield* bumpRevision(changeSetId);
-  });
+  }
+);
 
 /**
  * Runs a change set's follow-up steps and its `complete` step on the
@@ -319,12 +335,12 @@ const completeChangeSet = (changeSetId: string) =>
  * @param options - Retry delays of the `complete` config commit.
  * @returns How the follow-up phase ended.
  */
-export const runFollowUps = (
-  connection: DedicatedConnection,
-  changeSetId: string,
-  options?: ConfigCommitOptions
-) =>
-  Effect.gen(function* runFollowUpSteps() {
+export const runFollowUps = Effect.fn("Schema.runFollowUps")(
+  function* runFollowUps(
+    connection: DedicatedConnection,
+    changeSetId: string,
+    options?: ConfigCommitOptions
+  ) {
     const steps = yield* readSteps(connection.execute, changeSetId);
 
     for (const step of steps) {
@@ -356,7 +372,8 @@ export const runFollowUps = (
       revision: completed.revision,
       state: "completed",
     } satisfies FollowUpOutcome;
-  });
+  }
+);
 
 /** The class ID written on journal rows. */
 export const SCHEMA_CHANGE_CLASS_ID = PLATFORM_CLASS_IDS.schema_change;

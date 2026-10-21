@@ -5,7 +5,16 @@
  * tightened over existing rows.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Ref, Schema } from "effect";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  Ref,
+  Schedule,
+  Schema,
+} from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { DDL_LOCK_BUDGET_MS } from "../src/schema/change-set.ts";
@@ -56,26 +65,45 @@ const configKeyHolder = values(
   [String(advisoryClassId(CONFIG_KEY)), String(advisoryObjectId(CONFIG_KEY))]
 ).pipe(Effect.map(([pid]) => pid));
 
+/** What the `CONFIG_KEY` sampler shares with its test. */
+interface HoldRecorder {
+  /** How long each exclusive hold lasted, in milliseconds. */
+  readonly spans: Ref.Ref<readonly number[]>;
+  /** Set by the test once the change set has returned. */
+  readonly done: Ref.Ref<boolean>;
+  /** Completed by the sampler once it has seen the lock free after `done`. */
+  readonly settled: Deferred.Deferred<boolean>;
+}
+
 /**
- * Samples `CONFIG_KEY` until interrupted and records how long each
- * exclusive hold lasted.
- * @param spans - Receives the hold durations in milliseconds.
- * @returns An effect that runs until interrupted.
+ * Samples `CONFIG_KEY` in Postgres every `POLL` and records how long each
+ * exclusive hold lasted; completes `settled` once the test is done and the
+ * last hold has been recorded. Sampling real time is the point here: the
+ * hold durations are what the test measures.
+ * @param recorder - The shared state.
+ * @returns An effect that ends after `settled` completes.
  */
-const recordHolds = (spans: Ref.Ref<readonly number[]>) =>
+const recordHolds = (recorder: HoldRecorder) =>
   Effect.gen(function* sampleConfigKey() {
     let since: number | null = null;
 
     for (;;) {
       const holder = yield* configKeyHolder;
-      const now = Date.now();
+      const now = yield* Clock.currentTimeMillis;
 
       if (holder !== undefined && since === null) {
         since = now;
       } else if (holder === undefined && since !== null) {
         const started = since;
-        yield* Ref.update(spans, (list) => [...list, now - started]);
+
+        yield* Ref.update(recorder.spans, (list) => [...list, now - started]);
         since = null;
+      }
+
+      if (holder === undefined && (yield* Ref.get(recorder.done))) {
+        yield* Deferred.succeed(recorder.settled, true);
+
+        return;
       }
 
       yield* Effect.sleep(POLL);
@@ -150,7 +178,14 @@ describe("schema-locks", () => {
             yield* second.query(`LOCK TABLE ${MONITOR} IN ROW EXCLUSIVE MODE`);
 
             const spans = yield* Ref.make<readonly number[]>([]);
-            const sampler = yield* Effect.forkChild(recordHolds(spans));
+
+            const recorder: HoldRecorder = {
+              done: yield* Ref.make(false),
+              settled: yield* Deferred.make<boolean>(),
+              spans,
+            };
+
+            yield* Effect.forkChild(recordHolds(recorder));
             yield* Effect.forkChild(
               Effect.sleep("1500 millis").pipe(
                 Effect.andThen(first.query("COMMIT"))
@@ -177,8 +212,11 @@ describe("schema-locks", () => {
               FAST_RETRIES
             );
 
-            yield* Effect.sleep("100 millis");
-            yield* Fiber.interrupt(sampler);
+            yield* Ref.set(recorder.done, true);
+            yield* Deferred.await(recorder.settled).pipe(
+              Effect.timeout(Duration.seconds(5))
+            );
+
             const holds = yield* Ref.get(spans);
 
             yield* Effect.logInfo(`CONFIG_KEY holds: ${holds.join(", ")} ms`);
@@ -217,19 +255,19 @@ describe("schema-locks", () => {
             const index = addIndex(ACME.asset, [ACME.status], false);
             const building = yield* Effect.forkChild(change([index.op]));
 
-            for (;;) {
-              const [state] = yield* values(
-                `SELECT s.state AS value FROM core."schema_change_step" s
+            // The step runs in another fiber's coordinator session; poll
+            // its journal row until the build is running.
+            yield* values(
+              `SELECT s.state AS value FROM core."schema_change_step" s
                WHERE s.kind = 'create_index_concurrently' AND s.target_id = $1::uuid`,
-                [index.id]
-              );
-
-              if (state === "running") {
-                break;
-              }
-
-              yield* Effect.sleep("20 millis");
-            }
+              [index.id]
+            ).pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced(POLL),
+                until: ([state]) => state === "running",
+              }),
+              Effect.timeout(Duration.seconds(10))
+            );
 
             const [changeSetId] = yield* values(
               `SELECT change_id::text AS value FROM core."schema_change_step" WHERE target_id = $1::uuid`,

@@ -32,7 +32,7 @@ import type { DefinitionInvalid } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Result, Schema } from "effect";
+import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -195,8 +195,10 @@ interface LockBudget {
   readonly deadline: number;
 }
 
-const remainingMs = (budget: LockBudget): number =>
-  Math.max(1, budget.deadline - Date.now());
+const remainingMs = (budget: LockBudget): Effect.Effect<number> =>
+  Clock.currentTimeMillis.pipe(
+    Effect.map((now) => Math.max(1, budget.deadline - now))
+  );
 
 /**
  * Takes every table lock the DDL needs, one at a time, each with
@@ -208,20 +210,26 @@ const remainingMs = (budget: LockBudget): number =>
  * @param locks - The plan's locks, in order.
  * @returns The budget for the DDL that follows.
  */
-const takeTableLocks = (locks: readonly TableLock[]) =>
-  Effect.gen(function* takeLocksInOrder() {
+const takeTableLocks = Effect.fn("Schema.takeTableLocks")(
+  function* takeTableLocks(locks: readonly TableLock[]) {
     const sql = yield* SqlClient.SqlClient;
-    const budget: LockBudget = { deadline: Date.now() + DDL_LOCK_BUDGET_MS };
+
+    const budget: LockBudget = {
+      deadline: (yield* Clock.currentTimeMillis) + DDL_LOCK_BUDGET_MS,
+    };
 
     for (const lock of locks) {
-      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remainingMs(budget)}ms'`);
+      const remaining = yield* remainingMs(budget);
+
+      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
       yield* lockWaiting(
         sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
       );
     }
 
     return budget;
-  });
+  }
+);
 
 /**
  * Runs DDL whose table locks are already held. `lock_timeout` stays at what
@@ -232,17 +240,19 @@ const takeTableLocks = (locks: readonly TableLock[]) =>
  * @param budget - The attempt's budget.
  * @returns An effect in the main transaction.
  */
-const runDdl = (statements: readonly DdlStatement[], budget: LockBudget) =>
-  Effect.gen(function* runMainDdl() {
-    const sql = yield* SqlClient.SqlClient;
+const runDdl = Effect.fn("Schema.runDdl")(function* runDdl(
+  statements: readonly DdlStatement[],
+  budget: LockBudget
+) {
+  const sql = yield* SqlClient.SqlClient;
 
-    for (const statement of statements) {
-      const remaining = remainingMs(budget);
+  for (const statement of statements) {
+    const remaining = yield* remainingMs(budget);
 
-      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-      yield* lockWaiting(sql.unsafe(statement.sql));
-    }
-  });
+    yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
+    yield* lockWaiting(sql.unsafe(statement.sql));
+  }
+});
 
 const restoreLockTimeout = SqlClient.SqlClient.pipe(
   Effect.flatMap((sql) =>
@@ -259,9 +269,9 @@ interface MainInput {
   readonly timing: { started: number; finished: number };
 }
 
-const mainTransaction = (input: MainInput) =>
-  Effect.gen(function* runMainTransaction() {
-    input.timing.started = Date.now();
+const mainTransaction = Effect.fn("Schema.mainTransaction")(
+  function* mainTransaction(input: MainInput) {
+    input.timing.started = yield* Clock.currentTimeMillis;
     const state = yield* RequestRevision;
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
@@ -318,10 +328,11 @@ const mainTransaction = (input: MainInput) =>
     });
 
     const next = yield* bumpRevision(input.changeSetId);
-    input.timing.finished = Date.now();
+    input.timing.finished = yield* Clock.currentTimeMillis;
 
     return { next, plan };
-  });
+  }
+);
 
 const hasRows = (
   connection: DedicatedConnection,
@@ -341,11 +352,11 @@ const hasRows = (
  * @param applied - The change set applied in memory.
  * @returns The preflight.
  */
-const checkExistence = (
-  connection: DedicatedConnection,
-  applied: AppliedChangeSet
-): Effect.Effect<Preflight, DatabaseError> =>
-  Effect.gen(function* checkTablesForRows() {
+const checkExistence = Effect.fn("Schema.checkExistence")(
+  function* checkExistence(
+    connection: DedicatedConnection,
+    applied: AppliedChangeSet
+  ): Effect.fn.Return<Preflight, DatabaseError> {
     const { existenceChecks } = planChangeSet(applied, ASSUME_POPULATED);
     const populated = new Set<DefinitionId>();
 
@@ -360,13 +371,14 @@ const checkExistence = (
     yield* connection.execute("RESET enable_seqscan");
 
     return { hasRows: (classId: DefinitionId) => populated.has(classId) };
-  });
+  }
+);
 
-const countViolations = (
-  connection: DedicatedConnection,
-  check: ViolationCheck
-): Effect.Effect<void, ExistingDataViolates | DatabaseError> =>
-  Effect.gen(function* countViolatingRows() {
+const countViolations = Effect.fn("Schema.countViolations")(
+  function* countViolations(
+    connection: DedicatedConnection,
+    check: ViolationCheck
+  ): Effect.fn.Return<void, ExistingDataViolates | DatabaseError> {
     const [counted] = yield* connection
       .execute(
         `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
@@ -390,7 +402,8 @@ const countViolations = (
       definitionId: check.definitionId,
       sampleIds: samples.map((row) => row.id),
     });
-  });
+  }
+);
 
 const newChangeSetId = hygienic(
   SqlClient.SqlClient.pipe(
@@ -433,16 +446,16 @@ const resultOf = (
   ),
 });
 
-const withCoordinator = (
-  request: ChangeSetRequest,
-  changeSetId: string,
-  options: ChangeSetOptions | undefined
-): Effect.Effect<
-  ChangeSetResult,
-  ChangeSetError,
-  ChangeSetServices | Scope.Scope
-> =>
-  Effect.gen(function* coordinateChangeSet() {
+const withCoordinator = Effect.fn("Schema.withCoordinator")(
+  function* withCoordinator(
+    request: ChangeSetRequest,
+    changeSetId: string,
+    options: ChangeSetOptions | undefined
+  ): Effect.fn.Return<
+    ChangeSetResult,
+    ChangeSetError,
+    ChangeSetServices | Scope.Scope
+  > {
     const catalog = yield* Catalog;
     const connection = yield* openCoordinator;
     const snapshot = yield* catalog.refresh;
@@ -483,7 +496,8 @@ const withCoordinator = (
       error: outcome.error,
       state: outcome.state,
     };
-  });
+  }
+);
 
 /**
  * Applies a change set.
@@ -492,11 +506,11 @@ const withCoordinator = (
  * @param options - Retry delays of the config commits.
  * @returns What was applied.
  */
-export const applyChangeSet = (
-  request: ChangeSetRequest,
-  options?: ChangeSetOptions
-): Effect.Effect<ChangeSetResult, ChangeSetError, ChangeSetServices> =>
-  Effect.gen(function* applyChangeSetRequest() {
+export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
+  function* applyChangeSet(
+    request: ChangeSetRequest,
+    options?: ChangeSetOptions
+  ): Effect.fn.Return<ChangeSetResult, ChangeSetError, ChangeSetServices> {
     const catalog = yield* Catalog;
     const { configCommit } = yield* Transactions;
     const snapshot = yield* catalog.refresh;
@@ -529,4 +543,5 @@ export const applyChangeSet = (
     );
 
     return resultOf(changeSetId, committed, timing);
-  });
+  }
+);

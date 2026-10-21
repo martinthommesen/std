@@ -17,13 +17,10 @@ import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
-import type { SqlError } from "effect/sql/SqlError";
 
 import { boundValues, tableOf } from "../catalog/definition-tables.ts";
 import { decodeRows } from "../sql/rows.ts";
 import type { EnforcementUpdate, PlannedStep } from "./plan.ts";
-
-type Write = Effect.Effect<void, SqlError, SqlClient.SqlClient>;
 
 const decodeIds = decodeRows(Schema.Struct({ id: Schema.String }));
 
@@ -32,11 +29,11 @@ export class DefinitionRowConflictError extends Error {
   override readonly name = "DefinitionRowConflictError";
 }
 
-const insertDefinition = (
-  definition: Definition,
-  requesterId: DefinitionId
-): Write =>
-  Effect.gen(function* insertDefinitionRow() {
+const insertDefinition = Effect.fn("Schema.insertDefinition")(
+  function* insertDefinition(
+    definition: Definition,
+    requesterId: DefinitionId
+  ) {
     const sql = yield* SqlClient.SqlClient;
     const entry = tableOf(definition.kind);
     const values = boundValues(definition);
@@ -57,14 +54,15 @@ const insertDefinition = (
       `INSERT INTO core."${entry.table}" (id, class_id, version, created_at, created_by, updated_at, updated_by, ${values.map((value) => value.column).join(", ")}) VALUES ($1::uuid, $2::uuid, $3::int8, now(), $4::uuid, now(), $4::uuid, ${placeholders.join(", ")})`,
       params
     );
-  });
+  }
+);
 
-const updateDefinition = (
-  definition: Definition,
-  previousVersion: number,
-  requesterId: DefinitionId
-): Write =>
-  Effect.gen(function* updateDefinitionRow() {
+const updateDefinition = Effect.fn("Schema.updateDefinition")(
+  function* updateDefinition(
+    definition: Definition,
+    previousVersion: number,
+    requesterId: DefinitionId
+  ) {
     const sql = yield* SqlClient.SqlClient;
     const entry = tableOf(definition.kind);
     const values = boundValues(definition);
@@ -95,7 +93,8 @@ const updateDefinition = (
     }
 
     return yield* Effect.void;
-  });
+  }
+);
 
 /**
  * Writes the definitions a change set creates or changes.
@@ -105,12 +104,12 @@ const updateDefinition = (
  * @param requesterId - The acting user, for the audit columns.
  * @returns An effect in the main transaction.
  */
-export const writeDefinitions = (
-  definitions: readonly Definition[],
-  before: ConfigSnapshot,
-  requesterId: DefinitionId
-): Write =>
-  Effect.gen(function* writeDefinitionRows() {
+export const writeDefinitions = Effect.fn("Schema.writeDefinitions")(
+  function* writeDefinitions(
+    definitions: readonly Definition[],
+    before: ConfigSnapshot,
+    requesterId: DefinitionId
+  ) {
     for (const definition of definitions) {
       const stored = before.get(definition.id);
 
@@ -118,7 +117,8 @@ export const writeDefinitions = (
         ? insertDefinition(definition, requesterId)
         : updateDefinition(definition, stored.version, requesterId);
     }
-  });
+  }
+);
 
 /**
  * Records enforcement states that do not change a definition's
@@ -127,10 +127,8 @@ export const writeDefinitions = (
  * @param updates - The ancestors with a widened subtree check.
  * @returns An effect in the main transaction.
  */
-export const writeEnforcementNotes = (
-  updates: readonly EnforcementUpdate[]
-): Write =>
-  Effect.gen(function* writeNotes() {
+export const writeEnforcementNotes = Effect.fn("Schema.writeEnforcementNotes")(
+  function* writeEnforcementNotes(updates: readonly EnforcementUpdate[]) {
     const sql = yield* SqlClient.SqlClient;
 
     for (const update of updates) {
@@ -138,7 +136,8 @@ export const writeEnforcementNotes = (
         UPDATE core."class" SET enforcement = 'enforced', enforcement_note = ${update.note}
         WHERE id = ${update.definition.id}::uuid`;
     }
-  });
+  }
+);
 
 /**
  * Sets the enforcement state of definitions (the `complete` step).
@@ -146,13 +145,13 @@ export const writeEnforcementNotes = (
  * @param entries - Definitions and their new state.
  * @returns An effect in a config commit.
  */
-export const writeEnforcement = (
-  entries: readonly {
-    readonly definition: Definition;
-    readonly enforcement: "enforced" | "failed";
-  }[]
-): Write =>
-  Effect.gen(function* writeEnforcementStates() {
+export const writeEnforcement = Effect.fn("Schema.writeEnforcement")(
+  function* writeEnforcement(
+    entries: readonly {
+      readonly definition: Definition;
+      readonly enforcement: "enforced" | "failed";
+    }[]
+  ) {
     const sql = yield* SqlClient.SqlClient;
 
     for (const { definition, enforcement } of entries) {
@@ -161,7 +160,8 @@ export const writeEnforcement = (
         [enforcement, definition.id]
       );
     }
-  });
+  }
+);
 
 /**
  * Writes one `core.definition_revision` row per changed definition at the
@@ -171,32 +171,34 @@ export const writeEnforcement = (
  * @param definitions - The created or changed definitions.
  * @returns An effect in the main transaction.
  */
-export const writeDefinitionRevisions = (
+export const writeDefinitionRevisions = Effect.fn(
+  "Schema.writeDefinitionRevisions"
+)(function* writeDefinitionRevisions(
   revision: number,
   definitions: readonly Definition[]
-): Write =>
-  definitions.length === 0
-    ? Effect.void
-    : SqlClient.SqlClient.pipe(
-        Effect.flatMap((sql) =>
-          sql.unsafe(
-            `INSERT INTO core.definition_revision (definition_id, revision, kind, effective)
-             SELECT (e ->> 'id')::uuid, $1::int8, e ->> 'kind', e -> 'effective'
-             FROM jsonb_array_elements($2::jsonb) AS e`,
-            [
-              String(revision),
-              stringifyJson(
-                definitions.map((definition) => ({
-                  effective: effectiveJson(definition),
-                  id: definition.id,
-                  kind: definition.kind,
-                }))
-              ),
-            ]
-          )
-        ),
-        Effect.asVoid
-      );
+) {
+  if (definitions.length === 0) {
+    return;
+  }
+
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql.unsafe(
+    `INSERT INTO core.definition_revision (definition_id, revision, kind, effective)
+     SELECT (e ->> 'id')::uuid, $1::int8, e ->> 'kind', e -> 'effective'
+     FROM jsonb_array_elements($2::jsonb) AS e`,
+    [
+      String(revision),
+      stringifyJson(
+        definitions.map((definition) => ({
+          effective: effectiveJson(definition),
+          id: definition.id,
+          kind: definition.kind,
+        }))
+      ),
+    ]
+  );
+});
 
 /**
  * Replaces the dependency rows of the changed definitions (Contracts 1.7).
@@ -204,37 +206,40 @@ export const writeDefinitionRevisions = (
  * @param definitions - The created or changed definitions.
  * @returns An effect in the main transaction.
  */
-export const writeDependencies = (definitions: readonly Definition[]): Write =>
-  definitions.length === 0
-    ? Effect.void
-    : Effect.gen(function* writeDependencyRows() {
-        const sql = yield* SqlClient.SqlClient;
+export const writeDependencies = Effect.fn("Schema.writeDependencies")(
+  function* writeDependencies(definitions: readonly Definition[]) {
+    if (definitions.length === 0) {
+      return;
+    }
 
-        yield* sql.unsafe(
-          `DELETE FROM core.config_dependency
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* sql.unsafe(
+      `DELETE FROM core.config_dependency
            WHERE from_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
-          [stringifyJson(definitions.map((definition) => definition.id))]
-        );
+      [stringifyJson(definitions.map((definition) => definition.id))]
+    );
 
-        const edges = definitions.flatMap(dependenciesOf);
+    const edges = definitions.flatMap(dependenciesOf);
 
-        if (edges.length > 0) {
-          yield* sql.unsafe(
-            `INSERT INTO core.config_dependency (from_id, to_id, kind)
+    if (edges.length > 0) {
+      yield* sql.unsafe(
+        `INSERT INTO core.config_dependency (from_id, to_id, kind)
              SELECT (e ->> 'fromId')::uuid, (e ->> 'toId')::uuid, e ->> 'kind'
              FROM jsonb_array_elements($1::jsonb) AS e`,
-            [
-              stringifyJson(
-                edges.map((entry) => ({
-                  fromId: entry.fromId,
-                  kind: entry.kind,
-                  toId: entry.toId,
-                }))
-              ),
-            ]
-          );
-        }
-      });
+        [
+          stringifyJson(
+            edges.map((entry) => ({
+              fromId: entry.fromId,
+              kind: entry.kind,
+              toId: entry.toId,
+            }))
+          ),
+        ]
+      );
+    }
+  }
+);
 
 const nameOf = (definition: Definition | undefined): JsonValue =>
   definition !== undefined && "name" in definition ? definition.name : null;
@@ -285,8 +290,8 @@ export interface JournalEntry {
  * @param entry - The journal entry.
  * @returns An effect in the main transaction.
  */
-export const writeJournal = (entry: JournalEntry): Write =>
-  Effect.gen(function* writeJournalRows() {
+export const writeJournal = Effect.fn("Schema.writeJournal")(
+  function* writeJournal(entry: JournalEntry) {
     const sql = yield* SqlClient.SqlClient;
     const applying = entry.steps.length > 0;
 
@@ -332,4 +337,5 @@ export const writeJournal = (entry: JournalEntry): Write =>
         ]
       );
     }
-  });
+  }
+);

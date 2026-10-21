@@ -5,7 +5,7 @@
  * an earlier state that reaches the same revision through other change sets.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Duration, Effect, Option } from "effect";
+import { Duration, Effect, Option, Queue } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import {
@@ -26,15 +26,31 @@ import {
 
 const TIMEOUT = Duration.seconds(10);
 
-const latestRevision = (catalog: CatalogApi) =>
-  catalog.latest.pipe(
-    Effect.map((latest) => Option.getOrUndefined(latest)?.revision)
+/**
+ * A catalog whose reloads report the revision they loaded on a queue.
+ * @param reloads - Receives each reloaded revision.
+ * @returns The catalog.
+ */
+const reportingCatalog = (reloads: Queue.Queue<number>) =>
+  makeCatalog.pipe(
+    Effect.map((catalog): CatalogApi => ({
+      ...catalog,
+      refresh: catalog.refresh.pipe(
+        Effect.tap((snapshot) => Queue.offer(reloads, snapshot.revision))
+      ),
+    }))
   );
 
-const waitForRevision = (catalog: CatalogApi, revision: number) =>
-  Effect.gen(function* pollCatalog() {
-    while ((yield* latestRevision(catalog)) !== revision) {
-      yield* Effect.sleep("20 millis");
+/**
+ * Waits until a reload of the revision is reported.
+ * @param reloads - The reported revisions.
+ * @param revision - The revision to wait for.
+ * @returns The effect.
+ */
+const awaitReload = (reloads: Queue.Queue<number>, revision: number) =>
+  Effect.gen(function* takeUntilRevision() {
+    while ((yield* Queue.take(reloads)) !== revision) {
+      // An earlier reload; keep waiting.
     }
   }).pipe(Effect.timeout(TIMEOUT));
 
@@ -61,12 +77,15 @@ describe("catalog", () => {
         Effect.scoped(
           Effect.gen(function* listening() {
             yield* loadCore;
-            const catalog = yield* makeCatalog;
+            const reloads = yield* Queue.unbounded<number>();
+            const catalog = yield* reportingCatalog(reloads);
+
             yield* Effect.forkScoped(followSignals(catalog));
-            yield* waitForRevision(catalog, yield* currentRevision);
+            yield* awaitReload(reloads, yield* currentRevision);
 
             const first = yield* change([createRole("listener_first")]);
-            yield* waitForRevision(catalog, first.revision ?? 0);
+
+            yield* awaitReload(reloads, first.revision ?? 0);
 
             const database = yield* TestDatabase;
             const killer = yield* database.session("listener-killer");
@@ -79,7 +98,8 @@ describe("catalog", () => {
             assert.isAtLeast(killed.rows.length, 1);
 
             const second = yield* change([createRole("listener_second")]);
-            yield* waitForRevision(catalog, second.revision ?? 0);
+
+            yield* awaitReload(reloads, second.revision ?? 0);
 
             const snapshot = yield* catalog.latest;
 
