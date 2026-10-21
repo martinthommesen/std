@@ -520,3 +520,139 @@ tables:
       - id: 976ddb1b-8039-4ca2-b41b-12c072def543
         name: finished_at
         type: dateTime
+  # Config layer tables (Contracts 8.1, 8.2), platform migration 0005.
+  - id: 0b70df4d-c000-4b9a-aa7f-8b5b92f1afce
+    name: core.config_set
+    label: Installed definition set
+    storage: platform
+    displayField: name
+    fields:
+      - id: 700b5b9a-bae9-4ac1-99ec-4ff9eb241ba5
+        name: name
+        type: text
+        required: true
+      - id: 729aecba-e9ce-46a3-90b5-e104295c7e2d
+        name: layer
+        type: text
+        required: true
+      - id: a46da479-5248-40de-a9c4-b7b816c8be7f
+        name: set_version
+        type: integer
+        required: true
+      - id: 081dc264-bdfb-42d3-a424-1587a04dfaca
+        name: hash
+        type: text
+        required: true
+      - id: 54de7138-8972-4c32-9c21-0fc851f04ed5
+        name: requires
+        type: json
+        required: true
+  - id: aa13ec55-456b-415b-aab5-ef9c42438f16
+    name: core.config_base
+    label: Shipped base record
+    storage: platform
+    fields:
+      - id: c0d21a69-619c-4b74-bcb4-4d47ec502192
+        name: set_id
+        type: uuid
+        required: true
+      - id: d48eaafe-9b65-4e71-8137-d3c89200ee59
+        name: set_version
+        type: integer
+        required: true
+      - id: 1a486b45-4d8d-4c02-a19f-c2ed88072f8a
+        name: kind
+        type: text
+        required: true
+      - id: 00cada7b-1c80-4f31-bc8c-14c4b582c6fb
+        name: shipped
+        type: json
+        required: true
+      - id: 5e63aa5e-b965-4870-9b44-9374c5b95228
+        name: hash
+        type: text
+        required: true
+      - id: 7beec646-ad16-4394-9097-4e867b28fd28
+        name: removed
+        type: boolean
+  - id: 225c71f0-e411-4e5e-a01c-aebdd779a2c5
+    name: core.config_override
+    label: Local override
+    storage: platform
+    fields:
+      - id: 3c96ac61-1715-4745-8ed3-a417205419f9
+        name: record_id
+        type: uuid
+        required: true
+      - id: d32afd39-65f2-4cc9-8eea-c88e66b0c166
+        name: property
+        type: text
+        required: true
+      - id: e1a6f1a9-96c2-42e2-b18a-9207059ecae2
+        name: value
+        type: json
+        required: true
+      - id: 7da197b1-b241-4818-b18e-28bb176f8396
+        name: base_when_set
+        type: json
+        required: true
+      - id: 591a17bf-a329-4088-bc76-f2cb6b904a09
+        name: set_by
+        type: uuid
+        required: true
+      - id: 4dd92d0d-4dcd-47b9-8cd6-f6b8e90c8959
+        name: set_at
+        type: dateTime
+        required: true
+  - id: b7281780-9441-46f3-9d58-f14b812a59c2
+    name: core.config_conflict
+    label: Upgrade conflict
+    storage: platform
+    fields:
+      - id: d3aeaf9b-e390-4913-94de-4775ed3d6d65
+        name: record_id
+        type: uuid
+        required: true
+      - id: 95900447-5657-4e7d-b7f1-38664a65b405
+        name: property
+        type: text
+        required: true
+      - id: ac471499-07b8-40ec-9fa3-aa824c35e042
+        name: set_id
+        type: uuid
+        required: true
+      - id: 6d054390-f737-4058-8fab-4fa312197930
+        name: set_version
+        type: integer
+        required: true
+      - id: 8dbf4401-8fcf-453a-9b57-76aa0cf714b4
+        name: change_set_id
+        type: uuid
+      - id: 988877cf-7424-43fc-a531-4e1131a4a051
+        name: old_shipped
+        type: json
+        required: true
+      - id: 4747fa64-2c66-4ad2-8b23-443f0807576c
+        name: new_shipped
+        type: json
+        required: true
+      - id: 4fff7f7d-a0dc-4997-abbf-555e682eb7b9
+        name: local_value
+        type: json
+        required: true
+      - id: ab38162c-0b3a-4e6f-bd14-effa20addedc
+        name: state
+        type: text
+        required: true
+      - id: dd2dc6b8-f56e-41b0-a366-b2ab3558b5e7
+        name: resolution
+        type: text
+      - id: 5f7b32e3-551e-4195-9e4b-d7e56a78c68a
+        name: resolved_value
+        type: json
+      - id: 1d502502-8242-49e3-82a8-55ff38912be4
+        name: resolved_by
+        type: uuid
+      - id: 53908536-35e8-4657-b9a6-dd8eaec46aa3
+        name: resolved_at
+        type: dateTime
