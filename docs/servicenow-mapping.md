@@ -29,7 +29,7 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Role `contains` roles | none in Step 1 | Flat roles; groups and nested roles come in Step 3. |
 | Granting a role elevated privileges (`elevated_privilege`) | Permissions granted to roles (`core.role_permission`), checked by permission ID | v0.1: `schema.purge`, `schema.snapshot`, `rules.run_as`; admin holds none implicitly (`schema_purger` holds `schema.purge`). |
 | `sys_user` delete | Refused for every caller by a built-in deny | Users are deactivated (`active = false`), which ends their sessions; labels naming them keep resolving. |
-| System tables (`sys_*`) editable by admins through forms and the Table API | Platform tables (definitions, journal, `core.change`) readable by admins, never written through the generic record routes | Definitions change only through change sets (1A routes generic writes to them); history is written only by the save pipeline. |
+| System tables (`sys_*`) editable by admins through forms and the Table API | Platform tables (definitions, journal, `core.change`) readable by admins, never written through the generic record routes | Definitions change only through change sets (1A routes generic writes to them); history is written only by the save pipeline. Only core rules match platform tables: an app or local `*` rule never reaches them, and one naming them is refused. |
 | `GET /api/now/ui/user/current_user`-style session info | `GET /api/v1/auth/me` | The session's user ID and effective roles. |
 
 ## Record API (Contracts 2, 6)

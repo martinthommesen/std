@@ -1,6 +1,6 @@
 # 0014. Authorization on every path (Step 1, workstream 1C)
 
-Status: accepted, 2026-10-21 (workstream 1C). Code: `packages/server/src/records/save-pipeline.ts` (platform-table guard), `packages/server/src/auth/sessions.ts` (system user), `packages/server/src/http/{handlers,record-writes,stale-request,stale-scope,app}.ts`, `packages/api/src/{auth,session,api,client}.ts`, `packages/testing/src/acme-fixture.ts` (Ada, an admin). Contracts 1.8, 1.9, 2.2, 2.3, 3, 4.1, 6.1 to 6.7.
+Status: accepted, 2026-10-21 (workstream 1C). Code: `packages/server/src/records/save-pipeline.ts` (platform-table guard), `packages/server/src/auth/sessions.ts` (system user), `packages/server/src/http/{handlers,meta-handlers,record-writes,stale-request,stale-scope,app}.ts`, `packages/api/src/{auth,session,meta,api,client}.ts`, `packages/access/src/rules.ts` and `packages/definitions/src/validate.ts` (platform tables match only core rules), `packages/testing/src/acme-fixture.ts` (Ada, an admin). Contracts 1.8, 1.9, 2.2, 2.3, 3, 4.1, 6.1 to 6.7.
 
 Builds on decisions 0008 (reads) and 0009 (writes). Step 1's gate asks for "the two-user suite from Stage 0, extended to every read and write path, plus fuzzed error responses that never contain Postgres text"; this note records the audit, the gaps it found, and the tests that now hold the line.
 
@@ -52,7 +52,7 @@ A fuzz hierarchy (`acme.fuzz_item`, child `acme.fuzz_special`: a case-insensitiv
 - Fixed endpoints: `POST /auth/sign-in`, `GET /auth/me`, `POST /auth/sign-out`, the generic record routes, and `GET /api/v1/openapi.json`. Every response carries `STD-Schema-Revision` (`api-client` fetches ten, errors and unknown routes included).
 - `@std/api/client`: `makeStdClient({ baseUrl, schemaRevision? })` is `HttpApiClient.make(StdApi, ...)`, sending the revision header when given; `authenticationClient(token?)` is the client side of the `Authentication` middleware. `HttpApiClient.make` needs the client middleware of every group with `requiredForClient`, so a client built before sign-in passes no token. `api-client` runs it against the HTTP app on a Node server at an ephemeral port.
 - Type-level test: canaries `tooling/canaries/api-compatible` (client code against `StdApi`, passes) and `api-drift` (the same code against the real groups with sign-in's `login` renamed `username`, fails `tsc`), run by `pnpm test:canaries`.
-- OpenAPI: `effect/http-api` 4.0.5 generates OpenAPI 3.1 (`OpenApi.fromApi`); `HttpApiBuilder.layer(StdApi, { openapiPath })` serves it without a session. Generic record bodies appear with their fixed envelope; `values` is a JSON record.
+- OpenAPI: `effect/http-api` 4.0.5 generates OpenAPI 3.1 (`OpenApi.fromApi`); the `meta` group's `openApi` endpoint serves it without a session (round 1). Generic record bodies appear with their fixed envelope; `values` is a JSON record.
 
 ## Stale requests on every path (6.4)
 
@@ -60,9 +60,17 @@ A fuzz hierarchy (`acme.fuzz_item`, child `acme.fuzz_special`: a case-insensitiv
 
 ## Deviations
 
-- Contracts 3.2 says definition tables, `core.access_rule` and `core.change` are "reachable only through the admin rule". That holds for the shipped rules; an app rule on `*` for another role reaches them too, by design (no code checks a role name). The contract text now says so.
 - The generic write refusal on platform tables is `NotAllowed` (3.8: refused on a visible record), not a new error.
 - `auth/me` returns IDs and role names but not the user's name: that is a `core.user` read the client makes through the record routes, under rules.
+
+## Review round 1
+
+- **Platform tables match only core rules (3.2, 3.7).** `@std/access` applies a rule to a platform class only when the rule is in the `core` owner layer, in record and field decisions and in `knowsTable`, so `*` in an app or local rule never reaches definition tables, the journal or `core.change`. `@std/definitions` refuses an app or local rule that names a platform table (`invalidAccessRule`). The decision uses the table's storage and the rule's owner layer, not a role name. `platform-tables` adds a local `allow employee * records read`: Bob then sees every asset, and `core.change` and `core.access_rule` stay `UnknownTable`, identical to a missing table; a local rule naming `core.change` is refused. In `no-bypass`, the local copies of the allow-all rules reach app tables like admin and stop at platform tables.
+- **`no-bypass` parses the source.** The scan uses `oxc-parser` (a server dev dependency) instead of text matching: a string literal or template text equal to a built-in role or permission name is a finding anywhere in executable code (comparisons, `switch` cases, `includes`, map lookups, constants), except as a plain object key or in a type; `roleByName` and `permissionByName` calls are findings outside the definition-set resolver. Comments neither hide nor cause findings. A probe source (a role check behind a block comment, a `switch` case, `includes`, a computed lookup, a template, a lookup by name) proves the scan finds each.
+- **`error-fuzz` oracle.** A refusal may repeat only what the request sent: stored values of every record, the target included, are checked on errors; only a success may show the saved record's own projection. A synthetic 422 repeating the target's old value proves the oracle rejects it.
+- **`error-fuzz` matrix.** Every constraint (unique on the parent and on the child, required, type, length, the owner's CHECK and NOT NULL, the reference precheck, the FK backstop, a referenced delete) × every operation it applies to × both endpoints: 36 cells, each with its intended refusal. For the FK backstop another transaction deletes the target and holds the delete open until the write waits on its row lock (observed in `pg_stat_activity`); Postgres's FK check refuses the write, mapped by constraint name to `InvalidReference` with no Postgres text.
+- **OpenAPI checks the stated revision.** The document is now the `meta` group's `openApi` endpoint of `StdApi` (no longer `HttpApiBuilder`'s `openapiPath` route), in a request transaction like every endpoint: a malformed header is 400, a revision the database never had 409, and the response carries the revision it was served at. `stale-paths` includes it.
+- **History of a descendant through a parent endpoint.** History shows every readable field of the record's concrete class (2.3), so after the record proved visible its stale check also covers the concrete class's default selection: with laptop `serial` made read-only, stale history of K is `SchemaChanged` through `/acme.asset` as through `/acme.laptop`, while Bob's stale request for the invisible K stays byte-identical to a random ID. A unit test of `staleScope` shows the field filter's IDs entering the scope on their own class.
 
 ## Waiting on 1A
 
