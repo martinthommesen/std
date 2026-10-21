@@ -219,12 +219,12 @@ Resume:
 
 ### 1.10 `doctor`
 
-`std doctor [--json]` only reads. Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
+`std doctor [--json]` only reads: one REPEATABLE READ READ ONLY transaction without advisory locks, so it never waits for a config commit or a running schema change (decision 0002). Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
 
 Checks:
 
 1. Migration ledger matches the code.
-2. Every active and retired table and field matches the catalog (type, nullability, default, keys, level FK).
+2. Every active and retired table and field matches the catalog (type, nullability, default, keys, level FK); every audit ID on a platform table exists in `core.user` (1.9).
 3. Every index and constraint exists under its ID-based name and is valid (`indisvalid`, `convalidated`), or its enforcement state explains why not. A widened subtree check recorded as `enforced` without VALIDATE (2.4) is accepted.
 4. Purged definitions are absent from the catalog.
 5. Orphan tables, columns, indexes or constraints in STD namespaces (reported, never dropped).
@@ -235,7 +235,7 @@ Checks:
 10. Protected definitions match the installed core set by hash.
 11. Column headroom per table, counting dropped columns; warning at 1,400 [judgment].
 12. Inheritance invariants (2.2): each non-root record has its lowest level row; `class_id` is NOT NULL in every table; FK delete and update actions match 3.10.
-13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1).
+13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1). Until imports add the table (Step 3) the check reports "not applicable" as informational.
 14. The fold table's Unicode version equals the server's `unicode_version()` [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html)] (5.5).
 15. The database encoding is UTF8 (5.5), and `client_connection_check_interval` is 0 (1.5).
 16. Each definition's latest `core.definition_revision` row equals its effective record (4.4).
@@ -1146,13 +1146,14 @@ Per row: (1) a mapped source ID found in `external_identity` updates that record
 | `core.config_set` | installed sets: ID, layer, version, hash, dependencies | `std upgrade` |
 | `core.config_base` | one row per shipped record: set, version, kind, shipped properties (JSON), hash | `std upgrade` only |
 | `core.config_override` | one row per overridden property: record ID, property, local value, `base_when_set`, who, when | config service on admin edits |
-| `core.config_conflict` | upgrade conflicts and resolutions | opened by `std upgrade`, resolved by admins |
+| `core.config_conflict` | upgrade conflicts and resolutions, and `converged` entries | opened by `std upgrade`, resolved by admins |
 | definition tables | the effective record | config service only, in the same transaction |
 | `core.definition_revision` | effective record per revision (4.4) | config service only, in the same transaction |
 
 - The runtime reads only effective records, so layering stays inside the config service. [judgment]
 - Admin edits to shipped records are stored as overrides; removing one restores the shipped value.
 - Overridable properties [judgment]: field label, help text, default, and tightening of required, read-only and max length (never name or type); table label and display field; choice label, order, hidden (shipped choices cannot be deleted); a layout's element list as one property; role label; rule and access rule `active` only (protected access rules cannot be disabled); protected records label and help text only.
+- In v0.1 a field's max length lives in its type, which never changes, so max length is not overridable yet; and removing a `required` override (or `take_shipped` of one) is a loosening the schema engine refuses until it can drop the NOT NULL it added (decision 0012).
 
 ### 8.3 Applying sets
 
@@ -1188,8 +1189,8 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 
 - Offline in v0.1: stop servers, run `std upgrade`, start servers. It refuses to run while any session with `application_name = 'std-server'` is connected, and when the database encoding is not UTF8 (5.5). Reason: rolling upgrades need expand-and-contract rules, which come with high availability.
 - Order: take `SCHEMA_KEY`; compare versions; run platform migrations; resume interrupted change sets; load core; load app sets; write the report.
-- `--plan` (and `--json`) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes. The real run applies that plan and stops if the database changed since.
-- After a failure, rerunning continues from the last committed migration or change set.
+- `--plan` (and `--json`, which implies it) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes, with a hash over all of them and the configuration state they start from. It runs while servers are connected and reports them as a warning. The real run applies that plan and stops if the database changed since: `--expect <hash>` refuses before anything runs when the plan differs; each set is planned again before it applies and must equal its plan; and its main transaction checks that no other config commit came first (decision 0012).
+- After a failure, rerunning continues from the last committed migration or change set. A change set that ends in `needs_attention` stops the run with an error naming it, and every later run refuses until an admin resumes or abandons it, so unfinished change sets never look upgraded.
 
 ### 8.6 Backup and restore
 

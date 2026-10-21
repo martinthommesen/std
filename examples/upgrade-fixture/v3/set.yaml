@@ -1,0 +1,57 @@
+# The Step 1 upgrade fixture, version 3. Against version 2 it changes Z's
+# label only, so a keep_local resolution of the conflict on X survives it.
+set:
+  id: 01d6f657-c4f6-47de-9d47-78a7281d98d2
+  name: fx
+  layer: app
+  version: 3
+  requires: [core]
+
+namespaces:
+  - id: e93f72f4-d801-4e89-a262-3113bca8ef73
+    name: fx
+    label: Fixture
+
+tables:
+  - id: 89a1d501-ec59-41be-aefc-b4dfa2b43ecc
+    name: fx.item
+    label: Item
+    displayField: x
+    fields:
+      - id: 8bd6796c-93a5-4fe8-a0b2-ba630a27722f
+        name: x
+        label: X v2
+        type: text
+      - id: db1cec97-896f-4071-af4a-2a0bb2cb7c75
+        name: w
+        label: W local
+        type: text
+      - id: 4fe2275c-f07c-47db-a9a1-88e3d1479fdb
+        name: z
+        label: Z v3
+        type: text
+
+roles:
+  - id: 1cd6855e-fcfb-440b-a801-4aa41dab99ff
+    name: auditor
+    label: Auditor
+  - id: 46a4d035-778a-4921-9e4a-d42b76fe35ae
+    name: approver
+    label: Approver
+
+accessRules:
+  - id: 7c00d9a7-db1b-4726-bf62-aca982ae2612
+    description: Auditors read and update items.
+    effect: allow
+    roles: [auditor]
+    table: fx.item
+    target: records
+    actions: [read, update]
+  - id: 2b97bff9-a239-4199-8703-06013c70c775
+    description: Reviewers read every item field.
+    effect: allow
+    roles: [auditor]
+    table: fx.item
+    target: fields
+    fields: "*"
+    actions: [read]
