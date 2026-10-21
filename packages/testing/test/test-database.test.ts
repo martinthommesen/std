@@ -181,6 +181,26 @@ const plantTemplate = (
     );
   });
 
+const decodeOid = decodeRows(Schema.Struct({ oid: Schema.String }));
+
+/**
+ * A database's OID, as the janitor's listing reads it.
+ * @param connection - A connection to the maintenance database.
+ * @param name - The database name.
+ * @returns The OID as text.
+ */
+const databaseOid = (connection: PgConnection.PgConnection, name: string) =>
+  connection
+    .query(
+      "SELECT oid::text AS oid FROM pg_database WHERE datname = $1",
+      [name],
+      false
+    )
+    .pipe(
+      Effect.flatMap((result) => decodeOid(result.rows)),
+      Effect.map(([row]) => row?.oid ?? "")
+    );
+
 /**
  * A janitor clock at which a template planted now has expired.
  * @returns Epoch milliseconds.
@@ -514,6 +534,67 @@ describe("test-database", () => {
             "gone"
           );
           assert.isTrue(yield* isOpen(connection));
+        })
+      )
+  );
+
+  it.live(
+    "the janitor never drops a template that was rebuilt after it listed it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* rebuiltTemplate() {
+          const connection = yield* admin;
+          const template = `std_tpl_${randomHex(12)}`;
+
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(dropTemplate(connection, template))
+          );
+
+          // A slow janitor listed the template as expired. Then another
+          // run's janitor dropped it and a build made a new one with the
+          // same name. The slow janitor's clock says even the new one has
+          // expired, so only the OID tells them apart.
+          yield* plantTemplate(connection, template);
+          const listed = yield* databaseOid(connection, template);
+          yield* dropTemplate(connection, template);
+          yield* plantTemplate(connection, template);
+
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, template, {
+              now: templateExpiry(),
+              oid: listed,
+            }),
+            "kept"
+          );
+          assert.isTrue(yield* databaseExists(template), "the rebuild stays");
+        })
+      )
+  );
+
+  it.live(
+    "the janitor re-checks under the lock that a template has expired",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* stillFresh() {
+          const connection = yield* admin;
+          const template = `std_tpl_${randomHex(12)}`;
+
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(dropTemplate(connection, template))
+          );
+
+          // The same database, created just now: by the janitor's clock it
+          // has not expired, whatever the listing said.
+          yield* plantTemplate(connection, template);
+
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, template, {
+              now: Date.now(),
+              oid: yield* databaseOid(connection, template),
+            }),
+            "kept"
+          );
+          assert.isTrue(yield* databaseExists(template));
         })
       )
   );

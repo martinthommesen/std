@@ -51,6 +51,8 @@ The `FATAL: terminating connection due to administrator command` lines in the se
 - **One lock space.** All admin work of the harness, including the template locks, happens in the server's `postgres` database (`MAINTENANCE_DATABASE`), whatever database `STD_DATABASE_URL` names. Cloning holds a template's lock shared from the readiness check through `CREATE DATABASE ... TEMPLATE`. Building and dropping hold it exclusive. So no run drops a template while another run selects, clones or builds it.
 - **Template drops re-read under the lock.** The lock and re-read happen in `dropTemplateIfUnused` (the janitor) and `dropTemplate` (tests).
   - If the template no longer exists, the drop reports `gone`.
+  - A janitor passes what it listed: the database's OID and its own clock. Between the listing and the lock, another run's janitor can drop the template and a build can create a new one with the same name. So under the lock, the janitor checks that the OID is still the listed one and that the ownership comment is still expired. Otherwise it reports `kept` and leaves the database alone.
+  - Test databases need no such check. Each name records its creation time, process and 32 random bits, and is never created twice, so a dropped test database is never replaced by one with the same name.
   - If the template is invalid, it is dropped without `ALTER DATABASE`.
   - Otherwise, the template is altered and then dropped.
 - **Templates that are being built or were left half-built.**
@@ -74,6 +76,8 @@ Until a branch merges this change, its runs still take the template locks in the
 - "a run whose STD_DATABASE_URL names another database never drops a template this run is cloning": the other run's janitor and `dropTemplateIfUnused` run with a `ConfigProvider` that points `STD_DATABASE_URL` at another database. When the admin connection uses the URL's database (the old behavior), the janitor drops the template that is being cloned, and the test fails.
 - "a template another run dropped after the janitor listed it is skipped" fails on the old drop with `database ... does not exist`.
 - "an invalid template is dropped without ALTER DATABASE, which would close the connection" fails on the old drop with FATAL and a closed connection. It marks the database invalid through `pg_database`, which needs a superuser. Its comment is fresh, so no run's janitor treats it as expired.
+- "the janitor never drops a template that was rebuilt after it listed it" drops and rebuilds the template between the listing and the drop, with a janitor clock at which even the rebuilt template has expired. It fails without the OID check.
+- "the janitor re-checks under the lock that a template has expired" fails without the expiry check.
 - "the janitor leaves a template alone while another run is building it" holds the build's exclusive lock over a created but unfinished template.
 - "dropping one run's test database leaves another run's sessions alone" builds two harness instances in one process.
 

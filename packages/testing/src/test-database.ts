@@ -237,7 +237,11 @@ const query = (
     .pipe(Effect.map((result) => result.rows));
 
 const decodeDatabases = decodeRows(
-  Schema.Struct({ comment: Schema.String, datname: Schema.String })
+  Schema.Struct({
+    comment: Schema.String,
+    datname: Schema.String,
+    oid: Schema.String,
+  })
 );
 
 const decodeTemplateFlag = decodeRows(
@@ -245,7 +249,12 @@ const decodeTemplateFlag = decodeRows(
 );
 
 const decodeDatabaseState = decodeRows(
-  Schema.Struct({ datistemplate: Schema.Boolean, invalid: Schema.Boolean })
+  Schema.Struct({
+    comment: Schema.String,
+    datistemplate: Schema.Boolean,
+    invalid: Schema.Boolean,
+    oid: Schema.String,
+  })
 );
 
 const dropDatabase = (
@@ -346,29 +355,57 @@ const withTemplateLock = <A, E>(
   );
 
 /**
+ * What a janitor saw when it listed a template it found expired: the
+ * database's OID and the janitor's clock. Between the listing and the lock,
+ * another run may drop the template and build a new one with the same name.
+ */
+export interface ListedTemplate {
+  /** `pg_database.oid` at the listing, as text. */
+  readonly oid: string;
+  /** The janitor's clock, in epoch milliseconds. */
+  readonly now: number;
+}
+
+/**
  * Drops a template; run only under its exclusive lock. It re-reads the
- * database first: one that is gone (another run dropped it after this run
- * listed it) is left alone, and one that is invalid (a `DROP DATABASE` was
+ * database first. One that is gone (another run dropped it after this run
+ * listed it) is left alone. With `listed`, one that is not the database the
+ * janitor listed (another OID: dropped and rebuilt meanwhile) or is no longer
+ * expired is left alone too. One that is invalid (a `DROP DATABASE` was
  * interrupted) is dropped without `ALTER DATABASE`, which Postgres refuses
  * with FATAL, closing the connection.
  * @param admin - A connection to the maintenance database.
  * @param template - The template name.
- * @returns `"dropped"`, or `"gone"` when there was no such database.
+ * @param listed - The janitor's listing, when the drop is the janitor's.
+ * @returns `"dropped"`; `"gone"` when there was no such database; `"kept"`
+ *   when it is not the expired database that was listed.
  */
 const dropTemplateLocked = (
   admin: PgConnection.PgConnection,
-  template: string
-): Effect.Effect<"dropped" | "gone", SqlError> =>
+  template: string,
+  listed?: ListedTemplate
+): Effect.Effect<"dropped" | "gone" | "kept", SqlError> =>
   Effect.gen(function* dropLockedTemplate() {
     const [state] = yield* query(
       admin,
-      `SELECT datistemplate, datconnlimit = -2 AS invalid
+      `SELECT oid::text AS oid, datistemplate, datconnlimit = -2 AS invalid,
+              coalesce(shobj_description(oid, 'pg_database'), '') AS comment
        FROM pg_database WHERE datname = $1`,
       [template]
     ).pipe(Effect.flatMap(decodeDatabaseState));
 
     if (state === undefined) {
       return "gone";
+    }
+
+    const replaced =
+      listed !== undefined &&
+      (state.oid !== listed.oid ||
+        expiredHarnessDatabase(template, state.comment, listed.now) !==
+          "template");
+
+    if (replaced) {
+      return "kept";
     }
 
     if (state.datistemplate && !state.invalid) {
@@ -383,17 +420,33 @@ const dropTemplateLocked = (
     return "dropped";
   });
 
+/** What `dropTemplateIfUnused` did; only `"dropped"` dropped the template. */
+export const TEMPLATE_DROP_OUTCOMES = [
+  "dropped",
+  "gone",
+  "in-use",
+  "kept",
+] as const;
+
+/** One of `TEMPLATE_DROP_OUTCOMES`. */
+export type TemplateDropOutcome = (typeof TEMPLATE_DROP_OUTCOMES)[number];
+
 /**
  * Drops a template unless someone is cloning, building or dropping it.
  * @param admin - A connection to the maintenance database.
  * @param template - The template name.
+ * @param listed - When the janitor drops a template it listed as expired:
+ *   what it listed. The template is then dropped only if, under the lock, it
+ *   is still that database and still expired.
  * @returns `"dropped"`; `"gone"` when it no longer exists; `"in-use"` when
- *   another session holds its lock, so it was left alone.
+ *   another session holds its lock; `"kept"` when it is not the listed,
+ *   expired database. Only `"dropped"` drops it.
  */
 export const dropTemplateIfUnused = (
   admin: PgConnection.PgConnection,
-  template: string
-): Effect.Effect<"dropped" | "gone" | "in-use", SqlError> =>
+  template: string,
+  listed?: ListedTemplate
+): Effect.Effect<TemplateDropOutcome, SqlError> =>
   Effect.acquireUseRelease(
     query(admin, lockStatement("pg_try_advisory_lock"), [template]).pipe(
       Effect.flatMap(decodeLocked),
@@ -401,7 +454,7 @@ export const dropTemplateIfUnused = (
     ),
     (locked) =>
       locked
-        ? dropTemplateLocked(admin, template)
+        ? dropTemplateLocked(admin, template, listed)
         : Effect.succeed("in-use" as const),
     (locked) =>
       locked
@@ -421,7 +474,7 @@ export const dropTemplateIfUnused = (
 export const dropTemplate = (
   admin: PgConnection.PgConnection,
   template: string
-): Effect.Effect<"dropped" | "gone", SqlError> =>
+): Effect.Effect<"dropped" | "gone" | "kept", SqlError> =>
   withTemplateLock(
     admin,
     template,
@@ -433,14 +486,24 @@ export const dropTemplate = (
  * Drops one database the janitor listed, if it is an expired harness
  * database and not the template in use.
  * @param admin - A connection to the maintenance database.
- * @param database - Its name and comment.
+ * A test database is dropped by name: its name records its creation time,
+ * process and 32 random bits, and the harness never creates a name twice, so
+ * a dropped test database is never replaced by another with its name. A
+ * template's name is reused by every build of the same migrations, so a
+ * template is dropped only if it is still the listed database, under its
+ * lock.
+ * @param database - Its name, comment and OID.
  * @param keep - The template in use.
  * @param now - The current time in epoch milliseconds.
  * @returns An effect that drops it or leaves it.
  */
 const dropIfExpired = (
   admin: PgConnection.PgConnection,
-  database: { readonly datname: string; readonly comment: string },
+  database: {
+    readonly datname: string;
+    readonly comment: string;
+    readonly oid: string;
+  },
   keep: string,
   now: number
 ): Effect.Effect<void, SqlError> => {
@@ -455,7 +518,10 @@ const dropIfExpired = (
   }
 
   if (expired === "template" && database.datname !== keep) {
-    return dropTemplateIfUnused(admin, database.datname).pipe(Effect.asVoid);
+    return dropTemplateIfUnused(admin, database.datname, {
+      now,
+      oid: database.oid,
+    }).pipe(Effect.asVoid);
   }
 
   return Effect.void;
@@ -488,7 +554,8 @@ export const runJanitor = (
   Effect.gen(function* dropExpiredDatabases() {
     const listed = yield* query(
       admin,
-      `SELECT datname, coalesce(shobj_description(oid, 'pg_database'), '') AS comment
+      `SELECT datname, oid::text AS oid,
+              coalesce(shobj_description(oid, 'pg_database'), '') AS comment
        FROM pg_database WHERE datname LIKE 'std\\_test\\_%' OR datname LIKE 'std\\_tpl\\_%'`
     ).pipe(Effect.flatMap(decodeDatabases));
 
