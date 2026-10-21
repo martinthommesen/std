@@ -12,6 +12,8 @@ import { StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
+import { SaveHooks } from "../records/save-hooks.ts";
+import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
@@ -23,9 +25,16 @@ export const ApiHandlers = Layer.mergeAll(
   RecordHandlers
 );
 
+/**
+ * The save pipeline's hook points and password hashing for the write
+ * routes: no hooks or subscriptions yet (Step 3, 1E), scrypt as sign-in.
+ */
+const SaveServices = Layer.mergeAll(SaveHooks.none, WriteOnlyValues.scrypt);
+
 /** The API routes with their handlers and middleware. */
 export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(ApiHandlers),
+  Layer.provide(SaveServices),
   Layer.provide(AuthenticationLayer)
 );
 

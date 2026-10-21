@@ -2,7 +2,9 @@
  * The two-user example of Contracts 3.3 in a test database.
  *
  * The core and acme definition sets are loaded through the real loader
- * (`loadSetDirectory`, one change set each). Then, as table owner:
+ * (`loadSetDirectory`, one change set each). Then, through the record
+ * service's save pipeline (with every record allowed: a seeding actor, no
+ * access rules), so every record has its change entry:
  *
  * - users Alice (role `asset_manager`) and Bob (role `employee`), with
  *   passwords, plus Carol (`employee`, deactivated);
@@ -10,26 +12,31 @@
  *   300, not docked) and plain asset S (cost 2500, status `lost`);
  * - Alice's monitor AM and laptop K.
  *
- * TEMPORARY: users, roles and records are inserted with direct SQL
- * (`owner-records.ts`) until the save pipeline exists; the writes
- * workstream replaces these inserts with record-service creates.
+ * Users and their role assignments are created by the system user; each
+ * asset by its owner, so `created_by` is the owner.
  */
-import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { USER_CLASS_ID, USER_ROLE_CLASS_ID } from "@std/definitions/well-known";
-import { setPasswordForDevelopment } from "@std/server/auth/dev-password";
+import {
+  SYSTEM_USER_ID,
+  USER_CLASS_ID,
+  USER_ROLE_CLASS_ID,
+} from "@std/definitions/well-known";
+import { Actor } from "@std/server/auth/actor";
 import { Catalog } from "@std/server/catalog/catalog";
 import { InstanceSettings } from "@std/server/config/instance-settings";
 import { loadSetDirectory } from "@std/server/config/load-set";
 import { CORE_SET_DIRECTORY } from "@std/server/config/set-files";
+import { SaveHooks } from "@std/server/records/save-hooks";
+import { createRecord } from "@std/server/records/save-pipeline";
+import { WriteAccess } from "@std/server/records/write-access";
+import { WriteOnlyValues } from "@std/server/records/write-only-values";
 import { Transactions } from "@std/server/sql/transactions";
+import type { JsonValue } from "@std/values/json-value";
 import { Context, Effect, Layer } from "effect";
 
-import { insertAsOwner } from "./owner-records.ts";
-import type { OwnerRecord } from "./owner-records.ts";
 import { testDatabaseLayer } from "./test-database.ts";
 import type { TestDatabaseOptions } from "./test-database.ts";
 
@@ -78,15 +85,46 @@ const roleId = (snapshot: ConfigSnapshot, name: string): DefinitionId => {
   return role.id;
 };
 
+/** The seeding services: every record allowed, scrypt, no hooks. */
+const SeedServices = Layer.mergeAll(
+  WriteAccess.allowAll,
+  SaveHooks.none,
+  WriteOnlyValues.scrypt
+);
+
 /**
- * Inserts a user with roles and a password, as table owner.
+ * Creates one record through the save pipeline as a seeding actor.
+ *
+ * @param actorId - The acting (and auditing) user.
+ * @param classId - The class to create.
+ * @param body - Field values by name.
+ * @returns The new record's ID.
+ */
+export const seedRecord = Effect.fn("AcmeFixture.seedRecord")(
+  function* seedRecord(
+    actorId: DefinitionId,
+    classId: DefinitionId,
+    body: Readonly<Record<string, JsonValue>>
+  ) {
+    const saved = yield* createRecord({ body, endpointClassId: classId }).pipe(
+      Effect.provideService(Actor, Actor.of({ roleIds: [], userId: actorId })),
+      Effect.provide(SeedServices)
+    );
+
+    return saved.id;
+  }
+);
+
+/**
+ * Creates a user with roles and a password through the save pipeline, as
+ * the system user.
  *
  * @param snapshot - The configuration.
  * @param user - Name, login, password, roles and whether active.
  * @returns The user.
  */
-export const insertUserAsOwner = Effect.fn("AcmeFixture.insertUser")(
-  function* insertUserAsOwner(
+export const createFixtureUser = Effect.fn("AcmeFixture.createUser")(
+  function* createFixtureUser(
     snapshot: ConfigSnapshot,
     user: {
       readonly name: string;
@@ -96,27 +134,19 @@ export const insertUserAsOwner = Effect.fn("AcmeFixture.insertUser")(
       readonly active: boolean;
     }
   ) {
-    const [id = ""] = yield* insertAsOwner(snapshot, USER_CLASS_ID, [
-      {
-        values: {
-          active: user.active ? "true" : "false",
-          login: user.login,
-          name: user.name,
-        },
-      },
-    ]);
+    const id = yield* seedRecord(SYSTEM_USER_ID, USER_CLASS_ID, {
+      active: user.active,
+      login: user.login,
+      name: user.name,
+      password: user.password,
+    });
 
-    if (user.roles.length > 0) {
-      yield* insertAsOwner(
-        snapshot,
-        USER_ROLE_CLASS_ID,
-        user.roles.map((role): OwnerRecord => ({
-          values: { role: roleId(snapshot, role), user: id },
-        }))
-      );
+    for (const role of user.roles) {
+      yield* seedRecord(SYSTEM_USER_ID, USER_ROLE_CLASS_ID, {
+        role: roleId(snapshot, role),
+        user: id,
+      });
     }
-
-    yield* setPasswordForDevelopment(snapshot, id, user.password);
 
     return {
       id,
@@ -127,13 +157,14 @@ export const insertUserAsOwner = Effect.fn("AcmeFixture.insertUser")(
 );
 
 const asset = (
-  by: DefinitionId,
-  values: Readonly<Record<string, string | null>>
-): OwnerRecord => ({ by, id: randomUUID(), values: { owner: by, ...values } });
+  owner: DefinitionId,
+  classId: DefinitionId,
+  values: Readonly<Record<string, JsonValue>>
+) => seedRecord(owner, classId, { owner, ...values });
 
 const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
   function* insertAcmeRecords(snapshot: ConfigSnapshot) {
-    const alice = yield* insertUserAsOwner(snapshot, {
+    const alice = yield* createFixtureUser(snapshot, {
       active: true,
       login: "alice",
       name: "Alice",
@@ -141,7 +172,7 @@ const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
       roles: ["asset_manager"],
     });
 
-    const bob = yield* insertUserAsOwner(snapshot, {
+    const bob = yield* createFixtureUser(snapshot, {
       active: true,
       login: "bob",
       name: "Bob",
@@ -149,7 +180,7 @@ const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
       roles: ["employee"],
     });
 
-    const carol = yield* insertUserAsOwner(snapshot, {
+    const carol = yield* createFixtureUser(snapshot, {
       active: false,
       login: "carol",
       name: "Carol",
@@ -157,57 +188,47 @@ const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
       roles: ["employee"],
     });
 
-    const [AM = ""] = yield* insertAsOwner(snapshot, ACME.monitor, [
-      asset(alice.id, {
-        cost: "400",
-        name: "Alice monitor",
-        purchased_on: "2025-02-01",
-        size_inches: "27",
-        status: "in_use",
-      }),
-    ]);
+    const AM = yield* asset(alice.id, ACME.monitor, {
+      cost: "400",
+      name: "Alice monitor",
+      purchased_on: "2025-02-01",
+      size_inches: 27,
+      status: "in_use",
+    });
 
-    const [K = ""] = yield* insertAsOwner(snapshot, ACME.laptop, [
-      asset(alice.id, {
-        cost: "1800",
-        disk_key: "K-DISK-KEY",
-        name: "K",
-        purchased_on: "2025-03-01",
-        serial: "SN-K",
-        status: "in_use",
-      }),
-    ]);
+    const K = yield* asset(alice.id, ACME.laptop, {
+      cost: "1800",
+      disk_key: "K-DISK-KEY",
+      name: "K",
+      purchased_on: "2025-03-01",
+      serial: "SN-K",
+      status: "in_use",
+    });
 
-    const [L = ""] = yield* insertAsOwner(snapshot, ACME.laptop, [
-      asset(bob.id, {
-        cost: "1200",
-        disk_key: "L-DISK-KEY",
-        docked_to: AM,
-        name: "L",
-        purchased_on: "2025-01-15",
-        serial: "SN-L",
-        status: "in_use",
-      }),
-    ]);
+    const L = yield* asset(bob.id, ACME.laptop, {
+      cost: "1200",
+      disk_key: "L-DISK-KEY",
+      docked_to: AM,
+      name: "L",
+      purchased_on: "2025-01-15",
+      serial: "SN-L",
+      status: "in_use",
+    });
 
-    const [M = ""] = yield* insertAsOwner(snapshot, ACME.monitor, [
-      asset(bob.id, {
-        cost: "300",
-        name: "M",
-        purchased_on: "2024-06-01",
-        size_inches: "24",
-        status: "in_use",
-      }),
-    ]);
+    const M = yield* asset(bob.id, ACME.monitor, {
+      cost: "300",
+      name: "M",
+      purchased_on: "2024-06-01",
+      size_inches: 24,
+      status: "in_use",
+    });
 
-    const [S = ""] = yield* insertAsOwner(snapshot, ACME.asset, [
-      asset(bob.id, {
-        cost: "2500",
-        name: "S",
-        purchased_on: "2023-03-10",
-        status: "lost",
-      }),
-    ]);
+    const S = yield* asset(bob.id, ACME.asset, {
+      cost: "2500",
+      name: "S",
+      purchased_on: "2023-03-10",
+      status: "lost",
+    });
 
     return {
       alice,

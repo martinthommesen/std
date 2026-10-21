@@ -33,7 +33,6 @@ import {
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
-import type { SqlFragment } from "@std/conditions/sql-fragment";
 import type { AccessAction } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -42,19 +41,17 @@ import { Clock, Effect, Layer, Option } from "effect";
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
-import { fieldPredicate, FALSE_SQL, recordPredicate } from "./access-sql.ts";
+import { fieldPredicate, recordPredicate } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
 import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
+import { readableOnRecord, truthColumn } from "./record-access.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import { WriteAccess } from "./write-access.ts";
 import type { ProposedCheck } from "./write-access.ts";
 
 const ALIAS = "r";
-
-const truth = (expression: SqlFragment, name: string): SqlFragment =>
-  sql`CAST(COALESCE(${expression}, false) AS text) AS ${identSql(name)}`;
 
 const byId = (snapshot: ConfigSnapshot, classId: DefinitionId, id: string) =>
   sql`FROM ${recordRelation(snapshot, classId)} AS ${identSql(ALIAS)}
@@ -137,7 +134,7 @@ export const RuleWriteAccess: Layer.Layer<
       const every = sql`(${joinSql(predicates, " AND ")})`;
 
       const [row] = yield* readRows(
-        sql`SELECT ${truth(every, "allowed")}
+        sql`SELECT ${truthColumn(every, "allowed")}
 ${byId(check.snapshot, check.classId, check.id)}`
       );
 
@@ -206,41 +203,12 @@ ${byId(check.snapshot, check.classId, check.id)}`
           version: input.record.version,
         }));
       }),
-      visibility: Effect.fn("WriteAccess.visibility")(
-        function* visibility(input) {
-          const { classId } = input.record;
-          const view = scopeOf(input.snapshot).view(classId, true);
-          const fields = input.snapshot.fields(classId);
-
-          const columns = fields.map((field, index) => {
-            const readField = view.byId(field.id);
-
-            return truth(
-              readField === undefined
-                ? FALSE_SQL
-                : view.readable(ALIAS, readField),
-              `f${index}`
-            );
-          });
-
-          const [row] = yield* readRows(
-            sql`SELECT ${joinSql([truth(view.visibility(ALIAS), "visible"), ...columns], ", ")}
-${byId(input.snapshot, classId, input.record.id)}`
-          );
-
-          if (row?.visible !== "true") {
-            return Option.none();
-          }
-
-          const readable: ReadonlySet<DefinitionId> = new Set(
-            fields.flatMap((field, index) =>
-              row[`f${index}`] === "true" ? [field.id] : []
-            )
-          );
-
-          return Option.some(readable);
-        }
-      ),
+      visibility: (input) =>
+        readableOnRecord(
+          scopeOf(input.snapshot),
+          input.record.classId,
+          input.record.id
+        ),
       visibleTargets: Effect.fn("WriteAccess.visibleTargets")(
         function* visibleTargets(input) {
           if (input.ids.length === 0) {

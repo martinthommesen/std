@@ -47,6 +47,7 @@ import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
 import type { DecodedInput, StoredValue } from "@std/values/field-value";
 import type { JsonObject } from "@std/values/json-value";
+import { parseUuid } from "@std/values/uuid";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
 
@@ -476,6 +477,11 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
 ) {
   const access = yield* WriteAccess;
   const stack = yield* SaveStack;
+
+  // An ID that is not a UUID is unknown, exactly like a missing record.
+  if (!parseUuid(input.id).ok) {
+    return yield* new NotFound();
+  }
 
   const locked = yield* lockRoot(
     snapshot,
