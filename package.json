@@ -19,6 +19,7 @@
   "devDependencies": {
     "@effect/tsgo": "catalog:",
     "@effect/vitest": "catalog:",
+    "@foldkit/oxlint-plugin": "0.15.3",
     "@shadcn/lint": "^0.2.3",
     "@types/node": "catalog:",
     "effect": "catalog:",
