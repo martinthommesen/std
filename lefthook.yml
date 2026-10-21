@@ -25,10 +25,12 @@ pre-commit:
         - "*.yml"
         - "*.graphql"
         - "*.gql"
-      # Vendored Effect source carries its own Oxlint config with plugins we do not install;
+      # repos/ holds the vendored Effect and Foldkit source, with their own Oxlint configs and
+      # plugins we do not install; FOLDKIT.md is Foldkit's template, kept byte-for-byte;
       # .agents/ and skills-lock.json are third-party agent skills pinned by hash.
       exclude:
-        - "vendor/**"
+        - "repos/**"
+        - "FOLDKIT.md"
         - ".claude/**"
         - ".agents/**"
         - "skills-lock.json"
