@@ -33,7 +33,8 @@ import { TransactionRefused } from "./transaction-refused.ts";
  * - `NOTIFY`, `LISTEN`, `UNLISTEN`: notifications.
  * - `EXPLAIN`, `ANALYZE`: query plans and statistics.
  * - `SET`: only as `SET LOCAL <name> = ...` or `SET LOCAL <name> TO ...`
- *   with `<name>` an unquoted word from `TRANSACTION_SETTINGS`.
+ *   with `<name>` an unquoted word from `TRANSACTION_SETTINGS`, or from
+ *   `READ_TUNING_SETTINGS` followed by exactly one valid value.
  *
  * Everything else is refused, among it `BEGIN`, `START`, `COMMIT`, `END`,
  * `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE`, `DO`, `CALL`,
@@ -71,6 +72,46 @@ export const TRANSACTION_SETTINGS: ReadonlySet<string> = new Set([
   "statement_timeout",
 ]);
 
+/** Largest value Postgres accepts for `max_parallel_workers_per_gather`. */
+const MAX_PARALLEL_WORKERS = 1024;
+
+const DIGITS = /^\d+$/u;
+
+/** The values `plan_cache_mode` takes. */
+const PLAN_CACHE_MODES = new Set([
+  "auto",
+  "force_custom_plan",
+  "force_generic_plan",
+]);
+
+const isWorkerCount = (value: LexedToken): boolean =>
+  value.kind === "other" &&
+  DIGITS.test(value.text) &&
+  Number(value.text) <= MAX_PARALLEL_WORKERS;
+
+const isPlanCacheMode = (value: LexedToken): boolean =>
+  value.kind === "word" && PLAN_CACHE_MODES.has(value.text);
+
+/**
+ * Planner settings the transaction's code may change with `SET LOCAL`, each
+ * with the exact grammar of its value: an unquoted integer from 0 to 1024
+ * for `max_parallel_workers_per_gather`, an unquoted `auto`,
+ * `force_custom_plan` or `force_generic_plan` for `plan_cache_mode`. Reads
+ * use them to keep rule-branched list queries on custom plans without
+ * parallel workers. They change plans only, never results, isolation or
+ * locking.
+ */
+export const READ_TUNING_SETTINGS: ReadonlyMap<
+  string,
+  (value: LexedToken) => boolean
+> = new Map([
+  ["max_parallel_workers_per_gather", isWorkerCount],
+  ["plan_cache_mode", isPlanCacheMode],
+]);
+
+/** `SET LOCAL <name> = <value>`: the tokens of a read-tuning setting. */
+const READ_TUNING_TOKENS = 5;
+
 /** First keywords of reads, the only statements `readOnly` may mark. */
 export const READ_KEYWORDS: ReadonlySet<string> = new Set([
   "select",
@@ -104,10 +145,29 @@ const isAssignment = (token: LexedToken | undefined): boolean =>
   (token?.kind === "other" && token.text === "=") || isWord(token, "to");
 
 const isSetLocal = (tokens: readonly LexedToken[]): boolean => {
-  const [, scope, name, assign] = tokens;
-  const settable = name?.kind === "word" && TRANSACTION_SETTINGS.has(name.text);
+  const [first, scope, name, assign, value] = tokens;
 
-  return isWord(scope, "local") && settable && isAssignment(assign);
+  if (
+    !isWord(first, "set") ||
+    !isWord(scope, "local") ||
+    name?.kind !== "word" ||
+    !isAssignment(assign)
+  ) {
+    return false;
+  }
+
+  if (TRANSACTION_SETTINGS.has(name.text)) {
+    return true;
+  }
+
+  const validValue = READ_TUNING_SETTINGS.get(name.text);
+
+  return (
+    validValue !== undefined &&
+    value !== undefined &&
+    tokens.length === READ_TUNING_TOKENS &&
+    validValue(value)
+  );
 };
 
 /**
@@ -140,7 +200,7 @@ export const refusalFor = (sql: string): Refusal | undefined => {
 
     return [
       isolation ? "isolation-level" : CONTROL_REASON,
-      `SET other than SET LOCAL of a timeout${INSIDE}`,
+      `SET other than SET LOCAL of a timeout or a read-tuning setting with a valid value${INSIDE}`,
     ];
   }
 
@@ -423,13 +483,19 @@ export class TransactionState implements TransactionHandle {
       return Option.some(refusal(...refused));
     }
 
+    const lexed = analyzeStatement(sql);
+
     if (!marks.readOnly) {
-      this.writes += 1;
+      // An admitted SET LOCAL changes a setting of this transaction, never
+      // data, so it does not count as a write: a nested unit that only
+      // tuned timeouts or plans may fail without poisoning the transaction.
+      if (!isSetLocal(lexed.leadingTokens)) {
+        this.writes += 1;
+      }
 
       return Option.none();
     }
 
-    const lexed = analyzeStatement(sql);
     const [first] = lexed.leadingTokens;
 
     const isRead =

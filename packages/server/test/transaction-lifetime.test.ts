@@ -17,6 +17,7 @@ import { CurrentTransaction } from "../src/sql/transaction-context.ts";
 import type { TransactionHandle } from "../src/sql/transaction-context.ts";
 import {
   READ_KEYWORDS,
+  READ_TUNING_SETTINGS,
   STATEMENT_KEYWORDS,
   TRANSACTION_SETTINGS,
   TransactionState,
@@ -367,6 +368,87 @@ describe("transaction-lifetime", () => {
     );
 
     dbTest.effect(
+      "read-tuning settings take effect, and a nested unit that only set them may fail without poisoning",
+      () =>
+        Effect.gen(function* readTuning() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_tuning (id int PRIMARY KEY)`;
+
+          const settings = yield* request(
+            Effect.gen(function* tuneAndRead() {
+              yield* sql`INSERT INTO lifetime_tuning VALUES (1)`;
+              yield* request(
+                sql`SET LOCAL max_parallel_workers_per_gather = 0`.pipe(
+                  Effect.andThen(
+                    sql`SET LOCAL plan_cache_mode = force_custom_plan`
+                  ),
+                  Effect.andThen(Effect.fail("nested failure" as const))
+                )
+              ).pipe(Effect.ignore);
+
+              const [workers] =
+                yield* sql`SHOW max_parallel_workers_per_gather`;
+
+              const [mode] = yield* sql`SHOW plan_cache_mode`;
+
+              return [workers, mode];
+            })
+          );
+
+          assert.deepStrictEqual(settings, [
+            { max_parallel_workers_per_gather: "0" },
+            { plan_cache_mode: "force_custom_plan" },
+          ]);
+          assert.strictEqual(yield* countRows("lifetime_tuning"), 1);
+
+          const refused = yield* Effect.exit(
+            request(sql.unsafe("SET LOCAL plan_cache_mode = 'auto'"))
+          );
+
+          assert.strictEqual(refusalOf(refused)?.reason, "transaction-control");
+        })
+    );
+
+    dbTest.effect(
+      "readOnly runs an unprepared read and refuses an unprepared write",
+      () =>
+        Effect.gen(function* unpreparedReads() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_unprepared (id int PRIMARY KEY)`;
+          yield* sql`INSERT INTO lifetime_unprepared VALUES (1), (2)`;
+
+          const rows = yield* request(
+            readOnly(
+              sql`SELECT id FROM lifetime_unprepared WHERE id > ${1} ORDER BY id`,
+              { unprepared: true }
+            )
+          );
+
+          assert.deepStrictEqual(rows, [{ id: 2 }]);
+
+          for (const text of [
+            "WITH x AS (DELETE FROM lifetime_unprepared RETURNING 1) SELECT * FROM x",
+            "SELECT 1 AS id INTO lifetime_unprepared_copy",
+            "DELETE FROM lifetime_unprepared",
+          ]) {
+            const refused = yield* Effect.exit(
+              request(readOnly(sql.unsafe(text), { unprepared: true }))
+            );
+
+            assert.strictEqual(
+              refusalOf(refused)?.reason,
+              "transaction-control",
+              text
+            );
+          }
+
+          assert.strictEqual(yield* countRows("lifetime_unprepared"), 2);
+        })
+    );
+
+    dbTest.effect(
       "readOnly refuses SELECT INTO, so a caught nested failure cannot commit its table",
       () =>
         Effect.gen(function* selectInto() {
@@ -504,7 +586,7 @@ describe("transaction-lifetime", () => {
     }
   });
 
-  it("the allowlist admits no transaction control and SET LOCAL only for timeouts", () => {
+  it("the allowlist admits no transaction control and SET LOCAL only for timeouts and read tuning", () => {
     for (const keyword of [
       "begin",
       "commit",
@@ -527,6 +609,10 @@ describe("transaction-lifetime", () => {
       "idle_in_transaction_session_timeout",
       "lock_timeout",
       "statement_timeout",
+    ]);
+    assert.deepStrictEqual([...READ_TUNING_SETTINGS.keys()].toSorted(), [
+      "max_parallel_workers_per_gather",
+      "plan_cache_mode",
     ]);
     assert.deepStrictEqual([...READ_KEYWORDS].toSorted(), [
       "select",

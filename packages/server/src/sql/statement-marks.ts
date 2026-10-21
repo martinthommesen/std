@@ -11,7 +11,9 @@
  *   statements were all marked read-only may fail without poisoning the
  *   transaction. It takes one statement value, not an effect, and only one
  *   starting with a read keyword. Mark only statements you built as plain
- *   reads; a `SELECT` that calls a writing function is not one.
+ *   reads; a `SELECT` that calls a writing function is not one. With
+ *   `{ unprepared: true }` the statement runs unprepared, so Postgres plans
+ *   it for its actual parameters instead of reusing a generic plan.
  * - `lockWaiting(statement)`: the statement is DDL run under the config
  *   commit's 2 s `lock_timeout`, so its lock timeout (SQLSTATE 55P03) makes
  *   the config commit roll back and retry (Contracts 1.4).
@@ -19,6 +21,15 @@
 import { Context, Effect, Predicate } from "effect";
 import { Statement } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
+
+/** Options of `readOnly`. */
+export interface ReadOnlyOptions {
+  /**
+   * Run the statement unprepared (`Statement.unprepared`). The read rules
+   * are the same; only how the statement is sent changes.
+   */
+  readonly unprepared?: boolean;
+}
 
 /** The marks of the statements an effect runs. */
 export interface StatementMarksValue {
@@ -53,16 +64,29 @@ const withMark = <A, E, R>(
  * `SqlClient` tagged template (or `sql.unsafe`) is accepted, never an
  * arbitrary effect, so the mark cannot spread over other statements; and
  * the transaction refuses the mark unless the statement starts like a read
- * (`SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`).
+ * (`SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`) and holds no write clause.
  * @param statement - A statement the caller built as a plain read.
+ * @param options - `unprepared` to send it unprepared.
  * @returns The statement, marked.
  */
 export const readOnly = <A>(
-  statement: Statement.Statement<A>
-): Effect.Effect<readonly A[], SqlError> =>
-  Statement.isFragment(statement) && Predicate.hasProperty(statement, "compile")
-    ? withMark(statement, { readOnly: true })
-    : Effect.die(new TypeError("readOnly accepts a single SQL statement"));
+  statement: Statement.Statement<A>,
+  options?: ReadOnlyOptions
+): Effect.Effect<readonly A[], SqlError> => {
+  if (
+    !Statement.isFragment(statement) ||
+    !Predicate.hasProperty(statement, "compile")
+  ) {
+    return Effect.die(new TypeError("readOnly accepts a single SQL statement"));
+  }
+
+  return withMark(
+    options?.unprepared === true ? statement.unprepared : statement,
+    {
+      readOnly: true,
+    }
+  );
+};
 
 /**
  * Marks the statements of `effect` as DDL waiting for table locks under the

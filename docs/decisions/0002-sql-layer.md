@@ -24,7 +24,7 @@ Import each module by its subpath, for example `@std/server/sql/transactions`.
 | `sql/request-revision` | `RequestRevision` service (`{ revision, changeSetId }`) and `parseConfigState` |
 | `sql/transaction-state` | per-transaction bookkeeping, `refusalFor(sql)` (the statement check), the tracking connection wrapper |
 | `sql/statement-lexer` | `analyzeStatement(sql)`: statement count and leading words, lexed like Postgres (comments, quotes, dollar quotes) |
-| `sql/statement-marks` | `readOnly(effect)` and `lockWaiting(effect)`: the only ways to exempt a statement from poisoning or to make its lock timeout retryable |
+| `sql/statement-marks` | `readOnly(statement, { unprepared? })` and `lockWaiting(effect)`: the only ways to exempt a statement from poisoning or to make its lock timeout retryable |
 | `sql/transaction-refused` | `TransactionRefused` defect, `reason`: `poisoned`, `isolation-level`, `savepoint`, `transaction-control`, `nesting`, `closed` |
 | `sql/config-commit` | config-commit machinery, `bumpRevision(changeSetId)`, `SchemaLockTimeout` (`attempts`, `holders`: pid, application name, client address, state, granted locks), `CONFIG_CHANNEL = "std_config"`, timeouts, `DEFAULT_RETRY_DELAYS` and `retrySchedule(delays)` |
 | `sql/dedicated` | `makeDedicatedConnection({ applicationName? })`: `processId`, `client`, `transactions`, `execute` (autocommit), `tryAdvisoryLock`, `advisoryUnlock` |
@@ -176,6 +176,14 @@ Checked against the `effect` skill (`.agents/skills/effect`) and the 4.0.5 sourc
 - `hygienic` now replaces driver errors reason by reason (`sanitizeCause`) and keeps every other reason. It used to recover the first `SqlError` failure, which dropped any defect beside it.
 - The lexer reads an optional `UESCAPE` clause (its argument a string constant, plain, `E`-prefixed or dollar-quoted, tagged or not), with blanks and comments before it, as part of a `U&` identifier or string, as Postgres's parser does, so `WITH U&"!0078" UESCAPE '!' AS (...)` parses as a CTE.
 - Test robustness under a shared, busy Postgres: the `@std/server` and `@std/testing` suites allow 120 s per test and per hook; the harness tests check that a database was cloned from the existing template instead of bounding creation by wall time; three concurrent creations start at a `Deferred` gate, are released with the test's scope, and may take 300 s, because every `DROP DATABASE` waits for a forced checkpoint, which a busy shared server can delay for minutes; `waitUntil` waits up to 60 s by default.
+
+## Read tuning (API changes)
+
+For the reads workstream and the storage benchmark (`docs/decisions/0004-storage-benchmark.md` on `ws/0e-bench`): rule-branched list queries need custom plans and no parallel workers to meet the Q6 budget at 10M rows.
+
+- `SET LOCAL` also admits two planner settings, `READ_TUNING_SETTINGS`, with the same rules as the timeouts (`SET LOCAL` only, an unquoted name, one statement) plus an exact value grammar: `max_parallel_workers_per_gather` takes an unquoted integer from 0 to 1024, `plan_cache_mode` an unquoted `auto`, `force_custom_plan` or `force_generic_plan`, and nothing may follow the value. Any other form (quoted, `DEFAULT`, a parameter, a list, a session `SET`) is refused. Both settings change plans only: results, isolation, snapshots and locks stay the same.
+- An admitted `SET LOCAL` (a timeout or a read-tuning setting) no longer counts as a write: it changes a setting of the transaction, never data, so a nested unit that only tuned settings may fail without poisoning the transaction. The setting stays in force for the rest of the transaction, as `SET LOCAL` does. `readOnly` still refuses a `SET`.
+- `readOnly(statement, { unprepared: true })` runs the statement through `Statement.unprepared`, so Postgres plans it for its actual parameters. The read rules are unchanged: the transaction checks the same text (first keyword, single statement, `writeClause`) whichever way it is sent.
 
 ## Open items
 
