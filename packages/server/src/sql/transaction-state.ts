@@ -3,7 +3,7 @@
  * that checks and counts every statement the transaction's code sends.
  */
 import type { PgClient } from "@effect/sql-pg";
-import { Effect, Fiber, Option, Schema, Stream } from "effect";
+import { Context, Effect, Fiber, Option, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
@@ -14,6 +14,7 @@ import { analyzeStatement } from "./statement-lexer.ts";
 import type { LexedToken } from "./statement-lexer.ts";
 import { StatementMarks } from "./statement-marks.ts";
 import type { StatementMarksValue } from "./statement-marks.ts";
+import { CurrentTransaction } from "./transaction-context.ts";
 import type {
   TransactionHandle,
   TransactionKind,
@@ -199,6 +200,12 @@ export class TransactionState implements TransactionHandle {
   readonly fibers = new Set<Fiber.Fiber<unknown, unknown>>();
   /** Set when the transaction's code has ended; no new fiber may join. */
   sealed = false;
+  /**
+   * Id of the fiber that runs the transaction's code. Fiber ids grow
+   * monotonically, so a fiber with a smaller id existed before the code
+   * started and cannot descend from it.
+   */
+  bodyFiberId: number | undefined;
   /** Token set with `set_config(..., true)` at the start, checked before `COMMIT`. */
   token = "";
   /** `transaction_timestamp()` at the start, checked before `COMMIT`. */
@@ -249,6 +256,15 @@ export class TransactionState implements TransactionHandle {
     }
 
     if (!this.fibers.has(fiber)) {
+      if (!this.owns(fiber)) {
+        return Option.some(
+          refusal(
+            "foreignFiber",
+            `${what} from a fiber outside the ${this.kind} transaction's code`
+          )
+        );
+      }
+
       if (this.sealed) {
         return Option.some(
           refusal(
@@ -262,6 +278,27 @@ export class TransactionState implements TransactionHandle {
     }
 
     return Option.none();
+  }
+
+  /**
+   * Whether a fiber belongs to the transaction's code: it was created no
+   * earlier than the code's own fiber (so it is no ancestor of it) and runs
+   * with this transaction as its `CurrentTransaction` (so it was forked from
+   * inside the code, or is the code's fiber). Only such fibers are ever
+   * enrolled, so the sweep before the commit decision never interrupts a
+   * fiber that is waiting for the transaction to end.
+   * @param fiber - The fiber asking.
+   * @returns `true` when the fiber may enroll.
+   */
+  owns(fiber: Fiber.Fiber<unknown, unknown>): boolean {
+    const current = Context.getOption(fiber.context, CurrentTransaction);
+
+    return (
+      this.bodyFiberId !== undefined &&
+      fiber.id >= this.bodyFiberId &&
+      Option.isSome(current) &&
+      current.value === this
+    );
   }
 
   /**
@@ -392,9 +429,15 @@ export class TransactionState implements TransactionHandle {
       return Option.none();
     }
 
-    const [first] = analyzeStatement(sql).leadingTokens;
+    const lexed = analyzeStatement(sql);
+    const [first] = lexed.leadingTokens;
 
-    return first?.kind === "word" && READ_KEYWORDS.has(first.text)
+    const isRead =
+      first?.kind === "word" &&
+      READ_KEYWORDS.has(first.text) &&
+      !lexed.dataModifying;
+
+    return isRead
       ? Option.none()
       : Option.some(
           refusal(

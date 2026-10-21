@@ -29,7 +29,38 @@ export interface LexedStatement {
   readonly statements: number;
   /** How many top-level `;` the text holds. */
   readonly separators: number;
+  /**
+   * Whether an unquoted `INSERT`, `UPDATE`, `DELETE` or `MERGE` occurs
+   * anywhere outside strings, comments and quoted identifiers, a locking
+   * clause (`FOR UPDATE`, `FOR NO KEY UPDATE`) excepted.
+   */
+  readonly dataModifying: boolean;
 }
+
+const DATA_MODIFYING_WORDS = new Set(["delete", "insert", "merge"]);
+
+/**
+ * Whether a word makes a statement data-modifying, given the words just
+ * before it.
+ * @param word - The word, lower-cased.
+ * @param before - The unquoted words directly before it, most recent last.
+ * @returns `true` for `INSERT`, `DELETE`, `MERGE`, and `UPDATE` outside a locking clause.
+ */
+const modifies = (word: string, before: readonly string[]): boolean => {
+  if (DATA_MODIFYING_WORDS.has(word)) {
+    return true;
+  }
+
+  if (word !== "update") {
+    return false;
+  }
+
+  const [third, second, last] = before.slice(-3);
+  const forUpdate = last === "for";
+  const forNoKeyUpdate = third === "for" && second === "no" && last === "key";
+
+  return !(forUpdate || forNoKeyUpdate);
+};
 
 /** The kinds of token the classifier sees; see `LexedToken.kind`. */
 export type LexedTokenKind = "word" | "quoted" | "literal" | "other";
@@ -332,12 +363,21 @@ export const analyzeStatement = (sql: string): LexedStatement => {
   let statements = 0;
   let separators = 0;
   let inStatement = false;
+  let dataModifying = false;
+  let recentWords: string[] = [];
   let index = 0;
 
   while (index < sql.length) {
     const start = index;
     const token = tokenAt(sql, index);
     index = token.end;
+
+    if (token.kind === "word" && token.name !== undefined) {
+      dataModifying ||= modifies(token.name, recentWords);
+      recentWords = [...recentWords.slice(-2), token.name];
+    } else if (token.kind !== "blank") {
+      recentWords = [];
+    }
 
     if (token.kind === "separator") {
       separators += 1;
@@ -369,6 +409,7 @@ export const analyzeStatement = (sql: string): LexedStatement => {
   }
 
   return {
+    dataModifying,
     leadingTokens,
     leadingWords,
     separators,

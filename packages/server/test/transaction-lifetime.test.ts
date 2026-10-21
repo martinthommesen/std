@@ -11,7 +11,10 @@ import { SqlClient } from "effect/sql";
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import { DatabaseError } from "../src/sql/errors.ts";
 import { decodeRows } from "../src/sql/rows.ts";
+import { analyzeStatement } from "../src/sql/statement-lexer.ts";
 import { readOnly } from "../src/sql/statement-marks.ts";
+import { CurrentTransaction } from "../src/sql/transaction-context.ts";
+import type { TransactionHandle } from "../src/sql/transaction-context.ts";
 import {
   READ_KEYWORDS,
   STATEMENT_KEYWORDS,
@@ -147,28 +150,94 @@ describe("transaction-lifetime", () => {
     );
 
     dbTest.effect(
-      "a fiber that first uses a transaction after its code ended is refused",
+      "only fibers of the transaction's code enroll, and not after it ended",
       () =>
         Effect.gen(function* foreignFiber() {
           const client = yield* PgClient.PgClient;
           const state = new TransactionState("request", client);
-          yield* state.enter("the owner");
-          state.sealed = true;
 
-          yield* state.enter("the owner again");
+          const asOwner = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.provideService(effect, CurrentTransaction, state);
 
-          const stranger = yield* Effect.exit(
-            Effect.forkChild(state.enter("a stranger")).pipe(
+          yield* Effect.withFiber((fiber) => {
+            state.bodyFiberId = fiber.id;
+
+            return Effect.void;
+          });
+          yield* asOwner(state.enter("the owner"));
+
+          const outsider = yield* Effect.exit(
+            Effect.forkChild(state.enter("a fiber without the context")).pipe(
               Effect.flatMap(Fiber.join)
             )
           );
 
-          assert.strictEqual(refusalOf(stranger)?.reason, "foreignFiber");
+          assert.strictEqual(refusalOf(outsider)?.reason, "foreignFiber");
+
+          state.sealed = true;
+          yield* asOwner(state.enter("the owner again"));
+
+          const late = yield* Effect.exit(
+            Effect.forkChild(
+              asOwner(state.enter("a child after the seal"))
+            ).pipe(Effect.flatMap(Fiber.join))
+          );
+
+          assert.strictEqual(refusalOf(late)?.reason, "foreignFiber");
 
           state.closed = true;
-          const late = yield* Effect.exit(state.enter("the owner, late"));
-          assert.strictEqual(refusalOf(late)?.reason, "closed");
+
+          const closed = yield* Effect.exit(
+            asOwner(state.enter("the owner, late"))
+          );
+
+          assert.strictEqual(refusalOf(closed)?.reason, "closed");
         })
+    );
+
+    dbTest.effect(
+      "an ancestor holding the transaction's handle is refused at once and the transaction settles",
+      () =>
+        Effect.gen(function* ancestorHandle() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_ancestor (id int PRIMARY KEY)`;
+
+          const handed = yield* Deferred.make<TransactionHandle>();
+          const released = yield* Deferred.make<boolean>();
+          const ran: string[] = [];
+
+          const transaction = yield* Effect.forkChild(
+            request(
+              Effect.gen(function* handOutHandle() {
+                yield* sql`INSERT INTO lifetime_ancestor VALUES (1)`;
+                yield* Deferred.succeed(handed, yield* CurrentTransaction);
+                yield* Deferred.await(released);
+              })
+            )
+          );
+
+          const handle = yield* Deferred.await(handed);
+
+          const registered = yield* Effect.exit(
+            handle.afterCommit(
+              Effect.sync(() => {
+                ran.push("foreign action");
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(registered)?.reason, "foreignFiber");
+
+          yield* Deferred.succeed(released, true);
+          yield* Fiber.join(transaction).pipe(
+            Effect.timeout(Duration.seconds(10))
+          );
+
+          assert.deepStrictEqual(ran, [], "the foreign action never ran");
+          assert.strictEqual(yield* countRows("lifetime_ancestor"), 1);
+        }),
+      { timeout: 20_000 }
     );
 
     dbTest.effect(
@@ -208,9 +277,59 @@ describe("transaction-lifetime", () => {
         );
 
         assert.strictEqual(refusalOf(exit)?.reason, "transaction-control");
+
+        const writingWith = yield* Effect.exit(
+          request(
+            readOnly(
+              sql`WITH x AS (INSERT INTO lifetime_read_only VALUES (2) RETURNING 1) SELECT * FROM x`
+            )
+          )
+        );
+
+        assert.strictEqual(
+          refusalOf(writingWith)?.reason,
+          "transaction-control"
+        );
         assert.strictEqual(yield* countRows("lifetime_read_only"), 0);
+
+        // A locking clause is still a read.
+        yield* sql`INSERT INTO lifetime_read_only VALUES (3)`;
+        yield* request(
+          readOnly(sql`SELECT id FROM lifetime_read_only FOR UPDATE`).pipe(
+            Effect.andThen(
+              readOnly(sql`SELECT id FROM lifetime_read_only FOR NO KEY UPDATE`)
+            )
+          )
+        );
       })
     );
+  });
+
+  it("the lexer flags data-modifying words outside strings, comments and quoted names", () => {
+    const modifying = [
+      "WITH x AS (INSERT INTO t VALUES (1) RETURNING 1) SELECT * FROM x",
+      "WITH x AS (UPDATE t SET a = 1 RETURNING 1) SELECT * FROM x",
+      "WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x",
+      "WITH x AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1",
+    ];
+
+    const reads = [
+      "SELECT id FROM t FOR UPDATE",
+      "SELECT id FROM t FOR NO KEY UPDATE SKIP LOCKED",
+      "SELECT id FROM t FOR SHARE",
+      "SELECT 'insert into t' AS s",
+      'SELECT "update" FROM t',
+      "SELECT 1 -- delete from t",
+      "SELECT $$update t$$",
+    ];
+
+    for (const sql of modifying) {
+      assert.isTrue(analyzeStatement(sql).dataModifying, sql);
+    }
+
+    for (const sql of reads) {
+      assert.isFalse(analyzeStatement(sql).dataModifying, sql);
+    }
   });
 
   it("the allowlist admits no transaction control and SET LOCAL only for timeouts", () => {
