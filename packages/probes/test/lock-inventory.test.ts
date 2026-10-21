@@ -12,8 +12,13 @@ import {
   DDL_LOCK_INVENTORY,
   modeCovers,
   runLockInventoryProbe,
+  UNBUDGETED_INDEX,
+  UNBUDGETED_TOAST,
 } from "../src/lock-inventory.ts";
 import { probeDatabaseLayer } from "../src/probe-database.ts";
+
+/** Catalog lock modes DDL may hold: they conflict only with SHARE and stronger. */
+const CATALOG_MODES = ["AccessShareLock", "RowExclusiveLock"];
 
 describe("probe-lock-inventory", () => {
   it("covers every form of the Contracts 1.4 DDL table that runs in the main transaction", () => {
@@ -56,6 +61,27 @@ describe("probe-lock-inventory", () => {
 
           for (const result of results) {
             assert.deepStrictEqual(result.violations, [], result.form);
+
+            // Catalog locks the DDL still holds conflict only with SHARE and
+            // stronger, which only direct catalog maintenance takes.
+            for (const mode of result.catalogModes) {
+              assert.include(CATALOG_MODES, mode, result.form);
+            }
+
+            // Index and TOAST locks are ACCESS SHARE, or the table's own
+            // explicit mode (an index dropped with its column).
+            for (const lock of result.added) {
+              if (
+                lock.kind === UNBUDGETED_INDEX ||
+                lock.kind === UNBUDGETED_TOAST
+              ) {
+                assert.include(
+                  ["AccessShareLock", lock.tableMode],
+                  lock.mode,
+                  `${result.form}: ${lock.relation}`
+                );
+              }
+            }
           }
         }),
       { timeout: 60_000 }
@@ -91,6 +117,30 @@ describe("probe-lock-inventory", () => {
 
           assert.deepStrictEqual(result?.violations, [
             "inv.target AccessExclusiveLock",
+          ]);
+        }),
+      { timeout: 60_000 }
+    );
+
+    dbTest.effect(
+      "a sequence lock is always a violation: STD tables have no owned sequences",
+      () =>
+        Effect.gen(function* sequenceIsViolation() {
+          const [result] = yield* Effect.scoped(
+            runLockInventoryProbe([
+              {
+                form: "Drop an identity column",
+                step: {
+                  label: "Drop an identity column",
+                  locks: [{ mode: "ACCESS EXCLUSIVE", table: "inv.counter" }],
+                  statement: "ALTER TABLE inv.counter DROP COLUMN n",
+                },
+              },
+            ])
+          );
+
+          assert.deepStrictEqual(result?.violations, [
+            "inv.counter_n_seq AccessExclusiveLock",
           ]);
         }),
       { timeout: 60_000 }

@@ -40,6 +40,7 @@ import type { Scope } from "effect";
 
 import { now } from "./clock.ts";
 import { INDEX_BUILD_APPLICATION_NAME } from "./index-build-names.ts";
+import { pollFor, waitFor } from "./observe.ts";
 
 /** One way of killing a build's client. */
 export interface KilledBuildScenario {
@@ -91,8 +92,6 @@ const CHILD_SCRIPT = fileURLToPath(
 
 const INDEX_NAME = "probe_build_code";
 const TABLE_NAME = "probe_build";
-const POLL_INTERVAL = Duration.millis(10);
-const WAIT_LIMIT_MS = 120_000;
 const ABSENT = -1;
 
 const decodeBackend = decodeRows(
@@ -124,28 +123,6 @@ WHERE locktype = 'advisory' AND granted
   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
   AND classid = ${String(advisoryClassId(SCHEMA_KEY))}::oid
   AND objid = ${String(advisoryObjectId(SCHEMA_KEY))}::oid`;
-
-/**
- * Polls `check` until it returns `true`; dies after two minutes.
- * @param check - The condition.
- * @returns Completes once the condition holds.
- */
-const waitFor = <E, R>(
-  check: Effect.Effect<boolean, E, R>
-): Effect.Effect<void, E, R> =>
-  Effect.gen(function* poll() {
-    const deadline = (yield* now) + WAIT_LIMIT_MS;
-
-    while (!(yield* check)) {
-      if ((yield* now) > deadline) {
-        return yield* Effect.die(new Error("probe wait timed out"));
-      }
-
-      yield* Effect.sleep(POLL_INTERVAL);
-    }
-
-    return yield* Effect.void;
-  });
 
 const startChild = (
   url: string,
@@ -328,11 +305,7 @@ export const runKilledBuildScenario = Effect.fn("runKilledBuildScenario")(
 
     if (scenario.busy === "writer") {
       // Watch for the hold time: the backend may notice the lost client.
-      const deadline = killedAt + scenario.holdAfterKillMs;
-
-      while ((yield* now) < deadline && !(yield* noteExit)) {
-        yield* Effect.sleep(POLL_INTERVAL);
-      }
+      yield* pollFor(noteExit, Duration.millis(scenario.holdAfterKillMs));
 
       backendAliveAfterKill = !(yield* noteExit);
       lockHeldAfterKill = (yield* watch.holder) === pid;

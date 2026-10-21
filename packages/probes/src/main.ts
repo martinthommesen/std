@@ -4,9 +4,9 @@
  * `packages/probes/results/<yyyy-mm-dd>.json` and `.md`.
  *
  * Usage: `pnpm probes [--quick] [probe ...]`, where a probe is its number
- * (1 to 6, 7 for probe 3b, 8 for 3c) or key (`configPause`, `killedBuild`,
- * `addClass`, `lockBudget`, `lockInventory`, `casefold`, `addColumn`,
- * `notify`). `--quick` uses small sizes and short runs and
+ * (1 to 6, 7 for probe 3b, 8 for 3c, 9 for 3d) or key (`configPause`,
+ * `killedBuild`, `addClass`, `lockBudget`, `lockInventory`,
+ * `unbudgetedWaits`, `casefold`, `addColumn`, `notify`). `--quick` uses small sizes and short runs and
  * writes `<date>-quick.*`, for checking the script itself. Each probe runs
  * in its own fresh database, dropped afterwards. Full runs take about six
  * minutes.
@@ -37,6 +37,7 @@ import {
   probeSettings,
 } from "./settings.ts";
 import type { Mode } from "./settings.ts";
+import { runUnbudgetedWaitProbe } from "./unbudgeted-waits.ts";
 
 const RESULTS_DIRECTORY = fileURLToPath(
   new URL("../results/", import.meta.url)
@@ -172,6 +173,17 @@ const program = Effect.gen(function* probes() {
     )
   );
 
+  const unbudgetedWaits = yield* optional(
+    wanted("unbudgetedWaits", 9),
+    record(
+      "3d unbudgeted waits",
+      DEFAULT_POOL,
+      inSequence(settings.unbudgetedWaits, (options) =>
+        Effect.scoped(runUnbudgetedWaitProbe(options))
+      )
+    )
+  );
+
   const casefold = yield* optional(
     wanted("casefold", 4),
     record(
@@ -212,6 +224,7 @@ const program = Effect.gen(function* probes() {
     mode,
     notify,
     startedAt,
+    unbudgetedWaits,
   };
 
   const base = `${RESULTS_DIRECTORY}${startedAt.slice(0, DATE_LENGTH)}${mode === "quick" ? "-quick" : ""}`;

@@ -9,6 +9,7 @@ import type { ConfigPauseOptions } from "./config-pause.ts";
 import type { KilledBuildScenario } from "./killed-index-build.ts";
 import type { LockBudgetOptions } from "./lock-budget.ts";
 import type { NotifyProbeOptions } from "./notify-throughput.ts";
+import type { UnbudgetedOptions } from "./unbudgeted-waits.ts";
 
 /** Measurement mode. */
 export type Mode = "full" | "quick";
@@ -19,6 +20,7 @@ export interface ProbeSettings {
   readonly killedBuild: readonly KilledBuildScenario[];
   readonly addClass: readonly AddClassProbeOptions[];
   readonly lockBudget: readonly LockBudgetOptions[];
+  readonly unbudgetedWaits: readonly UnbudgetedOptions[];
   readonly casefold: CasefoldProbeOptions;
   readonly addColumn: AddColumnProbeOptions;
   readonly notify: NotifyProbeOptions;
@@ -110,6 +112,13 @@ const LOCK_BUDGET_RUNS: readonly LockBudgetOptions[] = [
   { holdMs: STAGGERED_HOLD_MS, mechanism: "lock-budget" },
 ];
 
+const UNBUDGETED_RUNS: readonly UnbudgetedOptions[] = [
+  { holdMs: STAGGERED_HOLD_MS, release: "after-hold", target: "index" },
+  { holdMs: STAGGERED_HOLD_MS, release: "after-timeout", target: "index" },
+  { holdMs: STAGGERED_HOLD_MS, release: "after-hold", target: "catalog" },
+  { holdMs: STAGGERED_HOLD_MS, release: "after-timeout", target: "catalog" },
+];
+
 const FULL: ProbeSettings = {
   addClass: addClassRuns(1_000_000),
   addColumn: { rows: 1_000_000 },
@@ -133,6 +142,7 @@ const FULL: ProbeSettings = {
     rounds: 1,
     warmupMs: 5000,
   },
+  unbudgetedWaits: UNBUDGETED_RUNS,
 };
 
 const QUICK: ProbeSettings = {
@@ -149,6 +159,7 @@ const QUICK: ProbeSettings = {
   killedBuild: killedBuildScenarios(10_000, 1_000_000),
   lockBudget: LOCK_BUDGET_RUNS,
   notify: { ...FULL.notify, durationMs: 5000, records: 10_000, warmupMs: 1000 },
+  unbudgetedWaits: UNBUDGETED_RUNS,
 };
 
 /**

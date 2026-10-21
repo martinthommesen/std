@@ -9,7 +9,7 @@ import {
   CONFIG_KEY,
 } from "@std/server/sql/locks";
 import { decodeRows } from "@std/server/sql/rows";
-import { Duration, Effect, Schema } from "effect";
+import { Duration, Effect, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { now } from "./clock.ts";
@@ -18,7 +18,7 @@ import { now } from "./clock.ts";
 export const POLL_INTERVAL = Duration.millis(10);
 
 /** A wait that takes longer than this fails the probe. */
-export const WAIT_LIMIT_MS = 120_000;
+export const WAIT_LIMIT = Duration.minutes(2);
 
 const decodeFlag = decodeRows(Schema.Struct({ flag: Schema.Boolean }));
 
@@ -28,26 +28,39 @@ const flagOf = (rows: readonly unknown[]) =>
   decodeFlag(rows).pipe(Effect.map(([row]) => row?.flag === true));
 
 /**
- * Polls `check` until it returns `true`; dies after `WAIT_LIMIT_MS`.
+ * Polls `check` every `POLL_INTERVAL` until it returns `true` or `limit` has
+ * passed. A running check is never interrupted, so no query is cut off.
+ * @param check - The condition.
+ * @param limit - How long to keep polling.
+ * @returns Whether the condition held.
+ */
+export const pollFor = <E, R>(
+  check: Effect.Effect<boolean, E, R>,
+  limit: Duration.Input
+): Effect.Effect<boolean, E, R> =>
+  check.pipe(
+    Effect.repeat({
+      schedule: Schedule.max([
+        Schedule.spaced(POLL_INTERVAL),
+        Schedule.during(limit),
+      ]),
+      until: (done: boolean) => done,
+    })
+  );
+
+/**
+ * Polls `check` until it returns `true`; dies after `WAIT_LIMIT`.
  * @param check - The condition.
  * @returns Completes once the condition holds.
  */
 export const waitFor = <E, R>(
   check: Effect.Effect<boolean, E, R>
 ): Effect.Effect<void, E, R> =>
-  Effect.gen(function* poll() {
-    const deadline = (yield* now) + WAIT_LIMIT_MS;
-
-    while (!(yield* check)) {
-      if ((yield* now) > deadline) {
-        return yield* Effect.die(new Error("probe wait timed out"));
-      }
-
-      yield* Effect.sleep(POLL_INTERVAL);
-    }
-
-    return yield* Effect.void;
-  });
+  pollFor(check, WAIT_LIMIT).pipe(
+    Effect.flatMap((done) =>
+      done ? Effect.void : Effect.die(new Error("probe wait timed out"))
+    )
+  );
 
 /**
  * Whether `blocker` is among the sessions `waiter` waits for.
@@ -138,14 +151,10 @@ export const releaseAfterWait = <E, R>(
   Effect.gen(function* holdThenRelease() {
     yield* waitFor(isBlockedBy(waiter, blocker));
     const waitingSince = yield* now;
-
-    while (
-      (yield* now) - waitingSince < holdMs &&
-      (yield* isBlockedBy(waiter, blocker))
-    ) {
-      yield* Effect.sleep(POLL_INTERVAL);
-    }
-
+    yield* pollFor(
+      isBlockedBy(waiter, blocker).pipe(Effect.map((blocked) => !blocked)),
+      Duration.millis(holdMs)
+    );
     const observedMs = (yield* now) - waitingSince;
     yield* release;
 

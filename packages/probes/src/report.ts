@@ -21,6 +21,7 @@ import type { NotifyProbeResult } from "./notify-throughput.ts";
 import type { Mode } from "./settings.ts";
 import { round } from "./stats.ts";
 import type { Summary } from "./stats.ts";
+import type { UnbudgetedResult } from "./unbudgeted-waits.ts";
 
 /** The contract's bound for a boolean or constant-default `ADD COLUMN` (Contracts 6.5). */
 export const ADD_COLUMN_BOUND_MS = 100;
@@ -48,6 +49,7 @@ export interface ProbeReport {
   readonly addClass: ProbeRecord<readonly AddClassProbeResult[]> | null;
   readonly lockBudget: ProbeRecord<readonly LockBudgetResult[]> | null;
   readonly lockInventory: ProbeRecord<readonly FormResult[]> | null;
+  readonly unbudgetedWaits: ProbeRecord<readonly UnbudgetedResult[]> | null;
   readonly casefold: ProbeRecord<CasefoldProbeResult> | null;
   readonly addColumn: ProbeRecord<AddColumnProbeResult> | null;
   readonly notify: ProbeRecord<NotifyProbeResult> | null;
@@ -403,14 +405,14 @@ const renderLockInventory = (
     "",
     conditionsLine(record),
     "",
-    "Each form runs in its own config commit on a fresh fixture: its listed locks are taken with `LOCK TABLE`, then the DDL runs, and every relation lock it added is classified. `pre-locked`: a listed table in a mode the listed mode covers; `implied`: an index or TOAST table of a listed table; `created`: made by the statement; system catalog locks are only counted; anything else is a violation.",
+    "Each form runs in its own config commit on a fresh fixture: its listed locks are taken with `LOCK TABLE`, then the DDL runs, and every relation lock it still holds afterwards is classified. `pre-locked`: a listed table in a mode the listed mode covers; `created`: made by the statement; `unbudgeted: index of a locked table` and `unbudgeted: system catalog`: locks `LOCK TABLE` cannot take in advance, capped by `lock_timeout` (probe 3d); anything else, including any sequence, is a violation. Catalog locks Postgres releases before the end of the statement are not seen.",
     "",
     table(
       [
         "Form",
         "Explicit locks taken first",
         "Relation locks the DDL added",
-        "Catalog locks",
+        "Catalog locks held (modes)",
         "DDL",
         "Violations",
       ],
@@ -422,7 +424,9 @@ const renderLockInventory = (
         result.added
           .map((lock) => `${lock.relation} ${lock.mode} (${lock.kind})`)
           .join(", "),
-        String(result.catalogLocks),
+        result.catalogLocks === 0
+          ? "none"
+          : `${result.catalogLocks} (${result.catalogModes.join(", ")})`,
         ms(result.ddlMs),
         result.violations.length === 0 ? "none" : result.violations.join(", "),
       ])
@@ -430,6 +434,49 @@ const renderLockInventory = (
     "",
     `No form locks a relation beyond its inventory: ${verdict(
       record.result.every((result) => result.violations.length === 0)
+    )}`,
+  ].join("\n");
+
+const withinWorstCase = (result: UnbudgetedResult): boolean =>
+  result.attempts.every(
+    (attempt) =>
+      attempt.heldMs <=
+      DDL_LOCK_BUDGET_MS * (1 + result.blockers) + BUDGET_SLACK_MS
+  );
+
+const renderUnbudgetedWaits = (
+  record: ProbeRecord<readonly UnbudgetedResult[]>
+): string =>
+  [
+    "## Probe 3d: waits on indexes and catalogs, outside the budget",
+    "",
+    conditionsLine(record),
+    "",
+    "With every inventoried table lock taken first, other sessions lock an index (`ALTER INDEX ... RENAME`, open) or a system catalog (`LOCK TABLE pg_class` / `pg_type IN SHARE MODE`, open) directly, so the DDL waits on locks it takes internally. `lock_timeout` is set to the remaining budget before the DDL, which caps each such wait. `after-hold`: each blocker rolls back once the commit waited on it for the hold time; `after-timeout`: the blockers stay until an attempt failed.",
+    "",
+    table(
+      [
+        "Target",
+        "Form",
+        "Release",
+        "Observed waits",
+        "Locks the DDL requested while waiting",
+        "Attempts",
+        `Within budget × (1 + waits), ${ms(BUDGET_SLACK_MS)} slack`,
+      ],
+      record.result.map((result) => [
+        result.target,
+        result.form,
+        result.release,
+        result.observedWaitsMs.map(ms).join(", "),
+        result.requestedLocks.join(", "),
+        attemptsText(result.attempts),
+        yesNo(withinWorstCase(result)),
+      ])
+    ),
+    "",
+    `Every attempt within the documented worst case: ${verdict(
+      record.result.every(withinWorstCase)
     )}`,
   ].join("\n");
 
@@ -597,6 +644,9 @@ export const renderMarkdown = (report: ProbeReport): string =>
     report.lockInventory === null
       ? undefined
       : renderLockInventory(report.lockInventory),
+    report.unbudgetedWaits === null
+      ? undefined
+      : renderUnbudgetedWaits(report.unbudgetedWaits),
     report.casefold === null ? undefined : renderCasefold(report.casefold),
     report.addColumn === null ? undefined : renderAddColumn(report.addColumn),
     report.notify === null ? undefined : renderNotify(report.notify),

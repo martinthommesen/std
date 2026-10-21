@@ -11,9 +11,11 @@
  *   time with `LOCK TABLE <t> IN <mode> MODE`, root first, each under
  *   `SET LOCAL lock_timeout` set to what is left of the budget. The step's
  *   lock list must be complete (`lock-inventory.ts` checks every form), so
- *   the DDL itself never waits for a table lock. A `LOCK TABLE` that times
- *   out raises 55P03 and, marked `lockWaiting`, makes the config commit
- *   retry.
+ *   the DDL itself never waits for a table lock. Before the statement,
+ *   `lock_timeout` is set to the remaining budget once more: that caps each
+ *   lock the DDL takes internally on indexes and system catalogs, which
+ *   `LOCK TABLE` cannot take in advance. A lock timeout raises 55P03 and,
+ *   marked `lockWaiting`, makes the config commit retry.
  */
 import { MAIN_LOCK_TIMEOUT } from "@std/server/sql/config-commit";
 import { lockWaiting } from "@std/server/sql/statement-marks";
@@ -163,6 +165,22 @@ export const takeStepLocks = (step: DdlStep, budget: LockDeadline) =>
   });
 
 /**
+ * Sets `lock_timeout` to what is left of the budget before a DDL statement.
+ * The statement's inventoried table locks are already held; this caps each
+ * lock it still takes internally (indexes of locked tables, system
+ * catalogs), which `LOCK TABLE` cannot take in advance.
+ * @param budget - The attempt's lock deadline.
+ * @returns Completes once the setting is in place.
+ */
+export const capUnbudgetedWaits = (budget: LockDeadline) =>
+  Effect.gen(function* capWaits() {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.unsafe(
+      `SET LOCAL lock_timeout = '${yield* budget.remaining}ms'`
+    );
+  });
+
+/**
  * Runs DDL steps inside a config commit with the given mechanism.
  * @param steps - The statements, in order, with their table locks.
  * @param mechanism - How lock waits are bounded.
@@ -180,6 +198,10 @@ export const runDdlSteps = (
     for (const step of steps) {
       const lockWaits =
         mechanism === "lock-budget" ? yield* takeStepLocks(step, budget) : [];
+
+      if (mechanism === "lock-budget") {
+        yield* capUnbudgetedWaits(budget);
+      }
 
       const [ms] = yield* timedMillis(lockWaiting(sql.unsafe(step.statement)));
 
