@@ -22,6 +22,8 @@ import { SqlClient } from "effect/sql";
 
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { CurrentTransaction } from "../sql/transaction-context.ts";
+import type { TransactionHandle } from "../sql/transaction-context.ts";
 import { NOW } from "./save-sql.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { isWriteOnly } from "./stored-values.ts";
@@ -58,10 +60,14 @@ export const ChangeKindSchema = Schema.Literals(["create", "update", "delete"]);
 export type ChangeKind = typeof ChangeKindSchema.Type;
 
 /**
- * The transaction-local setting holding the operation ID of the running
- * transaction (Contracts 4.2).
+ * The operation ID of each running transaction attempt (Contracts 4.2: one
+ * per outermost transaction), keyed by the attempt's `CurrentTransaction`.
+ * The SQL layer creates a fresh handle for every outermost transaction and
+ * every config-commit retry, and nested units join with the same handle,
+ * so the ID is shared by every save of one attempt and never outlives it.
+ * It lives in process memory only: no SQL a caller can run reaches it.
  */
-export const OPERATION_SETTING = "std.operation_id";
+const operations = new WeakMap<TransactionHandle, string>();
 
 /** The `{"changed": true}` marker of a password or secret field. */
 export const WRITE_ONLY_CHANGE: JsonObject = { changed: true };
@@ -138,10 +144,9 @@ const decodeInserted = decodeRows(
  * Inserts a change entry with a new UUIDv7 change ID.
  *
  * The operation ID is transaction-scoped (Contracts 4.2: one per outermost
- * transaction): the first entry of a transaction uses its own change ID and
- * stores it in the transaction-local setting `std.operation_id`; every
- * later entry of the same transaction, nested in a hook or not, reads it
- * back. The setting ends with the transaction.
+ * transaction): the first entry of a transaction attempt uses its own
+ * change ID, and every later entry of the same attempt, nested in a hook or
+ * not, reuses it (see `operations`).
  *
  * @param input - The change.
  * @returns The written entry.
@@ -150,23 +155,19 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
   function* writeChangeEntry(input: ChangeEntryInput) {
     const sql = yield* SqlClient.SqlClient;
     const { revision } = yield* RequestRevision;
+    const transaction = yield* CurrentTransaction;
+    const operationId = operations.get(transaction) ?? null;
 
     const rows = yield* sql.unsafe(
-      `WITH n AS (SELECT uuidv7() AS id),
-       op AS (
-         SELECT coalesce(nullif(current_setting('${OPERATION_SETTING}', true), '')::uuid, n.id) AS id
-         FROM n),
-       remembered AS (
-         SELECT set_config('${OPERATION_SETTING}', op.id::text, true) AS id
-         FROM op)
+      `WITH n AS (SELECT uuidv7() AS id)
        INSERT INTO core."change" (
          id, class_id, version, created_at, created_by, updated_at, updated_by,
          operation_id, record_id, record_class_id, record_version, kind,
          actor_id, cause, schema_revision, occurred_at, fields)
        SELECT n.id, $1::uuid, 1, ${NOW}, $2::uuid, ${NOW}, $2::uuid,
-         remembered.id::uuid, $3::uuid, $4::uuid, $5::int8, $6::text,
+         coalesce($10::uuid, n.id), $3::uuid, $4::uuid, $5::int8, $6::text,
          $2::uuid, $7::jsonb, $8::int8, ${NOW}, $9::jsonb
-       FROM n, remembered
+       FROM n
        RETURNING id::text AS id, operation_id::text AS operation_id`,
       [
         PLATFORM_CLASS_IDS.change,
@@ -178,6 +179,7 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
         stringifyJson(input.cause),
         String(revision),
         stringifyJson(input.fields),
+        operationId,
       ]
     );
 
@@ -185,6 +187,10 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
 
     if (row === undefined) {
       return yield* Effect.die(new Error("core.change returned no row"));
+    }
+
+    if (operationId === null) {
+      operations.set(transaction, row.operation_id);
     }
 
     const entry: ChangeEntry = {

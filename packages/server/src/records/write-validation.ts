@@ -26,7 +26,7 @@ import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import { decodeIn, encodeOut } from "@std/values/codec";
 import type { StoredOrPlaintext } from "@std/values/compare";
-import { ok, refuse } from "@std/values/field-error";
+import { refuse } from "@std/values/field-error";
 import type { Decoded, InvalidValue } from "@std/values/field-error";
 import type { DecodedInput } from "@std/values/field-value";
 import { planCreate, planUpdate } from "@std/values/write";
@@ -196,8 +196,10 @@ export const recheckValue = (
     return notOfType;
   }
 
+  // Plaintext is checked like body input (non-empty, well-formed, no
+  // U+0000); refusals never carry the value.
   return isPlaintext(value)
-    ? ok(value)
+    ? decodeIn(type, value.reveal())
     : decodeIn(type, encodeOut(type, value));
 };
 

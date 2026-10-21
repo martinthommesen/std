@@ -14,7 +14,7 @@ Phase 1 builds everything that needs no access rules, actor service or HTTP. Aut
 | `records/field-errors` | the field errors of `ValidationFailed` as `Schema.TaggedStruct`s; `InvalidValue` reasons are `@std/values`'s plus `notUnique` |
 | `records/save-sql` | `lockRoot`, `loadRecord`, `insertRecord`, `updateRecord` (rows), `deleteRecordRows`, `existingTargets`, `updateLock`, `NOW` |
 | `records/save-constraints` | `constraintFailure`, `mapConstraints`: constraint violations to API errors by generated name |
-| `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry`, `OPERATION_SETTING` |
+| `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry` |
 | `records/history-query` | `readHistory` with an explicit readable-field set and filters |
 | `records/write-access` | `WriteAccess` seam; `WriteAccess.allowAll`, `projectAll` |
 | `records/save-hooks` | `SaveHooks` seam (`beforeWrite`, `deliveries`, `afterWrite`); `SaveHooks.none` |
@@ -62,7 +62,7 @@ Laid out like the 0002 platform tables and described in `definitions/core/platfo
 | `id` | change ID, UUIDv7 |
 | `class_id`, `version` | platform class of `core.change`; always 1 (entries never change) |
 | `created_*`, `updated_*` | equal `occurred_at` and `actor_id` (CHECK `change_audit`) |
-| `operation_id` | one per transaction: the first entry's change ID, kept in the transaction-local setting `std.operation_id` (`set_config(..., true)` in the entry's `INSERT`), which every later entry of the transaction reads |
+| `operation_id` | one per transaction attempt: the first entry's change ID, kept in process memory in a `WeakMap` keyed by the attempt's `CurrentTransaction` handle (fresh per outermost transaction and per config-commit retry, shared by joined units), so no SQL a caller runs can change or forge it |
 | `record_id`, `record_class_id`, `record_version` | the logical record; `UNIQUE (record_id, record_version)` |
 | `kind` | `create`, `update`, `delete` |
 | `actor_id`, `cause` (jsonb), `schema_revision`, `occurred_at` | 4.2 |
@@ -101,5 +101,10 @@ Everything else stays `DatabaseError` (SQLSTATE, constraint name, diagnostic ID)
 - Values after before-write hooks are rechecked under the effective type, and required fields are checked over the complete final record (create: dropped fields get their absent value).
 - Fields hooks add go through `checkExisting` before any write.
 - The written fields, and so the second no-op check, are recomputed from the final candidate.
-- `operation_id` is transaction-scoped (`std.operation_id`), not tied to the hook stack; `SaveStack` keeps only record IDs, and `ChangeEntryInput` no longer has `operationId`.
+- `operation_id` is transaction-scoped, not tied to the hook stack (round 2: held in TypeScript per transaction attempt, no SQL setting); `SaveStack` keeps only record IDs, and `ChangeEntryInput` no longer has `operationId`.
 - `projectAll` projects the endpoint's lineage.
+
+## Review round 2
+
+- The operation ID moved from the SQL setting `std.operation_id` to a `WeakMap` keyed by the transaction attempt's `CurrentTransaction`: a caller's `set_config` can neither split nor forge it, and the change-entry `INSERT` no longer calls `set_config`.
+- Plaintext a hook supplies for a password or secret is checked like body input (`decodeIn` of the revealed text: non-empty, well-formed, no U+0000); refusals carry no value.
