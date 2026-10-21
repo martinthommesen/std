@@ -6,8 +6,10 @@
  * and retired fields through the read compiler and the save pipeline.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { OverrideDraft } from "@std/definitions/definition";
 import { DEPENDENCY_KINDS } from "@std/definitions/dependencies";
 import type { DependencyKind } from "@std/definitions/dependencies";
+import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
 import {
@@ -22,7 +24,7 @@ import {
 import type { PlatformTable } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import { isJsonArray, isJsonObject } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   Context,
   Deferred,
@@ -40,6 +42,7 @@ import type { TestResponse } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { tableOf } from "../src/catalog/definition-tables.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
@@ -68,6 +71,7 @@ import {
   createRole,
   ensureSite,
   freshId,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 import { errorOf, waitUntil } from "./support.ts";
@@ -680,6 +684,381 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     "subscription",
     (id) => ({ table_id: id }),
   ],
+};
+
+/** The revisions a request of the hidden-versus-missing matrix states. */
+const MATRIX_REVISIONS = ["current", "past", "future", "unknown"] as const;
+
+/** A revision of the matrix. */
+type MatrixRevision = (typeof MATRIX_REVISIONS)[number];
+
+/** The definitions an operation of the matrix refers to, by kind. */
+interface MatrixRefs {
+  readonly namespace: string;
+  readonly class: string;
+  readonly field: string;
+  readonly role: string;
+  readonly permission: string;
+}
+
+/** An operation that creates a definition with `id` referring to `refs`. */
+type CreateCase = (id: string, refs: MatrixRefs) => Operation;
+
+/** An operation on the stored definition `id`. */
+type TargetCase = (id: string) => Operation;
+
+/** The hidden fixtures a targeted operation names. */
+type HiddenTarget = "role" | "field" | "override";
+
+/** How the matrix exercises one operation kind of the change-set endpoint. */
+interface OperationCase {
+  /** Creates: its own ID and its references vary. */
+  readonly create?: {
+    readonly build: CreateCase;
+    /** The definition table a generic POST creates it on, if any. */
+    readonly table?: string;
+  };
+  /** Operations on a stored definition: the target varies. */
+  readonly target?: {
+    readonly build: TargetCase;
+    readonly hidden: HiddenTarget;
+    /** The generic request standing for it, if any. */
+    readonly generic?: readonly [
+      "PATCH" | "DELETE",
+      string,
+      Readonly<Record<string, JsonValue>> | null,
+    ];
+  };
+}
+
+const LOCAL = { owner: { layer: "local" }, protected: false } as const;
+
+/** The label of the hidden override the matrix replaces. */
+const HIDDEN_OVERRIDE_LABEL = "Matrix hidden override";
+
+/**
+ * The override draft the matrix stores hidden and later replaces with the
+ * same values (the round 8 reproduction).
+ * @param id - Its ID.
+ * @returns The draft.
+ */
+const matrixOverride = (id: string): OverrideDraft => ({
+  ...LOCAL,
+  classId: ACME.laptop,
+  default: null,
+  fieldId: ACME.cost,
+  helpText: null,
+  id,
+  kind: "override",
+  label: HIDDEN_OVERRIDE_LABEL,
+  max: null,
+  maxLength: null,
+  min: null,
+  readOnly: null,
+  required: null,
+});
+
+/**
+ * One more.
+ * @param count - A count.
+ * @returns The count plus one.
+ */
+const increment = (count: number): number => count + 1;
+
+/**
+ * An update that makes an access rule name one role.
+ * @param ruleId - The rule, at version 1.
+ * @param roleId - The role.
+ * @returns The operation.
+ */
+const roleUpdate = (ruleId: string, roleId: string): Operation => ({
+  changes: { roleIds: [roleId] },
+  id: ruleId,
+  op: "update",
+  version: 1,
+});
+
+/**
+ * The IDs of a set of references, in a fixed order.
+ * @param refs - The references.
+ * @returns Their IDs.
+ */
+const refIdsOf = (refs: MatrixRefs): readonly string[] => [
+  refs.namespace,
+  refs.class,
+  refs.field,
+  refs.role,
+  refs.permission,
+];
+
+/**
+ * Every operation kind the change-set endpoint accepts. The record is
+ * keyed by the operation schema's tags, so a new kind fails to compile
+ * until it has a case; the test also checks the keys against the schema
+ * at run time.
+ */
+const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
+  addField: {
+    create: {
+      build: (id, refs) =>
+        addField(refs.class, "m_fld", { kind: "text" }, { id }).op,
+      table: "core.field",
+    },
+  },
+  addIndex: {
+    create: {
+      build: (id, refs) => addIndex(refs.class, [refs.field], false, id).op,
+      table: "core.index",
+    },
+  },
+  adopt: {
+    target: {
+      build: (id) => ({ id, op: "adopt", version: 1 }),
+      hidden: "role",
+    },
+  },
+  createAccessRule: {
+    create: {
+      build: (id, refs) => {
+        const built = addAccessRule(refs.class, [refs.role], {
+          fields: [refs.field],
+        }).op;
+
+        return built.op === "createAccessRule"
+          ? { ...built, definition: { ...built.definition, id } }
+          : built;
+      },
+      table: "core.access_rule",
+    },
+  },
+  createClass: {
+    create: {
+      build: (id, refs) => {
+        const built = createClass("m_cls", {
+          namespaceId: refs.namespace,
+          parentId: refs.class,
+        }).op;
+
+        return built.op === "createClass"
+          ? { ...built, definition: { ...built.definition, id } }
+          : built;
+      },
+      table: "core.class",
+    },
+  },
+  createGrant: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          id,
+          kind: "grant",
+          permissionId: refs.permission,
+          roleId: refs.role,
+        },
+        op: "createGrant",
+      }),
+      table: "core.role_permission",
+    },
+  },
+  createNamespace: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          extensible: false,
+          helpText: null,
+          id,
+          kind: "namespace",
+          label: "Matrix",
+          name: "m_ns",
+          storage: "standard",
+        },
+        op: "createNamespace",
+      }),
+      table: "core.namespace",
+    },
+  },
+  createPermission: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          helpText: null,
+          id,
+          kind: "permission",
+          label: "Matrix",
+          name: "m.p",
+        },
+        op: "createPermission",
+      }),
+      table: "core.permission",
+    },
+  },
+  createRole: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          helpText: null,
+          id,
+          kind: "role",
+          label: "Matrix",
+          name: "m_role",
+        },
+        op: "createRole",
+      }),
+      table: "core.role",
+    },
+  },
+  createSubscription: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          classId: refs.class,
+          condition: null,
+          deadLetter: "block",
+          enabled: true,
+          id,
+          identityId: SYSTEM_USER_ID,
+          kind: "subscription",
+          maxAttempts: 10,
+          name: "m_sub",
+          operations: ["create"],
+        },
+        op: "createSubscription",
+      }),
+      table: "core.subscription",
+    },
+  },
+  delete: {
+    target: {
+      build: (id) => ({ id, op: "delete", version: 1 }),
+      generic: ["DELETE", "core.role", null],
+      hidden: "role",
+    },
+  },
+  purge: {
+    target: {
+      build: (id) => ({
+        confirm: { id, version: 1 },
+        id,
+        op: "purge",
+        version: 1,
+      }),
+      hidden: "field",
+    },
+  },
+  reactivate: {
+    target: {
+      build: (id) => ({ id, op: "reactivate", version: 1 }),
+      generic: ["PATCH", "core.role", { state: "active" }],
+      hidden: "role",
+    },
+  },
+  rename: {
+    target: {
+      build: (id) => ({ id, name: "m_renamed", op: "rename", version: 1 }),
+      generic: ["PATCH", "core.role", { name: "m_renamed" }],
+      hidden: "role",
+    },
+  },
+  retire: {
+    target: {
+      build: (id) => ({ id, op: "retire", version: 1 }),
+      generic: ["PATCH", "core.role", { state: "retired" }],
+      hidden: "role",
+    },
+  },
+  setOverride: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...matrixOverride(id),
+          classId: refs.class,
+          fieldId: refs.field,
+        },
+        op: "setOverride",
+        version: null,
+      }),
+      table: "core.field_override",
+    },
+    target: {
+      build: (id) => ({
+        definition: matrixOverride(id),
+        op: "setOverride",
+        version: 1,
+      }),
+      generic: ["PATCH", "core.field_override", { label: "Replaced" }],
+      hidden: "override",
+    },
+  },
+  update: {
+    target: {
+      build: (id) => ({
+        changes: { label: "x" },
+        id,
+        op: "update",
+        version: 1,
+      }),
+      generic: ["PATCH", "core.role", { label: "x" }],
+      hidden: "role",
+    },
+  },
+};
+
+/**
+ * A generic POST body for a create: the definition table's writable
+ * columns from the operation's draft.
+ * @param operation - A create.
+ * @returns The body.
+ */
+const genericBody = (operation: Operation) => {
+  const body: Record<string, JsonValue> = {};
+
+  if (!("definition" in operation)) {
+    return body;
+  }
+
+  const draft: JsonObject = operation.definition;
+
+  for (const spec of tableOf(operation.definition.kind).columns) {
+    const value = draft[spec.property];
+
+    if (!spec.column.startsWith("enforcement") && value !== undefined) {
+      body[spec.column] = value;
+    }
+  }
+
+  if (operation.definition.kind === "accessRule") {
+    const { target } = operation.definition;
+
+    body.target = target.kind;
+    body.fields =
+      target.kind === "fields" && target.fields !== "*"
+        ? [...target.fields]
+        : null;
+  }
+
+  return body;
+};
+
+/**
+ * A response body with IDs replaced by placeholders, for comparing the
+ * hidden and the missing case.
+ * @param response - The response.
+ * @param ids - The IDs the case named.
+ * @returns Status and body text.
+ */
+const normalized = (response: TestResponse, ids: readonly string[]): string => {
+  let { text } = response;
+
+  for (const [index, id] of ids.entries()) {
+    text = text.replaceAll(id, `<id${index}>`);
+  }
+
+  return `${response.status} ${text}`;
 };
 
 describe("schema-http", () => {
@@ -2324,4 +2703,347 @@ describe("schema-http", () => {
         })
     );
   });
+
+  layer(readsTestLayer(), { excludeTestServices: true, timeout: 600_000 })(
+    (dbTest) => {
+      dbTest.effect(
+        "hidden and missing look alike for every operation kind, ID state, reference state, stated revision and HTTP path",
+        () =>
+          Effect.gen(function* hiddenMissingMatrix() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const catalog = yield* Catalog;
+
+            assert.sameMembers(
+              Object.keys(OPERATION_CASES),
+              OperationSchema.members.map((member) => member.fields.op.literal)
+            );
+
+            // Hidden fixtures: one definition of every referenced kind, and
+            // an override that the round 8 batch replaces with its own values.
+            const hidden = yield* createHidden;
+            const overrideId = freshId();
+
+            yield* change([
+              {
+                definition: matrixOverride(overrideId),
+                op: "setOverride",
+                version: null,
+              },
+            ]);
+
+            const labelField = (yield* catalog.refresh).fieldByName(
+              PLATFORM_CLASS_IDS.field_override,
+              "label"
+            );
+
+            yield* asCoreSet([
+              hideByName(
+                PLATFORM_CLASS_IDS.field_override,
+                labelField?.id ?? "",
+                HIDDEN_OVERRIDE_LABEL
+              ),
+            ]);
+
+            const past = (yield* catalog.refresh).key;
+            const rule = addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin]);
+
+            yield* change([rule.op]);
+
+            const current = (yield* catalog.refresh).key;
+            const otherChangeSet = freshId();
+
+            const HEADERS: Readonly<Record<MatrixRevision, string>> = {
+              current: `${current.revision}.${current.changeSetId}`,
+              future: `${current.revision + 5}.${current.changeSetId}`,
+              past: `${past.revision}.${past.changeSetId}`,
+              unknown: `${current.revision}.${otherChangeSet}`,
+            };
+
+            const hiddenRefs: MatrixRefs = hidden;
+
+            const missingRefs: MatrixRefs = {
+              class: freshId(),
+              field: freshId(),
+              namespace: freshId(),
+              permission: freshId(),
+              role: freshId(),
+            };
+
+            const visibleRefs: MatrixRefs = {
+              class: ACME.asset,
+              field: ACME.cost,
+              namespace: SITE_NAMESPACE_ID,
+              permission: PERMISSION_IDS["schema.purge"],
+              role: BUILT_IN_ROLE_IDS.admin,
+            };
+
+            const hiddenTargets: Readonly<Record<HiddenTarget, string>> = {
+              field: hidden.field,
+              override: overrideId,
+              role: hidden.role,
+            };
+
+            const post = (
+              revision: MatrixRevision,
+              operations: Operation[]
+            ) => {
+              const parsed = parseJson(JSON.stringify({ operations }));
+
+              return http.request("POST", CHANGE_SETS, {
+                body: parsed.ok ? parsed.value : null,
+                headers: { "std-schema-revision": HEADERS[revision] },
+                token: admin,
+              });
+            };
+
+            const generic = (
+              revision: MatrixRevision,
+              method: "POST" | "PATCH" | "DELETE",
+              path: string,
+              body: Readonly<Record<string, JsonValue>> | null
+            ) => {
+              const headers = {
+                "if-match": '"1"',
+                "std-schema-revision": HEADERS[revision],
+              };
+
+              return body === null
+                ? http.request(method, path, { headers, token: admin })
+                : http.request(method, path, { body, headers, token: admin });
+            };
+
+            const committed = values(
+              "SELECT revision::text AS value FROM core.config_state"
+            );
+
+            const counted = yield* Ref.make(0);
+
+            /** Both cases: identical after IDs are replaced, nothing committed. */
+            const pair = Effect.fn("Matrix.pair")(function* comparePair(
+              label: string,
+              onHidden: Effect.Effect<TestResponse>,
+              onMissing: Effect.Effect<TestResponse>,
+              ids: readonly [readonly string[], readonly string[]]
+            ) {
+              const before = yield* committed;
+              const hiddenResponse = yield* onHidden;
+              const missingResponse = yield* onMissing;
+
+              assert.strictEqual(
+                normalized(hiddenResponse, ids[0]),
+                normalized(missingResponse, ids[1]),
+                label
+              );
+              assert.notStrictEqual(hiddenResponse.status, 201, label);
+              assert.deepStrictEqual(yield* committed, before, label);
+              yield* Ref.update(counted, increment);
+            });
+
+            // A batch that creates a definition under a client-chosen ID
+            // that a stored definition already has is refused by the engine
+            // (an ID is never reused), while the same batch with a free ID
+            // goes ahead; under a known revision that difference is the ID
+            // space itself, so there only the refusal and the absence of
+            // any commit are checked (decision 0011, review round 8).
+            const collision = Effect.fn("Matrix.collision")(function* collision(
+              label: string,
+              onHidden: Effect.Effect<TestResponse>
+            ) {
+              const before = yield* committed;
+              const response = yield* onHidden;
+
+              // Refused (by the engine's first refusal), never a 5xx.
+              assert.isAtLeast(response.status, 400, label);
+              assert.isBelow(
+                response.status,
+                500,
+                `${label}: ${response.text}`
+              );
+              assert.deepStrictEqual(yield* committed, before, label);
+            });
+
+            /**
+             * Both refused before the engine (a revision this database
+             * does not have), or under a known revision a collision only.
+             * @param label - The case.
+             * @param revision - The stated revision.
+             * @param onHidden - The request naming the hidden definition.
+             * @param onMissing - The same request naming a free ID.
+             * @param ids - The IDs each names, for comparison.
+             * @returns The check.
+             */
+            const ownIdPair = (
+              label: string,
+              revision: MatrixRevision,
+              onHidden: Effect.Effect<TestResponse>,
+              onMissing: Effect.Effect<TestResponse>,
+              ids: readonly [readonly string[], readonly string[]]
+            ) =>
+              revision === "future" || revision === "unknown"
+                ? pair(label, onHidden, onMissing, ids)
+                : collision(label, onHidden);
+
+            const runCreate = Effect.fn("Matrix.create")(function* runCreate(
+              name: string,
+              creates: NonNullable<OperationCase["create"]>,
+              revision: MatrixRevision
+            ) {
+              const fresh = freshId();
+              const withHidden = creates.build(fresh, hiddenRefs);
+              const withMissing = creates.build(fresh, missingRefs);
+
+              const refs = [
+                refIdsOf(hiddenRefs),
+                refIdsOf(missingRefs),
+              ] as const;
+
+              // References: only for creates that name any.
+              if (JSON.stringify(withHidden) !== JSON.stringify(withMissing)) {
+                yield* pair(
+                  `${name} references ${revision}`,
+                  post(revision, [withHidden]),
+                  post(revision, [withMissing]),
+                  refs
+                );
+
+                if (creates.table !== undefined) {
+                  const path = listPath(creates.table);
+
+                  yield* pair(
+                    `${name} generic references ${revision}`,
+                    generic(revision, "POST", path, genericBody(withHidden)),
+                    generic(revision, "POST", path, genericBody(withMissing)),
+                    refs
+                  );
+                }
+              }
+
+              // Its own ID: that of a hidden definition, or a free one.
+              const free = freshId();
+
+              yield* ownIdPair(
+                `${name} own ID ${revision}`,
+                revision,
+                post(revision, [creates.build(hidden.role, visibleRefs)]),
+                post(revision, [creates.build(free, visibleRefs)]),
+                [[hidden.role], [free]]
+              );
+            });
+
+            const roleWithId =
+              OPERATION_CASES.createRole.create?.build ?? (() => rule.op);
+
+            const runTarget = Effect.fn("Matrix.target")(function* runTarget(
+              name: string,
+              target: NonNullable<OperationCase["target"]>,
+              revision: MatrixRevision
+            ) {
+              const hiddenId = hiddenTargets[target.hidden];
+              const missingId = freshId();
+              const ids = [[hiddenId], [missingId]] as const;
+
+              yield* pair(
+                `${name} target ${revision}`,
+                post(revision, [target.build(hiddenId)]),
+                post(revision, [target.build(missingId)]),
+                ids
+              );
+
+              if (target.generic !== undefined) {
+                const [method, table, body] = target.generic;
+
+                yield* pair(
+                  `${name} generic target ${revision}`,
+                  generic(revision, method, recordPath(table, hiddenId), body),
+                  generic(revision, method, recordPath(table, missingId), body),
+                  ids
+                );
+              }
+
+              // Created earlier in the batch: a payload, never the stored
+              // record with the same ID (the round 8 reproduction for
+              // setOverride).
+              yield* ownIdPair(
+                `${name} created earlier ${revision}`,
+                revision,
+                post(revision, [
+                  roleWithId(hiddenId, visibleRefs),
+                  target.build(hiddenId),
+                ]),
+                post(revision, [
+                  roleWithId(missingId, visibleRefs),
+                  target.build(missingId),
+                ]),
+                ids
+              );
+            });
+
+            const runUpdateReferences = Effect.fn("Matrix.updateReferences")(
+              function* runUpdateReferences(revision: MatrixRevision) {
+                const ids = [[hidden.role], [missingRefs.role]] as const;
+                const path = recordPath("core.access_rule", rule.id);
+
+                yield* pair(
+                  `update references ${revision}`,
+                  post(revision, [roleUpdate(rule.id, hidden.role)]),
+                  post(revision, [roleUpdate(rule.id, missingRefs.role)]),
+                  ids
+                );
+                yield* pair(
+                  `generic update references ${revision}`,
+                  generic(revision, "PATCH", path, { role_ids: [hidden.role] }),
+                  generic(revision, "PATCH", path, {
+                    role_ids: [missingRefs.role],
+                  }),
+                  ids
+                );
+              }
+            );
+
+            // The round 8 reproduction on its own: a batch creating X and
+            // then replacing override X with the hidden override's values,
+            // under an unknown revision.
+            const missingOverride = freshId();
+
+            yield* pair(
+              "round 8: createRole(X), setOverride(X) under an unknown revision",
+              post("unknown", [
+                roleWithId(overrideId, visibleRefs),
+                {
+                  definition: matrixOverride(overrideId),
+                  op: "setOverride",
+                  version: 1,
+                },
+              ]),
+              post("unknown", [
+                roleWithId(missingOverride, visibleRefs),
+                {
+                  definition: matrixOverride(missingOverride),
+                  op: "setOverride",
+                  version: 1,
+                },
+              ]),
+              [[overrideId], [missingOverride]]
+            );
+
+            for (const revision of MATRIX_REVISIONS) {
+              for (const [name, spec] of Object.entries(OPERATION_CASES)) {
+                if (spec.create !== undefined) {
+                  yield* runCreate(name, spec.create, revision);
+                }
+
+                if (spec.target !== undefined) {
+                  yield* runTarget(name, spec.target, revision);
+                }
+              }
+
+              yield* runUpdateReferences(revision);
+            }
+
+            assert.isAtLeast(yield* Ref.get(counted), 150);
+          })
+      );
+    }
+  );
 });
