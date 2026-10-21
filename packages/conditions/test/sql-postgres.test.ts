@@ -1,5 +1,8 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { testDatabaseLayer } from "@std/testing/test-database";
+import { isCaseSensitive, postgresColumn } from "@std/values/field-type";
+import type { FieldType } from "@std/values/field-type";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 import { assert as check, constantFrom, property, tuple } from "fast-check";
@@ -89,6 +92,157 @@ const eq = (target: FieldInfo, value: string): Expr => ({
   op: "eq",
   right: { value },
 });
+
+/** The class of the literal-index test: one field per comparable kind. */
+const LITERAL = stableId(0x91_00);
+
+const literalField = (n: number, name: string, type: FieldType): FieldInfo => ({
+  classId: LITERAL,
+  id: stableId(0x91_00 + n),
+  name,
+  retired: false,
+  type,
+});
+
+/** The row every literal names; the table has `LITERAL_ROWS` rows. */
+const LITERAL_ROW = 4242;
+const LITERAL_ROWS = 20_000;
+const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
+
+const literalId = (prefix: string, n: number): string =>
+  `${prefix}${n.toString(16).padStart(12, "0")}`;
+
+/**
+ * One field per kind with a comparison class, its column's values over
+ * `generate_series(1, LITERAL_ROWS) AS n`, and the JSON literal that
+ * denotes row `LITERAL_ROW`'s value. Case-insensitive text is indexed on
+ * its casefold key, every other kind with a plain B-tree on the column.
+ */
+const LITERAL_CASES: readonly {
+  readonly field: FieldInfo;
+  readonly values: string;
+  readonly literal: string | number | boolean;
+}[] = [
+  {
+    field: literalField(1, "code", { caseSensitive: true, kind: "text" }),
+    literal: `code-${LITERAL_ROW}`,
+    values: "'code-' || n",
+  },
+  {
+    field: literalField(2, "transcript", {
+      caseSensitive: true,
+      kind: "longText",
+    }),
+    literal: `note-${LITERAL_ROW}`,
+    values: "'note-' || n",
+  },
+  {
+    field: literalField(3, "name", { kind: "text" }),
+    literal: `NAME-${LITERAL_ROW}`,
+    values: "'name-' || n",
+  },
+  {
+    field: literalField(4, "count", { kind: "integer" }),
+    literal: LITERAL_ROW,
+    values: "n",
+  },
+  {
+    field: literalField(5, "serial", { kind: "bigInteger" }),
+    literal: `${LITERAL_ROW}000000000`,
+    values: "n::int8 * 1000000000",
+  },
+  {
+    field: literalField(6, "cost", {
+      kind: "decimal",
+      precision: 12,
+      scale: 2,
+    }),
+    literal: (LITERAL_ROW / 100).toFixed(2),
+    values: "n / 100.0",
+  },
+  {
+    field: literalField(7, "active", { kind: "boolean" }),
+    literal: true,
+    values: `n = ${LITERAL_ROW}`,
+  },
+  {
+    field: literalField(8, "due", { kind: "date" }),
+    literal: new Date(Date.UTC(2000, 0, 1) + LITERAL_ROW * DAY_MS)
+      .toISOString()
+      .slice(0, 10),
+    values: "date '2000-01-01' + n",
+  },
+  {
+    field: literalField(9, "opened", { kind: "dateTime" }),
+    literal: new Date(
+      Date.UTC(2020, 0, 1) + LITERAL_ROW * MINUTE_MS
+    ).toISOString(),
+    values: "timestamptz '2020-01-01T00:00:00Z' + n * interval '1 minute'",
+  },
+  {
+    field: literalField(10, "external", { kind: "uuid" }),
+    literal: literalId("00000000-0000-7000-8000-", LITERAL_ROW),
+    values: "('00000000-0000-7000-8000-' || lpad(to_hex(n), 12, '0'))::uuid",
+  },
+  {
+    field: literalField(11, "owner", {
+      kind: "reference",
+      targetClassId: LITERAL,
+    }),
+    literal: literalId("00000000-0000-7000-9000-", LITERAL_ROW),
+    values: "('00000000-0000-7000-9000-' || lpad(to_hex(n), 12, '0'))::uuid",
+  },
+  {
+    field: literalField(12, "status", { kind: "choice" }),
+    literal: `key_${LITERAL_ROW}`,
+    values: "'key_' || n",
+  },
+];
+
+const literalView = staticClassView([
+  {
+    fields: LITERAL_CASES.map(({ field: info }) => info),
+    id: LITERAL,
+    parentId: null,
+  },
+]);
+
+const literalIndex = (info: FieldInfo): string => `std_literal_${info.name}`;
+
+/**
+ * The SQL, the plan and the matching IDs of a condition on `literal_eq`.
+ * @param client - The SQL client.
+ * @param expr - The condition.
+ * @returns The compiled SQL text, the EXPLAIN text and the IDs.
+ */
+const planAndRows = (client: SqlClient.SqlClient, expr: Expr) =>
+  Effect.gen(function* planAndRowsOf() {
+    const compiled = compileCondition(resolved(expr, LITERAL, literalView), {
+      alias: "r",
+      hooks: identHooks,
+    });
+
+    const select = sql`SELECT r.id FROM literal_eq AS "r" WHERE ${compiled.predicate} ORDER BY r.id`;
+    const explain = renderSql(sql`EXPLAIN ${select}`);
+    const query = renderSql(select);
+
+    const plan = yield* client.unsafe<{ readonly "QUERY PLAN": string }>(
+      explain.text,
+      explain.values
+    );
+
+    const rows = yield* client.unsafe<{ readonly id: number }>(
+      query.text,
+      query.values
+    );
+
+    return {
+      ids: rows.map((row) => row.id),
+      plan: plan.map((row) => row["QUERY PLAN"]).join("\n"),
+      sql: query.text,
+    };
+  });
 
 describe("SQL fragments", () => {
   it("number placeholders, cast parameters and quote identifiers", () => {
@@ -354,6 +508,86 @@ layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
           assert.deepStrictEqual(
             found.map((row) => row.id),
             [42]
+          );
+        })
+    );
+
+    pg.effect(
+      "[spike] literal eq and in use the field's index on every comparable kind",
+      () =>
+        Effect.gen(function* literalIndexes() {
+          const client = yield* SqlClient.SqlClient;
+
+          const columns = LITERAL_CASES.map(
+            ({ field: info }) =>
+              `${quoteIdent(info.name)} ${postgresColumn(info.type).sqlType}`
+          );
+
+          yield* client.unsafe(
+            `CREATE TABLE literal_eq (id int PRIMARY KEY, ${columns.join(", ")})`
+          );
+          yield* client.unsafe(
+            `INSERT INTO literal_eq SELECT n, ${LITERAL_CASES.map(({ values: column }) => column).join(", ")} FROM generate_series(1, ${LITERAL_ROWS}) AS n`
+          );
+
+          for (const { field: info } of LITERAL_CASES) {
+            const folded =
+              (info.type.kind === "text" || info.type.kind === "longText") &&
+              !isCaseSensitive(info.type);
+
+            const key = folded
+              ? `(casefold(${quoteIdent(info.name)} COLLATE pg_unicode_fast))`
+              : `(${quoteIdent(info.name)})`;
+
+            yield* client.unsafe(
+              `CREATE INDEX ${literalIndex(info)} ON literal_eq ${key}`
+            );
+          }
+
+          yield* client.unsafe("ANALYZE literal_eq");
+
+          for (const { field: info, literal } of LITERAL_CASES) {
+            const left = { path: [info.id] };
+            const value: JsonValue = literal;
+
+            const single = yield* planAndRows(client, {
+              left,
+              op: "eq",
+              right: { value },
+            });
+
+            assert.include(single.sql, " = $1::", info.name);
+            assert.notInclude(single.sql, "DISTINCT", info.name);
+            assert.include(single.plan, literalIndex(info), info.name);
+            assert.notInclude(single.plan, "Seq Scan", info.name);
+            assert.deepStrictEqual(single.ids, [LITERAL_ROW], info.name);
+
+            if (info.type.kind !== "boolean") {
+              const listed = yield* planAndRows(client, {
+                left,
+                op: "in",
+                right: [{ value }, { value }],
+              });
+
+              assert.include(listed.sql, "= ANY(", info.name);
+              assert.include(listed.plan, literalIndex(info), info.name);
+              assert.notInclude(listed.plan, "Seq Scan", info.name);
+              assert.deepStrictEqual(listed.ids, [LITERAL_ROW], info.name);
+            }
+          }
+
+          // The reason for `=`: the same literal under IS NOT DISTINCT FROM
+          // cannot use the index.
+          const distinct = yield* client.unsafe<{
+            readonly "QUERY PLAN": string;
+          }>(
+            `EXPLAIN SELECT r.id FROM literal_eq AS "r" WHERE "r"."code" IS NOT DISTINCT FROM $1::text`,
+            [`code-${LITERAL_ROW}`]
+          );
+
+          assert.include(
+            distinct.map((row) => row["QUERY PLAN"]).join("\n"),
+            "Seq Scan"
           );
         })
     );

@@ -7,10 +7,16 @@ import { decodeChoiceWrite, decodeIn, encodeOut } from "../src/codec.ts";
 import { storedEquals } from "../src/compare.ts";
 import { getOrThrow } from "../src/field-error.ts";
 import type { Decoded } from "../src/field-error.ts";
+import {
+  comparisonClass,
+  isOrdered,
+  parameterCast,
+  postgresColumn,
+} from "../src/field-type.ts";
 import type { FieldType } from "../src/field-type.ts";
 import { isJsonObject } from "../src/json-value.ts";
 import type { JsonValue } from "../src/json-value.ts";
-import { JSON_MAX_DEPTH, parseJson } from "../src/json.ts";
+import { JSON_MAX_DEPTH, parseJson, stringifyJson } from "../src/json.ts";
 import { isPlaintext, secretState } from "../src/write-only.ts";
 import { payloadEntry, planCreate, planUpdate } from "../src/write.ts";
 import type { PayloadEntry } from "../src/write.ts";
@@ -24,6 +30,8 @@ const DATE: FieldType = { kind: "date" };
 const BOOLEAN: FieldType = { kind: "boolean" };
 const JSON_TYPE: FieldType = { kind: "json" };
 const PASSWORD: FieldType = { kind: "password" };
+const SECRET: FieldType = { kind: "secret" };
+const CONDITION: FieldType = { kind: "condition", profile: "filter" };
 
 const TIME_ZONES = [
   "UTC",
@@ -632,5 +640,272 @@ describe("choice, reference and uuid", () => {
       reason(decodeIn({ kind: "uuid" }, "01920c4e7a3b7c1d9a2e3f4b5c6d7e8f")),
       "invalidUuid"
     );
+  });
+});
+
+describe("secret", () => {
+  // Contracts 6.5 fixes the representation now; the encrypted envelope and
+  // its key come later. Contracts 4.3: the plaintext never shows.
+  const plaintext = "vault marker 51H7 é";
+
+  it('writes take plaintext as is, reads return {"set": bool}, null clears', () => {
+    const decoded = getOrThrow(decodeIn(SECRET, plaintext));
+
+    assert.isTrue(isPlaintext(decoded));
+
+    // No text conversion: no trimming, no NFC, no change of case.
+    const exact = " Aé  ";
+    const kept = getOrThrow(decodeIn(SECRET, exact));
+
+    assert.strictEqual(isPlaintext(kept) ? kept.reveal() : null, exact);
+    assert.deepStrictEqual(roundTrip(SECRET, plaintext), { set: true });
+    assert.deepStrictEqual(encodeOut(SECRET, secretState(true)), {
+      set: true,
+    });
+    assert.deepStrictEqual(encodeOut(SECRET, secretState(false)), {
+      set: false,
+    });
+    // Empty is {"set": false}, never null.
+    assert.deepStrictEqual(encodeOut(SECRET, null), { set: false });
+    assert.strictEqual(getOrThrow(decodeIn(SECRET, null)), null);
+  });
+
+  it("follows the 6.7 table: absent keeps or stays empty, null clears", () => {
+    assert.deepStrictEqual(getOrThrow(planCreate(SECRET, { present: false })), {
+      action: "set",
+      source: "empty",
+      value: null,
+    });
+    assert.deepStrictEqual(
+      getOrThrow(planCreate(SECRET, { json: null, present: true })),
+      { action: "set", source: "payload", value: null }
+    );
+    assert.deepStrictEqual(getOrThrow(planUpdate(SECRET, { present: false })), {
+      action: "keep",
+    });
+    assert.deepStrictEqual(
+      getOrThrow(planUpdate(SECRET, { json: null, present: true })),
+      { action: "set", source: "payload", value: null }
+    );
+
+    const planned = getOrThrow(
+      planUpdate(SECRET, { json: plaintext, present: true })
+    );
+
+    assert.isTrue(planned.action === "set" && isPlaintext(planned.value));
+  });
+
+  it("refuses non-strings, the read shape, empty text and malformed Unicode", () => {
+    const wrong: readonly JsonValue[] = [
+      42,
+      true,
+      false,
+      [plaintext],
+      { set: true },
+      { set: false },
+    ];
+
+    for (const json of wrong) {
+      assert.strictEqual(
+        reason(decodeIn(SECRET, json)),
+        "wrongJsonType",
+        JSON.stringify(json)
+      );
+    }
+
+    assert.strictEqual(reason(decodeIn(SECRET, "")), "emptyNotAllowed");
+    assert.strictEqual(
+      reason(decodeIn(SECRET, `${plaintext}\0`)),
+      "notWellFormed"
+    );
+    assert.strictEqual(
+      reason(decodeIn(SECRET, `${plaintext}\uD800`)),
+      "notWellFormed"
+    );
+  });
+
+  it("the plaintext never appears in JSON, text, inspection or errors", () => {
+    const decoded = getOrThrow(decodeIn(SECRET, plaintext));
+
+    const created = getOrThrow(
+      planCreate(SECRET, { json: plaintext, present: true })
+    );
+
+    const refusals = [`${plaintext}\0`, `${plaintext}\uD800`].map((json) =>
+      decodeIn(SECRET, json)
+    );
+
+    const errorTexts = refusals.flatMap((refused) =>
+      refused.ok
+        ? []
+        : [
+            JSON.stringify(refused.error),
+            String(refused.error),
+            inspect(refused.error),
+            refused.error.message,
+          ]
+    );
+
+    const shown = [
+      JSON.stringify(decoded),
+      JSON.stringify({ values: { token: decoded } }),
+      JSON.stringify(created),
+      String(decoded),
+      String(decoded),
+      inspect(decoded),
+      inspect({ created }, { depth: null, showHidden: true }),
+      JSON.stringify(isPlaintext(decoded) ? Object.entries(decoded) : null),
+      JSON.stringify(roundTrip(SECRET, plaintext)),
+      stringifyJson(roundTrip(SECRET, plaintext)),
+      ...errorTexts,
+    ];
+
+    assert.strictEqual(errorTexts.length, 8);
+
+    for (const text of shown) {
+      assert.notInclude(text, plaintext);
+      assert.notInclude(text, "vault marker");
+    }
+
+    assert.strictEqual(JSON.stringify(decoded), '"<redacted>"');
+    assert.strictEqual(isPlaintext(decoded) ? decoded.reveal() : "", plaintext);
+  });
+
+  it("a new plaintext always counts as a change; stored states compare by set", () => {
+    const decoded = getOrThrow(decodeIn(SECRET, plaintext));
+    const again = getOrThrow(decodeIn(SECRET, plaintext));
+
+    assert.isFalse(storedEquals("secret", secretState(true), decoded));
+    assert.isFalse(storedEquals("secret", decoded, again));
+    assert.isFalse(storedEquals("secret", null, decoded));
+    assert.isTrue(storedEquals("secret", secretState(true), secretState(true)));
+    assert.isFalse(
+      storedEquals("secret", secretState(true), secretState(false))
+    );
+    assert.isTrue(storedEquals("secret", null, null));
+  });
+
+  it("is a nullable bytea column, bound as bytea, never compared or sorted", () => {
+    assert.deepStrictEqual(postgresColumn(SECRET), {
+      notNull: false,
+      sqlType: "bytea",
+    });
+    assert.strictEqual(parameterCast("secret"), "bytea");
+    // Conditions may use only empty and notEmpty on it (Contracts 6.5).
+    assert.isNull(comparisonClass("secret"));
+    assert.isFalse(isOrdered("secret"));
+  });
+});
+
+describe("condition", () => {
+  // The codec fixes the JSON representation: an object under the json
+  // rules, stored as jsonb. The AST check against the field's profile and
+  // class is `checkConditionJson` in `@std/conditions` (check.test.ts).
+  const ast: JsonValue = {
+    args: [
+      {
+        left: { path: ["00000000-0000-7000-8000-000000000001"] },
+        op: "eq",
+        right: { value: "open" },
+      },
+      { arg: { path: ["00000000-0000-7000-8000-000000000002"] }, op: "empty" },
+    ],
+    op: "and",
+  };
+
+  it("round-trips an AST object whole, written in jsonb's key order", () => {
+    assert.deepStrictEqual(roundTrip(CONDITION, ast), ast);
+    assert.strictEqual(
+      stringifyJson(roundTrip(CONDITION, ast)),
+      '{"op":"and","args":[{"op":"eq","left":{"path":["00000000-0000-7000-8000-000000000001"]},"right":{"value":"open"}},{"op":"empty","arg":{"path":["00000000-0000-7000-8000-000000000002"]}}]}'
+    );
+    assert.strictEqual(
+      stringifyJson(roundTrip(CONDITION, { op: "eq", right: { value: -0 } })),
+      '{"op":"eq","right":{"value":0}}'
+    );
+  });
+
+  it("null clears; anything but an object is refused", () => {
+    assert.strictEqual(getOrThrow(decodeIn(CONDITION, null)), null);
+    assert.isNull(encodeOut(CONDITION, null));
+
+    const wrong: readonly JsonValue[] = [
+      "status = open",
+      1,
+      true,
+      false,
+      [],
+      [ast],
+    ];
+
+    for (const json of wrong) {
+      assert.strictEqual(
+        reason(decodeIn(CONDITION, json)),
+        "wrongJsonType",
+        JSON.stringify(json)
+      );
+    }
+
+    assert.deepStrictEqual(
+      getOrThrow(planCreate(CONDITION, { present: false })),
+      { action: "set", source: "empty", value: null }
+    );
+    assert.deepStrictEqual(
+      getOrThrow(planUpdate(CONDITION, { json: null, present: true })),
+      { action: "set", source: "payload", value: null }
+    );
+    assert.deepStrictEqual(
+      getOrThrow(planUpdate(CONDITION, { present: false })),
+      { action: "keep" }
+    );
+  });
+
+  it("applies the json rules: duplicate keys, U+0000, depth and size", () => {
+    assert.strictEqual(
+      reason(parseJson('{"op": "and", "args": [], "op": "or"}')),
+      "duplicateKey"
+    );
+    assert.strictEqual(
+      reason(decodeIn(CONDITION, { op: "eq", right: { value: "a\0b" } })),
+      "nulCharacter"
+    );
+    assert.strictEqual(
+      reason(decodeIn(CONDITION, { op: "eq", right: { value: "a\uD800" } })),
+      "notWellFormed"
+    );
+
+    const deep = getOrThrow(parseJson(nested(JSON_MAX_DEPTH)));
+
+    assert.strictEqual(
+      reason(decodeIn(CONDITION, { args: [deep], op: "and" })),
+      "tooDeep"
+    );
+    assert.strictEqual(
+      reason(decodeIn(CONDITION, { op: "x", pad: "x".repeat(1_048_576) })),
+      "tooLarge"
+    );
+  });
+
+  it("compares by jsonb equality, so reordered keys are no change", () => {
+    const reordered = getOrThrow(
+      parseJson(
+        '{"op": "and", "args": [{"right": {"value": "open"}, "op": "eq", "left": {"path": ["00000000-0000-7000-8000-000000000001"]}}, {"op": "empty", "arg": {"path": ["00000000-0000-7000-8000-000000000002"]}}]}'
+      )
+    );
+
+    const other = getOrThrow(parseJson('{"op": "or", "args": []}'));
+
+    assert.isTrue(storedEquals("condition", ast, reordered));
+    assert.isFalse(storedEquals("condition", ast, other));
+  });
+
+  it("is a nullable jsonb column, bound as jsonb, never compared or sorted", () => {
+    assert.deepStrictEqual(postgresColumn(CONDITION), {
+      notNull: false,
+      sqlType: "jsonb",
+    });
+    assert.strictEqual(parameterCast("condition"), "jsonb");
+    assert.isNull(comparisonClass("condition"));
+    assert.isFalse(isOrdered("condition"));
   });
 });
