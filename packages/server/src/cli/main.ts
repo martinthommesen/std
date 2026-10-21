@@ -1,11 +1,14 @@
 /**
  * The `std` command.
  *
- * Commands (later workstreams add `serve` and `doctor`):
+ * Commands (later workstreams add `doctor`):
  *
  * - `std upgrade [--set <dir>]...`: applies pending platform migrations,
  *   resumes interrupted change sets, then loads the core definition set,
  *   then each app set in the order given (Contracts 8.5).
+ * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
+ *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
+ *   platform migrations.
  * - `std schema status [--json]`: open change sets, their steps and last
  *   errors, build progress and the `SCHEMA_KEY` holder (Contracts 8.7).
  * - `std schema resume <id>`: runs the unfinished steps of a change set in
@@ -23,6 +26,7 @@ import { Console, Effect, Layer } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
 import { runUpgrade } from "../config/upgrade.ts";
+import { ServerLayer } from "../http/serve.ts";
 import { recoverySettingsFromEnv } from "../schema/recovery-settings.ts";
 import { abandonChangeSet, resumeOnRequest } from "../schema/recovery.ts";
 import { formatStatus, schemaStatus } from "../schema/status.ts";
@@ -39,6 +43,7 @@ Commands:
                              change sets, then load the core definition
                              set, then each app set (stop all STD servers
                              first)
+  serve                      Serve the STD API over HTTP
   schema status [--json]     Show open change sets, their steps, build
                              progress and the SCHEMA_KEY holder
   schema resume <id>         Run the unfinished steps of a change set
@@ -217,12 +222,27 @@ const setDirectoriesOf = (
   return directories;
 };
 
+/** `std serve`: runs the HTTP server until interrupted. */
+const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
+  Effect.matchEffect({
+    onFailure: (failure) =>
+      Console.error(`std serve: ${String(failure)}`).pipe(
+        Effect.andThen(setExitCode(EXIT_FAILURE))
+      ),
+    onSuccess: () => Effect.void,
+  })
+);
+
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;
   const directories = setDirectoriesOf(rest);
 
   if (command === "upgrade" && directories !== undefined) {
     return upgrade(directories);
+  }
+
+  if (command === "serve" && rest.length === 0) {
+    return serve;
   }
 
   const schema = command === "schema" ? schemaCommand(rest) : undefined;
