@@ -416,19 +416,24 @@ export const indexKey = (field: FieldDefinition): string =>
 
 /**
  * The value existing rows get in a column added for a field: its constant
- * default, `false` for booleans, NULL otherwise.
+ * default, `false` for booleans, NULL otherwise. Always a typed cast, never
+ * a bare constant: the duplicate preflight puts it in `GROUP BY`, where
+ * Postgres reads a bare integer as a column position and refuses any other
+ * bare constant (42601).
  *
  * @param field - A field.
- * @returns A constant SQL expression of the column's type.
+ * @returns A cast constant of the column's type, such as `'false'::boolean`.
  */
 export const initialValue = (field: FieldDefinition): string => {
-  if (field.default !== null) {
-    return defaultLiteral(field.type, field.default);
+  const { sqlType } = postgresColumn(field.type);
+
+  if (field.type.kind === "boolean") {
+    return `'${field.default === true ? "true" : "false"}'::${sqlType}`;
   }
 
-  return field.type.kind === "boolean"
-    ? "false"
-    : `NULL::${postgresColumn(field.type).sqlType}`;
+  return field.default === null
+    ? `NULL::${sqlType}`
+    : defaultLiteral(field.type, field.default);
 };
 
 /**

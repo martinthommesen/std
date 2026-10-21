@@ -5,6 +5,7 @@
  * booleans and keyword-like text defaults on tables with rows.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { Operation } from "@std/definitions/operation";
 import { Effect } from "effect";
 
 import { duplicatePredicate } from "../src/schema/plan.ts";
@@ -21,6 +22,7 @@ import {
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
+import type { BuiltOperation } from "./schema-support.ts";
 
 const ASSET = '"acme"."asset"';
 const LAPTOP = '"acme"."laptop"';
@@ -30,6 +32,35 @@ const indexExists = (indexId: string) =>
     `SELECT count(*)::text AS value FROM pg_class WHERE relname = 'std_ix_' || replace($1, '-', '')`,
     [indexId]
   ).pipe(Effect.map(([value]) => value === "1"));
+
+/**
+ * Applies a change set expected to be refused for existing data.
+ * @param operations - The change set.
+ * @returns The violation count, or -1 for any other outcome.
+ */
+const refusedCount = (operations: readonly Operation[]) =>
+  Effect.flip(change(operations)).pipe(
+    Effect.map((refused) =>
+      refused._tag === "ExistingDataViolates" ? refused.count : -1
+    )
+  );
+
+/**
+ * A unique index over a field added in the same change set.
+ * @param classId - The class.
+ * @param field - The new field.
+ * @param leading - Existing fields indexed before it.
+ * @returns The two operations and the index ID.
+ */
+const withUniqueIndex = (
+  classId: string,
+  field: BuiltOperation,
+  leading: readonly string[] = []
+) => {
+  const index = addIndex(classId, [...leading, field.id], true);
+
+  return { id: index.id, operations: [field.op, index.op] };
+};
 
 describe("preflight", () => {
   it("counts duplicates with the index's own key expressions", () => {
@@ -100,6 +131,75 @@ describe("preflight", () => {
             assert.strictEqual(sameDefault.definitionId, regionUnique.id);
             assert.strictEqual(sameDefault.count, 5);
           }
+        })
+    );
+
+    dbTest.effect(
+      "unique indexes over new boolean and integer columns count their typed initial values",
+      () =>
+        Effect.gen(function* typedInitialValues() {
+          yield* loadCoreAndAcme;
+
+          // A table of its own: three rows with distinct labels.
+          const tally = createClass("tally", { namespaceId: ACME.namespace });
+          const label = addField(tally.id, "label", { kind: "text" });
+
+          yield* change([tally.op, label.op]);
+          yield* insertRecords(['"acme"."tally"'], tally.id, 3, {
+            label: "'row ' || g",
+          });
+
+          // Every existing row gets false, whether implicit or the explicit
+          // default, so one boolean key repeats three times.
+          assert.strictEqual(
+            yield* refusedCount(
+              withUniqueIndex(
+                tally.id,
+                addField(tally.id, "checked", { kind: "boolean" })
+              ).operations
+            ),
+            3
+          );
+
+          for (const fallback of [false, true]) {
+            const flag = addField(
+              tally.id,
+              `flag_${fallback}`,
+              { kind: "boolean" },
+              { default: fallback }
+            );
+
+            assert.strictEqual(
+              yield* refusedCount(withUniqueIndex(tally.id, flag).operations),
+              3
+            );
+          }
+
+          // Read as a bare constant, 1 would group by the first column, the
+          // distinct id, and accept three equal keys.
+          const ordinal = addField(
+            tally.id,
+            "ordinal",
+            { kind: "integer" },
+            { default: 1 }
+          );
+
+          assert.strictEqual(
+            yield* refusedCount(withUniqueIndex(tally.id, ordinal).operations),
+            3
+          );
+
+          // Distinct labels make every (label, new boolean) key distinct.
+          const mixed = withUniqueIndex(
+            tally.id,
+            addField(tally.id, "mixed", { kind: "boolean" }),
+            [label.id]
+          );
+
+          const applied = yield* change(mixed.operations);
+
+          assert.strictEqual(applied.state, "completed");
+          assert.isTrue(yield* indexExists(mixed.id));
         })
     );
 
