@@ -4,8 +4,9 @@
  * `packages/probes/results/<yyyy-mm-dd>.json` and `.md`.
  *
  * Usage: `pnpm probes [--quick] [probe ...]`, where a probe is its number
- * (1 to 6, 7 for probe 3b) or key (`configPause`, `killedBuild`,
- * `addClass`, `lockBudget`, `casefold`, `addColumn`, `notify`). `--quick` uses small sizes and short runs and
+ * (1 to 6, 7 for probe 3b, 8 for 3c) or key (`configPause`, `killedBuild`,
+ * `addClass`, `lockBudget`, `lockInventory`, `casefold`, `addColumn`,
+ * `notify`). `--quick` uses small sizes and short runs and
  * writes `<date>-quick.*`, for checking the script itself. Each probe runs
  * in its own fresh database, dropped afterwards. Full runs take about six
  * minutes.
@@ -24,6 +25,7 @@ import { runConfigPauseProbe } from "./config-pause.ts";
 import { readConditions, readEnvironment } from "./environment.ts";
 import { runKilledBuildScenario } from "./killed-index-build.ts";
 import { runLockBudgetProbe } from "./lock-budget.ts";
+import { runLockInventoryProbe } from "./lock-inventory.ts";
 import { runNotifyProbe } from "./notify-throughput.ts";
 import { probeDatabaseLayer } from "./probe-database.ts";
 import type { ProbeServices } from "./probe-database.ts";
@@ -161,6 +163,15 @@ const program = Effect.gen(function* probes() {
     )
   );
 
+  const lockInventory = yield* optional(
+    wanted("lockInventory", 8),
+    record(
+      "3c lock inventory",
+      DEFAULT_POOL,
+      Effect.scoped(runLockInventoryProbe())
+    )
+  );
+
   const casefold = yield* optional(
     wanted("casefold", 4),
     record(
@@ -197,6 +208,7 @@ const program = Effect.gen(function* probes() {
     finishedAt: new Date().toISOString(),
     killedBuild,
     lockBudget,
+    lockInventory,
     mode,
     notify,
     startedAt,

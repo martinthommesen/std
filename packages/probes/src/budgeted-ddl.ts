@@ -9,16 +9,13 @@
  * - `lock-budget`: the 2 s is a budget for the attempt. Before each DDL
  *   statement, every table lock it needs is taken explicitly and one at a
  *   time with `LOCK TABLE <t> IN <mode> MODE`, root first, each under
- *   `SET LOCAL lock_timeout` set to what is left of the budget; then the
- *   statement runs with `statement_timeout` set to the remaining budget (at
- *   least `MIN_STATEMENT_MS`) as a backstop for locks not taken explicitly,
- *   so the DDL itself never waits. A `LOCK TABLE` that times out raises
- *   55P03 and, marked `lockWaiting`, makes the config commit retry.
+ *   `SET LOCAL lock_timeout` set to what is left of the budget. The step's
+ *   lock list must be complete (`lock-inventory.ts` checks every form), so
+ *   the DDL itself never waits for a table lock. A `LOCK TABLE` that times
+ *   out raises 55P03 and, marked `lockWaiting`, makes the config commit
+ *   retry.
  */
-import {
-  MAIN_LOCK_TIMEOUT,
-  MAIN_STATEMENT_TIMEOUT,
-} from "@std/server/sql/config-commit";
+import { MAIN_LOCK_TIMEOUT } from "@std/server/sql/config-commit";
 import { lockWaiting } from "@std/server/sql/statement-marks";
 import { Duration, Effect, Exit } from "effect";
 import { SqlClient } from "effect/sql";
@@ -116,8 +113,54 @@ export const tracked = <A, E, R>(
     return yield* exit;
   });
 
-/** The backstop `statement_timeout` never goes below this [judgment]. */
-export const MIN_STATEMENT_MS = 100;
+/** A deadline for the attempt's explicit lock waits. */
+export interface LockDeadline {
+  /** What is left of the budget, in whole milliseconds, at least 1. */
+  readonly remaining: Effect.Effect<number>;
+}
+
+/**
+ * Starts the lock budget of an attempt.
+ * @returns The deadline, `DDL_LOCK_BUDGET_MS` from now.
+ */
+export const startLockBudget = Effect.gen(function* lockBudget() {
+  const deadline = (yield* now) + DDL_LOCK_BUDGET_MS;
+
+  const budget: LockDeadline = {
+    remaining: now.pipe(
+      Effect.map((time) => Math.max(1, Math.ceil(deadline - time)))
+    ),
+  };
+
+  return budget;
+});
+
+/**
+ * Takes a step's table locks explicitly, one at a time, each under
+ * `lock_timeout` set to what is left of the budget.
+ * @param step - The DDL step.
+ * @param budget - The attempt's lock deadline.
+ * @returns How long each lock waited.
+ */
+export const takeStepLocks = (step: DdlStep, budget: LockDeadline) =>
+  Effect.gen(function* takeLocks() {
+    const sql = yield* SqlClient.SqlClient;
+    const waits: LockWait[] = [];
+
+    for (const lock of step.locks) {
+      yield* sql.unsafe(
+        `SET LOCAL lock_timeout = '${yield* budget.remaining}ms'`
+      );
+
+      const [ms] = yield* timedMillis(
+        lockWaiting(sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`))
+      );
+
+      waits.push({ ms, table: lock.table });
+    }
+
+    return waits;
+  });
 
 /**
  * Runs DDL steps inside a config commit with the given mechanism.
@@ -131,41 +174,14 @@ export const runDdlSteps = (
 ) =>
   Effect.gen(function* ddlSteps() {
     const sql = yield* SqlClient.SqlClient;
-    const deadline = (yield* now) + DDL_LOCK_BUDGET_MS;
-
-    const remaining = now.pipe(
-      Effect.map((time) => Math.max(1, Math.ceil(deadline - time)))
-    );
-
+    const budget = yield* startLockBudget;
     const timings: StepTiming[] = [];
 
     for (const step of steps) {
-      const lockWaits: LockWait[] = [];
-
-      if (mechanism === "lock-budget") {
-        for (const lock of step.locks) {
-          yield* sql.unsafe(`SET LOCAL lock_timeout = '${yield* remaining}ms'`);
-
-          const [ms] = yield* timedMillis(
-            lockWaiting(
-              sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
-            )
-          );
-
-          lockWaits.push({ ms, table: lock.table });
-        }
-
-        const backstop = Math.max(MIN_STATEMENT_MS, yield* remaining);
-        yield* sql.unsafe(`SET LOCAL statement_timeout = '${backstop}ms'`);
-      }
+      const lockWaits =
+        mechanism === "lock-budget" ? yield* takeStepLocks(step, budget) : [];
 
       const [ms] = yield* timedMillis(lockWaiting(sql.unsafe(step.statement)));
-
-      if (mechanism === "lock-budget") {
-        yield* sql.unsafe(
-          `SET LOCAL statement_timeout = '${MAIN_STATEMENT_TIMEOUT}'`
-        );
-      }
 
       timings.push({ label: step.label, lockWaits, ms });
     }

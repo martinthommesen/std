@@ -16,6 +16,7 @@ import type { Conditions, Environment } from "./environment.ts";
 import type { KilledBuildResult } from "./killed-index-build.ts";
 import { MULTI_LOCK_STEP } from "./lock-budget.ts";
 import type { LockBudgetResult } from "./lock-budget.ts";
+import type { FormResult } from "./lock-inventory.ts";
 import type { NotifyProbeResult } from "./notify-throughput.ts";
 import type { Mode } from "./settings.ts";
 import { round } from "./stats.ts";
@@ -46,6 +47,7 @@ export interface ProbeReport {
   readonly killedBuild: ProbeRecord<readonly KilledBuildResult[]> | null;
   readonly addClass: ProbeRecord<readonly AddClassProbeResult[]> | null;
   readonly lockBudget: ProbeRecord<readonly LockBudgetResult[]> | null;
+  readonly lockInventory: ProbeRecord<readonly FormResult[]> | null;
   readonly casefold: ProbeRecord<CasefoldProbeResult> | null;
   readonly addColumn: ProbeRecord<AddColumnProbeResult> | null;
   readonly notify: ProbeRecord<NotifyProbeResult> | null;
@@ -393,6 +395,44 @@ const renderLockBudget = (
     ),
   ].join("\n");
 
+const renderLockInventory = (
+  record: ProbeRecord<readonly FormResult[]>
+): string =>
+  [
+    "## Probe 3c: the explicit lock inventory of every DDL form",
+    "",
+    conditionsLine(record),
+    "",
+    "Each form runs in its own config commit on a fresh fixture: its listed locks are taken with `LOCK TABLE`, then the DDL runs, and every relation lock it added is classified. `pre-locked`: a listed table in a mode the listed mode covers; `implied`: an index or TOAST table of a listed table; `created`: made by the statement; system catalog locks are only counted; anything else is a violation.",
+    "",
+    table(
+      [
+        "Form",
+        "Explicit locks taken first",
+        "Relation locks the DDL added",
+        "Catalog locks",
+        "DDL",
+        "Violations",
+      ],
+      record.result.map((result) => [
+        result.form,
+        result.explicitLocks.length === 0
+          ? "none"
+          : result.explicitLocks.join(", "),
+        result.added
+          .map((lock) => `${lock.relation} ${lock.mode} (${lock.kind})`)
+          .join(", "),
+        String(result.catalogLocks),
+        ms(result.ddlMs),
+        result.violations.length === 0 ? "none" : result.violations.join(", "),
+      ])
+    ),
+    "",
+    `No form locks a relation beyond its inventory: ${verdict(
+      record.result.every((result) => result.violations.length === 0)
+    )}`,
+  ].join("\n");
+
 const renderCasefold = (record: ProbeRecord<CasefoldProbeResult>): string => {
   const { result } = record;
 
@@ -554,6 +594,9 @@ export const renderMarkdown = (report: ProbeReport): string =>
     report.lockBudget === null
       ? undefined
       : renderLockBudget(report.lockBudget),
+    report.lockInventory === null
+      ? undefined
+      : renderLockInventory(report.lockInventory),
     report.casefold === null ? undefined : renderCasefold(report.casefold),
     report.addColumn === null ? undefined : renderAddColumn(report.addColumn),
     report.notify === null ? undefined : renderNotify(report.notify),
