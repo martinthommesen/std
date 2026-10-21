@@ -1,9 +1,0 @@
-{
-  "commit": "7f524e25cfb49a71ac39b0f44278d08d40dda5de",
-  "package": "effect",
-  "prefix": "vendor/effect",
-  "repository": "https://github.com/Effect-TS/effect",
-  "tag": "effect@4.0.5",
-  "tree": "208c4ac5b9d8c68a7656cd93b430a3bbede6b41f",
-  "version": "4.0.5"
-}

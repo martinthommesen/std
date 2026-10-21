@@ -54,7 +54,7 @@ jobs:
         run: pnpm check:postgres
       - name: Lint and format
         run: pnpm check
-      - name: Tooling checks (tsconfig profiles, plain imports, lockfile, vendored Effect)
+      - name: Tooling checks (tsconfig profiles, plain imports, lockfile, vendored Effect and Foldkit)
         run: pnpm check:tooling
       - name: Type check
         run: pnpm typecheck
