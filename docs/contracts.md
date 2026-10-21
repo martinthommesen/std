@@ -80,7 +80,7 @@ Covers how definitions change without breaking references, stalling the applicat
 - The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [checked: `PgClient.makeClient` in `@effect/sql-pg` 4.0.5 is a client over one `PgConnection`, outside any pool; decision 0002]
 - Changes without DDL or data preflight (labels, layouts, rules, access rules) take only `CONFIG_KEY`.
 - Lock order is always `SCHEMA_KEY`, `CONFIG_KEY`, table locks. Requests take `CONFIG_KEY` before any table lock. So STD sessions cannot deadlock on these.
-- Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`.
+- Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`, and name tables and columns as they are before the change set's DDL.
 
 Main transaction of a change set:
 
@@ -169,7 +169,7 @@ Resume:
 - A step that errors is retried 3 times [judgment], then the change set moves to `needs_attention` and `doctor` reports it. An admin fixes the cause and runs `std schema resume <id>`, or runs `std schema abandon <id>` (abandon actions plus `complete`).
 - A failed concurrent unique build leaves an invalid index that still enforces uniqueness [checked], so abandon drops it at once.
 - A new coordinator, once it holds `SCHEMA_KEY`, first resumes change sets left in `applying`, then refuses with `SchemaNeedsAttention` (409) while any change set is `needs_attention`: stored step statements name tables and columns as they were, and the new change set could rename or drop them. Changes without DDL still apply. [judgment, decision 0011]
-- Abandon drops unfinished indexes concurrently before its `complete`, and drops `NOT VALID` constraints inside the `complete` config commit under the lock budget. If the change set's own backend still holds `SCHEMA_KEY` (a build waiting on another session, or one whose client died), `std schema abandon` terminates that backend first; that is the operator's decision. Any other holder gives `SchemaBusy`. [decision 0011]
+- Abandon applies only to a change set still `applying` or `needs_attention`. It drops unfinished index builds and finishes unfinished index drops concurrently before its `complete`, and drops `NOT VALID` constraints inside the `complete` config commit under the lock budget; afterwards the catalog matches the definitions or the enforcement state explains it. If the backend that is running one of this change set's steps right now holds `SCHEMA_KEY` (a build waiting on another session, or one whose client died), `std schema abandon` terminates it first, checking in the signalling statement the step's state, PID, backend start and the lock; that is the operator's decision. Any other holder gives `SchemaBusy`. [decision 0011]
 - The watchdog runs on a pooled connection beside the step and writes the PIDs the step waits for (`pg_blocking_pids`) and the build phase into `last_error`; `std schema status` shows them live too. [checked: `schema-recovery.test.ts`]
 
 ### 1.6 Field and table lifecycle
@@ -180,7 +180,7 @@ Resume:
 | `retired` | kept with data | only when selected explicitly, under access rules | refused (`DefinitionRetired`) | hidden | `active`, `purged` |
 | `purged` | dropped | no | no | no | none (tombstone) |
 
-- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A reactivated field comes back optional: retiring sets the field's `required` to false. Booleans stay `NOT NULL DEFAULT false`. [checked: `schema-lifecycle.test.ts`]
+- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A reactivated field comes back optional on every class: retiring sets the field's `required` to false and clears `required` on its overrides in descendant classes. Booleans stay `NOT NULL DEFAULT false`. [checked: `schema-lifecycle.test.ts`, `lifecycle.test.ts`]
 - Retiring a parent field retires it on every child class. A retired table accepts reads only.
 - Purge needs the `schema.purge` permission (3.1; held by the built-in `schema_purger` role, not by `admin`), a target retired in an earlier committed revision, no blocking dependents (1.7), and a confirmation naming the target's ID and version. It is journaled and audited with the number of values or rows destroyed. The count runs under `SCHEMA_KEY` before `CONFIG_KEY`; a retired field or table refuses writes, so the count is stable.
 - A tombstone keeps ID, last name, type, label and purge revision, so history can interpret old values. The name becomes free; the ID is never reused. The tombstone is the definition row in state `purged`; its purge revision is its first definition revision in that state (4.4). [decision 0011]
@@ -197,7 +197,8 @@ Resume:
 | --- | --- | --- |
 | Rename | target is protected, or owned by core or an app and the caller is not its set | nothing |
 | Retire field | protected; display field; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
-| Retire table | protected; has a child class not retired; a non-retired reference field points at it | other dependents |
+| Retire table | protected; has a child class not retired; a non-retired reference field points at it (whatever its own table's state, self-references included) | other dependents |
+| Reactivate field or table | a reference field that would be active points at a retired table | nothing |
 | Purge field | not retired; any non-retired dependent except layout entries and single-field indexes | count of non-null values (counted under `SCHEMA_KEY`) |
 | Purge table | not retired; a child class or incoming reference not purged; an access rule or subscription on it | row count (counted under `SCHEMA_KEY`) |
 | Delete or retire role | protected; an active access rule names it (`rule_role`); for a delete, any access rule | user-role assignments; a deleted role's grants are deleted with it |
