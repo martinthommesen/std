@@ -4,13 +4,15 @@
  * outside the database. The plaintext never reaches SQL text, history or
  * logs.
  *
- * Password hashing belongs to authentication (workstream 0C reads, sign-in
- * verifies the same hashes), which provides the real layer. Secrets come
+ * `WriteOnlyValues.scrypt` hashes passwords with authentication's scrypt
+ * (`auth/password.ts`), the same PHC strings sign-in verifies. Secrets come
  * with their key management later. `WriteOnlyValues.unavailable` refuses
  * both with a defect, for code paths that never write such fields.
  */
 import type { Plaintext } from "@std/values/write-only";
 import { Context, Effect, Layer } from "effect";
+
+import { hashPassword } from "../auth/password.ts";
 
 /** Hashing and encryption of write-only values. */
 export interface WriteOnlyValuesApi {
@@ -23,6 +25,12 @@ export class WriteOnlyValues extends Context.Service<
   WriteOnlyValues,
   WriteOnlyValuesApi
 >()("std/server/WriteOnlyValues") {
+  /** Hashes passwords with scrypt, as sign-in verifies them. */
+  static readonly scrypt: Layer.Layer<WriteOnlyValues> = Layer.succeed(
+    WriteOnlyValues,
+    WriteOnlyValues.of({ hashPassword })
+  );
+
   /** Refuses every write-only value with a defect. */
   static readonly unavailable: Layer.Layer<WriteOnlyValues> = Layer.succeed(
     WriteOnlyValues,

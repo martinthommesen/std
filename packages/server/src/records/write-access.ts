@@ -25,8 +25,13 @@ import { Context, Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import type { DatabaseError } from "../sql/errors.ts";
+import type { RequestRevision } from "../sql/request-revision.ts";
 import { existingTargets } from "./save-sql.ts";
 import type { StoredRecord } from "./stored-record.ts";
+
+/** What the seam's methods may use: the save's transaction. */
+export type InTransaction = SqlClient.SqlClient | RequestRevision;
 
 /** A record as the pipeline found it, right after the root lock. */
 export interface ExistingCheck {
@@ -94,12 +99,12 @@ export interface WriteAccessApi {
   ) => Effect.Effect<
     Option.Option<ReadonlySet<DefinitionId>>,
     SqlError,
-    SqlClient.SqlClient
+    InTransaction
   >;
   /** Record and field rules on the existing state (`NotAllowed`). */
   readonly checkExisting: (
     input: ExistingActionCheck
-  ) => Effect.Effect<void, NotAllowed | SqlError, SqlClient.SqlClient>;
+  ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
   /**
    * Record and field rules on the proposed state, after the row writes,
    * re-reading through the same compiled predicates (`NotAllowed`; the
@@ -107,21 +112,21 @@ export interface WriteAccessApi {
    */
   readonly checkProposed: (
     input: ProposedCheck
-  ) => Effect.Effect<void, NotAllowed | SqlError, SqlClient.SqlClient>;
+  ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
   /**
    * The IDs among `ids` that exist and that the caller can see (3.6); a
    * missing ID becomes `InvalidReference`.
    */
   readonly visibleTargets: (
     input: TargetCheck
-  ) => Effect.Effect<ReadonlySet<string>, SqlError, SqlClient.SqlClient>;
+  ) => Effect.Effect<ReadonlySet<string>, SqlError, InTransaction>;
   /**
    * The response record, with the caller's read rights; only `id` and
    * `version` when the record is no longer visible (3.9).
    */
   readonly project: (
     input: ProjectionInput
-  ) => Effect.Effect<JsonObject, SqlError, SqlClient.SqlClient>;
+  ) => Effect.Effect<JsonObject, SqlError | DatabaseError, InTransaction>;
 }
 
 /**
