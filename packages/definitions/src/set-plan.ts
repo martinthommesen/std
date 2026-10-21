@@ -170,7 +170,13 @@ export const topologicalOrder = (
 const jsonText = (value: JsonValue | undefined): string =>
   stringifyJson(value ?? null);
 
-const createOperation = (draft: Draft): Operation => {
+/**
+ * The operation that creates a draft's definition.
+ *
+ * @param draft - A draft.
+ * @returns Its create operation (`setOverride` with version null for an override).
+ */
+export const createOperation = (draft: Draft): Operation => {
   if (draft.kind === "namespace") {
     return { definition: draft, op: "createNamespace" };
   }

@@ -8,10 +8,11 @@
  * `versionConflict`.
  *
  * `update` carries only the properties that change. Which properties an
- * update may change depends on the kind (`UPDATABLE`); names, types,
- * parents, reference targets and index fields cannot change here (renames,
- * retire and purge come with workstream 1A; type changes are refused in
- * v0.1).
+ * update may change depends on the kind (`UPDATABLE`); names (other than
+ * role and permission names), types, parents, reference targets and index
+ * fields cannot change here (renames, retire and purge come with workstream
+ * 1A; type changes are refused in v0.1). `adopt` moves a definition its set
+ * removed into the `local` layer (Contracts 8.1).
  */
 import {
   Int,
@@ -78,6 +79,16 @@ export const OperationSchema = Union([
     op: Literal("update"),
     version: Version,
   }),
+  /**
+   * Moves a shipped definition its set removed into the `local` layer
+   * (Contracts 8.1). Only the config service issues it, after checking
+   * that the set removed the record; protected definitions refuse it.
+   */
+  Struct({
+    id: DefinitionIdSchema,
+    op: Literal("adopt"),
+    version: Version,
+  }),
 ]);
 
 /** A change-set operation. */
@@ -89,12 +100,16 @@ export type OperationName = Operation["op"];
 /** A create operation. */
 export type CreateOperation = Exclude<
   Operation,
-  { readonly op: "update" } | { readonly op: "setOverride" }
+  | { readonly op: "update" }
+  | { readonly op: "setOverride" }
+  | { readonly op: "adopt" }
 >;
 
 /**
  * Properties `update` may change, per kind. Field `required` may only
  * become true (a tightening with a data preflight); `default` is a constant.
+ * Role and permission names may change: rules refer to them by ID, so a
+ * rename needs no DDL (a new set version renames them, Contracts 8.4).
  */
 export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   accessRule: [
@@ -113,8 +128,8 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   index: [],
   namespace: ["helpText", "label"],
   override: [],
-  permission: ["helpText", "label"],
-  role: ["helpText", "label"],
+  permission: ["helpText", "label", "name"],
+  role: ["helpText", "label", "name"],
   subscription: [
     "classId",
     "condition",

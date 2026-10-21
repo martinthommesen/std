@@ -24,6 +24,7 @@ One row per agent PR. "Sent back" is yes when review returned it for Effect 3 id
 
 | Date | PR | Workstream | Sent back | Reason (Effect 3 idiom, misuse, other) | Notes |
 | --- | --- | --- | --- | --- | --- |
+| 2026-10-21 | ws/1b-config-layers | 1B | no (not reviewed yet) | none | `Effect.fn` with a whole-function transform (`Effect.scoped`) inferred a call signature without parameters for a generator whose parameter has a default; an explicit function type on the constant fixes it, as `runPlatformMigrations` already did |
 
 ## Gate reviews
 
