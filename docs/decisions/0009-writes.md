@@ -70,7 +70,7 @@ Laid out like the 0002 platform tables and described in `definitions/core/platfo
 
 Deviation: Contracts 4.2's `class_id` is stored as `record_class_id` (contract text updated). No FK on `record_id` (entries outlive records) or on actor and audit columns (platform convention). Index on `operation_id`.
 
-Migration 0003 is a placeholder (`SELECT 1`) holding the slot of `ws/0c-reads`; the reads branch replaces it on merge. No installation applies it before then.
+Migration 0003 (`core.session`) belongs to workstream 0C reads; phase 1 held its slot with a placeholder, dropped when `ws/0c-reads` was merged.
 
 ## Constraint mapping
 

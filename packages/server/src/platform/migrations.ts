@@ -7,7 +7,7 @@ import { validateMigrations } from "./migration.ts";
 import type { PlatformMigration } from "./migration.ts";
 import { migration0001 } from "./migrations/0001-core.ts";
 import { migration0002 } from "./migrations/0002-definitions.ts";
-import { migration0003 } from "./migrations/0003-reserved.ts";
+import { migration0003 } from "./migrations/0003-sessions.ts";
 import { migration0004 } from "./migrations/0004-history.ts";
 
 /** Every platform migration this version of STD knows. */

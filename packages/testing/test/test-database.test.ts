@@ -12,7 +12,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { migration0001 } from "@std/server/platform/migrations/0001-core";
 import { migration0002 } from "@std/server/platform/migrations/0002-definitions";
-import { migration0003 } from "@std/server/platform/migrations/0003-reserved";
+import { migration0003 } from "@std/server/platform/migrations/0003-sessions";
 import { migration0004 } from "@std/server/platform/migrations/0004-history";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
