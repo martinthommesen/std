@@ -296,7 +296,9 @@ const planOne = (
     }
   }
 
-  if (operation.op === "setOverride") {
+  // Only a replacement names a stored override: a create's ID is free
+  // (refused as in use before planning otherwise, Contracts 1.1).
+  if (operation.op === "setOverride" && operation.version !== null) {
     const replaced = snapshot.get(operation.definition.id);
 
     if (replaced !== undefined && isShipped(replaced)) {

@@ -47,6 +47,7 @@ import type {
 import { referencedIds } from "@std/definitions/dependencies";
 import type { Referencing } from "@std/definitions/dependencies";
 import type { DefinitionId } from "@std/definitions/ids";
+import { idInUseRefusal } from "@std/definitions/occupancy";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -665,6 +666,19 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
       operations,
       new Set(hidden)
     );
+
+    // A create's ID in use: one refusal that depends on occupancy alone,
+    // before any target, plan or engine looks at the batch (1.1, 3.6).
+    const snapshot = yield* (yield* Catalog).current;
+
+    const taken = idInUseRefusal(
+      (id) => snapshot.get(id) !== undefined,
+      operations
+    );
+
+    if (taken !== undefined) {
+      return yield* taken;
+    }
 
     const [first] = hidden;
 

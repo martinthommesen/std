@@ -43,6 +43,7 @@ import {
   rename,
   retire,
 } from "./lifecycle.ts";
+import { idInUseRefusal } from "./occupancy.ts";
 import { UPDATABLE } from "./operation.ts";
 import type {
   CreateOperation,
@@ -616,6 +617,17 @@ export const applyOperations = (
   key: SnapshotKey,
   context: ApplyContext = LOCAL_CONTEXT
 ): Result<AppliedChangeSet, ApplyError> => {
+  // A create whose ID something stored already holds stops the change set
+  // before any operation looks at the occupant (Contracts 1.1, 3.6).
+  const taken = idInUseRefusal(
+    (id) => snapshot.get(id) !== undefined,
+    operations
+  );
+
+  if (taken !== undefined) {
+    return fail(taken);
+  }
+
   const work = startWork(snapshot, key, context);
 
   for (const operation of operations) {
