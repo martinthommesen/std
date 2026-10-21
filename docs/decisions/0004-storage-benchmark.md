@@ -1,15 +1,15 @@
 # 0004: Stage 0 storage benchmark
 
-Status: measured 2026-10-20. **Decision rule not met; the storage decision is reopened and Stage 0 stops for Martin's decision.**
+Status: measured 2026-10-20 and 2026-10-21. **The decision rule is formally not met. Provisional decision: keep class-table storage, pending Martin's confirmation.** Every storage model misses the Q6 and Q7 budgets, and the baseline is never more than 2x faster, so the misses are not caused by storage. The read compiler's branch form meets the Q6 budget; Q7 still misses by a small margin (see "Compiler rewrites").
 
-Workstream 0E (plan: "Stage 0", gate item on the benchmark; Contracts 2.6). Full results, plans, sizes, settings and load: `bench/results/2026-10-20-stage0.md` (and `.json`). Reproduce with `pnpm bench`.
+Workstream 0E (plan: "Stage 0", gate item on the benchmark; Contracts 2.6). Full results, plans, sizes, settings and load: `bench/results/2026-10-20-stage0.md` (and `.json`). Reproduce with `pnpm bench`. The compiler-rewrite follow-up: `bench/results/2026-10-21-rewrites.md` (and `.json`). Reproduce with `pnpm bench --rewrites`.
 
 ## What was measured
 
 - The hierarchy of Contracts 2.6 (four levels, nine classes, 12/8/8/6 own fields with mixed types, the stated record distribution), 50,000 users referenced from `item.owner`, and `bench.ticket` at 20% of the records. Data is generated set-based and deterministically; record IDs come from `uuidv7()`.
 - Class-table storage exactly as Contracts 2.1 lays it out, at 1M and 10M records; one table per hierarchy (the baseline) at 10M; then, because the rule was not met, class-table with `class_id`-led indexes, the LIST-partitioned single table and one table per concrete class, all at 10M.
 - Q1 to Q7 and W1 to W3 as Contracts 2.6 defines them, for the admin and the restricted caller (row rule `owner = me OR status = "shared"`, a conditional deny on `item.location` compiled as `CASE WHEN` masks, a `bench.laptop` record rule reading `classification`). Reads: 10 warm-up and 200 measured runs with seeded parameters, p50 and p95 at the client, `EXPLAIN (ANALYZE, BUFFERS)` of the median run. Writes: 16 clients for 60 s each, through the save pipeline's statement sequence (lock the root alone, read the existing state, write the level row, bump the root version with a version check; delete through the root).
-- A smoke mode loads all four models from the same staging tables into one database and checks that every model returns the same IDs in the same order (and the same counts) for every request; it runs in CI (`bench-smoke`).
+- A smoke mode loads all four models from the same staging tables into one database. It checks that every model returns the same IDs in the same order (and the same counts) for every request, and that the branch form returns the same rows as the plain form in every model. It runs in CI (`bench-smoke`) against the CI Postgres service through `STD_BENCH_DATABASE_URL`.
 
 ## Results at 10M (p95, ms)
 
@@ -40,12 +40,124 @@ Contracts 2.6: keep class-table if it meets every budget at 10M and one table pe
 2. **With the `class_id` mitigations** (indexes `item (class_id, updated_at)`, `item (class_id, status, updated_at)`, `item (class_id, cost)`, `device (class_id, warranty_until)`, `computer (class_id, os)`, and the endpoint's `class_id IN subtree(E)` repeated on every joined level row): it still misses Q6 and Q7, and now also **Q3** (78.5 ms, 2.5x the baseline) and **Q4** (50.8 ms). The planner walks `device (class_id, warranty_until)` in sort order and probes the laptop level, which is slower here than the `cpu_model` index. **Not met.**
 3. The partitioned and per-concrete-class models were benchmarked as the rule requires. Both also miss Q2, Q6 and Q7.
 
-**Outcome: reopen.** Under the rule as written, class-table is not kept automatically, and **Stage 0 stops here for Martin's decision.** The numbers point one way, though. No storage model meets the budgets: every model misses Q6 and Q7, and the three single-table variants also miss Q2. Class-table is never more than 2x slower than the baseline. It is the fastest model on Q2 and Q6, within 4% of the baseline on Q7, and its misses are the misses every model has. Q3 and Q4 are where the joins cost (1.6x and 1.8x the baseline), and both stay under budget.
+**Outcome: the rule is formally not met.** Under the rule as written, class-table is not kept automatically.
+
+**Provisional decision (2026-10-21): keep class-table storage, pending Martin's confirmation.** Martin was not available, and the instruction was to keep going. The numbers support the provisional decision:
+
+- No storage model meets the budgets. Every model misses Q6 and Q7, and the three single-table variants also miss Q2.
+- Class-table is never more than 2x slower than the baseline. It is the fastest model on Q2 and Q6, within 4% of the baseline on Q7, and its misses are the misses every model has.
+- Q3 and Q4 are where the joins cost (1.6x and 1.8x the baseline), and both stay under budget.
+- The read compiler's branch form brings Q6 to 1.1 ms p95. Q7 reaches 51.9 ms p95 only with a covering index and two plan settings, and still misses by 1.9 ms (next section).
+
+Consequences:
+
+- **The Q6 form becomes a read-compiler requirement** for ws/0c-reads and the Step 4 rerun. For a restricted list, split the row rule's OR into disjoint branches, as described below.
+- **Q7 does not meet its budget** with any form the compiler can generate mechanically from the contract's indexes. What it would need is listed under "Compiler rewrites". Until one of those is decided, Q7 stays a known miss and a plan risk ("Known risks").
+
+## Compiler rewrites for Q6 and Q7 (2026-10-21)
+
+Question: can STD's read compiler, rather than the storage model, meet the Q6 and Q7 budgets on class-table storage? The test generated rewrites that the compiler can produce mechanically from the rule and the request (`compileBranchedList` in `bench/src/compile.ts`). They were measured on class-table at 10M records with 10 warm-up and 200 measured runs. All variants of a query use the same parameters. Results: `bench/results/2026-10-21-rewrites.md` (commit `a004c04`, seed 20261020).
+
+**The branch form.** The compiler splits the row rule's OR into disjoint branches. Branch _k_ is disjunct _k_ AND the negation of the earlier disjuncts, in negation normal form: `owner = me`, then `status = "shared" AND (owner <> me OR owner IS NULL)`. Each branch applies:
+
+- the per-class guard, with the shared rule factored out: `class_id IN (others) OR (class_id = laptop AND NOT denied)`;
+- the request's filters, with the same masks;
+- the request's sort, keeping its first page (`LIMIT 50`).
+
+The `UNION ALL` of the branches is sorted again and joined back to the endpoint for the selection, masks and labels. For Q7 the branches run over the ticket's item: tickets join the item under one rule disjunct each, so the `owner = me` branch resolves the user's items first and reaches tickets through `ticket(item)`.
+
+Checks:
+
+- At 10M, the branch form returned the same rows in the same order as the plain form on 20 requests each of Q6, Q7 and the restricted Q3 and Q4.
+- In smoke mode, it does so in all four storage models.
+
+Only the indexes Contracts 2.6 lists were used, except in the two variants marked "covering index".
+
+| Variant | p50 ms | p95 ms | Budget |
+| --- | --- | --- | --- |
+| Q6, plain form (as in the Stage 0 run) | 233 | 274 | 50 |
+| **Q6, branch form** | **0.58** | **1.10** | 50, met |
+| Q7, plain form (as in the Stage 0 run) | 143 | 167 | 50 |
+| Q7, branch form | 310 | 345 | 50 |
+| Q7, branch form, serial (`SET LOCAL max_parallel_workers_per_gather = 0`) | 308 | 341 | 50 |
+| Q7, branch form, serial, custom plans (`SET LOCAL plan_cache_mode = force_custom_plan`) | 53.4 | 68.3 | 50 |
+| Q7, branch form, serial, plus the covering index | 46.4 | 62.2 | 50 |
+| Q7, branch form, serial, custom plans, plus the covering index | 42.6 | **51.9** | 50, missed by 1.9 ms |
+
+The covering index is `item_rule_probe_idx ON bench.item (id) INCLUDE (status, owner, location, priority, class_id)`. Contracts 2.6 does not list it, and it is not a natural index: it exists only so the item probe becomes index-only.
+
+**Q6 meets its budget.** Each branch uses its own index. The `owner = me` branch reads the user's 200 items through `item (owner)`. The `shared` branch walks `item (status, updated_at)` and stops after 50 rows. When the requested status is not `shared`, Postgres proves the second branch empty (`status = 'ordered' AND status = 'shared'` becomes `One-Time Filter: false`). Median run, `EXPLAIN (ANALYZE, BUFFERS)` (class ID lists shortened):
+
+```text
+Limit (actual time=0.140..0.141 rows=0.00 loops=1)
+  Buffers: shared hit=183
+  ->  Sort  (Sort Key: i.updated_at DESC, i.id DESC)
+        ->  Nested Loop Left Join
+              ->  Nested Loop
+                    ->  Append (actual time=0.139..0.139 rows=0.00 loops=1)
+                          ->  Subquery Scan on "*SELECT* 1"
+                                ->  Limit -> Sort (Sort Key: i_1.updated_at DESC, i_1.id DESC)
+                                      ->  Nested Loop Left Join
+                                            Filter: ((i_1.class_id = ANY ('{…}'::uuid[])) OR ((i_1.class_id = '…08'::uuid) AND ((i_laptop.classification <> 'restricted'::text) OR (i_laptop.classification IS NULL))))
+                                            ->  Index Scan using item_owner_idx on item i_1 (actual time=0.137..0.137 rows=0.00 loops=1)
+                                                  Index Cond: (owner = '01a15d3f-…'::uuid)
+                                                  Filter: ((status = 'ordered'::text) AND (CASE WHEN ((priority <= 8) OR (priority IS NULL)) THEN location ELSE NULL::text END = 'LOC-006'::text) AND …)
+                                                  Rows Removed by Filter: 180
+                                                  Buffers: shared hit=183
+                                            ->  Index Scan using laptop_id_class on laptop i_laptop (never executed)
+                          ->  Subquery Scan on "*SELECT* 2"
+                                ->  Limit -> Sort -> Result (actual time=0.000..0.000 rows=0.00 loops=1)
+                                      One-Time Filter: false
+                    ->  Index Scan using item_pkey on item i (never executed)
+              ->  Index Scan using user_pkey on "user" ou (never executed)
+Planning Time: 0.268 ms
+Execution Time: 0.161 ms
+```
+
+**Q7 does not meet its budget.** The branch form fixes the `owner = me` branch: about 7 items through `item (owner)`, then tickets through `ticket(item)`, in 0.2 ms. The `shared` branch cannot be resolved first. Shared items with the requested location are about 40,000 items at 10M, and the contract has no index on `location`. Resolving them first took 341 ms (materialized CTE) and 192 ms with an extra `item (status, location)` index (single prototype runs). So the shared branch walks tickets in `updated_at` order and probes the item for each, about 11,000 probes for 50 rows. Three things stand between that and the budget:
+
+1. **Generic plans.** After five executions the prepared statement switches to a generic plan that is about 5x slower. Custom plans (`plan_cache_mode = force_custom_plan`, or an unprepared statement) are needed for rule-branched queries.
+2. **Parallel overshoot.** Parallel workers scan ahead about 200,000 tickets to return 50. An ordered `LIMIT` probe like this one must run serially.
+3. **Probe cost.** Each item probe is a primary-key lookup plus a heap fetch. A covering index that makes the probe index-only saves about 20%.
+
+With all three, Q7 is at 42.6 ms p50 and 51.9 ms p95. Median run of that variant, abridged:
+
+```text
+Limit (actual time=41.188..41.197 rows=50.00 loops=1)
+  Buffers: shared hit=68125
+  ->  Sort -> Nested Loop Left Join -> Nested Loop Left Join -> Nested Loop
+        ->  Append (actual time=0.231..40.619 rows=51.00 loops=1)
+              ->  Subquery Scan on "*SELECT* 1" (actual time=0.230..0.233 rows=1.00 loops=1)
+                    ->  … Index Scan using item_owner_idx on item ti_1 (rows=7.00)
+                          ->  Index Scan using ticket_item_idx on ticket t_1 (rows=0.14 loops=7)
+              ->  Subquery Scan on "*SELECT* 2" (actual time=25.763..40.381 rows=50.00 loops=1)
+                    ->  Limit -> Incremental Sort (Presorted Key: t_2.updated_at)
+                          ->  Nested Loop Left Join (actual time=6.676..40.359 rows=51.00 loops=1)
+                                ->  Nested Loop
+                                      ->  Index Scan Backward using ticket_updated_at_idx on ticket t_2 (actual time=0.011..8.946 rows=11250.00 loops=1)
+                                            Filter: ((NOT confidential) OR (opened_by = '01a15d3f-…'::uuid))
+                                      ->  Memoize (Hits: 4  Misses: 11246)
+                                            ->  Index Only Scan using item_rule_probe_idx on item ti_2 (actual time=0.002..0.002 rows=0.00 loops=11246)
+                                                  Filter: (((owner <> '01a15d3f-…'::uuid) OR (owner IS NULL)) AND (status = 'shared'::text) AND (CASE WHEN … THEN location … END = 'LOC-004'::text) AND …)
+                                                  Heap Fetches: 0
+                                                  Buffers: shared hit=55116
+                                ->  Index Scan using laptop_pkey on laptop ti_laptop_2 (loops=51)
+        ->  Index Scan using ticket_id_class on ticket t (loops=51)
+Execution Time: 42.897 ms
+```
+
+What Q7 would need to meet 50 ms reliably (one is enough):
+
+- **A ticket-side access path for the item rule.** For example, maintaining the reference target's rule inputs on the referencing row: a denormalized `item_status` and `item_location` on `ticket`, kept up to date by the record service, with an index on `(item_status, updated_at)`. This is a design change (Contracts 3.6), not compiler work.
+- **A relaxed budget** for list requests whose rule and reference filter together select under 1% of rows in sort order. For example, 100 ms p95 at 10M.
+- **A narrower Q7 definition.** Q7 here combines a 10% visibility guard with a 5% masked reference filter, so about 0.4% of tickets qualify. At about 2% density, the same plan runs in about 10 ms.
+
+Both Q7 forms are storage-independent. The same ordered ticket scan with item probes is the plan in every storage model.
 
 ## Why the misses happen
 
-- **Q6** (the restricted Q1) is a plan problem in every model. The median plan walks `item (status, updated_at)` for the requested status: about 1M index entries at 10M records, estimated at 416 rows, actual 2. The rule's `owner = me OR status = "shared"` is opaque to the planner's estimates, so it does not drive from the 200-row `owner` index. When the requested status is `shared` itself, the rule and the filter overlap. A compiler that simplifies the rule against the filter, or a plan that drives from `owner`, would fix it for any storage model.
-- **Q7** costs about 37k nested-loop probes into `item` for 50 tickets. The guard admits about 10% of items and the masked `location` filter 5%, so about 0.5% of tickets qualify, scanned in `updated_at` order. The cost does not depend on the scale (Q7 is 67 ms at 1M), and the same plan appears in every model.
+- **Q6** (the restricted Q1) is a plan problem in every model. The median plan walks `item (status, updated_at)` for the requested status: about 1M index entries at 10M records, estimated at 416 rows, actual 2. The rule's `owner = me OR status = "shared"` is opaque to the planner's estimates, so it does not drive from the 200-row `owner` index. The branch form fixes it (1.1 ms p95).
+- **Q7** costs about 37k nested-loop probes into `item` for 50 tickets (parallel workers included). The guard admits about 10% of items and the masked `location` filter 5%, so about 0.4% of tickets qualify, scanned in `updated_at` order. The cost does not depend on the scale (Q7 is 67 ms at 1M), and the same plan appears in every model. The branch form with custom plans, serial execution and a covering index gets it to 51.9 ms p95.
 - **Q2** is dominated by the count: a parallel sequential scan that filters 30% of 10M rows. Class-table is the fastest model on Q2 (244 ms, just under budget) because its root table is narrower than the single table's. Any model with wider rows misses.
 - **Q3 and Q4** are the cost of class-table joins: 20,000 to 25,000 level rows joined by primary key before the top-N sort. That is 48 to 49 ms against 27 to 31 ms for the single table: under budget, with little headroom.
 - **Writes** are bound by commit latency (WAL flush on the RAID 1 NVMe pair). Every model runs at about 5,000 operations per second with p95 near 5 ms, so the extra level rows of class-table do not show.
@@ -54,7 +166,7 @@ Contracts 2.6: keep class-table if it meets every budget at 10M and one table pe
 ## Caveats
 
 - **Shared machine.** The host (AMD Ryzen 7 9700X, 8 cores and 16 threads, 62 GiB, two NVMe drives in RAID 1) also runs other containers and other agents' test runs. The bench container is limited to 8 CPUs by CFS quota (not pinned) and 32 GB; it was never throttled. The results file records, per phase, host CPU use split into the bench container, the harness and everything else ("other" was 0.05 to 0.4 cores). Absolute numbers would be somewhat better on an idle machine; the comparisons between models ran under similar conditions.
-- **Stage 0 SQL is hand-written** (`bench/src/compile.ts`), mirroring what STD's compiler is specified to generate. Two compiler choices matter: class IDs are inlined as literals (definition constants), and the keyset cursor carries a redundant bound `k <= $k` on a descending first key next to the expanded null-aware predicate, so an index can start at the cursor. Statements are prepared, as STD's will be; Postgres may switch to generic plans after five executions, and the reported plans are `EXPLAIN ANALYZE` runs with the median run's parameters.
+- **Stage 0 SQL is hand-written** (`bench/src/compile.ts`), mirroring what STD's compiler is specified to generate. The rewrites run measured only class-table at 10M, on a quieter machine than the first full run ("other" load below 0.4 cores). Two compiler choices matter: class IDs are inlined as literals (definition constants), and the keyset cursor carries a redundant bound `k <= $k` on a descending first key next to the expanded null-aware predicate, so an index can start at the cursor. Statements are prepared, as STD's will be; Postgres may switch to generic plans after five executions, and the reported plans are `EXPLAIN ANALYZE` runs with the median run's parameters.
 - **Selectivities are judgment.** Contracts 2.6 fixes them only for Q1 (0.5%) and Q2 (30%). Q3 and Q4 filter 0.5% of the endpoint's records; Q7 filters tickets by the item's `location` (5%), masked for the restricted caller, behind a guard that admits about 10% of items. They were chosen before the 10M runs and not changed afterwards.
 - **Supplementary reads** (the restricted variants of Q2 to Q5 and the admin Q7) get 5 warm-up and 30 measured runs, because the restricted Q2 count takes seconds; they are reported, not decisive.
 - **W3 deletes the laptops W1 created** (no ticket references them), so several W3 phases end before 60 s when those run out; throughput and latency are over the time they ran.
@@ -62,7 +174,8 @@ Contracts 2.6: keep class-table if it meets every budget at 10M and one table pe
 
 ## Open questions for Martin
 
-1. **Storage.** Keep class-table storage? The benchmark found no storage-driven reason to leave it: no 2x losses, and the budget misses are shared by every model. The rule as written still says "reopen", so this needs your call.
-2. **Budgets for restricted lists (Q6, Q7).** Should these budgets hold for the restricted caller in Stage 0, or move to Step 1 and Step 4 as compiler work? The fixes are in query compilation, not storage: simplify rule predicates against the request's filters, check the plans STD gets for rule-shaped `OR` predicates (custom versus generic plans), and consider indexes that serve the rule, such as `(owner, updated_at)`.
-3. **Q2 count.** Exact counts of 3M rows cost about 240 to 450 ms in every model. Keep exact counts on request (Contracts 3.5) with this cost, or allow an estimate above a threshold? The restricted count takes 5 to 7 s in every model.
-4. **Run variance.** A first full run on the same machine with more concurrent load (up to 2 other cores busy) measured class-table Q2 at 290 ms and Q4 at 61 ms, over budget, against 244 and 48 ms in the committed run. Q2, Q3 and Q4 sit within about 5% of their budgets, so a dedicated reference machine is needed before any of them is treated as passed or failed with confidence.
+1. **Storage.** Confirm the provisional decision to keep class-table storage. The benchmark found no storage-driven reason to leave it: no 2x losses, and the budget misses are shared by every model. Formally, the rule as written says "reopen".
+2. **Q7.** Pick one of the options above: denormalized reference rule inputs, a relaxed budget for low-density rule-plus-reference lists, or a narrower Q7. The read compiler alone gets Q7 to 51.9 ms p95, and only with a non-natural covering index.
+3. **Compiler requirements.** The branch form for rule-OR lists, and custom plans plus serial execution for ordered rule-branch queries, become ws/0c-reads requirements (provisionally, per this note). Confirm that the record service may set `plan_cache_mode` and `max_parallel_workers_per_gather` per statement.
+4. **Q2 count.** Exact counts of 3M rows cost about 240 to 450 ms in every model. Keep exact counts on request (Contracts 3.5) at this cost, or allow an estimate above a threshold? The restricted count takes 5 to 7 s in every model.
+5. **Run variance.** A first full run with more concurrent load (up to 2 other cores busy) measured class-table Q2 at 290 ms and Q4 at 61 ms, against 244 and 48 ms in the committed run. Q2, Q3 and Q4 sit within about 5% of their budgets, so a dedicated reference machine is needed before any of them is treated as passed or failed with confidence.

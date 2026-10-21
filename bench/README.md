@@ -8,14 +8,15 @@ Stage 0 workstream 0E (plan: "Stage 0", Contracts 2.6). It measures class-table 
 | --- | --- |
 | `pnpm bench` | The Stage 0 run: class-table at 1M and 10M, one table per hierarchy at 10M, the decision rule; then the `class_id` index mitigations and the other two models if the rule asks for them. Writes `bench/results/<yyyy-mm-dd>-stage0.md` and `.json`. About an hour on the reference machine. |
 | `pnpm bench --scale 1m --model class-table` | A custom run. `--scale` takes `50k`, `1m`, `10m` (or a comma list), `--model` takes `class-table`, `single-table`, `partitioned`, `concrete-table`, `all` (or a comma list). `--mitigations` adds the `class_id`-led indexes to class-table. Writes `results/<date>-custom-...`. |
-| `pnpm bench --smoke` | All four models at 50k records in one fresh database, a cross-model equivalence check (every model returns the same IDs in the same order for every request), and a short measurement. Writes to `results/raw/` (ignored by git). |
+| `pnpm bench --rewrites` | Q6 and Q7 in the read compiler's branch form (row rule OR split into UNION ALL branches) on class-table at 10M, against the plain form, after an equivalence check; also Q7 with custom plans, serial execution and a covering index. Writes `results/<date>-rewrites.md` and `.json`. About 5 minutes. |
+| `pnpm bench --smoke` | All four models at 50k records in one fresh database, a cross-model equivalence check (every model returns the same IDs in the same order for every request, and the branch form returns the same rows as the plain form), and a short measurement. Writes to `results/raw/` (ignored by git). |
 | `pnpm --filter @std/bench test` | Runs the smoke mode end to end in a fresh database (`bench-smoke`). |
 
 Other options: `--seed`, `--warmup`, `--runs`, `--write-seconds`, `--clients`, `--out <dir>`, `--database <name>` (smoke mode), `--no-writes`, `--keep` (do not drop the benchmark databases), `--reuse` (reuse an already generated database; development only, since writes change the data).
 
 ## The bench database
 
-The benchmark never uses the test database on 54329. `bench/docker-compose.yml` runs a dedicated Postgres 18 (`std-bench-postgres`, volume `std-bench-pg`, `127.0.0.1:54330`, user, password and database `bench`) limited to the reference machine (8 CPUs, 32 GB) and tuned for it. `pnpm bench` starts it if it does not answer. `STD_BENCH_DATABASE_URL` points the harness at another server. Every run creates its own database (`bench_<model>_<scale>`) and drops it afterwards; the test and smoke mode use a fresh `bench_smoke_*` database.
+The benchmark never uses the test database on 54329. `bench/docker-compose.yml` runs a dedicated Postgres 18 (`std-bench-postgres`, volume `std-bench-pg`, `127.0.0.1:54330`, user, password and database `bench`) limited to the reference machine (8 CPUs, 32 GB) and tuned for it. `pnpm bench` starts it if it does not answer. `STD_BENCH_DATABASE_URL` (read through Effect `Config`) points the harness at another server; GitHub CI points it at the CI Postgres service, where the smoke test creates and drops its own small database. Every run creates its own database (`bench_<model>_<scale>`) and drops it afterwards; the test and smoke mode use a fresh `bench_smoke_*` database.
 
 ## Layout
 
