@@ -1,18 +1,21 @@
 /**
  * The `std` command.
  *
- * Commands (later workstreams add `serve` and `schema ...`):
+ * Commands (later workstreams add `schema ...`):
  *
  * - `std upgrade`, with `--plan`, `--json`, `--expect <hash>`,
- *   `--report <file>` and `--set <dir>` (repeatable): applies pending platform migrations, resumes
- *   interrupted change sets, then loads the core definition set and each
- *   app set in `requires` order (Contracts 8.5). `--plan` changes nothing
- *   and prints the plan with its hash; `--expect <hash>` makes the real run
- *   refuse unless the database still plans exactly that; `--report` also
- *   writes the JSON report to a file. Exit 0 on success, 1 on a refusal or
- *   failure, 2 on a usage error.
+ *   `--report <file>` and `--set <dir>` (repeatable): applies pending
+ *   platform migrations, resumes interrupted change sets, then loads the
+ *   core definition set and each app set in `requires` order (Contracts
+ *   8.5). `--plan` changes nothing and prints the plan with its hash;
+ *   `--expect <hash>` makes the real run refuse unless the database still
+ *   plans exactly that; `--report` also writes the JSON report to a file.
+ *   Exit 0 on success, 1 on a refusal or failure, 2 on a usage error.
  * - `std doctor [--json]`: read-only checks (Contracts 1.10). Exit 0 when
  *   clean, 1 on any error, 2 for warnings only, and 1 when it cannot run.
+ * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
+ *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
+ *   platform migrations.
  */
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,6 +27,7 @@ import { Catalog } from "../catalog/catalog.ts";
 import { planUpgrade, runUpgrade } from "../config/upgrade.ts";
 import type { UpgradeOptions } from "../config/upgrade.ts";
 import { runDoctor } from "../doctor/doctor.ts";
+import { ServerLayer } from "../http/serve.ts";
 import {
   CLI_APPLICATION_NAME,
   DatabaseConfig,
@@ -38,7 +42,8 @@ Commands:
                   Apply platform migrations, resume interrupted change sets,
                   then load the core definition set and each app set (stop
                   all STD servers first). --plan changes nothing.
-  doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings`;
+  doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings
+  serve           Serve the STD API over HTTP`;
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -189,6 +194,17 @@ const doctor = (json: boolean) =>
     })
   );
 
+/** `std serve`: runs the HTTP server until interrupted. */
+const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
+  Effect.matchEffect({
+    onFailure: (failure) =>
+      Console.error(`std serve: ${String(failure)}`).pipe(
+        Effect.andThen(setExitCode(EXIT_FAILURE))
+      ),
+    onSuccess: () => Effect.void,
+  })
+);
+
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;
 
@@ -202,6 +218,10 @@ const main = (args: readonly string[]): Effect.Effect<void> => {
 
   if (command === "doctor" && rest.every((arg) => arg === "--json")) {
     return doctor(rest.length > 0);
+  }
+
+  if (command === "serve" && rest.length === 0) {
+    return serve;
   }
 
   return Effect.andThen(Console.error(USAGE), setExitCode(EXIT_USAGE));

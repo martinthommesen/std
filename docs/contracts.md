@@ -462,6 +462,8 @@ It exercises row visibility, a never-readable field, a conditionally readable fi
 - **Non-interference guarantee:** the rows, their order, the count and which fields are present depend only on values the caller can read and on the outcomes of the access-rule conditions that apply to the caller. Equivalently: for fixed rule outcomes (which records are visible, which fields are withheld on each), they depend only on values the caller can read.
 - A rule condition may read fields the caller cannot read (rule 10). That disclosure is the rule author's choice, and the rule editor warns when a condition reads a field that some role it applies to cannot read [judgment].
 - Cost: masked expressions cannot use a plain index; always fields compile bare. [judgment]
+- Sorts on text compare the field's comparison key (`casefold` for case-insensitive text) under `pg_unicode_fast`, so the order is by code point, independent of the database's default collation; password, secret, json and condition fields cannot be sorted. [judgment, decision 0008]
+- Branch form: when the caller's visibility has several top-level ORs (class groups or allow conditions), a page is a `UNION ALL` of disjoint branches (`AND NOT COALESCE(<earlier branches>, false)`), each with the full filter, cursor, `ORDER BY` and `LIMIT`, merged by the same order and limit; results equal the plain form's (property-tested). Counts use the plain form. Branch-form pages run unprepared with custom plans and no parallel workers (decision 0008).
 - Counts use the same `FROM` and `WHERE` as the page and are returned only on request (6.6). No total or "has more" flag comes from an unrestricted query.
 
 ### 3.6 References
@@ -497,6 +499,9 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `SchemaChanged` | 409 | see 6.4 |
 | `InvalidReference` | 422 | target does not exist or is not visible; identical |
 | `Referenced` | 409 | delete refused because other records reference it; no count or names |
+| `Unauthenticated` | 401 | no bearer token, an unknown or expired one, or an inactive user |
+| `InvalidCredentials` | 401 | sign-in refused; unknown login, wrong password and deactivated user alike |
+| `InvalidRequest`, `InvalidFilter`, `InvalidCursor` | 400 | a malformed query parameter, a filter that does not parse or check (after names resolve), a cursor not issued for this sort |
 
 - Raw Postgres error text is never returned (constraint details contain values); it goes to server logs only. Constraint names encode IDs, so violations map to fields without parsing messages.
 - Accepted leaks: a unique conflict reveals a value is taken; `Referenced` reveals some reference exists. Timing channels are out of scope for v0.1.
@@ -590,7 +595,7 @@ Hooks and record rules are selected by the record's concrete class: those attach
 
 Each committed version of a logical record has exactly one change entry, written in step 9. A no-op writes none. A delete's change entry and its deliveries carry `record_version` = current version + 1.
 
-`core.change` columns: `change_id` (UUIDv7, the idempotency key everywhere); `operation_id` (one per outermost transaction); `record_id`; `class_id`; `record_version`; `kind` (`create`, `update`, `delete`); `actor_id`; `cause` (`api`, `ui`, `import` with job and row, `hook` with hook and parent change, `after_commit` with subscription and parent change, `system`); `schema_revision`; `occurred_at` (informational, never used for ordering); `fields`, a map from field ID to `{before, after}` in canonical JSON (create: all non-empty `after`; update: changed fields; delete: all `before`). References store the ID only, never a label.
+`core.change` columns: `change_id` (UUIDv7, the idempotency key everywhere); `operation_id` (one per outermost transaction); `record_id`; `class_id` (column `record_class_id`, because `core.change` is laid out like a platform table whose own `class_id` is its platform class; decision 0009); `record_version`; `kind` (`create`, `update`, `delete`); `actor_id`; `cause` (`api`, `ui`, `import` with job and row, `hook` with hook and parent change, `after_commit` with subscription and parent change, `system`); `schema_revision`; `occurred_at` (informational, never used for ordering); `fields`, a map from field ID to `{before, after}` in canonical JSON (create: all non-empty `after`; update: changed fields; delete: all `before`). References store the ID only, never a label.
 
 - `UNIQUE (record_id, record_version)`: every version bump, and every delete, has exactly one entry, whichever endpoint the save came through.
 - Writes to other records in the same transaction are separate entries with the same `operation_id`.
@@ -983,7 +988,9 @@ The representation of every type is fixed in Step 1, including types implemented
 
 - `id`, `class` (concrete class) and `version` are envelope members; filters reach them as paths. A write body naming them gets `ReadOnlyField`. The expected version travels in `If-Match` (6.7).
 - `values` is keyed by field name; a followed reference appears under its dotted path. A value's shape depends only on its type.
-- `labels` only on request; absent when not permitted (3.6), never a placeholder.
+- `labels` only on request (`labels=true`); absent when not permitted (3.6), never a placeholder.
+- A path value (`docked_to.name`) is null when the reference is empty or its target or field is hidden, like a label it does not tell these apart; the key is absent only when the reference itself is withheld. [judgment, decision 0008]
+- Through a parent endpoint, single reads show the endpoint's fields too (2.3); `class` names the concrete class.
 - An absent key means "not delivered". `withheld` lists selected fields omitted by access rules on this record, so the UI shows "restricted"; it reveals nothing the absent key does not. `null` always means a stored empty.
 - Lists: `{ "schemaRevision", "records", "nextCursor", "count" }`. `nextCursor` is null on the last page. `count` is present only on request (`count=true`) and is computed with the page's `FROM` and `WHERE` (3.5).
 
