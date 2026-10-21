@@ -17,7 +17,11 @@ import {
 import { generatedName } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import type { Requester } from "@std/definitions/requester";
-import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
+import {
+  BUILT_IN_ROLE_IDS,
+  USER_CLASS_ID,
+  USER_ROLE_CLASS_ID,
+} from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -456,7 +460,45 @@ describe("schema-lifecycle", () => {
             }
 
             yield* remove(rule.id);
-            yield* remove(auditor.id);
+
+            // Two users hold the role: reported, allowed, and left intact.
+            const users = yield* insertRecords(
+              ['"core"."user"'],
+              USER_CLASS_ID,
+              2,
+              {
+                login: "'auditor' || g",
+                name: "'Auditor ' || g",
+              }
+            );
+
+            for (const userId of users) {
+              yield* insertRecords(
+                ['"core"."user_role"'],
+                USER_ROLE_CLASS_ID,
+                1,
+                {
+                  role: `'${auditor.id}'::uuid`,
+                  user: `'${userId}'::uuid`,
+                }
+              );
+            }
+
+            const assignments = values(
+              `SELECT count(*)::text AS value FROM "core"."user_role" WHERE "role" = $1::uuid`,
+              [auditor.id]
+            );
+
+            const retired = yield* retire(auditor.id);
+
+            assert.strictEqual(retired.assignments.get(auditor.id), 2);
+            assert.strictEqual(retired.operations[0]?.userRoleAssignments, 2);
+            assert.deepStrictEqual(yield* assignments, ["2"]);
+
+            const deleted = yield* remove(auditor.id);
+
+            assert.strictEqual(deleted.assignments.get(auditor.id), 2);
+            assert.deepStrictEqual(yield* assignments, ["2"]);
 
             const snapshot = yield* (yield* Catalog).refresh;
 

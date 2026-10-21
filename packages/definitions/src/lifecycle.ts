@@ -233,9 +233,16 @@ export const isActiveLineage = (
   return lineage.length > 0 && lineage.every(isActive);
 };
 
+/**
+ * What keeps a table from being retired: an active child class, or an
+ * active reference field pointing at it, whatever its own table's state and
+ * including the table's own fields (Contracts 1.7). The field's own state
+ * decides; retire it first.
+ *
+ * @param edges - The table's dependents.
+ * @returns The blocking ones.
+ */
 const retireClassBlockers = (
-  view: ConfigSnapshot,
-  target: ClassDefinition,
   edges: readonly DependentEdge[]
 ): readonly DependentEdge[] =>
   edges.filter(({ definition, kind }) => {
@@ -243,14 +250,10 @@ const retireClassBlockers = (
       return isActive(definition);
     }
 
-    if (kind !== "references_table" || definition.kind !== "field") {
-      return false;
-    }
-
     return (
-      isActive(definition) &&
-      definition.classId !== target.id &&
-      isActiveLineage(view, definition.classId)
+      kind === "references_table" &&
+      definition.kind === "field" &&
+      isActive(definition)
     );
   });
 
@@ -267,7 +270,6 @@ const roleRuleBlockers = (
   });
 
 const blockersForRetire = (
-  view: ConfigSnapshot,
   current: Definition,
   edges: readonly DependentEdge[]
 ): readonly DependentEdge[] => {
@@ -276,11 +278,31 @@ const blockersForRetire = (
   }
 
   if (current.kind === "class") {
-    return retireClassBlockers(view, current, edges);
+    return retireClassBlockers(edges);
   }
 
   return roleRuleBlockers(edges, true);
 };
+
+/**
+ * The overrides that make a field required on descendant classes. Retiring
+ * the field clears their `required`, so the field is optional on every
+ * class while retired and comes back optional everywhere when reactivated
+ * (Contracts 1.6). Their other tightenings stay.
+ *
+ * @param edges - The field's dependents.
+ * @returns The overrides.
+ */
+const requiringOverrides = (
+  edges: readonly DependentEdge[]
+): readonly Definition[] =>
+  edges.flatMap(({ definition, kind }) =>
+    kind === "overrides" &&
+    definition.kind === "override" &&
+    definition.required === true
+      ? [definition]
+      : []
+  );
 
 const retiredState = (current: Definition): JsonObject =>
   current.kind === "field"
@@ -319,7 +341,7 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
 
   const view = viewOf(work);
   const edges = dependentsOf(view, current.id);
-  const blocking = blockersForRetire(view, current, edges);
+  const blocking = blockersForRetire(current, edges);
   const blockingSet = new Set(blocking);
 
   if (conflict(work, current, "retire", blocking)) {
@@ -328,17 +350,66 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
 
   const next = withChanges(work, current, retiredState(current));
 
-  if (next !== undefined) {
-    record(
-      work,
-      operation,
-      next,
-      note(
-        allowed.localOverride,
-        edges.filter((edge) => !blockingSet.has(edge))
-      )
-    );
+  if (next === undefined) {
+    return;
   }
+
+  const loosened = requiringOverrides(edges);
+
+  for (const override of loosened) {
+    const optional = withChanges(work, override, { required: null });
+
+    if (optional !== undefined) {
+      recordCascade(work, optional);
+    }
+  }
+
+  record(
+    work,
+    operation,
+    next,
+    note(
+      allowed.localOverride,
+      edges.filter((edge) => !blockingSet.has(edge)),
+      loosened.map((override) => override.id)
+    )
+  );
+};
+
+/**
+ * The tables that are not active and that an active reference field of
+ * the reactivated definition would point at: a reactivated reference field
+ * must not point at a retired table, nor may a reactivated table carry an
+ * active reference field that does (Contracts 1.7, the retire rule seen
+ * from the other side).
+ *
+ * @param view - The configuration so far.
+ * @param current - The definition to reactivate.
+ * @returns The targets, as dependents of kind `references_table`.
+ */
+const inactiveTargets = (
+  view: ConfigSnapshot,
+  current: Definition
+): readonly DependentEdge[] => {
+  let fields: readonly FieldDefinition[] = [];
+
+  if (current.kind === "field") {
+    fields = [current];
+  } else if (current.kind === "class") {
+    fields = view.ownFields(current.id).filter(isActive);
+  }
+
+  return fields.flatMap((field) => {
+    const target =
+      field.type.kind === "reference"
+        ? view.class(field.type.targetClassId)
+        : undefined;
+
+    // A table's reference to itself becomes active with it.
+    return target === undefined || isActive(target) || target.id === current.id
+      ? []
+      : [{ definition: target, kind: "references_table" as const }];
+  });
 };
 
 /**
@@ -383,6 +454,17 @@ export const reactivate = (work: Work, operation: Op<"reactivate">): void => {
       `Its parent class ${parent.id} is ${parent.state}; reactivate it first.`
     );
 
+    return;
+  }
+
+  if (
+    conflict(
+      work,
+      current,
+      "reactivate",
+      inactiveTargets(viewOf(work), current)
+    )
+  ) {
     return;
   }
 

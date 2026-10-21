@@ -345,6 +345,120 @@ describe("lifecycle", () => {
     assert.isTrue(effectiveClass(applied.after, w.asset.id)?.readable);
   });
 
+  it("retiring a field clears the required overrides of descendants; reactivated it is optional on every class", () => {
+    const w = world();
+    const grade = field(w.asset, "grade", { kind: "text" });
+    const strict = override(w.laptop, grade, { maxLength: 10, required: true });
+    const snapshot = w.snapshot.with(KEY, [grade, strict]);
+
+    const before = effectiveFields(snapshot, w.laptop.id).find(
+      (entry) => entry.field.id === grade.id
+    );
+
+    assert.isTrue(before?.required);
+
+    const retired = succeeded(apply(snapshot, [retireOp(grade)]));
+    const loosened = retired.after.getKind("override", strict.id);
+
+    assert.isNull(loosened?.required);
+    assert.strictEqual(loosened?.maxLength, 10);
+    assert.include([...(retired.notes[0]?.cascade ?? [])], strict.id);
+
+    const back = succeeded(
+      apply(committed(retired), [
+        { id: grade.id, op: "reactivate", version: 2 },
+      ])
+    );
+
+    for (const classId of [w.asset.id, w.laptop.id]) {
+      const effective = effectiveFields(back.after, classId).find(
+        (entry) => entry.field.id === grade.id
+      );
+
+      assert.strictEqual(effective?.state, "active");
+      assert.isFalse(effective?.required);
+    }
+  });
+
+  it("a table an active reference field points at stays active, and a reference never comes back to a retired table", () => {
+    const w = world();
+    const box = table(w.ns, "box");
+
+    const link = field(w.asset, "box", {
+      kind: "reference",
+      targetClassId: box.id,
+    });
+
+    const own = field(box, "parent_box", {
+      kind: "reference",
+      targetClassId: box.id,
+    });
+
+    const snapshot = w.snapshot.with(KEY, [box, link, own]);
+
+    // An active reference from another table, and the table's own
+    // reference to itself, both block.
+    const blocked = apply(snapshot, [retireOp(box)]);
+
+    assert.strictEqual(tagOf(blocked), "DependencyConflict");
+
+    if (isFailure(blocked) && blocked.failure._tag === "DependencyConflict") {
+      assert.sameMembers(
+        blocked.failure.dependents.map((entry) => entry.id),
+        [link.id, own.id]
+      );
+    }
+
+    // The reviewer's sequence: the source table retired first no longer
+    // exempts its active reference field.
+    const sourceRetired = committed(
+      succeeded(apply(snapshot, [retireOp(w.laptop), retireOp(w.asset)]))
+    );
+
+    assert.strictEqual(
+      tagOf(apply(sourceRetired, [retireOp(own), retireOp(box)])),
+      "DependencyConflict"
+    );
+
+    // With every reference retired, the table retires; then neither the
+    // field nor a table carrying an active one may come back while the
+    // target is retired.
+    const allRetired = committed(
+      succeeded(
+        apply(snapshot, [
+          retireOp(link),
+          retireOp(own),
+          retireOp(box),
+          retireOp(w.laptop),
+          retireOp(w.asset),
+        ])
+      )
+    );
+
+    assert.strictEqual(
+      tagOf(
+        apply(allRetired, [
+          { id: w.asset.id, op: "reactivate", version: 2 },
+          { id: link.id, op: "reactivate", version: 2 },
+        ])
+      ),
+      "DependencyConflict"
+    );
+    assert.isTrue(
+      isSuccess(
+        apply(allRetired, [{ id: w.asset.id, op: "reactivate", version: 2 }])
+      )
+    );
+    assert.isTrue(
+      isSuccess(
+        apply(allRetired, [
+          { id: box.id, op: "reactivate", version: 2 },
+          { id: own.id, op: "reactivate", version: 2 },
+        ])
+      )
+    );
+  });
+
   it("refuses purges per the contract and succeeds once causes are removed", () => {
     const w = world();
 

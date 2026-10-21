@@ -261,15 +261,18 @@ const targetOf = (operation: Operation): DefinitionId =>
  * definition the origin does not own (`localOverride`, stored as an
  * override by workstream 1B); and for a purge, the number of values or
  * rows destroyed, counted under `SCHEMA_KEY` (the audit record of the
- * purge).
+ * purge); for a retired or deleted role, the user-role assignments it had
+ * (reported but allowed, Contracts 1.7).
  *
  * @param applied - The applied change set.
  * @param destroyed - Values or rows destroyed per purged definition.
+ * @param assignments - User-role assignments per retired or deleted role.
  * @returns One JSON object per operation that changed something.
  */
 export const journalOperations = (
   applied: AppliedChangeSet,
-  destroyed: ReadonlyMap<DefinitionId, number> = new Map()
+  destroyed: ReadonlyMap<DefinitionId, number> = new Map(),
+  assignments: ReadonlyMap<DefinitionId, number> = new Map()
 ): readonly JsonObject[] =>
   applied.operations.map((operation, index) => {
     const id = targetOf(operation);
@@ -299,6 +302,12 @@ export const journalOperations = (
 
     if (counted.length > 0) {
       entry.destroyed = counted;
+    }
+
+    const assigned = assignments.get(id);
+
+    if (assigned !== undefined) {
+      entry.userRoleAssignments = assigned;
     }
 
     return entry;

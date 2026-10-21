@@ -43,6 +43,7 @@ import type { ChangeSetRefusal } from "@std/definitions/refusals";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "@std/definitions/requester";
 import type { ChangeOrigin, Requester } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { USER_ROLE_CLASS_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
@@ -80,7 +81,7 @@ import { stepBoundary } from "./recovery-settings.ts";
 import { settleOpenChangeSets } from "./recovery.ts";
 import type { SchemaBusy } from "./schema-busy.ts";
 import type { SchemaNeedsAttention } from "./schema-needs-attention.ts";
-import { tableName } from "./sql-text.ts";
+import { quoteIdent, tableName } from "./sql-text.ts";
 import {
   journalOperations,
   writeDefinitionRevisions,
@@ -134,6 +135,11 @@ export interface ChangeSetResult {
   readonly error: string | null;
   /** Values or rows each purged definition destroyed (Contracts 1.6). */
   readonly destroyed: ReadonlyMap<DefinitionId, number>;
+  /**
+   * User-role assignments of each retired or deleted role, reported but
+   * allowed (Contracts 1.7); the assignments themselves stay.
+   */
+  readonly assignments: ReadonlyMap<DefinitionId, number>;
   /** What the journal recorded per operation (cascades, reported dependents). */
   readonly operations: readonly JsonObject[];
 }
@@ -239,6 +245,8 @@ interface MainInput {
   readonly timing: { started: number; finished: number };
   /** Values or rows each purge destroys, counted before `CONFIG_KEY`. */
   readonly destroyed: ReadonlyMap<DefinitionId, number>;
+  /** User-role assignments of retired or deleted roles. */
+  readonly assignments: ReadonlyMap<DefinitionId, number>;
 }
 
 const mainTransaction = Effect.fn("Schema.mainTransaction")(
@@ -286,7 +294,11 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     yield* writeDefinitionRevisions(revision, plan.definitions);
     yield* writeDependencies(plan.definitions);
 
-    const operations = journalOperations(applied, input.destroyed);
+    const operations = journalOperations(
+      applied,
+      input.destroyed,
+      input.assignments
+    );
 
     yield* writeJournal({
       changeSetId: input.changeSetId,
@@ -427,6 +439,63 @@ const countPurges = Effect.fn("Schema.countPurges")(function* countPurges(
   return destroyed;
 });
 
+/**
+ * The roles a change set retires or deletes.
+ *
+ * @param applied - The applied change set.
+ * @returns Their IDs.
+ */
+const endedRoles = (applied: AppliedChangeSet): readonly DefinitionId[] =>
+  applied.changes.flatMap(({ before, after }) =>
+    before?.kind === "role" &&
+    before.state !== after.state &&
+    after.state !== "active"
+      ? [after.id]
+      : []
+  );
+
+/**
+ * Counts the user-role assignments of each role the change set retires or
+ * deletes (Contracts 1.7: reported but allowed). It reads data, so it runs
+ * on the pool before `CONFIG_KEY`; the number is a report, and assignments
+ * made meanwhile are not refused anyway.
+ *
+ * @param applied - The applied change set.
+ * @returns Assignments per role.
+ */
+const countAssignments = Effect.fn("Schema.countAssignments")(
+  function* countAssignments(applied: AppliedChangeSet) {
+    const counts = new Map<DefinitionId, number>();
+    const roles = endedRoles(applied);
+    const roleField = applied.before.fieldByName(USER_ROLE_CLASS_ID, "role");
+
+    if (
+      roles.length === 0 ||
+      roleField === undefined ||
+      applied.before.class(USER_ROLE_CLASS_ID)?.storage !== "standard"
+    ) {
+      return counts;
+    }
+
+    const sql = yield* SqlClient.SqlClient;
+    const table = tableName(applied.before, USER_ROLE_CLASS_ID);
+
+    for (const roleId of roles) {
+      const [row] = yield* sql
+        .unsafe(
+          `SELECT count(*) AS n FROM ${table} WHERE ${quoteIdent(roleField.name)} = $1::uuid`,
+          [roleId]
+        )
+        .pipe(Effect.flatMap(decodeCount));
+
+      counts.set(roleId, Number(row?.n ?? "0"));
+    }
+
+    return counts;
+  },
+  hygienic
+);
+
 const newChangeSetId = hygienic(
   SqlClient.SqlClient.pipe(
     Effect.flatMap((sql) => sql`SELECT uuidv7()::text AS id`),
@@ -436,6 +505,7 @@ const newChangeSetId = hygienic(
 );
 
 const unchanged: ChangeSetResult = {
+  assignments: new Map(),
   changeSetId: null,
   completeRevision: null,
   destroyed: new Map(),
@@ -456,8 +526,10 @@ const resultOf = (
     readonly operations: readonly JsonObject[];
   },
   timing: { readonly started: number; readonly finished: number },
-  destroyed: ReadonlyMap<DefinitionId, number>
+  destroyed: ReadonlyMap<DefinitionId, number>,
+  assignments: ReadonlyMap<DefinitionId, number>
 ): ChangeSetResult => ({
+  assignments,
   changeSetId,
   completeRevision: null,
   destroyed,
@@ -478,7 +550,8 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
   function* withCoordinator(
     request: ChangeSetRequest,
     changeSetId: string,
-    options: ChangeSetOptions | undefined
+    options: ChangeSetOptions | undefined,
+    assignments: ReadonlyMap<DefinitionId, number>
   ): Effect.fn.Return<
     ChangeSetResult,
     ChangeSetError,
@@ -506,6 +579,7 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
 
     const committed = yield* connection.transactions.configCommit(
       mainTransaction({
+        assignments,
         changeSetId,
         coordinatorPid: connection.processId,
         destroyed,
@@ -516,7 +590,13 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
       options
     );
 
-    const result = resultOf(changeSetId, committed, timing, destroyed);
+    const result = resultOf(
+      changeSetId,
+      committed,
+      timing,
+      destroyed,
+      assignments
+    );
 
     if (committed.plan.steps.length === 0) {
       return result;
@@ -558,10 +638,11 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
     }
 
     const changeSetId = request.changeSetId ?? (yield* newChangeSetId);
+    const assignments = yield* countAssignments(applied);
 
     if (requiresSchemaKey(applied)) {
       return yield* Effect.scoped(
-        withCoordinator(request, changeSetId, options)
+        withCoordinator(request, changeSetId, options, assignments)
       );
     }
 
@@ -569,6 +650,7 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
 
     const committed = yield* configCommit(
       mainTransaction({
+        assignments,
         changeSetId,
         coordinatorPid: null,
         destroyed: new Map(),
@@ -579,6 +661,6 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
       options
     );
 
-    return resultOf(changeSetId, committed, timing, new Map());
+    return resultOf(changeSetId, committed, timing, new Map(), assignments);
   }
 );
