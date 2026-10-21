@@ -12,7 +12,14 @@
  * catch a deliberately disguised name (assembled at run time, say), which
  * review covers.
  */
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -26,7 +33,13 @@ import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { freshAsset, objectOf, observe, signInAll } from "./authz-support.ts";
 import type { Observation } from "./authz-support.ts";
-import { NAME_LOOKUP_SITES, nameChecksIn, sourceFiles } from "./name-scan.ts";
+import {
+  NAME_LOOKUP_SITES,
+  nameChecksIn,
+  SOURCE_EXTENSIONS,
+  sourceFiles,
+  workspacePackages,
+} from "./name-scan.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import { change, createRole, freshId, values } from "./schema-support.ts";
 
@@ -36,17 +49,8 @@ const ALLOW_ALL = [
   "3bd8ef4a-4973-4ca2-a041-0bfd67b838e9",
 ] as const;
 
-const PACKAGES = path.resolve(import.meta.dirname, "../..");
-
-/** The packages whose `src/` decides access, and every other `src/`. */
-const SOURCE_PACKAGES = [
-  "access",
-  "api",
-  "conditions",
-  "definitions",
-  "server",
-  "values",
-] as const;
+/** The repository root. */
+const ROOT = path.resolve(import.meta.dirname, "../../..");
 
 // Every path an admin takes, with the record IDs it needs.
 const adminPaths = (records: {
@@ -124,6 +128,49 @@ const withoutRevision = (json: JsonValue | undefined): JsonValue =>
     Object.entries(objectOf(json)).filter(([key]) => key !== "schemaRevision")
   );
 
+/**
+ * The scan of a snapshot file shaped like the real one, plus members and
+ * statements.
+ *
+ * @param members - More class members.
+ * @param after - Statements after the class.
+ * @returns The findings.
+ */
+const snapshotProbe = (
+  members: readonly string[],
+  after: readonly string[] = []
+) =>
+  nameChecksIn(
+    "packages/definitions/src/snapshot.ts",
+    [
+      "export class ConfigSnapshot {",
+      "  readonly #roleByName = new Map();",
+      "  readonly #permissionByName = new Map();",
+      "  #index() { for (const r of this.roles) { this.#roleByName.set(r.name, r); } }",
+      "  roleByName(name) { return this.#roleByName.get(name); }",
+      "  permissionByName(name) { return this.#permissionByName.get(name); }",
+      ...members,
+      "}",
+      ...after,
+    ].join("\n")
+  );
+
+/**
+ * Workspace packages the scan skips, each with its reason; every other
+ * package's `src/` is scanned, and a listed package that no longer exists
+ * fails the scan.
+ */
+const UNSCANNED_PACKAGES: ReadonlyMap<string, string> = new Map([
+  [
+    "bench",
+    "the storage benchmark models callers with its own role kinds; it never runs STD's authorization",
+  ],
+  [
+    "packages/testing",
+    "fixtures assign the built-in roles to test users by name, as set files do",
+  ],
+]);
+
 describe("no-bypass", () => {
   it("the scan finds role-name checks in code, whatever the comments", () => {
     const probe = [
@@ -138,13 +185,16 @@ describe("no-bypass", () => {
       'type Name = "admin";',
     ].join("\n");
 
-    assert.deepStrictEqual(nameChecksIn("server/src/probe.ts", probe), [
-      'server/src/probe.ts:1 "admin"',
-      'server/src/probe.ts:2 "authenticated"',
-      'server/src/probe.ts:3 "schema_purger"',
-      'server/src/probe.ts:4 "admin"',
-      'server/src/probe.ts:5 "admin"',
-    ]);
+    assert.deepStrictEqual(
+      nameChecksIn("packages/server/src/probe.ts", probe),
+      [
+        'packages/server/src/probe.ts:1 "admin"',
+        'packages/server/src/probe.ts:2 "authenticated"',
+        'packages/server/src/probe.ts:3 "schema_purger"',
+        'packages/server/src/probe.ts:4 "admin"',
+        'packages/server/src/probe.ts:5 "admin"',
+      ]
+    );
   });
 
   it("every mention of a lookup by name is a finding outside its approved call", () => {
@@ -166,22 +216,26 @@ describe("no-bypass", () => {
     const used = new Set<string>();
 
     assert.deepStrictEqual(
-      nameChecksIn("definitions/src/set-upgrade.ts", approvedWithEscapes, used),
+      nameChecksIn(
+        "packages/definitions/src/set-upgrade.ts",
+        approvedWithEscapes,
+        used
+      ),
       [
-        "definitions/src/set-upgrade.ts:2 mentions roleByName",
-        "definitions/src/set-upgrade.ts:3 mentions roleByName",
-        "definitions/src/set-upgrade.ts:4 mentions roleByName",
-        "definitions/src/set-upgrade.ts:5 mentions permissionByName",
-        "definitions/src/set-upgrade.ts:6 mentions roleByName",
-        "definitions/src/set-upgrade.ts:7 mentions roleByName",
-        "definitions/src/set-upgrade.ts:10 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:2 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:3 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:4 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:5 mentions permissionByName",
+        "packages/definitions/src/set-upgrade.ts:6 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:7 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:10 mentions roleByName",
       ]
     );
     assert.sameMembers(
       [...used],
       [
-        "definitions/src/set-upgrade.ts#localClash#roleByName",
-        "definitions/src/set-upgrade.ts#localClash#permissionByName",
+        "packages/definitions/src/set-upgrade.ts#localClash#roleByName",
+        "packages/definitions/src/set-upgrade.ts#localClash#permissionByName",
       ]
     );
 
@@ -189,32 +243,32 @@ describe("no-bypass", () => {
     // no longer unique, so neither function is approved.
     assert.deepStrictEqual(
       nameChecksIn(
-        "definitions/src/set-upgrade.ts",
+        "packages/definitions/src/set-upgrade.ts",
         [
           "const localClash = (installed, draft) => [installed.roleByName(draft.name)];",
           "const later = function localClash() { return x.roleByName(n); };",
         ].join("\n")
       ),
       [
-        "definitions/src/set-upgrade.ts:1 mentions roleByName",
-        "definitions/src/set-upgrade.ts:2 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:1 mentions roleByName",
+        "packages/definitions/src/set-upgrade.ts:2 mentions roleByName",
       ]
     );
 
     // A `satisfies`-wrapped initializer is not an approved declaration.
     assert.deepStrictEqual(
       nameChecksIn(
-        "definitions/src/set-upgrade.ts",
+        "packages/definitions/src/set-upgrade.ts",
         "const localClash = ((installed, n) => installed.roleByName(n)) satisfies unknown;"
       ),
-      ["definitions/src/set-upgrade.ts:1 mentions roleByName"]
+      ["packages/definitions/src/set-upgrade.ts:1 mentions roleByName"]
     );
 
     // Unlisted functions, the top level, the other lookup in a listed
     // function, and a listed name in another file are findings.
     assert.deepStrictEqual(
       nameChecksIn(
-        "definitions/src/set-resolve.ts",
+        "packages/definitions/src/set-resolve.ts",
         [
           "const decide = (snapshot, name) => snapshot.roleByName(name);",
           "base.permissionByName('top level');",
@@ -222,23 +276,23 @@ describe("no-bypass", () => {
         ].join("\n")
       ),
       [
-        "definitions/src/set-resolve.ts:1 mentions roleByName",
-        "definitions/src/set-resolve.ts:2 mentions permissionByName",
-        "definitions/src/set-resolve.ts:3 mentions permissionByName",
+        "packages/definitions/src/set-resolve.ts:1 mentions roleByName",
+        "packages/definitions/src/set-resolve.ts:2 mentions permissionByName",
+        "packages/definitions/src/set-resolve.ts:3 mentions permissionByName",
       ]
     );
     assert.deepStrictEqual(
       nameChecksIn(
-        "server/src/records/probe.ts",
+        "packages/server/src/records/probe.ts",
         "const localClash = (installed, name) => installed.roleByName(name);"
       ),
-      ["server/src/records/probe.ts:1 mentions roleByName"]
+      ["packages/server/src/records/probe.ts:1 mentions roleByName"]
     );
 
     // Only the snapshot class declares the lookups.
     assert.deepStrictEqual(
       nameChecksIn(
-        "definitions/src/snapshot.ts",
+        "packages/definitions/src/snapshot.ts",
         [
           "export class ConfigSnapshot {",
           "  #roleByName = new Map();",
@@ -249,24 +303,197 @@ describe("no-bypass", () => {
         ].join("\n")
       ),
       [
-        "definitions/src/snapshot.ts:4 mentions roleByName",
-        "definitions/src/snapshot.ts:6 mentions roleByName",
+        "packages/definitions/src/snapshot.ts:4 mentions roleByName",
+        "packages/definitions/src/snapshot.ts:6 mentions roleByName",
       ]
     );
   });
 
+  it("the snapshot's exemption covers its own direct members only", () => {
+    // The declaration site as it is: no finding.
+    assert.deepStrictEqual(snapshotProbe([]), []);
+
+    // Private references in other members, in a helper nested in a
+    // reader, and handing the index out are findings.
+    assert.deepStrictEqual(
+      snapshotProbe([
+        "  hasNamedRole(name, id) { return this.#roleByName.get(name)?.id === id; }",
+        "  index() { return this.#permissionByName; }",
+        "  #helper = () => this.#roleByName;",
+      ]),
+      [
+        "packages/definitions/src/snapshot.ts:7 mentions #roleByName",
+        "packages/definitions/src/snapshot.ts:8 mentions #permissionByName",
+        "packages/definitions/src/snapshot.ts:9 mentions #roleByName",
+      ]
+    );
+    assert.deepStrictEqual(
+      nameChecksIn(
+        "packages/definitions/src/snapshot.ts",
+        [
+          "export class ConfigSnapshot {",
+          "  readonly #roleByName = new Map();",
+          "  roleByName(name) { const read = () => this.#roleByName.get(name); return read(); }",
+          "}",
+        ].join("\n")
+      ),
+      ["packages/definitions/src/snapshot.ts:3 mentions #roleByName"]
+    );
+
+    // Other classes in the same file: a class expression, a class nested
+    // in a member, and a second class of the same name.
+    assert.deepStrictEqual(
+      snapshotProbe(
+        ["  make() { return class { roleByName(name) { return name; } }; }"],
+        ["const Other = class { permissionByName(name) { return name; } };"]
+      ),
+      [
+        "packages/definitions/src/snapshot.ts:7 mentions roleByName",
+        "packages/definitions/src/snapshot.ts:9 mentions permissionByName",
+      ]
+    );
+
+    // A nested class named ConfigSnapshot makes the name non-unique: no
+    // declaration in the file is exempt any more (8 mentions on lines 2 to
+    // 7, two on each lookup method's line).
+    const twice = snapshotProbe([
+      "  make() { class ConfigSnapshot { roleByName() {} } }",
+    ]);
+
+    assert.lengthOf(twice, 8);
+    assert.include(
+      twice,
+      "packages/definitions/src/snapshot.ts:2 mentions #roleByName"
+    );
+
+    // A subclass elsewhere is not the declaration site.
+    assert.deepStrictEqual(
+      nameChecksIn(
+        "packages/server/src/records/probe.ts",
+        "class Sub extends ConfigSnapshot { roleByName(n) { return n; } }"
+      ),
+      ["packages/server/src/records/probe.ts:1 mentions roleByName"]
+    );
+  });
+
+  it("an approved name must be bound only once in its file", () => {
+    const approved =
+      "const localClash = (installed, draft) => installed.roleByName(draft.name);";
+
+    const flagged = [
+      "packages/definitions/src/set-upgrade.ts:1 mentions roleByName",
+    ];
+
+    for (const rebinding of [
+      "function other(localClash) { return localClash; }",
+      "const { a: localClash } = source;",
+      "const [localClash] = list;",
+      "try { run(); } catch (localClash) { log(); }",
+      "const Named = class localClash {};",
+      'import { thing as localClash } from "./elsewhere.ts";',
+    ]) {
+      assert.deepStrictEqual(
+        nameChecksIn(
+          "packages/definitions/src/set-upgrade.ts",
+          `${approved}\n${rebinding}`
+        ),
+        flagged,
+        rebinding
+      );
+    }
+
+    // Overload signatures bind the name too.
+    assert.deepStrictEqual(
+      nameChecksIn(
+        "packages/definitions/src/set-upgrade.ts",
+        [
+          "function localClash(installed: unknown): unknown;",
+          "function localClash(installed) { return installed.roleByName(name); }",
+        ].join("\n")
+      ),
+      ["packages/definitions/src/set-upgrade.ts:2 mentions roleByName"]
+    );
+  });
+
+  it("every source extension the compiler accepts is scanned", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "std-name-scan-"));
+
+    try {
+      const sources = [
+        "a.ts",
+        "b.tsx",
+        "c.mts",
+        "d.cts",
+        "e.js",
+        "f.jsx",
+        "g.mjs",
+        "h.cjs",
+      ];
+
+      for (const name of [...sources, "notes.md", "data.json"]) {
+        writeFileSync(
+          path.join(directory, name),
+          "export const read = (s, n) => s.roleByName(n);\n"
+        );
+      }
+
+      assert.sameMembers(
+        sourceFiles(directory).map((file) => path.basename(file)),
+        sources
+      );
+      assert.deepStrictEqual([...SOURCE_EXTENSIONS].toSorted(), [
+        ".cjs",
+        ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".mts",
+        ".ts",
+        ".tsx",
+      ]);
+
+      for (const file of sourceFiles(directory)) {
+        assert.lengthOf(
+          nameChecksIn(path.basename(file), readFileSync(file, "utf-8")),
+          1,
+          file
+        );
+      }
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it("no source file checks a built-in role or permission by name", () => {
     const used = new Set<string>();
+    const packages = workspacePackages(ROOT);
 
-    const findings = SOURCE_PACKAGES.flatMap((name) =>
-      sourceFiles(path.join(PACKAGES, name, "src")).flatMap((file) =>
-        nameChecksIn(
-          path.relative(PACKAGES, file),
-          readFileSync(file, "utf-8"),
-          used
-        )
-      )
-    );
+    // The workspace's packages, not a hand-written list.
+    assert.includeMembers(packages, [
+      "bench",
+      "examples/acme",
+      "packages/access",
+      "packages/api",
+      "packages/definitions",
+      "packages/server",
+      "packages/testing",
+    ]);
+
+    assert.includeMembers(packages, [...UNSCANNED_PACKAGES.keys()]);
+
+    const findings = packages.flatMap((name) => {
+      const src = path.join(ROOT, name, "src");
+
+      return existsSync(src) && !UNSCANNED_PACKAGES.has(name)
+        ? sourceFiles(src).flatMap((file) =>
+            nameChecksIn(
+              path.relative(ROOT, file),
+              readFileSync(file, "utf-8"),
+              used
+            )
+          )
+        : [];
+    });
 
     assert.deepStrictEqual(findings, []);
     // Every listed site exists: an exception never outlives its use.
