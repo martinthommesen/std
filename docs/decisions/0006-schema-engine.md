@@ -127,7 +127,7 @@ A set is a directory of `.yaml` files (YAML 1.2 core schema, unique keys, unknow
 - Fields of a class are ordered by the set's topological order (ties by ID), not by file position; layouts (Step 2) define display order.
 - Enforcement state and notes are operational: they do not bump a definition's version or produce definition revisions; `complete` still bumps the revision.
 - `core.config_set`/`core.config_base` are not used yet; definitions removed from a set are left alone; changes that need upgrade rules (renames, type changes, retired definitions) refuse the set (1B).
-- Protected definitions are flagged but not yet enforced against admin edits (1A), and the core namespace's reservation is not enforced.
+- Protected definitions, ownership and the reserved `core` and app namespaces are enforced by the schema service since workstream 1A (decision 0011).
 - `std upgrade` loads each set as its own change set and does not yet hold `SCHEMA_KEY` across the whole upgrade (1B).
 - Text fields without `maxLength` get the 255 code-point CHECK of `@std/values`; platform text columns have no CHECK, and verification compares types and nullability only.
 - The catalog uses `effect/Cache` for its snapshots: a cache built once per catalog, keyed by the state's text form, and a permit around `Cache.get` inside the caller's transaction. Cache's built-in shared lookup is not relied on for serialization; the permit is, so a pending lookup never outlives its transaction.

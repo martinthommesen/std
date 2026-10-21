@@ -1,0 +1,101 @@
+# 0011. Schema lifecycle: rename, retire, purge, dependencies, protected definitions, recovery
+
+Status: accepted, 2026-10-21 (workstream 1A, items 1 to 8). Builds on decision 0006 (operation model, planner, coordinator, step model) and 0007 (lock budget, index and catalog locks, resume). Code: `packages/definitions/src/{requester,guards,lifecycle,dependents,apply,apply-work,effective-schema,*-refused,…}.ts`, `packages/server/src/schema/{plan-lifecycle,lock-budget,recovery,recovery-settings,watchdog,status,journal-kinds}.ts`, `packages/server/src/catalog/definition-revisions.ts`, `packages/server/src/cli/main.ts`.
+
+## Modules
+
+| Module | What it provides |
+| --- | --- |
+| `@std/definitions/operation` | `rename`, `retire`, `reactivate`, `purge` (with `confirm: { id, version }`) and `delete` operations; `RENAMABLE`, `RETIRABLE`, `PURGEABLE`, `NEVER_DELETED` |
+| `@std/definitions/requester` | `Requester` (`userId`, `roleIds`), `SYSTEM_REQUESTER`, `ChangeOrigin` (`local` or `set` with its owner), `setOrigin`, `LOCAL_ORIGIN`, `originOwns`, `isCoreOrigin`, `hasPermission` (by permission ID through active grants of the requester's active roles) |
+| `@std/definitions/guards` | the 1.8 guard: `guardChange` for operations on existing definitions, `guardCreate` and `guardNewOverride` for new ones |
+| `@std/definitions/lifecycle` | the five lifecycle operations in memory with the 1.7 table, cascades and notes |
+| `@std/definitions/dependents` | `dependentsOf(snapshot, id)`, the reverse dependency index; `describeDependent`, `displayNameOf` |
+| `@std/definitions/{dependency-conflict,use-retire-or-purge,definition-protected,permission-required,purge-refused,refusals}` | the refusals and their union `ChangeSetRefusal` |
+| `@std/definitions/apply` | `applyOperations(snapshot, operations, key, context)`: guard first, then the operation; the first refusal fails the change set; `AppliedChangeSet.notes` (cascade, reported dependents, `localOverride`) |
+| `@std/definitions/effective-schema` | per field `state`, `selectedByDefault`, `writable`; `effectiveClass` (`acceptsWrites`, `readable`); `defaultSelection`; `effectiveIndexes` (`enforcement`, `uniqueEnforced`) |
+| `server/schema/plan-lifecycle` | drops (columns, tables deepest first), renames (schemas, tables, columns), `DROP NOT NULL` of retired required fields, `drop_index_concurrently` steps, purge counts and record checks, `lockNames` |
+| `server/schema/lock-budget` | `takeTableLocks`, `runDdl`, `restoreLockTimeout`, `DDL_LOCK_BUDGET_MS` (moved out of `change-set.ts`, shared with abandon) |
+| `server/schema/recovery` | `resumeChangeSet`, `resumeApplying`, `settleOpenChangeSets`, `resumePass`, `SchemaResumer` (layer), `abandonChangeSet`, `resumeOnRequest`, `openChangeSets`, `schemaKeyHolders` |
+| `server/schema/recovery-settings` | `RecoverySettings` (resume interval 30 s, watchdog after 10 min, poll 5 s; `recoverySettingsFromEnv` reads `STD_SCHEMA_RESUME_INTERVAL`, `STD_SCHEMA_WATCHDOG_AFTER`, `STD_SCHEMA_WATCHDOG_POLL`), `StepBoundary` (test hook, no-op by default) |
+| `server/schema/watchdog` | `watchStep`, `backendWait` (`pg_stat_progress_create_index.phase`, `pg_blocking_pids`), `watchdogReport` |
+| `server/schema/status` | `schemaStatus`, `formatStatus` |
+| `server/schema/journal-kinds` | `changeKindsOf`: `fieldRenamed`, `fieldRetired`, `fieldPurged`, `requiredChanged`, `tableRetired`, `indexDropped`, ... per journal operation (6.4) |
+| `server/catalog/definition-revisions` | `definitionAt(id, revision)`, `purgeRevisionOf(id)` |
+| `server/schema/{schema-needs-attention,schema-change-not-open}` | `SchemaNeedsAttention` (409), `SchemaChangeNotOpen` |
+| `cli/main` | `std schema status [--json]`, `std schema resume <id>`, `std schema abandon <id>`; `std upgrade` resumes after migrations |
+
+## APIs for workstream 1B (config layers)
+
+- **Who is asking.** `applyChangeSet({ operations, requester, origin, source })`. A set load passes `origin: setOrigin(owner)` (`load-set.ts` already does); the core set's origin is the only one that may change protected definitions. Admin edits pass `origin: LOCAL_ORIGIN` (the default) and the requester's role IDs; item 9 builds the requester from the HTTP `Actor`.
+- **Removed upstream.** A set load retires removed tables, fields and roles with `{ op: "retire", id, version }` under its own origin; the 1.7 refusals apply (a role an active access rule names is refused with `DependencyConflict`; 1B reports that at plan time). Rules are deactivated with `update` of `active`. Retired app definitions may be purged locally; `adopt` stays 1B's.
+- **Label and help-text overrides.** A change by an origin that does not own the definition (any change to a protected definition except label and help text is refused) is applied to the effective record now and marked `localOverride: true` in `AppliedChangeSet.notes` and in the journal entry. 1B stores it as `core.config_override` instead.
+- **Renames by a set.** `{ op: "rename", id, version, name }` under the set's origin; physical renames follow.
+- **Refusals** are typed: `DefinitionProtected` (`reason`: `protected`, `owner`, `reserved`, `notExtensible`, `platform`), `DependencyConflict` (each blocking dependent by ID, kind, name and dependency kind), `UseRetireOrPurge`, `PermissionRequired`, `PurgeRefused`.
+- **Doctor.** `schema-interrupted.test.ts`'s `assertRecovered` has the place for a `std doctor` exit-0 assertion; `test/catalog-drift.ts` is a small stand-in.
+
+## Decisions
+
+### Rename
+
+Renames go by ID for every kind that has a name: namespaces (`ALTER SCHEMA ... RENAME TO`), tables (`ALTER TABLE ... RENAME TO`), fields (`ALTER TABLE ... RENAME COLUMN`), roles, permissions and subscriptions (configuration only). Access rules and indexes have no name in the definition model (decision 0006), so there is nothing to rename; their identity is the ID and the index's physical name is `std_ix_<id>`. Adding names to them needs a platform migration, which this branch cannot number while 0003 to 0005 are unmerged (migration IDs must be consecutive); it is listed under open items.
+
+A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too: physical renames run one after another, so a swap would collide in the catalog and in the definition tables' live-name unique indexes.
+
+### Statement order and locks
+
+The main transaction runs drops first (purged columns, then purged tables, children before parents), then renames (schemas, tables, columns), then the retired fields' `DROP NOT NULL`, then the 0006 pipeline. So a name a purge frees can be taken in the same change set. Drops and renames name tables as they are before any DDL; later statements use the names after the change set. All table locks are taken before the first statement (decision 0007), so every lock names the table as it is before any DDL: `lockNames` maps after-names back for the later statements.
+
+`DROP TABLE` locks every ancestor `ACCESS EXCLUSIVE` (root first), the table, and every table its FKs reference (reference targets, and `core.user` for a root table's audit FKs), because dropping an FK drops its triggers on the referenced table. Purging a reference field locks both tables, as 0007 measured. `ALTER SCHEMA ... RENAME` takes no table lock. The lock-inventory probe checks every lifecycle form on populated tables.
+
+### Retire, reactivate and the effective schema
+
+Retiring a field sets `required` to false and, for a required non-boolean field, runs `ALTER COLUMN ... DROP NOT NULL` (catalog-only, 1.4 table). Booleans stay `NOT NULL DEFAULT false`, so inserts without them work anyway. A reactivated field therefore comes back optional. Retiring a parent field retires it on every child class: there is one definition, and `effectiveFields` of every class below shows it `retired`, not `selectedByDefault` and not `writable`. A retired table has `effectiveClass(...).acceptsWrites` false; every field on it is not `writable`. The read compiler and the save pipeline (0C) read these flags; the save pipeline reports `DefinitionRetired`.
+
+New definitions may not point at retired ones (a field on a retired table, a reference to one, an index on a retired field, a child of a retired class), but existing ones keep pointing at them. Stored conditions that read a field that is then retired keep working: validation checks conditions with `purpose: "store"` only for definitions whose condition the change set writes, and with `purpose: "evaluate"` for the rest.
+
+### Purge
+
+Purge needs `schema.purge`, checked by ID through the requester's role grants (`admin` holds nothing implicitly), a confirmation repeating the target's ID and version, and a target retired in the configuration the change set starts from (`PurgeRefused` `notRetired`, `retiredInThisChangeSet`, `confirmation`). The coordinator counts the non-null values of a field, or the rows of each table, on its `SCHEMA_KEY` connection before `CONFIG_KEY`; the journal entry records them as `destroyed`, which makes the journal the purge's audit record. A field purge takes its single-field indexes and its overrides along (`DROP COLUMN` drops the indexes); a table purge takes its fields, indexes and overrides along.
+
+Records of a child class also have rows in every ancestor table, which `DROP TABLE` of the child cannot remove. A purge of a non-root class whose subtree still has records in a root table that stays is refused (`PurgeRefused` `hasRecords`, counted under `SCHEMA_KEY`); a hierarchy is purged from its leaves up to its root in one change set, where the root's `DROP TABLE` removes every record. The ancestors' subtree CHECKs keep the purged class's ID: it is never reused, so the wider check admits nothing.
+
+The tombstone is the definition row itself in state `purged`: ID, last name, type and label stay; the live-name unique indexes of migration 0002 exclude purged rows, so the name is free. The purge revision is the first `core.definition_revision` row in state `purged` (`purgeRevisionOf`), and `definitionAt(id, R)` returns the definition as it was at revision R, which is how history reads old values under their old names and labels. A purge does not free a column slot (dropped columns count toward 1,600).
+
+### Dependencies (1.7)
+
+The dependency checks run in memory over the snapshot loaded under `CONFIG_KEY` in the main transaction, which is the configuration `core.config_dependency` indexes; `dependentsOf` is the reverse index. New dependency kinds: `subscription_on` (a subscription to its class) and `grant_of` (a grant to its role and permission), so a role or permission delete finds its grants and a table purge finds subscriptions. Deviations and precisions of the 1.7 table, all in the contract now:
+
+- A multi-field unique index refuses the retire of its fields, so a purge can only meet a non-unique multi-field index; both refuse.
+- A table purge is also refused while an access rule or subscription is on the table: leaving them would dangle, and deleting security configuration implicitly is worse.
+- A role delete is refused while any access rule names it (a deleted role cannot stay in a rule); a role retire only while an active rule names it. A deleted role takes its grants along.
+- `delete` of an override is refused (it would loosen the field, 2.5).
+
+### Protected definitions and local additions (1.8)
+
+The guard runs first for every operation and every origin. Protected definitions accept only `label` and `helpText` changes unless the origin is the core set. Rename, retire, reactivate and delete of a definition owned by core or an app are for its own set only. Platform tables, their fields and their namespace are never renamed, retired, purged or deleted. New definitions belong to the origin's layer. A new table must live in a namespace the origin owns, so the `core` namespace and installed apps' namespaces are reserved; fields, indexes, overrides and child classes may go onto app classes and `extensible` core classes, never onto platform tables. Test tables therefore live in a local `site` namespace (`schema-support.ts`).
+
+### Recovery
+
+- A new coordinator, once it holds `SCHEMA_KEY`, first resumes change sets left `applying` (getting the lock proves their coordinator is gone), then refuses with `SchemaNeedsAttention` (409) while any change set is `needs_attention`: its stored step statements name tables and columns as they were, and a rename or drop could invalidate them. Changes without DDL still apply.
+- Resume probes each unfinished step (`done` recorded, `partial` cleaned up and rerun, `not_started` run), takes over the change set (`coordinator_pid`, failed steps back to `pending`), and completes it; a step failing 3 times sets `needs_attention`.
+- `SchemaResumer` (a layer for the server process) and `std upgrade` call `resumePass`: a dedicated connection (`std-resumer`, with the keepalive startup parameters) tries `SCHEMA_KEY` at startup and every `resumeInterval`, resumes `applying` change sets and releases the lock.
+- Abandon runs each unfinished step's abandon action and then `complete` with final state `abandoned`: invalid or unfinished indexes are dropped concurrently before the commit; `NOT VALID` constraints are dropped inside the `complete` config commit under the lock budget, never outside `CONFIG_KEY`. If the change set's own backend still holds `SCHEMA_KEY` (a build waiting on another session, or one whose client died), abandon terminates that backend first; any other holder gives `SchemaBusy`.
+- The watchdog runs on the pool beside each step and writes `Watchdog: waiting N s in phase "..." for PIDs ...` into the step's `last_error`; status also shows the PIDs live. It never cancels. Metrics are not wired yet.
+- The coordinator calls the `StepBoundary` hook at `committed`, `before:<n>:<kind>`, `after:<n>:<kind>` and `before:complete`; production installs nothing.
+
+## Verified facts
+
+- SIGKILL of a coordinator process at each of the ten step boundaries of a change set with `validate_constraint`, `validate_override`, `create_index_concurrently` and `drop_index_concurrently` steps, and during a concurrent index build waiting on a writer, always ended `completed` after `resumePass`, with the catalog matching the definitions (`schema-interrupted.test.ts`). During the build the killed client's backend kept running and held `SCHEMA_KEY`, so `resumePass` did nothing until the build ended (0007 probe 2, now on the real engine).
+- An idle-in-transaction writer blocking a concurrent build is reported by `pg_blocking_pids` while the build waits in phase `waiting for writers before build`; the watchdog names its PID and the build completes once the writer commits.
+- A duplicate committed during a unique build makes every attempt fail; after 3 the change set is `needs_attention` with an invalid index; abandon drops it, sets enforcement `failed` and takes one revision; resume after deleting the duplicate completes it with a valid index.
+- Renaming a column keeps index expressions and the index's generated name; renaming a schema keeps every table.
+- Retiring a required field: `attnotnull` false after `DROP NOT NULL`, values kept, inserts without the column succeed.
+
+## Open items
+
+- Item 9 (after 0C merges): the change-set HTTP endpoints, generic record writes to definition tables as one-operation change sets, the `Actor` as requester, `DELETE` mapped to the `delete` operation, and the HTTP acceptance tests.
+- Names for access rules and indexes need a migration (0006 once 0003 to 0005 land).
+- User-role assignments are not yet counted in role retire/delete reports (data, not configuration).
+- The watchdog's metric, and `std schema status` warning about index or catalog maintenance sessions (0007 open item).
+- The SQL snapshot (`__snapshots__/ddl-forms.sql`) covers set loads only; lifecycle statements are checked by the guard and probe tests.
