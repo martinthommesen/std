@@ -39,7 +39,7 @@ const plan = (files: readonly NamedSetFile[]): readonly Operation[] => {
 };
 
 const idOf = (operation: Operation): string =>
-  operation.op === "update" ? operation.id : operation.definition.id;
+  "definition" in operation ? operation.definition.id : operation.id;
 
 describe("definition-sets", () => {
   it("derives labels from names", () => {
