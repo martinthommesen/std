@@ -12,8 +12,7 @@ import { maxLengthOf } from "@std/values/field-type";
 import type { FieldKind, FieldType } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 
-import { conditionPaths } from "./condition.ts";
-import type { Condition } from "./condition.ts";
+import { conditionProblems } from "./condition-view.ts";
 import type {
   AccessRuleDefinition,
   ClassDefinition,
@@ -663,42 +662,6 @@ const checkGrant = (
   );
 };
 
-/**
- * Checks the paths of a stored condition: every path names one field of the
- * class or its ancestors (no reference hops in Step 1).
- *
- * INTEGRATION POINT (the conditions package): replace with its checker, which also
- * checks operators, literals and the profile.
- *
- * @param snapshot - The configuration.
- * @param classId - The class the condition is evaluated on.
- * @param condition - The condition.
- * @returns Messages, empty when the condition is acceptable.
- */
-export const conditionProblems = (
-  snapshot: ConfigSnapshot,
-  classId: DefinitionId | null,
-  condition: Condition
-): readonly string[] => {
-  const fieldIds = new Set(
-    classId === null ? [] : snapshot.fields(classId).map((field) => field.id)
-  );
-
-  return conditionPaths(condition).flatMap((path) => {
-    if (path.path.length !== 1) {
-      return ["Conditions cannot follow references yet."];
-    }
-
-    const [fieldId] = path.path;
-
-    return fieldId !== undefined && fieldIds.has(fieldId)
-      ? []
-      : [
-          `The condition reads ${fieldId ?? "nothing"}, which is not a field of the class.`,
-        ];
-  });
-};
-
 const checkRuleFields = (
   snapshot: ConfigSnapshot,
   rule: AccessRuleDefinition,
@@ -764,7 +727,8 @@ const checkAccessRule = (
     for (const message of conditionProblems(
       snapshot,
       rule.classId,
-      rule.condition
+      rule.condition,
+      "accessRule"
     )) {
       problems.push(problem("invalidCondition", rule.id, message));
     }
@@ -809,7 +773,8 @@ const checkSubscription = (
     for (const message of conditionProblems(
       snapshot,
       subscription.classId,
-      subscription.condition
+      subscription.condition,
+      "subscription"
     )) {
       problems.push(problem("invalidCondition", subscription.id, message));
     }

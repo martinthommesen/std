@@ -287,6 +287,9 @@ importers:
 
   packages/definitions:
     dependencies:
+      '@std/conditions':
+        specifier: workspace:*
+        version: link:../conditions
       '@std/values':
         specifier: workspace:*
         version: link:../values

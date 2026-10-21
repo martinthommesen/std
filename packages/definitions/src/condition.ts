@@ -1,13 +1,11 @@
 /**
  * Stored conditions (Contracts 5.2), structurally.
  *
- * INTEGRATION POINT (the conditions package): this module only checks the
- * shape of a condition AST and lists the field IDs it reads. When the
- * conditions package lands, `ConditionSchema` becomes its `Expr` schema, and
- * `conditionProblems` in `validate.ts` calls its checker (field types,
- * operators per type, literal conversion, the access-rule and subscription
- * profiles). Until then the schema engine accepts any well-formed AST whose
- * paths name fields of the rule's class or its ancestors.
+ * This module decodes the shape of a condition AST in a JSON-compatible
+ * form (definitions are stored and compared as JSON) and lists the field
+ * IDs it reads, for the `condition_reads` dependency kind. Field types,
+ * operators, literals and profiles are checked by `@std/conditions`
+ * (`condition-view.ts`) when a condition is stored.
  */
 import {
   Array as SchemaArray,

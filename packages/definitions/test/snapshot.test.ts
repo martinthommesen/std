@@ -2,6 +2,11 @@ import { assert, describe, it } from "@effect/vitest";
 import { isFailure, isSuccess } from "effect/Result";
 
 import { applyOperations } from "../src/apply.ts";
+import type { Condition } from "../src/condition.ts";
+import type {
+  AccessRuleDefinition,
+  RoleDefinition,
+} from "../src/definition.ts";
 import { dependenciesOf } from "../src/dependencies.ts";
 import { effectiveJson } from "../src/effective-json.ts";
 import { effectiveFields } from "../src/effective-schema.ts";
@@ -15,6 +20,7 @@ import {
 import { validateSnapshot } from "../src/validate.ts";
 import {
   field,
+  freshId,
   KEY,
   namespace,
   override,
@@ -290,6 +296,68 @@ describe("definitions-snapshot", () => {
     );
 
     assert.isTrue(isFailure(typeChange));
+  });
+
+  it("checks access-rule conditions with the condition engine", () => {
+    const h = hierarchy();
+
+    const role: RoleDefinition = {
+      helpText: null,
+      id: freshId(),
+      kind: "role",
+      label: "Employee",
+      name: "employee",
+      owner: { layer: "local" },
+      protected: false,
+      state: "active",
+      version: 1,
+    };
+
+    const rule = (condition: Condition): AccessRuleDefinition => ({
+      actions: ["read"],
+      active: true,
+      classId: h.laptop.id,
+      condition,
+      description: null,
+      effect: "deny",
+      id: freshId(),
+      kind: "accessRule",
+      owner: { layer: "local" },
+      protected: false,
+      roleIds: [role.id],
+      state: "active",
+      target: { kind: "records" },
+      version: 1,
+    });
+
+    const base = [h.ns, h.asset, h.laptop, h.name, h.cost, h.serial, role];
+
+    const valid = rule({
+      left: { path: [h.cost.id] },
+      op: "gt",
+      right: { value: "2000" },
+    });
+
+    const textOrder = rule({
+      left: { path: [h.name.id] },
+      op: "lt",
+      right: { value: "x" },
+    });
+
+    const childOnly = rule({ arg: { path: [h.serial.id] }, op: "empty" });
+
+    assert.lengthOf(validateSnapshot(snapshotOf([...base, valid])), 0);
+    assert.deepStrictEqual(
+      validateSnapshot(snapshotOf([...base, textOrder])).map((p) => p.code),
+      ["invalidCondition"]
+    );
+    assert.lengthOf(validateSnapshot(snapshotOf([...base, childOnly])), 0);
+    assert.deepStrictEqual(
+      validateSnapshot(
+        snapshotOf([...base, { ...childOnly, classId: h.asset.id }])
+      ).map((p) => p.code),
+      ["invalidCondition"]
+    );
   });
 
   it("lists dependencies and effective JSON without bookkeeping", () => {
