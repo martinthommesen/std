@@ -516,13 +516,25 @@ export const runJanitor = (
     )
   );
 
+/**
+ * Whether a template is ready to clone: it exists, its build has finished
+ * (`IS_TEMPLATE` is set by the build's last statement, together with
+ * `ALLOW_CONNECTIONS false`), and it is not invalid. Run under the
+ * template's lock, so no build or drop is in progress.
+ * @param admin - A connection to the maintenance database.
+ * @param name - The template name.
+ * @returns Whether to clone it; otherwise it is built (again).
+ */
 const templateReady = (
   admin: PgConnection.PgConnection,
   name: string
 ): Effect.Effect<boolean, SqlError> =>
-  query(admin, "SELECT datistemplate FROM pg_database WHERE datname = $1", [
-    name,
-  ]).pipe(
+  query(
+    admin,
+    `SELECT datistemplate AND datconnlimit <> -2 AS datistemplate
+     FROM pg_database WHERE datname = $1`,
+    [name]
+  ).pipe(
     Effect.flatMap(decodeTemplateFlag),
     Effect.map(([row]) => row?.datistemplate === true)
   );

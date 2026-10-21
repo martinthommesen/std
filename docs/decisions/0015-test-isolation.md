@@ -38,6 +38,12 @@ Several agents run `pnpm ci:local` at the same time against the shared test serv
 
 4. **The template test raced with other runs' janitors.** The test planted an expired template and took its clone lock only after it had created and marked the template. In that window, other runs could drop it (`kept while in use`). Later, another run's janitor could still be dropping it when the test asserted that it was gone (`dropped once unused`). The test's finalizer also dropped the template without the lock.
 
+**Why many files fail with 08006 at once.** The old janitor ran in every test file's build, on the connection the build then used for cloning. Vitest starts a batch of files together. All their janitors listed the same expired template, and each ran `ALTER DATABASE` on it while another run was dropping it. Every one of those connections received the FATAL, and every one of those files then failed its clone with 08006 `Connection closed`. This looks like an event across the whole cluster, but nothing terminated backends across databases.
+
+The server log shows these clusters. For example, at 20:42:14–15 UTC five sessions in `std`, each a file of one old-code run, logged `cannot alter invalid database "std_tpl_6549ab..."`.
+
+The expired templates came from the old harness test "the janitor never drops a template while a clone holds its shared lock". Every run planted one. During this investigation, our stress runs planted many more between 20:39 and 20:48 UTC. The server logged 48 such FATALs in old-code runs of other agents in that window, so failures of other agents' runs at that time were probably caused by those stress runs. The tests in this change no longer plant expired databases (see Decision).
+
 The `FATAL: terminating connection due to administrator command` lines in the server log come from each run's own `DROP DATABASE ... WITH (FORCE)` and from the LISTEN tests. Those tests terminate backends with `datname = current_database()`. We matched the terminated PIDs of a run with three concurrent `@std/server` processes against sampled `pg_stat_activity` rows. Every PID belonged to that run's own test databases. No test creates, alters or drops roles.
 
 ## Decision
@@ -47,6 +53,12 @@ The `FATAL: terminating connection due to administrator command` lines in the se
   - If the template no longer exists, the drop reports `gone`.
   - If the template is invalid, it is dropped without `ALTER DATABASE`.
   - Otherwise, the template is altered and then dropped.
+- **Templates that are being built or were left half-built.**
+  - A build holds the template's exclusive lock from the readiness check to its last statement. That statement sets `IS_TEMPLATE true` and `ALLOW_CONNECTIONS false` together.
+  - Until the build comments the template, its comment is empty, and the janitor skips it. After that, the comment says it was created now, so it does not expire for a week. The janitor's try-lock would also fail while the build runs.
+  - A clone waits for the build's lock. It clones only a template that is marked `IS_TEMPLATE` and is not invalid. Otherwise it builds the template itself under the exclusive lock.
+  - The build first drops a half-built or invalid leftover. Under the single lock space, no other run can be building it at that moment.
+  - An interrupted `CREATE DATABASE` leaves nothing: its `pg_database` row is rolled back. Only an interrupted `DROP DATABASE` leaves an invalid database. Such a database is never `IS_TEMPLATE`, because Postgres refuses to drop a template.
 - **The janitor is isolated.** It runs on its own connection, and each database's failure is logged and ignored separately. Nothing the janitor meets can break the build of a test database.
 - **Templates are built from `template0`, not `template1`.** `CREATE DATABASE` fails while any session is connected to its template, and someone may be connected to `template1`.
 - The harness's own tests no longer plant expired databases for every run's janitor to chase. Planted databases carry a creation comment of now. The tests run their own janitor passes at a later clock, limited to the planted names (`runJanitor`'s `only` argument). The tests also take the clone lock before they create a template, drop templates under the lock, and use random name suffixes.
@@ -55,13 +67,14 @@ Retries, longer timeouts and skips were not used.
 
 ## Transition
 
-Until a branch merges this change, its runs still take the template locks in their own URL database (usually `std`), so they do not exclude runs that use the new code. The old janitor can still hit an invalid template and lose its connection. While the old and new code ran side by side, the server logged such FATALs from sessions in `std`, the old harness's maintenance database. The window closes once every active branch has merged main.
+Until a branch merges this change, its runs still take the template locks in their own URL database (usually `std`), so they do not exclude runs that use the new code. An old-code run and a new-code run that build the same new template at the same moment are not excluded either. The old janitor can still hit an invalid template and lose its connection. While the old and new code ran side by side, the server logged such FATALs from sessions in `std`, the old harness's maintenance database. The window closes once every active branch has merged main.
 
 ## Regression tests (`test-database.test.ts`)
 
 - "a run whose STD_DATABASE_URL names another database never drops a template this run is cloning": the other run's janitor and `dropTemplateIfUnused` run with a `ConfigProvider` that points `STD_DATABASE_URL` at another database. When the admin connection uses the URL's database (the old behavior), the janitor drops the template that is being cloned, and the test fails.
 - "a template another run dropped after the janitor listed it is skipped" fails on the old drop with `database ... does not exist`.
 - "an invalid template is dropped without ALTER DATABASE, which would close the connection" fails on the old drop with FATAL and a closed connection. It marks the database invalid through `pg_database`, which needs a superuser. Its comment is fresh, so no run's janitor treats it as expired.
+- "the janitor leaves a template alone while another run is building it" holds the build's exclusive lock over a created but unfinished template.
 - "dropping one run's test database leaves another run's sessions alone" builds two harness instances in one process.
 
 ## Out of scope

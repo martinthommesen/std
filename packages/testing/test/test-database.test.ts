@@ -519,6 +519,54 @@ describe("test-database", () => {
   );
 
   it.live(
+    "the janitor leaves a template alone while another run is building it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* templateBeingBuilt() {
+          const connection = yield* admin;
+          const template = `std_tpl_${randomHex(12)}`;
+
+          // Added before the builder connects, so it runs after the builder
+          // has closed and released its exclusive lock.
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(dropTemplate(connection, template))
+          );
+
+          const builder = yield* admin;
+
+          // A build in progress, as `buildTemplate` leaves it between its
+          // statements: created and commented, migrations running, not yet
+          // marked IS_TEMPLATE, under the template's exclusive lock.
+          yield* templateLock(builder, "pg_advisory_lock", template);
+          yield* connection.query(
+            `CREATE DATABASE "${template}" TEMPLATE template0`
+          );
+          yield* connection.query(
+            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
+          );
+
+          yield* runJanitor(
+            connection,
+            templateName(PLATFORM_MIGRATIONS),
+            templateExpiry(),
+            new Set([template])
+          );
+          assert.isTrue(yield* databaseExists(template), "kept while built");
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, template),
+            "in-use"
+          );
+
+          yield* templateLock(builder, "pg_advisory_unlock", template);
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, template),
+            "dropped"
+          );
+        })
+      )
+  );
+
+  it.live(
     "an invalid template is dropped without ALTER DATABASE, which would close the connection",
     () =>
       Effect.scoped(
