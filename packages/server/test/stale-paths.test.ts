@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { OPENAPI_PATH } from "@std/api/api";
 import { Effect } from "effect";
 import type { Layer } from "effect";
 
@@ -26,9 +27,15 @@ import type {
 } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
+import { staleScope } from "../src/http/stale-scope.ts";
 import { freshAsset, observe, signInAll } from "./authz-support.ts";
 import type { Callers, Observation } from "./authz-support.ts";
-import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import {
+  listPath,
+  readsTestLayer,
+  recordPath,
+  tagOf,
+} from "./reads-support.ts";
 import { ACME, change, values } from "./schema-support.ts";
 
 /** The paths, in the order of every expectation below. */
@@ -43,6 +50,7 @@ const PATHS = [
   "sign-in",
   "me",
   "sign-out",
+  "openapi",
 ] as const;
 
 type PathName = (typeof PATHS)[number];
@@ -115,6 +123,7 @@ const take = (callers: Callers, name: PathName, revision: string) =>
           token,
         }),
       me: () => http.get("/api/v1/auth/me", { headers, token }),
+      openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
       "sign-in": () =>
         http.request("POST", "/api/v1/auth/sign-in", {
           body: { login: "alice", password: "alice-password" },
@@ -164,6 +173,7 @@ const success: Readonly<Record<PathName, number>> = {
   "history?field": 200,
   list: 200,
   me: 200,
+  openapi: 200,
   "sign-in": 200,
   "sign-out": 204,
   update: 200,
@@ -201,6 +211,52 @@ const CHANGED: Observation = { status: 409, tag: "SchemaChanged" };
 describe("stale-paths", () => {
   it("expects success where nothing is refused", () => {
     assert.deepStrictEqual(expected({})[0], ["list", 200, ""]);
+  });
+
+  it("history's field filter puts its field IDs in scope, on their own class", () => {
+    const text = { kind: "text" as const, maxLength: 64 };
+
+    const definitions = {
+      classes: new Map([
+        [ACME.asset, { displayFieldId: null, parentId: null }],
+        [ACME.laptop, { displayFieldId: null, parentId: ACME.asset }],
+      ]),
+      fields: new Map([
+        [
+          ACME.name,
+          {
+            classId: ACME.asset,
+            id: ACME.name,
+            live: true,
+            name: "name",
+            type: text,
+          },
+        ],
+        [
+          ACME.serial,
+          {
+            classId: ACME.laptop,
+            id: ACME.serial,
+            live: true,
+            name: "serial",
+            type: text,
+          },
+        ],
+      ]),
+    };
+
+    const entries = (fieldIds?: string) =>
+      staleScope(
+        definitions,
+        ACME.asset,
+        fieldIds === undefined ? { fields: "" } : { fieldIds, fields: "" }
+      ).entries;
+
+    // A child-only field outside the parent endpoint's selection.
+    assert.deepStrictEqual(entries(), []);
+    assert.deepStrictEqual(entries(ACME.serial.toUpperCase()), [
+      { classId: ACME.laptop, fieldId: ACME.serial },
+    ]);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
@@ -283,6 +339,62 @@ describe("stale-paths", () => {
           })
         );
       })
+    );
+
+    dbTest.effect(
+      "history through a parent endpoint is checked against the record's own class",
+      () =>
+        Effect.gen(function* childHistory() {
+          const http = yield* TestHttpClient;
+          const callers = yield* signInAll;
+          const catalog = yield* Catalog;
+          const built = yield* catalog.refresh;
+          const stated = revisionHeaderValue(built);
+          const { K } = callers.fixture.records;
+
+          const historyOfK = (table: string, token: string, id = K) =>
+            http.get(`${recordPath(table, id)}/history`, {
+              headers: { [HEADER]: stated },
+              token,
+            });
+
+          assert.strictEqual(
+            (yield* historyOfK("acme.asset", callers.tokens.alice)).status,
+            200
+          );
+
+          // `serial`, a laptop-only field, becomes read-only.
+          yield* change([
+            {
+              changes: { readOnly: true },
+              id: ACME.serial,
+              op: "update",
+              version: built.field(ACME.serial)?.version ?? 1,
+            },
+          ]);
+
+          for (const table of ["acme.asset", "acme.laptop"]) {
+            const stale = yield* historyOfK(table, callers.tokens.alice);
+
+            assert.strictEqual(stale.status, 409, table);
+            assert.strictEqual(yield* tagOf(stale), "SchemaChanged");
+            assert.include(stale.text, "readOnlyChanged");
+            assert.include(stale.text, '"serial"');
+          }
+
+          // Before visibility nothing depends on the record: Bob's stale
+          // request for Alice's K is NotFound, like a random ID.
+          const invisible = yield* historyOfK("acme.asset", callers.tokens.bob);
+
+          const random = yield* historyOfK(
+            "acme.asset",
+            callers.tokens.bob,
+            randomUUID()
+          );
+
+          assert.strictEqual(invisible.status, 404);
+          assert.strictEqual(invisible.text, random.text);
+        })
     );
   });
 });

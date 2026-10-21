@@ -262,11 +262,29 @@ export const historyInRequest = Effect.fn("Http.history")(function* historyIn(
 ) {
   // History shows the record's fields by name, like a read's default
   // selection, and its `field` filter names fields by ID (6.4).
-  yield* checkRequestRevision(
-    stated,
-    request.table,
-    request.field === undefined ? {} : { fieldIds: request.field }
-  );
+  const parameters: ScopeParameters =
+    request.field === undefined ? {} : { fieldIds: request.field };
 
-  return jsonWithStatus(yield* recordHistory(request), 200);
+  yield* checkRequestRevision(stated, request.table, parameters);
+
+  const history = yield* recordHistory(request);
+
+  // Through any endpoint, history shows every readable field of the
+  // record's concrete class (2.3), child-only fields included, so a record
+  // of a descendant class is checked against that class's default
+  // selection too. Only once the record proved visible: before that, every
+  // check is independent of the record (decision 0009).
+  const { snapshot } = yield* currentReadScope();
+  const endpoint = snapshot.classByName(request.table)?.id;
+  const concrete = snapshot.qualifiedNameOf(history.classId);
+
+  if (concrete !== undefined && endpoint !== history.classId) {
+    yield* checkRequestRevision(stated, concrete, parameters).pipe(
+      // A visible record's class is always known to its reader; if not,
+      // the endpoint's check above stands.
+      Effect.catchTag("UnknownTable", () => Effect.void)
+    );
+  }
+
+  return jsonWithStatus(history.body, 200);
 });

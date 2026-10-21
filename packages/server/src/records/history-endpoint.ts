@@ -475,8 +475,9 @@ const entryJson = (
  * A record's history through endpoint E for the `Actor`.
  *
  * @param request - Table, record ID and filters.
- * @returns `{ schemaRevision, entries }`, entries in version order, field
- *   changes keyed by field name.
+ * @returns The body `{ schemaRevision, entries }` (entries in version
+ *   order, field changes keyed by field name) and the record's concrete
+ *   class, whose fields the entries show.
  */
 export const recordHistory = Effect.fn("Records.history")(
   function* recordHistory(request: HistoryRequest) {
@@ -542,9 +543,11 @@ export const recordHistory = Effect.fn("Records.history")(
           );
     }
 
-    return {
+    const body = {
       entries: entries.map((entry) => entryJson(scope.snapshot, entry)),
       schemaRevision: revision,
     } satisfies JsonObject;
+
+    return { body, classId: concrete };
   }
 );

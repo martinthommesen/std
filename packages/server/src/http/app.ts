@@ -8,7 +8,7 @@
  * `InstanceSettings`; `std serve` puts it on a Node HTTP server, tests turn
  * it into a web handler (`@std/testing/http-client`).
  */
-import { OPENAPI_PATH, StdApi } from "@std/api/api";
+import { StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
@@ -16,6 +16,7 @@ import { SaveHooks } from "../records/save-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
+import { MetaHandlers } from "./meta-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 
@@ -23,7 +24,8 @@ import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 export const ApiHandlers = Layer.mergeAll(
   SignInHandlers,
   SessionHandlers,
-  RecordHandlers
+  RecordHandlers,
+  MetaHandlers
 );
 
 /**
@@ -33,13 +35,12 @@ export const ApiHandlers = Layer.mergeAll(
 const SaveServices = Layer.mergeAll(SaveHooks.none, WriteOnlyValues.scrypt);
 
 /**
- * The API routes with their handlers and middleware, plus the OpenAPI 3.1
- * document generated from the shared definition (Contracts 6.1) at
- * `GET /api/v1/openapi.json`, served without a session.
+ * The API routes with their handlers and middleware. The OpenAPI 3.1
+ * document is the `meta` group's endpoint (`meta-handlers.ts`), not
+ * `HttpApiBuilder`'s `openapiPath` route, so it checks the stated revision
+ * like every other endpoint.
  */
-export const ApiRoutes = HttpApiBuilder.layer(StdApi, {
-  openapiPath: OPENAPI_PATH,
-}).pipe(
+export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(ApiHandlers),
   Layer.provide(SaveServices),
   Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))
