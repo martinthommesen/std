@@ -17,6 +17,7 @@ import { CurrentTransaction } from "../src/sql/transaction-context.ts";
 import type { TransactionHandle } from "../src/sql/transaction-context.ts";
 import {
   READ_KEYWORDS,
+  READ_TUNING_SETTINGS,
   STATEMENT_KEYWORDS,
   TRANSACTION_SETTINGS,
   TransactionState,
@@ -367,6 +368,152 @@ describe("transaction-lifetime", () => {
     );
 
     dbTest.effect(
+      "planner settings take effect, and a failed nested unit that only set them does not poison",
+      () =>
+        Effect.gen(function* readTuning() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_tuning (id int PRIMARY KEY)`;
+
+          const settings = yield* request(
+            Effect.gen(function* tuneAndRead() {
+              yield* sql`INSERT INTO lifetime_tuning VALUES (1)`;
+              yield* request(
+                sql`SET LOCAL max_parallel_workers_per_gather = 0`.pipe(
+                  Effect.andThen(
+                    sql`SET LOCAL plan_cache_mode = force_custom_plan`
+                  ),
+                  Effect.andThen(Effect.fail("nested failure" as const))
+                )
+              ).pipe(Effect.ignore);
+
+              const [workers] =
+                yield* sql`SHOW max_parallel_workers_per_gather`;
+
+              const [mode] = yield* sql`SHOW plan_cache_mode`;
+
+              return [workers, mode];
+            })
+          );
+
+          assert.deepStrictEqual(settings, [
+            { max_parallel_workers_per_gather: "0" },
+            { plan_cache_mode: "force_custom_plan" },
+          ]);
+          assert.strictEqual(yield* countRows("lifetime_tuning"), 1);
+
+          const refused = yield* Effect.exit(
+            request(sql.unsafe("SET LOCAL plan_cache_mode = 'auto'"))
+          );
+
+          assert.strictEqual(refusalOf(refused)?.reason, "transaction-control");
+        })
+    );
+
+    dbTest.effect(
+      "a failed nested unit that set a timeout poisons the request",
+      () =>
+        Effect.gen(function* timeoutPoisons() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_timeout_poison (id int PRIMARY KEY)`;
+
+          for (const setting of [
+            "SET LOCAL statement_timeout = '1ms'",
+            "SET LOCAL lock_timeout = 0",
+            "SET LOCAL idle_in_transaction_session_timeout = 0",
+          ]) {
+            const exit = yield* Effect.exit(
+              request(
+                Effect.gen(function* setThenFail() {
+                  yield* sql`INSERT INTO lifetime_timeout_poison VALUES (1)`;
+                  yield* request(
+                    sql
+                      .unsafe(setting)
+                      .pipe(
+                        Effect.andThen(Effect.fail("nested failure" as const))
+                      )
+                  ).pipe(Effect.ignore);
+                })
+              )
+            );
+
+            assert.strictEqual(refusalOf(exit)?.reason, "poisoned", setting);
+            assert.strictEqual(
+              yield* countRows("lifetime_timeout_poison"),
+              0,
+              setting
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "a config commit whose failed nested unit dropped its timeouts does not commit",
+      () =>
+        Effect.gen(function* configTimeoutsPoison() {
+          const sql = yield* SqlClient.SqlClient;
+          const { configCommit } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_config_poison (id int PRIMARY KEY)`;
+
+          const exit = yield* Effect.exit(
+            configCommit(
+              Effect.gen(function* dropBudgetsThenWrite() {
+                yield* configCommit(
+                  sql`SET LOCAL lock_timeout = 0`.pipe(
+                    Effect.andThen(sql`SET LOCAL statement_timeout = 0`),
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore);
+                yield* sql`INSERT INTO lifetime_config_poison VALUES (1)`;
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
+          assert.strictEqual(yield* countRows("lifetime_config_poison"), 0);
+        })
+    );
+
+    dbTest.effect(
+      "readOnly runs an unprepared read and refuses an unprepared write",
+      () =>
+        Effect.gen(function* unpreparedReads() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_unprepared (id int PRIMARY KEY)`;
+          yield* sql`INSERT INTO lifetime_unprepared VALUES (1), (2)`;
+
+          const rows = yield* request(
+            readOnly(
+              sql`SELECT id FROM lifetime_unprepared WHERE id > ${1} ORDER BY id`,
+              { unprepared: true }
+            )
+          );
+
+          assert.deepStrictEqual(rows, [{ id: 2 }]);
+
+          for (const text of [
+            "WITH x AS (DELETE FROM lifetime_unprepared RETURNING 1) SELECT * FROM x",
+            "SELECT 1 AS id INTO lifetime_unprepared_copy",
+            "DELETE FROM lifetime_unprepared",
+          ]) {
+            const refused = yield* Effect.exit(
+              request(readOnly(sql.unsafe(text), { unprepared: true }))
+            );
+
+            assert.strictEqual(
+              refusalOf(refused)?.reason,
+              "transaction-control",
+              text
+            );
+          }
+
+          assert.strictEqual(yield* countRows("lifetime_unprepared"), 2);
+        })
+    );
+
+    dbTest.effect(
       "readOnly refuses SELECT INTO, so a caught nested failure cannot commit its table",
       () =>
         Effect.gen(function* selectInto() {
@@ -504,7 +651,7 @@ describe("transaction-lifetime", () => {
     }
   });
 
-  it("the allowlist admits no transaction control and SET LOCAL only for timeouts", () => {
+  it("the allowlist admits no transaction control and SET LOCAL only for timeouts and read tuning", () => {
     for (const keyword of [
       "begin",
       "commit",
@@ -527,6 +674,10 @@ describe("transaction-lifetime", () => {
       "idle_in_transaction_session_timeout",
       "lock_timeout",
       "statement_timeout",
+    ]);
+    assert.deepStrictEqual([...READ_TUNING_SETTINGS.keys()].toSorted(), [
+      "max_parallel_workers_per_gather",
+      "plan_cache_mode",
     ]);
     assert.deepStrictEqual([...READ_KEYWORDS].toSorted(), [
       "select",
