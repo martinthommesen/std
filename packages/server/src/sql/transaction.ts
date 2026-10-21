@@ -73,6 +73,7 @@ import type { ConfigState } from "./request-revision.ts";
 import { decodeRows } from "./rows.ts";
 import { discardConnection } from "./sanitizing-client.ts";
 import { CurrentTransaction } from "./transaction-context.ts";
+import type { TransactionKind } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
 import {
   commit,
@@ -98,6 +99,26 @@ export const REQUEST_IDLE_TIMEOUT = "10s";
 
 /** The statement every STD transaction starts with. */
 export const BEGIN_STATEMENT = "BEGIN ISOLATION LEVEL READ COMMITTED";
+
+/**
+ * How a diagnostic transaction (`doctor`) begins: one snapshot for every
+ * statement, and Postgres refuses any write.
+ */
+export const DIAGNOSTIC_BEGIN_STATEMENT =
+  "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
+
+/** The isolation level of diagnostic transactions. */
+export const DIAGNOSTIC_ISOLATION: IsolationLevel = "repeatable read";
+
+/**
+ * `lock_timeout` of diagnostic transactions: a read that would wait longer
+ * for a table lock (a schema change's DDL holding ACCESS EXCLUSIVE) fails
+ * instead of stalling `doctor`.
+ */
+export const DIAGNOSTIC_LOCK_TIMEOUT = "5s";
+
+const isolationOf = (kind: TransactionKind): IsolationLevel =>
+  kind === "diagnostic" ? DIAGNOSTIC_ISOLATION : REQUEST_ISOLATION;
 
 /** The first query of every request transaction. */
 export const BEGIN_REQUEST_QUERY =
@@ -349,7 +370,7 @@ const verifyBeforeCommit = (
         return "the session is no longer in the transaction STD began";
       }
 
-      return row.isolation === REQUEST_ISOLATION
+      return row.isolation === isolationOf(state.kind)
         ? undefined
         : `the transaction runs at ${row.isolation}`;
     })
@@ -480,7 +501,12 @@ export const runOutermost = <S, A, E, R>(
       state.scope = bodyScope;
 
       const work = Effect.gen(function* transactionWork() {
-        yield* control(connection, BEGIN_STATEMENT);
+        yield* control(
+          connection,
+          state.kind === "diagnostic"
+            ? DIAGNOSTIC_BEGIN_STATEMENT
+            : BEGIN_STATEMENT
+        );
 
         const setupResult = yield* setup(connection, state).pipe(
           Effect.tapError(state.recordFailure)
@@ -733,6 +759,27 @@ const nestedMaintenance = Effect.die(
   })
 );
 
+const nestedDiagnostic = Effect.die(
+  new TransactionRefused({
+    detail: "a diagnostic transaction inside another transaction",
+    reason: "nesting",
+  })
+);
+
+const runDiagnostic = <A, E, R>(
+  client: PgClient.PgClient,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E | SqlError, Exclude<R, MaintenanceServices>> => {
+  const state = new TransactionState("diagnostic", client);
+
+  return runOutermost(
+    state,
+    maintenanceSetup({ lockTimeout: DIAGNOSTIC_LOCK_TIMEOUT }),
+    (_, tracked, scope) =>
+      Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
+  );
+};
+
 /** The request and maintenance transactions of one client. */
 export interface RequestTransactions {
   /**
@@ -759,6 +806,20 @@ export interface RequestTransactions {
     HygienicError<E | SqlError>,
     Exclude<R, MaintenanceServices>
   >;
+  /**
+   * Runs `effect` in a REPEATABLE READ READ ONLY transaction without
+   * `begin_request()` and without advisory locks, for `doctor`: every
+   * statement sees one snapshot, writes are refused by Postgres, and no
+   * config commit or schema change is waited for (table reads wait at most
+   * `DIAGNOSTIC_LOCK_TIMEOUT`). Cannot be nested.
+   */
+  readonly diagnostic: <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ) => Effect.Effect<
+    A,
+    HygienicError<E | SqlError>,
+    Exclude<R, MaintenanceServices>
+  >;
 }
 
 /**
@@ -769,6 +830,16 @@ export interface RequestTransactions {
 export const makeRequestTransactions = (
   client: PgClient.PgClient
 ): RequestTransactions => ({
+  diagnostic: Effect.fn("Transactions.diagnostic")(
+    function* diagnostic<A, E, R>(effect: Effect.Effect<A, E, R>) {
+      const current = yield* currentState;
+
+      return Option.isSome(current)
+        ? yield* nestedDiagnostic
+        : yield* runDiagnostic(client, effect);
+    },
+    (effect) => hygienic(effect)
+  ),
   maintenance: Effect.fn("Transactions.maintenance")(
     function* maintenance<A, E, R>(
       effect: Effect.Effect<A, E, R>,
