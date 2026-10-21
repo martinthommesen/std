@@ -209,6 +209,38 @@ const requiredWithoutDefault = (
       : []
   );
 
+/**
+ * One entry per class and field: a field both in the request and required
+ * without a default is listed once, with every kind relevant to either
+ * (an entry without `kinds` takes all kinds).
+ *
+ * @param entries - The scope's entries.
+ * @returns The entries without duplicates, in first-seen order.
+ */
+const mergeEntries = (
+  entries: readonly ScopeEntry[]
+): readonly ScopeEntry[] => {
+  const merged = new Map<string, ScopeEntry>();
+
+  for (const entry of entries) {
+    const key = `${entry.classId}/${entry.fieldId}`;
+    const seen = merged.get(key);
+
+    if (seen === undefined) {
+      merged.set(key, entry);
+    } else if (seen.kinds === undefined || entry.kinds === undefined) {
+      merged.set(key, { classId: entry.classId, fieldId: entry.fieldId });
+    } else {
+      merged.set(key, {
+        ...seen,
+        kinds: [...new Set([...seen.kinds, ...entry.kinds])],
+      });
+    }
+  }
+
+  return [...merged.values()];
+};
+
 const readHistory = Effect.fn("StaleRequest.readHistory")(function* readHistory(
   stated: ConfigState,
   current: ConfigState
@@ -704,16 +736,15 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
         ? readNameable(readScope)
         : writeNameable(readScope, write.action);
 
-    const withRequired = (scope: StaleScope): StaleScope =>
-      write?.action === "create"
-        ? {
-            ...scope,
-            entries: [
-              ...scope.entries,
-              ...requiredWithoutDefault(readScope, classId),
-            ],
-          }
-        : scope;
+    const withRequired = (scope: StaleScope): StaleScope => ({
+      ...scope,
+      entries: mergeEntries([
+        ...scope.entries,
+        ...(write?.action === "create"
+          ? requiredWithoutDefault(readScope, classId)
+          : []),
+      ]),
+    });
 
     const failure = (changes: SchemaChange[]) =>
       new SchemaChanged({

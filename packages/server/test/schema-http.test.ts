@@ -509,8 +509,8 @@ const REFERENCE_CASES: Readonly<
 };
 
 /**
- * The distinct `changes` of a `SchemaChanged` body, each as JSON text,
- * sorted.
+ * The `changes` of a `SchemaChanged` body, each as JSON text, sorted;
+ * duplicates are kept, so a test comparing lists sees them.
  * @param response - The response.
  * @returns The entries.
  */
@@ -521,9 +521,7 @@ const changesOf = (response: TestResponse): readonly string[] => {
   const listed = body.changes ?? null;
   const changes: readonly JsonValue[] = isJsonArray(listed) ? listed : [];
 
-  // As a set: the generic path may list a field twice (written, and
-  // required without a default).
-  return [...new Set(changes.map((entry) => JSON.stringify(entry)))].toSorted();
+  return changes.map((entry) => JSON.stringify(entry)).toSorted();
 };
 
 /** Visible local definitions the generic walk patches, by role. */
@@ -1371,6 +1369,46 @@ describe("schema-http", () => {
 
             assert.strictEqual(update.status, 409, update.text);
             assert.include(update.text, '"field":"label"');
+
+            // A create's scope comes from its payload alone: an ID that
+            // collides with a hidden definition looks like a fresh one.
+            const snapshot = yield* (yield* Catalog).refresh;
+            const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+            const collided = addRole("collided_hidden");
+
+            yield* change([collided.op]);
+            yield* asCoreSet([hideRole(name?.id ?? "", "collided_hidden")]);
+
+            const createWithId = (id: string) => {
+              const created = createRole("collision");
+
+              return http.request("POST", CHANGE_SETS, {
+                body: {
+                  operations: [
+                    created.op === "createRole"
+                      ? {
+                          ...created,
+                          definition: { ...created.definition, id },
+                        }
+                      : created,
+                  ],
+                },
+                headers: {
+                  "std-schema-revision": `${current.revision + 9}.${current.changeSetId}`,
+                },
+                token: admin,
+              });
+            };
+
+            const onHidden = yield* createWithId(collided.id);
+            const onMissing = yield* createWithId(MISSING_ID);
+
+            assert.strictEqual(onHidden.status, 409, onHidden.text);
+            assert.include(onHidden.text, '"field":"help_text"');
+            assert.strictEqual(
+              asMissing(onHidden, collided.id),
+              asMissing(onMissing, MISSING_ID)
+            );
           })
       );
 

@@ -184,10 +184,18 @@ export const writtenColumns = (
     properties = Object.keys(operation.changes);
   } else {
     const draft: JsonObject = operation.definition;
-    const stored = snapshot.get(operation.definition.id);
-    const before: JsonObject | undefined = stored;
 
-    // A replaced override writes only what differs from the stored one.
+    // Only a replaced override (its target checked visible first) is
+    // compared with the stored record: it writes what differs. A create's
+    // columns come from its payload alone, so a stored definition with the
+    // same ID, visible or not, never shapes them (Contracts 3.8).
+    const replaced =
+      operation.op === "setOverride" && operation.version !== null;
+
+    const before: JsonObject | undefined = replaced
+      ? snapshot.get(operation.definition.id)
+      : undefined;
+
     properties = Object.keys(draft).filter(
       (key) =>
         before === undefined ||
