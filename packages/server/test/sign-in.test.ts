@@ -6,10 +6,11 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Plaintext } from "@std/values/write-only";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { hashPassword, verifyPassword } from "../src/auth/password.ts";
 import {
   listPath,
@@ -18,6 +19,7 @@ import {
   tagOf,
 } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 const REVISION_HEADER = /^\d+\.[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/u;
 
@@ -204,6 +206,53 @@ describe("sign-in", () => {
           200
         );
       })
+    );
+
+    dbTest.effect("a sign-in racing a deactivation leaves no session", () =>
+      Effect.scoped(
+        Effect.gen(function* signInRace() {
+          const http = yield* TestHttpClient;
+          const database = yield* TestDatabase;
+          const fixture = yield* AcmeFixture;
+          const deactivator = yield* database.session("std-test-deactivator");
+
+          yield* deactivator.query("BEGIN");
+          yield* deactivator.query(
+            `UPDATE core."user" SET active = false WHERE login = 'bob'`
+          );
+
+          const signing = yield* http
+            .request("POST", "/api/v1/auth/sign-in", {
+              body: { login: "bob", password: "bob-password" },
+            })
+            .pipe(Effect.forkChild);
+
+          // The sign-in waits for the deactivation's row lock.
+          yield* waitUntil(
+            values(
+              "SELECT count(*)::text AS value FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))",
+              [String(deactivator.processId)]
+            ).pipe(Effect.map(([blocked]) => blocked === "1"))
+          );
+
+          yield* deactivator.query("COMMIT");
+
+          const response = yield* Fiber.join(signing);
+
+          const sessions = yield* values(
+            "SELECT count(*)::text AS value FROM core.session WHERE user_id = $1::uuid",
+            [fixture.bob.id]
+          );
+
+          yield* values(
+            `UPDATE core."user" SET active = true WHERE id = $1::uuid RETURNING id::text AS value`,
+            [fixture.bob.id]
+          );
+
+          assert.strictEqual(response.status, 401);
+          assert.deepStrictEqual(sessions, ["0"]);
+        })
+      )
     );
 
     dbTest.effect(
