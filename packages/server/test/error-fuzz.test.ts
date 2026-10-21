@@ -72,6 +72,7 @@ import type {
 } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { deliveryCount, subscribe } from "./outbox-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   ACME,
@@ -1583,6 +1584,25 @@ const provoking = (
  * @param cell - The cell.
  * @returns The outcome text.
  */
+/**
+ * The outcome of a write, with the delivery rows it left: none for a
+ * refusal (Contracts 4.6: deliveries are written in the save transaction).
+ *
+ * @param sending - The write.
+ * @returns The outcome text, plus `+<n> deliveries` when any were left.
+ */
+const withDeliveries = Effect.fn("ErrorMatrix.withDeliveries")(
+  function* withDeliveries(
+    sending: Effect.Effect<TestResponse, unknown, Services>
+  ) {
+    const before = yield* deliveryCount;
+    const text = outcomeText(yield* sending);
+    const left = (yield* deliveryCount) - before;
+
+    return left === 0 ? text : `${text} +${left} deliveries`;
+  }
+);
+
 const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
   context: FuzzContext,
   cell: Cell
@@ -1594,8 +1614,8 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
 
     yield* freshRecord(context, ITEM, { parent: target.id });
 
-    return outcomeText(
-      yield* send(context, {
+    return yield* withDeliveries(
+      send(context, {
         headers: { "if-match": '"1"' },
         method: "DELETE",
         path: recordPath(cell.endpoint, target.id),
@@ -1626,9 +1646,9 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
   };
 
   if (cell.constraint !== "referenceBackstop") {
-    return outcomeText(
-      yield* write(yield* provoking(context)[cell.constraint])
-    );
+    const values = yield* provoking(context)[cell.constraint];
+
+    return yield* withDeliveries(write(values));
   }
 
   // The FK backstop: the reference target is visible when the record
@@ -1653,13 +1673,15 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
 
   yield* Deferred.await(deleted);
 
-  const writing = yield* write({ parent: target.id }).pipe(Effect.forkChild);
+  const writing = yield* withDeliveries(write({ parent: target.id })).pipe(
+    Effect.forkChild
+  );
 
   yield* waitUntil(someoneWaitsOnALock);
   yield* Deferred.succeed(release, true);
   yield* Fiber.join(deleter);
 
-  return outcomeText(yield* Fiber.join(writing));
+  return yield* Fiber.join(writing);
 });
 
 /**
@@ -1857,6 +1879,24 @@ describe("error-fuzz", () => {
           Effect.gen(function* matrix() {
             const context = yield* setUp;
             const seen = new Map<string, string>();
+            const snapshot = yield* (yield* Catalog).refresh;
+
+            // Every committed save of the fuzz hierarchy writes a delivery
+            // row; a refused one must leave none.
+            yield* subscribe({
+              classId: snapshot.classByName(ITEM)?.id ?? "",
+              identityId: (yield* AcmeFixture).alice.id,
+            });
+
+            // The subscription is live: a valid create leaves one row.
+            assert.strictEqual(
+              yield* withDeliveries(
+                freshRecord(context, SPECIAL).pipe(
+                  Effect.as(syntheticResponse(201, { _tag: "Created" }))
+                )
+              ),
+              "201 Created +1 deliveries"
+            );
 
             for (const cell of MATRIX) {
               seen.set(cellKey(cell), yield* takeCell(context, cell));

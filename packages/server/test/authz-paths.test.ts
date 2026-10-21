@@ -24,6 +24,7 @@ import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Actor, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { InstanceSettings } from "../src/config/instance-settings.ts";
+import { OutboxSaveHooks } from "../src/records/outbox-producer.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
@@ -32,6 +33,7 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   arrayOf,
+  deliveries,
   freshAsset,
   listNames,
   nameOf,
@@ -41,6 +43,7 @@ import {
   recordIn,
   refused,
   signInAll,
+  subscribeToEverySave,
   userOf,
 } from "./authz-support.ts";
 import type { Callers, Observation, Who } from "./authz-support.ts";
@@ -347,11 +350,10 @@ const nestedSave = (
         Effect.provideService(SaveHooks, SaveHooks.of(hooks))
       );
 
-    const noHooks: SaveHooksApi = {
-      afterWrite: () => Effect.void,
-      beforeWrite: (input) => Effect.succeed(input.values),
-      deliveries: () => Effect.void,
-    };
+    // The HTTP app's hooks: the outbox producer, no other hook.
+    const noHooks: SaveHooksApi = yield* Effect.gen(function* outboxHooks() {
+      return yield* SaveHooks;
+    }).pipe(Effect.provide(OutboxSaveHooks));
 
     const saveAnother = Effect.gen(function* saveAnother() {
       const exit = yield* Effect.exit(
@@ -803,11 +805,24 @@ describe("authz-paths", () => {
       Effect.gen(function* writePaths() {
         const callers = yield* signInAll;
 
+        // Every committed save of an asset writes a delivery row in its
+        // transaction (Contracts 4.6); a refused one must leave none.
+        yield* subscribeToEverySave(ACME.asset, callers.fixture.alice.id);
+
         for (const row of WRITE_ROWS) {
           for (const who of ["alice", "bob"] as const) {
+            const before = yield* deliveries();
             const seen = yield* row.run(callers, who);
+            const written = (yield* deliveries()) - before;
+            const where = `${who}: ${row.path}`;
 
-            assert.deepStrictEqual(seen, row[who], `${who}: ${row.path}`);
+            assert.deepStrictEqual(seen, row[who], where);
+
+            if (seen.status >= 400) {
+              assert.strictEqual(written, 0, `deliveries after ${where}`);
+            } else if (row.path.includes("acme.")) {
+              assert.strictEqual(written, 1, `deliveries after ${where}`);
+            }
           }
         }
       })
@@ -826,8 +841,12 @@ describe("authz-paths", () => {
           const ownLaptop = yield* fresh(callers, "bob", ACME.laptop);
           const spare = { status: "spare" };
 
+          // The write test's subscription to every asset save is in place,
+          // so the outer save writes a delivery before its hook runs.
+          const before = yield* deliveries();
+
           // Alice's monitor is invisible to Bob: NotFound, and nothing of
-          // the outer save stays.
+          // the outer save stays, its delivery row included.
           assert.deepStrictEqual(
             yield* nestedSave(bob, outer.id, records.AM, spare),
             { nested: ["NotFound"], outer: "refused" }
@@ -848,6 +867,7 @@ describe("authz-paths", () => {
             yield* nestedSave(bob, outer.id, outer.id, spare),
             { nested: ["RecordInSave"], outer: "refused" }
           );
+          assert.strictEqual(yield* deliveries(), before);
 
           // Bob's own asset: saved, audited as Bob, in the same operation.
           assert.deepStrictEqual(
@@ -855,6 +875,8 @@ describe("authz-paths", () => {
             { nested: ["saved"], outer: "saved" }
           );
           assert.strictEqual(yield* versionOf(ownAsset.id), 2);
+          // One delivery for the outer save, one for the nested one.
+          assert.strictEqual(yield* deliveries(), before + 2);
           assert.deepStrictEqual(
             yield* values(
               `SELECT count(DISTINCT operation_id)::text AS value FROM core."change"

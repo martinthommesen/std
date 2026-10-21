@@ -43,9 +43,15 @@ const SOURCE_PACKAGES = [
   "values",
 ] as const;
 
-/** Where a definition set's role and permission names become IDs. */
+/**
+ * Where definition sets' role and permission names meet definitions:
+ * resolving a set file's names to IDs, the snapshot's index, and the
+ * upgrade plan finding a local definition that already uses a name the
+ * set adds (Contracts 1.8, 8.4). None decides access.
+ */
 const NAME_RESOLVERS = new Set([
   "definitions/src/set-resolve.ts",
+  "definitions/src/set-upgrade.ts",
   "definitions/src/snapshot.ts",
 ]);
 
@@ -341,6 +347,26 @@ describe("no-bypass", () => {
           }
 
           assert.deepStrictEqual(refused, REFUSED);
+
+          // Every table of the `core` schema but the user tables, which the
+          // `authenticated` rule keeps known, from pg_class: platform and
+          // internal tables a later migration adds are covered too.
+          const coreTables = yield* values(
+            `SELECT 'core.' || c.relname AS value FROM pg_class AS c
+               JOIN pg_namespace AS n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'core' AND c.relkind IN ('r', 'p')
+                AND c.relname NOT IN ('user')
+              ORDER BY c.relname`
+          );
+
+          for (const table of coreTables) {
+            assert.deepStrictEqual(
+              observe(yield* asAdmin("GET", listPath(table))),
+              { status: 404, tag: "UnknownTable" },
+              table
+            );
+          }
+
           assert.strictEqual(
             (yield* values(
               `SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid`,

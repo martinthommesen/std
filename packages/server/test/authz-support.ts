@@ -16,6 +16,7 @@ import { AcmeFixture, seedRecord } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
+import { deliveryCount, subscribe } from "./outbox-support.ts";
 
 /** The callers of the two-user example, plus the administrator. */
 export type Who = "alice" | "bob" | "admin";
@@ -64,6 +65,27 @@ export const freshAsset = (
   classId: DefinitionId,
   values: Readonly<Record<string, JsonValue>>
 ) => seedRecord(owner, classId, { owner, ...values });
+
+/**
+ * A subscription to every create, update and delete of a class and its
+ * descendants, so every committed save there writes a delivery row in its
+ * transaction (Contracts 4.6) and a refused one must leave none.
+ *
+ * @param classId - The class.
+ * @param identityId - The subscription's identity.
+ * @returns The subscription's ID.
+ */
+export const subscribeToEverySave = (
+  classId: DefinitionId,
+  identityId: DefinitionId
+) => subscribe({ classId, identityId });
+
+/**
+ * How many delivery rows exist, as table owner.
+ *
+ * @returns The count.
+ */
+export const deliveries = () => deliveryCount;
 
 /** What a table of expected outcomes compares. */
 export interface Observation {

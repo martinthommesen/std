@@ -5,18 +5,25 @@
  * same holds for every platform and config table and every route, for
  * every non-admin. Admins read them through the built-in allow-all rule,
  * but no caller writes them through the generic record routes: their rows
- * come from change sets and the save pipeline only.
+ * come from change sets and the save pipeline only. Internal tables of the
+ * `core` schema that no definition describes (sessions, deliveries, the
+ * ledger, ...) are unknown to every caller, admins included.
+ *
+ * Every list of tables is derived, not written down: platform classes from
+ * the catalog, tables from `pg_class`, so a table a later migration adds
+ * is covered without touching this file.
  */
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { listNames, signInAll } from "./authz-support.ts";
+import { deliveries, listNames, signInAll } from "./authz-support.ts";
 import type { Who } from "./authz-support.ts";
 import {
   listPath,
@@ -30,6 +37,31 @@ import { change, freshId, values } from "./schema-support.ts";
 const CONFIG_TABLES = ["core.user_role"] as const;
 
 const MISSING = "core.no_such_table";
+
+/**
+ * The qualified names of the platform classes of a snapshot.
+ *
+ * @param snapshot - The configuration.
+ * @returns `core.<table>` per platform class.
+ */
+const platformTables = (snapshot: ConfigSnapshot): string[] =>
+  snapshot
+    .all("class")
+    .filter((definition) => definition.storage === "platform")
+    .map((definition) => snapshot.qualifiedNameOf(definition.id) ?? "");
+
+/**
+ * Every table of the `core` schema, as table owner.
+ *
+ * @returns `core.<table>` per table.
+ */
+const coreSchemaTables = () =>
+  values(
+    `SELECT 'core.' || c.relname AS value FROM pg_class AS c
+       JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'core' AND c.relkind IN ('r', 'p')
+      ORDER BY c.relname`
+  );
 
 /**
  * How many change entries there are, as table owner.
@@ -82,10 +114,7 @@ describe("platform-tables", () => {
           const { tokens } = yield* signInAll;
           const snapshot = yield* (yield* Catalog).refresh;
 
-          const platform = snapshot
-            .all("class")
-            .filter((definition) => definition.storage === "platform")
-            .map((definition) => snapshot.qualifiedNameOf(definition.id) ?? "");
+          const platform = platformTables(snapshot);
 
           // Every platform table of the shipped set is described.
           assert.sameMembers(
@@ -141,6 +170,48 @@ describe("platform-tables", () => {
                   label
                 );
               }
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "every core table is described or internal, and internal ones are unknown to everyone",
+      () =>
+        Effect.gen(function* internalTables() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const snapshot = yield* (yield* Catalog).refresh;
+          const tables = yield* coreSchemaTables();
+
+          const described = new Set(
+            snapshot
+              .all("class")
+              .map((definition) => snapshot.qualifiedNameOf(definition.id))
+          );
+
+          // Every described platform table exists.
+          assert.includeMembers(tables, platformTables(snapshot));
+
+          const internal = tables.filter((table) => !described.has(table));
+
+          assert.includeMembers(internal, ["core.session", "core.delivery"]);
+
+          for (const who of ["admin", "alice", "bob"] as const) {
+            const missing = yield* http.get(listPath(MISSING), {
+              token: tokens[who],
+            });
+
+            for (const table of internal) {
+              const response = yield* http.get(listPath(table), {
+                token: tokens[who],
+              });
+
+              assert.strictEqual(response.status, 404, `${who} ${table}`);
+              assert.strictEqual(
+                response.text.replace(table, "?"),
+                missing.text.replace(MISSING, "?")
+              );
             }
           }
         })
@@ -212,6 +283,8 @@ describe("platform-tables", () => {
             ],
           ] as const;
 
+          const deliveriesBefore = yield* deliveries();
+
           for (const [method, path, options] of writes) {
             const response = yield* http.request(method, path, {
               ...options,
@@ -222,8 +295,20 @@ describe("platform-tables", () => {
             assert.strictEqual(yield* tagOf(response), "NotAllowed");
           }
 
+          // A create on every platform table the catalog describes.
+          for (const table of platformTables(yield* (yield* Catalog).refresh)) {
+            const response = yield* http.request("POST", listPath(table), {
+              body: {},
+              token,
+            });
+
+            assert.strictEqual(response.status, 403, `POST ${table}`);
+            assert.strictEqual(yield* tagOf(response), "NotAllowed");
+          }
+
           assert.deepStrictEqual(yield* changeCount(), before);
           assert.deepStrictEqual(yield* ruleText(), ruleBefore);
+          assert.strictEqual(yield* deliveries(), deliveriesBefore);
         })
     );
 
@@ -278,7 +363,7 @@ describe("platform-tables", () => {
             token: tokens.bob,
           });
 
-          for (const table of ["core.change", "core.access_rule"]) {
+          for (const table of platformTables(yield* catalog.refresh)) {
             const response = yield* http.get(listPath(table), {
               token: tokens.bob,
             });
