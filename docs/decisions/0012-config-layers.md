@@ -110,6 +110,7 @@ Open conflicts are informational, because open conflicts do not block the system
 ## Verified facts
 
 - Postgres 18 names the NOT NULL constraints of unnamed `NOT NULL` columns itself (`<table>_<column>_not_null`, `contype = 'n'`); check 5 ignores such constraints on system columns and reports only unknown `std_` names and other constraint kinds.
+- A `NOT NULL ... NOT VALID` constraint sets `pg_attribute.attnotnull` to true while `pg_constraint.convalidated` is false (Postgres 18.6, checked by hand on a scratch database), so check 2 compares nullability through `attnotnull` and check 3 reports the validation state.
 - An `ALTER DATABASE ... SET client_connection_check_interval` reaches only new sessions: `doctor` reads the setting of its own session, so it reports what new server sessions get (tested on a fresh pool).
 - The Ultracite fixer rewrites the string literal `"UTF8"` to `"utf-8"` (`unicorn/text-encoding-identifier-case`); encoding checks therefore compare in SQL (`encoding = pg_char_to_encoding('UTF8')`), as the migration runner already did.
 - A test seeding one drift per check confirmed every code in the table above except 6's `changeSetNeedsAttention`, 10's `coreSetPending` and 13, 14 (which cannot be provoked on a shared server; 14 has a unit test).
