@@ -16,6 +16,7 @@ import {
   claimDeliveries,
   claimStatement,
   LAST_ERROR_MAX_LENGTH,
+  LEASE_EXPIRED_ERROR,
   markDone,
   markFailed,
   RETRY_CAP,
@@ -42,8 +43,16 @@ const LEASE = Duration.minutes(5);
 
 const claim = (
   subscriptionId: string,
-  deadLetter: DeadLetterPolicy = "block"
-) => claimDeliveries({ deadLetter, lease: LEASE, limit: 50, subscriptionId });
+  deadLetter: DeadLetterPolicy = "block",
+  maxAttempts = 10
+) =>
+  claimDeliveries({
+    deadLetter,
+    lease: LEASE,
+    limit: 50,
+    maxAttempts,
+    subscriptionId,
+  });
 
 const keys = (claimed: readonly ClaimedDelivery[]) =>
   claimed.map((row) => `${row.recordId}:${row.recordVersion}`);
@@ -456,6 +465,64 @@ describe("outbox-claims", () => {
             `${r.id}:3`,
             `${other.id}:2`,
           ]);
+        })
+    );
+
+    dbTest.effect(
+      "a row reclaimed max_attempts times without a reported failure ends dead, under block and under skip",
+      () =>
+        Effect.gen(function* crashedAttempts() {
+          const policies = {
+            block: yield* subscribe({
+              classId: ACME.asset,
+              deadLetter: "block",
+              maxAttempts: 2,
+              operations: ["update"],
+            }),
+            skip: yield* subscribe({
+              classId: ACME.asset,
+              deadLetter: "skip",
+              maxAttempts: 2,
+              operations: ["update"],
+            }),
+          };
+
+          const r = yield* createAsset("crashing");
+
+          yield* rename(r.id, 1, "crash 2");
+          yield* rename(r.id, 2, "crash 3");
+
+          for (const policy of ["block", "skip"] as const) {
+            const subscription = policies[policy];
+
+            // Two claims whose workers die without reporting.
+            for (const attempt of [1, 2]) {
+              const claimed = only(yield* claim(subscription, policy, 2));
+
+              assert.strictEqual(claimed.recordVersion, 2);
+              assert.strictEqual(claimed.attempts, attempt);
+              yield* expireLease(claimed.id);
+            }
+
+            const after = yield* claim(subscription, policy, 2);
+
+            const dead = yield* deliveriesWhere(
+              "record_id = $1::uuid AND subscription_id = $2::uuid AND record_version = 2",
+              [r.id, subscription]
+            );
+
+            assert.strictEqual(dead[0]?.status, "dead");
+            assert.strictEqual(dead[0]?.attempts, 2);
+            assert.isNull(dead[0]?.lease_token);
+            assert.strictEqual(dead[0]?.last_error, LEASE_EXPIRED_ERROR);
+            assert.deepStrictEqual(
+              keys(after),
+              policy === "block" ? [] : [`${r.id}:3`],
+              policy === "block"
+                ? "the dead version 2 holds version 3 back"
+                : "version 3 proceeds past the dead version 2"
+            );
+          }
         })
     );
 

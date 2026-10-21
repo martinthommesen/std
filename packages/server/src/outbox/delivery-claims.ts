@@ -6,6 +6,10 @@
  * - `claimDeliveries` claims up to `limit` deliveries of one subscription
  *   with the 4.6 claim predicate, sets them `in_flight` with a lease and a
  *   fresh random lease token, and commits, in its own request transaction.
+ *   Before it claims, in the same transaction, an `in_flight` row whose
+ *   lease expired after its last allowed attempt (claimed `maxAttempts`
+ *   times) becomes `dead` instead of being claimed again, so a
+ *   delivery whose worker keeps dying before it reports still ends.
  *   Pending rows are due once `next_attempt_at` has passed; `in_flight`
  *   rows whose lease expired are claimable again, under a new token. A row
  *   is held back while an earlier version of the same record for the same
@@ -20,9 +24,8 @@
  *   and fail inside it, so the whole transaction rolls back.
  * - A failure returns the row to `pending` after `retryDelay` (10 s doubling
  *   to 1 h, minus up to 20 % jitter), or makes it `dead` once it has been
- *   claimed `maxAttempts` times. `attempts` counts claims, so a delivery
- *   whose worker keeps dying before it reports also uses up its attempts
- *   the next time a failure is reported.
+ *   claimed `maxAttempts` times. `attempts` counts claims, so a crashed
+ *   attempt counts like a failed one.
  */
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import { Duration, Effect, Option, Random, Schema } from "effect";
@@ -58,6 +61,11 @@ export interface ClaimInput {
   readonly limit: number;
   /** How long the lease lasts. It must exceed the effect's timeout. */
   readonly lease: Duration.Duration;
+  /**
+   * The subscription's `max_attempts` from the worker's snapshot: an
+   * expired lease of a row claimed this many times makes it `dead`.
+   */
+  readonly maxAttempts: number;
 }
 
 /** A claimed delivery. */
@@ -99,6 +107,10 @@ export type FailureOutcome = "pending" | "dead";
 
 /** The first retry delay. */
 export const RETRY_BASE: Duration.Duration = Duration.seconds(10);
+
+/** `last_error` of a row whose last allowed attempt never reported. */
+export const LEASE_EXPIRED_ERROR =
+  "The lease of the last allowed attempt expired without a result.";
 
 /** The longest retry delay. */
 export const RETRY_CAP: Duration.Duration = Duration.hours(1);
@@ -175,6 +187,24 @@ RETURNING d.id::text AS id, d.subscription_id::text AS subscription_id,
   d.record_version::text AS record_version, d.attempts,
   d.lease_token::text AS lease_token, d.lease_until::text AS lease_until`;
 
+/**
+ * Dead-letters the expired leases of one subscription's rows that used up
+ * their attempts. `$1` is the subscription, `$2` its `max_attempts`, `$3`
+ * the error text. Rows another transaction holds are skipped, never waited
+ * for.
+ */
+const EXPIRE_EXHAUSTED = `WITH exhausted AS (
+  SELECT id FROM core.delivery
+  WHERE subscription_id = $1::uuid AND status = 'in_flight'
+    AND lease_until < now() AND attempts >= $2::int4
+  ORDER BY id
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE core.delivery d
+SET status = 'dead', lease_until = NULL, lease_token = NULL, last_error = $3::text
+FROM exhausted x
+WHERE d.id = x.id`;
+
 const decodeClaimed = decodeRows(
   Schema.Struct({
     attempts: Schema.Int,
@@ -210,12 +240,14 @@ const refuseNested = Effect.die(
 
 /**
  * Claims due deliveries of one subscription in per-record version order,
- * sets them `in_flight` under a new lease token, and commits. It must not
+ * sets them `in_flight` under a new lease token, and commits. Expired
+ * leases of rows claimed `maxAttempts` times become `dead` first. It must not
  * run inside a transaction (it dies with `TransactionRefused`): a claim
  * that did not commit would hold its rows locked and hide the lease from
  * other workers.
  *
- * @param input - Subscription, dead-letter policy, limit and lease.
+ * @param input - Subscription, dead-letter policy, `max_attempts`, limit
+ *   and lease.
  * @returns The claimed rows, by row ID.
  */
 export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
@@ -230,6 +262,12 @@ export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
       return yield* Effect.die(new RangeError("A lease must be positive."));
     }
 
+    if (!Number.isInteger(input.maxAttempts) || input.maxAttempts < 1) {
+      return yield* Effect.die(
+        new RangeError("A subscription allows at least one attempt.")
+      );
+    }
+
     if (Option.isSome(yield* currentState)) {
       return yield* refuseNested;
     }
@@ -239,6 +277,14 @@ export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
     const rows = yield* request(
       Effect.gen(function* claim() {
         const sql = yield* SqlClient.SqlClient;
+
+        // First, so that under `block` the new dead row holds later
+        // versions back in the claim below, and under `skip` they proceed.
+        yield* sql.unsafe(EXPIRE_EXHAUSTED, [
+          input.subscriptionId,
+          String(input.maxAttempts),
+          LEASE_EXPIRED_ERROR,
+        ]);
 
         return yield* sql.unsafe(claimStatement(input.deadLetter), [
           input.subscriptionId,
