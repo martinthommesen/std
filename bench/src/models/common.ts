@@ -245,11 +245,17 @@ export const baseSetup = (users: number): readonly string[] => [
 const stageStatement = (
   ctx: ModelContext,
   chunk: readonly [number, number],
-  owner: FieldDef
+  owner: FieldDef,
+  fixedClass: string | null
 ): string => {
   const slotList = classSlots.map((cls) => uuidLiteral(cls.id)).join(",");
   const slotIds = `ARRAY[${slotList}]`;
-  const classId = `(${slotIds})[1 + ${hashMod("g.n", salt.classSlot, classSlots.length)}]`;
+
+  const classId =
+    fixedClass === null
+      ? `(${slotIds})[1 + ${hashMod("g.n", salt.classSlot, classSlots.length)}]`
+      : uuidLiteral(fixedClass);
+
   const updatedAt = `c.at + ${msInterval(hashMod("g.n", salt.updatedAt, updatedSpanDays * millisecondsPerDay))}`;
   const ownerId = `CASE WHEN ${hashMod("g.n", owner.salt + ownerNullSalt, percent)} < ${owner.nullPercent} THEN NULL ELSE ow.id END`;
   const version = `1 + ${hashMod("g.n", salt.version, versionSpread)}`;
@@ -276,8 +282,25 @@ export const stageJobs = (
 ): readonly LoadJob[] =>
   chunks.records.map((chunk) => ({
     table: `${auxSchema}.stage`,
-    text: stageStatement(ctx, chunk, owner),
+    text: stageStatement(ctx, chunk, owner, null),
   }));
+
+/**
+ * Stages extra records of one class after the main load, numbered past the
+ * existing ones (the disposable delete targets of W3).
+ *
+ * @param ctx - Sizes.
+ * @param range - The new record numbers.
+ * @param owner - The `item.owner` field (its salt and null share).
+ * @param classId - The class every staged record gets.
+ * @returns The staging statement.
+ */
+export const stageClassRecords = (
+  ctx: ModelContext,
+  range: readonly [number, number],
+  owner: FieldDef,
+  classId: string
+): string => stageStatement(ctx, range, owner, classId);
 
 const ticketStageStatement = (
   ctx: ModelContext,

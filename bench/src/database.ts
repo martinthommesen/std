@@ -131,17 +131,21 @@ const adminLayer = (
 ): Layer.Layer<PgClient | SqlClient, SqlError> =>
   clientLayer(server, server.adminDatabase, { maxConnections: 1 });
 
-const ping = (server: ServerConfig): Effect.Effect<void, SqlError> =>
-  Effect.gen(function* pingServer() {
+const ping: (server: ServerConfig) => Effect.Effect<void, SqlError> = Effect.fn(
+  "bench.ping"
+)(
+  function* pingServer(_server: ServerConfig) {
     const sql = yield* PgClientService;
 
     yield* sql.unsafe("SELECT 1");
-  }).pipe(Effect.provide(adminLayer(server)));
+  },
+  (effect, server) => effect.pipe(Effect.provide(adminLayer(server)))
+);
 
-const startContainer = (
+const startContainer: (
   server: ServerConfig
-): Effect.Effect<void, BenchError> =>
-  Effect.gen(function* startBenchContainer() {
+) => Effect.Effect<void, BenchError> = Effect.fn("bench.startContainer")(
+  function* startBenchContainer(server: ServerConfig) {
     yield* Effect.logInfo(
       `bench server not reachable; starting it with ${composeFile}`
     );
@@ -161,7 +165,8 @@ const startContainer = (
           })
       )
     );
-  });
+  }
+);
 
 /**
  * Makes sure the bench server answers; if it does not, starts the bench
@@ -175,15 +180,17 @@ export const ensureServer = (
 ): Effect.Effect<void, BenchError> =>
   ping(server).pipe(Effect.catchTag("SqlError", () => startContainer(server)));
 
-const adminStatement = (
+const adminStatement: (
   server: ServerConfig,
   text: string
-): Effect.Effect<void, SqlError> =>
-  Effect.gen(function* runAdminStatement() {
+) => Effect.Effect<void, SqlError> = Effect.fn("bench.adminStatement")(
+  function* runAdminStatement(_server: ServerConfig, text: string) {
     const sql = yield* PgClientService;
 
     yield* sql.unsafe(text).unprepared;
-  }).pipe(Effect.provide(adminLayer(server)));
+  },
+  (effect, server, _text) => effect.pipe(Effect.provide(adminLayer(server)))
+);
 
 const databaseName = (name: string): string => {
   if (!databaseNamePattern.test(name)) {

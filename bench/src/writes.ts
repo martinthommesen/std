@@ -11,8 +11,12 @@
  *   version check (Contracts 2.2 item 3), then the proposed-state check.
  * - W3 deletes a laptop through `/bench.item`: lock the root `FOR UPDATE`,
  *   resolve the concrete class, read the existing state, delete the root row
- *   with a version check (level rows cascade). It deletes laptops created by
- *   W1, which no ticket references.
+ *   with a version check (level rows cascade). Its targets are disposable
+ *   laptops that nothing references, added set-based before W3 (enough for
+ *   every phase to run its full duration), so W3 does not depend on W1.
+ *
+ * Per-operation code uses `Effect.fnUntraced`: a span per statement would
+ * be part of the measured latency.
  */
 import { PgClient } from "@effect/sql-pg/PgClient";
 import { Cause, Effect, Exit, Schema } from "effect";
@@ -22,6 +26,8 @@ import type { Caller } from "./access.ts";
 import { compileGet } from "./compile.ts";
 import type { BenchError } from "./errors.ts";
 import { query } from "./execute.ts";
+import type { DisposableRecord } from "./generate.ts";
+import { addDisposableRecords } from "./generate.ts";
 import type { ClassName } from "./hierarchy.ts";
 import { classes, endpointFields } from "./hierarchy.ts";
 import type { Rng } from "./random.ts";
@@ -73,7 +79,7 @@ export interface WriteResult {
   readonly throughput: number;
   readonly p50: number;
   readonly p95: number;
-  /** W3 stopped early because every W1-created record was deleted. */
+  /** W3 stopped early because its delete targets ran out (makes the run invalid for the decision rule). */
   readonly exhausted: boolean;
   readonly errorSamples: readonly string[];
 }
@@ -90,6 +96,13 @@ const errorSampleLength = 400;
 const statementPrefix = 80;
 const updatedField = { cls: "laptop", name: "battery_cycles" } as const;
 const batteryCycleLimit = 1500;
+
+/**
+ * Delete targets prepared per caller and second of W3: well above the about
+ * 5,500 deletes per second measured with 16 clients, so no phase runs out.
+ */
+const targetsPerSecond = 8000;
+const minimumTargets = 1000;
 
 const StepRow = Schema.Struct({
   class_id: Schema.optionalKey(Schema.String),
@@ -121,11 +134,18 @@ const mergeRow = (
   }
 };
 
-const executeSteps = (
+/**
+ * Runs the steps of a write in order, merging each first row into the state.
+ *
+ * @param steps - The write's statements.
+ * @param initial - Values known before the first step (such as `id`).
+ * @returns The final state; fails with `WriteFailed` when a step that must return a row does not.
+ */
+export const executeSteps: (
   steps: readonly WriteStep[],
   initial: WriteState
-): Effect.Effect<WriteState, WriteError, PgClient> =>
-  Effect.gen(function* runSteps() {
+) => Effect.Effect<WriteState, WriteError, PgClient> = Effect.fnUntraced(
+  function* runSteps(steps: readonly WriteStep[], initial: WriteState) {
     const state = new Map(initial);
 
     for (const step of steps) {
@@ -143,7 +163,8 @@ const executeSteps = (
     }
 
     return state;
-  });
+  }
+);
 
 interface Tally {
   readonly latencies: number[];
@@ -192,74 +213,73 @@ interface ClientRun {
   readonly deadline: number;
 }
 
-const clientLoop = (
+const clientLoop = Effect.fnUntraced(function* loop(
   run: ClientRun,
   client: number
-): Effect.Effect<void, never, PgClient> =>
-  Effect.gen(function* loop() {
-    const rng = makeRng(`${run.config.seed}:${run.name}:${client}`);
+) {
+  const rng = makeRng(`${run.config.seed}:${run.name}:${client}`);
 
-    while (!run.tally.exhausted && performance.now() < run.deadline) {
-      const begin = performance.now();
+  while (!run.tally.exhausted && performance.now() < run.deadline) {
+    const begin = performance.now();
 
-      const exit = yield* Effect.exit(
-        Effect.catchTag(run.operation(rng), "WriteFailed", refusalIsOutcome)
-      );
-
-      record(run.tally, exit, performance.now() - begin);
-    }
-  });
-
-const runClients = (config: WriteConfig, name: string, operation: Operation) =>
-  Effect.gen(function* drive() {
-    const tally: Tally = {
-      errorSamples: [],
-      errors: 0,
-      exhausted: false,
-      latencies: [],
-      refused: 0,
-    };
-
-    const start = performance.now();
-
-    const run: ClientRun = {
-      config,
-      deadline: start + config.seconds * millisecondsPerSecond,
-      name,
-      operation,
-      tally,
-    };
-
-    const clients = Array.from({ length: config.clients }, (_unused, index) =>
-      clientLoop(run, index)
+    const exit = yield* Effect.exit(
+      Effect.catchTag(run.operation(rng), "WriteFailed", refusalIsOutcome)
     );
 
-    yield* Effect.all(clients, { concurrency: config.clients, discard: true });
+    record(run.tally, exit, performance.now() - begin);
+  }
+});
 
-    const seconds = (performance.now() - start) / millisecondsPerSecond;
+const runPhase = Effect.fn("bench.runWritePhase")(function* drive(
+  config: WriteConfig,
+  name: string,
+  operation: Operation
+) {
+  const tally: Tally = {
+    errorSamples: [],
+    errors: 0,
+    exhausted: false,
+    latencies: [],
+    refused: 0,
+  };
 
-    return {
-      errorSamples: tally.errorSamples,
-      errors: tally.errors,
-      exhausted: tally.exhausted,
-      operations: tally.latencies.length,
-      p50: round3(percentile(tally.latencies, 50)),
-      p95: round3(percentile(tally.latencies, 95)),
-      refused: tally.refused,
-      seconds: round3(seconds),
-      throughput: round3(tally.latencies.length / seconds),
-    };
-  });
+  const start = performance.now();
+
+  const run: ClientRun = {
+    config,
+    deadline: start + config.seconds * millisecondsPerSecond,
+    name,
+    operation,
+    tally,
+  };
+
+  const clients = Array.from({ length: config.clients }, (_unused, index) =>
+    clientLoop(run, index)
+  );
+
+  yield* Effect.all(clients, { concurrency: config.clients, discard: true });
+
+  const seconds = (performance.now() - start) / millisecondsPerSecond;
+
+  return {
+    errorSamples: tally.errorSamples,
+    errors: tally.errors,
+    exhausted: tally.exhausted,
+    operations: tally.latencies.length,
+    p50: round3(percentile(tally.latencies, 50)),
+    p95: round3(percentile(tally.latencies, 95)),
+    refused: tally.refused,
+    seconds: round3(seconds),
+    throughput: round3(tally.latencies.length / seconds),
+  };
+});
 
 interface WriteContext {
   readonly model: StorageModel;
   readonly ctx: ModelContext;
   readonly samples: Samples;
   readonly writes: WriteModel;
-  readonly created: Record<
-    Caller["kind"],
-    { readonly id: string; readonly userId: string }[]
-  >;
+  readonly targets: Record<Caller["kind"], DisposableRecord[]>;
   readonly owned: Samples["laptops"];
   serial: number;
 }
@@ -288,14 +308,12 @@ const check = (
     const visible = state === "proposed" || row?.visible === true;
     const passes = row !== undefined && visible && row.allowed;
 
-    return passes
-      ? Effect.void
-      : Effect.fail(
-          new WriteFailed({
-            kind: "refused",
-            reason: `${state} state refused on ${target.cls}`,
-          })
-        );
+    const refusal = new WriteFailed({
+      kind: "refused",
+      reason: `${state} state refused on ${target.cls}`,
+    });
+
+    return passes ? Effect.void : Effect.fail(refusal);
   });
 };
 
@@ -333,124 +351,139 @@ const laptopValues = (
   return values;
 };
 
-const insertInTransaction = (
+const insertInTransaction = Effect.fnUntraced(function* insertSteps(
   context: WriteContext,
   caller: Caller,
   values: ReadonlyMap<string, string | null>
-) =>
-  Effect.gen(function* insertSteps() {
-    const state = yield* executeSteps(
-      context.writes.insert("laptop", values, caller.userId),
-      new Map()
-    );
+) {
+  const state = yield* executeSteps(
+    context.writes.insert("laptop", values, caller.userId),
+    new Map()
+  );
 
-    const newId = state.get("id") ?? "";
+  const newId = state.get("id") ?? "";
 
-    if (caller.kind === "restricted") {
-      yield* check(context, caller, { cls: "laptop", id: newId }, "proposed");
-    }
+  if (caller.kind === "restricted") {
+    yield* check(context, caller, { cls: "laptop", id: newId }, "proposed");
+  }
+});
 
-    return newId;
-  });
+const insertOne = Effect.fnUntraced(function* insertOne(
+  context: WriteContext,
+  kind: Caller["kind"],
+  rng: Rng
+) {
+  const sql = yield* PgClient;
+  const caller = callerFor(context, kind, rng, null);
+
+  yield* sql.withTransaction(
+    insertInTransaction(context, caller, laptopValues(context, caller, rng))
+  );
+
+  return "done" as const;
+});
 
 const insertLaptop =
   (context: WriteContext, kind: Caller["kind"]): Operation =>
   (rng) =>
-    Effect.gen(function* insertOne() {
-      const sql = yield* PgClient;
-      const caller = callerFor(context, kind, rng, null);
+    insertOne(context, kind, rng);
 
-      const id = yield* sql.withTransaction(
-        insertInTransaction(context, caller, laptopValues(context, caller, rng))
-      );
-
-      context.created[kind].push({ id, userId: caller.userId });
-
-      return "done" as const;
-    });
-
-const updateInTransaction = (
+const updateInTransaction = Effect.fnUntraced(function* updateSteps(
   context: WriteContext,
   caller: Caller,
   target: CheckTarget,
   value: string
-) =>
-  Effect.gen(function* updateSteps() {
-    const locked = yield* executeSteps(
-      context.writes.lock("laptop", "no key update"),
-      new Map([["id", target.id]])
-    );
+) {
+  const locked = yield* executeSteps(
+    context.writes.lock("laptop", "no key update"),
+    new Map([["id", target.id]])
+  );
 
-    yield* check(context, caller, target, "existing");
-    yield* executeSteps(
-      context.writes.update("laptop", updatedField, value, caller.userId),
-      locked
-    );
+  yield* check(context, caller, target, "existing");
+  yield* executeSteps(
+    context.writes.update("laptop", updatedField, value, caller.userId),
+    locked
+  );
 
-    if (caller.kind === "restricted") {
-      yield* check(context, caller, target, "proposed");
-    }
-  });
+  if (caller.kind === "restricted") {
+    yield* check(context, caller, target, "proposed");
+  }
+});
+
+const updateOne = Effect.fnUntraced(function* updateOne(
+  context: WriteContext,
+  kind: Caller["kind"],
+  rng: Rng
+) {
+  const sql = yield* PgClient;
+
+  const laptop = rng.pick(
+    kind === "admin" ? context.samples.laptops : context.owned
+  );
+
+  const caller = callerFor(context, kind, rng, laptop.owner);
+  const value = String(rng.int(batteryCycleLimit));
+
+  yield* sql.withTransaction(
+    updateInTransaction(
+      context,
+      caller,
+      { cls: "laptop", id: laptop.id },
+      value
+    )
+  );
+
+  return "done" as const;
+});
 
 const updateLaptop =
   (context: WriteContext, kind: Caller["kind"]): Operation =>
   (rng) =>
-    Effect.gen(function* updateOne() {
-      const sql = yield* PgClient;
+    updateOne(context, kind, rng);
 
-      const laptop = rng.pick(
-        kind === "admin" ? context.samples.laptops : context.owned
-      );
-
-      const caller = callerFor(context, kind, rng, laptop.owner);
-      const value = String(rng.int(batteryCycleLimit));
-
-      yield* sql.withTransaction(
-        updateInTransaction(
-          context,
-          caller,
-          { cls: "laptop", id: laptop.id },
-          value
-        )
-      );
-
-      return "done" as const;
-    });
-
-const deleteInTransaction = (
+const deleteInTransaction = Effect.fnUntraced(function* deleteSteps(
   context: WriteContext,
   caller: Caller,
   id: string
-) =>
-  Effect.gen(function* deleteSteps() {
-    const locked = yield* executeSteps(
-      context.writes.lock("item", "update"),
-      new Map([["id", id]])
-    );
+) {
+  const locked = yield* executeSteps(
+    context.writes.lock("item", "update"),
+    new Map([["id", id]])
+  );
 
-    const cls = classById(locked.get("class_id") ?? "");
+  const cls = classById(locked.get("class_id") ?? "");
 
-    yield* check(context, caller, { cls, id }, "existing");
-    yield* executeSteps(context.writes.remove(cls), locked);
-  });
+  yield* check(context, caller, { cls, id }, "existing");
+  yield* executeSteps(context.writes.remove(cls), locked);
+});
+
+const deleteOne = Effect.fnUntraced(function* deleteOne(
+  context: WriteContext,
+  kind: Caller["kind"],
+  rng: Rng
+) {
+  const sql = yield* PgClient;
+  const target = context.targets[kind].pop();
+
+  if (target === undefined) {
+    return "exhausted" as const;
+  }
+
+  yield* sql.withTransaction(
+    deleteInTransaction(
+      context,
+      callerFor(context, kind, rng, target.owner),
+      target.id
+    )
+  );
+
+  return "done" as const;
+});
 
 const deleteLaptop =
   (context: WriteContext, kind: Caller["kind"]): Operation =>
-  () =>
-    Effect.gen(function* deleteOne() {
-      const sql = yield* PgClient;
-      const entry = context.created[kind].pop();
-
-      if (entry === undefined) {
-        return "exhausted" as const;
-      }
-
-      yield* sql.withTransaction(
-        deleteInTransaction(context, { kind, userId: entry.userId }, entry.id)
-      );
-
-      return "done" as const;
-    });
+  (rng) =>
+    deleteOne(context, kind, rng);
 
 interface PlannedWrite {
   readonly name: WriteResult["name"];
@@ -459,7 +492,7 @@ interface PlannedWrite {
   readonly operation: Operation;
 }
 
-const writePlan = (context: WriteContext): readonly PlannedWrite[] => [
+const insertsAndUpdates = (context: WriteContext): readonly PlannedWrite[] => [
   {
     caller: "admin",
     description: "insert a laptop (4 levels)",
@@ -485,46 +518,78 @@ const writePlan = (context: WriteContext): readonly PlannedWrite[] => [
     name: "W2",
     operation: updateLaptop(context, "restricted"),
   },
+];
+
+const deletes = (context: WriteContext): readonly PlannedWrite[] => [
   {
     caller: "admin",
-    description: "delete a laptop through the root (W1's records)",
+    description: "delete a disposable laptop through the root",
     name: "W3",
     operation: deleteLaptop(context, "admin"),
   },
   {
     caller: "restricted",
-    description: "delete a laptop through the root as its owner (W1's records)",
+    description: "delete a disposable laptop through the root as its owner",
     name: "W3",
     operation: deleteLaptop(context, "restricted"),
   },
 ];
 
-const measureOneWrite = (
+const measureOneWrite = Effect.fn("bench.measureWrite")(function* measureWrite(
   model: StorageModel,
   config: WriteConfig,
   entry: PlannedWrite
-) =>
-  Effect.gen(function* measureWrite() {
-    const measured = yield* runClients(
-      config,
-      `${entry.name}:${entry.caller}`,
-      entry.operation
+) {
+  const measured = yield* runPhase(
+    config,
+    `${entry.name}:${entry.caller}`,
+    entry.operation
+  );
+
+  const summary = `${measured.throughput}/s p95 ${measured.p95} ms, ${measured.errors} errors, ${measured.refused} refused by rules`;
+
+  yield* Effect.logInfo(
+    `${model.id} ${entry.name} ${entry.caller}: ${summary}`
+  );
+
+  return {
+    ...measured,
+    caller: entry.caller,
+    clients: config.clients,
+    description: entry.description,
+    name: entry.name,
+  };
+});
+
+// Adds the W3 targets: one list per caller, the restricted list only with an owner to act as.
+const prepareTargets = Effect.fn("bench.prepareDeleteTargets")(
+  function* prepare(context: WriteContext, config: WriteConfig) {
+    const perCaller = Math.max(
+      minimumTargets,
+      Math.ceil(config.seconds * targetsPerSecond)
     );
 
-    const summary = `${measured.throughput}/s p95 ${measured.p95} ms, ${measured.errors} errors, ${measured.refused} refused by rules`;
+    const added = yield* addDisposableRecords(
+      context.model,
+      context.ctx,
+      "laptop",
+      perCaller * 2
+    );
 
+    const admin = added.slice(0, perCaller);
+
+    const restricted = added
+      .slice(perCaller)
+      .filter((target) => target.owner !== null);
+
+    // Popped from the end: reverse so targets are deleted in staging order.
+    context.targets.admin.push(...admin.toReversed());
+    context.targets.restricted.push(...restricted.toReversed());
     yield* Effect.logInfo(
-      `${model.id} ${entry.name} ${entry.caller}: ${summary}`
+      `${context.model.id}: prepared ${admin.length} + ${restricted.length} W3 delete targets`
     );
-
-    return {
-      ...measured,
-      caller: entry.caller,
-      clients: config.clients,
-      description: entry.description,
-      name: entry.name,
-    };
-  });
+  }
+);
 
 /**
  * Runs W1, W2 and W3 for the admin and the restricted caller.
@@ -535,23 +600,37 @@ const measureOneWrite = (
  * @param config - Clients, seconds and seed.
  * @returns One result per write and caller.
  */
-export const measureWrites = (
-  model: StorageModel,
-  ctx: ModelContext,
-  samples: Samples,
-  config: WriteConfig
-): Effect.Effect<readonly WriteResult[], never, PgClient> => {
-  const context: WriteContext = {
-    created: { admin: [], restricted: [] },
-    ctx,
-    model,
-    owned: samples.laptops.filter((laptop) => laptop.owner !== null),
-    samples,
-    serial: 0,
-    writes: model.writes(ctx),
-  };
+export const measureWrites = Effect.fn("bench.measureWrites")(
+  function* measureAllWrites(
+    model: StorageModel,
+    ctx: ModelContext,
+    samples: Samples,
+    config: WriteConfig
+  ) {
+    const context: WriteContext = {
+      ctx,
+      model,
+      owned: samples.laptops.filter((laptop) => laptop.owner !== null),
+      samples,
+      serial: 0,
+      targets: { admin: [], restricted: [] },
+      writes: model.writes(ctx),
+    };
 
-  return Effect.all(
-    writePlan(context).map((entry) => measureOneWrite(model, config, entry))
-  );
-};
+    const first: WriteResult[] = [];
+
+    for (const entry of insertsAndUpdates(context)) {
+      first.push(yield* measureOneWrite(model, config, entry));
+    }
+
+    yield* prepareTargets(context, config);
+
+    const second: WriteResult[] = [];
+
+    for (const entry of deletes(context)) {
+      second.push(yield* measureOneWrite(model, config, entry));
+    }
+
+    return [...first, ...second];
+  }
+);

@@ -611,6 +611,22 @@ const ticketBranch = (
 };
 
 /**
+ * True when the branch form returns the same rows as the plain form. For a
+ * hierarchy endpoint it always does: visibility is a WHERE predicate in both.
+ * For tickets the plain form keeps a visible ticket whose item is hidden (its
+ * item fields and label are just empty), while the branch form reaches
+ * tickets only through visible items. The two agree only when the request
+ * filters on an item field with `eq` or `in`: such a filter is false for an
+ * empty or hidden item, so the plain form drops those tickets too.
+ *
+ * @param query - The request.
+ * @returns Whether the branch form may be used.
+ */
+export const branchFormApplies = (query: ListQuery): boolean =>
+  query.endpoint !== "ticket" ||
+  query.filters.some((atom) => atom.path.kind === "item");
+
+/**
  * The branch form of a list request for a restricted caller, which STD's
  * read compiler can generate mechanically from the rule and the request:
  * the row rule's OR is split into disjoint branches (`ruleBranches`), each
@@ -618,7 +634,8 @@ const ticketBranch = (
  * keeps the first page, and the union is sorted again and joined back for
  * the selection and labels. Each branch can then use its own index. For a
  * reference filter (Q7) the branches reach tickets through the item rule's
- * disjuncts the same way. First pages only; the admin gets the plain form.
+ * disjuncts the same way, and only when `branchFormApplies`. First pages
+ * only; the admin and every other request get the plain form.
  *
  * @param target - Model, context and caller.
  * @param query - The request (no cursor).
@@ -630,7 +647,7 @@ export const compileBranchedList = (
 ): Compiled => {
   const branches = branchCount(target);
 
-  if (branches === 0) {
+  if (branches === 0 || !branchFormApplies(query)) {
     return compileList(target, query);
   }
 

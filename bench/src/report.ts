@@ -242,6 +242,10 @@ const stepText = (step: DecisionStep, index: number): string => {
     ),
     "",
     `Meets every budget: ${meets}. Read queries where the baseline is more than 2x faster: ${step.baselineFasterCount} (at most 1 allowed). Rule satisfied: ${satisfied}.`,
+    "",
+    step.problems.length === 0
+      ? "Measurements complete: every decisive read measured, every write phase error-free and run for its full duration."
+      : `**Not judged.** ${step.problems.join("; ")}.`,
     ...(supplementary === ""
       ? []
       : [

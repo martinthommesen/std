@@ -53,11 +53,12 @@ import type { WriteResult } from "./writes.ts";
 import { measureWrites } from "./writes.ts";
 
 const sampleCount = 5000;
-const smokeBranchInstances = 5;
+const smokeBranchInstances = 25;
 const loadParallelism = 6;
 const millisecondsPerSecond = 1000;
 const classTable: ModelId = "class-table";
 const tenMillion = "10m";
+const invalidMeasurement = "invalid-measurement";
 
 type PipelineError = SqlError | BenchError;
 
@@ -106,27 +107,32 @@ const planFor = (
   users: scale.users,
 });
 
-const prepareDatabase = (
+const prepareDatabase: (
   server: ServerConfig,
   plan: GenerationPlan,
   reuse: boolean
-): Effect.Effect<GenerationReport, PipelineError> =>
-  Effect.gen(function* prepare() {
-    const reusable =
-      reuse &&
-      (yield* databaseExists(server, plan.database)) &&
-      (yield* isGenerated(server, plan));
+) => Effect.Effect<GenerationReport, PipelineError> = Effect.fn(
+  "bench.prepareDatabase"
+)(function* prepare(
+  server: ServerConfig,
+  plan: GenerationPlan,
+  reuse: boolean
+) {
+  const reusable =
+    reuse &&
+    (yield* databaseExists(server, plan.database)) &&
+    (yield* isGenerated(server, plan));
 
-    if (reusable) {
-      yield* Effect.logInfo(`reusing ${plan.database}`);
+  if (reusable) {
+    yield* Effect.logInfo(`reusing ${plan.database}`);
 
-      return { steps: [], totalSeconds: 0 };
-    }
+    return { steps: [], totalSeconds: 0 };
+  }
 
-    yield* recreateDatabase(server, plan.database);
+  yield* recreateDatabase(server, plan.database);
 
-    return yield* generate(server, plan);
-  });
+  return yield* generate(server, plan);
+});
 
 interface Measured {
   readonly reads: readonly ReadResult[];
@@ -149,46 +155,52 @@ const measureOne =
       )
     );
 
-const measureModel = (
+const measureModel: (
   model: StorageModel,
   ctx: ModelContext,
   samples: Samples,
   options: Options
-): Effect.Effect<Measured, PipelineError, PgClient> =>
-  Effect.gen(function* measureEverything() {
-    const allReads = Effect.all(
-      reads.map(measureOne(model, ctx, samples, options))
-    );
+) => Effect.Effect<Measured, PipelineError, PgClient> = Effect.fn(
+  "bench.measureModel"
+)(function* measureEverything(
+  model: StorageModel,
+  ctx: ModelContext,
+  samples: Samples,
+  options: Options
+) {
+  const allReads = Effect.all(
+    reads.map(measureOne(model, ctx, samples, options))
+  );
 
-    const [readResults, readLoad] = yield* withLoadWindow(
-      `${model.id} reads`,
-      allReads
-    );
+  const [readResults, readLoad] = yield* withLoadWindow(
+    `${model.id} reads`,
+    allReads
+  );
 
-    const sizes = yield* schemaSizes(ctx.schema);
+  const sizes = yield* schemaSizes(ctx.schema);
 
-    if (!options.writes) {
-      return { load: [readLoad], reads: readResults, sizes, writes: [] };
-    }
+  if (!options.writes) {
+    return { load: [readLoad], reads: readResults, sizes, writes: [] };
+  }
 
-    const writeConfig = {
-      clients: options.clients,
-      seconds: options.writeSeconds,
-      seed: options.seed,
-    };
+  const writeConfig = {
+    clients: options.clients,
+    seconds: options.writeSeconds,
+    seed: options.seed,
+  };
 
-    const [writeResults, writeLoad] = yield* withLoadWindow(
-      `${model.id} writes`,
-      measureWrites(model, ctx, samples, writeConfig)
-    );
+  const [writeResults, writeLoad] = yield* withLoadWindow(
+    `${model.id} writes`,
+    measureWrites(model, ctx, samples, writeConfig)
+  );
 
-    return {
-      load: [readLoad, writeLoad],
-      reads: readResults,
-      sizes,
-      writes: writeResults,
-    };
-  });
+  return {
+    load: [readLoad, writeLoad],
+    reads: readResults,
+    sizes,
+    writes: writeResults,
+  };
+});
 
 /** One model at one scale. */
 export interface RunSpec {
@@ -240,12 +252,12 @@ export const prepareModel: (
 /** Parameter samples drawn per run. */
 export const samplesPerRun = sampleCount;
 
-const runModel = (
+const runModel: (
   server: ServerConfig,
   options: Options,
   spec: RunSpec
-): Effect.Effect<ModelRun, PipelineError> =>
-  Effect.gen(function* runOneModel() {
+) => Effect.Effect<ModelRun, PipelineError> = Effect.fn("bench.runModel")(
+  function* runOneModel(server: ServerConfig, options: Options, spec: RunSpec) {
     const startedAt = new Date().toISOString();
     const begin = performance.now();
     const model = modelById(spec.model);
@@ -287,7 +299,8 @@ const runModel = (
       seconds,
       startedAt,
     };
-  });
+  }
+);
 
 interface Outcome {
   readonly runs: readonly ModelRun[];
@@ -303,68 +316,69 @@ interface SmokeContext {
   readonly scale: Scale;
 }
 
-const smokeRuns = (
+const smokeRuns: (
   smoke: SmokeContext
-): Effect.Effect<Outcome, PipelineError, PgClient> =>
-  Effect.gen(function* measureSmoke() {
-    const { generation, options, planned } = smoke;
-    const samples = yield* loadSamples(options.seed, sampleCount);
-    const crossModel = yield* checkEquivalence(planned, samples, options.seed);
+) => Effect.Effect<Outcome, PipelineError, PgClient> = Effect.fn(
+  "bench.smokeRuns"
+)(function* measureSmoke(smoke: SmokeContext) {
+  const { generation, options, planned } = smoke;
+  const samples = yield* loadSamples(options.seed, sampleCount);
+  const crossModel = yield* checkEquivalence(planned, samples, options.seed);
 
-    const equivalence = [...crossModel];
+  const equivalence = [...crossModel];
 
-    for (const { ctx, model } of planned) {
-      const lines = yield* checkBranchedEquivalence(
-        model,
-        ctx,
-        samples,
-        options.seed,
-        smokeBranchInstances
-      );
-
-      for (const line of lines) {
-        equivalence.push(`${model.id} branch form, ${line}`);
-      }
-    }
-
-    yield* Effect.logInfo(
-      `equivalence: ${equivalence.length} requests agree across ${planned.length} models`
+  for (const { ctx, model } of planned) {
+    const lines = yield* checkBranchedEquivalence(
+      model,
+      ctx,
+      samples,
+      options.seed,
+      smokeBranchInstances
     );
 
-    const runs: ModelRun[] = [];
-
-    for (const { model, ctx } of planned) {
-      const begin = performance.now();
-      const measured = yield* measureModel(model, ctx, samples, options);
-
-      runs.push({
-        ...measured,
-        database: smoke.database,
-        generation: {
-          steps: generation.steps.filter((entry) =>
-            entry.name.startsWith(model.id)
-          ),
-          totalSeconds: generation.totalSeconds,
-        },
-        label: runLabel(model.id, smoke.scale, options.mitigations),
-        mitigations: options.mitigations,
-        model: model.id,
-        scale: smoke.scale,
-        seconds: (performance.now() - begin) / millisecondsPerSecond,
-        startedAt: new Date().toISOString(),
-      });
+    for (const line of lines) {
+      equivalence.push(`${model.id} branch form, ${line}`);
     }
+  }
 
-    return { decision: null, equivalence, runs };
-  });
+  yield* Effect.logInfo(
+    `equivalence: ${equivalence.length} requests agree across ${planned.length} models`
+  );
+
+  const runs: ModelRun[] = [];
+
+  for (const { model, ctx } of planned) {
+    const begin = performance.now();
+    const measured = yield* measureModel(model, ctx, samples, options);
+
+    runs.push({
+      ...measured,
+      database: smoke.database,
+      generation: {
+        steps: generation.steps.filter((entry) =>
+          entry.name.startsWith(model.id)
+        ),
+        totalSeconds: generation.totalSeconds,
+      },
+      label: runLabel(model.id, smoke.scale, options.mitigations),
+      mitigations: options.mitigations,
+      model: model.id,
+      scale: smoke.scale,
+      seconds: (performance.now() - begin) / millisecondsPerSecond,
+      startedAt: new Date().toISOString(),
+    });
+  }
+
+  return { decision: null, equivalence, runs };
+});
 
 // Smoke mode: every model in one database with shared staging tables,
 // checked for equivalence, then measured briefly.
-const runSmoke = (
+const runSmoke: (
   server: ServerConfig,
   options: Options
-): Effect.Effect<Outcome, PipelineError> =>
-  Effect.gen(function* smoke() {
+) => Effect.Effect<Outcome, PipelineError> = Effect.fn("bench.runSmoke")(
+  function* smoke(server: ServerConfig, options: Options) {
     const scale = options.scales[0] ?? parseScale("50k");
     const database = options.database ?? "bench_smoke";
 
@@ -400,9 +414,12 @@ const runSmoke = (
     }
 
     return result;
-  });
+  }
+);
 
 const verdicts: Readonly<Record<Decision["outcome"], string>> = {
+  "invalid-measurement":
+    "The runs cannot be judged: the decision rule needs complete, error-free measurements, so it was not applied. Fix the problems below and rerun.",
   "keep-class-table": "Class-table storage is kept.",
   "keep-class-table-with-mitigations":
     "Class-table storage is kept, with the class_id-led mitigation indexes.",
@@ -432,18 +449,26 @@ const runner =
     runModel(server, options, { mitigations, model, scale });
 
 // The Stage 0 run: the three required runs, then whatever the decision rule asks for.
-const runStage0 = (
+const runStage0: (
   server: ServerConfig,
   options: Options
-): Effect.Effect<Outcome, PipelineError> =>
-  Effect.gen(function* stage0() {
+) => Effect.Effect<Outcome, PipelineError> = Effect.fn("bench.runStage0")(
+  function* stage0(server: ServerConfig, options: Options) {
     const run = runner(server, options);
     const large = parseScale(tenMillion);
     const oneMillionRun = yield* run(classTable, parseScale("1m"), false);
     const classTableRun = yield* run(classTable, large, false);
     const baselineRun = yield* run("single-table", large, false);
     const runs = [oneMillionRun, classTableRun, baselineRun];
-    const first = decide(classTableRun, baselineRun);
+    const first = decide(classTableRun, baselineRun, options.writeSeconds);
+
+    if (first.problems.length > 0) {
+      return {
+        decision: summarize(invalidMeasurement, [first]),
+        equivalence: null,
+        runs,
+      };
+    }
 
     if (first.keep) {
       return {
@@ -458,7 +483,15 @@ const runStage0 = (
     );
 
     const mitigatedRun = yield* run(classTable, large, true);
-    const second = decide(mitigatedRun, baselineRun);
+    const second = decide(mitigatedRun, baselineRun, options.writeSeconds);
+
+    if (second.problems.length > 0) {
+      return {
+        decision: summarize(invalidMeasurement, [first, second]),
+        equivalence: null,
+        runs: [...runs, mitigatedRun],
+      };
+    }
 
     if (second.keep) {
       return {
@@ -483,11 +516,13 @@ const runStage0 = (
       equivalence: null,
       runs: [...runs, mitigatedRun, partitionedRun, concreteRun],
     };
-  });
+  }
+);
 
 const customDecision = (
   runs: readonly ModelRun[],
-  mitigations: boolean
+  mitigations: boolean,
+  writeSeconds: number
 ): Decision | null => {
   const at10m = (
     model: ModelId,
@@ -507,16 +542,20 @@ const customDecision = (
     return null;
   }
 
-  const step = decide(classTableRun, baselineRun);
+  const step = decide(classTableRun, baselineRun, writeSeconds);
+
+  if (step.problems.length > 0) {
+    return summarize(invalidMeasurement, [step]);
+  }
 
   return summarize(step.keep ? "keep-class-table" : "reopen", [step]);
 };
 
-const runCustom = (
+const runCustom: (
   server: ServerConfig,
   options: Options
-): Effect.Effect<Outcome, PipelineError> =>
-  Effect.gen(function* custom() {
+) => Effect.Effect<Outcome, PipelineError> = Effect.fn("bench.runCustom")(
+  function* custom(server: ServerConfig, options: Options) {
     const runs: ModelRun[] = [];
 
     for (const scale of options.scales) {
@@ -532,11 +571,12 @@ const runCustom = (
     }
 
     return {
-      decision: customDecision(runs, options.mitigations),
+      decision: customDecision(runs, options.mitigations, options.writeSeconds),
       equivalence: null,
       runs,
     };
-  });
+  }
+);
 
 const gitCommit: Effect.Effect<string> = command("git", [
   "rev-parse",

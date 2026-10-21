@@ -41,7 +41,7 @@ import type { ReadDef, ReadInstance, Samples } from "./workload.ts";
 import { compileInstance, loadSamples, reads } from "./workload.ts";
 
 const millisecondsPerSecond = 1000;
-const equivalenceInstances = 20;
+const equivalenceInstances = 200;
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 /** The extra index the "what would be needed" variant measures. */
@@ -278,51 +278,54 @@ const writeRewrites = (
     },
   });
 
-const measureAll = (model: StorageModel, ctx: ModelContext, options: Options) =>
-  Effect.gen(function* measureRewrites() {
-    const samples = yield* loadSamples(options.seed, samplesPerRun);
+const measureAll = Effect.fn("bench.measureAll")(function* measureRewrites(
+  model: StorageModel,
+  ctx: ModelContext,
+  options: Options
+) {
+  const samples = yield* loadSamples(options.seed, samplesPerRun);
 
-    const equivalence = yield* checkBranchedEquivalence(
-      model,
-      ctx,
-      samples,
-      options.seed,
-      equivalenceInstances
-    );
+  const equivalence = yield* checkBranchedEquivalence(
+    model,
+    ctx,
+    samples,
+    options.seed,
+    equivalenceInstances
+  );
 
-    yield* Effect.logInfo(
-      `branch form agrees with plain form: ${equivalence.join("; ")}`
-    );
+  yield* Effect.logInfo(
+    `branch form agrees with plain form: ${equivalence.join("; ")}`
+  );
 
-    const first = yield* measureVariants(
-      model,
-      ctx,
-      samples,
-      options,
-      beforeIndex
-    );
+  const first = yield* measureVariants(
+    model,
+    ctx,
+    samples,
+    options,
+    beforeIndex
+  );
 
-    yield* execute({ params: [], text: coveringIndex(ctx) });
-    yield* execute({
-      params: [],
-      text: `VACUUM (ANALYZE) ${table(ctx.schema, "item")}`,
-    });
-
-    const second = yield* measureVariants(
-      model,
-      ctx,
-      samples,
-      options,
-      afterIndex
-    );
-
-    yield* execute({
-      params: [],
-      text: `DROP INDEX ${table(ctx.schema, coveringIndexName)}`,
-    });
-
-    return { equivalence, variants: [...first, ...second] };
+  yield* execute({ params: [], text: coveringIndex(ctx) });
+  yield* execute({
+    params: [],
+    text: `VACUUM (ANALYZE) ${table(ctx.schema, "item")}`,
   });
+
+  const second = yield* measureVariants(
+    model,
+    ctx,
+    samples,
+    options,
+    afterIndex
+  );
+
+  yield* execute({
+    params: [],
+    text: `DROP INDEX ${table(ctx.schema, coveringIndexName)}`,
+  });
+
+  return { equivalence, variants: [...first, ...second] };
+});
 
 const gitCommit: Effect.Effect<string> = command("git", [
   "rev-parse",

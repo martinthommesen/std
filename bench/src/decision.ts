@@ -100,17 +100,68 @@ const compare = (
   };
 };
 
+const minimumWriteShare = 0.99;
+
+// Problems that make a run unfit for the rule: every decisive read measured,
+// every write phase error-free and run for its full duration.
+const problemsOf = (
+  run: ModelRun,
+  expectedWriteSeconds: number
+): readonly string[] => {
+  const problems: string[] = [];
+
+  for (const read of run.reads) {
+    if (read.decisive && (read.runs === 0 || !Number.isFinite(read.p95))) {
+      problems.push(`${run.label}: ${read.name} has no measurements`);
+    }
+  }
+
+  if (run.reads.filter((read) => read.decisive).length === 0) {
+    problems.push(`${run.label}: no decisive reads`);
+  }
+
+  for (const write of run.writes) {
+    const label = `${run.label}: ${write.name} ${write.caller}`;
+
+    if (write.errors > 0) {
+      problems.push(`${label} had ${write.errors} errors`);
+    }
+
+    if (write.operations === 0) {
+      problems.push(`${label} completed no operations`);
+    }
+
+    if (
+      write.exhausted ||
+      write.seconds < expectedWriteSeconds * minimumWriteShare
+    ) {
+      problems.push(
+        `${label} ran ${write.seconds} s of ${expectedWriteSeconds} s`
+      );
+    }
+  }
+
+  return problems;
+};
+
 /**
  * Applies the rule to one class-table run and one baseline run.
  *
  * @param classTable - The class-table run at 10M.
  * @param baseline - The one-table-per-hierarchy run at 10M.
+ * @param expectedWriteSeconds - How long each write phase should have run.
  * @returns The budget checks, comparisons and verdict.
  */
 export const decide = (
   classTable: ModelRun,
-  baseline: ModelRun
+  baseline: ModelRun,
+  expectedWriteSeconds: number
 ): DecisionStep => {
+  const problems = [
+    ...problemsOf(classTable, expectedWriteSeconds),
+    ...problemsOf(baseline, expectedWriteSeconds),
+  ];
+
   const checks = [
     ...readChecks(classTable, true),
     ...writeChecks(classTable, true),
@@ -143,8 +194,9 @@ export const decide = (
     budgets: checks,
     classTable: classTable.label,
     comparisons,
-    keep: meetsBudgets && baselineFasterCount <= 1,
+    keep: problems.length === 0 && meetsBudgets && baselineFasterCount <= 1,
     meetsBudgets,
+    problems,
     supplementaryMisses: supplementary.filter((check) => !check.pass),
   };
 };
@@ -188,6 +240,10 @@ const fasterText = (step: DecisionStep): string => {
  * @returns The explanation.
  */
 export const explainStep = (step: DecisionStep): string => {
+  if (step.problems.length > 0) {
+    return `${step.classTable} against ${step.baseline} cannot be judged: ${step.problems.join("; ")}.`;
+  }
+
   const verdict = step.keep ? "keep" : "not met";
 
   return `${step.classTable} ${missText(step)}; ${fasterText(step)} (vs ${step.baseline}). Rule: ${verdict}.`;

@@ -206,8 +206,8 @@ const sumBusy = (fields: readonly number[]): number => {
   return total / userHz;
 };
 
-const snapshot = (cgroup: string | null): Effect.Effect<CpuSnapshot> =>
-  Effect.gen(function* takeSnapshot() {
+const snapshot: (cgroup: string | null) => Effect.Effect<CpuSnapshot> =
+  Effect.fn("bench.snapshot")(function* takeSnapshot(cgroup: string | null) {
     const stat = yield* optional(readText("/proc/stat"));
     const loadavg = yield* optional(readText("/proc/loadavg"));
     const [cpuLine = ""] = stat.split("\n");

@@ -58,16 +58,30 @@ export interface DecisionStep {
   readonly meetsBudgets: boolean;
   readonly baselineFasterCount: number;
   readonly keep: boolean;
+  /**
+   * Why a run cannot be judged: missing or empty read measurements, write
+   * errors, or a write phase that did not run its full duration. Any problem
+   * makes the step invalid; the rule is not applied to it.
+   */
+  readonly problems: readonly string[];
   /** Budget misses of the supplementary (non-decisive) requests, reported but not decisive. */
   readonly supplementaryMisses: readonly BudgetCheck[];
 }
 
+/** The outcomes of the decision rule of Contracts 2.6. */
+export const outcomes = [
+  "keep-class-table",
+  "keep-class-table-with-mitigations",
+  "reopen",
+  "invalid-measurement",
+] as const;
+
+/** One outcome of the decision rule. */
+export type Outcome = (typeof outcomes)[number];
+
 /** The outcome of the decision rule of Contracts 2.6. */
 export interface Decision {
-  readonly outcome:
-    | "keep-class-table"
-    | "keep-class-table-with-mitigations"
-    | "reopen";
+  readonly outcome: Outcome;
   readonly steps: readonly DecisionStep[];
   readonly summary: string;
 }

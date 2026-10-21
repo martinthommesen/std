@@ -27,72 +27,70 @@ interface Output {
   readonly count: string;
 }
 
-const outputOf = (
+const outputOf: (
   planned: PlannedModel,
   instance: ReadInstance
-): Effect.Effect<Output, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* runOnModel() {
-    const statements = yield* compileInstance(
-      planned.model,
-      planned.ctx,
-      instance
-    );
+) => Effect.Effect<Output, SqlError | BenchError, PgClient> = Effect.fn(
+  "bench.outputOf"
+)(function* runOnModel(planned: PlannedModel, instance: ReadInstance) {
+  const statements = yield* compileInstance(
+    planned.model,
+    planned.ctx,
+    instance
+  );
 
-    const [page = [], counted = []] = yield* runRequest(statements);
-    const ids = yield* decodeRows(IdRow, page);
+  const [page = [], counted = []] = yield* runRequest(statements);
+  const ids = yield* decodeRows(IdRow, page);
 
-    const counts =
-      counted.length === 0 ? [] : yield* decodeRows(CountRow, counted);
+  const counts =
+    counted.length === 0 ? [] : yield* decodeRows(CountRow, counted);
 
-    return {
-      count: counts[0]?.count ?? "",
-      ids: ids.map((row) => row.id).join(","),
-      model: planned.model.id,
-      rows: ids.length,
-    };
-  });
+  return {
+    count: counts[0]?.count ?? "",
+    ids: ids.map((row) => row.id).join(","),
+    model: planned.model.id,
+    rows: ids.length,
+  };
+});
 
-const checkRead = (
+const checkRead = Effect.fn("bench.checkRead")(function* checkOneRead(
   planned: readonly PlannedModel[],
   def: ReadDef,
   samples: Samples,
   seed: number
-) =>
-  Effect.gen(function* checkOneRead() {
-    const checked: string[] = [];
-    const mismatches: string[] = [];
+) {
+  const checked: string[] = [];
+  const mismatches: string[] = [];
 
-    for (const [index, instance] of instancesOf(
-      def,
-      samples,
-      seed,
-      instancesPerRead
-    ).entries()) {
-      const [reference, ...others] = yield* Effect.all(
-        planned.map((entry) => outputOf(entry, instance))
-      );
+  for (const [index, instance] of instancesOf(
+    def,
+    samples,
+    seed,
+    instancesPerRead
+  ).entries()) {
+    const [reference, ...others] = yield* Effect.all(
+      planned.map((entry) => outputOf(entry, instance))
+    );
 
-      for (const other of others) {
-        if (
-          reference !== undefined &&
-          (other.ids !== reference.ids || other.count !== reference.count)
-        ) {
-          mismatches.push(
-            `${def.name} #${index}: ${other.model} differs from ${reference.model}`
-          );
-        }
+    for (const other of others) {
+      if (
+        reference !== undefined &&
+        (other.ids !== reference.ids || other.count !== reference.count)
+      ) {
+        mismatches.push(
+          `${def.name} #${index}: ${other.model} differs from ${reference.model}`
+        );
       }
-
-      const count =
-        reference?.count === "" ? "" : `, count ${reference?.count ?? ""}`;
-
-      checked.push(
-        `${def.name} #${index}: ${reference?.rows ?? 0} rows${count}`
-      );
     }
 
-    return { checked, mismatches };
-  });
+    const count =
+      reference?.count === "" ? "" : `, count ${reference?.count ?? ""}`;
+
+    checked.push(`${def.name} #${index}: ${reference?.rows ?? 0} rows${count}`);
+  }
+
+  return { checked, mismatches };
+});
 
 /**
  * Checks that every model returns the same rows for every read.
@@ -127,16 +125,17 @@ export const checkEquivalence: (
     return results.flatMap((result) => result.checked);
   });
 
-const idsOf = (
+const idsOf: (
   statements: readonly Compiled[]
-): Effect.Effect<string, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* readIds() {
-    const results = yield* runRequest(statements);
-    const page = results.at(-1) ?? [];
-    const rows = yield* decodeRows(IdRow, page);
+) => Effect.Effect<string, SqlError | BenchError, PgClient> = Effect.fn(
+  "bench.idsOf"
+)(function* readIds(statements: readonly Compiled[]) {
+  const results = yield* runRequest(statements);
+  const page = results.at(-1) ?? [];
+  const rows = yield* decodeRows(IdRow, page);
 
-    return rows.map((row) => row.id).join(",");
-  });
+  return rows.map((row) => row.id).join(",");
+});
 
 /**
  * Checks that the branch form returns the same rows in the same order as

@@ -7,6 +7,7 @@
  */
 import { PgClient } from "@effect/sql-pg/PgClient";
 import { Effect, Schema } from "effect";
+import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 
 import type { BenchError } from "./errors.ts";
@@ -105,52 +106,137 @@ export const runRequest: (
 
 const PlanRow = Schema.Struct({ "QUERY PLAN": Schema.String });
 
-const explain = (
-  statement: Compiled
-): Effect.Effect<string, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* explainStatement() {
-    const sql = yield* PgClient;
-
-    const rows: readonly unknown[] = yield* sql.unsafe(
-      `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${statement.text}`,
-      statement.params
-    ).unprepared;
-
-    const lines = yield* decodeRows(PlanRow, rows);
-
-    return lines.map((line) => line["QUERY PLAN"]).join("\n");
-  });
-
 const isSetting = (statement: Compiled): boolean =>
   statement.text.startsWith("SET ");
 
-// Explains a request's statements in one transaction; `SET LOCAL` statements run, the others are explained.
-const plansOf = (
+const literal = (value: string | null): string =>
+  value === null ? "NULL" : `'${value.replaceAll("'", "''")}'`;
+
+/**
+ * The statements of one read, prepared with SQL `PREPARE` on one reserved
+ * connection, so every measured run and the reported plan go through the
+ * same prepared statement and its plan cache (custom or generic plan, as
+ * Postgres chooses after five executions), as STD's prepared statements do.
+ */
+interface PreparedSession {
+  readonly connection: Connection;
+  readonly names: Map<string, string>;
+  readonly prefix: string;
+}
+
+const keepRows = <A extends object>(rows: readonly A[]): readonly A[] => rows;
+
+const run = (
+  session: PreparedSession,
+  text: string
+): Effect.Effect<readonly unknown[], SqlError> =>
+  session.connection.executeUnprepared(text, [], keepRows);
+
+const executeText = Effect.fnUntraced(function* executeText(
+  session: PreparedSession,
+  statement: Compiled
+) {
+  if (isSetting(statement)) {
+    return statement.text;
+  }
+
+  let name = session.names.get(statement.text);
+
+  if (name === undefined) {
+    name = `${session.prefix}_${session.names.size}`;
+    yield* run(session, `PREPARE ${name} AS ${statement.text}`);
+    session.names.set(statement.text, name);
+  }
+
+  const args =
+    statement.params.length === 0
+      ? ""
+      : `(${statement.params.map((value) => literal(value)).join(", ")})`;
+
+  return `EXECUTE ${name}${args}`;
+});
+
+// Runs one request in a transaction on the session's connection; returns the first non-SET statement's rows.
+const runPrepared = Effect.fnUntraced(function* runPrepared(
+  session: PreparedSession,
   statements: readonly Compiled[]
-): Effect.Effect<readonly StatementPlan[], SqlError | BenchError, PgClient> =>
-  Effect.gen(function* explainRequest() {
-    const sql = yield* PgClient;
+) {
+  const texts: string[] = [];
 
-    const explainAll = Effect.gen(function* explainInTransaction() {
-      const plans: StatementPlan[] = [];
+  for (const statement of statements) {
+    texts.push(yield* executeText(session, statement));
+  }
 
-      for (const statement of statements) {
-        if (isSetting(statement)) {
-          yield* execute(statement);
-        } else {
-          plans.push({
-            params: statement.params,
-            plan: yield* explain(statement),
-            text: statement.text,
-          });
-        }
-      }
+  yield* run(session, "BEGIN");
 
-      return plans;
-    });
+  let page: readonly unknown[] = [];
+  let found = false;
 
-    return yield* sql.withTransaction(explainAll);
-  });
+  for (const [index, text] of texts.entries()) {
+    const rows = yield* run(session, text);
+
+    if (!found && !isSetting(statements[index] ?? { params: [], text: "" })) {
+      page = rows;
+      found = true;
+    }
+  }
+
+  yield* run(session, "COMMIT");
+
+  return page;
+});
+
+// EXPLAIN (ANALYZE, BUFFERS) EXECUTE of the same prepared statements, in one transaction on the same connection.
+const plansOf = Effect.fnUntraced(function* explainRequest(
+  session: PreparedSession,
+  statements: readonly Compiled[]
+) {
+  const plans: StatementPlan[] = [];
+
+  yield* run(session, "BEGIN");
+
+  for (const statement of statements) {
+    const text = yield* executeText(session, statement);
+
+    if (isSetting(statement)) {
+      yield* run(session, text);
+    } else {
+      const lines = yield* decodeRows(
+        PlanRow,
+        yield* run(session, `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${text}`)
+      );
+
+      plans.push({
+        params: statement.params,
+        plan: lines.map((line) => line["QUERY PLAN"]).join("\n"),
+        text: statement.text,
+      });
+    }
+  }
+
+  yield* run(session, "COMMIT");
+
+  return plans;
+});
+
+const openSession = Effect.fnUntraced(function* openSession(prefix: string) {
+  const sql = yield* PgClient;
+  const connection = yield* sql.reserve;
+  const session: PreparedSession = { connection, names: new Map(), prefix };
+
+  // Runs before the reserved connection goes back to the pool.
+  yield* Effect.addFinalizer(() =>
+    Effect.ignore(
+      Effect.all(
+        [...session.names.values()].map((name) =>
+          run(session, `DEALLOCATE ${name}`)
+        )
+      )
+    )
+  );
+
+  return session;
+});
 
 /** How a request is compiled, and which instances it draws. */
 export interface ReadVariant {
@@ -162,8 +248,13 @@ export interface ReadVariant {
   readonly seedName?: string;
 }
 
+let sessionCounter = 0;
+
 /**
- * Measures one read against one model.
+ * Measures one read against one model: warm-up and measured runs through
+ * prepared statements on one reserved connection, then
+ * `EXPLAIN (ANALYZE, BUFFERS) EXECUTE` of the median run's parameters on the
+ * same prepared statements.
  *
  * @param target - The model, its context and the samples.
  * @param def - The read.
@@ -171,13 +262,13 @@ export interface ReadVariant {
  * @param variant - How to compile the request and which read's parameters to draw (defaults to the plain form).
  * @returns p50, p95 and the median run's plans.
  */
-export const measureRead = (
-  target: ReadTarget,
-  def: ReadDef,
-  config: ReadConfig,
-  variant: ReadVariant = {}
-): Effect.Effect<ReadResult, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* measureOneRead() {
+export const measureRead = Effect.fn("bench.measureRead")(
+  function* measureOneRead(
+    target: ReadTarget,
+    def: ReadDef,
+    config: ReadConfig,
+    variant: ReadVariant = {}
+  ) {
     const compile =
       variant.compile ??
       ((instance: ReadInstance) =>
@@ -200,45 +291,47 @@ export const measureRead = (
 
     const requests = yield* Effect.all(instances.map(compile));
 
-    for (const request of requests.slice(0, warmup)) {
-      yield* runRequest(request);
-    }
+    sessionCounter += 1;
 
-    const timings: number[] = [];
-    let rows = 0;
+    return yield* Effect.scoped(
+      Effect.gen(function* measureOnConnection() {
+        const session = yield* openSession(`bench_read_${sessionCounter}`);
 
-    for (const request of requests.slice(warmup)) {
-      const begin = performance.now();
-      const results = yield* runRequest(request);
+        for (const request of requests.slice(0, warmup)) {
+          yield* runPrepared(session, request);
+        }
 
-      const page =
-        results.find(
-          (_rows, index) =>
-            !isSetting(request[index] ?? { params: [], text: "" })
-        ) ?? [];
+        const timings: number[] = [];
+        let rows = 0;
 
-      timings.push(performance.now() - begin);
-      rows += page.length;
-    }
+        for (const request of requests.slice(warmup)) {
+          const begin = performance.now();
+          const page = yield* runPrepared(session, request);
 
-    const median = medianIndex(timings);
-    const medianRequest = requests[warmup + median] ?? [];
-    const plans = yield* plansOf(medianRequest);
+          timings.push(performance.now() - begin);
+          rows += page.length;
+        }
 
-    return {
-      caller: def.caller,
-      decisive: def.decisive,
-      description: def.description,
-      endpoint: def.endpoint,
-      max: round3(Math.max(...timings)),
-      meanRows: round3(rows / Math.max(1, timings.length)),
-      medianRun: median,
-      min: round3(Math.min(...timings)),
-      name: def.name,
-      p50: round3(percentile(timings, 50)),
-      p95: round3(percentile(timings, 95)),
-      plans,
-      query: def.query,
-      runs: timings.length,
-    };
-  });
+        const median = medianIndex(timings);
+        const plans = yield* plansOf(session, requests[warmup + median] ?? []);
+
+        return {
+          caller: def.caller,
+          decisive: def.decisive,
+          description: def.description,
+          endpoint: def.endpoint,
+          max: round3(Math.max(...timings)),
+          meanRows: round3(rows / Math.max(1, timings.length)),
+          medianRun: median,
+          min: round3(Math.min(...timings)),
+          name: def.name,
+          p50: round3(percentile(timings, 50)),
+          p95: round3(percentile(timings, 95)),
+          plans,
+          query: def.query,
+          runs: timings.length,
+        } satisfies ReadResult;
+      })
+    );
+  }
+);

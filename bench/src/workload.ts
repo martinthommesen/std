@@ -381,24 +381,25 @@ const ProbeRow = Schema.Struct({
   keys: Schema.Array(Schema.NullOr(Schema.String)),
 });
 
-const withCursor = (
+const withCursor: (
   target: Target,
   instance: ListInstance
-): Effect.Effect<ListQuery, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* findCursor() {
-    if (instance.depth === 0) {
-      return instance.query;
-    }
+) => Effect.Effect<ListQuery, SqlError | BenchError, PgClient> = Effect.fn(
+  "bench.withCursor"
+)(function* findCursor(target: Target, instance: ListInstance) {
+  if (instance.depth === 0) {
+    return instance.query;
+  }
 
-    const [row] = yield* query(
-      compileCursorProbe(target, instance.query, instance.depth),
-      ProbeRow
-    );
+  const [row] = yield* query(
+    compileCursorProbe(target, instance.query, instance.depth),
+    ProbeRow
+  );
 
-    return row === undefined
-      ? instance.query
-      : { ...instance.query, cursor: { id: row.id, values: row.keys } };
-  });
+  return row === undefined
+    ? instance.query
+    : { ...instance.query, cursor: { id: row.id, values: row.keys } };
+});
 
 /**
  * Compiles an instance into the statements of one request. Q2's cursor is
