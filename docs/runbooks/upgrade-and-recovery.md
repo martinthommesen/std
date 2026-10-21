@@ -8,6 +8,7 @@ This runbook covers `std upgrade` (Contracts 8.5), backup and restore (8.6), and
 - Every command reads the database from `STD_DATABASE_URL`. `psql`, `pg_dump` and `pg_restore` read the same URL.
 - `doctor` exits 0 when clean, 1 on any error and 2 for warnings only. `std upgrade` exits 0 on success, 1 on a refusal or failure, 2 on a usage error.
 - Each shell block is meant to run with `set -euo pipefail`. A block that expects a non-zero exit code says so and tests it explicitly.
+- Values an operator reads from a previous step (a change set ID, a PID) go into environment variables, which each block validates before use (`: "${CHANGE_SET_ID:?set CHANGE_SET_ID}"`). SQL receives them as psql variables (`:'id'`), never by pasting them into the text; psql interpolates variables only in input it reads, not in `-c` commands, so those queries are passed on standard input.
 
 ```bash
 set -euo pipefail
@@ -104,26 +105,36 @@ State: step `running`; the watchdog reports the PIDs the build waits for. Recove
 psql "$STD_DATABASE_URL" -Atc "SELECT p.pid, a.pid AS blocking_pid, a.application_name, a.state FROM pg_stat_progress_create_index p JOIN LATERAL unnest(pg_blocking_pids(p.pid)) AS b(pid) ON true JOIN pg_stat_activity a ON a.pid = b.pid"
 ```
 
-End a blocking session only after checking with its owner (`<blocking_pid>` from the query above):
+End a blocking session only after checking with its owner. Set `BLOCKING_PID` to a `blocking_pid` from the query above:
 
 ```bash
-psql "$STD_DATABASE_URL" -Atc "SELECT pg_terminate_backend(<blocking_pid>)"
+: "${BLOCKING_PID:?set BLOCKING_PID to the PID of the blocking session}"
+[[ "$BLOCKING_PID" =~ ^[0-9]+$ ]] || { echo "BLOCKING_PID must be a number" >&2; exit 2; }
+psql "$STD_DATABASE_URL" -At -v pid="$BLOCKING_PID" <<'SQL'
+SELECT pg_terminate_backend(:'pid'::int);
+SQL
 ```
 
-Or abandon the change set (`<id>` from the open change sets; `std schema` comes with workstream 1A):
+Or abandon the change set. Set `CHANGE_SET_ID` to its ID from the open change sets (`std schema` comes with workstream 1A):
 
 ```bash
-pnpm std schema abandon <id>
+: "${CHANGE_SET_ID:?set CHANGE_SET_ID to the change set ID}"
+[[ "$CHANGE_SET_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "CHANGE_SET_ID must be a UUID" >&2; exit 2; }
+pnpm std schema abandon "$CHANGE_SET_ID"
 pnpm std doctor
 ```
 
 ### Repeatedly failing step
 
-State: change set `needs_attention`; `doctor` reports `changeSetNeedsAttention` with the change set's ID. Recovery: fix the cause (the step's `last_error` names it), then resume, or abandon:
+State: change set `needs_attention`; `doctor` reports `changeSetNeedsAttention` and `std upgrade` refuses, both naming the change set. Recovery: fix the cause (the step's `last_error` names it), then resume, or abandon. Set `CHANGE_SET_ID` to the change set's ID:
 
 ```bash
-psql "$STD_DATABASE_URL" -Atc "SELECT ordinal, kind, state, attempts, last_error FROM core.schema_change_step WHERE change_id = '<id>' ORDER BY ordinal"
-pnpm std schema resume <id>
+: "${CHANGE_SET_ID:?set CHANGE_SET_ID to the change set ID}"
+[[ "$CHANGE_SET_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "CHANGE_SET_ID must be a UUID" >&2; exit 2; }
+psql "$STD_DATABASE_URL" -At -v id="$CHANGE_SET_ID" <<'SQL'
+SELECT ordinal, kind, state, attempts, last_error FROM core.schema_change_step WHERE change_id = :'id'::uuid ORDER BY ordinal;
+SQL
+pnpm std schema resume "$CHANGE_SET_ID"
 pnpm std doctor
 ```
 
@@ -151,11 +162,15 @@ While a dump runs, concurrent index builds wait for its snapshot (the watchdog r
 ## Restore (Contracts 8.6)
 
 1. Stop every STD server (the query in "Upgrade an install", step 2, must print nothing).
-2. Restore into an empty database. The target URL `STD_RESTORE_URL` names a database that does not exist yet, on Postgres 18, owned by the STD role:
+2. Restore into an empty database. `STD_RESTORE_DB` names a database that does not exist yet on the same Postgres 18 server:
 
    ```bash
-   export STD_RESTORE_URL="postgres://std:std@127.0.0.1:54329/std_restored"
-   psql "$STD_DATABASE_URL" -Atc "CREATE DATABASE std_restored ENCODING 'UTF8' TEMPLATE template0"
+   : "${STD_RESTORE_DB:=std_restored}"
+   [[ "$STD_RESTORE_DB" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "STD_RESTORE_DB must be a plain database name" >&2; exit 2; }
+   export STD_RESTORE_URL="${STD_DATABASE_URL%/*}/$STD_RESTORE_DB"
+   psql "$STD_DATABASE_URL" -At -v db="$STD_RESTORE_DB" <<'SQL'
+   CREATE DATABASE :"db" ENCODING 'UTF8' TEMPLATE template0;
+   SQL
    pg_restore --exit-on-error --no-owner --dbname="$STD_RESTORE_URL" std-backup.dump
    ```
 
