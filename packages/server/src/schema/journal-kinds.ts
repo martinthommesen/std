@@ -62,7 +62,7 @@ const propertyKinds = (before: Definition, after: Definition): string[] => {
 };
 
 const nameOf = (definition: Definition): string | undefined =>
-  "name" in definition ? definition.name : undefined;
+  "name" in definition ? (definition.name ?? undefined) : undefined;
 
 /**
  * The change kinds of one definition's change.

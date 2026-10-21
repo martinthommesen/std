@@ -214,6 +214,7 @@ const setUpProbes = Effect.gen(function* setUpProbes() {
       effect,
       id: freshId(),
       kind: "accessRule",
+      name: null,
       owner: { layer: "local" },
       protected: false,
       roleIds: [roleId],

@@ -245,6 +245,9 @@ tables:
       - id: e4f761f2-0c33-47e2-8fc4-182a28518e96
         name: is_unique
         type: boolean
+      - id: d78f3f4f-0f71-44be-a90e-384a18b9b317
+        name: name
+        type: text
   - id: a425953f-b934-47d6-8ff1-4bbeca1b9370
     name: core.role
     label: Role
@@ -384,6 +387,9 @@ tables:
       - id: 3a56d726-a984-4b43-9614-10a8401c6e0c
         name: active
         type: boolean
+      - id: 97531933-eb10-4b4e-82db-d092063e5f4a
+        name: name
+        type: text
   - id: 31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e
     name: core.subscription
     label: Subscription

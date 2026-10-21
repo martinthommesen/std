@@ -127,6 +127,10 @@ const namingScope = (
     return snapshot.hierarchyFields(target.classId);
   }
 
+  if (target.kind === "index") {
+    return snapshot.indexes(target.classId);
+  }
+
   return target.kind === "class"
     ? snapshot.classesIn(target.namespaceId)
     : snapshot.all(target.kind).filter(isLive);

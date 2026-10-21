@@ -70,11 +70,11 @@ export const dependentsOf = (
  * @returns The name.
  */
 export const displayNameOf = (definition: Definition): string | null => {
-  if ("name" in definition) {
-    return definition.name;
+  if (definition.kind === "accessRule") {
+    return definition.name ?? definition.description;
   }
 
-  return definition.kind === "accessRule" ? definition.description : null;
+  return "name" in definition ? definition.name : null;
 };
 
 /**

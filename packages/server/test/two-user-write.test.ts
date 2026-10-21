@@ -92,6 +92,7 @@ const replaceRule7ForName = Effect.gen(function* replaceRule7() {
         effect: "allow",
         id: randomUUID(),
         kind: "accessRule",
+        name: null,
         owner: { layer: "local" },
         protected: false,
         roleIds: [EMPLOYEE],

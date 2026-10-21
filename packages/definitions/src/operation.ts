@@ -142,8 +142,10 @@ export const RENAMABLE: ReadonlySet<DefinitionKind> = new Set<DefinitionKind>([
   "namespace",
   "class",
   "field",
+  "index",
   "role",
   "permission",
+  "accessRule",
   "subscription",
 ]);
 

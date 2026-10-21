@@ -207,6 +207,7 @@ export const addIndex = (
     fieldIds,
     id,
     kind: "index",
+    name: null,
     unique,
   };
 
@@ -304,6 +305,7 @@ export const addAccessRule = (
     effect: "allow",
     id: freshId(),
     kind: "accessRule",
+    name: null,
     roleIds,
     target:
       options.fields === undefined

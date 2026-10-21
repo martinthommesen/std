@@ -217,6 +217,48 @@ describe("schema-lifecycle", () => {
             assert.deepStrictEqual(yield* lastJournal, [
               `${serial.id}|serial|serial_number|["fieldRenamed"]`,
             ]);
+
+            // Access rules and indexes are renamed by ID too; neither has a
+            // physical name to change.
+            const named = yield* change([
+              {
+                id: rule.id,
+                name: "gadget_serial_reader",
+                op: "rename",
+                version: 1,
+              },
+              { id: index.id, name: "gadget_serial", op: "rename", version: 1 },
+            ]);
+
+            assert.deepStrictEqual(named.statements, []);
+
+            const after = yield* (yield* Catalog).refresh;
+
+            assert.strictEqual(
+              after.getKind("accessRule", rule.id)?.name,
+              "gadget_serial_reader"
+            );
+            assert.strictEqual(
+              after.getKind("index", index.id)?.name,
+              "gadget_serial"
+            );
+            assert.isDefined(yield* indexDefinition("site", indexName));
+
+            const twin = addAccessRule(gadget.id, [reader.id]);
+
+            const clash = yield* Effect.flip(
+              change([
+                twin.op,
+                {
+                  id: twin.id,
+                  name: "gadget_serial_reader",
+                  op: "rename",
+                  version: 1,
+                },
+              ])
+            );
+
+            assert.strictEqual(clash._tag, "DefinitionInvalid");
             assert.deepStrictEqual(yield* catalogDrift, []);
           })
       );

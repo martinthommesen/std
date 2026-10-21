@@ -698,6 +698,16 @@ const checkIndex = (
     problems.push(problem("invalidIndex", index.id, message));
   };
 
+  if (index.name !== null) {
+    nameProblem(
+      problems,
+      index,
+      "index",
+      index.name,
+      identifierProblem(index.name)
+    );
+  }
+
   if (snapshot.class(index.classId)?.storage === "platform") {
     invalid("Indexes on platform tables belong to platform migrations.");
   }
@@ -779,6 +789,16 @@ const checkAccessRule = (
   const invalid = (message: string): void => {
     problems.push(problem("invalidAccessRule", rule.id, message));
   };
+
+  if (rule.name !== null) {
+    nameProblem(
+      problems,
+      rule,
+      "access rule",
+      rule.name,
+      identifierProblem(rule.name)
+    );
+  }
 
   if (rule.roleIds.length === 0) {
     invalid("An access rule names at least one role.");
@@ -913,6 +933,19 @@ const checkUniqueness = (
     snapshot.all("grant").filter(isLive),
     (grant) => `${grant.roleId}/${grant.permissionId}`,
     (grant) => `A grant of ${grant.permissionId} to ${grant.roleId}`
+  );
+  duplicates(
+    problems,
+    snapshot.all("index").filter(isLive),
+    (index) =>
+      index.name === null ? undefined : `${index.classId}/${index.name}`,
+    (index) => `The index name "${index.name ?? ""}" on its table`
+  );
+  duplicates(
+    problems,
+    snapshot.all("accessRule").filter(isLive),
+    (rule) => rule.name ?? undefined,
+    (rule) => `The access rule name "${rule.name ?? ""}"`
   );
   duplicates(
     problems,

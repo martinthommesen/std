@@ -434,6 +434,7 @@ const resolveIndexes = (resolution: Resolution, table: TableEntry): void => {
         classId: table.id,
         fieldIds,
         kind: "index",
+        name: index.name ?? null,
         unique: index.unique ?? false,
       });
     }
@@ -616,6 +617,7 @@ const resolveAccessRule = (
       description: rule.description ?? null,
       effect: rule.effect,
       kind: "accessRule",
+      name: rule.name ?? null,
       roleIds,
       target,
     });

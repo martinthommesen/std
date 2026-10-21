@@ -41,7 +41,7 @@ Covers how definitions change without breaking references, stalling the applicat
 - Shipped definitions carry their ID in the definition file, so they have the same ID on every install. Records and API-created definitions get a UUIDv7 from `uuidv7()` [checked: [UUID functions](https://www.postgresql.org/docs/18/functions-uuid.html)]. STD relies only on uniqueness, not on monotonicity, which the docs do not promise.
 - Generated SQL never uses `SELECT *`. Reason: adding a column must not change the row shape of a prepared statement.
 - Admins can rename local tables and fields. Core and app definitions are renamed only by a new version of their set (8.4).
-- Renames go by ID for every kind with a name: namespaces (`ALTER SCHEMA ... RENAME TO`), tables, fields, roles, permissions and subscriptions. Access rules and indexes have no name in v0.1. A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too (renames run one after another). [decision 0011]
+- Renames go by ID for every kind with a name: namespaces (`ALTER SCHEMA ... RENAME TO`), tables, fields, roles, permissions, subscriptions, access rules and indexes (the last two have an optional name, unique per table for indexes and among live access rules; the physical index name stays `std_ix_<id>`). A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too (renames run one after another). [decision 0011]
 - No aliases: after a rename, the old name is an unknown field. Reason: aliases make filter text ambiguous. [judgment]
 - Moving a table between namespaces is not supported in v0.1.
 

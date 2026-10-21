@@ -225,6 +225,11 @@ const indexFields = {
   classId: DefinitionIdSchema,
   fieldIds: SchemaArray(DefinitionIdSchema),
   kind: Literal("index"),
+  /**
+   * An optional name, unique among the live indexes of its table. Renames
+   * change only this; the physical index is always `std_ix_<id>`.
+   */
+  name: NullableText,
   unique: SchemaBoolean,
 } as const;
 
@@ -344,6 +349,8 @@ const accessRuleFields = {
   description: NullableText,
   effect: Literals(["allow", "deny"]),
   kind: Literal("accessRule"),
+  /** An optional name, unique among live access rules. */
+  name: NullableText,
   roleIds: SchemaArray(DefinitionIdSchema),
   target: AccessTargetSchema,
 } as const;

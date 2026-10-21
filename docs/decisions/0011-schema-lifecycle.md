@@ -38,7 +38,7 @@ Status: accepted, 2026-10-21 (workstream 1A, items 1 to 8). Builds on decision 0
 
 ### Rename
 
-Renames go by ID for every kind that has a name: namespaces (`ALTER SCHEMA ... RENAME TO`), tables (`ALTER TABLE ... RENAME TO`), fields (`ALTER TABLE ... RENAME COLUMN`), roles, permissions and subscriptions (configuration only). Access rules and indexes have no name in the definition model (decision 0006), so there is nothing to rename; their identity is the ID and the index's physical name is `std_ix_<id>`. Adding names to them needs a platform migration, which this branch cannot number while 0003 to 0005 are unmerged (migration IDs must be consecutive); it is listed under open items.
+Renames go by ID for every named kind: namespaces (`ALTER SCHEMA ... RENAME TO`), tables (`ALTER TABLE ... RENAME TO`), fields (`ALTER TABLE ... RENAME COLUMN`), and roles, permissions, subscriptions, access rules and indexes (configuration only). Access rules and indexes got an optional `name` (null by default; an identifier; unique among the live indexes of a table, and among live access rules) through a platform migration adding nullable `name` columns to `core.access_rule` and `core.index` (catalog-only `ADD COLUMN`; the core set describes both columns). The migration is 0005 on this branch, because migration IDs must be consecutive and workstream 1B's 0005 is not merged; it becomes 0006 at merge. An index's physical name stays `std_ix_<id>`. Set files accept an optional `name` on indexes and access rules.
 
 A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too: physical renames run one after another, so a swap would collide in the catalog and in the definition tables' live-name unique indexes.
 
@@ -101,6 +101,6 @@ The guard runs first for every operation and every origin. Protected definitions
 ## Open items
 
 - Item 9 (after 0C merges): the change-set HTTP endpoints, generic record writes to definition tables as one-operation change sets, the `Actor` as requester, `DELETE` mapped to the `delete` operation, and the HTTP acceptance tests.
-- Names for access rules and indexes need a migration (0006 once 0003 to 0005 land).
+- Renumber the definition-names migration from 0005 to 0006 when 1B's 0005 merges.
 - The watchdog's metric, and `std schema status` warning about index or catalog maintenance sessions (0007 open item).
 - The SQL snapshot (`__snapshots__/ddl-forms.sql`) covers set loads only; lifecycle statements are checked by the guard and probe tests.
