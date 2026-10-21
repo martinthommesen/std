@@ -16,6 +16,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { ConditionProfile } from "@std/values/field-type";
@@ -274,7 +275,7 @@ const runChecks = async (
   run: Runner,
   stats: Stats,
   cases: Arbitrary<DifferentialCase>,
-  timed: boolean
+  timeLimitMs?: number
 ): Promise<Checked> => {
   let lastCase: DifferentialCase | undefined;
   let lastRun: Promise<boolean> = Promise.resolve(true);
@@ -294,21 +295,24 @@ const runChecks = async (
 
       return await lastRun;
     }),
-    timed
-      ? {
+    timeLimitMs === undefined
+      ? { numRuns: 1 }
+      : {
           numRuns: Number.MAX_SAFE_INTEGER,
-          plugins: [interruptAfterTimeLimit(BUDGET_MS)],
+          plugins: [interruptAfterTimeLimit(timeLimitMs)],
         }
-      : { numRuns: 1 }
   );
 
   // At the time limit fast-check stops waiting for the run in flight and
   // ignores its outcome, but the run goes on: finish it before the tables
-  // are reused, and keep its case if it disagreed.
+  // are reused, and keep its case if it disagreed. A counterexample means
+  // the last run was a shrink step, reported through the counterexample; a
+  // limit reached during the first run gives none, yet that run counts.
   const lastAgreed = await lastRun;
 
   return {
-    abandoned: details.failed || lastAgreed ? undefined : lastCase,
+    abandoned:
+      details.counterexample !== null || lastAgreed ? undefined : lastCase,
     details,
   };
 };
@@ -363,6 +367,72 @@ const uncovered = (stats: Stats): Combination[] =>
       .filter((combination) => !isCovered(stats, combination))
   );
 
+const emptyStats = (): Stats => ({
+  comparisons: 0,
+  conditions: 0,
+  coverage: new Map(),
+  refused: 0,
+  runs: 0,
+});
+
+const CUT_OFF_LIMIT_MS = 20;
+const SLOW_RUN_MS = 200;
+
+// A runner that never touches the database: each case takes SLOW_RUN_MS and
+// reports one disagreement, or none.
+const slowRunner =
+  (disagrees: boolean): Runner =>
+  async () => {
+    await sleep(SLOW_RUN_MS);
+
+    return {
+      checked: [],
+      comparisons: 1,
+      mismatches: disagrees
+        ? [
+            {
+              expr: { op: "true" },
+              id: "cut-off",
+              negatedValue: false,
+              negatedWhere: false,
+              typescript: true,
+              value: false,
+              where: false,
+            },
+          ]
+        : [],
+      refused: 0,
+    };
+  };
+
+describe("time limit", () => {
+  it("keeps a disagreement in a first run the limit cut off", async () => {
+    const { abandoned, details } = await runChecks(
+      slowRunner(true),
+      emptyStats(),
+      caseArb,
+      CUT_OFF_LIMIT_MS
+    );
+
+    // fast-check reports this as an interrupted failure with no counterexample.
+    assert.isTrue(details.interrupted);
+    assert.isNull(details.counterexample);
+    assert.isDefined(abandoned);
+  });
+
+  it("accepts a cut-off run that agreed", async () => {
+    const { abandoned, details } = await runChecks(
+      slowRunner(false),
+      emptyStats(),
+      caseArb,
+      CUT_OFF_LIMIT_MS
+    );
+
+    assert.isTrue(details.interrupted);
+    assert.isUndefined(abandoned);
+  });
+});
+
 describe("coverage gate", () => {
   it("lists permitted combinations for every profile, Subscription included", () => {
     for (const profile of PROFILES) {
@@ -396,16 +466,10 @@ layer(TestDatabase, { timeout: 60_000 })("differential-postgres", (pg) => {
         const services = yield* Effect.context<SqlClient.SqlClient>();
         const run = Effect.runPromiseWith(services);
 
-        const stats: Stats = {
-          comparisons: 0,
-          conditions: 0,
-          coverage: new Map(),
-          refused: 0,
-          runs: 0,
-        };
+        const stats = emptyStats();
 
         const timed = yield* Effect.promise(
-          async () => await runChecks(run, stats, caseArb, true)
+          async () => await runChecks(run, stats, caseArb, BUDGET_MS)
         );
 
         yield* failOnCounterexample(timed, "timed");
@@ -425,7 +489,7 @@ layer(TestDatabase, { timeout: 60_000 })("differential-postgres", (pg) => {
               attempts += 1;
 
               const result = yield* Effect.promise(
-                async () => await runChecks(run, stats, cases, false)
+                async () => await runChecks(run, stats, cases)
               );
 
               yield* failOnCounterexample(result, "targeted");
