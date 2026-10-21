@@ -11,6 +11,12 @@ import { Config, Context, Effect, Layer, Redacted } from "effect";
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
 export const DEFAULT_DATABASE_URL = "postgres://std:std@127.0.0.1:54329/std";
 
+/** `STD_DATABASE_URL`, or `DEFAULT_DATABASE_URL` when it is not set. */
+export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
+  Config.Redacted("STD_DATABASE_URL").pipe(
+    Config.withDefault(Redacted.make(DEFAULT_DATABASE_URL))
+  );
+
 /**
  * The `application_name` of STD server processes. `std upgrade` refuses to
  * run while a session with this name is connected (Contracts 8.5).
@@ -52,9 +58,7 @@ export class DatabaseConfig extends Context.Service<
     Layer.effect(
       DatabaseConfig,
       Effect.gen(function* fromEnv() {
-        const url = yield* Config.Redacted("STD_DATABASE_URL").pipe(
-          Config.withDefault(Redacted.make(DEFAULT_DATABASE_URL))
-        );
+        const url = yield* databaseUrlConfig;
 
         const directUrl = yield* Config.Redacted(
           "STD_DATABASE_DIRECT_URL"

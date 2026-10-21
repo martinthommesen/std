@@ -320,9 +320,16 @@ export const toDatabaseError = (
 const failSafely = (error: SqlError): Effect.Effect<never, DatabaseError> =>
   toDatabaseError(error).pipe(Effect.flatMap(Effect.fail));
 
-const hasSqlDefect = <E>(cause: Cause.Cause<E>): boolean =>
+/**
+ * Whether a cause holds a driver error, as a failure or as a defect.
+ * @param cause - Any cause.
+ * @returns `true` when `sanitizeCause` would change it.
+ */
+const holdsSqlError = <E>(cause: Cause.Cause<E>): boolean =>
   cause.reasons.some(
-    (reason) => Cause.isDieReason(reason) && isSqlError(reason.defect)
+    (reason) =>
+      (Cause.isFailReason(reason) && isSqlError(reason.error)) ||
+      (Cause.isDieReason(reason) && isSqlError(reason.defect))
   );
 
 /**
@@ -387,15 +394,29 @@ export const sanitizeCause = <E>(
  */
 export const hygienic = <A, E, R>(
   effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, HygienicError<E>, R> =>
-  Effect.catchIf<A, E, R, Extract<E, SqlError>, never, DatabaseError, never>(
+): Effect.Effect<A, HygienicError<E>, R> => {
+  // Every reason is kept: driver errors are replaced in place, so a defect
+  // or another failure next to a SqlError survives.
+  const sanitized: Effect.Effect<A, E | DatabaseError, R> = Effect.catchCauseIf(
     effect,
-    (failure: E): failure is Extract<E, SqlError> => isSqlError(failure),
-    (failure: Extract<E, SqlError>) => failSafely(failure)
-  ).pipe(
-    Effect.catchCause((cause) =>
-      hasSqlDefect(cause)
-        ? sanitizeDefects(cause).pipe(Effect.flatMap(Effect.failCause))
-        : Effect.failCause(cause)
-    )
+    holdsSqlError,
+    (cause) => sanitizeCause(cause).pipe(Effect.flatMap(Effect.failCause))
   );
+
+  // Types only: no SqlError failure is left, so this never runs; it removes
+  // SqlError from the error channel.
+  return Effect.catchIf<
+    A,
+    E | DatabaseError,
+    R,
+    Extract<E, SqlError>,
+    never,
+    DatabaseError,
+    never
+  >(
+    sanitized,
+    (failure: E | DatabaseError): failure is Extract<E, SqlError> =>
+      isSqlError(failure),
+    (failure: Extract<E, SqlError>) => failSafely(failure)
+  );
+};

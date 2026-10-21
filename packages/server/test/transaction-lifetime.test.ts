@@ -5,7 +5,7 @@ import { PgClient } from "@effect/sql-pg";
  * a failed COMMIT, and `readOnly` on a write.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
@@ -57,26 +57,43 @@ const UNICODE_ISOLATION =
   "SET LOCAL U&\"transaction_\\0069solation\" = 'serializable'";
 
 /**
- * A request whose body detaches a nested unit that writes, signals and then
- * fails later; the body returns as soon as the write happened.
- * @returns The request.
+ * A request whose body detaches a nested unit that writes, signals, and then
+ * waits for a release that never comes; the body returns as soon as the
+ * write happened. The writer reports how it ended.
+ * @returns The request's exit, and an effect awaiting whether the writer was interrupted.
  */
 const detachedWriter = Effect.gen(function* detachWriter() {
   const sql = yield* SqlClient.SqlClient;
   const { request } = yield* Transactions;
   const wrote = yield* Deferred.make<boolean>();
+  const neverReleased = yield* Deferred.make<boolean>();
+  const writerEnded = yield* Deferred.make<boolean>();
 
   const writer = request(
     sql`INSERT INTO lifetime_detached VALUES (1)`.pipe(
       Effect.andThen(Deferred.succeed(wrote, true)),
-      Effect.andThen(Effect.sleep(Duration.millis(300))),
+      Effect.andThen(Deferred.await(neverReleased)),
       Effect.andThen(Effect.fail("late failure" as const))
     )
-  ).pipe(Effect.ignore);
-
-  return yield* request(
-    Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+  ).pipe(
+    Effect.onExit((exit) =>
+      Deferred.succeed(writerEnded, Exit.hasInterrupts(exit))
+    ),
+    Effect.ignore
   );
+
+  const exit = yield* Effect.exit(
+    request(
+      Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+    )
+  );
+
+  return {
+    exit,
+    writerInterrupted: Deferred.await(writerEnded).pipe(
+      Effect.timeout(Duration.seconds(10))
+    ),
+  };
 });
 
 describe("transaction-lifetime", () => {
@@ -141,10 +158,13 @@ describe("transaction-lifetime", () => {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`CREATE TABLE lifetime_detached (id int PRIMARY KEY)`;
 
-          const exit = yield* Effect.exit(detachedWriter);
+          const { exit, writerInterrupted } = yield* detachedWriter;
 
           assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
-          yield* Effect.sleep(Duration.millis(400));
+          assert.isTrue(
+            yield* writerInterrupted,
+            "the sweep interrupted the writer"
+          );
           assert.strictEqual(yield* countRows("lifetime_detached"), 0);
         })
     );
@@ -297,6 +317,10 @@ describe("transaction-lifetime", () => {
           "WITH x AS MATERIALIZED (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
           "WITH RECURSIVE r(n) AS (SELECT 1), d AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
           "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
+          `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1`,
+          "SELECT U&'x' UESCAPE '!' INTO lifetime_read_only_copy",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
         ];
 
         for (const text of writingCtes) {
@@ -322,6 +346,15 @@ describe("transaction-lifetime", () => {
           "SELECT update, delete, insert, merge FROM (SELECT 1 AS update, 2 AS delete, 3 AS insert, 4 AS merge) s",
           "SELECT 1 AS update",
           "SELECT insert()",
+          "SELECT 1 AS into",
+          `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          `WITH U&"!0078" /* c */ UESCAPE -- d\n '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          "SELECT U&'d!0061t!+000061' UESCAPE '!' AS c",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'SELECT s.into FROM (SELECT 1 AS "into") s',
+          'SELECT s. into FROM (SELECT 1 AS "into") s',
+          "SELECT E'a'\n'\\' into' AS c",
           "WITH RECURSIVE r(n) AS NOT MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SEARCH DEPTH FIRST BY n SET ord CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT n FROM r",
         ];
 
@@ -340,21 +373,47 @@ describe("transaction-lifetime", () => {
           const sql = yield* SqlClient.SqlClient;
           const { request } = yield* Transactions;
 
-          const outcome = yield* Effect.exit(
-            request(
-              request(
-                readOnly(
-                  sql.unsafe("SELECT 42 AS id INTO lifetime_select_into")
-                ).pipe(Effect.andThen(Effect.fail("nested failure" as const)))
-              ).pipe(Effect.ignore)
-            )
-          );
+          const selectsInto = [
+            "SELECT 42 AS id INTO lifetime_select_into",
+            // An escape string continued on the next line keeps its mode, so
+            // `\'` is an escaped quote and INTO lies outside the constant.
+            "SELECT E'a'\n'\\'x' AS c INTO lifetime_select_into",
+            "SELECT E'a' -- note\n'\\'x' AS c INTO lifetime_select_into",
+            // The `.` of a numeric literal does not qualify a name.
+            "SELECT 1. INTO lifetime_select_into",
+            "SELECT 1_000. INTO lifetime_select_into",
+          ];
 
-          assert.strictEqual(refusalOf(outcome)?.reason, "transaction-control");
-          assert.strictEqual(
-            yield* countRows("pg_class WHERE relname = 'lifetime_select_into'"),
-            0
-          );
+          for (const text of selectsInto) {
+            const outcome = yield* Effect.exit(
+              request(
+                request(
+                  readOnly(sql.unsafe(text)).pipe(
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore)
+              )
+            );
+
+            assert.strictEqual(
+              refusalOf(outcome)?.reason,
+              "transaction-control",
+              text
+            );
+            assert.strictEqual(
+              yield* countRows(
+                "pg_class WHERE relname = 'lifetime_select_into'"
+              ),
+              0,
+              text
+            );
+          }
+
+          // Without readOnly the same statements run, so each is SELECT INTO.
+          for (const text of selectsInto) {
+            yield* request(sql.unsafe(text));
+            yield* sql`DROP TABLE lifetime_select_into`;
+          }
         })
     );
   });
@@ -377,6 +436,27 @@ describe("transaction-lifetime", () => {
       "WITH x AS (SELECT 1)",
       "WITH x AS SELECT 1",
       "WITH /* a */ x -- b\n AS ( /* c */ DELETE FROM t) SELECT 1",
+      // String continuations keep the first segment's mode.
+      "SELECT E'a'\n'\\'x' AS c INTO t",
+      "SELECT E'a'\r\n  \t'\\'x' INTO t",
+      "SELECT E'a' -- c\n-- d\n'\\'x' INTO t",
+      "SELECT U&'a'\n'\\' INTO t",
+      "SELECT 'a'\n'\\' INTO t",
+      // A block comment ends the constant, so the next segment is plain.
+      "SELECT E'a' /* c */\n'\\' INTO t",
+      "SELECT E'a'\n/* c */ '\\' INTO t",
+      // INTO stays a clause after a number's `.` or a quoted "as".
+      "SELECT 1. INTO t",
+      "SELECT 1_000. INTO t",
+      "SELECT .5 INTO t",
+      "SELECT 1.5e3 INTO t",
+      'SELECT "as" INTO t',
+      // A UESCAPE clause belongs to its U& token and hides nothing after it.
+      `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM t RETURNING 1) SELECT 1`,
+      "SELECT U&'x' UESCAPE '!' INTO t",
+      "SELECT U&'x'\nUESCAPE '!' INTO t",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM t RETURNING 1) SELECT 1',
     ];
 
     const reads = [
@@ -397,6 +477,22 @@ describe("transaction-lifetime", () => {
       "WITH x AS (VALUES (1)) (SELECT * FROM x)",
       "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH BREADTH FIRST BY n SET o CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT * FROM r",
       'WITH "update" AS (SELECT 1) SELECT * FROM "update"',
+      // INTO as a column label or attribute name.
+      "SELECT 1 AS into",
+      "SELECT s.into FROM t s",
+      "SELECT s. into FROM t s",
+      "SELECT (s).into FROM t",
+      "SELECT $1.into",
+      // Inside continued constants.
+      "SELECT E'a'\n'\\' into' AS c",
+      "SELECT 'a' -- c\n'into t'",
+      "SELECT U&'a'\n\v'into t'",
+      // UESCAPE clauses, with blanks and comments in between.
+      `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+      `WITH U&"!0078" /* c */ uescape -- d\n '!' AS (SELECT 1) TABLE x`,
+      "SELECT U&'d!0061t' UESCAPE '!' AS c",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
     ];
 
     for (const sql of writing) {

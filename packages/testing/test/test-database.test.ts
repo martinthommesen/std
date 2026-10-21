@@ -2,8 +2,11 @@ import { randomBytes } from "node:crypto";
 
 import { PgConnection } from "@effect/sql-pg";
 /**
- * The test database harness: fresh migrated databases, fast creation,
- * concurrent creation, teardown, the janitor and the statement log.
+ * The test database harness: fresh migrated databases cloned from a
+ * template, concurrent creation, teardown, the janitor and the statement log.
+ *
+ * Several suites may share the Postgres server, so database creation can be
+ * slow: no test bounds it by wall time; they check what happened instead.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
@@ -13,7 +16,17 @@ import { migration0003 } from "@std/server/platform/migrations/0003-sessions";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
-import { Context, Effect, Exit, Layer, Redacted, Schema, Scope } from "effect";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Redacted,
+  Schema,
+  Scope,
+} from "effect";
 import { SqlClient } from "effect/sql";
 
 import {
@@ -31,14 +44,30 @@ import {
   testDatabaseName,
 } from "../src/test-database.ts";
 
-const MAX_CREATE_MS = 1000;
+/** Enough builds to race on one template. */
+const CONCURRENT_BUILDS = 3;
+
+/**
+ * Each build ends with DROP DATABASE, which waits for a forced checkpoint;
+ * on a Postgres shared with other busy runs that alone can take minutes.
+ */
+const CONCURRENT_BUILDS_TIMEOUT_MS = 300_000;
 
 const decodeExists = decodeRows(Schema.Struct({ n: Schema.Int }));
 
-const admin = PgConnection.make({
-  applicationName: "std-testing-test",
-  url: Redacted.make(maintenanceUrl()),
-});
+const decodeTemplateId = decodeRows(
+  Schema.Struct({ comment: Schema.String, id: Schema.String })
+);
+
+const admin = maintenanceUrl.pipe(
+  Effect.orDie,
+  Effect.flatMap((url) =>
+    PgConnection.make({
+      applicationName: "std-testing-test",
+      url: Redacted.make(url),
+    })
+  )
+);
 
 const databaseExists = (name: string) =>
   Effect.scoped(
@@ -52,6 +81,30 @@ const databaseExists = (name: string) =>
       ),
       Effect.flatMap((result) => decodeExists(result.rows)),
       Effect.map(([row]) => row?.n === 1)
+    )
+  );
+
+/**
+ * The identity of a template database: its oid and creation comment.
+ * @param name - The template name.
+ * @returns `oid:comment`, or `undefined` when there is no such database.
+ */
+const templateIdentity = (name: string) =>
+  Effect.scoped(
+    admin.pipe(
+      Effect.flatMap((connection) =>
+        connection.query(
+          `SELECT oid::text AS id,
+                  coalesce(shobj_description(oid, 'pg_database'), '') AS comment
+           FROM pg_database WHERE datname = $1`,
+          [name],
+          false
+        )
+      ),
+      Effect.flatMap((result) => decodeTemplateId(result.rows)),
+      Effect.map(([row]) =>
+        row === undefined ? undefined : `${row.id}:${row.comment}`
+      )
     )
   );
 
@@ -85,19 +138,25 @@ describe("test-database", () => {
   });
 
   it.live(
-    "creates a migrated database well under a second and drops it on release",
+    "clones a migrated database from the existing template and drops it on release",
     () =>
       Effect.gen(function* createAndDrop() {
+        const template = templateName(PLATFORM_MIGRATIONS);
+
         // The first build may have to create the template.
         const warm = yield* buildDatabase;
         yield* Scope.close(warm.scope, Exit.void);
+        const before = yield* templateIdentity(template);
 
-        const started = Date.now();
         const built = yield* buildDatabase;
-        const elapsed = Date.now() - started;
 
-        assert.isBelow(elapsed, MAX_CREATE_MS, `created in ${elapsed} ms`);
-        assert.strictEqual(built.template, templateName(PLATFORM_MIGRATIONS));
+        assert.strictEqual(built.template, template);
+        assert.isDefined(before);
+        assert.strictEqual(
+          yield* templateIdentity(template),
+          before,
+          "the template was reused, not rebuilt"
+        );
         assert.isTrue(yield* databaseExists(built.name));
 
         yield* Scope.close(built.scope, Exit.void);
@@ -105,21 +164,42 @@ describe("test-database", () => {
       })
   );
 
-  it.live("concurrent creations from one template never race", () =>
-    Effect.gen(function* concurrentCreation() {
-      const built = yield* Effect.all(
-        Array.from({ length: 6 }, () => buildDatabase),
-        { concurrency: "unbounded" }
-      );
+  it.live(
+    "concurrent creations from one template never race",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* concurrentCreation() {
+          // Every build waits at the gate, so all of them start together; each
+          // database is released with the test's scope, even after a failure.
+          const gate = yield* Deferred.make<boolean>();
 
-      const names = new Set(built.map((database) => database.name));
+          const gatedBuild = Deferred.await(gate).pipe(
+            Effect.andThen(
+              Effect.acquireRelease(buildDatabase, (database) =>
+                Scope.close(database.scope, Exit.void)
+              )
+            )
+          );
 
-      assert.strictEqual(names.size, 6);
+          const builds = yield* Effect.forkChild(
+            Effect.all(
+              Array.from({ length: CONCURRENT_BUILDS }, () => gatedBuild),
+              { concurrency: "unbounded" }
+            )
+          );
 
-      for (const database of built) {
-        yield* Scope.close(database.scope, Exit.void);
-      }
-    })
+          yield* Deferred.succeed(gate, true);
+          const built = yield* Fiber.join(builds);
+          const names = new Set(built.map((database) => database.name));
+
+          assert.strictEqual(names.size, CONCURRENT_BUILDS);
+
+          for (const database of built) {
+            assert.isTrue(yield* databaseExists(database.name));
+          }
+        })
+      ),
+    { timeout: CONCURRENT_BUILDS_TIMEOUT_MS }
   );
 
   it("the janitor recognizes only the harness's exact names with its ownership comment", () => {

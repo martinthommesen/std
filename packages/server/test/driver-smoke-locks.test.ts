@@ -4,8 +4,9 @@
  * config-commit lock-timeout retries.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
+import { TestClock } from "effect/testing";
 
 import {
   TestDatabase,
@@ -17,6 +18,7 @@ import {
   DEFAULT_RETRY_DELAYS,
   MAIN_LOCK_TIMEOUT,
   MAIN_STATEMENT_TIMEOUT,
+  retrySchedule,
   SchemaLockTimeout,
 } from "../src/sql/config-commit.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
@@ -32,7 +34,7 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { changeSetId, errorOf, waitUntil } from "./support.ts";
+import { changeSetId, defectTextOf, errorOf, waitUntil } from "./support.ts";
 
 const FAST_RETRIES = [
   Duration.millis(50),
@@ -109,6 +111,35 @@ describe("driver-smoke-locks", () => {
       [500, 1000, 2000, 4000]
     );
   });
+
+  it.effect(
+    "the retry policy waits 0.5, 1, 2 and 4 s between the 5 attempts",
+    () =>
+      Effect.gen(function* retryDelays() {
+        const startedAt: number[] = [];
+
+        const attempt = Clock.currentTimeMillis.pipe(
+          Effect.tap((now) => Effect.sync(() => startedAt.push(now))),
+          Effect.andThen(Effect.fail("lock timeout" as const))
+        );
+
+        const retried = yield* Effect.forkChild(
+          Effect.exit(
+            attempt.pipe(Effect.retry(retrySchedule(DEFAULT_RETRY_DELAYS)))
+          )
+        );
+
+        yield* TestClock.adjust(Duration.seconds(10));
+        const exit = yield* Fiber.join(retried);
+
+        assert.isTrue(Exit.isFailure(exit));
+        assert.deepStrictEqual(startedAt, [0, 500, 1500, 3500, 7500]);
+
+        // Without delays there is exactly one attempt.
+        yield* Effect.exit(attempt.pipe(Effect.retry(retrySchedule([]))));
+        assert.lengthOf(startedAt, 6);
+      })
+  );
 
   layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
@@ -311,20 +342,18 @@ describe("driver-smoke-locks", () => {
             );
             yield* log.clear;
 
-            yield* Effect.forkChild(
-              Effect.sleep(Duration.millis(1200)).pipe(
-                Effect.andThen(
-                  blocker.query(
-                    `SELECT pg_advisory_unlock(${CONFIG_KEY.toString()})`
-                  )
-                )
-              )
+            const committer = yield* Effect.forkChild(
+              configCommit(bumpRevision(changeSetId()))
             );
 
-            const started = Date.now();
-            const committed = yield* configCommit(bumpRevision(changeSetId()));
+            // Release the lock once the second attempt has started.
+            yield* waitUntil(lockAttempts.pipe(Effect.map((n) => n >= 2)));
+            yield* blocker.query(
+              `SELECT pg_advisory_unlock(${CONFIG_KEY.toString()})`
+            );
 
-            assert.isAtLeast(Date.now() - started, 1200);
+            const committed = yield* Fiber.join(committer);
+
             assert.strictEqual(committed.revision, before + 1);
             assert.isAtLeast(yield* lockAttempts, 2);
           })
@@ -463,6 +492,70 @@ describe("driver-smoke-locks", () => {
             );
 
             assert.strictEqual(column?.n, 0);
+            assert.strictEqual(yield* currentRevision, before);
+          })
+        ),
+      { timeout: 30_000 }
+    );
+
+    dbTest.effect(
+      "a defect next to a lock timeout is not retried and keeps its cause",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* defectNextToLockTimeout() {
+            const sql = yield* SqlClient.SqlClient;
+            const { configCommit } = yield* Transactions;
+            const database = yield* TestDatabase;
+            const log = yield* StatementLog;
+            const before = yield* currentRevision;
+            yield* sql`CREATE TABLE smoke_defect (id int)`;
+
+            const blocker = yield* database.session("smoke-defect-reader");
+            yield* blocker.query("BEGIN");
+            yield* blocker.query("SELECT count(*) FROM smoke_defect");
+
+            const alter = lockWaiting(
+              sql`ALTER TABLE smoke_defect ADD COLUMN extra int`
+            );
+
+            // The error handler of the timed-out DDL dies.
+            yield* log.clear;
+
+            const handlerDied = yield* Effect.exit(
+              configCommit(
+                alter.pipe(
+                  Effect.catchTag("SqlError", () =>
+                    Effect.die(new Error("handler defect"))
+                  )
+                ),
+                { retryDelays: FAST_RETRIES }
+              )
+            );
+
+            assert.notInstanceOf(errorOf(handlerDied), SchemaLockTimeout);
+            assert.include(defectTextOf(handlerDied) ?? "", "handler defect");
+            assert.strictEqual(yield* lockAttempts, 1, "no retry");
+
+            // A scope finalizer of the transaction's code dies after the timeout.
+            yield* log.clear;
+
+            const finalizerDied = yield* Effect.exit(
+              configCommit(
+                Effect.addFinalizer(() =>
+                  Effect.die(new Error("finalizer defect"))
+                ).pipe(Effect.andThen(alter)),
+                { retryDelays: FAST_RETRIES }
+              )
+            );
+
+            assert.notInstanceOf(errorOf(finalizerDied), SchemaLockTimeout);
+            assert.include(
+              defectTextOf(finalizerDied) ?? "",
+              "finalizer defect"
+            );
+            assert.strictEqual(yield* lockAttempts, 1, "no retry");
+
+            yield* blocker.query("ROLLBACK");
             assert.strictEqual(yield* currentRevision, before);
           })
         ),

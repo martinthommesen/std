@@ -4,7 +4,9 @@ import { PgClient } from "@effect/sql-pg";
  * debounced worker wake-up sent after commit.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Duration, Effect, Queue, Stream } from "effect";
+import { Duration, Effect, Queue, Ref, Stream } from "effect";
+import { SqlError, UnknownError } from "effect/sql/SqlError";
+import { TestClock } from "effect/testing";
 
 import {
   TestDatabase,
@@ -19,9 +21,11 @@ import {
 import type { ConfigSignal } from "../src/sql/config-listener.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
+  makeWorkerWakeup,
   WAKE_UP_INTERVAL,
   wakeWorkerAfterCommit,
   WORKER_CHANNEL,
+  WorkerWakeup,
 } from "../src/sql/wake-up.ts";
 import { changeSetId } from "./support.ts";
 
@@ -29,6 +33,24 @@ const SIGNAL_TIMEOUT = Duration.seconds(10);
 
 const nextSignal = (signals: Queue.Dequeue<ConfigSignal>) =>
   Queue.take(signals).pipe(Effect.timeout(SIGNAL_TIMEOUT));
+
+const notifyFailure = new SqlError({
+  reason: new UnknownError({
+    cause: new Error("connection lost"),
+    message: "connection lost",
+    operation: "notify",
+  }),
+});
+
+/**
+ * Lets forked wake-up fibers whose sleep is due run.
+ * @param millis - How far to move the test clock.
+ * @returns An effect that advances the clock and yields.
+ */
+const advance = (millis: number) =>
+  TestClock.adjust(Duration.millis(millis)).pipe(
+    Effect.andThen(Effect.yieldNow)
+  );
 
 const commitRevision = Transactions.pipe(
   Effect.flatMap(({ configCommit }) =>
@@ -45,6 +67,75 @@ describe("driver-smoke-listen", () => {
       [100, 5000, 250]
     );
   });
+
+  it.effect(
+    "a burst of wake-ups sends one at once and one at the end of the window",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* debouncedBurst() {
+          const sent = yield* Ref.make(0);
+
+          const wakeup = yield* makeWorkerWakeup(
+            Ref.update(sent, (n) => n + 1)
+          );
+
+          yield* wakeup.wake;
+          yield* advance(0);
+          assert.strictEqual(
+            yield* Ref.get(sent),
+            1,
+            "the first wake-up is sent at once"
+          );
+
+          for (let index = 0; index < 10; index += 1) {
+            yield* wakeup.wake;
+          }
+
+          yield* advance(249);
+          assert.strictEqual(
+            yield* Ref.get(sent),
+            1,
+            "nothing more inside the window"
+          );
+
+          yield* advance(1);
+          assert.strictEqual(
+            yield* Ref.get(sent),
+            2,
+            "one more at the end of the window"
+          );
+
+          yield* advance(1000);
+          assert.strictEqual(
+            yield* Ref.get(sent),
+            2,
+            "nothing without a new request"
+          );
+        })
+      )
+  );
+
+  it.effect("a failed NOTIFY is logged and later wake-ups are still sent", () =>
+    Effect.scoped(
+      Effect.gen(function* failedNotify() {
+        const tried = yield* Ref.make(0);
+
+        const wakeup = yield* makeWorkerWakeup(
+          Ref.update(tried, (n) => n + 1).pipe(
+            Effect.andThen(Effect.fail(notifyFailure))
+          )
+        );
+
+        yield* wakeup.wake;
+        yield* advance(0);
+        assert.strictEqual(yield* Ref.get(tried), 1);
+
+        yield* wakeup.wake;
+        yield* advance(250);
+        assert.strictEqual(yield* Ref.get(tried), 2);
+      })
+    )
+  );
 
   layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
@@ -98,64 +189,63 @@ describe("driver-smoke-listen", () => {
     );
 
     dbTest.effect(
-      "worker wake-ups are sent after commit, never inside the transaction or on rollback",
+      "worker wake-ups are requested after commit, never inside the transaction or on rollback",
       () =>
-        Effect.scoped(
-          Effect.gen(function* wakeUpAfterCommit() {
-            const client = yield* PgClient.PgClient;
-            const { request } = yield* Transactions;
-            const wakeups = yield* client.listen(WORKER_CHANNEL);
+        Effect.gen(function* wakeUpAfterCommit() {
+          const { request } = yield* Transactions;
+          const requested = yield* Ref.make(0);
 
-            yield* request(
-              Effect.gen(function* registerInsideTransaction() {
-                yield* wakeWorkerAfterCommit;
-                yield* Effect.sleep(Duration.millis(300));
-                assert.strictEqual(
-                  yield* Queue.size(wakeups),
-                  0,
-                  "nothing is sent before commit"
-                );
-              })
-            );
+          const counting = WorkerWakeup.of({
+            wake: Ref.update(requested, (n) => n + 1),
+          });
 
-            const delivered = yield* Queue.take(wakeups).pipe(
-              Effect.timeout(SIGNAL_TIMEOUT)
-            );
+          const register = wakeWorkerAfterCommit.pipe(
+            Effect.provideService(WorkerWakeup, counting)
+          );
 
-            assert.strictEqual(delivered.channel, WORKER_CHANNEL);
+          yield* request(
+            Effect.gen(function* registerInsideTransaction() {
+              yield* register;
+              assert.strictEqual(
+                yield* Ref.get(requested),
+                0,
+                "nothing is requested before commit"
+              );
+            })
+          );
 
-            yield* Effect.exit(
-              request(
-                wakeWorkerAfterCommit.pipe(
-                  Effect.andThen(Effect.fail("rolled back" as const))
-                )
-              )
-            );
-            yield* Effect.sleep(Duration.millis(400));
-            assert.strictEqual(
-              yield* Queue.size(wakeups),
-              0,
-              "nothing on rollback"
-            );
+          assert.strictEqual(yield* Ref.get(requested), 1);
 
-            // A burst of commits inside one 250 ms window: one wake-up at
-            // once, one at the end of the window.
-            yield* Effect.sleep(WAKE_UP_INTERVAL);
-            const started = Date.now();
+          yield* Effect.exit(
+            request(
+              register.pipe(Effect.andThen(Effect.fail("rolled back" as const)))
+            )
+          );
 
-            for (let index = 0; index < 10; index += 1) {
-              yield* request(wakeWorkerAfterCommit);
-            }
+          assert.strictEqual(
+            yield* Ref.get(requested),
+            1,
+            "nothing on rollback"
+          );
+        })
+    );
 
-            const burst = Date.now() - started;
-            yield* Effect.sleep(Duration.millis(700));
-            const sent = yield* Queue.size(wakeups);
+    dbTest.effect("a wake-up after commit reaches LISTEN std_worker", () =>
+      Effect.scoped(
+        Effect.gen(function* wakeUpDelivered() {
+          const client = yield* PgClient.PgClient;
+          const { request } = yield* Transactions;
+          const wakeups = yield* client.listen(WORKER_CHANNEL);
 
-            assert.isAtLeast(sent, 1);
-            assert.isAtMost(sent, Math.ceil(burst / 250) + 2);
-            assert.isAtMost(sent, 3, `burst of ${burst} ms`);
-          })
-        )
+          yield* request(wakeWorkerAfterCommit);
+
+          const delivered = yield* Queue.take(wakeups).pipe(
+            Effect.timeout(SIGNAL_TIMEOUT)
+          );
+
+          assert.strictEqual(delivered.channel, WORKER_CHANNEL);
+        })
+      )
     );
   });
 });

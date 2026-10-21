@@ -4,7 +4,7 @@
  * transaction, and use of a transaction after it ended.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Schema } from "effect";
+import { Deferred, Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -103,7 +103,7 @@ const ALLOWED: readonly string[] = [
   "SELECT 1 /* ; COMMIT */",
 ];
 
-const blockForever = Effect.sleep(Duration.minutes(5));
+const blockForever = Effect.never;
 
 /**
  * An outer unit that writes, runs `statement` in a nested unit that then
