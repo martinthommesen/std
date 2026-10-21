@@ -9,8 +9,9 @@
  *   delivery rows; may save other records through the record service, as
  *   a nested save in the same transaction.
  *
- * Hooks and record rules (Step 3) and the outbox producer (1E) provide
- * real layers; `SaveHooks.none` runs nothing.
+ * Hooks and record rules (Step 3) and the outbox producer
+ * (`outbox-producer.ts`, 1E) provide real layers; `SaveHooks.none` runs
+ * nothing.
  */
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -19,6 +20,7 @@ import { Context, Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import type { ChangeEntry, ChangeKind } from "./change-entry.ts";
 import type { StoredRecord } from "./stored-record.ts";
 
@@ -54,10 +56,13 @@ export interface SaveHooksApi {
     SqlError,
     SqlClient.SqlClient
   >;
-  /** Step 9: the outbox rows of the change entry. */
+  /**
+   * Step 9: the outbox rows of the change entry. The running transaction
+   * is available to register the after-commit worker wake-up (step 11).
+   */
   readonly deliveries: (
     input: AfterWriteInput
-  ) => Effect.Effect<void, SqlError, SqlClient.SqlClient>;
+  ) => Effect.Effect<void, SqlError, SqlClient.SqlClient | CurrentTransaction>;
   /** Step 10: after-write hooks. */
   readonly afterWrite: (
     input: AfterWriteInput

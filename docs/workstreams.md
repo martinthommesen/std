@@ -17,7 +17,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 3 | `ws/0a-foldkit-tooling` | 0A (web toolchain) | Foldkit source vendored at `repos/foldkit`, Foldkit agent skills for Claude Code and Codex, `@foldkit/oxlint-plugin` (all preset) on `apps/web`, vendor checks and canaries; vendored Effect moved to `repos/effect` | merged |
 | 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | in review |
 | 4 | `ws/1b-config-layers` | 1B | owner layers, sets, overrides, conflicts, `std upgrade --plan`, `doctor` | in review |
-| 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | in progress |
+| 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | merged |
 | 4 | `ws/1c-authz-complete` | 1C | every read and write path, stale requests, `@std/api`, error fuzz, users, no-bypass | in progress |
 | 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, `v0.0.1` | planned |
 | 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, OpenAPI, typed client | planned |

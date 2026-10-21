@@ -1,8 +1,6 @@
 /**
- * Migration 0005 on this branch, 0006 once workstream 1B's 0005 is merged
- * (renumbered at merge; migration IDs must be consecutive): names for
- * access rules and indexes, so they can be renamed by ID like every other
- * named definition (Contracts 1.1).
+ * Migration 0006: names for access rules and indexes, so they can be
+ * renamed by ID like every other named definition (Contracts 1.1).
  *
  * Both columns are nullable without a default, so `ADD COLUMN` is
  * catalog-only (Contracts 1.4). Uniqueness (index names per table, access
@@ -15,8 +13,8 @@
 import type { TxMigration } from "../migration.ts";
 
 /** Names of access rules and indexes. Never edit it once applied. */
-export const migration0005DefinitionNames: TxMigration = {
-  id: 5,
+export const migration0006DefinitionNames: TxMigration = {
+  id: 6,
   kind: "tx",
   name: "definition-names",
   statements: [

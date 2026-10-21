@@ -105,7 +105,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
-| `outbox/` | delivery worker (Step 3) | 4.6 |
+| `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |
 | `import/` | import jobs (Step 3) | 7 |
 | `definitions/` (directory at package root, not in `src`) | the shipped `core` definition set files | 1.8, 3.1 |
 
