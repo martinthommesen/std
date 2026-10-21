@@ -30,7 +30,7 @@ import type { SqlFragment } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
-import { classIn, groupsSql, TRUE_SQL } from "./access-sql.ts";
+import { branchesSql, classIn, groupsSql, TRUE_SQL } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
 import { SYSTEM_FIELDS, systemField } from "./read-field.ts";
 import type { ReadField } from "./read-field.ts";
@@ -52,6 +52,16 @@ export interface ReadView {
   readonly anyVisible: boolean;
   /** Row visibility over a relation alias. */
   readonly visibility: (alias: string) => SqlFragment;
+  /**
+   * The rows of `subtree(E)` (or of the one class): the part of
+   * `visibility` that is not a rule.
+   */
+  readonly membership: (alias: string) => SqlFragment;
+  /**
+   * The visibility rules split at their top-level ORs, for the branch
+   * form of lists: `membership AND (b1 OR b2 ...)` equals `visibility`.
+   */
+  readonly visibilityBranches: (alias: string) => readonly SqlFragment[];
   /** Whether the field is readable on the row: `TRUE` when always. */
   readonly readable: (alias: string, field: ReadField) => SqlFragment;
   /** Whether the field is readable on every visible row. */
@@ -157,6 +167,7 @@ const makeView = (
     classIds: schema.classIds,
     fields,
     isAlways,
+    membership: (alias) => classIn(alias, schema.classIds),
     output: (alias, field) =>
       masked(
         alias,
@@ -170,6 +181,8 @@ const makeView = (
     value: (alias, field) => masked(alias, field, column(alias, field)),
     visibility: (alias) =>
       sql`(${classIn(alias, schema.classIds)} AND ${groupsSql(snapshot, schema.rows, alias, context)})`,
+    visibilityBranches: (alias) =>
+      branchesSql(snapshot, schema.rows, alias, context),
   };
 };
 

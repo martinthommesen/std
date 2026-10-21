@@ -166,6 +166,77 @@ export const groupsSql = (
     : sql`(${joinSql(parts, " OR ")})`;
 };
 
+/**
+ * The top-level disjuncts of a decision's condition: `a OR b` gives `a`
+ * and `b`, `(a OR b) AND NOT d` gives `a AND NOT d` and `b AND NOT d`.
+ *
+ * @param decision - An always or conditional decision.
+ * @returns Decisions whose OR is the original.
+ */
+const disjunctsOf = (decision: Decision): readonly Decision[] => {
+  if (decision.kind !== "conditional") {
+    return [decision];
+  }
+
+  const { condition } = decision;
+
+  if (condition.op === "or") {
+    return condition.args.map((arg) => ({
+      condition: arg,
+      kind: "conditional",
+    }));
+  }
+
+  const [allowed, notDenied] = condition.op === "and" ? condition.args : [];
+
+  if (
+    condition.op === "and" &&
+    condition.args.length === 2 &&
+    allowed?.op === "or" &&
+    notDenied !== undefined
+  ) {
+    return allowed.args.map((arg) => ({
+      condition: { args: [arg, notDenied], op: "and" },
+      kind: "conditional",
+    }));
+  }
+
+  return [decision];
+};
+
+/**
+ * The visibility predicate split at its top-level ORs (the branch form of
+ * a list, Contracts 3.5 and the storage benchmark): one predicate per class
+ * group and allow condition, whose OR equals `groupsSql`.
+ *
+ * @param snapshot - The configuration.
+ * @param grouped - The groups.
+ * @param alias - The relation alias.
+ * @param context - `now`, time zone and `me`.
+ * @returns The branches; none when nothing is visible.
+ */
+export const branchesSql = (
+  snapshot: ConfigSnapshot,
+  grouped: Grouped,
+  alias: string,
+  context: AccessContext
+): readonly SqlFragment[] =>
+  grouped.groups.flatMap((group) => {
+    const [first] = group.classIds;
+
+    if (first === undefined) {
+      return [];
+    }
+
+    const membership = classIn(alias, group.classIds);
+
+    return disjunctsOf(group.decision).map((decision) =>
+      decision.kind === "always"
+        ? membership
+        : sql`(${membership} AND ${decisionSql(snapshot, decision, first, alias, context)})`
+    );
+  });
+
 /** A predicate with the decisions it was compiled from. */
 export interface CompiledAccess {
   readonly grouped: Grouped;

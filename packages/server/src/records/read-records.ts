@@ -80,7 +80,24 @@ export interface ListRequest {
   readonly limit?: string;
   readonly count?: string;
   readonly labels?: string;
+  /**
+   * `plain` forces the plain form (tests compare it with the branch form);
+   * by default a visibility with several top-level ORs uses the branch form.
+   */
+  readonly form?: "plain" | "auto";
 }
+
+/**
+ * The body of a list (Contracts 6.6). A type alias, not an interface, so
+ * it stays a JSON object for `stringifyJson`.
+ */
+// oxlint-disable-next-line typescript/consistent-type-definitions -- interfaces are not assignable to JsonObject's index signature
+export type ListResult = {
+  readonly schemaRevision: number;
+  readonly records: readonly JsonObject[];
+  readonly nextCursor: string | null;
+  readonly count?: number;
+};
 
 /** `GET /api/v1/tables/{table}/records/{id}`. */
 export interface GetRequest {
@@ -166,6 +183,8 @@ interface Label {
 /** The select list, joins and row decoder of one read. */
 interface Projection {
   readonly columns: readonly SqlFragment[];
+  /** The output column names, in order. */
+  readonly names: readonly string[];
   readonly joins: readonly SqlFragment[];
   readonly decode: (row: TextRow) => JsonObject;
 }
@@ -182,6 +201,15 @@ const flagOf = (
     ? undefined
     : sql`COALESCE(${view.readable(alias, field)}, false)`;
 
+const addColumn = (
+  builder: ProjectionBuilder,
+  expression: SqlFragment,
+  name: string
+): void => {
+  builder.columns.push(asText(expression, name));
+  builder.names.push(name);
+};
+
 const isTrue = (row: TextRow, flag: string | null): boolean =>
   flag === null || row[flag] === "true";
 
@@ -190,6 +218,7 @@ interface ProjectionBuilder {
   readonly scope: ReadScope;
   readonly view: ReadView;
   readonly columns: SqlFragment[];
+  readonly names: string[];
   readonly joins: SqlFragment[];
   readonly joined: Map<string, string>;
 }
@@ -257,7 +286,7 @@ const addLabel = (
   }
 
   const alias = joinTarget(builder, reference);
-  builder.columns.push(asText(target.value(alias, display), column));
+  addColumn(builder, target.value(alias, display), column);
 
   return true;
 };
@@ -329,6 +358,7 @@ const project = (
     ],
     joined: new Map(),
     joins: [],
+    names: ["id", "class_id", "version"],
     scope,
     view,
   };
@@ -341,20 +371,19 @@ const project = (
     const flag = flagOf(view, item.field, BASE_ALIAS);
     const flagColumn = flag === undefined ? null : `w${index}`;
 
-    builder.columns.push(
+    addColumn(
+      builder,
       item.through === undefined
-        ? asText(view.output(BASE_ALIAS, item.field), value)
-        : asText(
-            item.through.view.output(
-              joinTarget(builder, item.field),
-              item.through.field
-            ),
-            value
-          )
+        ? view.output(BASE_ALIAS, item.field)
+        : item.through.view.output(
+            joinTarget(builder, item.field),
+            item.through.field
+          ),
+      value
     );
 
     if (flag !== undefined && flagColumn !== null) {
-      builder.columns.push(asText(flag, flagColumn));
+      addColumn(builder, flag, flagColumn);
     }
 
     values.push({
@@ -379,6 +408,7 @@ const project = (
     columns: builder.columns,
     decode: decodeRow(scope, values, withLabels ? labels : null),
     joins: builder.joins,
+    names: builder.names,
   };
 };
 
@@ -387,6 +417,117 @@ const whereAll = (conditions: readonly SqlFragment[]): SqlFragment =>
 
 const optionalJoins = (joins: readonly SqlFragment[]): SqlFragment =>
   joins.length === 0 ? rawSql("") : sql` ${joinSql(joins, " ")}`;
+
+/** What a page statement is built from. */
+interface PageParts {
+  readonly relation: SqlFragment;
+  readonly projection: Projection;
+  readonly keys: readonly CompiledKey[];
+  readonly joins: readonly SqlFragment[];
+  /** Visibility, filter and cursor: the plain form's `WHERE`. */
+  readonly conditions: readonly SqlFragment[];
+  /** `class_id IN subtree(E)`. */
+  readonly membership: SqlFragment;
+  /** Visibility split at its top-level ORs; fewer than two: plain form. */
+  readonly branches: readonly SqlFragment[];
+  readonly limit: number;
+}
+
+const orderColumn = (index: number): SqlFragment =>
+  identSql(["o", String(index)].join(""));
+
+const selectList = (parts: PageParts): SqlFragment =>
+  joinSql(
+    [
+      ...parts.projection.columns,
+      ...parts.keys.map((key, index) => asText(key.expression, `k${index}`)),
+    ],
+    ", "
+  );
+
+/**
+ * The page statement, plain form: one `SELECT` with the whole visibility
+ * predicate in `WHERE`.
+ *
+ * @param parts - The page's parts.
+ * @returns The statement.
+ */
+const plainPage = (parts: PageParts): SqlFragment =>
+  sql`SELECT ${selectList(parts)}
+FROM ${parts.relation} AS ${identSql(BASE_ALIAS)}${optionalJoins(parts.joins)}
+WHERE ${whereAll(parts.conditions)}
+ORDER BY ${orderBy(parts.keys, ID)}
+LIMIT ${textParameter(String(parts.limit), "int8")}`;
+
+/**
+ * The page statement, branch form (storage benchmark, decision 0008): the
+ * visibility predicate's top-level ORs become `UNION ALL` branches, each
+ * with the full filter, cursor, `ORDER BY` and `LIMIT`, made disjoint by
+ * `AND NOT COALESCE(<earlier branches>, false)`; the outer query merges
+ * them with the same order and limit. Each branch can use an index for its
+ * own rule. The result equals the plain form's, row for row.
+ *
+ * @param parts - The page's parts.
+ * @returns The statement.
+ */
+const branchedPage = (parts: PageParts): SqlFragment => {
+  const filterAndCursor = parts.conditions.slice(1);
+
+  const branches = parts.branches.map((branch, index) => {
+    const earlier = parts.branches.slice(0, index);
+
+    const disjoint =
+      earlier.length === 0
+        ? []
+        : [sql`NOT COALESCE((${joinSql(earlier, " OR ")}), false)`];
+
+    const ordering = joinSql(
+      [
+        selectList(parts),
+        ...parts.keys.map(
+          (key, at) => sql`${key.expression} AS ${orderColumn(at)}`
+        ),
+        sql`${ID} AS "oid"`,
+      ],
+      ", "
+    );
+
+    return sql`(SELECT ${ordering}
+FROM ${parts.relation} AS ${identSql(BASE_ALIAS)}${optionalJoins(parts.joins)}
+WHERE ${whereAll([parts.membership, branch, ...disjoint, ...filterAndCursor])}
+ORDER BY ${orderBy(parts.keys, ID)}
+LIMIT ${textParameter(String(parts.limit), "int8")})`;
+  });
+
+  const outer = "u";
+
+  const names = [
+    ...parts.projection.names,
+    ...parts.keys.map((_, index) => `k${index}`),
+  ];
+
+  const merged: CompiledKey[] = parts.keys.map((key, index) => ({
+    expression: identSql(outer, ["o", String(index)].join("")),
+    key: key.key,
+  }));
+
+  return sql`SELECT ${joinSql(
+    names.map((name) => identSql(outer, name)),
+    ", "
+  )}
+FROM (${joinSql(branches, " UNION ALL ")}) AS ${identSql(outer)}
+ORDER BY ${orderBy(merged, identSql(outer, "oid"))}
+LIMIT ${textParameter(String(parts.limit), "int8")}`;
+};
+
+/**
+ * The page statement in the form the visibility calls for.
+ *
+ * @param parts - The page's parts.
+ * @returns The plain form for at most one branch, else the branch form.
+ */
+const pageStatement = (parts: PageParts): SqlFragment =>
+  parts.branches.length > 1 ? branchedPage(parts) : plainPage(parts);
 
 /**
  * Lists records through endpoint E (Contracts 3.5, 6.6).
@@ -441,21 +582,20 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
   const projection = project(scope, view, selection, withLabels);
 
   const page = yield* readRows(
-    sql`SELECT ${joinSql(
-      [
-        ...projection.columns,
-        ...keys.map((key, index) => asText(key.expression, `k${index}`)),
-      ],
-      ", "
-    )}
-FROM ${relation} AS ${identSql(BASE_ALIAS)}${optionalJoins([...filterJoins, ...projection.joins])}
-WHERE ${whereAll(
-      position === undefined
-        ? conditions
-        : [...conditions, cursorPredicate(keys, position, ID)]
-    )}
-ORDER BY ${orderBy(keys, ID)}
-LIMIT ${textParameter(String(limit + 1), "int8")}`
+    pageStatement({
+      branches:
+        request.form === "plain" ? [] : view.visibilityBranches(BASE_ALIAS),
+      conditions:
+        position === undefined
+          ? conditions
+          : [...conditions, cursorPredicate(keys, position, ID)],
+      joins: [...filterJoins, ...projection.joins],
+      keys,
+      limit: limit + 1,
+      membership: view.membership(BASE_ALIAS),
+      projection,
+      relation,
+    })
   );
 
   const rows = page.slice(0, limit);
@@ -473,7 +613,7 @@ LIMIT ${textParameter(String(limit + 1), "int8")}`
     nextCursor,
     records: rows.map(projection.decode),
     schemaRevision: revision,
-  } satisfies JsonObject;
+  } satisfies ListResult;
 
   if (withCount) {
     const [counted] = yield* readRows(
@@ -485,7 +625,7 @@ WHERE ${whereAll(conditions)}`
     return {
       ...body,
       count: Number(counted?.count ?? "0"),
-    } satisfies JsonObject;
+    } satisfies ListResult;
   }
 
   return body;
