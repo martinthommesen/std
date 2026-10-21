@@ -145,5 +145,32 @@ describe("probe-lock-inventory", () => {
         }),
       { timeout: 60_000 }
     );
+
+    dbTest.effect(
+      "a sequence the DDL creates is a violation too: creating an identity column is rejected",
+      () =>
+        Effect.gen(function* createdSequenceIsViolation() {
+          const [result] = yield* Effect.scoped(
+            runLockInventoryProbe([
+              {
+                form: "Create a table with an identity column",
+                step: {
+                  label: "Create a table with an identity column",
+                  locks: [],
+                  statement:
+                    "CREATE TABLE inv.numbered (id int8 GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)",
+                },
+              },
+            ])
+          );
+
+          assert.isNotEmpty(result?.violations ?? []);
+
+          for (const violation of result?.violations ?? []) {
+            assert.match(violation, /^inv\.numbered_id_seq /u);
+          }
+        }),
+      { timeout: 60_000 }
+    );
   });
 });

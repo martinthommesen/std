@@ -60,33 +60,37 @@ const wanted = (key: string, number: number): boolean =>
  * @param probe - The probe.
  * @returns The result with timing and load samples.
  */
-const record = <A, E>(
+const record = Effect.fn("record")(function* recordProbe<A, E>(
   title: string,
   pool: number,
   probe: Effect.Effect<A, E, ProbeServices>
-) =>
-  Effect.scoped(
-    Effect.gen(function* runProbe() {
-      yield* Console.log(`probe: ${title}`);
-      const startedAt = new Date().toISOString();
-      const before = yield* readConditions;
-      const started = yield* now;
-      const result = yield* probe;
-      const elapsedMs = (yield* now) - started;
-      const after = yield* readConditions;
-      yield* Console.log(`probe: ${title} done in ${Math.round(elapsedMs)} ms`);
+) {
+  const measured = Effect.gen(function* runProbe() {
+    yield* Console.log(`probe: ${title}`);
+    const startedAt = new Date().toISOString();
+    const before = yield* readConditions;
+    const started = yield* now;
+    const result = yield* probe;
+    const elapsedMs = (yield* now) - started;
+    const after = yield* readConditions;
+    yield* Console.log(`probe: ${title} done in ${Math.round(elapsedMs)} ms`);
 
-      const recorded: ProbeRecord<A> = {
-        after,
-        before,
-        elapsedMs,
-        result,
-        startedAt,
-      };
+    const recorded: ProbeRecord<A> = {
+      after,
+      before,
+      elapsedMs,
+      result,
+      startedAt,
+    };
 
-      return recorded;
-    })
-  ).pipe(Effect.provide(probeDatabaseLayer({ maxConnections: pool })));
+    return recorded;
+  });
+
+  return yield* measured.pipe(
+    Effect.scoped,
+    Effect.provide(probeDatabaseLayer({ maxConnections: pool }))
+  );
+});
 
 const DEFAULT_POOL = 10;
 
@@ -96,19 +100,18 @@ const DEFAULT_POOL = 10;
  * @param run - One run.
  * @returns The results in order.
  */
-const inSequence = <I, A, E, R>(
+const inSequence = Effect.fn("inSequence")(function* eachInTurn<I, A, E, R>(
   items: readonly I[],
   run: (item: I) => Effect.Effect<A, E, R>
-): Effect.Effect<readonly A[], E, R> =>
-  Effect.gen(function* eachInTurn() {
-    const results: A[] = [];
+) {
+  const results: A[] = [];
 
-    for (const item of items) {
-      results.push(yield* run(item));
-    }
+  for (const item of items) {
+    results.push(yield* run(item));
+  }
 
-    return results;
-  });
+  return results;
+});
 
 const optional = <A, E>(
   enabled: boolean,

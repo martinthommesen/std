@@ -406,16 +406,30 @@ const lockedOwner = (
  * Classifies one lock the DDL added.
  * @param oid - The relation.
  * @param mode - The lock mode.
- * @param known - Relations that existed before the DDL.
+ * @param relations - Relations before the DDL ran, and after it.
  * @param explicit - Explicitly locked relations and their modes.
  * @returns The class, and for index and TOAST locks the table's explicit mode.
  */
 const classify = (
   oid: string,
   mode: string,
-  known: ReadonlyMap<string, KnownRelation>,
+  relations: {
+    readonly before: ReadonlyMap<string, KnownRelation>;
+    readonly after: ReadonlyMap<string, KnownRelation>;
+  },
   explicit: ReadonlyMap<string, string>
 ): Classified => {
+  const known = relations.before;
+
+  // A sequence is a violation whether it existed before or the DDL made it
+  // (an identity column), so its kind is read from the metadata after the
+  // statement first.
+  const kind = (relations.after.get(oid) ?? known.get(oid))?.kind;
+
+  if (kind === SEQUENCE_KIND) {
+    return { kind: "violation", tableMode: null };
+  }
+
   if (Number(oid) < FIRST_NORMAL_OID) {
     return { kind: UNBUDGETED_CATALOG, tableMode: null };
   }
@@ -424,10 +438,6 @@ const classify = (
 
   if (relation === undefined) {
     return { kind: "created", tableMode: null };
-  }
-
-  if (relation.kind === SEQUENCE_KIND) {
-    return { kind: "violation", tableMode: null };
   }
 
   const held = explicit.get(oid);
@@ -456,92 +466,98 @@ const classify = (
  * @param ddlForm - The form.
  * @returns What its DDL locked.
  */
-const checkForm = (ddlForm: DdlForm) =>
-  Effect.gen(function* formTransaction() {
-    const sql = yield* SqlClient.SqlClient;
-    const budget = yield* startLockBudget;
-    yield* takeStepLocks(ddlForm.step, budget);
+const checkForm = Effect.fn("checkForm")(function* formTransaction(
+  ddlForm: DdlForm
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const budget = yield* startLockBudget;
+  yield* takeStepLocks(ddlForm.step, budget);
 
-    const explicit = new Map<string, string>();
+  const explicit = new Map<string, string>();
 
-    for (const lock of ddlForm.step.locks) {
-      const [row] =
-        yield* sql`SELECT ${lock.table}::regclass::oid::text AS oid`.pipe(
-          Effect.flatMap(decodeOid)
-        );
+  for (const lock of ddlForm.step.locks) {
+    const [row] =
+      yield* sql`SELECT ${lock.table}::regclass::oid::text AS oid`.pipe(
+        Effect.flatMap(decodeOid)
+      );
 
-      explicit.set(row?.oid ?? "", PG_LOCK_MODE[lock.mode]);
-    }
+    explicit.set(row?.oid ?? "", PG_LOCK_MODE[lock.mode]);
+  }
 
-    const relations = yield* sql
+  const relations = yield* sql
+    .unsafe(RELATIONS_QUERY)
+    .pipe(Effect.flatMap(decodeRelations));
+
+  const known = new Map(
+    relations.map((relation) => [
+      relation.oid,
+      { kind: relation.kind, name: relation.name, owner: relation.owner },
+    ])
+  );
+
+  const before = new Set(
+    (yield* sql.unsafe(LOCKS_QUERY).pipe(Effect.flatMap(decodeLocks))).map(
+      (lock) => lockKey(lock.oid, lock.mode)
+    )
+  );
+
+  yield* capUnbudgetedWaits(budget);
+
+  const [ddlMs] = yield* timedMillis(
+    lockWaiting(sql.unsafe(ddlForm.step.statement))
+  );
+
+  const after = yield* sql
+    .unsafe(LOCKS_QUERY)
+    .pipe(Effect.flatMap(decodeLocks));
+
+  const afterRelations = new Map(
+    (yield* sql
       .unsafe(RELATIONS_QUERY)
-      .pipe(Effect.flatMap(decodeRelations));
+      .pipe(Effect.flatMap(decodeRelations))).map((relation) => [
+      relation.oid,
+      { kind: relation.kind, name: relation.name, owner: relation.owner },
+    ])
+  );
 
-    const known = new Map(
-      relations.map((relation) => [
-        relation.oid,
-        { kind: relation.kind, name: relation.name, owner: relation.owner },
-      ])
-    );
+  const added = after.filter(
+    (lock) => !before.has(lockKey(lock.oid, lock.mode))
+  );
 
-    const before = new Set(
-      (yield* sql.unsafe(LOCKS_QUERY).pipe(Effect.flatMap(decodeLocks))).map(
-        (lock) => lockKey(lock.oid, lock.mode)
-      )
-    );
+  const classified: AddedLock[] = added.map((lock) => ({
+    ...classify(
+      lock.oid,
+      lock.mode,
+      { after: afterRelations, before: known },
+      explicit
+    ),
+    mode: lock.mode,
+    relation:
+      known.get(lock.oid)?.name ??
+      afterRelations.get(lock.oid)?.name ??
+      `oid ${lock.oid}`,
+  }));
 
-    yield* capUnbudgetedWaits(budget);
+  const catalog = classified.filter((lock) => lock.kind === UNBUDGETED_CATALOG);
 
-    const [ddlMs] = yield* timedMillis(
-      lockWaiting(sql.unsafe(ddlForm.step.statement))
-    );
+  yield* bumpRevision(randomUUID());
 
-    const after = yield* sql
-      .unsafe(LOCKS_QUERY)
-      .pipe(Effect.flatMap(decodeLocks));
+  const result: FormResult = {
+    added: classified.filter((lock) => lock.kind !== UNBUDGETED_CATALOG),
+    catalogLocks: catalog.length,
+    catalogModes: [...new Set(catalog.map((lock) => lock.mode))].toSorted(),
+    ddlMs,
+    explicitLocks: ddlForm.step.locks.map(
+      (lock) => `${lock.table} ${lock.mode}`
+    ),
+    form: ddlForm.form,
+    violations: classified.flatMap((lock) =>
+      lock.kind === "violation" ? [`${lock.relation} ${lock.mode}`] : []
+    ),
+  };
 
-    const names = new Map(
-      (yield* sql
-        .unsafe(RELATIONS_QUERY)
-        .pipe(Effect.flatMap(decodeRelations))).map((relation) => [
-        relation.oid,
-        relation.name,
-      ])
-    );
-
-    const added = after.filter(
-      (lock) => !before.has(lockKey(lock.oid, lock.mode))
-    );
-
-    const classified: AddedLock[] = added.map((lock) => ({
-      ...classify(lock.oid, lock.mode, known, explicit),
-      mode: lock.mode,
-      relation:
-        known.get(lock.oid)?.name ?? names.get(lock.oid) ?? `oid ${lock.oid}`,
-    }));
-
-    const catalog = classified.filter(
-      (lock) => lock.kind === UNBUDGETED_CATALOG
-    );
-
-    yield* bumpRevision(randomUUID());
-
-    const result: FormResult = {
-      added: classified.filter((lock) => lock.kind !== UNBUDGETED_CATALOG),
-      catalogLocks: catalog.length,
-      catalogModes: [...new Set(catalog.map((lock) => lock.mode))].toSorted(),
-      ddlMs,
-      explicitLocks: ddlForm.step.locks.map(
-        (lock) => `${lock.table} ${lock.mode}`
-      ),
-      form: ddlForm.form,
-      violations: classified.flatMap((lock) =>
-        lock.kind === "violation" ? [`${lock.relation} ${lock.mode}`] : []
-      ),
-    };
-
-    return result;
-  });
+  return result;
+});
 
 /**
  * Runs probe 3c on the current database: every form of the inventory, each

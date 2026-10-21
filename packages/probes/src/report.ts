@@ -441,7 +441,7 @@ const withinWorstCase = (result: UnbudgetedResult): boolean =>
   result.attempts.every(
     (attempt) =>
       attempt.heldMs <=
-      DDL_LOCK_BUDGET_MS * (1 + result.blockers) + BUDGET_SLACK_MS
+      DDL_LOCK_BUDGET_MS * (1 + result.internalBlockers) + BUDGET_SLACK_MS
   );
 
 const renderUnbudgetedWaits = (

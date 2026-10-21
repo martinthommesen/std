@@ -13,13 +13,12 @@ export const now: Effect.Effect<number> = Effect.sync(() => performance.now());
  * @param effect - The effect to time.
  * @returns The elapsed milliseconds and the result.
  */
-export const timedMillis = <A, E, R>(
+export const timedMillis = Effect.fnUntraced(function* measure<A, E, R>(
   effect: Effect.Effect<A, E, R>
-): Effect.Effect<readonly [number, A], E, R> =>
-  Effect.gen(function* measure() {
-    const started = yield* now;
-    const result = yield* effect;
-    const finished = yield* now;
+) {
+  const started = yield* now;
+  const result = yield* effect;
+  const finished = yield* now;
 
-    return [finished - started, result] as const;
-  });
+  return [finished - started, result] as const;
+});

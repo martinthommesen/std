@@ -98,22 +98,21 @@ export const attemptLog = (): AttemptLog => ({ records: [], started: 0 });
  * @param work - The main transaction's work.
  * @returns The same work, recorded.
  */
-export const tracked = <A, E, R>(
+export const tracked = Effect.fnUntraced(function* recordAttempt<A, E, R>(
   log: AttemptLog,
   work: Effect.Effect<A, E, R>
-): Effect.Effect<A, E, R> =>
-  Effect.gen(function* recordAttempt() {
-    log.started += 1;
-    const startedAt = yield* now;
-    const exit = yield* Effect.exit(work);
-    log.records.push({
-      heldMs: (yield* now) - startedAt,
-      ok: Exit.isSuccess(exit),
-      startedAt,
-    });
-
-    return yield* exit;
+) {
+  log.started += 1;
+  const startedAt = yield* now;
+  const exit = yield* Effect.exit(work);
+  log.records.push({
+    heldMs: (yield* now) - startedAt,
+    ok: Exit.isSuccess(exit),
+    startedAt,
   });
+
+  return yield* exit;
+});
 
 /** A deadline for the attempt's explicit lock waits. */
 export interface LockDeadline {
@@ -144,25 +143,27 @@ export const startLockBudget = Effect.gen(function* lockBudget() {
  * @param budget - The attempt's lock deadline.
  * @returns How long each lock waited.
  */
-export const takeStepLocks = (step: DdlStep, budget: LockDeadline) =>
-  Effect.gen(function* takeLocks() {
-    const sql = yield* SqlClient.SqlClient;
-    const waits: LockWait[] = [];
+export const takeStepLocks = Effect.fn("takeStepLocks")(function* takeLocks(
+  step: DdlStep,
+  budget: LockDeadline
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const waits: LockWait[] = [];
 
-    for (const lock of step.locks) {
-      yield* sql.unsafe(
-        `SET LOCAL lock_timeout = '${yield* budget.remaining}ms'`
-      );
+  for (const lock of step.locks) {
+    yield* sql.unsafe(
+      `SET LOCAL lock_timeout = '${yield* budget.remaining}ms'`
+    );
 
-      const [ms] = yield* timedMillis(
-        lockWaiting(sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`))
-      );
+    const [ms] = yield* timedMillis(
+      lockWaiting(sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`))
+    );
 
-      waits.push({ ms, table: lock.table });
-    }
+    waits.push({ ms, table: lock.table });
+  }
 
-    return waits;
-  });
+  return waits;
+});
 
 /**
  * Sets `lock_timeout` to what is left of the budget before a DDL statement.
@@ -172,13 +173,14 @@ export const takeStepLocks = (step: DdlStep, budget: LockDeadline) =>
  * @param budget - The attempt's lock deadline.
  * @returns Completes once the setting is in place.
  */
-export const capUnbudgetedWaits = (budget: LockDeadline) =>
-  Effect.gen(function* capWaits() {
+export const capUnbudgetedWaits = Effect.fn("capUnbudgetedWaits")(
+  function* capWaits(budget: LockDeadline) {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.unsafe(
       `SET LOCAL lock_timeout = '${yield* budget.remaining}ms'`
     );
-  });
+  }
+);
 
 /**
  * Runs DDL steps inside a config commit with the given mechanism.
@@ -186,27 +188,26 @@ export const capUnbudgetedWaits = (budget: LockDeadline) =>
  * @param mechanism - How lock waits are bounded.
  * @returns Per-step timings.
  */
-export const runDdlSteps = (
+export const runDdlSteps = Effect.fn("runDdlSteps")(function* ddlSteps(
   steps: readonly DdlStep[],
   mechanism: DdlMechanism
-) =>
-  Effect.gen(function* ddlSteps() {
-    const sql = yield* SqlClient.SqlClient;
-    const budget = yield* startLockBudget;
-    const timings: StepTiming[] = [];
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const budget = yield* startLockBudget;
+  const timings: StepTiming[] = [];
 
-    for (const step of steps) {
-      const lockWaits =
-        mechanism === "lock-budget" ? yield* takeStepLocks(step, budget) : [];
+  for (const step of steps) {
+    const lockWaits =
+      mechanism === "lock-budget" ? yield* takeStepLocks(step, budget) : [];
 
-      if (mechanism === "lock-budget") {
-        yield* capUnbudgetedWaits(budget);
-      }
-
-      const [ms] = yield* timedMillis(lockWaiting(sql.unsafe(step.statement)));
-
-      timings.push({ label: step.label, lockWaits, ms });
+    if (mechanism === "lock-budget") {
+      yield* capUnbudgetedWaits(budget);
     }
 
-    return timings;
-  });
+    const [ms] = yield* timedMillis(lockWaiting(sql.unsafe(step.statement)));
+
+    timings.push({ label: step.label, lockWaits, ms });
+  }
+
+  return timings;
+});

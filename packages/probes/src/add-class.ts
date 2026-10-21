@@ -410,23 +410,24 @@ export const addClassSteps = (): readonly DdlStep[] => {
  * @param mechanism - How its DDL waits for locks.
  * @returns The step timings, the locks held before commit and the scans.
  */
-const addClassWork = (mechanism: DdlMechanism) =>
-  Effect.gen(function* addClassMain() {
-    const sql = yield* SqlClient.SqlClient;
-    const steps = yield* runDdlSteps(addClassSteps(), mechanism);
+const addClassWork = Effect.fn("addClassWork")(function* addClassMain(
+  mechanism: DdlMechanism
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const steps = yield* runDdlSteps(addClassSteps(), mechanism);
 
-    const locks = yield* sql
-      .unsafe(LOCKS_QUERY)
-      .pipe(Effect.flatMap(decodeLocks));
+  const locks = yield* sql
+    .unsafe(LOCKS_QUERY)
+    .pipe(Effect.flatMap(decodeLocks));
 
-    yield* bumpRevision(randomUUID());
+  yield* bumpRevision(randomUUID());
 
-    const scans = yield* sql
-      .unsafe(TRANSACTION_SCANS_QUERY)
-      .pipe(Effect.flatMap(decodeScans));
+  const scans = yield* sql
+    .unsafe(TRANSACTION_SCANS_QUERY)
+    .pipe(Effect.flatMap(decodeScans));
 
-    return { locks, scans, steps };
-  });
+  return { locks, scans, steps };
+});
 
 const decodeRevision = decodeRows(Schema.Struct({ revision: Schema.String }));
 
@@ -465,12 +466,12 @@ const timedRootRequest = Effect.gen(function* rootRequest() {
  * @param commit - The running config commit.
  * @returns The queue facts.
  */
-const readerPastTimeout = (
-  coordinator: DedicatedConnection,
-  log: AttemptLog,
-  commit: Effect.Effect<void, unknown>
-) =>
-  Effect.gen(function* holdPastTimeout() {
+const readerPastTimeout = Effect.fn("readerPastTimeout")(
+  function* holdPastTimeout(
+    coordinator: DedicatedConnection,
+    log: AttemptLog,
+    commit: Effect.Effect<void, unknown>
+  ) {
     const database = yield* TestDatabase;
     const reader = yield* database.session("std-probe-long-reader");
     yield* reader.query("BEGIN");
@@ -533,7 +534,8 @@ const readerPastTimeout = (
     };
 
     return facts;
-  });
+  }
+);
 
 /**
  * Two readers, on the root and on the parent; each is released once the
@@ -544,48 +546,47 @@ const readerPastTimeout = (
  * @param commit - The running config commit.
  * @returns The observed waits and an STD request's latency.
  */
-const staggeredReaders = (
+const staggeredReaders = Effect.fn("staggeredReaders")(function* staggered(
   coordinator: DedicatedConnection,
   holdMs: number,
   commit: Effect.Effect<void, unknown>
-) =>
-  Effect.gen(function* staggered() {
-    const database = yield* TestDatabase;
-    const rootReader = yield* database.session("std-probe-root-reader");
-    const parentReader = yield* database.session("std-probe-parent-reader");
-    yield* rootReader.query("BEGIN");
-    yield* rootReader.query("SELECT count(*) FROM probe.asset");
-    yield* parentReader.query("BEGIN");
-    yield* parentReader.query("SELECT count(*) FROM probe.laptop");
+) {
+  const database = yield* TestDatabase;
+  const rootReader = yield* database.session("std-probe-root-reader");
+  const parentReader = yield* database.session("std-probe-parent-reader");
+  yield* rootReader.query("BEGIN");
+  yield* rootReader.query("SELECT count(*) FROM probe.asset");
+  yield* parentReader.query("BEGIN");
+  yield* parentReader.query("SELECT count(*) FROM probe.laptop");
 
-    const commitFiber = yield* Effect.forkChild(commit);
-    yield* waitFor(isBlockedBy(coordinator.processId, rootReader.processId));
-    const requestFiber = yield* Effect.forkChild(timedRootRequest);
+  const commitFiber = yield* Effect.forkChild(commit);
+  yield* waitFor(isBlockedBy(coordinator.processId, rootReader.processId));
+  const requestFiber = yield* Effect.forkChild(timedRootRequest);
 
-    const rootWait = yield* releaseAfterWait(
-      coordinator.processId,
-      rootReader.processId,
-      holdMs,
-      rootReader.query("COMMIT")
-    );
+  const rootWait = yield* releaseAfterWait(
+    coordinator.processId,
+    rootReader.processId,
+    holdMs,
+    rootReader.query("COMMIT")
+  );
 
-    const parentWait = yield* releaseAfterWait(
-      coordinator.processId,
-      parentReader.processId,
-      holdMs,
-      parentReader.query("COMMIT")
-    );
+  const parentWait = yield* releaseAfterWait(
+    coordinator.processId,
+    parentReader.processId,
+    holdMs,
+    parentReader.query("COMMIT")
+  );
 
-    yield* Fiber.join(commitFiber);
-    const rootRequest = yield* Fiber.join(requestFiber);
+  yield* Fiber.join(commitFiber);
+  const rootRequest = yield* Fiber.join(requestFiber);
 
-    const facts: StaggeredFacts = {
-      observedWaitsMs: [rootWait, parentWait],
-      requestMs: rootRequest.ms,
-    };
+  const facts: StaggeredFacts = {
+    observedWaitsMs: [rootWait, parentWait],
+    requestMs: rootRequest.ms,
+  };
 
-    return facts;
-  });
+  return facts;
+});
 
 /**
  * Runs probe 3 on the current database.

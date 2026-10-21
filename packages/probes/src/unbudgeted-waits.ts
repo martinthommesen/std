@@ -16,8 +16,15 @@
  *   `DROP COLUMN` waits on each index.
  * - `catalog`: two sessions hold `LOCK TABLE pg_class` and `pg_type` in SHARE
  *   mode, and the form is "Create root table", which waits on each catalog.
+ * - `table-then-index`: a plain reader holds `inv.child` until the explicit
+ *   `LOCK TABLE` has waited `holdMs` on it, spending that much of the budget;
+ *   an open `ALTER INDEX ... RENAME` holds one index of the purged column
+ *   until the attempt fails. The internal index wait then gets only what is
+ *   left of the budget (`lock_timeout` is recomputed before the statement),
+ *   so the attempt ends near the original 2 s deadline, not at
+ *   `holdMs` + 2 s.
  *
- * Release policies:
+ * Release policies (`table-then-index` fixes its own):
  *
  * - `after-hold`: each blocker rolls back once the commit has waited on it
  *   for `holdMs`, below the budget; no wait times out, so one attempt holds
@@ -42,8 +49,8 @@ import { now } from "./clock.ts";
 import { DDL_LOCK_INVENTORY, INVENTORY_FIXTURE } from "./lock-inventory.ts";
 import { isBlockedBy, waitFor } from "./observe.ts";
 
-/** Which internal locks the blockers hold. */
-export type UnbudgetedTarget = "index" | "catalog";
+/** Which locks the blockers hold. */
+export type UnbudgetedTarget = "index" | "catalog" | "table-then-index";
 
 /** When the blockers let go. */
 export type ReleasePolicy = "after-hold" | "after-timeout";
@@ -51,6 +58,7 @@ export type ReleasePolicy = "after-hold" | "after-timeout";
 /** Options of one run of probe 3d. */
 export interface UnbudgetedOptions {
   readonly target: UnbudgetedTarget;
+  /** Release policy of the blockers that do not fix their own. */
   readonly release: ReleasePolicy;
   /** How long the commit is let wait on each blocker (`after-hold`). */
   readonly holdMs: number;
@@ -63,33 +71,76 @@ export interface UnbudgetedResult {
   readonly target: UnbudgetedTarget;
   readonly release: ReleasePolicy;
   readonly form: string;
-  /** Internal lock acquisitions the blockers contend. */
-  readonly blockers: number;
-  /** How long the commit was observed waiting on each blocker. */
+  /** Internal (unbudgeted) lock acquisitions the blockers contend. */
+  readonly internalBlockers: number;
+  /**
+   * How long the commit was observed waiting on each blocker in its first
+   * wait: until the wait ended (granted or timed out) or the blocker let go.
+   */
   readonly observedWaitsMs: readonly number[];
   /** The locks the DDL was seen requesting while it waited, as `relation mode`. */
   readonly requestedLocks: readonly string[];
   readonly attempts: readonly AttemptRecord[];
 }
 
-/** The form and the blocker statements of each target. */
+/** One blocking session of a scenario. */
+interface BlockerSpec {
+  /** Run after `BEGIN`; the session then holds its locks until it rolls back. */
+  readonly statement: string;
+  /** Whether the DDL takes the contended lock internally (not budgeted). */
+  readonly internal: boolean;
+  /** Overrides the run's release policy. */
+  readonly release?: ReleasePolicy;
+}
+
+/** The form and the blockers of each target. */
 const SCENARIOS: Readonly<
   Record<
     UnbudgetedTarget,
-    { readonly form: string; readonly blockers: readonly string[] }
+    { readonly form: string; readonly blockers: readonly BlockerSpec[] }
   >
 > = {
   catalog: {
     blockers: [
-      "LOCK TABLE pg_catalog.pg_class IN SHARE MODE",
-      "LOCK TABLE pg_catalog.pg_type IN SHARE MODE",
+      {
+        internal: true,
+        statement: "LOCK TABLE pg_catalog.pg_class IN SHARE MODE",
+      },
+      {
+        internal: true,
+        statement: "LOCK TABLE pg_catalog.pg_type IN SHARE MODE",
+      },
     ],
     form: "Create root table",
   },
   index: {
     blockers: [
-      "ALTER INDEX inv.child_owner_ix RENAME TO child_owner_ix_held",
-      "ALTER INDEX inv.child_owner_serial_ix RENAME TO child_owner_serial_ix_held",
+      {
+        internal: true,
+        statement:
+          "ALTER INDEX inv.child_owner_ix RENAME TO child_owner_ix_held",
+      },
+      {
+        internal: true,
+        statement:
+          "ALTER INDEX inv.child_owner_serial_ix RENAME TO child_owner_serial_ix_held",
+      },
+    ],
+    form: "Purge reference field",
+  },
+  "table-then-index": {
+    blockers: [
+      {
+        internal: false,
+        release: "after-hold",
+        statement: "SELECT count(*) FROM inv.child",
+      },
+      {
+        internal: true,
+        release: "after-timeout",
+        statement:
+          "ALTER INDEX inv.child_owner_ix RENAME TO child_owner_ix_held",
+      },
     ],
     form: "Purge reference field",
   },
@@ -118,10 +169,32 @@ const requestedLocks = (pid: number) =>
 /** One blocker's state while the commit runs. */
 interface Blocker {
   readonly pid: number;
+  readonly release: ReleasePolicy;
   readonly rollback: Effect.Effect<unknown, unknown>;
   waitingSince: number | null;
-  observedMs: number | null;
+  /** When the first observed wait ended: granted, timed out, or released. */
+  waitEndedAt: number | null;
+  released: boolean;
 }
+
+/**
+ * Rolls a blocker back once, closing its observed wait.
+ * @param blocker - The blocker.
+ * @returns Completes once it has let go.
+ */
+const releaseBlocker = Effect.fnUntraced(function* release(blocker: Blocker) {
+  if (blocker.released) {
+    return;
+  }
+
+  blocker.released = true;
+
+  if (blocker.waitingSince !== null && blocker.waitEndedAt === null) {
+    blocker.waitEndedAt = yield* now;
+  }
+
+  yield* blocker.rollback;
+});
 
 /**
  * Runs one scenario of probe 3d on the current database.
@@ -151,14 +224,16 @@ export const runUnbudgetedWaitProbe = Effect.fn("runUnbudgetedWaitProbe")(
 
     const blockers: Blocker[] = [];
 
-    for (const [index, statement] of scenario.blockers.entries()) {
+    for (const [index, spec] of scenario.blockers.entries()) {
       const session = yield* database.session(`std-probe-blocker-${index}`);
       yield* session.query("BEGIN");
-      yield* session.query(statement);
+      yield* session.query(spec.statement);
       blockers.push({
-        observedMs: null,
         pid: session.processId,
+        release: spec.release ?? options.release,
+        released: false,
         rollback: session.query("ROLLBACK"),
+        waitEndedAt: null,
         waitingSince: null,
       });
     }
@@ -180,24 +255,13 @@ export const runUnbudgetedWaitProbe = Effect.fn("runUnbudgetedWaitProbe")(
       )
     );
 
-    const releaseOne = (blocker: Blocker) =>
-      Effect.gen(function* release() {
-        if (blocker.observedMs === null) {
-          blocker.observedMs =
-            blocker.waitingSince === null
-              ? 0
-              : (yield* now) - blocker.waitingSince;
-          yield* blocker.rollback;
-        }
-      });
-
     // One observation step: note new waits, release per policy; done once
     // the commit has finished.
     const step = Effect.gen(function* observeAndRelease() {
       const attemptFailed = log.records.some((attempt) => !attempt.ok);
 
       for (const blocker of blockers) {
-        if (blocker.observedMs !== null) {
+        if (blocker.released) {
           continue;
         }
 
@@ -212,16 +276,24 @@ export const runUnbudgetedWaitProbe = Effect.fn("runUnbudgetedWaitProbe")(
           }
         }
 
+        if (
+          !blocked &&
+          blocker.waitingSince !== null &&
+          blocker.waitEndedAt === null
+        ) {
+          blocker.waitEndedAt = time;
+        }
+
         const waitedMs =
           blocker.waitingSince === null ? 0 : time - blocker.waitingSince;
 
         const release =
-          options.release === "after-hold"
+          blocker.release === "after-hold"
             ? blocked && waitedMs >= options.holdMs
             : attemptFailed;
 
         if (release) {
-          yield* releaseOne(blocker);
+          yield* releaseBlocker(blocker);
         }
       }
 
@@ -232,14 +304,19 @@ export const runUnbudgetedWaitProbe = Effect.fn("runUnbudgetedWaitProbe")(
     yield* Fiber.join(commit);
 
     for (const blocker of blockers) {
-      yield* releaseOne(blocker);
+      yield* releaseBlocker(blocker);
     }
 
     const result: UnbudgetedResult = {
       attempts: log.records,
-      blockers: blockers.length,
       form: ddlForm.form,
-      observedWaitsMs: blockers.map((blocker) => blocker.observedMs ?? 0),
+      internalBlockers: scenario.blockers.filter((spec) => spec.internal)
+        .length,
+      observedWaitsMs: blockers.map((blocker) =>
+        blocker.waitingSince === null
+          ? 0
+          : (blocker.waitEndedAt ?? blocker.waitingSince) - blocker.waitingSince
+      ),
       release: options.release,
       requestedLocks: [...requested].toSorted(),
       target: options.target,

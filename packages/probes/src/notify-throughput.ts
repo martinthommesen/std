@@ -129,54 +129,56 @@ const setupSaves = Effect.fn("setupSaves")(function* setup(records: number) {
  * @param notifyInTransaction - Send `NOTIFY` inside the transaction.
  * @returns The sample.
  */
-const save = (ids: readonly string[], notifyInTransaction: boolean) =>
-  Effect.gen(function* oneSave() {
-    const { request } = yield* Transactions;
-    const index = yield* Random.nextIntBetween(0, ids.length - 1);
-    const id = ids[index] ?? "";
-    const startedAt = yield* now;
+const save = Effect.fnUntraced(function* oneSave(
+  ids: readonly string[],
+  notifyInTransaction: boolean
+) {
+  const { request } = yield* Transactions;
+  const index = yield* Random.nextIntBetween(0, ids.length - 1);
+  const id = ids[index] ?? "";
+  const startedAt = yield* now;
 
-    const ok = yield* request(
-      Effect.gen(function* saveRecord() {
-        const { revision } = yield* RequestRevision;
-        const sql = yield* SqlClient.SqlClient;
+  const ok = yield* request(
+    Effect.gen(function* saveRecord() {
+      const { revision } = yield* RequestRevision;
+      const sql = yield* SqlClient.SqlClient;
 
-        const [row] = yield* sql`
+      const [row] = yield* sql`
           SELECT version::text AS version FROM probe_record
           WHERE id = ${id}::uuid FOR NO KEY UPDATE`.pipe(
-          Effect.flatMap(decodeVersion)
-        );
+        Effect.flatMap(decodeVersion)
+      );
 
-        const current = row?.version ?? "0";
-        const next = String(BigInt(current) + 1n);
-        const name = `record ${id} v${next}`;
+      const current = row?.version ?? "0";
+      const next = String(BigInt(current) + 1n);
+      const name = `record ${id} v${next}`;
 
-        yield* sql`
+      yield* sql`
           UPDATE probe_record
           SET version = ${next}::int8, name = ${name}, updated_at = now(), updated_by = ${ACTOR}::uuid
           WHERE id = ${id}::uuid AND version = ${current}::int8`;
-        yield* sql`
+      yield* sql`
           INSERT INTO probe_change (record_id, record_version, changed_at, changed_by, revision, payload)
           VALUES (${id}::uuid, ${next}::int8, now(), ${ACTOR}::uuid, ${String(revision)}::int8,
                   jsonb_build_object('name', ${name}::text))`;
 
-        yield* notifyInTransaction
-          ? Effect.asVoid(sql`SELECT pg_notify(${WORKER_CHANNEL}, ${id})`)
-          : wakeWorkerAfterCommit;
-      })
-    ).pipe(
-      Effect.as(true),
-      Effect.catchTag("DatabaseError", () => Effect.succeed(false))
-    );
+      yield* notifyInTransaction
+        ? Effect.asVoid(sql`SELECT pg_notify(${WORKER_CHANNEL}, ${id})`)
+        : wakeWorkerAfterCommit;
+    })
+  ).pipe(
+    Effect.as(true),
+    Effect.catchTag("DatabaseError", () => Effect.succeed(false))
+  );
 
-    const sample: SaveSample = {
-      ok,
-      startedAt,
-      totalMs: (yield* now) - startedAt,
-    };
+  const sample: SaveSample = {
+    ok,
+    startedAt,
+    totalMs: (yield* now) - startedAt,
+  };
 
-    return sample;
-  });
+  return sample;
+});
 
 /**
  * One measured run of one variant.
@@ -186,51 +188,50 @@ const save = (ids: readonly string[], notifyInTransaction: boolean) =>
  * @param received - Counts notifications.
  * @returns The run's measurements.
  */
-const measureRun = (
+const measureRun = Effect.fn("measureRun")(function* oneRun(
   options: NotifyProbeOptions,
   ids: readonly string[],
   variant: ThroughputRun["variant"],
   received: { count: number }
-) =>
-  Effect.gen(function* oneRun() {
-    const stop = stopSignal();
-    const notificationsBefore = received.count;
+) {
+  const stop = stopSignal();
+  const notificationsBefore = received.count;
 
-    const load = yield* Effect.forkChild(
-      runClients(options.clients, stop, save(ids, variant === IN_TRANSACTION))
-    );
+  const load = yield* Effect.forkChild(
+    runClients(options.clients, stop, save(ids, variant === IN_TRANSACTION))
+  );
 
-    yield* Effect.sleep(Duration.millis(options.warmupMs));
+  yield* Effect.sleep(Duration.millis(options.warmupMs));
 
-    const from = yield* now;
-    yield* Effect.sleep(Duration.millis(options.durationMs));
-    const to = yield* now;
-    stop.stopped = true;
+  const from = yield* now;
+  yield* Effect.sleep(Duration.millis(options.durationMs));
+  const to = yield* now;
+  stop.stopped = true;
 
-    const samples = (yield* Fiber.join(load)).filter(
-      (sample) => sample.startedAt >= from && sample.startedAt <= to
-    );
+  const samples = (yield* Fiber.join(load)).filter(
+    (sample) => sample.startedAt >= from && sample.startedAt <= to
+  );
 
-    const durationMs = to - from;
+  const durationMs = to - from;
 
-    const run: ThroughputRun = {
-      durationMs,
-      failed: samples.filter((sample) => !sample.ok).length,
-      latency: summarize(samples.map((sample) => sample.totalMs)),
-      notifications: received.count - notificationsBefore,
-      saves: samples.length,
-      savesPerSecond:
-        samples.length / Duration.toSeconds(Duration.millis(durationMs)),
-      variant,
-    };
+  const run: ThroughputRun = {
+    durationMs,
+    failed: samples.filter((sample) => !sample.ok).length,
+    latency: summarize(samples.map((sample) => sample.totalMs)),
+    notifications: received.count - notificationsBefore,
+    saves: samples.length,
+    savesPerSecond:
+      samples.length / Duration.toSeconds(Duration.millis(durationMs)),
+    variant,
+  };
 
-    const measured: MeasuredRun = {
-      latencies: samples.map((sample) => sample.totalMs),
-      run,
-    };
+  const measured: MeasuredRun = {
+    latencies: samples.map((sample) => sample.totalMs),
+    run,
+  };
 
-    return measured;
-  });
+  return measured;
+});
 
 const totalsOf = (
   runs: readonly MeasuredRun[],

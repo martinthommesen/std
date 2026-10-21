@@ -142,13 +142,13 @@ export const configKeyWaitersBlockedBy = (blocker: number) =>
  * @param release - Ends the blocker's transaction.
  * @returns How long the wait was observed before the release.
  */
-export const releaseAfterWait = <E, R>(
-  waiter: number,
-  blocker: number,
-  holdMs: number,
-  release: Effect.Effect<unknown, E, R>
-) =>
-  Effect.gen(function* holdThenRelease() {
+export const releaseAfterWait = Effect.fn("releaseAfterWait")(
+  function* holdThenRelease<E, R>(
+    waiter: number,
+    blocker: number,
+    holdMs: number,
+    release: Effect.Effect<unknown, E, R>
+  ) {
     yield* waitFor(isBlockedBy(waiter, blocker));
     const waitingSince = yield* now;
     yield* pollFor(
@@ -159,4 +159,5 @@ export const releaseAfterWait = <E, R>(
     yield* release;
 
     return observedMs;
-  });
+  }
+);

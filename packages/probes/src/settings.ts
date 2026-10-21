@@ -112,11 +112,20 @@ const LOCK_BUDGET_RUNS: readonly LockBudgetOptions[] = [
   { holdMs: STAGGERED_HOLD_MS, mechanism: "lock-budget" },
 ];
 
+/** Probe 3d: both release policies for the index and catalog targets, then the remainder case. */
 const UNBUDGETED_RUNS: readonly UnbudgetedOptions[] = [
-  { holdMs: STAGGERED_HOLD_MS, release: "after-hold", target: "index" },
-  { holdMs: STAGGERED_HOLD_MS, release: "after-timeout", target: "index" },
-  { holdMs: STAGGERED_HOLD_MS, release: "after-hold", target: "catalog" },
-  { holdMs: STAGGERED_HOLD_MS, release: "after-timeout", target: "catalog" },
+  ...(["index", "catalog"] as const).flatMap((target) =>
+    (["after-hold", "after-timeout"] as const).map((release) => ({
+      holdMs: STAGGERED_HOLD_MS,
+      release,
+      target,
+    }))
+  ),
+  {
+    holdMs: STAGGERED_HOLD_MS,
+    release: "after-timeout",
+    target: "table-then-index",
+  },
 ];
 
 const FULL: ProbeSettings = {

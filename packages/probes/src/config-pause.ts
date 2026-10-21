@@ -222,36 +222,37 @@ export const setupConfigPause = Effect.fn("setupConfigPause")(function* setup(
  * @param items - Rows in `probe_item`.
  * @returns The sample.
  */
-const shortRequest = (items: number) =>
-  Effect.gen(function* oneShortRequest() {
-    const { request } = yield* Transactions;
-    const id = yield* Random.nextIntBetween(1, items);
-    const startedAt = yield* now;
-    let begunAt = startedAt;
+const shortRequest = Effect.fnUntraced(function* oneShortRequest(
+  items: number
+) {
+  const { request } = yield* Transactions;
+  const id = yield* Random.nextIntBetween(1, items);
+  const startedAt = yield* now;
+  let begunAt = startedAt;
 
-    const ok = yield* request(
-      Effect.gen(function* readOne() {
-        begunAt = yield* now;
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`SELECT name, version FROM probe_item WHERE id = ${String(id)}::int8`;
-      })
-    ).pipe(
-      Effect.as(true),
-      Effect.catchTag("DatabaseError", () => Effect.succeed(false))
-    );
+  const ok = yield* request(
+    Effect.gen(function* readOne() {
+      begunAt = yield* now;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`SELECT name, version FROM probe_item WHERE id = ${String(id)}::int8`;
+    })
+  ).pipe(
+    Effect.as(true),
+    Effect.catchTag("DatabaseError", () => Effect.succeed(false))
+  );
 
-    const endedAt = yield* now;
+  const endedAt = yield* now;
 
-    const sample: RequestSample = {
-      endedAt,
-      ok,
-      startMs: begunAt - startedAt,
-      startedAt,
-      totalMs: endedAt - startedAt,
-    };
+  const sample: RequestSample = {
+    endedAt,
+    ok,
+    startMs: begunAt - startedAt,
+    startedAt,
+    totalMs: endedAt - startedAt,
+  };
 
-    return sample;
-  });
+  return sample;
+});
 
 /**
  * Groups slow requests that overlap in time.
@@ -333,29 +334,28 @@ export const windowStats = (
  * @param scenario - The scenario.
  * @returns The scenario's result and the window statistics.
  */
-const underLoad = <A, E, R>(
+const underLoad = Effect.fn("underLoad")(function* withLoad<A, E, R>(
   options: ConfigPauseOptions,
   scenario: Effect.Effect<A, E, R>
-) =>
-  Effect.gen(function* withLoad() {
-    const stop = stopSignal();
+) {
+  const stop = stopSignal();
 
-    const load = yield* Effect.forkChild(
-      runClients(options.clients, stop, shortRequest(options.items))
-    );
+  const load = yield* Effect.forkChild(
+    runClients(options.clients, stop, shortRequest(options.items))
+  );
 
-    yield* Effect.sleep(WARMUP);
+  yield* Effect.sleep(WARMUP);
 
-    const from = yield* now;
-    const result = yield* scenario;
-    const to = yield* now;
-    yield* Effect.sleep(COOLDOWN);
-    stop.stopped = true;
+  const from = yield* now;
+  const result = yield* scenario;
+  const to = yield* now;
+  yield* Effect.sleep(COOLDOWN);
+  stop.stopped = true;
 
-    const samples = yield* Fiber.join(load);
+  const samples = yield* Fiber.join(load);
 
-    return { result, window: windowStats(samples, from, to) };
-  });
+  return { result, window: windowStats(samples, from, to) };
+});
 
 /** Counts attempts and records when the last one got `CONFIG_KEY`. */
 interface AttemptCounter {
@@ -368,21 +368,22 @@ interface AttemptCounter {
  * @param counter - Counts attempts that got `CONFIG_KEY`.
  * @returns The work, ending with the revision bump.
  */
-const smallChangeSet = (counter: AttemptCounter) =>
-  Effect.gen(function* smallDdlChangeSet() {
-    counter.lockedAt = yield* now;
-    counter.attempts += 1;
+const smallChangeSet = Effect.fn("smallChangeSet")(function* smallDdlChangeSet(
+  counter: AttemptCounter
+) {
+  counter.lockedAt = yield* now;
+  counter.attempts += 1;
 
-    const sql = yield* SqlClient.SqlClient;
-    const changeSetId = randomUUID();
-    yield* lockWaiting(
-      sql.unsafe(
-        `ALTER TABLE probe_dummy ALTER COLUMN label SET DEFAULT 'change ${changeSetId}'`
-      )
-    );
-    yield* sql`INSERT INTO probe_journal (change_set_id, note) VALUES (${changeSetId}::uuid, ${"probe change set"})`;
-    yield* bumpRevision(changeSetId);
-  });
+  const sql = yield* SqlClient.SqlClient;
+  const changeSetId = randomUUID();
+  yield* lockWaiting(
+    sql.unsafe(
+      `ALTER TABLE probe_dummy ALTER COLUMN label SET DEFAULT 'change ${changeSetId}'`
+    )
+  );
+  yield* sql`INSERT INTO probe_journal (change_set_id, note) VALUES (${changeSetId}::uuid, ${"probe change set"})`;
+  yield* bumpRevision(changeSetId);
+});
 
 /**
  * Runs one small DDL change set on the coordinator's connection.
@@ -390,52 +391,51 @@ const smallChangeSet = (counter: AttemptCounter) =>
  * @param retryDelays - Retry delays, or the defaults.
  * @returns How it ended.
  */
-const oneCommit = (
+const oneCommit = Effect.fn("oneCommit")(function* timedCommit(
   coordinator: DedicatedConnection,
   retryDelays: ConfigCommitOptions["retryDelays"]
-) =>
-  Effect.gen(function* timedCommit() {
-    const counter: AttemptCounter = { attempts: 0, lockedAt: 0 };
-    const started = yield* now;
+) {
+  const counter: AttemptCounter = { attempts: 0, lockedAt: 0 };
+  const started = yield* now;
 
-    const exit = yield* Effect.exit(
-      coordinator.transactions.configCommit(
-        smallChangeSet(counter),
-        retryDelays === undefined ? {} : { retryDelays }
-      )
-    );
+  const exit = yield* Effect.exit(
+    coordinator.transactions.configCommit(
+      smallChangeSet(counter),
+      retryDelays === undefined ? {} : { retryDelays }
+    )
+  );
 
-    const elapsedMs = (yield* now) - started;
+  const elapsedMs = (yield* now) - started;
 
-    if (Exit.isSuccess(exit)) {
-      const outcome: CommitOutcome = {
-        attempts: null,
-        attemptsWithLock: counter.attempts,
-        elapsedMs,
-        holders: [],
-        outcome: "committed",
-      };
-
-      return outcome;
-    }
-
-    const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
-    const timedOut = failure?._tag === "SchemaLockTimeout";
-
+  if (Exit.isSuccess(exit)) {
     const outcome: CommitOutcome = {
-      attempts: timedOut ? failure.attempts : null,
+      attempts: null,
       attemptsWithLock: counter.attempts,
       elapsedMs,
-      holders: timedOut
-        ? failure.holders.map(
-            (holder) => `${holder.pid} (${holder.applicationName})`
-          )
-        : [],
-      outcome: timedOut ? "SchemaLockTimeout" : "failed",
+      holders: [],
+      outcome: "committed",
     };
 
     return outcome;
-  });
+  }
+
+  const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+  const timedOut = failure?._tag === "SchemaLockTimeout";
+
+  const outcome: CommitOutcome = {
+    attempts: timedOut ? failure.attempts : null,
+    attemptsWithLock: counter.attempts,
+    elapsedMs,
+    holders: timedOut
+      ? failure.holders.map(
+          (holder) => `${holder.pid} (${holder.applicationName})`
+        )
+      : [],
+    outcome: timedOut ? "SchemaLockTimeout" : "failed",
+  };
+
+  return outcome;
+});
 
 /**
  * One config commit, observing whether it waits for `blocker`.
@@ -444,12 +444,12 @@ const oneCommit = (
  * @param retryDelays - Retry delays, or the defaults.
  * @returns How the commit ended and whether the wait was observed.
  */
-const commitObservingBlocker = (
-  coordinator: DedicatedConnection,
-  blocker: number,
-  retryDelays: ConfigCommitOptions["retryDelays"]
-) =>
-  Effect.gen(function* observedCommit() {
+const commitObservingBlocker = Effect.fn("commitObservingBlocker")(
+  function* observedCommit(
+    coordinator: DedicatedConnection,
+    blocker: number,
+    retryDelays: ConfigCommitOptions["retryDelays"]
+  ) {
     const fiber = yield* Effect.forkChild(oneCommit(coordinator, retryDelays));
     let blocked = false;
     yield* waitFor(
@@ -464,7 +464,8 @@ const commitObservingBlocker = (
     const commit = yield* Fiber.join(fiber);
 
     return { blocked, commit };
-  });
+  }
+);
 
 /**
  * The stream scenario: back-to-back config commits under load.
@@ -513,23 +514,25 @@ const measureStream = (
  * @param pid - Receives the backend PID.
  * @returns The request.
  */
-const longRequest = (ms: number, pid: Deferred.Deferred<number>) =>
-  Effect.gen(function* holdSharedLong() {
-    const { request } = yield* Transactions;
+const longRequest = Effect.fn("longRequest")(function* holdSharedLong(
+  ms: number,
+  pid: Deferred.Deferred<number>
+) {
+  const { request } = yield* Transactions;
 
-    return yield* request(
-      Effect.gen(function* sleepInPostgres() {
-        const sql = yield* SqlClient.SqlClient;
+  return yield* request(
+    Effect.gen(function* sleepInPostgres() {
+      const sql = yield* SqlClient.SqlClient;
 
-        const [row] = yield* sql`SELECT pg_backend_pid() AS pid`.pipe(
-          Effect.flatMap(decodePid)
-        );
+      const [row] = yield* sql`SELECT pg_backend_pid() AS pid`.pipe(
+        Effect.flatMap(decodePid)
+      );
 
-        yield* Deferred.succeed(pid, row?.pid ?? 0);
-        yield* sql`SELECT pg_sleep(${String(Duration.toSeconds(Duration.millis(ms)))}::float8)`;
-      })
-    );
-  });
+      yield* Deferred.succeed(pid, row?.pid ?? 0);
+      yield* sql`SELECT pg_sleep(${String(Duration.toSeconds(Duration.millis(ms)))}::float8)`;
+    })
+  );
+});
 
 /**
  * A write batch: one request transaction inserting rows for `ms`.
@@ -537,31 +540,33 @@ const longRequest = (ms: number, pid: Deferred.Deferred<number>) =>
  * @param pid - Receives the batch's backend PID once it holds `CONFIG_KEY`.
  * @returns Rows written.
  */
-const writeBatch = (ms: number, pid: Deferred.Deferred<number>) =>
-  Effect.gen(function* batchWrites() {
-    const { request } = yield* Transactions;
+const writeBatch = Effect.fn("writeBatch")(function* batchWrites(
+  ms: number,
+  pid: Deferred.Deferred<number>
+) {
+  const { request } = yield* Transactions;
 
-    return yield* request(
-      Effect.gen(function* insertForAWhile() {
-        const sql = yield* SqlClient.SqlClient;
+  return yield* request(
+    Effect.gen(function* insertForAWhile() {
+      const sql = yield* SqlClient.SqlClient;
 
-        const [row] = yield* sql`SELECT pg_backend_pid() AS pid`.pipe(
-          Effect.flatMap(decodePid)
-        );
+      const [row] = yield* sql`SELECT pg_backend_pid() AS pid`.pipe(
+        Effect.flatMap(decodePid)
+      );
 
-        yield* Deferred.succeed(pid, row?.pid ?? 0);
-        const end = (yield* now) + ms;
-        let rows = 0;
+      yield* Deferred.succeed(pid, row?.pid ?? 0);
+      const end = (yield* now) + ms;
+      let rows = 0;
 
-        while ((yield* now) < end) {
-          yield* sql`INSERT INTO probe_batch (note) SELECT 'batch row' FROM generate_series(1, ${String(BATCH_STATEMENT_ROWS)}::int4)`;
-          rows += BATCH_STATEMENT_ROWS;
-        }
+      while ((yield* now) < end) {
+        yield* sql`INSERT INTO probe_batch (note) SELECT 'batch row' FROM generate_series(1, ${String(BATCH_STATEMENT_ROWS)}::int4)`;
+        rows += BATCH_STATEMENT_ROWS;
+      }
 
-        return rows;
-      })
-    );
-  });
+      return rows;
+    })
+  );
+});
 
 /**
  * One config commit while a long request and a write batch hold
@@ -570,11 +575,11 @@ const writeBatch = (ms: number, pid: Deferred.Deferred<number>) =>
  * @param coordinator - The coordinator's dedicated connection.
  * @returns The scenario's result.
  */
-export const measureLongRequest = (
-  options: ConfigPauseOptions,
-  coordinator: DedicatedConnection
-) =>
-  Effect.gen(function* longRequestScenario() {
+export const measureLongRequest = Effect.fn("measureLongRequest")(
+  function* longRequestScenario(
+    options: ConfigPauseOptions,
+    coordinator: DedicatedConnection
+  ) {
     const sql = yield* SqlClient.SqlClient;
     const pid = yield* Deferred.make<number>();
     const batchPid = yield* Deferred.make<number>();
@@ -632,7 +637,8 @@ export const measureLongRequest = (
     };
 
     return measured;
-  });
+  }
+);
 
 /**
  * One config commit while only a write batch holds `CONFIG_KEY` shared.
@@ -640,11 +646,11 @@ export const measureLongRequest = (
  * @param coordinator - The coordinator's dedicated connection.
  * @returns The scenario's result.
  */
-const measureBatchOnly = (
-  options: ConfigPauseOptions,
-  coordinator: DedicatedConnection
-) =>
-  Effect.gen(function* batchOnlyScenario() {
+const measureBatchOnly = Effect.fn("measureBatchOnly")(
+  function* batchOnlyScenario(
+    options: ConfigPauseOptions,
+    coordinator: DedicatedConnection
+  ) {
     const batchPid = yield* Deferred.make<number>();
 
     const batch = yield* Effect.forkChild(
@@ -663,7 +669,8 @@ const measureBatchOnly = (
     const measured: SingleCommitResult = { commit: result, window };
 
     return measured;
-  });
+  }
+);
 
 /**
  * One config commit whose DDL waits for a table lock held by a plain
@@ -672,11 +679,11 @@ const measureBatchOnly = (
  * @param coordinator - The coordinator's dedicated connection.
  * @returns The scenario's result.
  */
-const measureTableLock = (
-  options: ConfigPauseOptions,
-  coordinator: DedicatedConnection
-) =>
-  Effect.gen(function* tableLockScenario() {
+const measureTableLock = Effect.fn("measureTableLock")(
+  function* tableLockScenario(
+    options: ConfigPauseOptions,
+    coordinator: DedicatedConnection
+  ) {
     const database = yield* TestDatabase;
     const reader = yield* database.session("std-probe-table-reader");
     yield* reader.query("BEGIN");
@@ -708,7 +715,8 @@ const measureTableLock = (
     const measured: SingleCommitResult = { commit: result, window };
 
     return measured;
-  });
+  }
+);
 
 /**
  * The coordinator's dedicated connection for probe 1.

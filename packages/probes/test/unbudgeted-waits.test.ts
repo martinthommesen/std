@@ -30,14 +30,17 @@ const FAST_RETRIES = [
   Duration.millis(50),
 ];
 
-const TARGETS: readonly UnbudgetedTarget[] = ["index", "catalog"];
+/** Targets whose blockers both hold internal locks. */
+type InternalTarget = Exclude<UnbudgetedTarget, "table-then-index">;
+
+const TARGETS: readonly InternalTarget[] = ["index", "catalog"];
 
 /**
  * The locks the DDL requested while it waited: ACCESS EXCLUSIVE on the
  * indexes it drops with the column, ROW EXCLUSIVE on the catalogs it writes
  * (which conflicts only with SHARE and stronger: direct catalog maintenance).
  */
-const REQUESTED: Readonly<Record<UnbudgetedTarget, readonly string[]>> = {
+const REQUESTED: Readonly<Record<InternalTarget, readonly string[]>> = {
   catalog: ["pg_class RowExclusiveLock", "pg_type RowExclusiveLock"],
   index: [
     "inv.child_owner_ix AccessExclusiveLock",
@@ -51,7 +54,7 @@ const REQUESTED: Readonly<Record<UnbudgetedTarget, readonly string[]>> = {
  * @returns Budget × (1 + internal waits) plus slack, in milliseconds.
  */
 const worstCase = (result: UnbudgetedResult): number =>
-  DDL_LOCK_BUDGET_MS * (1 + result.blockers) + SLACK_MS;
+  DDL_LOCK_BUDGET_MS * (1 + result.internalBlockers) + SLACK_MS;
 
 describe("probe-unbudgeted-waits", () => {
   it("contends two internal acquisitions per scenario", () => {
@@ -117,5 +120,43 @@ describe("probe-unbudgeted-waits", () => {
         { timeout: 60_000 }
       );
     }
+
+    dbTest.effect(
+      "after an explicit lock spent part of the budget, an internal wait gets only the remainder",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* remainderOnly() {
+            const result = yield* runUnbudgetedWaitProbe({
+              holdMs: HOLD_MS,
+              release: "after-timeout",
+              retryDelays: FAST_RETRIES,
+              target: "table-then-index",
+            });
+
+            const [tableWait = 0, indexWait = 0] = result.observedWaitsMs;
+            const [first] = result.attempts;
+            const remainder = DDL_LOCK_BUDGET_MS - HOLD_MS;
+
+            assert.deepStrictEqual(result.requestedLocks, [
+              "inv.child AccessExclusiveLock",
+              "inv.child_owner_ix AccessExclusiveLock",
+            ]);
+            assert.isAtLeast(tableWait, HOLD_MS, "the explicit lock waited");
+            // The internal wait timed out after about the remainder (0.8 s),
+            // not after a fresh 2 s.
+            assert.isAbove(indexWait, 0);
+            assert.isAtMost(indexWait, remainder + SLACK_MS);
+            assert.deepStrictEqual(
+              result.attempts.map((attempt) => attempt.ok),
+              [false, true]
+            );
+            // The attempt ended near the original 2 s deadline, not at
+            // HOLD_MS + 2 s.
+            assert.isAtMost(first?.heldMs ?? 0, DDL_LOCK_BUDGET_MS + SLACK_MS);
+            assert.isBelow(first?.heldMs ?? 0, HOLD_MS + DDL_LOCK_BUDGET_MS);
+          })
+        ),
+      { timeout: 60_000 }
+    );
   });
 });
