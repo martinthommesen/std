@@ -22,6 +22,7 @@ import {
   insertRecords,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 
@@ -29,9 +30,9 @@ const ASSET = '"acme"."asset"';
 const LAPTOP = '"acme"."laptop"';
 const MONITOR = '"acme"."monitor"';
 
-const FLEET = '"acme"."fleet"';
+const FLEET = '"site"."fleet"';
 
-const CAR = '"acme"."fleet_car"';
+const CAR = '"site"."fleet_car"';
 
 /**
  * The SQLSTATE a statement fails with.
@@ -145,10 +146,12 @@ describe("inheritance-invariants", () => {
 
             // A hierarchy of its own, populated by a session that flushes
             // its statistics, so the scan counters below are exact.
-            const fleet = createClass("fleet", { namespaceId: ACME.namespace });
+            const fleet = createClass("fleet", {
+              namespaceId: SITE_NAMESPACE_ID,
+            });
 
             const car = createClass("fleet_car", {
-              namespaceId: ACME.namespace,
+              namespaceId: SITE_NAMESPACE_ID,
               parentId: fleet.id,
             });
 
@@ -173,7 +176,7 @@ describe("inheritance-invariants", () => {
             };
 
             const sports = createClass("fleet_sports", {
-              namespaceId: ACME.namespace,
+              namespaceId: SITE_NAMESPACE_ID,
               parentId: car.id,
             });
 
@@ -182,15 +185,15 @@ describe("inheritance-invariants", () => {
             assert.strictEqual(result.state, "completed");
             assert.match(
               result.statements[0] ?? "",
-              /^ALTER TABLE "acme"."fleet" DROP CONSTRAINT std_sc_\w+, ADD CONSTRAINT std_sc_\w+ CHECK .* NOT VALID$/u
+              /^ALTER TABLE "site"."fleet" DROP CONSTRAINT std_sc_\w+, ADD CONSTRAINT std_sc_\w+ CHECK .* NOT VALID$/u
             );
             assert.match(
               result.statements[1] ?? "",
-              /^ALTER TABLE "acme"."fleet_car" DROP CONSTRAINT/u
+              /^ALTER TABLE "site"."fleet_car" DROP CONSTRAINT/u
             );
             assert.match(
               result.statements[2] ?? "",
-              /^CREATE TABLE "acme"."fleet_sports"/u
+              /^CREATE TABLE "site"."fleet_sports"/u
             );
             assert.strictEqual(yield* validated(FLEET, fleet.id), "false");
             assert.strictEqual(yield* validated(CAR, car.id), "false");
@@ -210,7 +213,7 @@ describe("inheritance-invariants", () => {
             assert.strictEqual(yield* seqScans(FLEET), before.fleet);
             assert.strictEqual(yield* seqScans(CAR), before.car);
 
-            const table = '"acme"."fleet_sports"';
+            const table = '"site"."fleet_sports"';
 
             const [record] = yield* insertRecords(
               [FLEET, CAR, table],

@@ -9,7 +9,7 @@ import { assert, describe, expect, it, layer } from "@effect/vitest";
 import { applyOperations } from "@std/definitions/apply";
 import type { AppliedChangeSet } from "@std/definitions/apply";
 import type { Owner } from "@std/definitions/definition";
-import type { DefinitionInvalid } from "@std/definitions/problems";
+import { setOrigin, SYSTEM_REQUESTER } from "@std/definitions/requester";
 import { planSet } from "@std/definitions/set-plan";
 import { resolveSet } from "@std/definitions/set-resolve";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -39,7 +39,7 @@ import {
 
 const EMPTY: Preflight = { hasRows: () => false };
 
-const orThrow = <A>(result: Result.Result<A, DefinitionInvalid>): A => {
+const orThrow = <A, E extends Error>(result: Result.Result<A, E>): A => {
   if (Result.isFailure(result)) {
     throw result.failure;
   }
@@ -58,10 +58,15 @@ const loadInMemory = (
       const operations = orThrow(planSet(resolved, snapshot));
 
       return orThrow(
-        applyOperations(snapshot, operations, {
-          changeSetId: snapshot.changeSetId,
-          revision: snapshot.revision + 1,
-        })
+        applyOperations(
+          snapshot,
+          operations,
+          {
+            changeSetId: snapshot.changeSetId,
+            revision: snapshot.revision + 1,
+          },
+          { origin: setOrigin(resolved.owner), requester: SYSTEM_REQUESTER }
+        )
       );
     })
   );

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { isFailure, isSuccess } from "effect/Result";
 
 import { applyOperations } from "../src/apply.ts";
+import type { ApplyError } from "../src/apply.ts";
 import type { Condition } from "../src/condition.ts";
 import type {
   AccessRuleDefinition,
@@ -19,6 +20,7 @@ import {
   namespaceNameProblem,
   tableNameProblem,
 } from "../src/names.ts";
+import type { DefinitionProblem } from "../src/problems.ts";
 import { validateSnapshot } from "../src/validate.ts";
 import {
   field,
@@ -29,6 +31,14 @@ import {
   snapshotOf,
   table,
 } from "./fixtures.ts";
+
+/**
+ * The problems of a `DefinitionInvalid`, none for a refusal.
+ * @param failure - An apply failure.
+ * @returns Its problems.
+ */
+const problemsOf = (failure: ApplyError): readonly DefinitionProblem[] =>
+  failure._tag === "DefinitionInvalid" ? failure.problems : [];
 
 const hierarchy = () => {
   const ns = namespace("acme");
@@ -281,7 +291,7 @@ describe("definitions-snapshot", () => {
     assert.isTrue(isFailure(stale));
 
     if (isFailure(stale)) {
-      assert.strictEqual(stale.failure.problems[0]?.code, "versionConflict");
+      assert.strictEqual(problemsOf(stale.failure)[0]?.code, "versionConflict");
     }
 
     const typeChange = applyOperations(
@@ -394,7 +404,7 @@ describe("definitions-snapshot", () => {
 
     if (isFailure(replaced)) {
       assert.strictEqual(
-        replaced.failure.problems[0]?.code,
+        problemsOf(replaced.failure)[0]?.code,
         "unsupportedChange"
       );
     }

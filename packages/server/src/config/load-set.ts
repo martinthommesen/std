@@ -12,6 +12,7 @@
  */
 import type { Owner } from "@std/definitions/definition";
 import type { DefinitionInvalid } from "@std/definitions/problems";
+import { setOrigin } from "@std/definitions/requester";
 import type { NamedSetFile, SetHeader } from "@std/definitions/set-file";
 import { planSet } from "@std/definitions/set-plan";
 import { resolveSet } from "@std/definitions/set-resolve";
@@ -73,6 +74,7 @@ export const loadSet = Effect.fn("Config.loadSet")(function* loadSet(
   const result = yield* applyChangeSet(
     {
       operations,
+      origin: setOrigin(resolved.owner),
       source: {
         kind: "set",
         name: header.name,

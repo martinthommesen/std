@@ -21,12 +21,13 @@ import {
   insertRecords,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 
 const ASSET = '"acme"."asset"';
 
-const BULK = '"acme"."bulk"';
+const BULK = '"site"."bulk"';
 
 const CLIENTS = 8;
 
@@ -147,7 +148,9 @@ describe("change-sets", () => {
 
               // A table of its own, filled by a session that flushes its
               // statistics, so the scan counter below is exact.
-              const bulk = createClass("bulk", { namespaceId: ACME.namespace });
+              const bulk = createClass("bulk", {
+                namespaceId: SITE_NAMESPACE_ID,
+              });
 
               yield* change([
                 bulk.op,

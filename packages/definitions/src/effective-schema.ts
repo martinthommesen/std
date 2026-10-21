@@ -6,13 +6,25 @@
  * Overrides only tighten, so stacking is order-independent for required,
  * read-only and bounds; label, help text and default take the lowest
  * override that sets them.
+ *
+ * It also states the lifecycle (Contracts 1.6) the read compiler and the
+ * save pipeline enforce: a retired field is hidden from default selection
+ * but may be selected explicitly (under access rules) and refuses writes
+ * (`DefinitionRetired`); a retired table accepts reads only, so none of its
+ * fields is writable; purged fields are not part of the schema at all.
  */
 import { compareDecimals, parseDecimal } from "@std/values/decimal";
 import type { FieldType, FieldTypeOf } from "@std/values/field-type";
 import { compareBigIntegers, parseBigInteger } from "@std/values/integer";
 import type { JsonValue } from "@std/values/json-value";
 
-import type { FieldDefinition, OverrideDefinition } from "./definition.ts";
+import type {
+  ClassDefinition,
+  Enforcement,
+  FieldDefinition,
+  IndexDefinition,
+  OverrideDefinition,
+} from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
@@ -30,6 +42,16 @@ export interface EffectiveField {
   readonly type: FieldType;
   /** The overrides that apply, top down. */
   readonly overrideIds: readonly DefinitionId[];
+  /** `active` or `retired`; purged fields are not in the schema. */
+  readonly state: "active" | "retired";
+  /** Whether reads without an explicit selection include it: active fields only. */
+  readonly selectedByDefault: boolean;
+  /**
+   * Whether writes may set it: the field is active and the class and every
+   * ancestor are active. A write to a field that is not writable because it
+   * or its table is retired fails with `DefinitionRetired`.
+   */
+  readonly writable: boolean;
 }
 
 /** A numeric bound as stored: a number for integer, a string otherwise. */
@@ -181,17 +203,67 @@ export const stackOverride = (
   type: tightenType(effective.type, override),
 });
 
-const baseField = (field: FieldDefinition): EffectiveField => ({
-  default: field.default,
-  definedOn: field.classId,
-  field,
-  helpText: field.helpText,
-  label: field.label,
-  overrideIds: [],
-  readOnly: field.readOnly,
-  required: field.required,
-  type: field.type,
-});
+const baseField = (
+  field: FieldDefinition,
+  classWritable: boolean
+): EffectiveField => {
+  const active = field.state === "active";
+
+  return {
+    default: field.default,
+    definedOn: field.classId,
+    field,
+    helpText: field.helpText,
+    label: field.label,
+    overrideIds: [],
+    readOnly: field.readOnly,
+    required: field.required,
+    selectedByDefault: active,
+    state: active ? "active" : "retired",
+    type: field.type,
+    writable: active && classWritable,
+  };
+};
+
+/** The lifecycle of a class as reads and writes see it (Contracts 1.6). */
+export interface EffectiveClass {
+  readonly definition: ClassDefinition;
+  /** The class's own state. */
+  readonly state: ClassDefinition["state"];
+  /** True while the class and every ancestor are active. */
+  readonly acceptsWrites: boolean;
+  /** True unless the class is purged. */
+  readonly readable: boolean;
+}
+
+/**
+ * The lifecycle of a class: a retired table accepts reads only; since a
+ * class can only be retired after its children, a class under a retired
+ * ancestor is retired too.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The class.
+ * @returns Its lifecycle, or undefined for an unknown class.
+ */
+export const effectiveClass = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId
+): EffectiveClass | undefined => {
+  const definition = snapshot.class(classId);
+
+  if (definition === undefined) {
+    return undefined;
+  }
+
+  return {
+    acceptsWrites: snapshot
+      .lineage(classId)
+      .every((level) => level.state === "active"),
+    definition,
+    readable: definition.state !== "purged",
+    state: definition.state,
+  };
+};
 
 /**
  * One field as it applies to a class, or as it is inherited into a class
@@ -214,7 +286,10 @@ export const effectiveField = (
 
   const end = options.exclusive === true ? lineage.length - 1 : lineage.length;
 
-  let effective = baseField(field);
+  let effective = baseField(
+    field,
+    effectiveClass(snapshot, classId)?.acceptsWrites ?? false
+  );
 
   for (const level of lineage.slice(start + 1, end)) {
     for (const override of snapshot.ownOverrides(level.id)) {
@@ -229,7 +304,8 @@ export const effectiveField = (
 
 /**
  * The effective schema of class C: the live fields of C and its ancestors
- * (root's first) with stacked overrides.
+ * (root's first) with stacked overrides, retired fields included and
+ * marked (`state`, `selectedByDefault`, `writable`).
  *
  * @param snapshot - The configuration.
  * @param classId - The class.
@@ -242,3 +318,45 @@ export const effectiveFields = (
   snapshot
     .fields(classId)
     .map((field) => effectiveField(snapshot, classId, field));
+
+/**
+ * The fields a read returns when it selects nothing explicitly: the active
+ * ones (Contracts 1.6).
+ *
+ * @param fields - Effective fields of a class.
+ * @returns The fields selected by default.
+ */
+export const defaultSelection = (
+  fields: readonly EffectiveField[]
+): readonly EffectiveField[] =>
+  fields.filter((field) => field.selectedByDefault);
+
+/** An index of a class table with its enforcement (Contracts 1.4). */
+export interface EffectiveIndex {
+  readonly index: IndexDefinition;
+  readonly enforcement: Enforcement;
+  /**
+   * Whether the index promises uniqueness now: unique and `enforced`. A
+   * unique index still being built concurrently (`pending`) or whose build
+   * failed or was abandoned (`failed`) promises nothing.
+   */
+  readonly uniqueEnforced: boolean;
+}
+
+/**
+ * The live indexes on a class's own table with their enforcement states.
+ * Dropped indexes are tombstones and not listed.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The class.
+ * @returns The indexes, sorted by ID.
+ */
+export const effectiveIndexes = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId
+): readonly EffectiveIndex[] =>
+  snapshot.indexes(classId).map((index) => ({
+    enforcement: index.enforcement,
+    index,
+    uniqueEnforced: index.unique && index.enforcement === "enforced",
+  }));

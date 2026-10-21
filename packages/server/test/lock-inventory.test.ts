@@ -45,6 +45,7 @@ import {
   createClass,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
 } from "./schema-support.ts";
 
 /** Lock modes as `pg_locks.mode` names them, weakest first. */
@@ -373,11 +374,11 @@ describe("lock-inventory", () => {
           );
 
           const gaming = createClass("gaming_laptop", {
-            namespaceId: ACME.namespace,
+            namespaceId: SITE_NAMESPACE_ID,
             parentId: ACME.laptop,
           });
 
-          const kit = createClass("kit", { namespaceId: ACME.namespace });
+          const kit = createClass("kit", { namespaceId: SITE_NAMESPACE_ID });
 
           const onEmpty = yield* planOf(
             [

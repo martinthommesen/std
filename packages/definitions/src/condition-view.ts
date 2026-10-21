@@ -44,6 +44,9 @@ export const classViewOf = (snapshot: ConfigSnapshot): ClassView => ({
   },
 });
 
+/** Whether a condition is being stored now or was stored earlier. */
+export type ConditionPurpose = "store" | "evaluate";
+
 /**
  * Checks a condition as it is stored on an access rule (`accessRule`
  * profile, no reference hops in Step 1) or a subscription (`subscription`
@@ -54,13 +57,17 @@ export const classViewOf = (snapshot: ConfigSnapshot): ClassView => ({
  * @param classId - The class the condition is evaluated on, or null for `*`.
  * @param condition - The condition.
  * @param profile - The profile it is checked under.
+ * @param purpose - `store` for a condition being stored or edited, which
+ *   may not use retired fields; `evaluate` for one stored earlier, which
+ *   keeps working after a field it reads is retired (Contracts 1.6, 1.7).
  * @returns Messages, empty when the condition is acceptable.
  */
 export const conditionProblems = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId | null,
   condition: Condition,
-  profile: ConditionProfile
+  profile: ConditionProfile,
+  purpose: ConditionPurpose = "store"
 ): readonly string[] => {
   if (classId === null) {
     return conditionPaths(condition).length === 0
@@ -73,7 +80,7 @@ export const conditionProblems = (
   const checked = checkConditionJson(json, {
     classId,
     profile,
-    purpose: "store",
+    purpose,
     view: classViewOf(snapshot),
   });
 

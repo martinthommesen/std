@@ -20,6 +20,7 @@ import {
   insertRecords,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 import type { BuiltOperation } from "./schema-support.ts";
@@ -141,11 +142,14 @@ describe("preflight", () => {
           yield* loadCoreAndAcme;
 
           // A table of its own: three rows with distinct labels.
-          const tally = createClass("tally", { namespaceId: ACME.namespace });
+          const tally = createClass("tally", {
+            namespaceId: SITE_NAMESPACE_ID,
+          });
+
           const label = addField(tally.id, "label", { kind: "text" });
 
           yield* change([tally.op, label.op]);
-          yield* insertRecords(['"acme"."tally"'], tally.id, 3, {
+          yield* insertRecords(['"site"."tally"'], tally.id, 3, {
             label: "'row ' || g",
           });
 
@@ -269,11 +273,11 @@ describe("preflight", () => {
           });
 
           const parent = createClass("dock_parent", {
-            namespaceId: ACME.namespace,
+            namespaceId: SITE_NAMESPACE_ID,
           });
 
           const child = createClass("dock_child", {
-            namespaceId: ACME.namespace,
+            namespaceId: SITE_NAMESPACE_ID,
             parentId: parent.id,
           });
 

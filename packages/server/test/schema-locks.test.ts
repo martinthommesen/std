@@ -36,6 +36,7 @@ import {
   insertRecords,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 
@@ -198,7 +199,7 @@ describe("schema-locks", () => {
             );
 
             const dock = createClass("dock", {
-              namespaceId: ACME.namespace,
+              namespaceId: SITE_NAMESPACE_ID,
               parentId: ACME.asset,
             });
 

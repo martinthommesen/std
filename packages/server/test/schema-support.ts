@@ -12,7 +12,7 @@ import type {
   OverrideDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { CORE_NAMESPACE_ID, SYSTEM_USER_ID } from "@std/definitions/well-known";
+import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 import { Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -70,8 +70,46 @@ export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY);
 /** Loads the acme example set. */
 export const loadAcme = loadSetDirectory(ACME_SET_DIRECTORY);
 
-/** Loads core, then acme. */
-export const loadCoreAndAcme = Effect.andThen(loadCore, loadAcme);
+/**
+ * The local namespace `site`, where tests create their own tables: the
+ * `core` namespace and app namespaces are reserved for their sets
+ * (Contracts 1.8).
+ */
+export const SITE_NAMESPACE_ID = "5173e5f0-0000-4000-8000-00000000517e";
+
+/** Creates the `site` namespace unless it exists. */
+export const ensureSite = Effect.gen(function* createSiteNamespace() {
+  const snapshot = yield* (yield* Catalog).refresh;
+
+  if (snapshot.namespace(SITE_NAMESPACE_ID) !== undefined) {
+    return;
+  }
+
+  yield* applyChangeSet({
+    operations: [
+      {
+        definition: {
+          extensible: false,
+          helpText: null,
+          id: SITE_NAMESPACE_ID,
+          kind: "namespace",
+          label: "Site",
+          name: "site",
+          owner: { layer: "local" },
+          protected: false,
+          storage: "standard",
+        },
+        op: "createNamespace",
+      },
+    ],
+  });
+});
+
+/** Loads core, then acme, then makes sure the local `site` namespace exists. */
+export const loadCoreAndAcme = loadCore.pipe(
+  Effect.andThen(loadAcme),
+  Effect.andThen(ensureSite)
+);
 
 /**
  * A fresh ID.
@@ -106,7 +144,7 @@ export const createClass = (
     kind: "class",
     label: name,
     name,
-    namespaceId: options.namespaceId ?? CORE_NAMESPACE_ID,
+    namespaceId: options.namespaceId ?? SITE_NAMESPACE_ID,
     parentId: options.parentId ?? null,
     storage: "standard",
   };

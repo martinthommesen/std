@@ -25,12 +25,18 @@
  */
 import type { PgClient } from "@effect/sql-pg";
 import { applyOperations } from "@std/definitions/apply";
-import type { AppliedChangeSet } from "@std/definitions/apply";
+import type {
+  ApplyContext,
+  ApplyError,
+  AppliedChangeSet,
+} from "@std/definitions/apply";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import type { DefinitionInvalid } from "@std/definitions/problems";
+import type { ChangeSetRefusal } from "@std/definitions/refusals";
+import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "@std/definitions/requester";
+import type { ChangeOrigin, Requester } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
@@ -76,8 +82,17 @@ export const SAMPLE_IDS = 20;
 /** A change set to apply. */
 export interface ChangeSetRequest {
   readonly operations: readonly Operation[];
-  /** The acting user; the system user by default (bootstrap and set loads). */
-  readonly requesterId?: DefinitionId;
+  /**
+   * The acting user and the roles they hold; the system user without
+   * roles by default (bootstrap and set loads). Permissions such as
+   * `schema.purge` are checked against it.
+   */
+  readonly requester?: Requester;
+  /**
+   * A local edit (the default) or a definition set load, which owns its
+   * definitions (Contracts 1.8).
+   */
+  readonly origin?: ChangeOrigin;
   /** Where the change set comes from, recorded in the journal. */
   readonly source?: JsonObject;
   /** A fixed change set ID; `uuidv7()` by default. */
@@ -108,6 +123,7 @@ export interface ChangeSetResult {
 /** Errors of a change set. Nothing is applied when one is raised. */
 export type ChangeSetError =
   | DefinitionInvalid
+  | ChangeSetRefusal
   | SchemaBusy
   | ExistingDataViolates
   | DdlRefused
@@ -129,15 +145,28 @@ const decodeExists = decodeRows(Schema.Struct({ present: Schema.Boolean }));
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.String }));
 
+/**
+ * The requester and origin of a change set.
+ *
+ * @param request - The change set.
+ * @returns Its apply context.
+ */
+export const contextOf = (request: ChangeSetRequest): ApplyContext => ({
+  origin: request.origin ?? LOCAL_ORIGIN,
+  requester: request.requester ?? SYSTEM_REQUESTER,
+});
+
 const apply = (
   snapshot: ConfigSnapshot,
-  operations: readonly Operation[],
+  request: ChangeSetRequest,
   changeSetId: string
-): Effect.Effect<AppliedChangeSet, DefinitionInvalid> => {
-  const applied = applyOperations(snapshot, operations, {
-    changeSetId,
-    revision: snapshot.revision + 1,
-  });
+): Effect.Effect<AppliedChangeSet, ApplyError> => {
+  const applied = applyOperations(
+    snapshot,
+    request.operations,
+    { changeSetId, revision: snapshot.revision + 1 },
+    contextOf(request)
+  );
 
   return Result.isSuccess(applied)
     ? Effect.succeed(applied.success)
@@ -276,14 +305,10 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
 
-    const applied = yield* apply(
-      snapshot,
-      input.request.operations,
-      input.changeSetId
-    );
+    const applied = yield* apply(snapshot, input.request, input.changeSetId);
 
     const plan = planChangeSet(applied, input.preflight);
-    const requesterId = input.request.requesterId ?? SYSTEM_USER_ID;
+    const requesterId = contextOf(input.request).requester.userId;
     const revision = state.revision + 1;
 
     if (input.coordinatorPid === null && requiresSchemaKey(applied)) {
@@ -459,7 +484,7 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
     const catalog = yield* Catalog;
     const connection = yield* openCoordinator;
     const snapshot = yield* catalog.refresh;
-    const applied = yield* apply(snapshot, request.operations, changeSetId);
+    const applied = yield* apply(snapshot, request, changeSetId);
     const preflight = yield* checkExistence(connection, applied);
     const plan = planChangeSet(applied, preflight);
 
@@ -515,7 +540,7 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
     const { configCommit } = yield* Transactions;
     const snapshot = yield* catalog.refresh;
     const probeId = request.changeSetId ?? snapshot.changeSetId;
-    const applied = yield* apply(snapshot, request.operations, probeId);
+    const applied = yield* apply(snapshot, request, probeId);
 
     if (applied.changes.length === 0) {
       return unchanged;

@@ -245,7 +245,7 @@ const nameOf = (definition: Definition | undefined): JsonValue =>
   definition !== undefined && "name" in definition ? definition.name : null;
 
 const targetOf = (operation: Operation): DefinitionId =>
-  operation.op === "update" ? operation.id : operation.definition.id;
+  "definition" in operation ? operation.definition.id : operation.id;
 
 /**
  * The journal entry of each operation: tag, kind, target, old and new name
