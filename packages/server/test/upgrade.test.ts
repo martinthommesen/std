@@ -32,6 +32,7 @@ import {
   configFingerprint,
   FIXTURE,
   FX,
+  insertAdmin,
   fieldLabel,
   variantOf,
   writeSetDirectory,
@@ -141,6 +142,7 @@ describe("upgrade", () => {
       () =>
         Effect.gen(function* planThenRun() {
           yield* runUpgrade({ sets: [FIXTURE.v1] });
+          yield* insertAdmin;
 
           const before = yield* databaseState;
           const plan = yield* planUpgrade({ sets: [FIXTURE.v2] });
@@ -253,6 +255,8 @@ describe("upgrade", () => {
         Effect.scoped(
           Effect.gen(function* nameClash() {
             yield* runUpgrade({ sets: [FIXTURE.v1] });
+            yield* insertAdmin;
+            yield* insertAdmin;
             yield* change([createRole("approver")]);
 
             const localRole = yield* idByName("role", "approver");
@@ -335,6 +339,7 @@ describe("upgrade", () => {
         Effect.scoped(
           Effect.gen(function* removedUpstream() {
             yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
             yield* change([localRule(FX.approver, "Local rule on approvers.")]);
 
             const v2 = yield* readSetDirectory(FIXTURE.v2);
@@ -411,6 +416,8 @@ describe("upgrade", () => {
         Effect.scoped(
           Effect.gen(function* rerunAfterFailure() {
             yield* runUpgrade({ sets: [FIXTURE.v1] });
+            yield* insertAdmin;
+            yield* insertAdmin;
 
             const v1 = yield* readSetDirectory(FIXTURE.v1);
 

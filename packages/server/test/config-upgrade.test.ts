@@ -24,6 +24,7 @@ import {
   conflictsOf,
   FIXTURE,
   FX,
+  insertAdmin,
   fieldLabel,
   latestRevisionLabel,
   openConflictIds,
@@ -78,6 +79,7 @@ describe("config-upgrade", () => {
       () =>
         Effect.gen(function* gateFixture() {
           const installed = yield* runUpgrade({ sets: [FIXTURE.v1] });
+          yield* insertAdmin;
 
           assert.deepStrictEqual(
             installed.sets.map((set) => [set.name, set.result.state]),

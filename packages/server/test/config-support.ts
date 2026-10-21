@@ -14,6 +14,7 @@ import type {
   TableEntry,
   TypeEntry,
 } from "@std/definitions/set-file";
+import { SYSTEM_USER_ID, USER_CLASS_ID } from "@std/definitions/well-known";
 import { Effect } from "effect";
 import { stringify } from "yaml";
 
@@ -41,8 +42,21 @@ export const FX = {
   z: "4fe2275c-f07c-47db-a9a1-88e3d1479fdb",
 } as const;
 
-/** The admin of the tests (audit IDs of overrides need no `core.user` row). */
+/** The admin of the tests, a `core.user` row `withAdmin` inserts. */
 export const ADMIN = "0d4f4bde-1c7a-4a4e-9d3e-0a5b8c6f7e21";
+
+/**
+ * Inserts the tests' admin into `core.user` (as table owner, until the
+ * record service exists), so audit IDs written by admin edits name a user.
+ *
+ * @returns The effect.
+ */
+export const insertAdmin = values(
+  `INSERT INTO core."user" (id, class_id, version, created_at, created_by, updated_at, updated_by, name, login, active)
+   VALUES ($1::uuid, $2::uuid, 1, now(), $3::uuid, now(), $3::uuid, 'Admin', 'admin', true)
+   ON CONFLICT (id) DO NOTHING`,
+  [ADMIN, USER_CLASS_ID, SYSTEM_USER_ID]
+);
 
 /** A set file whose lists can be replaced. */
 type MutableSetFile = { -readonly [K in keyof SetFile]: SetFile[K] };

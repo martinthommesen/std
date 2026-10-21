@@ -28,6 +28,7 @@ import {
   conflictsOf,
   FIXTURE,
   FX,
+  insertAdmin,
   fieldLabel,
   openConflictIds,
   openConflictOf,
@@ -109,6 +110,7 @@ describe("config-service", () => {
       () =>
         Effect.gen(function* overrides() {
           yield* runUpgrade({ sets: [FIXTURE.v1] });
+          yield* insertAdmin;
 
           yield* edit("field", FX.x, {
             helpText: "Local help",
@@ -230,6 +232,7 @@ describe("config-service", () => {
       Effect.scoped(
         Effect.gen(function* resolutions() {
           yield* runUpgrade({ sets: [FIXTURE.v1] });
+          yield* insertAdmin;
           yield* edit("field", FX.x, { label: "X local" });
           yield* edit("field", FX.z, { label: "Z local" });
 
@@ -294,6 +297,8 @@ describe("config-service", () => {
         Effect.scoped(
           Effect.gen(function* adoptRemoved() {
             yield* runUpgrade({ sets: [FIXTURE.v1] });
+            yield* insertAdmin;
+            yield* insertAdmin;
 
             assert.strictEqual(
               yield* refusalReason(
