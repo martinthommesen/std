@@ -289,6 +289,36 @@ describe("ddl-forms", () => {
     );
     assert.strictEqual(maskQuoted(`a 'b''c' "d" e`), `a '____' "_" e`);
 
+    // Lexical forms the builders never emit are refused before
+    // classification, so a quote inside them cannot hide a volatile default.
+    const hidden = (check: string) =>
+      `CREATE TABLE ${table} (\n  id uuid NOT NULL,\n  CONSTRAINT c CHECK (${check}),\n  "seen" timestamptz(3) DEFAULT now()\n)`;
+
+    const unsupported = [
+      hidden(String.raw`class_id::text <> E'\''`),
+      hidden("class_id::text <> $$'$$"),
+      hidden("class_id::text <> $tag$'$tag$"),
+      hidden(String.raw`class_id::text <> U&'d\0061t\+000061' UESCAPE '!'`),
+      String.raw`ALTER TABLE ${table} ALTER COLUMN U&"d\0061ta" SET DEFAULT 'x'::text`,
+      `ALTER TABLE ${table} ADD COLUMN "c" text DEFAULT 'x'::text -- ' now()`,
+      `ALTER TABLE ${table} ADD COLUMN "c" text DEFAULT /* ' */ now()`,
+    ];
+
+    for (const statement of unsupported) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { ok: false, reason: "unknownForm" },
+        statement
+      );
+    }
+
+    assert.deepStrictEqual(
+      checkDdl(
+        `ALTER TABLE ${table} ADD COLUMN "price" text DEFAULT 'costs $5 -- or E''x'''::text`
+      ),
+      { form: "addColumn", ok: true }
+    );
+
     assert.deepStrictEqual(
       checkDdl(
         `ALTER TABLE ${table} ADD COLUMN "flag" boolean CONSTRAINT std_nn_00000000000040008000000000000001 NOT NULL DEFAULT false`

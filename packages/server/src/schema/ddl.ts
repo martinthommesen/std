@@ -392,6 +392,19 @@ export const setDefault = (
 };
 
 /**
+ * The index key of a field over a value expression: casefolded for
+ * case-insensitive text, as is otherwise.
+ *
+ * @param field - An indexed field.
+ * @param value - The column, or another expression of the field's value.
+ * @returns The key expression.
+ */
+export const keyOf = (field: FieldDefinition, value: string): string =>
+  field.type.kind === "text" && !isCaseSensitive(field.type)
+    ? `casefold(${value} COLLATE pg_unicode_fast)`
+    : value;
+
+/**
  * The index key of a field: the casefold expression for case-insensitive
  * text (Contracts 5.5), the column otherwise.
  *
@@ -399,9 +412,24 @@ export const setDefault = (
  * @returns The key expression.
  */
 export const indexKey = (field: FieldDefinition): string =>
-  field.type.kind === "text" && !isCaseSensitive(field.type)
-    ? `casefold(${quoteIdent(field.name)} COLLATE pg_unicode_fast)`
-    : quoteIdent(field.name);
+  keyOf(field, quoteIdent(field.name));
+
+/**
+ * The value existing rows get in a column added for a field: its constant
+ * default, `false` for booleans, NULL otherwise.
+ *
+ * @param field - A field.
+ * @returns A constant SQL expression of the column's type.
+ */
+export const initialValue = (field: FieldDefinition): string => {
+  if (field.default !== null) {
+    return defaultLiteral(field.type, field.default);
+  }
+
+  return field.type.kind === "boolean"
+    ? "false"
+    : `NULL::${postgresColumn(field.type).sqlType}`;
+};
 
 /**
  * `CREATE [UNIQUE] INDEX`, plain or concurrent.

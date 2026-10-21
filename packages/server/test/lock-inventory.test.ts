@@ -126,6 +126,12 @@ const decodeLocks = decodeRows(
   })
 );
 
+const RELATION_KINDS = `SELECT oid::text AS oid, relkind::text AS kind FROM pg_class WHERE oid >= ${FIRST_NORMAL_OID}`;
+
+const decodeKinds = decodeRows(
+  Schema.Struct({ kind: Schema.String, oid: Schema.String })
+);
+
 const decodeOid = decodeRows(Schema.Struct({ oid: Schema.String }));
 
 /** How an added relation lock relates to the statement's inventory. */
@@ -142,13 +148,15 @@ type LockClass =
  * @param mode - The added mode.
  * @param owners - Each existing relation's table (for indexes and TOAST), or `0`.
  * @param listed - Listed relations and their modes.
+ * @param kinds - The `relkind` of every user relation after the statement.
  * @returns The class.
  */
 const classify = (
   oid: string,
   mode: string,
   owners: ReadonlyMap<string, string>,
-  listed: ReadonlyMap<string, string>
+  listed: ReadonlyMap<string, string>,
+  kinds: ReadonlyMap<string, string>
 ): LockClass => {
   if (Number(oid) < FIRST_NORMAL_OID) {
     return "catalog";
@@ -157,7 +165,9 @@ const classify = (
   const owner = owners.get(oid);
 
   if (owner === undefined) {
-    return "created";
+    // No generated form creates a sequence (identity and serial columns are
+    // refused), so a new sequence means the inventory missed a form.
+    return kinds.get(oid) === "S" ? "missing" : "created";
   }
 
   const held = listed.get(oid);
@@ -233,6 +243,12 @@ const probeStatement = (
       Effect.flatMap(decodeLocks)
     );
 
+    const kinds = new Map(
+      (yield* query(session, RELATION_KINDS).pipe(
+        Effect.flatMap(decodeKinds)
+      )).map((row) => [row.oid, row.kind])
+    );
+
     yield* query(session, "COMMIT");
 
     return after.flatMap((row) =>
@@ -241,7 +257,7 @@ const probeStatement = (
         : [
             {
               lock: `${statement.form}: ${row.name} ${row.mode}`,
-              type: classify(row.oid, row.mode, owners, listed),
+              type: classify(row.oid, row.mode, owners, listed, kinds),
             },
           ]
     );
@@ -421,6 +437,20 @@ describe("lock-inventory", () => {
               .filter((added) => added.type === "missing")
               .map((added) => added.lock),
             ["setDefault: acme.asset AccessExclusiveLock"]
+          );
+
+          const identity = yield* probeStatement(session, {
+            form: "addColumn",
+            locks: [{ mode: "ACCESS EXCLUSIVE", table: ASSET }],
+            sql: `ALTER TABLE ${ASSET} ADD COLUMN "counter" integer GENERATED ALWAYS AS IDENTITY`,
+          });
+
+          assert.isTrue(
+            identity.some(
+              (added) =>
+                added.type === "missing" && added.lock.includes("counter_seq")
+            ),
+            identity.map((added) => `${added.type} ${added.lock}`).join("; ")
           );
 
           const unbudgeted = [

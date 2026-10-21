@@ -56,6 +56,8 @@ import {
   createTable,
   createTrigger,
   indexKey,
+  initialValue,
+  keyOf,
   replaceSubtreeCheck,
   setDefault,
   subtreeExpression,
@@ -528,14 +530,14 @@ const planAuditKeys = (
  * indexes treat NULLs as distinct.
  *
  * @param table - The quoted table.
- * @param fields - The indexed fields, in order.
+ * @param keyExpressions - The key expressions, in index order.
  * @returns A boolean SQL expression over the table's rows.
  */
 export const duplicatePredicate = (
   table: string,
-  fields: readonly FieldDefinition[]
+  keyExpressions: readonly string[]
 ): string => {
-  const keys = fields.map(indexKey).join(", ");
+  const keys = keyExpressions.join(", ");
 
   return `(${keys}) IN (SELECT ${keys} FROM ${table} GROUP BY ${keys} HAVING count(*) > 1)`;
 };
@@ -565,7 +567,16 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
   if (index.unique) {
     planning.violations.push({
       definitionId: index.id,
-      predicate: duplicatePredicate(table, fields),
+      predicate: duplicatePredicate(
+        table,
+        fields.map((field) =>
+          // A column this change set adds does not exist yet: existing rows
+          // will hold its initial value (default, false, or NULL).
+          planning.created.has(field.id)
+            ? keyOf(field, initialValue(field))
+            : indexKey(field)
+        )
+      ),
       table,
     });
   }

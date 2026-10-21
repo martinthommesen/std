@@ -13,7 +13,7 @@ import path from "node:path";
 import { NodeRuntime } from "@effect/platform-node";
 import { Console, Effect, Layer } from "effect";
 
-import { catalogLayer } from "../catalog/catalog.ts";
+import { Catalog } from "../catalog/catalog.ts";
 import { runUpgrade } from "../config/upgrade.ts";
 import {
   CLI_APPLICATION_NAME,
@@ -74,7 +74,7 @@ const upgrade = (setDirectories: readonly string[]) =>
     }
   }).pipe(
     Effect.provide(
-      catalogLayer.pipe(
+      Catalog.layer.pipe(
         Layer.provideMerge(SqlLayer),
         Layer.provideMerge(DatabaseConfig.fromEnv(CLI_APPLICATION_NAME))
       )

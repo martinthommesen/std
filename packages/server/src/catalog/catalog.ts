@@ -22,7 +22,7 @@
  * permit holder waits for, and a pending lookup never outlives the
  * transaction that started it.
  *
- * `listeningCatalogLayer` also listens on `std_config` and reloads early when
+ * `Catalog.listening` also listens on `std_config` and reloads early when
  * another process commits, including after its listener connection was
  * lost and re-established.
  */
@@ -99,19 +99,20 @@ export interface CatalogApi {
   ) => Effect.Effect<ConfigSnapshot, DatabaseError, SqlClient.SqlClient>;
   /** Loads the latest configuration in its own request transaction. */
   readonly refresh: Effect.Effect<ConfigSnapshot, DatabaseError>;
-  /** The most recently loaded snapshot, if any. */
+  /**
+   * The snapshot of the database state the last refresh observed, if any:
+   * after a restore to an earlier state, the restored one.
+   */
   readonly latest: Effect.Effect<Option.Option<ConfigSnapshot>>;
   /** How many loads this process has run (for tests and metrics). */
   readonly loads: Effect.Effect<number>;
 }
 
-/** The configuration catalog of this process. */
-export class Catalog extends Context.Service<Catalog, CatalogApi>()(
-  "@std/server/catalog/catalog/Catalog"
-) {}
-
 /**
- * Builds a catalog: the cache, the load permit and the latest snapshot.
+ * Builds a catalog: the cache, the load permit, and the snapshot of the
+ * database state the last refresh observed. That snapshot follows the
+ * database even when a restore moves it to an earlier revision: it is
+ * replaced by every refresh, whatever the revision number.
  *
  * @returns The catalog functions over fresh state.
  */
@@ -119,18 +120,13 @@ export const makeCatalog: Effect.Effect<CatalogApi, never, Transactions> =
   Effect.gen(function* makeCatalogState() {
     const { request } = yield* Transactions;
     const permit = yield* Semaphore.make(1);
-    const latest = yield* Ref.make(Option.none<ConfigSnapshot>());
+    const observed = yield* Ref.make(Option.none<ConfigSnapshot>());
     const loads = yield* Ref.make(0);
 
     const load = Effect.fn("Catalog.load")(function* load(key: string) {
       const snapshot = yield* loadSnapshot(stateOfKey(key));
 
       yield* Ref.update(loads, (count) => count + 1);
-      yield* Ref.update(latest, (previous) =>
-        Option.isSome(previous) && previous.value.revision > snapshot.revision
-          ? previous
-          : Option.some(snapshot)
-      );
 
       return snapshot;
     });
@@ -153,13 +149,20 @@ export const makeCatalog: Effect.Effect<CatalogApi, never, Transactions> =
       return yield* permit.withPermit(Cache.get(cache, key));
     });
 
-    return Catalog.of({
+    const refresh = request(
+      RequestRevision.pipe(
+        Effect.flatMap(at),
+        Effect.tap((snapshot) => Ref.set(observed, Option.some(snapshot)))
+      )
+    );
+
+    return {
       at,
       current: RequestRevision.pipe(Effect.flatMap(at)),
-      latest: Ref.get(latest),
+      latest: Ref.get(observed),
       loads: Ref.get(loads),
-      refresh: request(RequestRevision.pipe(Effect.flatMap(at))),
-    });
+      refresh,
+    };
   });
 
 /**
@@ -190,24 +193,35 @@ export const followSignals = (
     )
   );
 
-/** A catalog without a listener: it loads on demand. */
-export const catalogLayer: Layer.Layer<Catalog, never, Transactions> =
-  Layer.effect(Catalog, makeCatalog);
+/** The configuration catalog of this process. */
+export class Catalog extends Context.Service<Catalog, CatalogApi>()(
+  "@std/server/catalog/catalog/Catalog"
+) {
+  /** A catalog without a listener: it loads on demand. */
+  static readonly layer: Layer.Layer<Catalog, never, Transactions> =
+    Layer.effect(
+      Catalog,
+      Effect.gen(function* catalog() {
+        return Catalog.of(yield* makeCatalog);
+      })
+    );
 
-/**
- * A catalog that also listens on `std_config` and reloads as soon as
- * another session commits configuration.
- */
-export const listeningCatalogLayer: Layer.Layer<
-  Catalog,
-  never,
-  Transactions | PgClient.PgClient
-> = Layer.effect(
-  Catalog,
-  Effect.gen(function* listeningCatalog() {
-    const catalog = yield* makeCatalog;
-    yield* Effect.forkScoped(followSignals(catalog));
+  /**
+   * A catalog that also listens on `std_config` and reloads as soon as
+   * another session commits configuration.
+   */
+  static readonly listening: Layer.Layer<
+    Catalog,
+    never,
+    Transactions | PgClient.PgClient
+  > = Layer.effect(
+    Catalog,
+    Effect.gen(function* listeningCatalog() {
+      const catalog = yield* makeCatalog;
 
-    return catalog;
-  })
-);
+      yield* Effect.forkScoped(followSignals(catalog));
+
+      return Catalog.of(catalog);
+    })
+  );
+}

@@ -149,7 +149,31 @@ describe("catalog", () => {
            FROM public.backup_config_state b RETURNING 'x' AS value`
           );
 
-          for (const index of [1, 2, 3, 4, 5]) {
+          // The restored state has a lower revision than the cached one;
+          // `latest` follows the database, not the highest revision seen.
+          const restored = yield* catalog.refresh;
+          const observedAfterRestore = yield* catalog.latest;
+
+          assert.strictEqual(restored.revision, base);
+          assert.isTrue(
+            Option.isSome(observedAfterRestore) &&
+              observedAfterRestore.value.revision === base &&
+              observedAfterRestore.value.roleByName("before_reset_5") ===
+                undefined
+          );
+
+          yield* change([createRole("after_reset_0")]);
+          const third = yield* catalog.refresh;
+          const observedThird = yield* catalog.latest;
+
+          assert.strictEqual(third.revision, base + 1);
+          assert.isTrue(
+            Option.isSome(observedThird) &&
+              observedThird.value.changeSetId === third.changeSetId &&
+              observedThird.value.roleByName("after_reset_0") !== undefined
+          );
+
+          for (const index of [1, 2, 3, 4]) {
             yield* change([createRole(`after_reset_${index}`)]);
           }
 
@@ -159,7 +183,7 @@ describe("catalog", () => {
           assert.strictEqual(reloaded.revision, cached.revision);
           assert.notStrictEqual(reloaded.changeSetId, cached.changeSetId);
           assert.isAbove(yield* catalog.loads, loadsBefore - 1);
-          assert.isDefined(reloaded.roleByName("after_reset_5"));
+          assert.isDefined(reloaded.roleByName("after_reset_4"));
           assert.isUndefined(reloaded.roleByName("before_reset_5"));
         })
     );

@@ -236,6 +236,78 @@ describe("schema-locks", () => {
     );
 
     dbTest.effect(
+      "a catalog lock the DDL takes internally is capped by what is left of the budget",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* internalLockWait() {
+            yield* loadCoreAndAcme;
+            const database = yield* TestDatabase;
+            const tableHolder = yield* database.session("table-holder");
+            const catalogHolder = yield* database.session("catalog-holder");
+
+            // The explicit ACCESS EXCLUSIVE on the table waits 1.7 s; then
+            // ADD COLUMN must insert into pg_attribute, which a session
+            // holds in SHARE mode: a lock no LOCK TABLE can budget.
+            yield* tableHolder.query("BEGIN");
+            yield* tableHolder.query(
+              `LOCK TABLE ${ASSET} IN ACCESS SHARE MODE`
+            );
+            yield* catalogHolder.query("BEGIN");
+            yield* catalogHolder.query(
+              "LOCK TABLE pg_catalog.pg_attribute IN SHARE MODE"
+            );
+
+            const spans = yield* Ref.make<readonly number[]>([]);
+
+            const recorder: HoldRecorder = {
+              done: yield* Ref.make(false),
+              settled: yield* Deferred.make<boolean>(),
+              spans,
+            };
+
+            yield* Effect.forkChild(recordHolds(recorder));
+            yield* Effect.forkChild(
+              Effect.sleep("1700 millis").pipe(
+                Effect.andThen(tableHolder.query("COMMIT"))
+              )
+            );
+            yield* Effect.forkChild(
+              Effect.sleep("3000 millis").pipe(
+                Effect.andThen(catalogHolder.query("COMMIT"))
+              )
+            );
+
+            const result = yield* change(
+              [addField(ACME.asset, "budgeted", { kind: "integer" }).op],
+              FAST_RETRIES
+            );
+
+            yield* Ref.set(recorder.done, true);
+            yield* Deferred.await(recorder.settled).pipe(
+              Effect.timeout(Duration.seconds(5))
+            );
+
+            const holds = yield* Ref.get(spans);
+            const [firstHold] = holds;
+
+            yield* Effect.logInfo(`CONFIG_KEY holds: ${holds.join(", ")} ms`);
+            assert.strictEqual(result.state, "completed");
+            assert.isAtLeast(holds.length, 2, `holds: ${holds.join(", ")} ms`);
+            assert.isAtLeast(
+              firstHold ?? 0,
+              1900,
+              "the first attempt waited out its budget"
+            );
+            assert.isAtMost(
+              firstHold ?? 0,
+              MAX_HOLD_MS,
+              "and stopped near the deadline"
+            );
+          })
+        )
+    );
+
+    dbTest.effect(
       "a second DDL change set during a follow-up phase gets SchemaBusy; a label change succeeds",
       () =>
         Effect.scoped(

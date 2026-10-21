@@ -18,7 +18,7 @@ import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import type { TestDatabaseOptions } from "../../testing/src/test-database.ts";
-import { catalogLayer } from "../src/catalog/catalog.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { CORE_SET_DIRECTORY } from "../src/config/set-files.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
@@ -61,7 +61,7 @@ export const FAST_RETRIES: ChangeSetOptions = {
  * @returns The layer.
  */
 export const schemaTestLayer = (options: TestDatabaseOptions = {}) =>
-  catalogLayer.pipe(Layer.provideMerge(testDatabaseLayer(options)));
+  Catalog.layer.pipe(Layer.provideMerge(testDatabaseLayer(options)));
 
 /** Loads the core set. */
 export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY);

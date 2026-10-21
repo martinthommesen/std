@@ -253,6 +253,43 @@ export const maskQuoted = (sql: string): string => {
   return masked;
 };
 
+const WORD_CHAR = /[\w$]/u;
+
+/**
+ * Whether a statement uses lexical forms the builders never emit: escape
+ * strings (`E'...'`, backslash escapes), dollar quotes (`$tag$...$tag$`)
+ * and any other `$`, Unicode escapes (`U&'...'`, `U&"..."`) and comments.
+ * The builders write standard strings and quoted identifiers only
+ * (`quoteLiteral`, `quoteIdent`), which `maskQuoted` reads exactly; a
+ * statement with any other form is refused before it is classified, so a
+ * quote inside such a form can never hide the rest of the statement.
+ *
+ * @param sql - A statement.
+ * @returns True when the statement leaves the builders' subset.
+ */
+export const usesUnsupportedSyntax = (sql: string): boolean => {
+  const masked = maskQuoted(sql);
+
+  for (let index = 0; index < masked.length; index += 1) {
+    const char = masked.charAt(index);
+    const next = masked.charAt(index + 1);
+    const wordBefore = index > 0 && WORD_CHAR.test(masked.charAt(index - 1));
+
+    const escapeString = (char === "E" || char === "e") && next === "'";
+    const unicodeEscape = (char === "U" || char === "u") && next === "&";
+    const prefixed = (escapeString || unicodeEscape) && !wordBefore;
+
+    const comment =
+      (char === "-" && next === "-") || (char === "/" && next === "*");
+
+    if (char === "$" || comment || prefixed) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const DEFAULT_KEYWORD = " DEFAULT ";
 
 const CLAUSE_ENDS = [",\n", "\n)"] as const;
@@ -315,6 +352,10 @@ const createTableProblem = (sql: string): DdlRefusal | undefined => {
  * @returns Its form, or why it is refused.
  */
 export const checkDdl = (sql: string): DdlCheck => {
+  if (usesUnsupportedSyntax(sql)) {
+    return { ok: false, reason: "unknownForm" };
+  }
+
   const masked = maskQuoted(sql);
 
   if (TYPE_CHANGE.test(masked)) {

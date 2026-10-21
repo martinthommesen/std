@@ -34,8 +34,8 @@ const indexExists = (indexId: string) =>
 describe("preflight", () => {
   it("counts duplicates with the index's own key expressions", () => {
     assert.strictEqual(
-      duplicatePredicate(ASSET, []),
-      `() IN (SELECT  FROM ${ASSET} GROUP BY  HAVING count(*) > 1)`
+      duplicatePredicate(ASSET, ['"status"', "'x'::text"]),
+      `("status", 'x'::text) IN (SELECT "status", 'x'::text FROM ${ASSET} GROUP BY "status", 'x'::text HAVING count(*) > 1)`
     );
   });
 
@@ -70,6 +70,36 @@ describe("preflight", () => {
 
           assert.strictEqual(yield* currentRevision, revision);
           assert.isFalse(yield* indexExists(unique.id));
+
+          // A unique index on a column added in the same change set: every
+          // existing row holds its initial value. All NULL is valid; one
+          // constant default on several rows is a duplicate.
+          const nullable = addField(ACME.asset, "tag_number", { kind: "text" });
+          const tagUnique = addIndex(ACME.asset, [nullable.id], true);
+          const added = yield* change([nullable.op, tagUnique.op]);
+
+          assert.strictEqual(added.state, "completed");
+          assert.isTrue(yield* indexExists(tagUnique.id));
+
+          const constant = addField(
+            ACME.asset,
+            "region",
+            { kind: "text" },
+            { default: "EU" }
+          );
+
+          const regionUnique = addIndex(ACME.asset, [constant.id], true);
+
+          const sameDefault = yield* Effect.flip(
+            change([constant.op, regionUnique.op])
+          );
+
+          assert.strictEqual(sameDefault._tag, "ExistingDataViolates");
+
+          if (sameDefault._tag === "ExistingDataViolates") {
+            assert.strictEqual(sameDefault.definitionId, regionUnique.id);
+            assert.strictEqual(sameDefault.count, 5);
+          }
         })
     );
 
