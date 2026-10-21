@@ -449,10 +449,9 @@ describe("references", () => {
           const bob = yield* http.signIn("bob", "bob-password");
           const alice = yield* http.signIn("alice", "alice-password");
           const labels = { labels: "true" };
-          const read = labelled;
 
-          const asBob = yield* read(bob, LAPTOP, records.L);
-          const asAlice = yield* read(alice, LAPTOP, records.L);
+          const asBob = yield* labelled(bob, LAPTOP, records.L);
+          const asAlice = yield* labelled(alice, LAPTOP, records.L);
 
           assert.strictEqual(asBob.values.docked_to, records.AM);
           assert.notProperty(asBob.labels ?? {}, "docked_to");
@@ -475,7 +474,7 @@ describe("references", () => {
           );
 
           // Through the monitor endpoint: Bob's M, and Alice's AM is a 404.
-          const monitor = yield* read(bob, MONITOR, records.M);
+          const monitor = yield* labelled(bob, MONITOR, records.M);
 
           assert.strictEqual(monitor.labels?.owner, "Bob");
           assert.strictEqual(monitor.values.docked_to, null);
