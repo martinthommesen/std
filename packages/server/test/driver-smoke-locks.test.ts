@@ -1,3 +1,4 @@
+import { PgClient } from "@effect/sql-pg";
 /**
  * Plan 0A driver smoke test, part 2: the dedicated connection and
  * `SCHEMA_KEY`, `begin_request()` against a concurrent config commit, and
@@ -14,6 +15,7 @@ import {
 } from "../../testing/src/test-database.ts";
 import {
   bumpRevision,
+  describeLockHolders,
   CONFIG_LOCK_TIMEOUT,
   DEFAULT_RETRY_DELAYS,
   MAIN_LOCK_TIMEOUT,
@@ -54,6 +56,8 @@ const decodeSetting = decodeRows(Schema.Struct({ setting: Schema.String }));
 const decodeValid = decodeRows(Schema.Struct({ valid: Schema.Boolean }));
 
 const decodeRevision = decodeRows(Schema.Struct({ revision: Schema.String }));
+
+const decodeRelation = decodeRows(Schema.Struct({ relation: Schema.String }));
 
 const configKeyWaiters = SqlClient.SqlClient.pipe(
   Effect.flatMap(
@@ -472,6 +476,9 @@ describe("driver-smoke-locks", () => {
             const timeout = errorOf(exit);
 
             assert.instanceOf(timeout, SchemaLockTimeout);
+            // A lower bound only: the blocker holds the table throughout, so
+            // each of the 5 attempts waits its full 2 s lock_timeout, which
+            // Postgres enforces; load can only make it longer.
             assert.isAtLeast(Date.now() - started, 5 * 2000);
 
             const holder = timeout?.holders.find(
@@ -496,6 +503,63 @@ describe("driver-smoke-locks", () => {
           })
         ),
       { timeout: 30_000 }
+    );
+
+    dbTest.effect(
+      "without sampled blockers, the holders of a lock conflicting with the waited one are named",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* fallbackHolders() {
+            const sql = yield* SqlClient.SqlClient;
+            const monitor = yield* PgClient.PgClient;
+            const database = yield* TestDatabase;
+            yield* sql`CREATE TABLE smoke_fallback (id int)`;
+
+            const [table] = yield* sql`
+              SELECT 'smoke_fallback'::regclass::oid::text AS relation`.pipe(
+              Effect.flatMap(decodeRelation)
+            );
+
+            const relation = table?.relation ?? "";
+            const blocker = yield* database.session("smoke-fallback-reader");
+            yield* blocker.query("BEGIN");
+            yield* blocker.query("SELECT count(*) FROM smoke_fallback");
+
+            // As if the sampler missed the whole wait: no blockers, only the
+            // relation lock the attempt was seen waiting for.
+            const conflicting = yield* describeLockHolders(monitor, [], {
+              mode: "AccessExclusiveLock",
+              relation,
+            });
+
+            const holder = conflicting.find(
+              (candidate) => candidate.pid === blocker.processId
+            );
+
+            assert.strictEqual(
+              holder?.applicationName,
+              "smoke-fallback-reader"
+            );
+            assert.include(
+              holder?.locks ?? [],
+              "relation AccessShareLock on smoke_fallback"
+            );
+
+            // AccessShareLock does not conflict with RowShareLock.
+            const compatible = yield* describeLockHolders(monitor, [], {
+              mode: "RowShareLock",
+              relation,
+            });
+
+            assert.isUndefined(
+              compatible.find(
+                (candidate) => candidate.pid === blocker.processId
+              )
+            );
+
+            yield* blocker.query("ROLLBACK");
+          })
+        )
     );
 
     dbTest.effect(

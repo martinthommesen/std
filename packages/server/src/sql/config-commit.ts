@@ -33,7 +33,11 @@ import { SqlClient } from "effect/sql";
 import { isSqlError } from "effect/sql/SqlError";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { AttemptLockTimedOut } from "./attempt-lock-timed-out.ts";
+import {
+  AttemptLockTimedOut,
+  WaitedLockSchema,
+} from "./attempt-lock-timed-out.ts";
+import type { WaitedLock } from "./attempt-lock-timed-out.ts";
 import {
   DatabaseError,
   hygienic,
@@ -227,24 +231,140 @@ const PidRows = Schema.Array(Schema.Struct({ pid: Schema.Int }));
 
 const decodePidRows = Schema.decodeUnknownEffect(PidRows);
 
+const decodeWaitedRows = Schema.decodeUnknownEffect(
+  Schema.Array(WaitedLockSchema)
+);
+
 /**
- * The sessions that blocked a config commit, or that hold `CONFIG_KEY` when
- * no blocker was sampled.
+ * The relation lock modes each mode conflicts with (the table in the
+ * Postgres documentation, "Explicit Locking").
+ */
+const CONFLICTING_MODES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["AccessShareLock", ["AccessExclusiveLock"]],
+  ["RowShareLock", ["ExclusiveLock", "AccessExclusiveLock"]],
+  [
+    "RowExclusiveLock",
+    [
+      "ShareLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+  [
+    "ShareUpdateExclusiveLock",
+    [
+      "ShareUpdateExclusiveLock",
+      "ShareLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+  [
+    "ShareLock",
+    [
+      "RowExclusiveLock",
+      "ShareUpdateExclusiveLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+  [
+    "ShareRowExclusiveLock",
+    [
+      "RowExclusiveLock",
+      "ShareUpdateExclusiveLock",
+      "ShareLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+  [
+    "ExclusiveLock",
+    [
+      "RowShareLock",
+      "RowExclusiveLock",
+      "ShareUpdateExclusiveLock",
+      "ShareLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+  [
+    "AccessExclusiveLock",
+    [
+      "AccessShareLock",
+      "RowShareLock",
+      "RowExclusiveLock",
+      "ShareUpdateExclusiveLock",
+      "ShareLock",
+      "ShareRowExclusiveLock",
+      "ExclusiveLock",
+      "AccessExclusiveLock",
+    ],
+  ],
+]);
+
+const CONFLICTING_HOLDERS_QUERY = `
+SELECT DISTINCT pid FROM pg_locks
+WHERE granted AND locktype = 'relation'
+  AND relation = $1::oid AND mode = ANY($2::text[])
+  AND pid <> pg_backend_pid()
+ORDER BY pid`;
+
+const WAITED_LOCK_QUERY = `
+SELECT relation::text AS relation, mode FROM pg_locks
+WHERE pid = $1::int4 AND NOT granted AND locktype = 'relation'
+LIMIT 1`;
+
+/** What the sampler saw of one attempt's lock waits. */
+interface AttemptWait {
+  /** Every PID seen blocking the attempt; never cleared during the attempt. */
+  readonly blockers: Set<number>;
+  /** The last relation lock the attempt was seen waiting for. */
+  waited?: WaitedLock;
+}
+
+/**
+ * The sessions that blocked a config commit. Without sampled blockers, the
+ * sessions holding a lock that conflicts with the relation lock the attempt
+ * was seen waiting for; failing that, the sessions holding `CONFIG_KEY`.
  * @param monitor - A pooled client, outside the failed transaction.
  * @param pids - Blocking PIDs sampled while the attempt waited.
+ * @param waited - The relation lock the attempt was seen waiting for, if any.
  * @returns The holders, by PID.
  */
 export const describeLockHolders: (
   monitor: PgClient.PgClient,
-  pids: readonly number[]
+  pids: readonly number[],
+  waited?: WaitedLock
 ) => Effect.Effect<readonly LockHolder[], SqlError> = Effect.fn(
   "ConfigCommit.describeLockHolders"
 )(function* describeHolders(
   monitor: PgClient.PgClient,
-  pids: readonly number[]
+  pids: readonly number[],
+  waited?: WaitedLock
 ) {
+  const conflicting = CONFLICTING_MODES.get(waited?.mode ?? "");
+  let holderPids = pids;
+
+  if (holderPids.length === 0 && waited !== undefined && conflicting) {
+    const rows = yield* monitor.unsafe(CONFLICTING_HOLDERS_QUERY, [
+      waited.relation,
+      `{${conflicting.join(",")}}`,
+    ]);
+
+    holderPids = (yield* decodePidRows(rows).pipe(Effect.orDie)).map(
+      (row) => row.pid
+    );
+  }
+
   const raw = yield* monitor.unsafe(HOLDERS_QUERY, [
-    `{${pids.join(",")}}`,
+    `{${holderPids.join(",")}}`,
     String(advisoryClassId(CONFIG_KEY)),
     String(advisoryObjectId(CONFIG_KEY)),
   ]);
@@ -261,39 +381,47 @@ export const describeLockHolders: (
 });
 
 /**
- * Samples `pg_blocking_pids` of a waiting backend until interrupted.
+ * Samples a backend's blockers (`pg_blocking_pids`) and the relation lock it
+ * waits for, at once and then every 50 ms, until interrupted. Samples only
+ * add: the sampler outlives the wait (it stops with the attempt's scope,
+ * after the timeout and the `ROLLBACK`), and a sample taken then sees no
+ * wait at all, which must not erase what was seen during it.
  * @param monitor - A pooled client, outside the transaction.
  * @param pid - The backend of the config commit.
- * @param seen - Holds the blocking PIDs of the latest sample.
+ * @param wait - Collects what was seen.
  * @returns An effect that runs until interrupted.
  */
 const sampleBlockers = (
   monitor: PgClient.PgClient,
   pid: number,
-  seen: Set<number>
+  wait: AttemptWait
 ): Effect.Effect<void> =>
-  monitor
-    .unsafe("SELECT unnest(pg_blocking_pids($1::int4)) AS pid", [pid])
-    .pipe(
-      Effect.flatMap((rows) => decodePidRows(rows)),
-      Effect.tap((rows) =>
-        Effect.sync(() => {
-          seen.clear();
+  Effect.gen(function* sampleWait() {
+    const blockers = yield* monitor
+      .unsafe("SELECT unnest(pg_blocking_pids($1::int4)) AS pid", [pid])
+      .pipe(Effect.flatMap((rows) => decodePidRows(rows)));
 
-          for (const row of rows) {
-            seen.add(row.pid);
-          }
-        })
-      ),
-      Effect.ignore,
-      Effect.repeat(Schedule.spaced(BLOCKER_SAMPLE_INTERVAL)),
-      Effect.asVoid
-    );
+    for (const row of blockers) {
+      wait.blockers.add(row.pid);
+    }
+
+    const [waited] = yield* monitor
+      .unsafe(WAITED_LOCK_QUERY, [pid])
+      .pipe(Effect.flatMap((rows) => decodeWaitedRows(rows)));
+
+    if (waited !== undefined) {
+      wait.waited = waited;
+    }
+  }).pipe(
+    Effect.ignore,
+    Effect.repeat(Schedule.spaced(BLOCKER_SAMPLE_INTERVAL)),
+    Effect.asVoid
+  );
 
 const configSetup =
   (
     monitor: PgClient.PgClient,
-    blockers: Set<number>
+    wait: AttemptWait
   ): TransactionSetup<ConfigState> =>
   (connection, state) =>
     Effect.gen(function* beginConfigCommitSetup() {
@@ -305,9 +433,7 @@ const configSetup =
       const [backend] = yield* decodePidRows(pids).pipe(Effect.orDie);
 
       if (backend !== undefined) {
-        yield* Effect.forkScoped(
-          sampleBlockers(monitor, backend.pid, blockers)
-        );
+        yield* Effect.forkScoped(sampleBlockers(monitor, backend.pid, wait));
       }
 
       yield* control(connection, LOCK_CONFIG_KEY).pipe(
@@ -363,10 +489,10 @@ export const makeConfigCommit = (
   > =>
     Effect.gen(function* configCommitAttempt() {
       const state = new TransactionState("config", client);
-      const blockers = new Set<number>();
+      const wait: AttemptWait = { blockers: new Set<number>() };
 
       const exit = yield* Effect.exit(
-        runAtConfigState(state, configSetup(monitor, blockers), effect)
+        runAtConfigState(state, configSetup(monitor, wait), effect)
       );
 
       if (
@@ -374,7 +500,11 @@ export const makeConfigCommit = (
         state.lockTimedOut &&
         onlyLockTimeouts(exit.cause)
       ) {
-        return yield* new AttemptLockTimedOut({ blockers: [...blockers] });
+        const blockers = [...wait.blockers];
+
+        return yield* wait.waited === undefined
+          ? new AttemptLockTimedOut({ blockers })
+          : new AttemptLockTimedOut({ blockers, waited: wait.waited });
       }
 
       return yield* exit;
@@ -415,7 +545,7 @@ export const makeConfigCommit = (
         (error): error is AttemptLockTimedOut =>
           error instanceof AttemptLockTimedOut,
         (timedOut) =>
-          describeLockHolders(monitor, timedOut.blockers).pipe(
+          describeLockHolders(monitor, timedOut.blockers, timedOut.waited).pipe(
             Effect.flatMap((holders) =>
               Effect.fail(new SchemaLockTimeout({ attempts, holders }))
             )

@@ -185,6 +185,11 @@ For the reads workstream and the storage benchmark (`docs/decisions/0004-storage
 - An admitted `SET LOCAL` of a planner setting does not count as a write, so a nested unit that only tuned plans may fail without poisoning the transaction. The setting stays in force for the rest of the outer transaction, as `SET LOCAL` does; that is acceptable because it changes plans, never results. A `SET LOCAL` of a timeout still counts as a write: left behind by a failed nested unit it would change the outer transaction's deadlines (a config commit sets its budgets once, at setup). `readOnly` still refuses a `SET`.
 - `readOnly(statement, { unprepared: true })` runs the statement through `Statement.unprepared`, so Postgres plans it for its actual parameters. The read rules are unchanged: the transaction checks the same text (first keyword, single statement, `writeClause`) whichever way it is sent.
 
+## Lock-holder sampling (API changes)
+
+- A config commit attempt's blocker sampler (`pg_blocking_pids` of its backend, at once and then every 50 ms) now only adds to what it has seen. It used to replace the set on every sample, and since it runs until the attempt's scope closes, a sample taken after the lock timeout and the `ROLLBACK` saw no wait and erased the blockers; under load that window is long, so `SchemaLockTimeout` named the `CONFIG_KEY` holders instead of the session holding the table. The per-attempt lock timeouts are unchanged.
+- The sampler also records the relation lock the attempt was last seen waiting for (`pg_locks`, oid and mode). When no blocker was sampled, `describeLockHolders(monitor, pids, waited?)` names the sessions holding a lock on that relation in a mode that conflicts with the waited one; only without either does it fall back to the `CONFIG_KEY` holders. `AttemptLockTimedOut` carries `waited`.
+
 ## Open items
 
 - The root `vitest.config.ts` lists `bench`, which does not exist on this branch, so `pnpm test` from the root fails to start until the benchmark workstream lands; `pnpm -r test` runs both packages.
