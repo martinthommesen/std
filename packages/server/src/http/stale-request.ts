@@ -608,22 +608,20 @@ const relevantChanges = (
 };
 
 /**
- * Checks only the stated revision's identity (Contracts 6.4): the same
+ * Whether this database has the stated revision (Contracts 6.4): the same
  * state as the transaction's, or an older revision whose change set the
- * journal records at that number. Anything else (a number above the
- * current one, another change set at that number, a journal that no longer
- * reaches it) is `SchemaChanged` with no change listed, whatever the
- * request names: the client's revision does not describe this database.
- * Used where the request's scope must not be looked up first (the
- * change-set endpoint, whose targets may be hidden).
+ * journal records at that number. A number above the current one, another
+ * change set at that number, or a journal that no longer reaches it means
+ * the client's revision does not describe this database. Decided without
+ * looking up anything the request names.
  *
  * @param statedRevision - The request's revision, if it sent one.
- * @returns Nothing, or `SchemaChanged`.
+ * @returns True when absent or known.
  */
-export const checkRevisionIdentity = Effect.fn("StaleRequest.identity")(
-  function* checkRevisionIdentity(statedRevision: Option.Option<ConfigState>) {
+export const isRevisionKnown = Effect.fn("StaleRequest.isKnown")(
+  function* isRevisionKnown(statedRevision: Option.Option<ConfigState>) {
     if (Option.isNone(statedRevision)) {
-      return yield* Effect.void;
+      return true;
     }
 
     const stated = statedRevision.value;
@@ -633,15 +631,30 @@ export const checkRevisionIdentity = Effect.fn("StaleRequest.identity")(
       stated.revision === current.revision &&
       stated.changeSetId === current.changeSetId;
 
-    if (
+    return (
       unchanged ||
       (stated.revision < current.revision && (yield* journalReaches(stated)))
-    ) {
-      return yield* Effect.void;
-    }
+    );
+  }
+);
+
+/**
+ * The refusal of a revision this database does not have: every field in
+ * the request's scope counts as changed, kind `unknown` (Contracts 6.4).
+ *
+ * @param stated - The request's revision.
+ * @param changes - The `unknown` entries of the scope, without duplicates.
+ * @returns `SchemaChanged`.
+ */
+export const unknownRevision = Effect.fn("StaleRequest.unknownRevision")(
+  function* unknownRevision(
+    stated: ConfigState,
+    changes: readonly SchemaChange[]
+  ) {
+    const current = yield* RequestRevision;
 
     return yield* new SchemaChanged({
-      changes: [],
+      changes: [...changes],
       currentRevision: revisionHeaderValue(current),
       requestRevision: revisionHeaderValue(stated),
     });

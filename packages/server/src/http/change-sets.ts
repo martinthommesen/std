@@ -24,6 +24,7 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import { SchemaBusy } from "@std/api/errors/schema-busy";
 import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
+import type { SchemaChange } from "@std/api/errors/schemas";
 import {
   DEFINITION_KINDS,
   DefinitionSchema,
@@ -63,7 +64,8 @@ import type {
 import type { ConfigState } from "../sql/request-revision.ts";
 import {
   checkRequestRevision,
-  checkRevisionIdentity,
+  isRevisionKnown,
+  unknownRevision,
 } from "./stale-request.ts";
 
 /** The platform table of each definition kind. */
@@ -328,6 +330,45 @@ export const checkTargetsVisible = Effect.fn("Http.checkTargetsVisible")(
 );
 
 /**
+ * The 6.4 check of one operation's scope, as a generic write of the same
+ * table runs it: its definition table and the columns it writes (none for
+ * a delete or purge). A target hidden from the caller, or missing, has no
+ * scope: nothing about it is looked up.
+ *
+ * @param stated - The revision the request stated, if any.
+ * @param snapshot - The configuration the request runs at.
+ * @param operation - The operation.
+ * @param hidden - Definitions hidden from the caller or missing.
+ * @returns Fails with `SchemaChanged`.
+ */
+const operationScopeCheck = (
+  stated: Option.Option<ConfigState>,
+  snapshot: ConfigSnapshot,
+  operation: Operation,
+  hidden: ReadonlySet<DefinitionId>
+) => {
+  const kind = hidden.has(targetIdOf(operation))
+    ? undefined
+    : kindOf(snapshot, operation);
+
+  if (kind === undefined) {
+    return Effect.void;
+  }
+
+  const table = `core.${DEFINITION_TABLE[kind]}`;
+  const action = actionOf(operation);
+
+  return action === "delete"
+    ? checkRequestRevision(stated, table, {})
+    : checkRequestRevision(
+        stated,
+        table,
+        { fields: writtenColumns(snapshot, operation, kind).join(",") },
+        { action: action === "create" ? "create" : "update" }
+      );
+};
+
+/**
  * The stale-request check of Contracts 6.4 for a change set, the way
  * generic writes to definition tables run it: for each operation, its
  * definition table and the columns it writes (none for a delete or
@@ -345,32 +386,58 @@ export const checkChangeSetRevision = Effect.fn("Http.checkChangeSetRevision")(
     stated: Option.Option<ConfigState>,
     operations: readonly Operation[]
   ) {
-    if (Option.isNone(stated)) {
-      return yield* Effect.void;
-    }
-
     const snapshot = yield* (yield* Catalog).current;
 
     for (const operation of operations) {
-      const kind = kindOf(snapshot, operation);
-      const action = actionOf(operation);
-
-      // An unknown target is reported by the change set (`unknownDefinition`).
-      if (kind !== undefined) {
-        const table = `core.${DEFINITION_TABLE[kind]}`;
-
-        yield* action === "delete"
-          ? checkRequestRevision(stated, table, {})
-          : checkRequestRevision(
-              stated,
-              table,
-              { fields: writtenColumns(snapshot, operation, kind).join(",") },
-              { action: action === "create" ? "create" : "update" }
-            );
-      }
+      yield* operationScopeCheck(stated, snapshot, operation, new Set());
     }
 
     return yield* Effect.void;
+  }
+);
+
+/**
+ * The `unknown` entries of a revision this database does not have: every
+ * operation's scope that needs no target looked up (a create's table and
+ * written columns), and the scopes of visible targets; hidden and missing
+ * targets add nothing, so they look alike (Contracts 3.8, 6.4).
+ *
+ * @param stated - The revision the request stated.
+ * @param operations - The operations.
+ * @param hidden - Definitions hidden from the caller or missing.
+ * @returns Fails with `SchemaChanged`.
+ */
+const refuseUnknownRevision = Effect.fn("Http.refuseUnknownRevision")(
+  function* refuseUnknownRevision(
+    stated: ConfigState,
+    operations: readonly Operation[],
+    hidden: ReadonlySet<DefinitionId>
+  ) {
+    const snapshot = yield* (yield* Catalog).current;
+    const changes = new Map<string, SchemaChange>();
+
+    for (const operation of operations) {
+      const found = yield* operationScopeCheck(
+        Option.some(stated),
+        snapshot,
+        operation,
+        hidden
+      ).pipe(
+        Effect.as([]),
+        Effect.catchTag("SchemaChanged", (failure) =>
+          Effect.succeed(failure.changes)
+        )
+      );
+
+      for (const change of found) {
+        changes.set(
+          `${change.table}/${change.fieldId ?? change.field ?? ""}/${change.kind}`,
+          change
+        );
+      }
+    }
+
+    return yield* unknownRevision(stated, [...changes.values()]);
   }
 );
 
@@ -452,7 +519,8 @@ export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
  * Everything the change-set endpoint checks about its request before the
  * schema engine sees it, in the request transaction and again wherever
  * the change set validates or commits (`ChangeSetRequest.authorize`): the
- * stated revision's identity (does this database have it), the access
+ * stated revision's identity (does this database have it; if not,
+ * `SchemaChanged` with the scopes that reveal no hidden target), the access
  * rules (with hidden targets treated as missing), every target's existence
  * and visibility (a hidden one refused like a missing one), and only then
  * the per-table checks of 6.4 for the visible targets.
@@ -466,11 +534,18 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
     stated: Option.Option<ConfigState>,
     operations: readonly Operation[]
   ) {
-    // Whether this database has the stated revision at all, before any
-    // target is looked up (6.4).
-    yield* checkRevisionIdentity(stated);
-
     const hidden = yield* hiddenTargets(operations);
+
+    // A revision this database does not have: SchemaChanged before
+    // anything else, listing only what does not reveal hidden targets.
+    if (Option.isSome(stated) && !(yield* isRevisionKnown(stated))) {
+      return yield* refuseUnknownRevision(
+        stated.value,
+        operations,
+        new Set(hidden)
+      );
+    }
+
     const actor = yield* Actor;
 
     // Access rules first, treating hidden targets as missing, so a caller
