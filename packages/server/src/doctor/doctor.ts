@@ -25,17 +25,18 @@
  * | 16 | latest definition revision equals the effective record | `check-config` |
  */
 import type { DefinitionInvalid } from "@std/definitions/problems";
-import { Effect } from "effect";
-import type { SqlClient } from "effect/sql";
+import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 
-import type { Catalog } from "../catalog/catalog.ts";
-import { readInstalledState } from "../config/installed-state.ts";
-import { layerTablesExist } from "../config/layer-store.ts";
+import { Catalog } from "../catalog/catalog.ts";
+import { layerTablesExist, readLayerState } from "../config/layer-store.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
-import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
-import type { Transactions } from "../sql/transactions.ts";
+import { parseConfigState } from "../sql/request-revision.ts";
+import { decodeRows } from "../sql/rows.ts";
+import { readOnly } from "../sql/statement-marks.ts";
+import { Transactions } from "../sql/transactions.ts";
 import { readCatalogFacts, tableKey } from "./catalog-facts.ts";
 import {
   checkAuditUsers,
@@ -47,6 +48,7 @@ import {
   checkProtected,
   checkRevision,
 } from "./check-config.ts";
+import { checkDefaults } from "./check-defaults.ts";
 import {
   checkColumnHeadroom,
   checkConstraintsValid,
@@ -84,37 +86,54 @@ export interface DoctorReport {
 const byCheck = (findings: readonly Finding[]): readonly Finding[] =>
   findings.toSorted((left, right) => left.check - right.check);
 
+const decodePresence = decodeRows(Schema.Struct({ present: Schema.Boolean }));
+
 /**
- * Runs every check. It only reads.
- *
- * @param options - Migrations and the core set to compare with.
- * @returns The findings and the exit code.
+ * The configuration state and snapshot in the diagnostic transaction, read
+ * from `core.config_state` without `begin_request()` (no advisory lock);
+ * none before the platform migrations created the definition tables.
  */
-export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
-  options: DoctorOptions = {}
-): Effect.fn.Return<
-  DoctorReport,
-  DatabaseError | DefinitionInvalid,
-  Catalog | Transactions | SqlClient.SqlClient
-> {
+const diagnosticState = Effect.gen(function* diagnosticState() {
+  const sql = yield* SqlClient.SqlClient;
+  const catalog = yield* Catalog;
+
+  const [presence] = yield* readOnly(
+    sql`SELECT to_regclass('core.namespace') IS NOT NULL AND to_regclass('core.config_state') IS NOT NULL AS present`
+  ).pipe(Effect.flatMap(decodePresence));
+
+  if (presence?.present !== true) {
+    return null;
+  }
+
+  const state = yield* parseConfigState(
+    yield* readOnly(
+      sql`SELECT revision::text AS revision, change_set_id::text AS change_set_id FROM core.config_state`
+    )
+  );
+
+  return {
+    layers: yield* readLayerState,
+    snapshot: yield* catalog.at(state),
+  };
+});
+
+const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
+  options: DoctorOptions
+) {
   const server = [
-    ...(yield* hygienic(
-      checkLedger(options.migrations ?? PLATFORM_MIGRATIONS)
-    )),
-    ...(yield* hygienic(checkUnicodeVersion)),
-    ...(yield* hygienic(checkServerSettings)),
+    ...(yield* checkLedger(options.migrations ?? PLATFORM_MIGRATIONS)),
+    ...(yield* checkUnicodeVersion),
+    ...(yield* checkServerSettings),
   ];
 
-  const installed = yield* readInstalledState;
+  const installed = yield* diagnosticState;
 
-  if (installed.state === null) {
-    const findings = byCheck(server);
-
-    return { exitCode: exitCodeOf(findings), findings };
+  if (installed === null) {
+    return server;
   }
 
   const { snapshot, layers } = installed;
-  const catalog = yield* hygienic(readCatalogFacts(stdSchemas(snapshot)));
+  const catalog = yield* readCatalogFacts(stdSchemas(snapshot));
 
   const exists = (classId: string): boolean => {
     const definition = snapshot.class(classId);
@@ -131,32 +150,45 @@ export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
     );
   };
 
-  const config = yield* hygienic(
-    Effect.gen(function* configChecks() {
-      return [
-        ...(yield* checkChangeSets),
-        ...(yield* checkRevision),
-        ...(yield* checkLayers(snapshot, layers, yield* layerTablesExist)),
-        ...(yield* checkDependencies(snapshot)),
-        ...(yield* checkDefinitionRevisions(snapshot)),
-        ...(yield* checkLevelRows(snapshot, exists)),
-        ...(yield* checkAuditUsers(snapshot, exists)),
-        ...(yield* checkExternalIdentities),
-      ];
-    })
-  );
-
-  const findings = byCheck([
+  return [
     ...server,
     ...checkTablesMatch(snapshot, catalog),
+    ...(yield* checkDefaults(snapshot, catalog)),
     ...checkConstraintsValid(snapshot, catalog),
     ...checkPurgedAbsent(snapshot, catalog),
     ...checkOrphans(snapshot, catalog),
     ...checkColumnHeadroom(catalog),
     ...checkInheritanceCatalog(snapshot, catalog),
-    ...config,
+    ...(yield* checkChangeSets),
+    ...(yield* checkRevision),
+    ...(yield* checkLayers(snapshot, layers, yield* layerTablesExist)),
+    ...(yield* checkDependencies(snapshot)),
+    ...(yield* checkDefinitionRevisions(snapshot)),
+    ...(yield* checkLevelRows(snapshot, exists)),
+    ...(yield* checkAuditUsers(snapshot, exists)),
+    ...(yield* checkExternalIdentities),
     ...(yield* checkProtected(snapshot, layers, options.coreDirectory)),
-  ]);
+  ];
+});
+
+/**
+ * Runs every check in one diagnostic transaction (`Transactions.diagnostic`:
+ * REPEATABLE READ READ ONLY, one snapshot, no advisory locks, every
+ * statement marked read-only), so it neither changes anything nor waits
+ * for a config commit or a schema change's coordinator.
+ *
+ * @param options - Migrations and the core set to compare with.
+ * @returns The findings and the exit code.
+ */
+export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
+  options: DoctorOptions = {}
+): Effect.fn.Return<
+  DoctorReport,
+  DatabaseError | DefinitionInvalid,
+  Catalog | Transactions
+> {
+  const { diagnostic } = yield* Transactions;
+  const findings = byCheck(yield* diagnostic(allChecks(options)));
 
   return { exitCode: exitCodeOf(findings), findings };
 });

@@ -1,0 +1,5719 @@
+{
+  "core.access_rule": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "description",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "effect",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "role_ids",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "target",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "fields",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "actions",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "condition",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "active",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL actions",
+        "name": "access_rule_actions_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL active",
+        "name": "access_rule_active_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "access_rule_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((target = 'records'::text) = (fields IS NULL)))",
+        "name": "access_rule_check1",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "access_rule_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "access_rule_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "access_rule_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((effect = ANY (ARRAY['allow'::text, 'deny'::text])))",
+        "name": "access_rule_effect_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL effect",
+        "name": "access_rule_effect_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "access_rule_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "access_rule_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "access_rule_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "access_rule_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL role_ids",
+        "name": "access_rule_role_ids_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "access_rule_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "access_rule_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (table_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "access_rule_table_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((target = ANY (ARRAY['records'::text, 'fields'::text])))",
+        "name": "access_rule_target_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL target",
+        "name": "access_rule_target_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "access_rule_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "access_rule_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "access_rule_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "access_rule_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_051b98ff3fc24155a6e8b3d9053a5b9e",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '051b98ff-3fc2-4155-a6e8-b3d9053a5b9e'::uuid))",
+        "name": "std_sc_051b98ff3fc24155a6e8b3d9053a5b9e",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_051b98ff3fc24155a6e8b3d9053a5b9e",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX access_rule_table ON core.access_rule USING btree (table_id)",
+        "name": "access_rule_table",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_051b98ff3fc24155a6e8b3d9053a5b9e ON core.access_rule USING btree (id)",
+        "name": "std_pk_051b98ff3fc24155a6e8b3d9053a5b9e",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_051b98ff3fc24155a6e8b3d9053a5b9e ON core.access_rule USING btree (id, class_id)",
+        "name": "std_uq_051b98ff3fc24155a6e8b3d9053a5b9e",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_051b98ff3fc24155a6e8b3d9053a5b9e BEFORE UPDATE ON core.access_rule FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_051b98ff3fc24155a6e8b3d9053a5b9e"
+      }
+    ]
+  },
+  "core.change": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "operation_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "actor_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "cause",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "schema_revision",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "occurred_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "fields",
+        "notNull": true,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL actor_id",
+        "name": "change_actor_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((created_by = actor_id) AND (updated_by = actor_id) AND (created_at = occurred_at) AND (updated_at = occurred_at)))",
+        "name": "change_audit",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((jsonb_typeof(cause) = 'object'::text))",
+        "name": "change_cause_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL cause",
+        "name": "change_cause_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "change_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "change_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "change_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((jsonb_typeof(fields) = 'object'::text))",
+        "name": "change_fields_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL fields",
+        "name": "change_fields_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "change_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((kind = ANY (ARRAY['create'::text, 'update'::text, 'delete'::text])))",
+        "name": "change_kind_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL kind",
+        "name": "change_kind_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL occurred_at",
+        "name": "change_occurred_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL operation_id",
+        "name": "change_operation_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL record_class_id",
+        "name": "change_record_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL record_id",
+        "name": "change_record_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (record_id, record_version)",
+        "name": "change_record_version",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((record_version > 0))",
+        "name": "change_record_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL record_version",
+        "name": "change_record_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((schema_revision >= 0))",
+        "name": "change_schema_revision_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL schema_revision",
+        "name": "change_schema_revision_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "change_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "change_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version = 1))",
+        "name": "change_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "change_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_edde151df2044639bcbfa4793f86a219",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'edde151d-f204-4639-bcbf-a4793f86a219'::uuid))",
+        "name": "std_sc_edde151df2044639bcbfa4793f86a219",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_edde151df2044639bcbfa4793f86a219",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX change_operation ON core.change USING btree (operation_id)",
+        "name": "change_operation",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX change_record_version ON core.change USING btree (record_id, record_version)",
+        "name": "change_record_version",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_edde151df2044639bcbfa4793f86a219 ON core.change USING btree (id)",
+        "name": "std_pk_edde151df2044639bcbfa4793f86a219",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_edde151df2044639bcbfa4793f86a219 ON core.change USING btree (id, class_id)",
+        "name": "std_uq_edde151df2044639bcbfa4793f86a219",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_edde151df2044639bcbfa4793f86a219 BEFORE UPDATE ON core.change FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_edde151df2044639bcbfa4793f86a219"
+      }
+    ]
+  },
+  "core.class": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "enforcement",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "enforcement_note",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "namespace_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "parent_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "display_field_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "storage",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "extensible",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "class_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "class_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "class_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "class_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (display_field_id) REFERENCES core.field(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "class_display_field",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((enforcement = ANY (ARRAY['pending'::text, 'enforced'::text, 'failed'::text])))",
+        "name": "class_enforcement_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL enforcement",
+        "name": "class_enforcement_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL extensible",
+        "name": "class_extensible_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL label",
+        "name": "class_label_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "class_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (namespace_id) REFERENCES core.namespace(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "class_namespace_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL namespace_id",
+        "name": "class_namespace_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "class_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "class_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (parent_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "class_parent_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "class_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "class_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "class_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((storage = ANY (ARRAY['standard'::text, 'platform'::text])))",
+        "name": "class_storage_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL storage",
+        "name": "class_storage_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "class_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "class_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "class_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "class_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_7a8a72021e014d77bf6f4ff80876bef6",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '7a8a7202-1e01-4d77-bf6f-4ff80876bef6'::uuid))",
+        "name": "std_sc_7a8a72021e014d77bf6f4ff80876bef6",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_7a8a72021e014d77bf6f4ff80876bef6",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX class_name_live ON core.class USING btree (namespace_id, name) WHERE (state <> 'purged'::text)",
+        "name": "class_name_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX class_parent ON core.class USING btree (parent_id)",
+        "name": "class_parent",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_7a8a72021e014d77bf6f4ff80876bef6 ON core.class USING btree (id)",
+        "name": "std_pk_7a8a72021e014d77bf6f4ff80876bef6",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_7a8a72021e014d77bf6f4ff80876bef6 ON core.class USING btree (id, class_id)",
+        "name": "std_uq_7a8a72021e014d77bf6f4ff80876bef6",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_7a8a72021e014d77bf6f4ff80876bef6 BEFORE UPDATE ON core.class FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_7a8a72021e014d77bf6f4ff80876bef6"
+      }
+    ]
+  },
+  "core.config_base": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "set_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "set_version",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "shipped",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "hash",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "removed",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "config_base_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "config_base_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "config_base_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL hash",
+        "name": "config_base_hash_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "config_base_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL kind",
+        "name": "config_base_kind_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL removed",
+        "name": "config_base_removed_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (set_id) REFERENCES core.config_set(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "config_base_set_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_id",
+        "name": "config_base_set_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((set_version > 0))",
+        "name": "config_base_set_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_version",
+        "name": "config_base_set_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL shipped",
+        "name": "config_base_shipped_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "config_base_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "config_base_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "config_base_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "config_base_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_aa13ec55456b415baab5ef9c42438f16",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'aa13ec55-456b-415b-aab5-ef9c42438f16'::uuid))",
+        "name": "std_sc_aa13ec55456b415baab5ef9c42438f16",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_aa13ec55456b415baab5ef9c42438f16",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX config_base_set ON core.config_base USING btree (set_id)",
+        "name": "config_base_set",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_aa13ec55456b415baab5ef9c42438f16 ON core.config_base USING btree (id)",
+        "name": "std_pk_aa13ec55456b415baab5ef9c42438f16",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_aa13ec55456b415baab5ef9c42438f16 ON core.config_base USING btree (id, class_id)",
+        "name": "std_uq_aa13ec55456b415baab5ef9c42438f16",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_aa13ec55456b415baab5ef9c42438f16 BEFORE UPDATE ON core.config_base FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_aa13ec55456b415baab5ef9c42438f16"
+      }
+    ]
+  },
+  "core.config_conflict": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "property",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "set_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "set_version",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "change_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "old_shipped",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "new_shipped",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "local_value",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "resolution",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "resolved_value",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "resolved_by",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "resolved_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (change_set_id) REFERENCES core.schema_change(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "config_conflict_change_set_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((state = 'open'::text) = (resolution IS NULL)))",
+        "name": "config_conflict_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "config_conflict_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "config_conflict_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "config_conflict_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "config_conflict_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL local_value",
+        "name": "config_conflict_local_value_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL new_shipped",
+        "name": "config_conflict_new_shipped_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL old_shipped",
+        "name": "config_conflict_old_shipped_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL property",
+        "name": "config_conflict_property_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL record_id",
+        "name": "config_conflict_record_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((resolution = ANY (ARRAY['keep_local'::text, 'take_shipped'::text, 'replace'::text, 'converged'::text])))",
+        "name": "config_conflict_resolution_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (set_id) REFERENCES core.config_set(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "config_conflict_set_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_id",
+        "name": "config_conflict_set_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((set_version > 0))",
+        "name": "config_conflict_set_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_version",
+        "name": "config_conflict_set_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['open'::text, 'resolved'::text])))",
+        "name": "config_conflict_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "config_conflict_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "config_conflict_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "config_conflict_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "config_conflict_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "config_conflict_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_b7281780944146f39d58f14b812a59c2",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'b7281780-9441-46f3-9d58-f14b812a59c2'::uuid))",
+        "name": "std_sc_b7281780944146f39d58f14b812a59c2",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_b7281780944146f39d58f14b812a59c2",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX config_conflict_open ON core.config_conflict USING btree (record_id, property) WHERE (state = 'open'::text)",
+        "name": "config_conflict_open",
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX config_conflict_record ON core.config_conflict USING btree (record_id)",
+        "name": "config_conflict_record",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_b7281780944146f39d58f14b812a59c2 ON core.config_conflict USING btree (id)",
+        "name": "std_pk_b7281780944146f39d58f14b812a59c2",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_b7281780944146f39d58f14b812a59c2 ON core.config_conflict USING btree (id, class_id)",
+        "name": "std_uq_b7281780944146f39d58f14b812a59c2",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_b7281780944146f39d58f14b812a59c2 BEFORE UPDATE ON core.config_conflict FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_b7281780944146f39d58f14b812a59c2"
+      }
+    ]
+  },
+  "core.config_dependency": {
+    "columns": [
+      {
+        "default": null,
+        "name": "from_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "to_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL from_id",
+        "name": "config_dependency_from_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL kind",
+        "name": "config_dependency_kind_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (from_id, kind, to_id)",
+        "name": "config_dependency_pkey",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL to_id",
+        "name": "config_dependency_to_id_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX config_dependency_pkey ON core.config_dependency USING btree (from_id, kind, to_id)",
+        "name": "config_dependency_pkey",
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX config_dependency_to ON core.config_dependency USING btree (to_id)",
+        "name": "config_dependency_to",
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.config_override": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "property",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "value",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "base_when_set",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "set_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "set_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL base_when_set",
+        "name": "config_override_base_when_set_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "config_override_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "config_override_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "config_override_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "config_override_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL property",
+        "name": "config_override_property_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (record_id) REFERENCES core.config_base(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "config_override_record_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL record_id",
+        "name": "config_override_record_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (record_id, property)",
+        "name": "config_override_record_id_property_key",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_at",
+        "name": "config_override_set_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_by",
+        "name": "config_override_set_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "config_override_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "config_override_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL value",
+        "name": "config_override_value_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "config_override_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "config_override_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_225c71f0e4114e5ea01caebdd779a2c5",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '225c71f0-e411-4e5e-a01c-aebdd779a2c5'::uuid))",
+        "name": "std_sc_225c71f0e4114e5ea01caebdd779a2c5",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_225c71f0e4114e5ea01caebdd779a2c5",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX config_override_record_id_property_key ON core.config_override USING btree (record_id, property)",
+        "name": "config_override_record_id_property_key",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_225c71f0e4114e5ea01caebdd779a2c5 ON core.config_override USING btree (id)",
+        "name": "std_pk_225c71f0e4114e5ea01caebdd779a2c5",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_225c71f0e4114e5ea01caebdd779a2c5 ON core.config_override USING btree (id, class_id)",
+        "name": "std_uq_225c71f0e4114e5ea01caebdd779a2c5",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_225c71f0e4114e5ea01caebdd779a2c5 BEFORE UPDATE ON core.config_override FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_225c71f0e4114e5ea01caebdd779a2c5"
+      }
+    ]
+  },
+  "core.config_set": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "set_version",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "hash",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "requires",
+        "notNull": true,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "config_set_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "config_set_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "config_set_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL hash",
+        "name": "config_set_hash_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "config_set_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((layer = ANY (ARRAY['core'::text, 'app'::text])))",
+        "name": "config_set_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL layer",
+        "name": "config_set_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "config_set_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL requires",
+        "name": "config_set_requires_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((set_version > 0))",
+        "name": "config_set_set_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL set_version",
+        "name": "config_set_set_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "config_set_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "config_set_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "config_set_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "config_set_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_0b70df4dc0004b9aaa7f8b5b92f1afce",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '0b70df4d-c000-4b9a-aa7f-8b5b92f1afce'::uuid))",
+        "name": "std_sc_0b70df4dc0004b9aaa7f8b5b92f1afce",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_0b70df4dc0004b9aaa7f8b5b92f1afce",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX config_set_name ON core.config_set USING btree (name)",
+        "name": "config_set_name",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_0b70df4dc0004b9aaa7f8b5b92f1afce ON core.config_set USING btree (id)",
+        "name": "std_pk_0b70df4dc0004b9aaa7f8b5b92f1afce",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_0b70df4dc0004b9aaa7f8b5b92f1afce ON core.config_set USING btree (id, class_id)",
+        "name": "std_uq_0b70df4dc0004b9aaa7f8b5b92f1afce",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_0b70df4dc0004b9aaa7f8b5b92f1afce BEFORE UPDATE ON core.config_set FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_0b70df4dc0004b9aaa7f8b5b92f1afce"
+      }
+    ]
+  },
+  "core.config_state": {
+    "columns": [
+      {
+        "default": "true",
+        "name": "singleton",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "revision",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "change_set_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL change_set_id",
+        "name": "config_state_change_set_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (singleton)",
+        "name": "config_state_pkey",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((revision >= 0))",
+        "name": "config_state_revision_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL revision",
+        "name": "config_state_revision_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (singleton)",
+        "name": "config_state_singleton_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL singleton",
+        "name": "config_state_singleton_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX config_state_pkey ON core.config_state USING btree (singleton)",
+        "name": "config_state_pkey",
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.definition_revision": {
+    "columns": [
+      {
+        "default": null,
+        "name": "definition_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "revision",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "effective",
+        "notNull": true,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL definition_id",
+        "name": "definition_revision_definition_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL effective",
+        "name": "definition_revision_effective_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL kind",
+        "name": "definition_revision_kind_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (definition_id, revision)",
+        "name": "definition_revision_pkey",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((revision > 0))",
+        "name": "definition_revision_revision_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL revision",
+        "name": "definition_revision_revision_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX definition_revision_pkey ON core.definition_revision USING btree (definition_id, revision)",
+        "name": "definition_revision_pkey",
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.field": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "enforcement",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "enforcement_note",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "type",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "required",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "read_only",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "default_value",
+        "notNull": false,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "field_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "field_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "field_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "field_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((enforcement = ANY (ARRAY['pending'::text, 'enforced'::text, 'failed'::text])))",
+        "name": "field_enforcement_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL enforcement",
+        "name": "field_enforcement_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "field_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL label",
+        "name": "field_label_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "field_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "field_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "field_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "field_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL read_only",
+        "name": "field_read_only_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL required",
+        "name": "field_required_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "field_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "field_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (table_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "field_table_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL table_id",
+        "name": "field_table_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL type",
+        "name": "field_type_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "field_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "field_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "field_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "field_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_de5ad84a87aa45a0b76b2ce287e306c2",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'de5ad84a-87aa-45a0-b76b-2ce287e306c2'::uuid))",
+        "name": "std_sc_de5ad84a87aa45a0b76b2ce287e306c2",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_de5ad84a87aa45a0b76b2ce287e306c2",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX field_name_live ON core.field USING btree (table_id, name) WHERE (state <> 'purged'::text)",
+        "name": "field_name_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_de5ad84a87aa45a0b76b2ce287e306c2 ON core.field USING btree (id)",
+        "name": "std_pk_de5ad84a87aa45a0b76b2ce287e306c2",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_de5ad84a87aa45a0b76b2ce287e306c2 ON core.field USING btree (id, class_id)",
+        "name": "std_uq_de5ad84a87aa45a0b76b2ce287e306c2",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_de5ad84a87aa45a0b76b2ce287e306c2 BEFORE UPDATE ON core.field FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_de5ad84a87aa45a0b76b2ce287e306c2"
+      }
+    ]
+  },
+  "core.field_override": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "enforcement",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "enforcement_note",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "field_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "required",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "read_only",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "max_length",
+        "notNull": false,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "min_value",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "max_value",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "default_value",
+        "notNull": false,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "field_override_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "field_override_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "field_override_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "field_override_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((enforcement = ANY (ARRAY['pending'::text, 'enforced'::text, 'failed'::text])))",
+        "name": "field_override_enforcement_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL enforcement",
+        "name": "field_override_enforcement_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (field_id) REFERENCES core.field(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "field_override_field_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL field_id",
+        "name": "field_override_field_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "field_override_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "field_override_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "field_override_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "field_override_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "field_override_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "field_override_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (table_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "field_override_table_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL table_id",
+        "name": "field_override_table_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "field_override_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "field_override_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "field_override_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "field_override_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_e29c0472668e40ffbb0c8ffa8e8b6f37",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'e29c0472-668e-40ff-bb0c-8ffa8e8b6f37'::uuid))",
+        "name": "std_sc_e29c0472668e40ffbb0c8ffa8e8b6f37",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_e29c0472668e40ffbb0c8ffa8e8b6f37",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX field_override_live ON core.field_override USING btree (table_id, field_id) WHERE (state <> 'purged'::text)",
+        "name": "field_override_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_e29c0472668e40ffbb0c8ffa8e8b6f37 ON core.field_override USING btree (id)",
+        "name": "std_pk_e29c0472668e40ffbb0c8ffa8e8b6f37",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_e29c0472668e40ffbb0c8ffa8e8b6f37 ON core.field_override USING btree (id, class_id)",
+        "name": "std_uq_e29c0472668e40ffbb0c8ffa8e8b6f37",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_e29c0472668e40ffbb0c8ffa8e8b6f37 BEFORE UPDATE ON core.field_override FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_e29c0472668e40ffbb0c8ffa8e8b6f37"
+      }
+    ]
+  },
+  "core.index": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "enforcement",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "enforcement_note",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "field_ids",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "is_unique",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "index_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "index_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "index_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "index_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((enforcement = ANY (ARRAY['pending'::text, 'enforced'::text, 'failed'::text])))",
+        "name": "index_enforcement_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL enforcement",
+        "name": "index_enforcement_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL field_ids",
+        "name": "index_field_ids_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "index_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL is_unique",
+        "name": "index_is_unique_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "index_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "index_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "index_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "index_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "index_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (table_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "index_table_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL table_id",
+        "name": "index_table_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "index_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "index_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "index_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "index_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_3e7e3e312fef44149c85e37a441a8809",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '3e7e3e31-2fef-4414-9c85-e37a441a8809'::uuid))",
+        "name": "std_sc_3e7e3e312fef44149c85e37a441a8809",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_3e7e3e312fef44149c85e37a441a8809",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX index_table ON core.index USING btree (table_id)",
+        "name": "index_table",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_3e7e3e312fef44149c85e37a441a8809 ON core.index USING btree (id)",
+        "name": "std_pk_3e7e3e312fef44149c85e37a441a8809",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_3e7e3e312fef44149c85e37a441a8809 ON core.index USING btree (id, class_id)",
+        "name": "std_uq_3e7e3e312fef44149c85e37a441a8809",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_3e7e3e312fef44149c85e37a441a8809 BEFORE UPDATE ON core.index FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_3e7e3e312fef44149c85e37a441a8809"
+      }
+    ]
+  },
+  "core.namespace": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "storage",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "extensible",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "namespace_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "namespace_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "namespace_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "namespace_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL extensible",
+        "name": "namespace_extensible_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "namespace_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL label",
+        "name": "namespace_label_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "namespace_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "namespace_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "namespace_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "namespace_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "namespace_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "namespace_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((storage = ANY (ARRAY['standard'::text, 'platform'::text])))",
+        "name": "namespace_storage_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL storage",
+        "name": "namespace_storage_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "namespace_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "namespace_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "namespace_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "namespace_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_53500c6c063b423ab626a6a938649162",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '53500c6c-063b-423a-b626-a6a938649162'::uuid))",
+        "name": "std_sc_53500c6c063b423ab626a6a938649162",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_53500c6c063b423ab626a6a938649162",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX namespace_name_live ON core.namespace USING btree (name) WHERE (state <> 'purged'::text)",
+        "name": "namespace_name_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_53500c6c063b423ab626a6a938649162 ON core.namespace USING btree (id)",
+        "name": "std_pk_53500c6c063b423ab626a6a938649162",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_53500c6c063b423ab626a6a938649162 ON core.namespace USING btree (id, class_id)",
+        "name": "std_uq_53500c6c063b423ab626a6a938649162",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_53500c6c063b423ab626a6a938649162 BEFORE UPDATE ON core.namespace FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_53500c6c063b423ab626a6a938649162"
+      }
+    ]
+  },
+  "core.permission": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "permission_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "permission_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "permission_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "permission_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "permission_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL label",
+        "name": "permission_label_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "permission_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "permission_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "permission_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "permission_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "permission_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "permission_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "permission_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "permission_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "permission_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "permission_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_0d6333e6d2414da7a4565cafd70db0a4",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '0d6333e6-d241-4da7-a456-5cafd70db0a4'::uuid))",
+        "name": "std_sc_0d6333e6d2414da7a4565cafd70db0a4",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_0d6333e6d2414da7a4565cafd70db0a4",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX permission_name_live ON core.permission USING btree (name) WHERE (state <> 'purged'::text)",
+        "name": "permission_name_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_0d6333e6d2414da7a4565cafd70db0a4 ON core.permission USING btree (id)",
+        "name": "std_pk_0d6333e6d2414da7a4565cafd70db0a4",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_0d6333e6d2414da7a4565cafd70db0a4 ON core.permission USING btree (id, class_id)",
+        "name": "std_uq_0d6333e6d2414da7a4565cafd70db0a4",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_0d6333e6d2414da7a4565cafd70db0a4 BEFORE UPDATE ON core.permission FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_0d6333e6d2414da7a4565cafd70db0a4"
+      }
+    ]
+  },
+  "core.platform_migration": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "checksum",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "std_version",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": "now()",
+        "name": "applied_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL applied_at",
+        "name": "platform_migration_applied_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL checksum",
+        "name": "platform_migration_checksum_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((id > 0))",
+        "name": "platform_migration_id_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "platform_migration_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "platform_migration_pkey",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL std_version",
+        "name": "platform_migration_std_version_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX platform_migration_pkey ON core.platform_migration USING btree (id)",
+        "name": "platform_migration_pkey",
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.role": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "help_text",
+        "notNull": false,
+        "type": "text"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "role_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "role_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "role_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "role_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "role_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL label",
+        "name": "role_label_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "role_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "role_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "role_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "role_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "role_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "role_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "role_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "role_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "role_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "role_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_a425953fb93447d68ff14bbeca1b9370",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'a425953f-b934-47d6-8ff1-4bbeca1b9370'::uuid))",
+        "name": "std_sc_a425953fb93447d68ff14bbeca1b9370",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_a425953fb93447d68ff14bbeca1b9370",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX role_name_live ON core.role USING btree (name) WHERE (state <> 'purged'::text)",
+        "name": "role_name_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_a425953fb93447d68ff14bbeca1b9370 ON core.role USING btree (id)",
+        "name": "std_pk_a425953fb93447d68ff14bbeca1b9370",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_a425953fb93447d68ff14bbeca1b9370 ON core.role USING btree (id, class_id)",
+        "name": "std_uq_a425953fb93447d68ff14bbeca1b9370",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_a425953fb93447d68ff14bbeca1b9370 BEFORE UPDATE ON core.role FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_a425953fb93447d68ff14bbeca1b9370"
+      }
+    ]
+  },
+  "core.role_permission": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "role_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "permission_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "role_permission_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "role_permission_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "role_permission_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "role_permission_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "role_permission_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "role_permission_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "role_permission_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (permission_id) REFERENCES core.permission(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "role_permission_permission_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL permission_id",
+        "name": "role_permission_permission_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "role_permission_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (role_id) REFERENCES core.role(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "role_permission_role_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL role_id",
+        "name": "role_permission_role_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "role_permission_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "role_permission_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "role_permission_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "role_permission_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "role_permission_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "role_permission_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_b16789cc353b4f929f9a3683a7f8ec0e",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'b16789cc-353b-4f92-9f9a-3683a7f8ec0e'::uuid))",
+        "name": "std_sc_b16789cc353b4f929f9a3683a7f8ec0e",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_b16789cc353b4f929f9a3683a7f8ec0e",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX role_permission_live ON core.role_permission USING btree (role_id, permission_id) WHERE (state <> 'purged'::text)",
+        "name": "role_permission_live",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_b16789cc353b4f929f9a3683a7f8ec0e ON core.role_permission USING btree (id)",
+        "name": "std_pk_b16789cc353b4f929f9a3683a7f8ec0e",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_b16789cc353b4f929f9a3683a7f8ec0e ON core.role_permission USING btree (id, class_id)",
+        "name": "std_uq_b16789cc353b4f929f9a3683a7f8ec0e",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_b16789cc353b4f929f9a3683a7f8ec0e BEFORE UPDATE ON core.role_permission FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_b16789cc353b4f929f9a3683a7f8ec0e"
+      }
+    ]
+  },
+  "core.schema_change": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "requester_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "source",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "operations",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "first_revision",
+        "notNull": false,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "last_revision",
+        "notNull": false,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "error",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "coordinator_pid",
+        "notNull": false,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "committed_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "completed_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "schema_change_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "schema_change_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "schema_change_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "schema_change_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL operations",
+        "name": "schema_change_operations_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL requester_id",
+        "name": "schema_change_requester_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL source",
+        "name": "schema_change_source_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['applying'::text, 'completed'::text, 'needs_attention'::text, 'abandoned'::text])))",
+        "name": "schema_change_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "schema_change_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "schema_change_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "schema_change_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "schema_change_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "schema_change_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_b176d598bd9d4b4d8dd987b52eaf992e",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = 'b176d598-bd9d-4b4d-8dd9-87b52eaf992e'::uuid))",
+        "name": "std_sc_b176d598bd9d4b4d8dd987b52eaf992e",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_b176d598bd9d4b4d8dd987b52eaf992e",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX schema_change_first_revision ON core.schema_change USING btree (first_revision)",
+        "name": "schema_change_first_revision",
+        "valid": true
+      },
+      {
+        "definition": "CREATE INDEX schema_change_open ON core.schema_change USING btree (state) WHERE (state = ANY (ARRAY['applying'::text, 'needs_attention'::text]))",
+        "name": "schema_change_open",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_b176d598bd9d4b4d8dd987b52eaf992e ON core.schema_change USING btree (id)",
+        "name": "std_pk_b176d598bd9d4b4d8dd987b52eaf992e",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_b176d598bd9d4b4d8dd987b52eaf992e ON core.schema_change USING btree (id, class_id)",
+        "name": "std_uq_b176d598bd9d4b4d8dd987b52eaf992e",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_b176d598bd9d4b4d8dd987b52eaf992e BEFORE UPDATE ON core.schema_change FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_b176d598bd9d4b4d8dd987b52eaf992e"
+      }
+    ]
+  },
+  "core.schema_change_step": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "change_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "ordinal",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "kind",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "target_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "sql",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "details",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "attempts",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "last_error",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "backend_pid",
+        "notNull": false,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "started_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "finished_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((attempts >= 0))",
+        "name": "schema_change_step_attempts_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL attempts",
+        "name": "schema_change_step_attempts_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (change_id) REFERENCES core.schema_change(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "schema_change_step_change_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL change_id",
+        "name": "schema_change_step_change_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (change_id, ordinal)",
+        "name": "schema_change_step_change_id_ordinal_key",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "schema_change_step_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "schema_change_step_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "schema_change_step_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL details",
+        "name": "schema_change_step_details_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "schema_change_step_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((kind = ANY (ARRAY['validate_constraint'::text, 'validate_override'::text, 'create_index_concurrently'::text, 'drop_index_concurrently'::text, 'complete'::text, 'backfill'::text])))",
+        "name": "schema_change_step_kind_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL kind",
+        "name": "schema_change_step_kind_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((ordinal > 0))",
+        "name": "schema_change_step_ordinal_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL ordinal",
+        "name": "schema_change_step_ordinal_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'done'::text, 'failed'::text])))",
+        "name": "schema_change_step_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "schema_change_step_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "schema_change_step_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "schema_change_step_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "schema_change_step_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "schema_change_step_version_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_3d49bff3764048b79030d37b68f8b639",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '3d49bff3-7640-48b7-9030-d37b68f8b639'::uuid))",
+        "name": "std_sc_3d49bff3764048b79030d37b68f8b639",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_3d49bff3764048b79030d37b68f8b639",
+        "type": "u",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX schema_change_step_change_id_ordinal_key ON core.schema_change_step USING btree (change_id, ordinal)",
+        "name": "schema_change_step_change_id_ordinal_key",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_3d49bff3764048b79030d37b68f8b639 ON core.schema_change_step USING btree (id)",
+        "name": "std_pk_3d49bff3764048b79030d37b68f8b639",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_3d49bff3764048b79030d37b68f8b639 ON core.schema_change_step USING btree (id, class_id)",
+        "name": "std_uq_3d49bff3764048b79030d37b68f8b639",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_3d49bff3764048b79030d37b68f8b639 BEFORE UPDATE ON core.schema_change_step FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_3d49bff3764048b79030d37b68f8b639"
+      }
+    ]
+  },
+  "core.session": {
+    "columns": [
+      {
+        "default": null,
+        "name": "token_hash",
+        "notNull": true,
+        "type": "bytea"
+      },
+      {
+        "default": null,
+        "name": "user_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "expires_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((expires_at > created_at))",
+        "name": "session_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "session_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL expires_at",
+        "name": "session_expires_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (token_hash)",
+        "name": "session_pkey",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((octet_length(token_hash) = 32))",
+        "name": "session_token_hash_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL token_hash",
+        "name": "session_token_hash_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL user_id",
+        "name": "session_user_id_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE INDEX session_by_user ON core.session USING btree (user_id)",
+        "name": "session_by_user",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX session_pkey ON core.session USING btree (token_hash)",
+        "name": "session_pkey",
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.subscription": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "operations",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "condition",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "identity_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "max_attempts",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "dead_letter",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "enabled",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "PRIMARY KEY (id)",
+        "name": "std_pk_31446f0c7ec74e5aa1b4f4a4686bca0e",
+        "type": "p",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((class_id = '31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e'::uuid))",
+        "name": "std_sc_31446f0c7ec74e5aa1b4f4a4686bca0e",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "UNIQUE (id, class_id)",
+        "name": "std_uq_31446f0c7ec74e5aa1b4f4a4686bca0e",
+        "type": "u",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "name": "subscription_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL class_id",
+        "name": "subscription_class_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_at",
+        "name": "subscription_created_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL created_by",
+        "name": "subscription_created_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((dead_letter = ANY (ARRAY['block'::text, 'skip'::text])))",
+        "name": "subscription_dead_letter_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL dead_letter",
+        "name": "subscription_dead_letter_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL enabled",
+        "name": "subscription_enabled_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL id",
+        "name": "subscription_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL identity_id",
+        "name": "subscription_identity_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((max_attempts > 0))",
+        "name": "subscription_max_attempts_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL max_attempts",
+        "name": "subscription_max_attempts_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL name",
+        "name": "subscription_name_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL operations",
+        "name": "subscription_operations_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "name": "subscription_owner_layer_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL owner_layer",
+        "name": "subscription_owner_layer_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL protected",
+        "name": "subscription_protected_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "name": "subscription_state_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL state",
+        "name": "subscription_state_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": true,
+        "deferred": true,
+        "definition": "FOREIGN KEY (table_id) REFERENCES core.class(id) DEFERRABLE INITIALLY DEFERRED",
+        "name": "subscription_table_id_fkey",
+        "type": "f",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL table_id",
+        "name": "subscription_table_id_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_at",
+        "name": "subscription_updated_at_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL updated_by",
+        "name": "subscription_updated_by_not_null",
+        "type": "n",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "CHECK ((version > 0))",
+        "name": "subscription_version_check",
+        "type": "c",
+        "validated": true
+      },
+      {
+        "deferrable": false,
+        "deferred": false,
+        "definition": "NOT NULL version",
+        "name": "subscription_version_not_null",
+        "type": "n",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "definition": "CREATE UNIQUE INDEX std_pk_31446f0c7ec74e5aa1b4f4a4686bca0e ON core.subscription USING btree (id)",
+        "name": "std_pk_31446f0c7ec74e5aa1b4f4a4686bca0e",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX std_uq_31446f0c7ec74e5aa1b4f4a4686bca0e ON core.subscription USING btree (id, class_id)",
+        "name": "std_uq_31446f0c7ec74e5aa1b4f4a4686bca0e",
+        "valid": true
+      },
+      {
+        "definition": "CREATE UNIQUE INDEX subscription_name_live ON core.subscription USING btree (name) WHERE (state <> 'purged'::text)",
+        "name": "subscription_name_live",
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "definition": "CREATE TRIGGER std_tg_31446f0c7ec74e5aa1b4f4a4686bca0e BEFORE UPDATE ON core.subscription FOR EACH ROW WHEN ((old.class_id IS DISTINCT FROM new.class_id)) EXECUTE FUNCTION core.refuse_class_change()",
+        "name": "std_tg_31446f0c7ec74e5aa1b4f4a4686bca0e"
+      }
+    ]
+  }
+}

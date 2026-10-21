@@ -6,11 +6,33 @@ import { FOLD_TABLE_UNICODE_VERSION } from "@std/values/fold-table";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { compareLedger, readLedger } from "../platform/ledger.ts";
+import { compareLedger } from "../platform/ledger.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { readOnly } from "../sql/statement-marks.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
+
+const decodeLedger = decodeRows(
+  Schema.Struct({ checksum: Schema.String, id: Schema.Int })
+);
+
+const decodePresent = decodeRows(Schema.Struct({ present: Schema.Boolean }));
+
+/** The ledger, read with statements marked read-only. */
+const diagnosticLedger = Effect.gen(function* diagnosticLedger() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const [presence] = yield* readOnly(
+    sql`SELECT to_regclass('core.platform_migration') IS NOT NULL AS present`
+  ).pipe(Effect.flatMap(decodePresent));
+
+  return presence?.present === true
+    ? yield* readOnly(
+        sql`SELECT id, checksum FROM core.platform_migration ORDER BY id`
+      ).pipe(Effect.flatMap(decodeLedger))
+    : [];
+});
 
 /**
  * Check 1: the migration ledger matches the code.
@@ -20,8 +42,7 @@ import type { Finding } from "./finding.ts";
  */
 export const checkLedger = Effect.fn("Doctor.checkLedger")(
   function* checkLedger(migrations: readonly PlatformMigration[]) {
-    const sql = yield* SqlClient.SqlClient;
-    const comparison = compareLedger(migrations, yield* readLedger(sql));
+    const comparison = compareLedger(migrations, yield* diagnosticLedger);
 
     return [
       ...comparison.pending.map((migration) =>
@@ -70,8 +91,8 @@ export const checkExternalIdentities = Effect.gen(
   function* checkExternalIdentities() {
     const sql = yield* SqlClient.SqlClient;
 
-    const [row] = yield* sql`
-      SELECT to_regclass('core.external_identity') IS NOT NULL AS present`.pipe(
+    const [row] = yield* readOnly(sql`
+      SELECT to_regclass('core.external_identity') IS NOT NULL AS present`).pipe(
       Effect.flatMap(decodePresence)
     );
 
@@ -116,7 +137,7 @@ export const unicodeMajorMinor = (version: string): string => {
 export const checkUnicodeVersion = Effect.gen(function* checkUnicodeVersion() {
   const sql = yield* SqlClient.SqlClient;
 
-  const [row] = yield* sql`SELECT unicode_version() AS version`.pipe(
+  const [row] = yield* readOnly(sql`SELECT unicode_version() AS version`).pipe(
     Effect.flatMap(decodeUnicode)
   );
 
@@ -153,11 +174,11 @@ const decodeSettings = decodeRows(
 export const checkServerSettings = Effect.gen(function* checkServerSettings() {
   const sql = yield* SqlClient.SqlClient;
 
-  const [row] = yield* sql`
+  const [row] = yield* readOnly(sql`
     SELECT pg_encoding_to_char(d.encoding)::text AS encoding,
            d.encoding = pg_char_to_encoding('UTF8') AS utf8,
            current_setting('client_connection_check_interval') AS check_interval
-    FROM pg_database d WHERE d.datname = current_database()`.pipe(
+    FROM pg_database d WHERE d.datname = current_database()`).pipe(
     Effect.flatMap(decodeSettings)
   );
 

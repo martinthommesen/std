@@ -5,6 +5,8 @@
 import type { Definition } from "@std/definitions/definition";
 import { dependenciesOf } from "@std/definitions/dependencies";
 import { effectiveJson } from "@std/definitions/effective-json";
+import { effectiveField } from "@std/definitions/effective-schema";
+import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import {
   applyOverrides,
@@ -19,6 +21,8 @@ import type { Draft } from "@std/definitions/set-resolve";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { displayName } from "@std/definitions/upgrade-report";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
+import { maxLengthOf } from "@std/values/field-type";
+import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -26,19 +30,12 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { jsonColumn, jsonHash, setHash } from "../config/layer-store.ts";
 import { readSetDirectory, CORE_SET_DIRECTORY } from "../config/set-files.ts";
-import { tableName } from "../schema/sql-text.ts";
+import { defaultLiteral, quoteIdent, tableName } from "../schema/sql-text.ts";
 import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { readOnly } from "../sql/statement-marks.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
-
-const decodeChanges = decodeRows(
-  Schema.Struct({
-    id: Schema.String,
-    running_steps: Schema.Int,
-    state: Schema.String,
-  })
-);
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.String }));
 
@@ -49,70 +46,149 @@ const decodeRevisions = decodeRows(
   })
 );
 
+const decodeChanges = decodeRows(
+  Schema.Struct({ id: Schema.String, state: Schema.String })
+);
+
+const decodeSteps = decodeRows(
+  Schema.Struct({
+    change_id: Schema.String,
+    change_state: Schema.String,
+    ordinal: Schema.Int,
+    state: Schema.String,
+  })
+);
+
+const schemaKeyHeld = Effect.gen(function* schemaKeyHeld() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const [held] = yield* readOnly(sql`
+    SELECT count(*)::text AS n FROM pg_locks
+    WHERE locktype = 'advisory' AND granted
+      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+      AND classid = ${String(advisoryClassId(SCHEMA_KEY))}::oid
+      AND objid = ${String(advisoryObjectId(SCHEMA_KEY))}::oid AND objsubid = 1`).pipe(
+    Effect.flatMap(decodeCount)
+  );
+
+  return Number(held?.n ?? "0") > 0;
+});
+
+const changeSetFinding = (
+  row: { readonly id: string; readonly state: string },
+  running: boolean
+): Finding => {
+  if (row.state === "needs_attention") {
+    return finding(
+      6,
+      "error",
+      "changeSetNeedsAttention",
+      `Change set ${row.id} needs attention: fix the cause and run std schema resume ${row.id}, or std schema abandon ${row.id}.`,
+      row.id
+    );
+  }
+
+  return running
+    ? finding(
+        6,
+        "info",
+        "changeSetRunning",
+        `Change set ${row.id} is being applied by the session holding SCHEMA_KEY.`,
+        row.id
+      )
+    : finding(
+        6,
+        "error",
+        "changeSetInterrupted",
+        `Change set ${row.id} was interrupted; std upgrade or a server start resumes it.`,
+        row.id
+      );
+};
+
+/** Step states that fit each change set state. */
+const STEP_STATES = {
+  abandoned: new Set(["done", "failed", "pending"]),
+  applying: new Set(["done", "failed", "pending", "running"]),
+  completed: new Set(["done"]),
+  needs_attention: new Set(["done", "failed", "pending"]),
+} satisfies Readonly<Record<string, ReadonlySet<string>>>;
+
 /**
- * Check 6: interrupted or `needs_attention` change sets, and steps left
- * `running`. A change set `applying` while a session holds `SCHEMA_KEY` is
- * still being applied (informational).
+ * Whether a step's state fits its change set's state.
+ *
+ * @param change - The change set's state.
+ * @param step - The step's state.
+ * @returns True when they fit.
+ */
+const fits = (change: string, step: string): boolean =>
+  Object.entries(STEP_STATES).some(
+    ([state, steps]) => state === change && steps.has(step)
+  );
+
+const stepFinding = (
+  row: {
+    readonly change_id: string;
+    readonly change_state: string;
+    readonly ordinal: number;
+    readonly state: string;
+  },
+  running: boolean
+): readonly Finding[] => {
+  const subject = `${row.change_id}/${row.ordinal}`;
+
+  if (!fits(row.change_state, row.state)) {
+    return [
+      finding(
+        6,
+        "error",
+        "stepStateInconsistent",
+        `Step ${row.ordinal} of change set ${row.change_id} is ${row.state}, which a ${row.change_state} change set cannot have.`,
+        subject
+      ),
+    ];
+  }
+
+  return row.state === "running" && !running
+    ? [
+        finding(
+          6,
+          "error",
+          "stepLeftRunning",
+          `Step ${row.ordinal} of change set ${row.change_id} was left running; no session holds SCHEMA_KEY.`,
+          subject
+        ),
+      ]
+    : [];
+};
+
+/**
+ * Check 6: interrupted or `needs_attention` change sets, every step left
+ * `running` (whatever its change set's state), and steps whose state does
+ * not fit their change set's. A change set `applying` while a session holds
+ * `SCHEMA_KEY` is still being applied (informational).
  *
  * @returns The findings.
  */
 export const checkChangeSets = Effect.gen(function* checkChangeSets() {
   const sql = yield* SqlClient.SqlClient;
+  const running = yield* schemaKeyHeld;
 
-  const [held] = yield* sql`
-    SELECT count(*)::text AS n FROM pg_locks
-    WHERE locktype = 'advisory' AND granted
-      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-      AND classid = ${String(advisoryClassId(SCHEMA_KEY))}::oid
-      AND objid = ${String(advisoryObjectId(SCHEMA_KEY))}::oid AND objsubid = 1`.pipe(
-    Effect.flatMap(decodeCount)
-  );
+  const changes = yield* readOnly(sql`
+    SELECT id::text AS id, state FROM core."schema_change"
+    WHERE state IN ('applying', 'needs_attention')
+    ORDER BY first_revision`).pipe(Effect.flatMap(decodeChanges));
 
-  const running = Number(held?.n ?? "0") > 0;
+  const steps = yield* readOnly(sql`
+    SELECT s.change_id::text AS change_id, c.state AS change_state, s.ordinal, s.state
+    FROM core."schema_change_step" s
+    JOIN core."schema_change" c ON c.id = s.change_id
+    WHERE s.state <> 'done' OR c.state <> 'completed'
+    ORDER BY s.change_id, s.ordinal`).pipe(Effect.flatMap(decodeSteps));
 
-  const rows = yield* sql`
-    SELECT c.id::text AS id, c.state,
-           (SELECT count(*)::int4 FROM core."schema_change_step" s
-            WHERE s.change_id = c.id AND s.state = 'running') AS running_steps
-    FROM core."schema_change" c
-    WHERE c.state IN ('applying', 'needs_attention')
-    ORDER BY c.first_revision`.pipe(Effect.flatMap(decodeChanges));
-
-  return rows.flatMap((row): Finding[] => {
-    if (row.state === "needs_attention") {
-      return [
-        finding(
-          6,
-          "error",
-          "changeSetNeedsAttention",
-          `Change set ${row.id} needs attention: fix the cause and run std schema resume ${row.id}, or std schema abandon ${row.id}.`,
-          row.id
-        ),
-      ];
-    }
-
-    if (running) {
-      return [
-        finding(
-          6,
-          "info",
-          "changeSetRunning",
-          `Change set ${row.id} is being applied by the session holding SCHEMA_KEY.`,
-          row.id
-        ),
-      ];
-    }
-
-    return [
-      finding(
-        6,
-        "error",
-        "changeSetInterrupted",
-        `Change set ${row.id} was interrupted (${row.running_steps} steps left running); std upgrade or a server start resumes it.`,
-        row.id
-      ),
-    ];
-  });
+  return [
+    ...changes.map((row) => changeSetFinding(row, running)),
+    ...steps.flatMap((row) => stepFinding(row, running)),
+  ];
 });
 
 /**
@@ -123,11 +199,11 @@ export const checkChangeSets = Effect.gen(function* checkChangeSets() {
 export const checkRevision = Effect.gen(function* checkRevision() {
   const sql = yield* SqlClient.SqlClient;
 
-  const [row] = yield* sql`
+  const [row] = yield* readOnly(sql`
     SELECT s.revision::text AS revision,
            (SELECT max(greatest(first_revision, coalesce(last_revision, first_revision)))::text
             FROM core."schema_change") AS journal
-    FROM core.config_state s`.pipe(Effect.flatMap(decodeRevisions));
+    FROM core.config_state s`).pipe(Effect.flatMap(decodeRevisions));
 
   const revision = Number(row?.revision ?? "0");
   const journal = Number(row?.journal ?? "0");
@@ -156,8 +232,8 @@ const decodeBaseHashes = decodeRows(
 const baseEdits = Effect.gen(function* baseEdits() {
   const sql = yield* SqlClient.SqlClient;
 
-  const rows = yield* sql`
-    SELECT id::text AS id, hash, shipped::text AS shipped FROM core."config_base" ORDER BY id`.pipe(
+  const rows = yield* readOnly(sql`
+    SELECT id::text AS id, hash, shipped::text AS shipped FROM core."config_base" ORDER BY id`).pipe(
     Effect.flatMap(decodeBaseHashes)
   );
 
@@ -305,9 +381,9 @@ const decodeConflicts = decodeRows(
 const openConflictFindings = Effect.gen(function* openConflictFindings() {
   const sql = yield* SqlClient.SqlClient;
 
-  const rows = yield* sql`
+  const rows = yield* readOnly(sql`
     SELECT id::text AS id, record_id::text AS record_id, property
-    FROM core."config_conflict" WHERE state = 'open' ORDER BY created_at, id`.pipe(
+    FROM core."config_conflict" WHERE state = 'open' ORDER BY created_at, id`).pipe(
     Effect.flatMap(decodeConflicts)
   );
 
@@ -321,6 +397,114 @@ const openConflictFindings = Effect.gen(function* openConflictFindings() {
     )
   );
 });
+
+const decodeViolations = decodeRows(
+  Schema.Struct({ ids: Schema.String, n: Schema.String })
+);
+
+/** How many violating records an `overrideViolated` finding names. */
+const VIOLATION_SAMPLES = 20;
+
+/**
+ * The predicate of rows that break a field's effective rules at a class:
+ * required, maximum length, numeric bounds.
+ *
+ * @param field - The effective field at the override's class.
+ * @returns SQL conditions over the field's column, ORed.
+ */
+const violationPredicates = (field: EffectiveField): readonly string[] => {
+  const column = quoteIdent(field.field.name);
+  const { type } = field;
+  const predicates = field.required ? [`${column} IS NULL`] : [];
+
+  if (type.kind === "text" || type.kind === "longText") {
+    predicates.push(`char_length(${column}) > ${maxLengthOf(type)}`);
+  }
+
+  if (
+    type.kind === "integer" ||
+    type.kind === "bigInteger" ||
+    type.kind === "decimal"
+  ) {
+    if (type.min !== undefined) {
+      predicates.push(`${column} < ${defaultLiteral(type, type.min)}`);
+    }
+
+    if (type.max !== undefined) {
+      predicates.push(`${column} > ${defaultLiteral(type, type.max)}`);
+    }
+  }
+
+  return predicates;
+};
+
+/**
+ * Check 8, data part: records of a class's subtree that break a child-class
+ * override (Contracts 2.5) — counted from the records themselves, whatever
+ * the override's enforcement state says.
+ *
+ * @param snapshot - The configuration.
+ * @returns The findings.
+ */
+const overrideViolations = Effect.fn("Doctor.overrideViolations")(
+  function* overrideViolations(
+    snapshot: ConfigSnapshot
+  ): Effect.fn.Return<readonly Finding[], SqlError, SqlClient.SqlClient> {
+    const sql = yield* SqlClient.SqlClient;
+    const found: Finding[] = [];
+
+    for (const override of snapshot.all("override")) {
+      const field = snapshot.field(override.fieldId);
+
+      const owner =
+        field === undefined ? undefined : snapshot.class(field.classId);
+
+      if (
+        override.state === "active" &&
+        field !== undefined &&
+        field.state === "active" &&
+        owner?.storage === "standard"
+      ) {
+        const predicates = violationPredicates(
+          effectiveField(snapshot, override.classId, field)
+        );
+
+        const subtree = snapshot.subtreeIds(override.classId);
+
+        const [row] = yield* readOnly(
+          sql.unsafe(
+            `SELECT count(*)::text AS n,
+                    coalesce((SELECT string_agg(s.id::text, ',' ORDER BY s.id) FROM (
+                      SELECT id FROM ${tableName(snapshot, field.classId)} AS v
+                      WHERE v.class_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)
+                        AND (${predicates.join(" OR ")})
+                      ORDER BY id LIMIT ${VIOLATION_SAMPLES}) AS s), '') AS ids
+             FROM ${tableName(snapshot, field.classId)} AS t
+             WHERE t.class_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)
+               AND (${predicates.join(" OR ")})`,
+            [stringifyJson(subtree)]
+          )
+        ).pipe(Effect.flatMap(decodeViolations));
+
+        const count = Number(row?.n ?? "0");
+
+        if (predicates.length > 0 && count > 0) {
+          found.push(
+            finding(
+              8,
+              "error",
+              "overrideViolated",
+              `${count} records violate the ${displayName(snapshot, override)} (for example ${row?.ids ?? ""}).`,
+              override.id
+            )
+          );
+        }
+      }
+    }
+
+    return found;
+  }
+);
 
 /**
  * Check 8: effective records equal base plus overrides; no override on a
@@ -338,21 +522,7 @@ export const checkLayers = Effect.fn("Doctor.checkLayers")(
     layers: LayerState,
     layerTables: boolean
   ) {
-    const violated = snapshot
-      .all("override")
-      .flatMap((override) =>
-        override.state === "active" && override.enforcement === "failed"
-          ? [
-              finding(
-                8,
-                "warning",
-                "overrideViolated",
-                `Records violate the ${displayName(snapshot, override)}; its enforcement is failed.`,
-                override.id
-              ),
-            ]
-          : []
-      );
+    const violated = yield* overrideViolations(snapshot);
 
     if (!layerTables) {
       return violated;
@@ -391,9 +561,9 @@ export const checkDependencies = Effect.fn("Doctor.checkDependencies")(
   function* checkDependencies(snapshot: ConfigSnapshot) {
     const sql = yield* SqlClient.SqlClient;
 
-    const rows = yield* sql`
+    const rows = yield* readOnly(sql`
       SELECT from_id::text AS from_id, kind, to_id::text AS to_id
-      FROM core.config_dependency ORDER BY from_id, kind, to_id`.pipe(
+      FROM core.config_dependency ORDER BY from_id, kind, to_id`).pipe(
       Effect.flatMap(decodeDependencies)
     );
 
@@ -588,9 +758,9 @@ export const checkDefinitionRevisions = Effect.fn(
 )(function* checkDefinitionRevisions(snapshot: ConfigSnapshot) {
   const sql = yield* SqlClient.SqlClient;
 
-  const rows = yield* sql`
+  const rows = yield* readOnly(sql`
     SELECT DISTINCT ON (definition_id) definition_id::text AS definition_id, effective::text AS effective
-    FROM core.definition_revision ORDER BY definition_id, revision DESC`.pipe(
+    FROM core.definition_revision ORDER BY definition_id, revision DESC`).pipe(
     Effect.flatMap(decodeLatest)
   );
 
@@ -656,14 +826,14 @@ export const checkLevelRows = Effect.fn("Doctor.checkLevelRows")(
       const root = snapshot.root(definition.id);
 
       if (root !== undefined && existing(definition.id) && existing(root.id)) {
-        const [row] = yield* sql
-          .unsafe(
+        const [row] = yield* readOnly(
+          sql.unsafe(
             `SELECT count(*)::text AS n FROM ${tableName(snapshot, root.id)} AS r
              WHERE r.class_id = $1::uuid
                AND NOT EXISTS (SELECT 1 FROM ${tableName(snapshot, definition.id)} AS l WHERE l.id = r.id)`,
             [definition.id]
           )
-          .pipe(Effect.flatMap(decodeCount));
+        ).pipe(Effect.flatMap(decodeCount));
 
         const count = Number(row?.n ?? "0");
 
@@ -720,13 +890,13 @@ export const checkAuditUsers = Effect.fn("Doctor.checkAuditUsers")(
     for (const definition of platform) {
       const table = tableName(snapshot, definition.id);
 
-      const [row] = yield* sql
-        .unsafe(
+      const [row] = yield* readOnly(
+        sql.unsafe(
           `SELECT count(*)::text AS n FROM ${table} AS t
            WHERE NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.created_by)
               OR NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.updated_by)`
         )
-        .pipe(Effect.flatMap(decodeCount));
+      ).pipe(Effect.flatMap(decodeCount));
 
       const count = Number(row?.n ?? "0");
 

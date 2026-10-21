@@ -1,34 +1,52 @@
 /**
  * `doctor` checks that compare the definitions with `pg_catalog`
  * (Contracts 1.10 checks 2, 3, 4, 5, 11 and the catalog part of 12). They
- * read only the facts gathered once per run.
+ * read only the facts gathered once per run. Class tables are compared
+ * with their definitions (`described.ts`), platform tables with the record
+ * of what their migrations create (`platform-catalog.ts`).
  */
-import type {
-  ClassDefinition,
-  Enforcement,
-  FieldDefinition,
-} from "@std/definitions/definition";
+import type { Enforcement } from "@std/definitions/definition";
 import { generatedName, parseGeneratedName } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
-import { isNotNull } from "../schema/ddl.ts";
-import { WIDENED_CHECK_NOTE } from "../schema/plan.ts";
-import type { CatalogFacts, TableFacts } from "./catalog-facts.ts";
+import type {
+  CatalogFacts,
+  ConstraintFact,
+  TableFacts,
+} from "./catalog-facts.ts";
 import {
-  classKeys,
+  classTriggers,
   describedColumns,
+  describedConstraints,
+  describedIndexes,
   describedTables,
   migrationTables,
 } from "./described.ts";
-import type { DescribedTable } from "./described.ts";
+import type {
+  DescribedConstraint,
+  DescribedIndex,
+  DescribedTable,
+} from "./described.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
+import { checkPlatformTables } from "./platform-catalog.ts";
 
 /** Columns per table at which check 11 warns [judgment, Contracts 1.10]. */
 export const COLUMN_HEADROOM_WARNING = 1400;
 
 const isLiveClass = (described: DescribedTable): boolean =>
   described.definition.state !== "purged";
+
+/**
+ * Live standard class tables, which `described.ts` covers.
+ *
+ * @param snapshot - The configuration.
+ * @returns The tables.
+ */
+const classTables = (snapshot: ConfigSnapshot): readonly DescribedTable[] =>
+  describedTables(snapshot).filter(
+    (described) => isLiveClass(described) && !described.platform
+  );
 
 const columnFindings = (
   snapshot: ConfigSnapshot,
@@ -66,96 +84,29 @@ const columnFindings = (
       ];
     }
 
-    const problems: Finding[] = [];
-
     if (expected.notNull !== null && column.notNull !== expected.notNull) {
-      problems.push(
+      return [
         finding(
           2,
           "error",
           "columnNullability",
           `Column ${where} is ${column.notNull ? "NOT NULL" : "nullable"}; its definition says ${expected.notNull ? "NOT NULL" : "nullable"}.`,
           where
-        )
-      );
-    }
-
-    if (
-      expected.hasDefault !== null &&
-      column.hasDefault !== expected.hasDefault
-    ) {
-      problems.push(
-        finding(
-          2,
-          "error",
-          "columnDefault",
-          `Column ${where} ${column.hasDefault ? "has" : "has no"} default; its definition says it ${expected.hasDefault ? "has" : "has none"}.`,
-          where
-        )
-      );
-    }
-
-    return problems;
-  });
-
-const keyFindings = (
-  described: DescribedTable,
-  facts: TableFacts
-): readonly Finding[] => {
-  const { constraints, trigger } = classKeys(described.definition);
-
-  const missing = [
-    ...constraints.filter(
-      (name) => !facts.constraints.some((entry) => entry.name === name)
-    ),
-    ...(facts.triggers.includes(trigger) ? [] : [trigger]),
-  ];
-
-  return missing.map((name) =>
-    finding(
-      2,
-      "error",
-      "keyMissing",
-      `Table ${described.key} lacks ${name} (key, level FK, subtree check or class-change trigger).`,
-      `${described.key}/${name}`
-    )
-  );
-};
-
-/**
- * Check 2: every active and retired table and field matches the catalog.
- *
- * @param snapshot - The configuration.
- * @param catalog - The catalog facts.
- * @returns The findings.
- */
-export const checkTablesMatch = (
-  snapshot: ConfigSnapshot,
-  catalog: CatalogFacts
-): readonly Finding[] =>
-  describedTables(snapshot).flatMap((described) => {
-    const facts = catalog.get(described.key);
-
-    if (!isLiveClass(described)) {
-      return [];
-    }
-
-    if (facts === undefined) {
-      return [
-        finding(
-          2,
-          "error",
-          "tableMissing",
-          `Table ${described.key} is missing.`,
-          described.key
         ),
       ];
     }
 
-    return [
-      ...columnFindings(snapshot, described, facts),
-      ...keyFindings(described, facts),
-    ];
+    return (column.default === null) === (expected.default === null)
+      ? []
+      : [
+          finding(
+            2,
+            "error",
+            "columnDefault",
+            `Column ${where} has default ${column.default ?? "none"}; its definition says ${expected.default ?? "none"}.`,
+            where
+          ),
+        ];
   });
 
 const enforcementFinding = (
@@ -187,43 +138,191 @@ const enforcementFinding = (
   );
 };
 
-const fieldConstraintNames = (field: FieldDefinition): readonly string[] => [
-  ...(isNotNull(field) ? [generatedName("nn", field.id)] : []),
-  ...(field.type.kind === "text" ? [generatedName("ck", field.id)] : []),
-  ...(field.type.kind === "reference" ? [generatedName("fk", field.id)] : []),
-];
+const sameList = (left: readonly string[], right: readonly string[]): boolean =>
+  left.join(",") === right.join(",");
 
-const constraintState = (
-  facts: TableFacts,
-  name: string
-): "missing" | "invalid" | "valid" => {
-  const found = facts.constraints.find((entry) => entry.name === name);
+/**
+ * How a live constraint differs in structure from its definition.
+ *
+ * @param expected - The described constraint.
+ * @param actual - The live constraint.
+ * @returns What differs, or an empty list.
+ */
+const structureDifferences = (
+  expected: DescribedConstraint,
+  actual: ConstraintFact
+): readonly string[] => {
+  const { references } = expected;
 
-  if (found === undefined) {
-    return "missing";
-  }
+  const referencesMatch =
+    references === null ||
+    (actual.references === references.table &&
+      sameList(actual.referencedColumns, references.columns));
 
-  return found.validated ? "valid" : "invalid";
+  const actionsMatch =
+    expected.deleteAction === null ||
+    (actual.deleteAction === expected.deleteAction &&
+      actual.updateAction === "a");
+
+  const differences = [
+    actual.type === expected.type ? "" : `kind ${actual.type}`,
+    sameList(actual.columns, expected.columns)
+      ? ""
+      : `columns (${actual.columns.join(", ")})`,
+    referencesMatch
+      ? ""
+      : `references ${actual.references ?? "nothing"} (${actual.referencedColumns.join(", ")})`,
+    actionsMatch ? "" : `actions ${actual.deleteAction}/${actual.updateAction}`,
+    actual.deferrable ? "deferrable" : "",
+    expected.matches(actual.definition)
+      ? ""
+      : `definition ${actual.definition}`,
+  ];
+
+  return differences.filter((entry) => entry !== "");
 };
 
-const subtreeFinding = (
-  definition: ClassDefinition,
+const constraintFinding = (
   key: string,
+  expected: DescribedConstraint,
   facts: TableFacts
 ): readonly Finding[] => {
-  const name = generatedName("sc", definition.id);
-  const state = constraintState(facts, name);
+  const actual = facts.constraints.find(
+    (entry) => entry.name === expected.name
+  );
 
-  return state === "invalid" &&
-    definition.enforcementNote !== WIDENED_CHECK_NOTE
-    ? [enforcementFinding(key, name, state, "enforced")]
-    : [];
+  const subject = `${key}/${expected.name}`;
+
+  if (actual === undefined) {
+    return expected.check === 2
+      ? [
+          finding(
+            2,
+            "error",
+            "keyMissing",
+            `Table ${key} lacks ${expected.name} (key, level FK, subtree check or audit FK).`,
+            subject
+          ),
+        ]
+      : [
+          enforcementFinding(
+            key,
+            expected.name,
+            "missing",
+            expected.enforcement === "widened"
+              ? "enforced"
+              : expected.enforcement
+          ),
+        ];
+  }
+
+  const differences = structureDifferences(expected, actual);
+
+  if (differences.length > 0) {
+    return [
+      finding(
+        2,
+        "error",
+        "constraintMismatch",
+        `${expected.name} on ${key} does not match its definition: ${differences.join("; ")}.`,
+        subject
+      ),
+    ];
+  }
+
+  if (actual.validated || expected.enforcement === "widened") {
+    return [];
+  }
+
+  return [
+    enforcementFinding(key, expected.name, "invalid", expected.enforcement),
+  ];
+};
+
+const indexFinding = (
+  key: string,
+  expected: DescribedIndex,
+  facts: TableFacts
+): readonly Finding[] => {
+  const actual = facts.indexes.find((entry) => entry.name === expected.name);
+
+  if (actual === undefined) {
+    return [
+      enforcementFinding(key, expected.name, "missing", expected.enforcement),
+    ];
+  }
+
+  if (actual.unique !== expected.unique) {
+    return [
+      finding(
+        2,
+        "error",
+        "constraintMismatch",
+        `Index ${expected.name} on ${key} is ${actual.unique ? "" : "not "}unique; its definition says the opposite.`,
+        `${key}/${expected.name}`
+      ),
+    ];
+  }
+
+  return actual.valid
+    ? []
+    : [enforcementFinding(key, expected.name, "invalid", expected.enforcement)];
 };
 
 /**
- * Check 3: every index and constraint exists under its ID-based name and is
- * valid, or its enforcement state explains why not; a widened subtree check
- * recorded with its note is accepted without VALIDATE.
+ * Check 2: every active and retired class table and field matches the
+ * catalog (types, nullability, defaults, keys, level FK, audit FKs,
+ * trigger), and the platform tables match their migrations.
+ *
+ * @param snapshot - The configuration.
+ * @param catalog - The catalog facts.
+ * @returns The findings.
+ */
+export const checkTablesMatch = (
+  snapshot: ConfigSnapshot,
+  catalog: CatalogFacts
+): readonly Finding[] => [
+  ...classTables(snapshot).flatMap((described) => {
+    const facts = catalog.get(described.key);
+
+    if (facts === undefined) {
+      return [
+        finding(
+          2,
+          "error",
+          "tableMissing",
+          `Table ${described.key} is missing.`,
+          described.key
+        ),
+      ];
+    }
+
+    return [
+      ...columnFindings(snapshot, described, facts),
+      ...classTriggers(described.definition).flatMap((trigger) =>
+        facts.triggers.some((entry) => entry.name === trigger)
+          ? []
+          : [
+              finding(
+                2,
+                "error",
+                "keyMissing",
+                `Table ${described.key} lacks its trigger ${trigger}.`,
+                `${described.key}/${trigger}`
+              ),
+            ]
+      ),
+    ];
+  }),
+  ...checkPlatformTables(catalog),
+];
+
+/**
+ * Checks 2 and 3 for class tables: every generated key, constraint and
+ * index exists under its ID-based name with the structure its definition
+ * implies, and is valid, or its enforcement state explains why not; a
+ * widened subtree check recorded with its note is accepted without
+ * VALIDATE.
  *
  * @param snapshot - The configuration.
  * @param catalog - The catalog facts.
@@ -233,57 +332,22 @@ export const checkConstraintsValid = (
   snapshot: ConfigSnapshot,
   catalog: CatalogFacts
 ): readonly Finding[] =>
-  describedTables(snapshot).flatMap((described) => {
+  classTables(snapshot).flatMap((described) => {
     const facts = catalog.get(described.key);
 
-    if (facts === undefined || !isLiveClass(described) || described.platform) {
+    if (facts === undefined) {
       return [];
     }
 
     const { definition, key } = described;
 
-    const indexes = snapshot.indexes(definition.id).flatMap((index) => {
-      const name = generatedName("ix", index.id);
-      const found = facts.indexes.find((entry) => entry.name === name);
-
-      if (found?.valid === true || index.state !== "active") {
-        return [];
-      }
-
-      return [
-        enforcementFinding(
-          key,
-          name,
-          found === undefined ? "missing" : "invalid",
-          index.enforcement
-        ),
-      ];
-    });
-
-    const fields = snapshot.ownFields(definition.id).flatMap((field) =>
-      fieldConstraintNames(field).flatMap((name) => {
-        const state = constraintState(facts, name);
-
-        return state === "valid" || field.state !== "active"
-          ? []
-          : [enforcementFinding(key, name, state, field.enforcement)];
-      })
-    );
-
-    const level =
-      definition.parentId === null
-        ? []
-        : [generatedName("lv", definition.id)].flatMap((name) =>
-            constraintState(facts, name) === "invalid"
-              ? [enforcementFinding(key, name, "invalid", "enforced")]
-              : []
-          );
-
     return [
-      ...indexes,
-      ...fields,
-      ...subtreeFinding(definition, key, facts),
-      ...level,
+      ...describedConstraints(snapshot, definition).flatMap((expected) =>
+        constraintFinding(key, expected, facts)
+      ),
+      ...describedIndexes(snapshot, definition).flatMap((expected) =>
+        indexFinding(key, expected, facts)
+      ),
     ];
   });
 
@@ -360,85 +424,72 @@ export const checkPurgedAbsent = (
     return [...columns, ...indexes];
   });
 
-const expectedNames = (
-  snapshot: ConfigSnapshot,
-  definition: ClassDefinition
-): ReadonlySet<string> =>
-  new Set([
-    ...classKeys(definition).constraints,
-    generatedName("cb", definition.id),
-    generatedName("ub", definition.id),
-    ...snapshot
-      .ownFields(definition.id)
-      .flatMap((field) => fieldConstraintNames(field)),
-    ...snapshot
-      .indexes(definition.id)
-      .map((index) => generatedName("ix", index.id)),
-  ]);
+const orphan = (
+  code: string,
+  label: string,
+  key: string,
+  name: string
+): Finding =>
+  finding(
+    5,
+    "warning",
+    code,
+    `${label} ${name} on ${key} belongs to no definition (reported, never dropped).`,
+    `${key}/${name}`
+  );
 
 const orphansOn = (
   snapshot: ConfigSnapshot,
   described: DescribedTable,
   facts: TableFacts
 ): readonly Finding[] => {
+  const { definition, key } = described;
+
   const columns = new Set(
     describedColumns(snapshot, described).map((column) => column.name)
   );
 
-  const names = expectedNames(snapshot, described.definition);
-  const { key } = described;
-
-  const orphanColumns = facts.columns.flatMap((column) =>
-    column.dropped || columns.has(column.name)
-      ? []
-      : [
-          finding(
-            5,
-            "warning",
-            "orphanColumn",
-            `Column ${key}.${column.name} is not described by any field (reported, never dropped).`,
-            `${key}.${column.name}`
-          ),
-        ]
+  const constraints = new Set(
+    describedConstraints(snapshot, definition).map((entry) => entry.name)
   );
 
-  // Postgres names the NOT NULL constraints of system columns itself.
-  const orphanConstraints = facts.constraints.flatMap((entry) =>
-    names.has(entry.name) ||
-    (entry.type === "n" && parseGeneratedName(entry.name) === undefined)
-      ? []
-      : [
-          finding(
-            5,
-            "warning",
-            "orphanConstraint",
-            `Constraint ${entry.name} on ${key} belongs to no definition (reported, never dropped).`,
-            `${key}/${entry.name}`
-          ),
-        ]
+  const indexes = new Set(
+    describedIndexes(snapshot, definition).map((entry) => entry.name)
   );
 
-  const orphanIndexes = facts.indexes.flatMap((entry) =>
-    names.has(entry.name)
-      ? []
-      : [
-          finding(
-            5,
-            "warning",
-            "orphanIndex",
-            `Index ${entry.name} on ${key} belongs to no definition (reported, never dropped).`,
-            `${key}/${entry.name}`
-          ),
-        ]
-  );
+  const triggers = new Set(classTriggers(definition));
 
-  return [...orphanColumns, ...orphanConstraints, ...orphanIndexes];
+  return [
+    ...facts.columns.flatMap((column) =>
+      column.dropped || columns.has(column.name)
+        ? []
+        : [orphan("orphanColumn", "Column", key, column.name)]
+    ),
+    // Postgres names the NOT NULL constraints of system columns itself.
+    ...facts.constraints.flatMap((entry) =>
+      constraints.has(entry.name) ||
+      (entry.type === "n" && parseGeneratedName(entry.name) === undefined)
+        ? []
+        : [orphan("orphanConstraint", "Constraint", key, entry.name)]
+    ),
+    ...facts.indexes.flatMap((entry) =>
+      indexes.has(entry.name)
+        ? []
+        : [orphan("orphanIndex", "Index", key, entry.name)]
+    ),
+    ...facts.triggers.flatMap((entry) =>
+      triggers.has(entry.name)
+        ? []
+        : [orphan("orphanConstraint", "Trigger", key, entry.name)]
+    ),
+  ];
 };
 
 /**
- * Check 5: tables, columns, indexes and constraints in STD namespaces that
- * no definition describes. Reported, never dropped. Platform tables are
- * checked by their migrations (check 1) and only for orphan tables here.
+ * Check 5: tables, columns, indexes, constraints and triggers in STD
+ * namespaces that no definition or platform migration describes. Reported,
+ * never dropped. (Objects on platform tables are compared with their
+ * migrations' record in check 2.)
  *
  * @param snapshot - The configuration.
  * @param catalog - The catalog facts.
@@ -454,23 +505,25 @@ export const checkOrphans = (
     )
   );
 
-  const internal = migrationTables();
+  const platform = migrationTables();
 
   return [...catalog].flatMap(([key, facts]) => {
     const table = described.get(key);
 
+    if (platform.has(key)) {
+      return [];
+    }
+
     if (table === undefined) {
-      return internal.has(key)
-        ? []
-        : [
-            finding(
-              5,
-              "warning",
-              "orphanTable",
-              `Table ${key} is not described by any class (reported, never dropped).`,
-              key
-            ),
-          ];
+      return [
+        finding(
+          5,
+          "warning",
+          "orphanTable",
+          `Table ${key} is not described by any class (reported, never dropped).`,
+          key
+        ),
+      ];
     }
 
     return table.platform ? [] : orphansOn(snapshot, table, facts);
@@ -521,9 +574,11 @@ export const checkInheritanceCatalog = (
   snapshot: ConfigSnapshot,
   catalog: CatalogFacts
 ): readonly Finding[] => {
-  const classTables = describedTables(snapshot).filter(isLiveClass);
+  const nullable = describedTables(snapshot).flatMap((described) => {
+    if (!isLiveClass(described)) {
+      return [];
+    }
 
-  const nullable = classTables.flatMap((described) => {
     const column = catalog
       .get(described.key)
       ?.columns.find((entry) => entry.name === "class_id" && !entry.dropped);
@@ -567,7 +622,7 @@ export const checkInheritanceCatalog = (
 };
 
 /**
- * The tables of the schemas `doctor` inspects: every namespace's schema.
+ * The schemas `doctor` inspects: `core` and every namespace's schema.
  *
  * @param snapshot - The configuration.
  * @returns Schema names.
