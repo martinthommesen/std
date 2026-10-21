@@ -1,7 +1,8 @@
 /**
  * Probe 5 (Contracts 1.4, 6.5): `ADD COLUMN` with a constant default on a
- * populated table changes only the catalog. The strict 100 ms bound is
- * checked by the measurement script (`pnpm probes`); CI asserts under 1 s.
+ * populated table changes only the catalog. The 1,000,000-row size and the
+ * strict 100 ms bound are the measurement script's (`pnpm probes`); CI uses
+ * 100,000 rows and asserts under 1 s.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
@@ -9,7 +10,12 @@ import { Effect } from "effect";
 import { ADD_COLUMN_CASES, runAddColumnProbe } from "../src/add-column.ts";
 import { probeDatabaseLayer } from "../src/probe-database.ts";
 
-const ROWS = 1_000_000;
+/**
+ * Large enough to make a rewrite visible, small enough not to slow the
+ * server's checkpoints for concurrent test files (dropping a test database
+ * waits for one). The 1,000,000-row run is `pnpm probes`.
+ */
+const ROWS = 100_000;
 const LOOSE_BOUND_MS = 1000;
 
 describe("probe-add-column", () => {
