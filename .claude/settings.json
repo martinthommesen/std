@@ -1,0 +1,15 @@
+{
+  "claudeMdExcludes": [
+    "**/repos/**/CLAUDE.md",
+    "**/repos/**/CLAUDE.local.md",
+    "**/repos/**/AGENTS.md",
+    "**/repos/**/.claude/rules/**"
+  ],
+  "skillOverrides": {
+    "agent-review": "off",
+    "commit": "off",
+    "make-pr": "off",
+    "make-pr-for-issue": "off",
+    "subagent-commit": "off"
+  }
+}
