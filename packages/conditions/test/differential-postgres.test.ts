@@ -5,8 +5,11 @@
  * TypeScript evaluator on read-back rows, SQL `WHERE` and
  * `COALESCE(e, false)` must agree, and `e` and `not e` must partition the
  * rows. Failures are shrunk and saved under `test/fixtures/differential/`,
- * which rerun first. The coverage gate fails the run if any permitted
- * (operator, type, profile) combination was generated zero times.
+ * which rerun first. When the budget runs out, every permitted (operator,
+ * type, profile) combination the timed run missed (a slow or busy machine
+ * fits fewer cases) gets targeted cases of its own, through the same runner
+ * and assertions. The coverage gate then fails the run only if a permitted
+ * combination cannot be generated at all.
  *
  * About 60 s by default; `STD_DIFFERENTIAL=nightly` runs about 30 min, and
  * `STD_DIFFERENTIAL_MS` sets the budget for local experiments.
@@ -15,6 +18,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { ConditionProfile } from "@std/values/field-type";
 import { Effect, Schema } from "effect";
 import type { SqlClient } from "effect/sql";
 import {
@@ -28,14 +32,16 @@ import {
   record,
   subarray,
 } from "fast-check";
-import type { Arbitrary } from "fast-check";
+import type { Arbitrary, RunDetails } from "fast-check";
 
 import { ExprSchema } from "../src/ast.ts";
+import type { Expr } from "../src/ast.ts";
 import { PROFILES } from "../src/profile.ts";
 import type { CaseReport, DifferentialCase } from "./support/differential.ts";
 import { createTables, runCase } from "./support/differential.ts";
 import {
   assetRowsArb,
+  atomArb,
   coverageKeys,
   exprArb,
   permittedCombinations,
@@ -52,6 +58,12 @@ const BUDGET_MS =
   (NIGHTLY ? 1_800_000 : 55_000);
 
 const SHRINK_ALLOWANCE_MS = 300_000;
+
+// Room for the targeted phase when the timed run covered almost nothing:
+// every combination at TARGETED_ATTEMPTS cases, on a loaded machine.
+const TARGETED_ALLOWANCE_MS = 180_000;
+const TARGETED_ATTEMPTS = 20;
+const TARGETED_EXPRESSIONS = 4;
 const MAX_ROWS = 10;
 const MAX_EXPRESSIONS = 12;
 const DEPTH = 6;
@@ -78,26 +90,79 @@ const contextArb = record({
   weekStart: constantFrom(1, 2, 3, 4, 5, 6, 7),
 });
 
+interface CaseSetup {
+  readonly classId: string;
+  readonly profile: ConditionProfile;
+  readonly accessRuleHops: 0 | 1;
+}
+
+const caseWith = (
+  { accessRuleHops, classId, profile }: CaseSetup,
+  exprs: Arbitrary<readonly Expr[]>
+): Arbitrary<DifferentialCase> =>
+  record({
+    classId: constantFrom(classId),
+    context: contextArb,
+    exprs,
+    people: personRowsArb,
+    profile: constantFrom(profile),
+    profileOptions: constantFrom({ accessRuleHops, myGroups: true }),
+    rows: assetRowsArb(MAX_ROWS),
+  });
+
 const caseArb: Arbitrary<DifferentialCase> = record({
   accessRuleHops: constantFrom(0 as const, 1 as const),
   classId: constantFrom(ASSET, LAPTOP),
   profile: constantFrom(...PROFILES),
-}).chain(({ accessRuleHops, classId, profile }) => {
-  const profileOptions = { accessRuleHops, myGroups: true };
+}).chain((setup) =>
+  caseWith(
+    setup,
+    array(
+      exprArb({
+        classId: setup.classId,
+        depth: DEPTH,
+        profile: setup.profile,
+        profileOptions: {
+          accessRuleHops: setup.accessRuleHops,
+          myGroups: true,
+        },
+      }),
+      { maxLength: MAX_EXPRESSIONS, minLength: 1 }
+    )
+  )
+);
 
-  return record({
-    classId: constantFrom(classId),
-    context: contextArb,
-    exprs: array(exprArb({ classId, depth: DEPTH, profile, profileOptions }), {
-      maxLength: MAX_EXPRESSIONS,
-      minLength: 1,
-    }),
-    people: personRowsArb,
-    profile: constantFrom(profile),
-    profileOptions: constantFrom(profileOptions),
-    rows: assetRowsArb(MAX_ROWS),
-  });
-});
+// Cases whose conditions are atoms of one combination, over either class and
+// either hop setting; undefined when no setup can generate it.
+const targetedCaseArb = (
+  profile: ConditionProfile,
+  combination: string
+): Arbitrary<DifferentialCase> | undefined => {
+  const setups = [ASSET, LAPTOP].flatMap((classId) =>
+    [0 as const, 1 as const].flatMap((accessRuleHops) => {
+      const atom = atomArb(
+        {
+          classId,
+          depth: 0,
+          profile,
+          profileOptions: { accessRuleHops, myGroups: true },
+        },
+        combination
+      );
+
+      return atom === undefined
+        ? []
+        : [
+            caseWith(
+              { accessRuleHops, classId, profile },
+              array(atom, { maxLength: TARGETED_EXPRESSIONS, minLength: 1 })
+            ),
+          ];
+    })
+  );
+
+  return setups.length === 0 ? undefined : oneof(...setups);
+};
 
 const JsonImageSchema = Schema.Record(Schema.String, Schema.Json);
 
@@ -198,28 +263,104 @@ type Runner = (
   effect: Effect.Effect<CaseReport, unknown, SqlClient.SqlClient>
 ) => Promise<CaseReport>;
 
-const runProperty = async (run: Runner, stats: Stats) =>
-  await check(
-    asyncProperty(caseArb, async (generated) => {
-      const report = await run(runCase(generated));
+interface Checked {
+  readonly details: RunDetails<unknown>;
+  /** The run cut off by the time limit, when it then disagreed. */
+  readonly abandoned: DifferentialCase | undefined;
+}
 
-      tally(stats, generated, report);
+// One property for both phases: run the case, count its coverage, agree.
+const runChecks = async (
+  run: Runner,
+  stats: Stats,
+  cases: Arbitrary<DifferentialCase>,
+  timed: boolean
+): Promise<Checked> => {
+  let lastCase: DifferentialCase | undefined;
+  let lastRun: Promise<boolean> = Promise.resolve(true);
 
-      return report.mismatches.length === 0;
+  const agree = async (generated: DifferentialCase): Promise<boolean> => {
+    const report = await run(runCase(generated));
+
+    tally(stats, generated, report);
+
+    return report.mismatches.length === 0;
+  };
+
+  const details = await check(
+    asyncProperty(cases, async (generated) => {
+      lastCase = generated;
+      lastRun = agree(generated);
+
+      return await lastRun;
     }),
-    {
-      numRuns: Number.MAX_SAFE_INTEGER,
-      plugins: [interruptAfterTimeLimit(BUDGET_MS)],
-    }
+    timed
+      ? {
+          numRuns: Number.MAX_SAFE_INTEGER,
+          plugins: [interruptAfterTimeLimit(BUDGET_MS)],
+        }
+      : { numRuns: 1 }
   );
 
-const uncovered = (stats: Stats): string[] =>
+  // At the time limit fast-check stops waiting for the run in flight and
+  // ignores its outcome, but the run goes on: finish it before the tables
+  // are reused, and keep its case if it disagreed.
+  const lastAgreed = await lastRun;
+
+  return {
+    abandoned: details.failed || lastAgreed ? undefined : lastCase,
+    details,
+  };
+};
+
+// A failure is shrunk by fast-check, saved, replayed and reported; a run
+// the time limit cut off is saved and reported unshrunk.
+const failOnCounterexample = Effect.fn("failOnCounterexample")(
+  function* failOnCounterexample(
+    { abandoned, details }: Checked,
+    phase: string
+  ) {
+    if (details.failed && details.counterexample !== null) {
+      const [failing] = decodeCounterexample(details.counterexample);
+      const file = saveCase(failing);
+      const report = yield* runCase(failing);
+
+      assert.fail(
+        `Engines disagree in the ${phase} phase (seed ${details.seed}); shrunk case saved to ${file}: ${JSON.stringify(report.mismatches.slice(0, 3))}`
+      );
+    }
+
+    // fast-check also reports a time limit reached before any run finished
+    // as failed, with no counterexample; that cut-off run is checked below.
+    assert.isFalse(
+      details.failed && !details.interrupted,
+      `fast-check failed in the ${phase} phase (seed ${details.seed}): ${String(details.errorInstance)}`
+    );
+
+    if (abandoned !== undefined) {
+      const file = saveCase(abandoned);
+      const report = yield* runCase(abandoned);
+
+      assert.fail(
+        `Engines disagree in the ${phase} phase's last run, cut off by the time limit (seed ${details.seed}); case saved unshrunk to ${file}: ${JSON.stringify(report.mismatches.slice(0, 3))}`
+      );
+    }
+  }
+);
+
+interface Combination {
+  readonly profile: ConditionProfile;
+  readonly key: string;
+}
+
+const isCovered = (stats: Stats, { key, profile }: Combination): boolean =>
+  (stats.coverage.get(`${profile}|${key}`) ?? 0) > 0;
+
+const uncovered = (stats: Stats): Combination[] =>
   PROFILES.flatMap((profile) =>
     permittedCombinations(profile)
-      .map((key) => `${profile}|${key}`)
-      .values()
-      .filter((combination) => (stats.coverage.get(combination) ?? 0) === 0)
-      .toArray()
+      .map((key): Combination => ({ key, profile }))
+      .filter((combination) => !isCovered(stats, combination))
   );
 
 describe("coverage gate", () => {
@@ -263,37 +404,52 @@ layer(TestDatabase, { timeout: 60_000 })("differential-postgres", (pg) => {
           runs: 0,
         };
 
-        const result = yield* Effect.promise(
-          async () => await runProperty(run, stats)
+        const timed = yield* Effect.promise(
+          async () => await runChecks(run, stats, caseArb, true)
         );
 
-        if (result.failed && result.counterexample !== null) {
-          const [failing] = decodeCounterexample(result.counterexample);
-          const file = saveCase(failing);
-          const report = yield* runCase(failing);
+        yield* failOnCounterexample(timed, "timed");
 
-          assert.fail(
-            `Engines disagree (seed ${result.seed}); shrunk case saved to ${file}: ${JSON.stringify(report.mismatches.slice(0, 3))}`
-          );
+        const timedRuns = stats.runs;
+
+        // The timed phase fits fewer cases on a busy machine; reach each
+        // combination it missed with cases of that combination alone.
+        const targets = uncovered(stats);
+
+        for (const target of targets) {
+          const cases = targetedCaseArb(target.profile, target.key);
+          let attempts = 0;
+
+          if (cases !== undefined) {
+            while (attempts < TARGETED_ATTEMPTS && !isCovered(stats, target)) {
+              attempts += 1;
+
+              const result = yield* Effect.promise(
+                async () => await runChecks(run, stats, cases, false)
+              );
+
+              yield* failOnCounterexample(result, "targeted");
+            }
+          }
         }
 
-        assert.isFalse(result.failed);
-
-        const missing = uncovered(stats);
+        const missing = uncovered(stats).map(
+          ({ key, profile }) => `${profile}|${key}`
+        );
 
         const counts = [...stats.coverage.values()];
 
         // The run's size, for the decision note and CI logs.
         process.stdout.write(
-          `differential: ${stats.runs} runs, ${stats.conditions} conditions (${stats.refused} refused by the checker), ${stats.comparisons} row comparisons, ${stats.coverage.size} combinations covered, each at least ${Math.min(...counts)} times\n`
+          `differential: ${stats.runs} runs (${timedRuns} timed, ${stats.runs - timedRuns} targeted), ${stats.conditions} conditions (${stats.refused} refused by the checker), ${stats.comparisons} row comparisons, ${stats.coverage.size} combinations covered, each at least ${Math.min(...counts)} times; ${targets.length} combinations needed the targeted phase\n`
         );
 
         assert.deepStrictEqual(
           missing,
           [],
-          "Coverage gate: permitted combinations never generated"
+          "Coverage gate: permitted combinations that cannot be generated"
         );
       }),
-    BUDGET_MS + SHRINK_ALLOWANCE_MS
+    BUDGET_MS + TARGETED_ALLOWANCE_MS + SHRINK_ALLOWANCE_MS
   );
 });
