@@ -209,6 +209,7 @@ Resume:
 ### 1.9 Minimal migration mechanism
 
 - **Platform tables** (`core.config_state`, definition tables, `core.definition_revision`, journal, config layer tables, migration ledger, outbox, import bookkeeping) are owned by platform migrations. Core definition files describe them so they appear in the API; the loader verifies them and never changes them. Reason: a change set cannot create the tables it writes into.
+- Platform tables laid out like root classes keep `created_by` and `updated_by` without a foreign key: `core.user` is created later, by the core set. Set loads write the system user's ID (a fixed ID, inserted into `core.user` by the change set that creates it); `doctor` checks that every audit ID on a platform table exists in `core.user`. Tables without `id` (`core.config_state`, `core.config_dependency`, `core.definition_revision`, the ledger) are internal and not described as classes. [judgment, decision 0006]
 - **Core definition tables** (for example `core.user`) are ordinary STD tables loaded through change sets.
 - Migrations are numbered, forward-only files (TypeScript modules that list their statements one by one, because the driver has no simple-query protocol to run a multi-statement script), recorded in `core.platform_migration (id, checksum, std_version, applied_at)`. No down migrations; rollback is restoring the backup taken before the upgrade. Reason: down migrations are rarely tested and lose data.
 - Kind `tx` (default) runs in one transaction with its ledger row. Kind `concurrent_index` is one `CREATE INDEX CONCURRENTLY` with a fixed name: the runner probes `pg_index` (valid: record; invalid: drop and rebuild; missing: build).
@@ -326,7 +327,7 @@ Runs as a change set (1.4), ancestors altered root first, the same order writers
 
 1. For each ancestor, `DROP CONSTRAINT <subtree check>, ADD CONSTRAINT ... CHECK (...) NOT VALID`. ACCESS EXCLUSIVE, but no scan, so brief.
 2. Create the child table with its level FK (SHARE ROW EXCLUSIVE on the parent).
-3. No VALIDATE. The NOT VALID check already applies to new rows, and the old validated check implies the new one, so a scan of every ancestor would gain nothing. The widened check is recorded as `enforced` with a note saying so, and `doctor` check 3 accepts that state. [judgment]
+3. No VALIDATE. The NOT VALID check already applies to new rows, and the old validated check implies the new one, so a scan of every ancestor would gain nothing. The widened check is recorded as `enforced` with a note saying so, and `doctor` check 3 accepts that state. [judgment; checked: `inheritance.test.ts` adds a grandchild to a hierarchy of 2,000 records, `seq_scan` of both ancestors unchanged, `convalidated` false]
 
 Measured [checked: 0F probe 3, a grandchild added to a 1,000,000-record hierarchy]: the main transaction took 6.6 ms (each widened check 0.3 to 0.4 ms); it held ACCESS EXCLUSIVE on the root and the parent and SHARE ROW EXCLUSIVE on the parent; no ancestor was scanned (`pg_stat_xact_user_tables.seq_scan` 0) or rewritten (`relfilenode` unchanged). A reader holding an ancestor past 2 s makes the attempt time out (after 2,001 ms), roll back with the revision unchanged, and retry.
 
@@ -424,6 +425,8 @@ Built-in rules: allow `admin` everything on `*`; allow `authenticated` read on `
 - `acme.asset`: `name`, `owner` (reference to user), `status`, `cost`, `purchased_on`, `docked_to` (reference to asset). `acme.laptop` adds `serial` and `disk_key` and overrides `purchased_on` to required. `acme.monitor` adds `size_inches`.
 - Alice has role `asset_manager`; Bob has `employee`.
 - Fixture: Bob owns laptop L (cost 1200, docked to Alice's monitor), monitor M (cost 300, not docked) and plain asset S (cost 2500, status `lost`). Alice owns that monitor and a laptop K.
+
+The rule numbers run 1, 2a to 2c and 3 to 10: twelve rules (`examples/acme/access.yaml`).
 
 | # | Effect | Role | Class and target | Actions | Condition |
 | --- | --- | --- | --- | --- | --- |
@@ -947,7 +950,7 @@ The representation of every type is fixed in Step 1, including types implemented
 - Big integer and decimal are strings because common JSON parsers lose precision; JSON numbers are refused, not converted [judgment].
 - Json: duplicate keys and numbers not exactly representable as a double are refused, because `jsonb` keeps the last duplicate and keeps digits that `JSON.parse` rounds. The canonical output is jsonb's key order (shorter UTF-8 byte length first, then bytewise), written by `stringifyJson` because JS objects put integer-like keys first. A number is exactly representable when its literal denotes the same decimal value as the shortest round-trip form of the double it parses to, so `0.1` is accepted and `0.1000000000000000055511151231257827` is refused; integral values beyond ±(2^53 - 1), such as `1e300`, are refused as well. `jsonb` refuses `\u0000` itself. Both engines compare json values by jsonb equality. [judgment]
 - Choice keys: 1 to 63 characters of `[a-z0-9_]`, starting with a letter or digit; validated by the record service so lists change without DDL [judgment].
-- Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [checked: 0F probe 5 on 1,000,000 rows: `relfilenode` unchanged, 0.4 ms for the statement and 4.1 ms for the config commit, `seq_scan` unchanged; a volatile default rewrote the table in 448 ms].
+- Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [checked: 0F probe 5 on 1,000,000 rows: `relfilenode` unchanged, 0.4 ms for the statement and 4.1 ms for the config commit, `seq_scan` unchanged; a volatile default rewrote the table in 448 ms; checked: `change-sets.test.ts` on 1,000,000 rows, also for `integer NOT NULL DEFAULT 1`: `relfilenode` unchanged, `seq_scan` unchanged, main transaction 3 ms; decision 0006].
 - System date-times come from one clock reading per transaction, already in whole milliseconds.
 - Password and secret conditions may use only `empty` and `notEmpty`, server-side.
 - History stores canonical JSON with the schema revision (4.2).
