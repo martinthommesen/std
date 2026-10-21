@@ -73,24 +73,25 @@ const decodeEntries = decodeRows(
  * @param sql - Any client.
  * @returns The rows, by id.
  */
-export const readLedger = (
+export const readLedger: (
   sql: SqlClient.SqlClient
-): Effect.Effect<readonly LedgerEntry[], SqlError> =>
-  Effect.gen(function* readLedgerRows() {
-    const [presence] = yield* sql`
+) => Effect.Effect<readonly LedgerEntry[], SqlError> = Effect.fn(
+  "Platform.readLedger"
+)(function* readLedgerRows(sql: SqlClient.SqlClient) {
+  const [presence] = yield* sql`
       SELECT to_regclass('core.platform_migration') IS NOT NULL AS present`.pipe(
-      Effect.flatMap(decodePresence)
-    );
+    Effect.flatMap(decodePresence)
+  );
 
-    if (presence?.present !== true) {
-      return [];
-    }
+  if (presence?.present !== true) {
+    return [];
+  }
 
-    return yield* sql`
+  return yield* sql`
       SELECT id, checksum FROM core.platform_migration ORDER BY id`.pipe(
-      Effect.flatMap(decodeEntries)
-    );
-  });
+    Effect.flatMap(decodeEntries)
+  );
+});
 
 /**
  * Compares the ledger with the known migrations.

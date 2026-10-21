@@ -12,6 +12,7 @@ import { SqlError, UnknownError } from "effect/sql/SqlError";
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import {
   DatabaseError,
+  hygienic,
   isSanitized,
   sanitizeCause,
   sanitizeSqlError,
@@ -101,6 +102,40 @@ describe("error-hygiene", () => {
         }
 
         assert.notInclude(inspect(cause, { depth: 20 }), PRIVATE);
+      })
+  );
+
+  it.effect(
+    "hygienic keeps a defect that sits next to a SqlError failure",
+    () =>
+      Effect.gen(function* keepsDefects() {
+        const raw = new SqlError({
+          reason: new UnknownError({
+            cause: Object.assign(new Error(PRIVATE), { code: "55P03" }),
+            message: PRIVATE,
+          }),
+        });
+
+        const exit = yield* Effect.exit(
+          hygienic(
+            Effect.failCause(
+              Cause.combine(Cause.fail(raw), Cause.die(new Error("kept")))
+            )
+          )
+        );
+
+        assert.isTrue(Exit.isFailure(exit));
+
+        const reasons = Exit.isFailure(exit) ? exit.cause.reasons : [];
+        const failures = reasons.filter(Cause.isFailReason);
+        const defects = reasons.filter(Cause.isDieReason);
+
+        assert.lengthOf(failures, 1);
+        assert.instanceOf(failures[0]?.error, DatabaseError);
+        assert.strictEqual(failures[0]?.error.sqlState, "55P03");
+        assert.lengthOf(defects, 1);
+        assert.include(String(defects[0]?.defect), "kept");
+        assert.notInclude(inspect(exit, { depth: 20 }), PRIVATE);
       })
   );
 

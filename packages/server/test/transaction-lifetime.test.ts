@@ -5,13 +5,16 @@ import { PgClient } from "@effect/sql-pg";
  * a failed COMMIT, and `readOnly` on a write.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import { DatabaseError } from "../src/sql/errors.ts";
 import { decodeRows } from "../src/sql/rows.ts";
+import { analyzeStatement } from "../src/sql/statement-lexer.ts";
 import { readOnly } from "../src/sql/statement-marks.ts";
+import { CurrentTransaction } from "../src/sql/transaction-context.ts";
+import type { TransactionHandle } from "../src/sql/transaction-context.ts";
 import {
   READ_KEYWORDS,
   STATEMENT_KEYWORDS,
@@ -54,26 +57,43 @@ const UNICODE_ISOLATION =
   "SET LOCAL U&\"transaction_\\0069solation\" = 'serializable'";
 
 /**
- * A request whose body detaches a nested unit that writes, signals and then
- * fails later; the body returns as soon as the write happened.
- * @returns The request.
+ * A request whose body detaches a nested unit that writes, signals, and then
+ * waits for a release that never comes; the body returns as soon as the
+ * write happened. The writer reports how it ended.
+ * @returns The request's exit, and an effect awaiting whether the writer was interrupted.
  */
 const detachedWriter = Effect.gen(function* detachWriter() {
   const sql = yield* SqlClient.SqlClient;
   const { request } = yield* Transactions;
   const wrote = yield* Deferred.make<boolean>();
+  const neverReleased = yield* Deferred.make<boolean>();
+  const writerEnded = yield* Deferred.make<boolean>();
 
   const writer = request(
     sql`INSERT INTO lifetime_detached VALUES (1)`.pipe(
       Effect.andThen(Deferred.succeed(wrote, true)),
-      Effect.andThen(Effect.sleep(Duration.millis(300))),
+      Effect.andThen(Deferred.await(neverReleased)),
       Effect.andThen(Effect.fail("late failure" as const))
     )
-  ).pipe(Effect.ignore);
-
-  return yield* request(
-    Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+  ).pipe(
+    Effect.onExit((exit) =>
+      Deferred.succeed(writerEnded, Exit.hasInterrupts(exit))
+    ),
+    Effect.ignore
   );
+
+  const exit = yield* Effect.exit(
+    request(
+      Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+    )
+  );
+
+  return {
+    exit,
+    writerInterrupted: Deferred.await(writerEnded).pipe(
+      Effect.timeout(Duration.seconds(10))
+    ),
+  };
 });
 
 describe("transaction-lifetime", () => {
@@ -138,37 +158,106 @@ describe("transaction-lifetime", () => {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`CREATE TABLE lifetime_detached (id int PRIMARY KEY)`;
 
-          const exit = yield* Effect.exit(detachedWriter);
+          const { exit, writerInterrupted } = yield* detachedWriter;
 
           assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
-          yield* Effect.sleep(Duration.millis(400));
+          assert.isTrue(
+            yield* writerInterrupted,
+            "the sweep interrupted the writer"
+          );
           assert.strictEqual(yield* countRows("lifetime_detached"), 0);
         })
     );
 
     dbTest.effect(
-      "a fiber that first uses a transaction after its code ended is refused",
+      "only fibers of the transaction's code enroll, and not after it ended",
       () =>
         Effect.gen(function* foreignFiber() {
           const client = yield* PgClient.PgClient;
           const state = new TransactionState("request", client);
-          yield* state.enter("the owner");
-          state.sealed = true;
 
-          yield* state.enter("the owner again");
+          const asOwner = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            Effect.provideService(effect, CurrentTransaction, state);
 
-          const stranger = yield* Effect.exit(
-            Effect.forkChild(state.enter("a stranger")).pipe(
+          yield* Effect.withFiber((fiber) => {
+            state.bodyFiberId = fiber.id;
+
+            return Effect.void;
+          });
+          yield* asOwner(state.enter("the owner"));
+
+          const outsider = yield* Effect.exit(
+            Effect.forkChild(state.enter("a fiber without the context")).pipe(
               Effect.flatMap(Fiber.join)
             )
           );
 
-          assert.strictEqual(refusalOf(stranger)?.reason, "foreignFiber");
+          assert.strictEqual(refusalOf(outsider)?.reason, "foreignFiber");
+
+          state.sealed = true;
+          yield* asOwner(state.enter("the owner again"));
+
+          const late = yield* Effect.exit(
+            Effect.forkChild(
+              asOwner(state.enter("a child after the seal"))
+            ).pipe(Effect.flatMap(Fiber.join))
+          );
+
+          assert.strictEqual(refusalOf(late)?.reason, "foreignFiber");
 
           state.closed = true;
-          const late = yield* Effect.exit(state.enter("the owner, late"));
-          assert.strictEqual(refusalOf(late)?.reason, "closed");
+
+          const closed = yield* Effect.exit(
+            asOwner(state.enter("the owner, late"))
+          );
+
+          assert.strictEqual(refusalOf(closed)?.reason, "closed");
         })
+    );
+
+    dbTest.effect(
+      "an ancestor holding the transaction's handle is refused at once and the transaction settles",
+      () =>
+        Effect.gen(function* ancestorHandle() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_ancestor (id int PRIMARY KEY)`;
+
+          const handed = yield* Deferred.make<TransactionHandle>();
+          const released = yield* Deferred.make<boolean>();
+          const ran: string[] = [];
+
+          const transaction = yield* Effect.forkChild(
+            request(
+              Effect.gen(function* handOutHandle() {
+                yield* sql`INSERT INTO lifetime_ancestor VALUES (1)`;
+                yield* Deferred.succeed(handed, yield* CurrentTransaction);
+                yield* Deferred.await(released);
+              })
+            )
+          );
+
+          const handle = yield* Deferred.await(handed);
+
+          const registered = yield* Effect.exit(
+            handle.afterCommit(
+              Effect.sync(() => {
+                ran.push("foreign action");
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(registered)?.reason, "foreignFiber");
+
+          yield* Deferred.succeed(released, true);
+          yield* Fiber.join(transaction).pipe(
+            Effect.timeout(Duration.seconds(10))
+          );
+
+          assert.deepStrictEqual(ran, [], "the foreign action never ran");
+          assert.strictEqual(yield* countRows("lifetime_ancestor"), 1);
+        }),
+      { timeout: 20_000 }
     );
 
     dbTest.effect(
@@ -208,9 +297,211 @@ describe("transaction-lifetime", () => {
         );
 
         assert.strictEqual(refusalOf(exit)?.reason, "transaction-control");
+
+        const writingWith = yield* Effect.exit(
+          request(
+            readOnly(
+              sql`WITH x AS (INSERT INTO lifetime_read_only VALUES (2) RETURNING 1) SELECT * FROM x`
+            )
+          )
+        );
+
+        assert.strictEqual(
+          refusalOf(writingWith)?.reason,
+          "transaction-control"
+        );
         assert.strictEqual(yield* countRows("lifetime_read_only"), 0);
+
+        const writingCtes = [
+          "WITH x AS (SELECT 1) SELECT * INTO lifetime_read_only_copy FROM x",
+          "WITH x AS MATERIALIZED (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH RECURSIVE r(n) AS (SELECT 1), d AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1",
+          "WITH x AS (SELECT 1) DELETE FROM lifetime_read_only",
+          `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1`,
+          "SELECT U&'x' UESCAPE '!' INTO lifetime_read_only_copy",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM lifetime_read_only RETURNING 1) SELECT 1',
+        ];
+
+        for (const text of writingCtes) {
+          const refused = yield* Effect.exit(
+            request(readOnly(sql.unsafe(text)))
+          );
+
+          assert.strictEqual(
+            refusalOf(refused)?.reason,
+            "transaction-control",
+            text
+          );
+        }
+
+        // Locking clauses, and command words used as names, are reads.
+        yield* sql`INSERT INTO lifetime_read_only VALUES (3)`;
+        yield* sql`CREATE FUNCTION insert() RETURNS int LANGUAGE sql AS 'SELECT 1'`;
+
+        const reads = [
+          'SELECT id FROM "lifetime_read_only" FOR UPDATE',
+          "SELECT 1 FOR UPDATE",
+          "SELECT id FROM lifetime_read_only t FOR NO KEY UPDATE OF t SKIP LOCKED",
+          "SELECT update, delete, insert, merge FROM (SELECT 1 AS update, 2 AS delete, 3 AS insert, 4 AS merge) s",
+          "SELECT 1 AS update",
+          "SELECT insert()",
+          "SELECT 1 AS into",
+          `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          `WITH U&"!0078" /* c */ UESCAPE -- d\n '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+          "SELECT U&'d!0061t!+000061' UESCAPE '!' AS c",
+          'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
+          'SELECT s.into FROM (SELECT 1 AS "into") s',
+          'SELECT s. into FROM (SELECT 1 AS "into") s',
+          "SELECT E'a'\n'\\' into' AS c",
+          "WITH RECURSIVE r(n) AS NOT MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SEARCH DEPTH FIRST BY n SET ord CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT n FROM r",
+        ];
+
+        for (const text of reads) {
+          yield* request(readOnly(sql.unsafe(text)));
+        }
+
+        assert.strictEqual(yield* countRows("lifetime_read_only"), 1);
       })
     );
+
+    dbTest.effect(
+      "readOnly refuses SELECT INTO, so a caught nested failure cannot commit its table",
+      () =>
+        Effect.gen(function* selectInto() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+
+          const selectsInto = [
+            "SELECT 42 AS id INTO lifetime_select_into",
+            // An escape string continued on the next line keeps its mode, so
+            // `\'` is an escaped quote and INTO lies outside the constant.
+            "SELECT E'a'\n'\\'x' AS c INTO lifetime_select_into",
+            "SELECT E'a' -- note\n'\\'x' AS c INTO lifetime_select_into",
+            // The `.` of a numeric literal does not qualify a name.
+            "SELECT 1. INTO lifetime_select_into",
+            "SELECT 1_000. INTO lifetime_select_into",
+          ];
+
+          for (const text of selectsInto) {
+            const outcome = yield* Effect.exit(
+              request(
+                request(
+                  readOnly(sql.unsafe(text)).pipe(
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore)
+              )
+            );
+
+            assert.strictEqual(
+              refusalOf(outcome)?.reason,
+              "transaction-control",
+              text
+            );
+            assert.strictEqual(
+              yield* countRows(
+                "pg_class WHERE relname = 'lifetime_select_into'"
+              ),
+              0,
+              text
+            );
+          }
+
+          // Without readOnly the same statements run, so each is SELECT INTO.
+          for (const text of selectsInto) {
+            yield* request(sql.unsafe(text));
+            yield* sql`DROP TABLE lifetime_select_into`;
+          }
+        })
+    );
+  });
+
+  it("the lexer finds write clauses by structure, not by command words", () => {
+    const writing = [
+      "SELECT 42 AS id INTO t",
+      "SELECT 1 INTO TEMP t",
+      "WITH x AS (SELECT 1) SELECT * INTO t FROM x",
+      "WITH x AS (INSERT INTO t VALUES (1) RETURNING 1) SELECT * FROM x",
+      "WITH x AS (UPDATE t SET a = 1 RETURNING 1) SELECT * FROM x",
+      "WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x",
+      "WITH x AS MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH x AS NOT MATERIALIZED (DELETE FROM t RETURNING 1) SELECT 1",
+      "WITH RECURSIVE r AS (SELECT 1), d AS (DELETE FROM t RETURNING 1) SELECT 1",
+      'WITH "x" (a, b) AS (MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE) SELECT 1',
+      "WITH x AS (SELECT 1) UPDATE t SET a = 1",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH DEPTH FIRST BY n SET o DELETE FROM t",
+      "WITH RECURSIVE r(n) AS (SELECT 1) CYCLE n SET c USING p DELETE FROM t",
+      "WITH x AS (SELECT 1)",
+      "WITH x AS SELECT 1",
+      "WITH /* a */ x -- b\n AS ( /* c */ DELETE FROM t) SELECT 1",
+      // String continuations keep the first segment's mode.
+      "SELECT E'a'\n'\\'x' AS c INTO t",
+      "SELECT E'a'\r\n  \t'\\'x' INTO t",
+      "SELECT E'a' -- c\n-- d\n'\\'x' INTO t",
+      "SELECT U&'a'\n'\\' INTO t",
+      "SELECT 'a'\n'\\' INTO t",
+      // A block comment ends the constant, so the next segment is plain.
+      "SELECT E'a' /* c */\n'\\' INTO t",
+      "SELECT E'a'\n/* c */ '\\' INTO t",
+      // INTO stays a clause after a number's `.` or a quoted "as".
+      "SELECT 1. INTO t",
+      "SELECT 1_000. INTO t",
+      "SELECT .5 INTO t",
+      "SELECT 1.5e3 INTO t",
+      'SELECT "as" INTO t',
+      // A UESCAPE clause belongs to its U& token and hides nothing after it.
+      `WITH U&"!0078" UESCAPE '!' AS (DELETE FROM t RETURNING 1) SELECT 1`,
+      "SELECT U&'x' UESCAPE '!' INTO t",
+      "SELECT U&'x'\nUESCAPE '!' INTO t",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (DELETE FROM t RETURNING 1) SELECT 1',
+    ];
+
+    const reads = [
+      "SELECT id FROM t FOR UPDATE",
+      'SELECT id FROM "t" FOR UPDATE',
+      "SELECT 1 FOR UPDATE",
+      "SELECT id FROM t FOR NO KEY UPDATE OF t SKIP LOCKED",
+      "SELECT id FROM t FOR SHARE",
+      "SELECT update, delete, insert, merge FROM t",
+      "SELECT 1 AS update",
+      "SELECT insert()",
+      "SELECT 'insert into t' AS s",
+      'SELECT "into" FROM t',
+      "SELECT 1 -- into t",
+      "SELECT $$into t$$",
+      "WITH x AS (SELECT 1), y AS ((SELECT 2)) SELECT * FROM x, y",
+      "WITH x AS (WITH y AS (SELECT 1) SELECT * FROM y) TABLE x",
+      "WITH x AS (VALUES (1)) (SELECT * FROM x)",
+      "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH BREADTH FIRST BY n SET o CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT * FROM r",
+      'WITH "update" AS (SELECT 1) SELECT * FROM "update"',
+      // INTO as a column label or attribute name.
+      "SELECT 1 AS into",
+      "SELECT s.into FROM t s",
+      "SELECT s. into FROM t s",
+      "SELECT (s).into FROM t",
+      "SELECT $1.into",
+      // Inside continued constants.
+      "SELECT E'a'\n'\\' into' AS c",
+      "SELECT 'a' -- c\n'into t'",
+      "SELECT U&'a'\n\v'into t'",
+      // UESCAPE clauses, with blanks and comments in between.
+      `WITH U&"!0078" UESCAPE '!' AS (SELECT 1 AS n) SELECT n FROM x`,
+      `WITH U&"!0078" /* c */ uescape -- d\n '!' AS (SELECT 1) TABLE x`,
+      "SELECT U&'d!0061t' UESCAPE '!' AS c",
+      'WITH U&"!0078" UESCAPE $$!$$ AS (SELECT 1 AS n) SELECT n FROM x',
+      'WITH U&"!0078" UESCAPE $q$!$q$ AS (SELECT 1 AS n) SELECT n FROM x',
+    ];
+
+    for (const sql of writing) {
+      assert.isTrue(analyzeStatement(sql).writeClause, sql);
+    }
+
+    for (const sql of reads) {
+      assert.isFalse(analyzeStatement(sql).writeClause, sql);
+    }
   });
 
   it("the allowlist admits no transaction control and SET LOCAL only for timeouts", () => {
