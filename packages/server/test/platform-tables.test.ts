@@ -10,12 +10,13 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { Operation } from "@std/definitions/operation";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { signInAll } from "./authz-support.ts";
+import { listNames, signInAll } from "./authz-support.ts";
 import type { Who } from "./authz-support.ts";
 import {
   listPath,
@@ -23,7 +24,7 @@ import {
   recordPath,
   tagOf,
 } from "./reads-support.ts";
-import { values } from "./schema-support.ts";
+import { change, freshId, values } from "./schema-support.ts";
 
 /** Config tables that are not platform tables but hold no data for users. */
 const CONFIG_TABLES = ["core.user_role"] as const;
@@ -223,6 +224,84 @@ describe("platform-tables", () => {
 
           assert.deepStrictEqual(yield* changeCount(), before);
           assert.deepStrictEqual(yield* ruleText(), ruleBefore);
+        })
+    );
+
+    dbTest.effect(
+      "a local rule on * never reaches platform tables, and one naming them is refused",
+      () =>
+        Effect.gen(function* localStar() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const catalog = yield* Catalog;
+          const snapshot = yield* catalog.refresh;
+          const employee = snapshot.roleByName("employee")?.id ?? "";
+
+          const allEmployees = (classId: string | null) =>
+            ({
+              definition: {
+                actions: ["read"],
+                active: true,
+                classId,
+                condition: null,
+                description: "employees read every record",
+                effect: "allow",
+                id: freshId(),
+                kind: "accessRule",
+                owner: { layer: "local" },
+                protected: false,
+                roleIds: [employee],
+                target: { kind: "records" },
+              },
+              op: "createAccessRule",
+            }) as const satisfies Operation;
+
+          const before = yield* http.get(listPath("acme.asset"), {
+            token: tokens.bob,
+          });
+
+          yield* change([allEmployees(null)]);
+
+          // Bob now sees every asset, Alice's too.
+          const after = yield* http.get(listPath("acme.asset"), {
+            token: tokens.bob,
+          });
+
+          assert.strictEqual(after.status, 200);
+          assert.isAbove(
+            listNames(after.json).length,
+            listNames(before.json).length
+          );
+
+          // But no platform table.
+          const missing = yield* http.get(listPath(MISSING), {
+            token: tokens.bob,
+          });
+
+          for (const table of ["core.change", "core.access_rule"]) {
+            const response = yield* http.get(listPath(table), {
+              token: tokens.bob,
+            });
+
+            assert.strictEqual(response.status, 404, table);
+            assert.strictEqual(
+              response.text.replace(table, "?"),
+              missing.text.replace(MISSING, "?")
+            );
+          }
+
+          // A local rule naming a platform table is refused.
+          const refusal = yield* change([
+            allEmployees(PLATFORM_CLASS_IDS.change),
+          ]).pipe(Effect.flip);
+
+          assert.strictEqual(refusal._tag, "DefinitionInvalid");
+          assert.include(
+            refusal._tag === "DefinitionInvalid"
+              ? refusal.problems.map((entry) => entry.code)
+              : [],
+            "invalidAccessRule"
+          );
         })
     );
   });
