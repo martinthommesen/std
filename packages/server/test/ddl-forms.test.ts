@@ -221,6 +221,40 @@ describe("ddl-forms", () => {
     );
   });
 
+  it("classifies the lifecycle forms and refuses their variants", () => {
+    const table = '"acme"."asset"';
+
+    const accepted = [
+      ['ALTER SCHEMA "acme" RENAME TO "assets"', "renameSchema"],
+      [`ALTER TABLE ${table} RENAME TO "thing"`, "renameTable"],
+      [`ALTER TABLE ${table} RENAME COLUMN "name" TO "title"`, "renameColumn"],
+      [`ALTER TABLE ${table} ALTER COLUMN "name" DROP NOT NULL`, "dropNotNull"],
+      [`DROP TABLE ${table}`, "dropTable"],
+    ] as const;
+
+    for (const [statement, form] of accepted) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { form, ok: true },
+        statement
+      );
+      assert.strictEqual(phaseOfForm(form), "main");
+    }
+
+    for (const statement of [
+      `DROP TABLE ${table} CASCADE`,
+      `DROP TABLE IF EXISTS ${table}`,
+      `ALTER TABLE ${table} RENAME CONSTRAINT std_ix_x TO y`,
+      'DROP SCHEMA "acme"',
+    ]) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { ok: false, reason: "unknownForm" },
+        statement
+      );
+    }
+  });
+
   it("refuses volatile defaults, type changes and direct SET NOT NULL", () => {
     const table = '"acme"."asset"';
 
