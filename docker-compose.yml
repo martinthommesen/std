@@ -9,7 +9,9 @@ services:
       POSTGRES_DB: std
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
     ports:
-      - "127.0.0.1:54329:5432"
+      # STD_POSTGRES_PORT moves the host port, for a second stack beside the
+      # shared one (`docker compose -p <name>`); the default is unchanged.
+      - "127.0.0.1:${STD_POSTGRES_PORT:-54329}:5432"
     command:
       ["postgres", "-c", "max_connections=400", "-c", "shared_buffers=1GB"]
     healthcheck:
@@ -19,5 +21,63 @@ services:
       retries: 30
     volumes:
       - std-pg:/var/lib/postgresql
+
+  # The quickstart (README.md, "Quickstart"; decision 0016). `docker compose
+  # up` runs `upgrade` once, then starts `server`. `pnpm db:up` starts only
+  # Postgres, as before.
+  #
+  # `upgrade` applies platform migrations and loads the core definition set
+  # (`std upgrade`), then creates the first administrator unless that login
+  # exists (`std bootstrap-admin`). Contracts 1.9: migrations never run at
+  # server start, so the server waits for it to exit 0.
+  upgrade:
+    build:
+      context: .
+      dockerfile: docker/quickstart.Dockerfile
+    init: true
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm --silent std upgrade && pnpm --silent std bootstrap-admin",
+      ]
+    environment:
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
+      STD_ADMIN_LOGIN: ${STD_ADMIN_LOGIN:-admin}
+      # A disposable demo credential; set your own for anything but a demo.
+      STD_ADMIN_PASSWORD: ${STD_ADMIN_PASSWORD:-quickstart-admin-password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # `std serve`: the HTTP API on 127.0.0.1:${STD_HTTP_PORT:-8080}.
+  server:
+    build:
+      context: .
+      dockerfile: docker/quickstart.Dockerfile
+    init: true
+    command: ["pnpm", "--silent", "std", "serve"]
+    environment:
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
+      STD_HTTP_HOST: 0.0.0.0
+      STD_HTTP_PORT: "8080"
+      STD_TIME_ZONE: ${STD_TIME_ZONE:-UTC}
+    ports:
+      - "127.0.0.1:${STD_HTTP_PORT:-8080}:8080"
+    depends_on:
+      upgrade:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/api/v1/openapi.json').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 volumes:
   std-pg:

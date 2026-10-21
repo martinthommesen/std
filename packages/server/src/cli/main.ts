@@ -22,6 +22,12 @@
  *   `applying` or `needs_attention`, probing each first.
  * - `std schema abandon <id>`: runs the abandon actions of its unfinished
  *   steps, then `complete`.
+ * - `std bootstrap-admin`: creates the first administrator, an active user
+ *   with the built-in `admin` role, unless a user with its login exists
+ *   (decision 0016). `STD_ADMIN_LOGIN` (default `admin`), `STD_ADMIN_NAME`
+ *   (default `Administrator`) and `STD_ADMIN_PASSWORD` (required; read from
+ *   the environment, never from the command line, so it stays out of
+ *   process listings).
  *
  * Exit 0 on success, 1 on a refusal or failure (a resume that ends in
  * `needs_attention` included), 2 on a usage error.
@@ -30,9 +36,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { NodeRuntime } from "@effect/platform-node";
-import { Console, Effect, Layer, Schema } from "effect";
+import { Config, Console, Effect, Layer, Schema } from "effect";
 
+import { bootstrapAdmin } from "../auth/bootstrap-admin.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import { InstanceSettings } from "../config/instance-settings.ts";
 import { planUpgrade, runUpgrade } from "../config/upgrade.ts";
 import type { UpgradeOptions } from "../config/upgrade.ts";
 import { runDoctor } from "../doctor/doctor.ts";
@@ -63,7 +71,9 @@ Commands:
                   Run the unfinished steps of a change set
   schema abandon <id>
                   Undo the unfinished steps of a change set and complete it
-                  as abandoned`;
+                  as abandoned
+  bootstrap-admin Create the first administrator unless its login exists
+                  (STD_ADMIN_LOGIN, STD_ADMIN_NAME, STD_ADMIN_PASSWORD)`;
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -294,6 +304,34 @@ const doctor = (json: boolean) =>
     })
   );
 
+/** The administrator `std bootstrap-admin` creates, from the environment. */
+const adminAccountConfig = Config.all({
+  login: Config.String("STD_ADMIN_LOGIN").pipe(Config.withDefault("admin")),
+  name: Config.String("STD_ADMIN_NAME").pipe(
+    Config.withDefault("Administrator")
+  ),
+  password: Config.schema(
+    Schema.Redacted(Schema.NonEmptyString),
+    "STD_ADMIN_PASSWORD"
+  ),
+});
+
+const createAdmin = adminAccountConfig.pipe(
+  Effect.flatMap(bootstrapAdmin),
+  Effect.flatMap((done) =>
+    Console.log(
+      done.outcome === "created"
+        ? `Created the administrator (user ${done.userId}).`
+        : `A user with this login exists (user ${done.userId}); nothing changed.`
+    )
+  ),
+  Effect.provide(Layer.merge(cliServices, InstanceSettings.layer)),
+  Effect.matchEffect({
+    onFailure: reportFailure("bootstrap-admin"),
+    onSuccess: () => Effect.void,
+  })
+);
+
 /** `std serve`: runs the HTTP server until interrupted. */
 const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
   Effect.matchEffect({
@@ -322,6 +360,10 @@ const main = (args: readonly string[]): Effect.Effect<void> => {
 
   if (command === "serve" && rest.length === 0) {
     return serve;
+  }
+
+  if (command === "bootstrap-admin" && rest.length === 0) {
+    return createAdmin;
   }
 
   const schema = command === "schema" ? schemaCommand(rest) : undefined;

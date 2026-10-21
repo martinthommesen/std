@@ -62,3 +62,8 @@ jobs:
         run: pnpm test
       - name: Toolchain canaries
         run: pnpm test:canaries
+      # The Step 1 runnable result: `std upgrade`, `std bootstrap-admin` and
+      # `std serve` on a disposable database, then examples/quickstart.sh
+      # twice (the rerun must succeed too), each ending with `std doctor`.
+      - name: Quickstart (examples/quickstart.sh against std serve, run twice)
+        run: pnpm quickstart:ci
