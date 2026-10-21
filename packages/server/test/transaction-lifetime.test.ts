@@ -368,7 +368,7 @@ describe("transaction-lifetime", () => {
     );
 
     dbTest.effect(
-      "read-tuning settings take effect, and a nested unit that only set them may fail without poisoning",
+      "planner settings take effect, and a failed nested unit that only set them does not poison",
       () =>
         Effect.gen(function* readTuning() {
           const sql = yield* SqlClient.SqlClient;
@@ -407,6 +407,71 @@ describe("transaction-lifetime", () => {
           );
 
           assert.strictEqual(refusalOf(refused)?.reason, "transaction-control");
+        })
+    );
+
+    dbTest.effect(
+      "a failed nested unit that set a timeout poisons the request",
+      () =>
+        Effect.gen(function* timeoutPoisons() {
+          const sql = yield* SqlClient.SqlClient;
+          const { request } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_timeout_poison (id int PRIMARY KEY)`;
+
+          for (const setting of [
+            "SET LOCAL statement_timeout = '1ms'",
+            "SET LOCAL lock_timeout = 0",
+            "SET LOCAL idle_in_transaction_session_timeout = 0",
+          ]) {
+            const exit = yield* Effect.exit(
+              request(
+                Effect.gen(function* setThenFail() {
+                  yield* sql`INSERT INTO lifetime_timeout_poison VALUES (1)`;
+                  yield* request(
+                    sql
+                      .unsafe(setting)
+                      .pipe(
+                        Effect.andThen(Effect.fail("nested failure" as const))
+                      )
+                  ).pipe(Effect.ignore);
+                })
+              )
+            );
+
+            assert.strictEqual(refusalOf(exit)?.reason, "poisoned", setting);
+            assert.strictEqual(
+              yield* countRows("lifetime_timeout_poison"),
+              0,
+              setting
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "a config commit whose failed nested unit dropped its timeouts does not commit",
+      () =>
+        Effect.gen(function* configTimeoutsPoison() {
+          const sql = yield* SqlClient.SqlClient;
+          const { configCommit } = yield* Transactions;
+          yield* sql`CREATE TABLE lifetime_config_poison (id int PRIMARY KEY)`;
+
+          const exit = yield* Effect.exit(
+            configCommit(
+              Effect.gen(function* dropBudgetsThenWrite() {
+                yield* configCommit(
+                  sql`SET LOCAL lock_timeout = 0`.pipe(
+                    Effect.andThen(sql`SET LOCAL statement_timeout = 0`),
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore);
+                yield* sql`INSERT INTO lifetime_config_poison VALUES (1)`;
+              })
+            )
+          );
+
+          assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
+          assert.strictEqual(yield* countRows("lifetime_config_poison"), 0);
         })
     );
 

@@ -171,6 +171,22 @@ const isSetLocal = (tokens: readonly LexedToken[]): boolean => {
 };
 
 /**
+ * Whether a statement is an admitted `SET LOCAL` of a planner setting
+ * (`READ_TUNING_SETTINGS`).
+ * @param tokens - The statement's leading tokens.
+ * @returns `true` for `SET LOCAL max_parallel_workers_per_gather` or `plan_cache_mode` with a valid value.
+ */
+const isPlannerSetting = (tokens: readonly LexedToken[]): boolean => {
+  const name = tokens.at(2);
+
+  return (
+    isSetLocal(tokens) &&
+    name !== undefined &&
+    READ_TUNING_SETTINGS.has(name.text)
+  );
+};
+
+/**
  * Why a statement from a transaction's code must not run, if it must not.
  * The text is lexed, so comments, punctuation and quoting cannot hide the
  * first keyword or a second statement; then the statement must be exactly
@@ -486,10 +502,13 @@ export class TransactionState implements TransactionHandle {
     const lexed = analyzeStatement(sql);
 
     if (!marks.readOnly) {
-      // An admitted SET LOCAL changes a setting of this transaction, never
-      // data, so it does not count as a write: a nested unit that only
-      // tuned timeouts or plans may fail without poisoning the transaction.
-      if (!isSetLocal(lexed.leadingTokens)) {
+      // A planner setting changes plans, never results, so it does not
+      // count as a write: a nested unit that only tuned plans may fail
+      // without poisoning, even though the setting stays in force for the
+      // outer transaction. A timeout setting does count: left behind by a
+      // failed nested unit, it would change the outer transaction's
+      // deadlines.
+      if (!isPlannerSetting(lexed.leadingTokens)) {
         this.writes += 1;
       }
 
