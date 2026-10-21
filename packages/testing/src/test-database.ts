@@ -473,19 +473,29 @@ const dropIfExpired = (
  * @param admin - A connection to the maintenance database.
  * @param keep - The template in use.
  * @param now - The current time in epoch milliseconds.
+ * @param only - Consider only these names. The harness's own tests pass the
+ *   databases they planted, with a `now` in the future, so that the planted
+ *   databases are expired only for them, and other runs' janitors never
+ *   chase them.
  * @returns An effect that never fails.
  */
 export const runJanitor = (
   admin: PgConnection.PgConnection,
   keep: string,
-  now: number
+  now: number,
+  only?: ReadonlySet<string>
 ): Effect.Effect<void> =>
   Effect.gen(function* dropExpiredDatabases() {
-    const databases = yield* query(
+    const listed = yield* query(
       admin,
       `SELECT datname, coalesce(shobj_description(oid, 'pg_database'), '') AS comment
        FROM pg_database WHERE datname LIKE 'std\\_test\\_%' OR datname LIKE 'std\\_tpl\\_%'`
     ).pipe(Effect.flatMap(decodeDatabases));
+
+    const databases =
+      only === undefined
+        ? listed
+        : listed.filter((database) => only.has(database.datname));
 
     for (const database of databases) {
       yield* dropIfExpired(admin, database, keep, now).pipe(

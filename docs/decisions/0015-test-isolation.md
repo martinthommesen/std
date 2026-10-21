@@ -49,9 +49,13 @@ The `FATAL: terminating connection due to administrator command` lines in the se
   - Otherwise, the template is altered and then dropped.
 - **The janitor is isolated.** It runs on its own connection, and each database's failure is logged and ignored separately. Nothing the janitor meets can break the build of a test database.
 - **Templates are built from `template0`, not `template1`.** `CREATE DATABASE` fails while any session is connected to its template, and someone may be connected to `template1`.
-- The harness tests now take the clone lock before they create the planted template, drop it under the lock, and use random name suffixes.
+- The harness's own tests no longer plant expired databases for every run's janitor to chase. Planted databases carry a creation comment of now. The tests run their own janitor passes at a later clock, limited to the planted names (`runJanitor`'s `only` argument). The tests also take the clone lock before they create a template, drop templates under the lock, and use random name suffixes.
 
 Retries, longer timeouts and skips were not used.
+
+## Transition
+
+Until a branch merges this change, its runs still take the template locks in their own URL database (usually `std`), so they do not exclude runs that use the new code. The old janitor can still hit an invalid template and lose its connection. While the old and new code ran side by side, the server logged such FATALs from sessions in `std`, the old harness's maintenance database. The window closes once every active branch has merged main.
 
 ## Regression tests (`test-database.test.ts`)
 

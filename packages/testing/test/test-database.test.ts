@@ -41,6 +41,7 @@ import {
   runJanitor,
   TEMPLATE_COMMENT_PREFIX,
   TEMPLATE_LOCK_CLASS,
+  TEMPLATE_MAX_AGE_MS,
   TEMPLATE_PREFIX,
   templateName,
   TEST_DATABASE_COMMENT_PREFIX,
@@ -157,6 +158,34 @@ const templateLock = (
   connection.query(`SELECT ${call}(${TEMPLATE_LOCK_CLASS}, hashtext($1))`, [
     template,
   ]);
+
+/**
+ * Plants a template as the harness builds one, with a creation comment of
+ * now: other runs' janitors leave it alone for a week, and the tests' own
+ * janitor passes run at `templateExpiry()`.
+ * @param connection - A connection to the maintenance database.
+ * @param template - The template name.
+ * @returns The statements.
+ */
+const plantTemplate = (
+  connection: PgConnection.PgConnection,
+  template: string
+) =>
+  Effect.gen(function* plant() {
+    yield* connection.query(`CREATE DATABASE "${template}" TEMPLATE template0`);
+    yield* connection.query(
+      `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
+    );
+    yield* connection.query(
+      `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
+    );
+  });
+
+/**
+ * A janitor clock at which a template planted now has expired.
+ * @returns Epoch milliseconds.
+ */
+const templateExpiry = (): number => Date.now() + TEMPLATE_MAX_AGE_MS + 60_000;
 
 /**
  * Whether a connection still answers.
@@ -321,11 +350,13 @@ describe("test-database", () => {
       Effect.gen(function* janitor() {
         const connection = yield* admin;
         const now = Date.now();
-        const oldStamp = now - TEST_DATABASE_MAX_AGE_MS - 60_000;
+        // The planted databases expire only at `later`, the janitor's clock
+        // here, so no other run's janitor drops them meanwhile.
+        const later = now + TEST_DATABASE_MAX_AGE_MS + 60_000;
         // Random suffixes: concurrent runs plant databases in the same
         // millisecond, and names are cluster-wide.
-        const owned = `std_test_${oldStamp.toString(36)}_${process.pid}_${randomHex(4)}`;
-        const unmarked = `std_test_${oldStamp.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const owned = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const unmarked = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
         const foreign = `std_test_1_accounts_backup_${randomHex(4)}`;
         const fresh = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
         const names = [owned, unmarked, foreign, fresh];
@@ -353,13 +384,16 @@ describe("test-database", () => {
             `COMMENT ON DATABASE "${name}" IS '${TEST_DATABASE_COMMENT_PREFIX}${new Date(at).toISOString()}'`
           );
 
-        yield* comment(owned, oldStamp);
-        yield* comment(foreign, oldStamp);
-        yield* comment(fresh, now);
+        yield* comment(owned, now);
+        yield* comment(foreign, now);
+        yield* comment(fresh, later);
 
-        // Other runs' janitors may drop `owned` first, or drop and plant
-        // other expired databases while this one runs; neither may stop it.
-        yield* runJanitor(connection, templateName(PLATFORM_MIGRATIONS), now);
+        yield* runJanitor(
+          connection,
+          templateName(PLATFORM_MIGRATIONS),
+          later,
+          new Set(names)
+        );
 
         assert.isFalse(yield* databaseExists(owned));
         assert.isTrue(yield* databaseExists(unmarked), "no ownership comment");
@@ -377,6 +411,7 @@ describe("test-database", () => {
           const connection = yield* admin;
           const template = `std_tpl_${randomHex(12)}`;
           const keep = templateName(PLATFORM_MIGRATIONS);
+          const only = new Set([template]);
 
           // Added before the cloner connects, so it runs after the cloner
           // has closed and released its shared lock.
@@ -386,29 +421,14 @@ describe("test-database", () => {
 
           const cloner = yield* admin;
 
-          // The template is expired from the start, so every run's janitor
-          // may drop it as soon as nobody holds its lock: lock it before it
-          // exists.
           yield* templateLock(cloner, "pg_advisory_lock_shared", template);
-          yield* connection.query(
-            `CREATE DATABASE "${template}" TEMPLATE template0`
-          );
-          yield* connection.query(
-            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z'`
-          );
-          yield* connection.query(
-            `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
-          );
+          yield* plantTemplate(connection, template);
 
-          yield* runJanitor(connection, keep, Date.now());
+          yield* runJanitor(connection, keep, templateExpiry(), only);
           assert.isTrue(yield* databaseExists(template), "kept while in use");
 
           yield* templateLock(cloner, "pg_advisory_unlock_shared", template);
-          yield* runJanitor(connection, keep, Date.now());
-          // Another run's janitor may have taken the lock first and still be
-          // dropping the template: wait for it.
-          yield* templateLock(connection, "pg_advisory_lock", template);
-          yield* templateLock(connection, "pg_advisory_unlock", template);
+          yield* runJanitor(connection, keep, templateExpiry(), only);
 
           assert.isFalse(
             yield* databaseExists(template),
@@ -455,17 +475,14 @@ describe("test-database", () => {
           // This run is cloning the template: it holds the shared lock from
           // before the readiness check through CREATE DATABASE ... TEMPLATE.
           yield* templateLock(cloner, "pg_advisory_lock_shared", template);
-          yield* connection.query(
-            `CREATE DATABASE "${template}" TEMPLATE template0`
-          );
-          yield* connection.query(
-            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z'`
-          );
-          yield* connection.query(
-            `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
-          );
+          yield* plantTemplate(connection, template);
 
-          yield* runJanitor(otherRun, otherKeep, Date.now());
+          yield* runJanitor(
+            otherRun,
+            otherKeep,
+            templateExpiry(),
+            new Set([template])
+          );
           assert.isTrue(
             yield* databaseExists(template),
             "the other run's janitor kept the template being cloned"
@@ -476,10 +493,9 @@ describe("test-database", () => {
           );
 
           yield* templateLock(cloner, "pg_advisory_unlock_shared", template);
-          // Any run's janitor may now drop it; wait for one that is at it.
-          assert.include(
-            ["dropped", "gone"],
-            yield* dropTemplate(otherRun, template)
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(otherRun, template),
+            "dropped"
           );
           assert.isFalse(yield* databaseExists(template));
         })
