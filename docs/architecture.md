@@ -106,7 +106,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
-| `outbox/` | delivery worker (Step 3) | 4.6 |
+| `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |
 | `import/` | import jobs (Step 3) | 7 |
 | `definitions/` (directory at package root, not in `src`) | the shipped `core` definition set files | 1.8, 3.1 |
 
