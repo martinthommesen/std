@@ -17,13 +17,15 @@ import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
+import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 
 /** Every group's handlers. */
 export const ApiHandlers = Layer.mergeAll(
   SignInHandlers,
   SessionHandlers,
-  RecordHandlers
+  RecordHandlers,
+  SchemaChangeHandlers
 );
 
 /**

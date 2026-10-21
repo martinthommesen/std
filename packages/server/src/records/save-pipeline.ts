@@ -1,4 +1,5 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
+import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
@@ -39,7 +40,10 @@ import { VersionConflict } from "@std/api/errors/version-conflict";
  * level FKs cascade; a reference from another record is `Referenced`) and
  * writes its change entry at the current version + 1.
  */
-import { effectiveFields } from "@std/definitions/effective-schema";
+import {
+  effectiveClass,
+  effectiveFields,
+} from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -379,12 +383,32 @@ const hookChanges = (
     return same ? [] : [fieldId];
   });
 
+/**
+ * A retired table accepts reads only (Contracts 1.6): creates, updates and
+ * deletes of records whose concrete class, or an ancestor of it, is
+ * retired are refused with `NotAllowed`, which names no rule.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The record's concrete class.
+ * @returns Fails with `NotAllowed`.
+ */
+const refuseRetiredClass = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId
+): Effect.Effect<void, NotAllowed> =>
+  effectiveClass(snapshot, classId)?.acceptsWrites === false
+    ? Effect.fail(new NotAllowed())
+    : Effect.void;
+
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInTransaction(input: CreateInput, body: JsonObject) {
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const classId = input.endpointClassId;
+
+    yield* refuseRetiredClass(snapshot, classId);
+
     const resolved = yield* resolveBody(snapshot, input, body, "create");
     const fields = effectiveById(snapshot, classId);
     const proposed = proposeCreate([...fields.values()], resolved);
@@ -528,6 +552,8 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   if (!(inSubtree && Option.isSome(locked))) {
     return yield* new NotFound();
   }
+
+  yield* refuseRetiredClass(snapshot, locked.value.classId);
 
   if (stack.recordIds.has(input.id)) {
     return yield* new RecordInSave();

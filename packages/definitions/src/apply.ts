@@ -264,20 +264,25 @@ const update = (
     return;
   }
 
-  const found = firstChangeProblem(current, operation.changes);
-
-  if (found !== undefined) {
-    work.problems.push(problem("unsupportedChange", current.id, found));
-
-    return;
-  }
-
+  // The guard first: a protected definition refuses every change but its
+  // label and help text, whatever the change is (Contracts 1.8).
   const allowed = guardChange(
     work,
     current,
     "update",
     Object.keys(operation.changes)
   );
+
+  const found =
+    allowed === undefined
+      ? undefined
+      : firstChangeProblem(current, operation.changes);
+
+  if (found !== undefined) {
+    work.problems.push(problem("unsupportedChange", current.id, found));
+
+    return;
+  }
 
   const next =
     allowed === undefined

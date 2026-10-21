@@ -327,6 +327,9 @@ importers:
 
   packages/api:
     dependencies:
+      '@std/definitions':
+        specifier: workspace:*
+        version: link:../definitions
       '@std/values':
         specifier: workspace:*
         version: link:../values

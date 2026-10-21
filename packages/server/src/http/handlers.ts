@@ -18,7 +18,10 @@ import { InstanceSettings } from "../config/instance-settings.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
 import { SaveHooks } from "../records/save-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
+import type { ChangeSetServices } from "../schema/change-set.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
+import { writeDefinition } from "./definition-writes.ts";
 import {
   createInRequest,
   deleteInRequest,
@@ -100,10 +103,13 @@ export const RecordHandlers = HttpApiBuilder.group(
     const settings = yield* InstanceSettings;
     const hooks = yield* SaveHooks;
     const writeOnly = yield* WriteOnlyValues;
+    const changeSets = yield* Effect.context<ChangeSetServices>();
 
-    // Everything a write handler's work needs besides the request.
+    // Everything a write handler's work needs besides the request; writes
+    // to definition tables run as change sets (`definition-writes.ts`).
     const services = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
+        Effect.provide(changeSets),
         Effect.provideService(Catalog, catalog),
         Effect.provideService(InstanceSettings, settings),
         Effect.provideService(SaveHooks, hooks),
@@ -164,6 +170,17 @@ export const RecordHandlers = HttpApiBuilder.group(
         Effect.gen(function* createHandler() {
           const stated = yield* parseRequestRevision(request);
           const body = yield* writeBodyOf(request);
+          const kind = DEFINITION_KIND_OF_TABLE.get(params.table);
+
+          if (kind !== undefined) {
+            return yield* writeDefinition(
+              transactions,
+              request,
+              params.table,
+              kind,
+              { action: "create", body }
+            );
+          }
 
           return yield* inRequestTransaction(
             transactions,
@@ -178,6 +195,17 @@ export const RecordHandlers = HttpApiBuilder.group(
 
           const stated = yield* parseRequestRevision(request);
           const body = yield* writeBodyOf(request);
+          const kind = DEFINITION_KIND_OF_TABLE.get(params.table);
+
+          if (kind !== undefined) {
+            return yield* writeDefinition(
+              transactions,
+              request,
+              params.table,
+              kind,
+              { action: "update", body, expectedVersion, id: params.id }
+            );
+          }
 
           return yield* inRequestTransaction(
             transactions,
@@ -198,6 +226,20 @@ export const RecordHandlers = HttpApiBuilder.group(
           const expectedVersion = yield* expectedVersionOf(headers["if-match"]);
 
           const stated = yield* parseRequestRevision(request);
+          const kind = DEFINITION_KIND_OF_TABLE.get(params.table);
+
+          if (kind !== undefined) {
+            return yield* writeDefinition(
+              transactions,
+              request,
+              params.table,
+              kind,
+              { action: "delete", expectedVersion, id: params.id }
+            ).pipe(
+              // A delete carries no body, so it has no field errors.
+              Effect.catchTag("ValidationFailed", Effect.die)
+            );
+          }
 
           return yield* inRequestTransaction(
             transactions,
