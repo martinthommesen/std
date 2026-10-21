@@ -213,9 +213,6 @@ describe("save-hook-points", () => {
         const separate = yield* newLaptop("op-3");
 
         assert.lengthOf(yield* operationIds([first.id, second.id]), 1);
-        assert.deepStrictEqual(yield* operationIds([first.id]), [
-          first.changeId ?? "",
-        ]);
         assert.lengthOf(
           yield* operationIds([first.id, second.id, separate.id]),
           2

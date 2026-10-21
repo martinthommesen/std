@@ -88,14 +88,10 @@ const attemptBody = (
     const first = yield* newMonitor(`retry-${index}-a`);
     const second = yield* newMonitor(`retry-${index}-b`);
 
-    yield* Ref.update(seen, (all) => [
-      ...all,
-      [first.changeId ?? "", second.changeId ?? ""],
-    ]);
-
     const shared = yield* operationIds([first.id, second.id]);
 
-    assert.deepStrictEqual(shared, [first.changeId ?? ""]);
+    assert.lengthOf(shared, 1);
+    yield* Ref.update(seen, (all) => [...all, shared]);
 
     if (index === 1) {
       const sql = yield* SqlClient.SqlClient;
@@ -137,10 +133,35 @@ describe("save-operations", () => {
             })
           );
 
-          assert.deepStrictEqual(yield* operationIds([first.id, second.id]), [
-            first.changeId ?? "",
-          ]);
-          assert.notStrictEqual(first.changeId, forgedId);
+          const shared = yield* operationIds([first.id, second.id]);
+
+          assert.lengthOf(shared, 1);
+          assert.notInclude(shared, forgedId);
+        })
+    );
+
+    dbTest.effect(
+      "concurrent saves joined to one request share one operation ID",
+      () =>
+        Effect.gen(function* concurrent() {
+          const { request } = yield* Transactions;
+
+          const saved = yield* request(
+            Effect.all(
+              Array.from({ length: 6 }, (_, index) =>
+                newMonitor(`concurrent-${index}`)
+              ),
+              { concurrency: "unbounded" }
+            )
+          );
+
+          const shared = yield* operationIds(saved.map((record) => record.id));
+
+          assert.lengthOf(shared, 1);
+          assert.match(
+            shared[0] ?? "",
+            /^[\da-f]{8}-[\da-f]{4}-7[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/u
+          );
         })
     );
 

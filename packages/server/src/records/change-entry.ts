@@ -10,6 +10,8 @@
  * secret fields are `{ "changed": true }` on create and update and are
  * left out on delete; their values never appear (4.3).
  */
+import { randomBytes, randomInt } from "node:crypto";
+
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
@@ -17,7 +19,7 @@ import { encodeOut } from "@std/values/codec";
 import { storedEquals } from "@std/values/compare";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { RequestRevision } from "../sql/request-revision.ts";
@@ -68,6 +70,52 @@ export type ChangeKind = typeof ChangeKindSchema.Type;
  * It lives in process memory only: no SQL a caller can run reaches it.
  */
 const operations = new WeakMap<TransactionHandle, string>();
+
+const TIMESTAMP_HEX = 12;
+const RANDOM_BYTES = 9;
+const HEX_RADIX = 16;
+const VARIANT_DIGITS = "89ab";
+
+/**
+ * A UUIDv7 (RFC 9562): 48 bits of Unix milliseconds, the version digit 7,
+ * the RFC variant, and random bits.
+ *
+ * @param millis - The timestamp.
+ * @returns The lowercase hyphenated UUID.
+ */
+export const uuidv7At = (millis: number): string => {
+  const time = millis.toString(HEX_RADIX).padStart(TIMESTAMP_HEX, "0");
+  const random = randomBytes(RANDOM_BYTES).toString("hex");
+  const variant = VARIANT_DIGITS[randomInt(VARIANT_DIGITS.length)] ?? "8";
+
+  return `${time.slice(0, 8)}-${time.slice(8, 12)}-7${random.slice(0, 3)}-${variant}${random.slice(3, 6)}-${random.slice(6, 18)}`;
+};
+
+/**
+ * The operation ID of a transaction attempt, created on first use. Check
+ * and set run in one synchronous step, so saves running concurrently in
+ * one transaction cannot both start an operation.
+ *
+ * @param transaction - The attempt's handle.
+ * @returns The operation ID.
+ */
+const operationOf = (transaction: TransactionHandle) =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      Effect.sync(() => {
+        const known = operations.get(transaction);
+
+        if (known !== undefined) {
+          return known;
+        }
+
+        const created = uuidv7At(now);
+        operations.set(transaction, created);
+
+        return created;
+      })
+    )
+  );
 
 /** The `{"changed": true}` marker of a password or secret field. */
 export const WRITE_ONLY_CHANGE: JsonObject = { changed: true };
@@ -144,9 +192,9 @@ const decodeInserted = decodeRows(
  * Inserts a change entry with a new UUIDv7 change ID.
  *
  * The operation ID is transaction-scoped (Contracts 4.2: one per outermost
- * transaction): the first entry of a transaction attempt uses its own
- * change ID, and every later entry of the same attempt, nested in a hook or
- * not, reuses it (see `operations`).
+ * transaction): a UUIDv7 created when the attempt writes its first entry
+ * and shared by every entry of the attempt, nested in a hook or concurrent
+ * (see `operations`).
  *
  * @param input - The change.
  * @returns The written entry.
@@ -156,7 +204,7 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
     const sql = yield* SqlClient.SqlClient;
     const { revision } = yield* RequestRevision;
     const transaction = yield* CurrentTransaction;
-    const operationId = operations.get(transaction) ?? null;
+    const operationId = yield* operationOf(transaction);
 
     const rows = yield* sql.unsafe(
       `WITH n AS (SELECT uuidv7() AS id)
@@ -165,7 +213,7 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
          operation_id, record_id, record_class_id, record_version, kind,
          actor_id, cause, schema_revision, occurred_at, fields)
        SELECT n.id, $1::uuid, 1, ${NOW}, $2::uuid, ${NOW}, $2::uuid,
-         coalesce($10::uuid, n.id), $3::uuid, $4::uuid, $5::int8, $6::text,
+         $10::uuid, $3::uuid, $4::uuid, $5::int8, $6::text,
          $2::uuid, $7::jsonb, $8::int8, ${NOW}, $9::jsonb
        FROM n
        RETURNING id::text AS id, operation_id::text AS operation_id`,
@@ -187,10 +235,6 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
 
     if (row === undefined) {
       return yield* Effect.die(new Error("core.change returned no row"));
-    }
-
-    if (operationId === null) {
-      operations.set(transaction, row.operation_id);
     }
 
     const entry: ChangeEntry = {
