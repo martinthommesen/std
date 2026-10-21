@@ -20,6 +20,7 @@ import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
 import {
+  ConfigProvider,
   Context,
   Deferred,
   Effect,
@@ -33,6 +34,8 @@ import {
 import { SqlClient } from "effect/sql";
 
 import {
+  dropTemplate,
+  dropTemplateIfUnused,
   expiredHarnessDatabase,
   maintenanceUrl,
   runJanitor,
@@ -45,6 +48,7 @@ import {
   TestDatabase,
   testDatabaseLayer,
   testDatabaseName,
+  testDatabaseService,
 } from "../src/test-database.ts";
 
 /** Enough builds to race on one template. */
@@ -57,6 +61,8 @@ const CONCURRENT_BUILDS = 3;
 const CONCURRENT_BUILDS_TIMEOUT_MS = 300_000;
 
 const decodeExists = decodeRows(Schema.Struct({ n: Schema.Int }));
+
+const randomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 const decodeTemplateId = decodeRows(
   Schema.Struct({ comment: Schema.String, id: Schema.String })
@@ -120,8 +126,49 @@ const buildDatabase = Effect.gen(function* buildTestDatabase() {
   const context = yield* Layer.buildWithScope(testDatabaseLayer(), scope);
   const database = Context.get(context, TestDatabase);
 
-  return { name: database.name, scope, template: database.template };
+  return {
+    name: database.name,
+    scope,
+    session: database.session,
+    template: database.template,
+  };
 });
+
+/** The advisory lock functions the tests call on a template's lock. */
+const LOCK_CALLS = [
+  "pg_advisory_lock",
+  "pg_advisory_unlock",
+  "pg_advisory_lock_shared",
+  "pg_advisory_unlock_shared",
+] as const;
+
+/**
+ * Calls an advisory lock function on a template's harness lock.
+ * @param connection - A connection to the maintenance database.
+ * @param call - One of `LOCK_CALLS`.
+ * @param template - The template name.
+ * @returns The query.
+ */
+const templateLock = (
+  connection: PgConnection.PgConnection,
+  call: (typeof LOCK_CALLS)[number],
+  template: string
+) =>
+  connection.query(`SELECT ${call}(${TEMPLATE_LOCK_CLASS}, hashtext($1))`, [
+    template,
+  ]);
+
+/**
+ * Whether a connection still answers.
+ * @param connection - The connection.
+ * @returns `false` once the server has closed it.
+ */
+const isOpen = (connection: PgConnection.PgConnection) =>
+  connection.query("SELECT 1 AS n", [], false).pipe(
+    Effect.flatMap((result) => decodeExists(result.rows)),
+    Effect.map(([row]) => row?.n === 1),
+    Effect.catchTag("SqlError", () => Effect.succeed(false))
+  );
 
 describe("test-database", () => {
   it("names templates after the migrations' checksums and test databases after their creation time", () => {
@@ -275,10 +322,12 @@ describe("test-database", () => {
         const connection = yield* admin;
         const now = Date.now();
         const oldStamp = now - TEST_DATABASE_MAX_AGE_MS - 60_000;
-        const owned = `std_test_${oldStamp.toString(36)}_1_deadbeef`;
-        const unmarked = `std_test_${oldStamp.toString(36)}_1_feedface`;
-        const foreign = `std_test_1_accounts_backup_${process.pid}`;
-        const fresh = `std_test_${now.toString(36)}_1_cafebabe`;
+        // Random suffixes: concurrent runs plant databases in the same
+        // millisecond, and names are cluster-wide.
+        const owned = `std_test_${oldStamp.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const unmarked = `std_test_${oldStamp.toString(36)}_${process.pid}_${randomHex(4)}`;
+        const foreign = `std_test_1_accounts_backup_${randomHex(4)}`;
+        const fresh = `std_test_${now.toString(36)}_${process.pid}_${randomHex(4)}`;
         const names = [owned, unmarked, foreign, fresh];
 
         yield* Effect.addFinalizer(() =>
@@ -308,6 +357,8 @@ describe("test-database", () => {
         yield* comment(foreign, oldStamp);
         yield* comment(fresh, now);
 
+        // Other runs' janitors may drop `owned` first, or drop and plant
+        // other expired databases while this one runs; neither may stop it.
         yield* runJanitor(connection, templateName(PLATFORM_MIGRATIONS), now);
 
         assert.isFalse(yield* databaseExists(owned));
@@ -324,23 +375,21 @@ describe("test-database", () => {
       Effect.scoped(
         Effect.gen(function* templateInUse() {
           const connection = yield* admin;
-          const cloner = yield* admin;
-          const template = `std_tpl_${randomBytes(12).toString("hex")}`;
+          const template = `std_tpl_${randomHex(12)}`;
+          const keep = templateName(PLATFORM_MIGRATIONS);
 
+          // Added before the cloner connects, so it runs after the cloner
+          // has closed and released its shared lock.
           yield* Effect.addFinalizer(() =>
-            Effect.ignore(
-              connection
-                .query(`ALTER DATABASE "${template}" WITH IS_TEMPLATE false`)
-                .pipe(
-                  Effect.andThen(
-                    connection.query(
-                      `DROP DATABASE IF EXISTS "${template}" WITH (FORCE)`
-                    )
-                  )
-                )
-            )
+            Effect.ignore(dropTemplate(connection, template))
           );
 
+          const cloner = yield* admin;
+
+          // The template is expired from the start, so every run's janitor
+          // may drop it as soon as nobody holds its lock: lock it before it
+          // exists.
+          yield* templateLock(cloner, "pg_advisory_lock_shared", template);
           yield* connection.query(
             `CREATE DATABASE "${template}" TEMPLATE template0`
           );
@@ -351,29 +400,185 @@ describe("test-database", () => {
             `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
           );
 
-          const lock = `(${TEMPLATE_LOCK_CLASS}, hashtext($1))`;
-          yield* cloner.query(`SELECT pg_advisory_lock_shared${lock}`, [
-            template,
-          ]);
-          yield* runJanitor(
-            connection,
-            templateName(PLATFORM_MIGRATIONS),
-            Date.now()
-          );
+          yield* runJanitor(connection, keep, Date.now());
           assert.isTrue(yield* databaseExists(template), "kept while in use");
 
-          yield* cloner.query(`SELECT pg_advisory_unlock_shared${lock}`, [
-            template,
-          ]);
-          yield* runJanitor(
-            connection,
-            templateName(PLATFORM_MIGRATIONS),
-            Date.now()
-          );
+          yield* templateLock(cloner, "pg_advisory_unlock_shared", template);
+          yield* runJanitor(connection, keep, Date.now());
+          // Another run's janitor may have taken the lock first and still be
+          // dropping the template: wait for it.
+          yield* templateLock(connection, "pg_advisory_lock", template);
+          yield* templateLock(connection, "pg_advisory_unlock", template);
+
           assert.isFalse(
             yield* databaseExists(template),
             "dropped once unused"
           );
+        })
+      )
+  );
+
+  it.live(
+    "a run whose STD_DATABASE_URL names another database never drops a template this run is cloning",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* sharedLockSpace() {
+          // The other run points STD_DATABASE_URL at a database of its own on
+          // the same server (here, an empty test database) and has other
+          // migrations, so to its janitor this run's template is just an
+          // expired one.
+          const elsewhere = Context.get(
+            yield* Layer.build(testDatabaseService({ empty: true })),
+            TestDatabase
+          );
+
+          const otherRun = yield* admin.pipe(
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ STD_DATABASE_URL: elsewhere.url })
+              )
+            )
+          );
+
+          const connection = yield* admin;
+          const template = `std_tpl_${randomHex(12)}`;
+          const otherKeep = `std_tpl_${randomHex(12)}`;
+
+          // Added before the cloner connects, so it runs after the cloner
+          // has closed and released its shared lock.
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(dropTemplate(connection, template))
+          );
+
+          const cloner = yield* admin;
+
+          // This run is cloning the template: it holds the shared lock from
+          // before the readiness check through CREATE DATABASE ... TEMPLATE.
+          yield* templateLock(cloner, "pg_advisory_lock_shared", template);
+          yield* connection.query(
+            `CREATE DATABASE "${template}" TEMPLATE template0`
+          );
+          yield* connection.query(
+            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}2000-01-01T00:00:00.000Z'`
+          );
+          yield* connection.query(
+            `ALTER DATABASE "${template}" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`
+          );
+
+          yield* runJanitor(otherRun, otherKeep, Date.now());
+          assert.isTrue(
+            yield* databaseExists(template),
+            "the other run's janitor kept the template being cloned"
+          );
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(otherRun, template),
+            "in-use"
+          );
+
+          yield* templateLock(cloner, "pg_advisory_unlock_shared", template);
+          // Any run's janitor may now drop it; wait for one that is at it.
+          assert.include(
+            ["dropped", "gone"],
+            yield* dropTemplate(otherRun, template)
+          );
+          assert.isFalse(yield* databaseExists(template));
+        })
+      )
+  );
+
+  it.live(
+    "a template another run dropped after the janitor listed it is skipped",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* vanishedTemplate() {
+          const connection = yield* admin;
+
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, `std_tpl_${randomHex(12)}`),
+            "gone"
+          );
+          assert.isTrue(yield* isOpen(connection));
+        })
+      )
+  );
+
+  it.live(
+    "an invalid template is dropped without ALTER DATABASE, which would close the connection",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* invalidTemplate() {
+          const connection = yield* admin;
+          const template = `std_tpl_${randomHex(12)}`;
+
+          // On a connection of its own: if the drop closed `connection`, the
+          // database would otherwise be left behind.
+          yield* Effect.addFinalizer(() =>
+            Effect.ignore(
+              Effect.scoped(
+                admin.pipe(
+                  Effect.flatMap((cleanup) =>
+                    cleanup.query(`DROP DATABASE IF EXISTS "${template}"`)
+                  )
+                )
+              )
+            )
+          );
+
+          yield* connection.query(
+            `CREATE DATABASE "${template}" TEMPLATE template0`
+          );
+          // A fresh comment: no run's janitor treats it as expired, so only
+          // this test touches it.
+          yield* connection.query(
+            `COMMENT ON DATABASE "${template}" IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
+          );
+          // DROP DATABASE marks the database invalid in place before it
+          // removes the files, and an interrupted drop leaves it so; mark it
+          // the same way (the test server's role is a superuser).
+          yield* connection.query(
+            "UPDATE pg_database SET datconnlimit = -2 WHERE datname = $1",
+            [template]
+          );
+
+          assert.strictEqual(
+            yield* dropTemplateIfUnused(connection, template),
+            "dropped"
+          );
+          assert.isFalse(yield* databaseExists(template));
+          assert.isTrue(yield* isOpen(connection));
+        })
+      )
+  );
+
+  it.live(
+    "dropping one run's test database leaves another run's sessions alone",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* twoRuns() {
+          const first = yield* buildDatabase;
+
+          const second = yield* Effect.acquireRelease(
+            buildDatabase,
+            (database) => Scope.close(database.scope, Exit.void)
+          );
+
+          const session = yield* second.session("other-run");
+
+          yield* Scope.close(first.scope, Exit.void);
+          yield* Effect.scoped(
+            admin.pipe(
+              Effect.flatMap((connection) =>
+                runJanitor(
+                  connection,
+                  templateName(PLATFORM_MIGRATIONS),
+                  Date.now()
+                )
+              )
+            )
+          );
+
+          assert.isFalse(yield* databaseExists(first.name));
+          assert.isTrue(yield* isOpen(session));
         })
       )
   );

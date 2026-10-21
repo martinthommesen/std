@@ -1,4 +1,5 @@
 import { assert, describe, it, layer } from "@effect/vitest";
+import { testDatabaseLayer } from "@std/testing/test-database";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 import { assert as check, constantFrom, property, tuple } from "fast-check";
@@ -25,7 +26,6 @@ import type { SqlHooks } from "../src/sql.ts";
 import type { ResolvedCondition } from "../src/typed.ts";
 import { hooks as fixtureHooks } from "./support/differential.ts";
 import { exprArb } from "./support/generate.ts";
-import { TestDatabase } from "./support/postgres.ts";
 import { ASSET, fixtureView, LAPTOP, stableId } from "./support/schema.ts";
 
 const CONTEXT: ConditionContext = {
@@ -241,118 +241,121 @@ const countEmptyList = (client: SqlClient.SqlClient, negated: boolean) =>
     return row?.n;
   });
 
-layer(TestDatabase)("sql-postgres", (pg) => {
-  pg.effect(
-    "name = STRASSE matches Straße and i does not match İ, in both engines",
-    () =>
-      Effect.gen(function* folds() {
-        const client = yield* SqlClient.SqlClient;
-        yield* client.unsafe(
-          "CREATE TABLE fold_case (id int PRIMARY KEY, name text, code text)"
-        );
-        yield* client.unsafe(
-          "INSERT INTO fold_case VALUES (1, 'Straße', 'Straße'), (2, 'İ', 'İ'), (3, 'i', 'i'), (4, NULL, NULL)"
-        );
+layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
+  "sql-postgres",
+  (pg) => {
+    pg.effect(
+      "name = STRASSE matches Straße and i does not match İ, in both engines",
+      () =>
+        Effect.gen(function* folds() {
+          const client = yield* SqlClient.SqlClient;
+          yield* client.unsafe(
+            "CREATE TABLE fold_case (id int PRIMARY KEY, name text, code text)"
+          );
+          yield* client.unsafe(
+            "INSERT INTO fold_case VALUES (1, 'Straße', 'Straße'), (2, 'İ', 'İ'), (3, 'i', 'i'), (4, NULL, NULL)"
+          );
 
-        assert.deepStrictEqual(
-          yield* foldMatches(client, eq(NAME, "STRASSE")),
-          {
-            sql: [1],
-            typescript: [1],
-          }
-        );
-        assert.deepStrictEqual(yield* foldMatches(client, eq(NAME, "i")), {
-          sql: [3],
-          typescript: [3],
-        });
-        assert.deepStrictEqual(
-          yield* foldMatches(client, eq(CODE, "STRASSE")),
-          {
-            sql: [],
-            typescript: [],
-          }
-        );
-        assert.deepStrictEqual(
-          yield* foldMatches(client, { arg: eq(NAME, "i"), op: "not" }),
-          { sql: [1, 2, 4], typescript: [1, 2, 4] }
-        );
-        assert.deepStrictEqual(
-          // Each side is keyed with its own case setting: fold("Straße") is
-          // "strasse", the case-sensitive "Straße" stays as is.
-          yield* foldMatches(client, {
-            left: { path: [NAME.id] },
-            op: "eq",
-            right: { path: [CODE.id] },
-          }),
-          { sql: [3, 4], typescript: [3, 4] }
-        );
-      })
-  );
+          assert.deepStrictEqual(
+            yield* foldMatches(client, eq(NAME, "STRASSE")),
+            {
+              sql: [1],
+              typescript: [1],
+            }
+          );
+          assert.deepStrictEqual(yield* foldMatches(client, eq(NAME, "i")), {
+            sql: [3],
+            typescript: [3],
+          });
+          assert.deepStrictEqual(
+            yield* foldMatches(client, eq(CODE, "STRASSE")),
+            {
+              sql: [],
+              typescript: [],
+            }
+          );
+          assert.deepStrictEqual(
+            yield* foldMatches(client, { arg: eq(NAME, "i"), op: "not" }),
+            { sql: [1, 2, 4], typescript: [1, 2, 4] }
+          );
+          assert.deepStrictEqual(
+            // Each side is keyed with its own case setting: fold("Straße") is
+            // "strasse", the case-sensitive "Straße" stays as is.
+            yield* foldMatches(client, {
+              left: { path: [NAME.id] },
+              op: "eq",
+              right: { path: [CODE.id] },
+            }),
+            { sql: [3, 4], typescript: [3, 4] }
+          );
+        })
+    );
 
-  pg.effect(
-    "in(f, []) matches nothing and notIn(f, []) matches every row",
-    () =>
-      Effect.gen(function* constants() {
-        const client = yield* SqlClient.SqlClient;
-        yield* client.unsafe(
-          "CREATE TABLE empty_list (id int PRIMARY KEY, name text)"
-        );
-        yield* client.unsafe(
-          "INSERT INTO empty_list VALUES (1, 'a'), (2, NULL)"
-        );
+    pg.effect(
+      "in(f, []) matches nothing and notIn(f, []) matches every row",
+      () =>
+        Effect.gen(function* constants() {
+          const client = yield* SqlClient.SqlClient;
+          yield* client.unsafe(
+            "CREATE TABLE empty_list (id int PRIMARY KEY, name text)"
+          );
+          yield* client.unsafe(
+            "INSERT INTO empty_list VALUES (1, 'a'), (2, NULL)"
+          );
 
-        assert.strictEqual(yield* countEmptyList(client, false), 0);
-        assert.strictEqual(yield* countEmptyList(client, true), 2);
-      })
-  );
+          assert.strictEqual(yield* countEmptyList(client, false), 0);
+          assert.strictEqual(yield* countEmptyList(client, true), 2);
+        })
+    );
 
-  pg.effect(
-    "equality on a unique case-insensitive field uses its casefold index",
-    () =>
-      Effect.gen(function* explain() {
-        const client = yield* SqlClient.SqlClient;
-        yield* client.unsafe(
-          "CREATE TABLE unique_name (id int PRIMARY KEY, name text, code text)"
-        );
-        yield* client.unsafe(
-          "CREATE UNIQUE INDEX std_unique_name_casefold ON unique_name (casefold(name COLLATE pg_unicode_fast))"
-        );
-        yield* client.unsafe(
-          "INSERT INTO unique_name SELECT n, 'name-' || n, 'code-' || n FROM generate_series(1, 20000) AS n"
-        );
-        yield* client.unsafe("ANALYZE unique_name");
+    pg.effect(
+      "equality on a unique case-insensitive field uses its casefold index",
+      () =>
+        Effect.gen(function* explain() {
+          const client = yield* SqlClient.SqlClient;
+          yield* client.unsafe(
+            "CREATE TABLE unique_name (id int PRIMARY KEY, name text, code text)"
+          );
+          yield* client.unsafe(
+            "CREATE UNIQUE INDEX std_unique_name_casefold ON unique_name (casefold(name COLLATE pg_unicode_fast))"
+          );
+          yield* client.unsafe(
+            "INSERT INTO unique_name SELECT n, 'name-' || n, 'code-' || n FROM generate_series(1, 20000) AS n"
+          );
+          yield* client.unsafe("ANALYZE unique_name");
 
-        const compiled = compileCondition(resolved(eq(NAME, "NAME-42")), {
-          alias: "r",
-          hooks: identHooks,
-        });
+          const compiled = compileCondition(resolved(eq(NAME, "NAME-42")), {
+            alias: "r",
+            hooks: identHooks,
+          });
 
-        const statement = renderSql(
-          sql`EXPLAIN SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
-        );
+          const statement = renderSql(
+            sql`EXPLAIN SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
+          );
 
-        const plan = yield* client.unsafe<{ readonly "QUERY PLAN": string }>(
-          statement.text,
-          statement.values
-        );
+          const plan = yield* client.unsafe<{ readonly "QUERY PLAN": string }>(
+            statement.text,
+            statement.values
+          );
 
-        const text = plan.map((row) => row["QUERY PLAN"]).join("\n");
+          const text = plan.map((row) => row["QUERY PLAN"]).join("\n");
 
-        const found = yield* client.unsafe<{ readonly id: number }>(
-          renderSql(
-            sql`SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
-          ).text,
-          renderSql(
-            sql`SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
-          ).values
-        );
+          const found = yield* client.unsafe<{ readonly id: number }>(
+            renderSql(
+              sql`SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
+            ).text,
+            renderSql(
+              sql`SELECT r.id FROM unique_name AS "r" WHERE ${compiled.predicate}`
+            ).values
+          );
 
-        assert.include(text, "std_unique_name_casefold");
-        assert.notInclude(text, "Seq Scan");
-        assert.deepStrictEqual(
-          found.map((row) => row.id),
-          [42]
-        );
-      })
-  );
-});
+          assert.include(text, "std_unique_name_casefold");
+          assert.notInclude(text, "Seq Scan");
+          assert.deepStrictEqual(
+            found.map((row) => row.id),
+            [42]
+          );
+        })
+    );
+  }
+);

@@ -18,6 +18,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { testDatabaseLayer } from "@std/testing/test-database";
 import type { ConditionProfile } from "@std/values/field-type";
 import { Effect, Schema } from "effect";
 import type { SqlClient } from "effect/sql";
@@ -51,7 +52,6 @@ import {
   personRowsArb,
 } from "./support/generate.ts";
 import { DATE_TIME_POOL, UUID_POOL, ZONES } from "./support/pools.ts";
-import { TestDatabase } from "./support/postgres.ts";
 import { ASSET, LAPTOP } from "./support/schema.ts";
 
 const NIGHTLY = process.env.STD_DIFFERENTIAL === "nightly";
@@ -505,7 +505,10 @@ describe("coverage gate", () => {
   });
 });
 
-layer(TestDatabase, { timeout: 60_000 })("differential-postgres", (pg) => {
+layer(testDatabaseLayer({ empty: true }), {
+  excludeTestServices: true,
+  timeout: 60_000,
+})("differential-postgres", (pg) => {
   pg.effect("replays saved failures first", () =>
     Effect.gen(function* replay() {
       yield* createTables;
