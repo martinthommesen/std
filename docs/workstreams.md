@@ -23,7 +23,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | merged |
 | 4 | `ws/1c-authz-complete` | 1C | every read and write path, stale requests, `@std/api`, error fuzz, users, no-bypass | merged |
 | 4 | `ws/1c-schema-paths` | 1C follow-up | the "Waiting on 1A" items of decision 0014: change-set endpoints and definition-table generic writes in `authz-paths`, `stale-paths` and `built-ins` | planned |
-| 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, `v0.0.1` | planned |
+| 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | in progress |
 | 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, OpenAPI, typed client | planned |
 | 5 | `ws/2b-web` | 2B, 2C | Foldkit web app, lists, forms, filter builder, picker, history panel, stale forms, browser tests | planned |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set, upgrade test, rename test, `v0.0.2` | planned |
