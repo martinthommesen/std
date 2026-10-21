@@ -583,8 +583,8 @@ const prepareTargets = Effect.fn("bench.prepareDeleteTargets")(
       .filter((target) => target.owner !== null);
 
     // Popped from the end: reverse so targets are deleted in staging order.
-    context.targets.admin.push(...admin.toReversed());
-    context.targets.restricted.push(...restricted.toReversed());
+    context.targets.admin = admin.toReversed();
+    context.targets.restricted = restricted.toReversed();
     yield* Effect.logInfo(
       `${context.model.id}: prepared ${admin.length} + ${restricted.length} W3 delete targets`
     );
