@@ -12,6 +12,7 @@ import { SqlLayer } from "@std/server/sql/layer";
 import type { SqlServices } from "@std/server/sql/layer";
 import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Effect, Layer, Redacted } from "effect";
+import type { Config } from "effect";
 
 /** `application_name` of the probes' pooled connections. */
 export const PROBE_APPLICATION_NAME = "std-probes";
@@ -34,7 +35,10 @@ const DEFAULT_POOL = 10;
  */
 export const probeDatabaseLayer = (
   options: ProbeDatabaseOptions = {}
-): Layer.Layer<ProbeServices, DatabaseError | UpgradeError> => {
+): Layer.Layer<
+  ProbeServices,
+  DatabaseError | UpgradeError | Config.ConfigError
+> => {
   const config = Layer.effect(
     DatabaseConfig,
     TestDatabase.pipe(
