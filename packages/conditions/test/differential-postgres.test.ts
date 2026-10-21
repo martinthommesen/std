@@ -16,7 +16,6 @@
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { ConditionProfile } from "@std/values/field-type";
@@ -26,14 +25,17 @@ import {
   array,
   asyncProperty,
   check,
+  constant,
   constantFrom,
   integer,
   interruptAfterTimeLimit,
   oneof,
+  PreconditionFailure,
   record,
+  sample,
   subarray,
 } from "fast-check";
-import type { Arbitrary, RunDetails } from "fast-check";
+import type { Arbitrary, Plugin, RunDetails } from "fast-check";
 
 import { ExprSchema } from "../src/ast.ts";
 import type { Expr } from "../src/ast.ts";
@@ -275,7 +277,7 @@ const runChecks = async (
   run: Runner,
   stats: Stats,
   cases: Arbitrary<DifferentialCase>,
-  timeLimitMs?: number
+  limit?: Plugin<unknown>
 ): Promise<Checked> => {
   let lastCase: DifferentialCase | undefined;
   let lastRun: Promise<boolean> = Promise.resolve(true);
@@ -295,12 +297,9 @@ const runChecks = async (
 
       return await lastRun;
     }),
-    timeLimitMs === undefined
+    limit === undefined
       ? { numRuns: 1 }
-      : {
-          numRuns: Number.MAX_SAFE_INTEGER,
-          plugins: [interruptAfterTimeLimit(timeLimitMs)],
-        }
+      : { numRuns: Number.MAX_SAFE_INTEGER, plugins: [limit] }
   );
 
   // At the time limit fast-check stops waiting for the run in flight and
@@ -375,61 +374,122 @@ const emptyStats = (): Stats => ({
   runs: 0,
 });
 
-const CUT_OFF_LIMIT_MS = 20;
-const SLOW_RUN_MS = 200;
+// Interrupts the run in flight when `interrupt` resolves to an interrupting
+// precondition failure, as `interruptAfterTimeLimit` does when its timer
+// fires, and reports the finished assessment through `completed`; no clock
+// involved.
+const interruptWhen =
+  (
+    interrupt: Promise<PreconditionFailure>,
+    completed: (details: RunDetails<unknown>) => void
+  ): Plugin<unknown> =>
+  () => ({
+    decorateRun: (nestedRun) => async (value) =>
+      await Promise.race([nestedRun(value), interrupt]),
+    onAllRunsComplete: completed,
+  });
 
-// A runner that never touches the database: each case takes SLOW_RUN_MS and
-// reports one disagreement, or none.
-const slowRunner =
-  (disagrees: boolean): Runner =>
-  async () => {
-    await sleep(SLOW_RUN_MS);
+const firstSample = (cases: Arbitrary<DifferentialCase>): DifferentialCase => {
+  const [generated] = sample(cases, { numRuns: 1, seed: 1 });
 
-    return {
-      checked: [],
-      comparisons: 1,
-      mismatches: disagrees
-        ? [
-            {
-              expr: { op: "true" },
-              id: "cut-off",
-              negatedValue: false,
-              negatedWhere: false,
-              typescript: true,
-              value: false,
-              where: false,
-            },
-          ]
-        : [],
-      refused: 0,
-    };
+  if (generated === undefined) {
+    throw new Error("fast-check sampled no case.");
+  }
+
+  return generated;
+};
+
+const FIXED_CASE = firstSample(caseArb);
+
+const reportOf = (disagrees: boolean): CaseReport => ({
+  checked: [],
+  comparisons: 1,
+  mismatches: disagrees
+    ? [
+        {
+          expr: { op: "true" },
+          id: "cut-off",
+          negatedValue: false,
+          negatedWhere: false,
+          typescript: true,
+          value: false,
+          where: false,
+        },
+      ]
+    : [],
+  refused: 0,
+});
+
+// Runs one fixed case through a runner that never touches the database and
+// blocks until released; the limit interrupts it while it runs, and only
+// once fast-check has finished the assessment is the case released.
+const cutOffFirstRun = async (disagrees: boolean) => {
+  const started = Promise.withResolvers<true>();
+  const release = Promise.withResolvers<true>();
+  const interrupt = Promise.withResolvers<PreconditionFailure>();
+  const assessed = Promise.withResolvers<RunDetails<unknown>>();
+  const calls = { completed: 0, started: 0 };
+
+  const runner: Runner = async () => {
+    calls.started += 1;
+    started.resolve(true);
+    await release.promise;
+    calls.completed += 1;
+
+    return reportOf(disagrees);
   };
+
+  const checking = runChecks(
+    runner,
+    emptyStats(),
+    constant(FIXED_CASE),
+    interruptWhen(interrupt.promise, assessed.resolve)
+  );
+
+  await started.promise;
+  interrupt.resolve(new PreconditionFailure(true));
+
+  const assessedDetails = await assessed.promise;
+  const startedBeforeRelease = calls.started;
+  const completedBeforeRelease = calls.completed;
+  release.resolve(true);
+
+  const checked = await checking;
+
+  return {
+    ...checked,
+    assessedDetails,
+    calls,
+    completedBeforeRelease,
+    startedBeforeRelease,
+  };
+};
 
 describe("time limit", () => {
   it("keeps a disagreement in a first run the limit cut off", async () => {
-    const { abandoned, details } = await runChecks(
-      slowRunner(true),
-      emptyStats(),
-      caseArb,
-      CUT_OFF_LIMIT_MS
-    );
+    const result = await cutOffFirstRun(true);
 
-    // fast-check reports this as an interrupted failure with no counterexample.
-    assert.isTrue(details.interrupted);
-    assert.isNull(details.counterexample);
-    assert.isDefined(abandoned);
+    // fast-check reports this as an interrupted failure with no
+    // counterexample, decided before the run finished.
+    assert.strictEqual(result.assessedDetails, result.details);
+    assert.isTrue(result.details.failed);
+    assert.isTrue(result.details.interrupted);
+    assert.isNull(result.details.counterexample);
+    assert.strictEqual(result.startedBeforeRelease, 1);
+    assert.strictEqual(result.completedBeforeRelease, 0);
+    assert.deepStrictEqual(result.calls, { completed: 1, started: 1 });
+    assert.deepStrictEqual(result.abandoned, FIXED_CASE);
   });
 
   it("accepts a cut-off run that agreed", async () => {
-    const { abandoned, details } = await runChecks(
-      slowRunner(false),
-      emptyStats(),
-      caseArb,
-      CUT_OFF_LIMIT_MS
-    );
+    const result = await cutOffFirstRun(false);
 
-    assert.isTrue(details.interrupted);
-    assert.isUndefined(abandoned);
+    assert.isTrue(result.details.interrupted);
+    assert.isNull(result.details.counterexample);
+    assert.strictEqual(result.startedBeforeRelease, 1);
+    assert.strictEqual(result.completedBeforeRelease, 0);
+    assert.deepStrictEqual(result.calls, { completed: 1, started: 1 });
+    assert.isUndefined(result.abandoned);
   });
 });
 
@@ -469,7 +529,13 @@ layer(TestDatabase, { timeout: 60_000 })("differential-postgres", (pg) => {
         const stats = emptyStats();
 
         const timed = yield* Effect.promise(
-          async () => await runChecks(run, stats, caseArb, BUDGET_MS)
+          async () =>
+            await runChecks(
+              run,
+              stats,
+              caseArb,
+              interruptAfterTimeLimit(BUDGET_MS)
+            )
         );
 
         yield* failOnCounterexample(timed, "timed");
