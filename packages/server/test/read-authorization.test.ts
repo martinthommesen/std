@@ -436,26 +436,52 @@ describe("child-fields", () => {
     );
 
     dbTest.effect(
-      "a read by ID returns the concrete class's readable fields",
+      "a read by ID shows the endpoint's fields and the concrete class",
       () =>
         Effect.gen(function* byId() {
           const http = yield* TestHttpClient;
           const { records } = yield* AcmeFixture;
-          const token = yield* http.signIn("bob", "bob-password");
+          const bob = yield* http.signIn("bob", "bob-password");
+          const alice = yield* http.signIn("alice", "alice-password");
 
           const viaParent = yield* recordOf(
-            yield* http.get(recordPath(ASSET, records.L), { token })
+            yield* http.get(recordPath(ASSET, records.L), { token: bob })
           );
 
           const viaChild = yield* recordOf(
-            yield* http.get(recordPath(LAPTOP, records.L), { token })
+            yield* http.get(recordPath(LAPTOP, records.L), { token: bob })
           );
 
+          const aliceViaParent = yield* recordOf(
+            yield* http.get(recordPath(ASSET, records.L), { token: alice })
+          );
+
+          const aliceViaChild = yield* recordOf(
+            yield* http.get(recordPath(LAPTOP, records.L), { token: alice })
+          );
+
+          // Contracts 2.3: child-only fields only through the child endpoint.
           assert.strictEqual(viaParent.class, LAPTOP);
-          assert.strictEqual(viaParent.values.serial, "SN-L");
-          assert.notProperty(viaParent.values, "disk_key");
-          assert.notProperty(viaParent.values, "cost");
-          assert.deepStrictEqual(viaParent, viaChild);
+          assert.notProperty(viaParent.values, "serial");
+          assert.notProperty(aliceViaParent.values, "serial");
+          assert.notProperty(aliceViaParent.values, "disk_key");
+          assert.strictEqual(viaChild.values.serial, "SN-L");
+          assert.notProperty(viaChild.values, "disk_key");
+          assert.notProperty(viaChild.values, "cost");
+          assert.strictEqual(aliceViaChild.values.disk_key, "L-DISK-KEY");
+
+          for (const parameter of ["filter", "sort"] as const) {
+            const query =
+              parameter === "filter"
+                ? { filter: 'serial = "SN-L"' }
+                : { sort: "serial" };
+
+            const hidden = yield* http.get(listPath(ASSET, query), {
+              token: alice,
+            });
+
+            assert.strictEqual(yield* tagOf(hidden), "UnknownField");
+          }
         })
     );
   });

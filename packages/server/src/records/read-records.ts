@@ -492,11 +492,12 @@ WHERE ${whereAll(conditions)}`
 });
 
 /**
- * Reads one record through endpoint E (Contracts 2.3, 3.5): the record's
- * concrete class is resolved first, then every field of that class the
- * caller can read is returned, child-only fields included. A record
- * outside E's subtree or the caller's visibility, and an ID that does not
- * exist or is not a UUID, give the same `NotFound`.
+ * Reads one record through endpoint E (Contracts 2.3, 3.5): the fields of
+ * E and its ancestors the caller can read on this record, the system
+ * fields, and `class`, the record's concrete class. Child-only fields are
+ * not shown through a parent endpoint (read them through the child's). A
+ * record outside E's subtree or the caller's visibility, and an ID that
+ * does not exist or is not a UUID, give the same `NotFound`.
  *
  * @param request - Table, ID, selection and labels.
  * @returns `{ schemaRevision, record }`.
@@ -507,30 +508,14 @@ export const getRecord = Effect.fn("Records.get")(function* getRecord(
   const scope = yield* currentReadScope();
   const { revision } = yield* RequestRevision;
   const classId = yield* resolveTable(scope, request.table);
-  const endpoint = scope.view(classId);
-  const explicit = yield* parseFields(scope, endpoint, request.fields);
+  const view = scope.view(classId);
+  const explicit = yield* parseFields(scope, view, request.fields);
   const withLabels = yield* parseFlag("labels", request.labels);
   const parsedId = parseUuid(request.id.toLowerCase());
 
   if (!parsedId.ok) {
     return yield* new NotFound();
   }
-
-  const id = textParameter(parsedId.value, "uuid");
-
-  const [found] = yield* readRows(
-    sql`SELECT ${identSql(BASE_ALIAS, "class_id")}::text AS "class_id"
-FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql(BASE_ALIAS)}
-WHERE ${ID} = ${id} AND ${endpoint.visibility(BASE_ALIAS)}`
-  );
-
-  const concrete = found?.class_id;
-
-  if (concrete === undefined || concrete === null) {
-    return yield* new NotFound();
-  }
-
-  const view = scope.view(concrete, true);
 
   const projection = project(
     scope,
@@ -541,8 +526,8 @@ WHERE ${ID} = ${id} AND ${endpoint.visibility(BASE_ALIAS)}`
 
   const [row] = yield* readRows(
     sql`SELECT ${joinSql(projection.columns, ", ")}
-FROM ${recordRelation(scope.snapshot, concrete)} AS ${identSql(BASE_ALIAS)}${optionalJoins(projection.joins)}
-WHERE ${ID} = ${id} AND ${view.visibility(BASE_ALIAS)}`
+FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql(BASE_ALIAS)}${optionalJoins(projection.joins)}
+WHERE ${ID} = ${textParameter(parsedId.value, "uuid")} AND ${view.visibility(BASE_ALIAS)}`
   );
 
   if (row === undefined) {
