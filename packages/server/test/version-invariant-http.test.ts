@@ -385,11 +385,90 @@ const recordHolds = Effect.fn("HttpInvariant.recordHolds")(
   }
 );
 
+/**
+ * Saves every run starts with, each of which must succeed, so that creates,
+ * updates and deletes through both endpoints, by both users, are always
+ * covered before the random tail. Targets index the live records:
+ * L1 (Alice's laptop for Bob), L2 (Alice's laptop), A3 (Bob's asset).
+ */
+const PREFIX: readonly Step[] = [
+  {
+    endpoint: "laptop",
+    name: "p-L1",
+    op: "create",
+    ownedByBob: true,
+    status: "in_use",
+    user: "alice",
+  },
+  {
+    endpoint: "laptop",
+    name: "p-L2",
+    op: "create",
+    ownedByBob: false,
+    status: "lost",
+    user: "alice",
+  },
+  {
+    endpoint: "asset",
+    name: "p-A3",
+    op: "create",
+    ownedByBob: true,
+    status: "in_use",
+    user: "bob",
+  },
+  {
+    endpoint: "asset",
+    name: "p-A3-renamed",
+    op: "update",
+    stale: false,
+    status: null,
+    target: 2,
+    user: "bob",
+  },
+  {
+    endpoint: "laptop",
+    name: "p-L1-renamed",
+    op: "update",
+    stale: false,
+    status: null,
+    target: 0,
+    user: "bob",
+  },
+  {
+    endpoint: "asset",
+    name: null,
+    op: "update",
+    stale: false,
+    status: "spare",
+    target: 1,
+    user: "alice",
+  },
+  {
+    endpoint: "laptop",
+    name: null,
+    op: "update",
+    stale: false,
+    status: "in_use",
+    target: 1,
+    user: "alice",
+  },
+  { endpoint: "asset", op: "delete", stale: false, target: 1, user: "alice" },
+  { endpoint: "laptop", op: "delete", stale: false, target: 0, user: "alice" },
+];
+
 const runSequence = Effect.fn("HttpInvariant.sequence")(function* runSequence(
   world: World,
   steps: readonly Step[]
 ) {
   const tracked: Tracked[] = [];
+
+  for (const step of PREFIX) {
+    const response = yield* sendStep(world, tracked, step);
+
+    if (response === undefined || !isSuccess(response)) {
+      return false;
+    }
+  }
 
   for (const step of steps) {
     const response = yield* sendStep(world, tracked, step);
@@ -499,10 +578,20 @@ describe("version-invariant", () => {
             `counterexample ${JSON.stringify(result.counterexample)} (seed ${result.seed})`
           );
 
-          // Not vacuous: both users saved, through both endpoints.
+          // Not vacuous: both users saved, and every operation succeeded
+          // through both endpoints.
           const seen = [...world.successes.keys()];
 
-          for (const part of ["alice ", "bob ", " asset", " laptop"]) {
+          for (const part of [
+            "alice ",
+            "bob ",
+            " create asset",
+            " create laptop",
+            " update asset",
+            " update laptop",
+            " delete asset",
+            " delete laptop",
+          ]) {
             assert.isTrue(
               seen.some((key) => key.includes(part)),
               `no successful save matching "${part}" in ${seen.join("; ")}`

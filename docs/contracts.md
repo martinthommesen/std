@@ -636,7 +636,7 @@ Worker (Step 3):
 - Fencing: the done and failure updates are `WHERE id = $1 AND lease_token = $2 AND status = 'in_flight'`. If 0 rows change, the worker has lost the lease and discards its result; in a delivery transaction that holds record writes, it rolls the whole transaction back. Expired leases are claimable again, and each claim writes a new token.
 - The worker interrupts its effect before `lease_until`. The lease must exceed the effect timeout plus a margin [judgment].
 - Record-service effects run in one delivery transaction that ends with the fenced `done` update (4.1). External calls run outside any transaction, then the fenced `done` update commits.
-- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]) makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
+- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]), or the expiry of the last allowed claim's lease (dead-lettered by the next claim), makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
 - Wake-ups (4.1 step 11) only wake workers; they also poll.
 - `done` rows are deleted after 7 days [judgment]; `dead` rows stay.
 - A new subscription receives changes committed after it is created; a change in flight at that moment may or may not get a row [judgment]. Backfill is later.
