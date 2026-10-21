@@ -1,12 +1,11 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
     "plugins": [
       {
         "name": "@effect/language-service",
-        "ignoreEffectWarningsInTscExitCode": false,
+        "allowedExperimentalApis": [],
         "allowedUnstableApis": [
           "effect/sql",
           "effect/http",
@@ -16,7 +15,6 @@
           "@effect/platform-node",
           "@effect/opentelemetry"
         ],
-        "allowedExperimentalApis": [],
         "diagnosticSeverity": {
           "unstableApiUsage": "error",
           "experimentalApiUsage": "error",
@@ -25,9 +23,10 @@
           "duplicatePackage": "error",
           "floatingEffect": "error"
         },
+        "ignoreEffectWarningsInTscExitCode": false,
         "overrides": [
           {
-            "include": ["test/**/*.ts"],
+            "include": ["test/**/*"],
             "options": {
               "allowedUnstableApis": [
                 "effect/sql",
@@ -45,5 +44,5 @@
       }
     ]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src", "test", "vitest.config.ts"]
 }
