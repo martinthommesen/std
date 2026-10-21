@@ -1698,6 +1698,183 @@ const syntheticResponse = (status: number, json: JsonObject): TestResponse => ({
   text: JSON.stringify(json),
 });
 
+/** A targeted case: a request that reaches one required outcome. */
+type TargetedCase = (
+  context: FuzzContext
+) => Effect.Effect<TestResponse, unknown, Services>;
+
+/**
+ * Sends a write as the admin, checked and counted like every fuzz request.
+ *
+ * @param context - Sessions and model.
+ * @param method - The method.
+ * @param path - The path.
+ * @param options - Body and headers.
+ * @returns The response.
+ */
+const adminSends = (
+  context: FuzzContext,
+  method: string,
+  path: string,
+  options: {
+    readonly body?: JsonObject;
+    readonly headers?: Readonly<Record<string, string>>;
+  } = {}
+) =>
+  send(context, {
+    ...options,
+    method,
+    path,
+    target: null,
+    token: context.admin,
+  });
+
+/**
+ * A fresh item, then a PATCH of it through the parent endpoint.
+ *
+ * @param context - Sessions and model.
+ * @param body - The PATCH body.
+ * @param headers - The PATCH headers.
+ * @returns The response.
+ */
+const patchFresh = (
+  context: FuzzContext,
+  body: JsonObject,
+  headers: Readonly<Record<string, string>>
+) =>
+  freshRecord(context, ITEM).pipe(
+    Effect.flatMap((fresh) =>
+      adminSends(context, "PATCH", recordPath(ITEM, fresh.id), {
+        body,
+        headers,
+      })
+    )
+  );
+
+/**
+ * One targeted case per required outcome. The random phase usually reaches
+ * every outcome, but how often depends on what fast-check draws: a unique
+ * conflict needs a body that passes validation, the owner's CHECK, NOT NULL
+ * and trigger, and a code already taken by a live record in some case, so
+ * some seeds never reach `notUnique`. After the random phase, each outcome
+ * it missed gets its case through the same request path and checks, as the
+ * conditions differential test's targeted phase does, so the coverage gate
+ * depends on neither luck nor speed.
+ */
+const TARGETED_CASES: ReadonlyMap<string, TargetedCase> = new Map<
+  string,
+  TargetedCase
+>([
+  [
+    "201",
+    (context) =>
+      adminSends(context, "POST", listPath(ITEM), { body: validBody(ITEM) }),
+  ],
+  [
+    "200",
+    (context) =>
+      patchFresh(context, { name: "nmpatched" }, { "if-match": '"1"' }),
+  ],
+  [
+    "400 InvalidRequest",
+    (context) =>
+      patchFresh(context, { name: "nmbadmatch" }, { "if-match": "one" }),
+  ],
+  [
+    "400 UnknownField",
+    (context) =>
+      adminSends(context, "POST", listPath(ITEM), {
+        body: { ...validBody(ITEM), nosuchfield: 1 },
+      }),
+  ],
+  [
+    "403 NotAllowed",
+    (context) =>
+      adminSends(context, "POST", listPath(USER), {
+        body: { login: freshToken("fz"), name: "nmuser" },
+      }).pipe(
+        Effect.flatMap((created) =>
+          adminSends(
+            context,
+            "DELETE",
+            recordPath(USER, parsedOf(created).record?.id ?? ""),
+            { headers: { "if-match": '"1"' } }
+          )
+        )
+      ),
+  ],
+  [
+    "404 NotFound",
+    (context) =>
+      adminSends(context, "PATCH", recordPath(ITEM, randomUUID()), {
+        body: { name: "nmnobody" },
+        headers: { "if-match": '"1"' },
+      }),
+  ],
+  [
+    "409 Referenced",
+    (context) =>
+      Effect.gen(function* referenced() {
+        const target = yield* freshRecord(context, ITEM);
+
+        yield* freshRecord(context, ITEM, { parent: target.id });
+
+        return yield* adminSends(
+          context,
+          "DELETE",
+          recordPath(ITEM, target.id),
+          {
+            headers: { "if-match": '"1"' },
+          }
+        );
+      }),
+  ],
+  [
+    "409 VersionConflict",
+    (context) =>
+      patchFresh(context, { name: "nmstale" }, { "if-match": '"7"' }),
+  ],
+  [
+    "422 InvalidReference",
+    (context) =>
+      adminSends(context, "POST", listPath(ITEM), {
+        body: { ...validBody(ITEM), parent: randomUUID() },
+      }),
+  ],
+  [
+    "422 ValidationFailed",
+    (context) =>
+      adminSends(context, "POST", listPath(ITEM), {
+        body: { ...validBody(ITEM), name: null },
+      }),
+  ],
+  [
+    "428 VersionRequired",
+    (context) => patchFresh(context, { name: "nmnoversion" }, {}),
+  ],
+  [
+    "500",
+    (context) =>
+      adminSends(context, "POST", listPath(ITEM), {
+        body: { ...validBody(ITEM), qty: -1 },
+      }),
+  ],
+  [
+    "notUnique",
+    (context) =>
+      Effect.gen(function* notUnique() {
+        const taken = yield* freshRecord(context, ITEM);
+
+        return yield* adminSends(context, "POST", listPath(SPECIAL), {
+          body: {
+            ...validBody(SPECIAL),
+            code: textsOf(taken.body.code).join("").toUpperCase(),
+          },
+        });
+      }),
+  ],
+]);
+
 describe("error-fuzz", () => {
   it("draws unique values that collide across case", () => {
     assert.isTrue(TOKEN.test("kqghmn"));
@@ -1914,6 +2091,26 @@ describe("error-fuzz", () => {
       );
 
       dbTest.effect(
+        "every targeted case reaches its outcome",
+        () =>
+          Effect.gen(function* targetedCases() {
+            const context = yield* setUp;
+
+            assert.sameMembers(
+              [...TARGETED_CASES.keys()],
+              [...REQUIRED_OUTCOMES]
+            );
+
+            for (const [outcome, targeted] of TARGETED_CASES) {
+              const response = yield* targeted(context);
+
+              assert.include(outcomesOf(response), outcome, response.text);
+            }
+          }),
+        TIMEOUT
+      );
+
+      dbTest.effect(
         "fuzzed constraint violations never return Postgres text or values",
         () =>
           Effect.gen(function* fuzz() {
@@ -1932,12 +2129,32 @@ describe("error-fuzz", () => {
 
             const seen = context.model.outcomes;
 
+            // The targeted phase: a case for every outcome the random
+            // phase missed, through the same requests and checks.
+            const missed = REQUIRED_OUTCOMES.filter(
+              (outcome) => !seen.has(outcome)
+            );
+
+            for (const outcome of missed) {
+              const targeted = TARGETED_CASES.get(outcome);
+
+              assert.isDefined(targeted, `no targeted case for ${outcome}`);
+
+              if (targeted !== undefined) {
+                yield* targeted(context);
+              }
+            }
+
             for (const outcome of REQUIRED_OUTCOMES) {
               assert.isTrue(
                 seen.has(outcome),
                 `never reached ${outcome}: ${JSON.stringify([...seen])}`
               );
             }
+
+            yield* Effect.logInfo(
+              `error-fuzz: ${RUNS} runs; outcomes the targeted phase reached: ${missed.join(", ") || "none"}`
+            );
           }),
         TIMEOUT
       );

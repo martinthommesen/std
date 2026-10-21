@@ -44,15 +44,28 @@ const SOURCE_PACKAGES = [
 ] as const;
 
 /**
- * Where definition sets' role and permission names meet definitions:
- * resolving a set file's names to IDs, the snapshot's index, and the
- * upgrade plan finding a local definition that already uses a name the
- * set adds (Contracts 1.8, 8.4). None decides access.
+ * The only call sites that may look a role or permission up by name, as
+ * `<file>#<enclosing function>#<lookup>`, each with its reason. None runs
+ * during a request or decides access; any other call, in these files too,
+ * is a finding.
  */
-const NAME_RESOLVERS = new Set([
-  "definitions/src/set-resolve.ts",
-  "definitions/src/set-upgrade.ts",
-  "definitions/src/snapshot.ts",
+const NAME_LOOKUP_SITES: ReadonlyMap<string, string> = new Map([
+  [
+    "definitions/src/set-resolve.ts#roleId#roleByName",
+    "a set file names roles; they become IDs when the set loads",
+  ],
+  [
+    "definitions/src/set-resolve.ts#resolveAccess#permissionByName",
+    "a set file's grants name permissions; they become IDs when it loads",
+  ],
+  [
+    "definitions/src/set-upgrade.ts#localClash#roleByName",
+    "an upgrade plan finds a local role using a name the set adds (1.8, 8.4)",
+  ],
+  [
+    "definitions/src/set-upgrade.ts#localClash#permissionByName",
+    "an upgrade plan finds a local permission using a name the set adds",
+  ],
 ]);
 
 /** Built-in role and permission names: code refers to them by ID only. */
@@ -78,6 +91,25 @@ const BY_NAME_LOOKUPS = new Set(["roleByName", "permissionByName"]);
 const lineAt = (source: string, offset: number): number =>
   source.slice(0, offset).split("\n").length;
 
+/** A variable declarator as the scanner's visitor sees it. */
+type Declarator = Parameters<
+  NonNullable<VisitorObject["VariableDeclarator"]>
+>[0];
+
+/**
+ * The function a declarator names: `const f = (...) => ...` and
+ * `const f = function (...) {...}` name `f`.
+ *
+ * @param node - A variable declarator.
+ * @returns The name, or undefined when it declares no function.
+ */
+const declaredFunction = (node: Declarator): string | undefined =>
+  node.id.type === "Identifier" &&
+  (node.init?.type === "ArrowFunctionExpression" ||
+    node.init?.type === "FunctionExpression")
+    ? node.id.name
+    : undefined;
+
 /** What a literal or a template's text can hold. */
 type LiteralValue = string | number | boolean | bigint | RegExp | null;
 
@@ -96,17 +128,24 @@ const isBuiltInName = (value: LiteralValue | undefined): boolean =>
  * A string literal or template text equal to a built-in name is a finding
  * anywhere in code (comparisons, `switch` cases, `includes`, map lookups,
  * constants), except as a plain object key (a name mapped to its ID) or in
- * a type. A call to `roleByName` or `permissionByName` is a finding outside
- * the definition-set resolver, where set files' names become IDs.
+ * a type. A call to `roleByName` or `permissionByName` is a finding unless
+ * its innermost named enclosing function is one of `NAME_LOOKUP_SITES`.
  *
  * @param relative - The file's path below `packages/`.
  * @param source - Its text.
+ * @param used - Collects the allowed call sites the file uses.
  * @returns `<path>:<line> <what>` per finding.
  */
-const nameChecksIn = (relative: string, source: string): string[] => {
+const nameChecksIn = (
+  relative: string,
+  source: string,
+  used = new Set<string>()
+): string[] => {
   const { program, errors } = parseSync(relative, source);
   const exempt = new Set<number>();
   const findings: string[] = [];
+  // Names of the enclosing functions, innermost last.
+  const enclosing: string[] = [];
 
   const found = (offset: number, what: string) => {
     findings.push(`${relative}:${lineAt(source, offset)} ${what}`);
@@ -129,9 +168,43 @@ const nameChecksIn = (relative: string, source: string): string[] => {
       ({ name } = callee.property);
     }
 
-    if (BY_NAME_LOOKUPS.has(name) && !NAME_RESOLVERS.has(relative)) {
+    if (!BY_NAME_LOOKUPS.has(name)) {
+      return;
+    }
+
+    const site = `${relative}#${enclosing.at(-1) ?? ""}#${name}`;
+
+    if (NAME_LOOKUP_SITES.has(site)) {
+      used.add(site);
+    } else {
       found(node.start, `${name}(...)`);
     }
+  };
+
+  const onDeclarator: VisitorObject["VariableDeclarator"] = (node) => {
+    const name = declaredFunction(node);
+
+    if (name !== undefined) {
+      enclosing.push(name);
+    }
+  };
+
+  const onDeclaratorExit: VisitorObject["VariableDeclarator:exit"] = (node) => {
+    if (declaredFunction(node) !== undefined) {
+      enclosing.pop();
+    }
+  };
+
+  // Function declarations and named function expressions name themselves;
+  // anonymous ones take the name of their declaration, if any.
+  const onFunction = (node: {
+    readonly id?: { readonly name: string } | null;
+  }): void => {
+    enclosing.push(node.id?.name ?? enclosing.at(-1) ?? "");
+  };
+
+  const onFunctionExit = (): void => {
+    enclosing.pop();
   };
 
   const onLiteral: VisitorObject["Literal"] = (node) => {
@@ -159,11 +232,19 @@ const nameChecksIn = (relative: string, source: string): string[] => {
   };
 
   new Visitor({
+    ArrowFunctionExpression: onFunction,
+    "ArrowFunctionExpression:exit": onFunctionExit,
     CallExpression: onCall,
+    FunctionDeclaration: onFunction,
+    "FunctionDeclaration:exit": onFunctionExit,
+    FunctionExpression: onFunction,
+    "FunctionExpression:exit": onFunctionExit,
     Literal: onLiteral,
     Property: onProperty,
     TSLiteralType: onLiteralType,
     TemplateLiteral: onTemplate,
+    VariableDeclarator: onDeclarator,
+    "VariableDeclarator:exit": onDeclaratorExit,
   }).visit(program);
 
   return findings;
@@ -280,24 +361,84 @@ describe("no-bypass", () => {
       "server/src/probe.ts:6 roleByName(...)",
     ]);
 
-    // The definition-set resolver turns set files' names into IDs.
+    // Only the listed call sites may look names up, by enclosing function
+    // and lookup; anything else in the same files is a finding.
+    const upgrade = [
+      "const localClash = (installed, draft) =>",
+      "  [installed.roleByName(draft.name), installed.permissionByName(draft.name)];",
+      "const decide = (snapshot, name) => snapshot.roleByName(name) !== undefined;",
+      "function grant(snapshot) { return snapshot.permissionByName('p'); }",
+      "const localClashTwo = (installed) => {",
+      "  const check = (name) => installed.roleByName(name);",
+      "  return check;",
+      "};",
+      "installed.roleByName('top level');",
+      "const roleId = (base, name) => base.roleByName(name);",
+      "const later = function localClash() { return x.roleByName(n); };",
+    ].join("\n");
+
+    const used = new Set<string>();
+
+    assert.deepStrictEqual(
+      nameChecksIn("definitions/src/set-upgrade.ts", upgrade, used),
+      [
+        "definitions/src/set-upgrade.ts:3 roleByName(...)",
+        "definitions/src/set-upgrade.ts:4 permissionByName(...)",
+        "definitions/src/set-upgrade.ts:6 roleByName(...)",
+        "definitions/src/set-upgrade.ts:9 roleByName(...)",
+        "definitions/src/set-upgrade.ts:10 roleByName(...)",
+      ]
+    );
+    // The last line's named function expression is `localClash`: allowed,
+    // like the first two lines.
+    assert.sameMembers(
+      [...used],
+      [
+        "definitions/src/set-upgrade.ts#localClash#roleByName",
+        "definitions/src/set-upgrade.ts#localClash#permissionByName",
+      ]
+    );
+
+    // A listed function in another file, or the other lookup, is a finding.
     assert.deepStrictEqual(
       nameChecksIn(
         "definitions/src/set-resolve.ts",
-        "const role = base.roleByName(name);"
+        [
+          "const roleId = (base, name) => base.roleByName(name);",
+          "const roleIdToo = (base, name) => base.permissionByName(name);",
+          "const resolveAccess = (base, entry) => base.roleByName(entry.role);",
+        ].join("\n")
       ),
-      []
+      [
+        "definitions/src/set-resolve.ts:2 permissionByName(...)",
+        "definitions/src/set-resolve.ts:3 roleByName(...)",
+      ]
+    );
+    assert.deepStrictEqual(
+      nameChecksIn(
+        "server/src/records/probe.ts",
+        "const localClash = (installed, name) => installed.roleByName(name);"
+      ),
+      ["server/src/records/probe.ts:1 roleByName(...)"]
     );
   });
 
   it("no source file checks a built-in role or permission by name", () => {
+    const used = new Set<string>();
+
     const findings = SOURCE_PACKAGES.flatMap((name) =>
       sourceFiles(path.join(PACKAGES, name, "src")).flatMap((file) =>
-        nameChecksIn(path.relative(PACKAGES, file), readFileSync(file, "utf-8"))
+        nameChecksIn(
+          path.relative(PACKAGES, file),
+          readFileSync(file, "utf-8"),
+          used
+        )
       )
     );
 
     assert.deepStrictEqual(findings, []);
+    // Every listed call site exists: an exception never outlives its call.
+    assert.sameMembers([...used], [...NAME_LOOKUP_SITES.keys()]);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {

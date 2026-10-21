@@ -64,6 +64,89 @@ const coreSchemaTables = () =>
   );
 
 /**
+ * The tables of the `core` schema that no definition describes: internal
+ * tables (sessions, deliveries, the ledger, ...).
+ *
+ * @param snapshot - The configuration.
+ * @returns `core.<table>` per internal table.
+ */
+const internalTables = (snapshot: ConfigSnapshot) =>
+  coreSchemaTables().pipe(
+    Effect.map((tables) => {
+      const described = new Set(
+        snapshot
+          .all("class")
+          .map((definition) => snapshot.qualifiedNameOf(definition.id))
+      );
+
+      return tables.filter((table) => !described.has(table));
+    })
+  );
+
+/** A record ID for the by-ID routes. */
+const ROUTE_ID = randomUUID();
+
+const VERSION_ONE = { "if-match": '"1"' };
+
+/**
+ * Every generic route of a table: list, get, history, create, update and
+ * delete.
+ *
+ * @param table - The table.
+ * @returns Method, path and options per route.
+ */
+const routesOf = (table: string) =>
+  [
+    ["GET", listPath(table), {}],
+    ["GET", recordPath(table, ROUTE_ID), {}],
+    ["GET", `${recordPath(table, ROUTE_ID)}/history`, {}],
+    ["POST", listPath(table), { body: { name: "x" } }],
+    [
+      "PATCH",
+      recordPath(table, ROUTE_ID),
+      { body: { name: "x" }, headers: VERSION_ONE },
+    ],
+    ["DELETE", recordPath(table, ROUTE_ID), { headers: VERSION_ONE }],
+  ] as const;
+
+/**
+ * Checks that a table is `UnknownTable` on every route for a caller,
+ * byte-identical to a table that does not exist.
+ *
+ * @param token - The caller's session.
+ * @param table - The table.
+ * @param label - Who asks, for messages.
+ * @returns Nothing.
+ */
+const unknownOnEveryRoute = Effect.fn("PlatformTables.unknownOnEveryRoute")(
+  function* unknownOnEveryRoute(token: string, table: string, label: string) {
+    const http = yield* TestHttpClient;
+    const missingRoutes = routesOf(MISSING);
+
+    for (const [index, [method, path, options]] of routesOf(table).entries()) {
+      const response = yield* http.request(method, path, { ...options, token });
+
+      const [, missingPath = "", missingOptions = {}] =
+        missingRoutes[index] ?? [];
+
+      const missing = yield* http.request(method, missingPath, {
+        ...missingOptions,
+        token,
+      });
+
+      const where = `${label} ${method} ${path}`;
+      assert.strictEqual(response.status, 404, where);
+      assert.strictEqual(yield* tagOf(response), "UnknownTable", where);
+      assert.strictEqual(
+        response.text.replace(table, "?"),
+        missing.text.replace(MISSING, "?"),
+        where
+      );
+    }
+  }
+);
+
+/**
  * How many change entries there are, as table owner.
  *
  * @returns The count as text.
@@ -110,7 +193,6 @@ describe("platform-tables", () => {
       "every platform and config table, on every route, for every non-admin",
       () =>
         Effect.gen(function* everyTable() {
-          const http = yield* TestHttpClient;
           const { tokens } = yield* signInAll;
           const snapshot = yield* (yield* Catalog).refresh;
 
@@ -122,55 +204,18 @@ describe("platform-tables", () => {
             Object.keys(PLATFORM_CLASS_IDS).map((name) => `core.${name}`)
           );
 
-          const id = randomUUID();
-          const version = { "if-match": '"1"' };
-
-          const routes = (table: string) =>
-            [
-              ["GET", listPath(table), {}],
-              ["GET", recordPath(table, id), {}],
-              ["GET", `${recordPath(table, id)}/history`, {}],
-              ["POST", listPath(table), { body: { name: "x" } }],
-              [
-                "PATCH",
-                recordPath(table, id),
-                { body: { name: "x" }, headers: version },
-              ],
-              ["DELETE", recordPath(table, id), { headers: version }],
-            ] as const;
-
+          const internal = yield* internalTables(snapshot);
           const nonAdmins: readonly Who[] = ["alice", "bob"];
 
           for (const who of nonAdmins) {
-            for (const table of [...platform, ...CONFIG_TABLES]) {
-              for (const [method, path, options] of routes(table)) {
-                const response = yield* http.request(method, path, {
-                  ...options,
-                  token: tokens[who],
-                });
-
-                const [, missingPath, missingOptions] =
-                  routes(MISSING).find(
-                    ([missingMethod, candidate]) =>
-                      missingMethod === method &&
-                      candidate.replace(MISSING, table) === path
-                  ) ?? [];
-
-                const missing = yield* http.request(method, missingPath ?? "", {
-                  ...missingOptions,
-                  token: tokens[who],
-                });
-
-                const label = `${who} ${method} ${path}`;
-                assert.strictEqual(response.status, 404, label);
-                assert.strictEqual(yield* tagOf(response), "UnknownTable");
-                assert.strictEqual(
-                  response.text.replace(table, "?"),
-                  missing.text.replace(MISSING, "?"),
-                  label
-                );
-              }
+            for (const table of [...platform, ...CONFIG_TABLES, ...internal]) {
+              yield* unknownOnEveryRoute(tokens[who], table, who);
             }
+          }
+
+          // Tables no definition describes are unknown to admins too.
+          for (const table of internal) {
+            yield* unknownOnEveryRoute(tokens.admin, table, "admin");
           }
         })
     );
@@ -178,8 +223,7 @@ describe("platform-tables", () => {
     dbTest.effect(
       "every core table is described or internal, and internal ones are unknown to everyone",
       () =>
-        Effect.gen(function* internalTables() {
-          const http = yield* TestHttpClient;
+        Effect.gen(function* describedOrInternal() {
           const { tokens } = yield* signInAll;
           const snapshot = yield* (yield* Catalog).refresh;
           const tables = yield* coreSchemaTables();
@@ -198,20 +242,8 @@ describe("platform-tables", () => {
           assert.includeMembers(internal, ["core.session", "core.delivery"]);
 
           for (const who of ["admin", "alice", "bob"] as const) {
-            const missing = yield* http.get(listPath(MISSING), {
-              token: tokens[who],
-            });
-
             for (const table of internal) {
-              const response = yield* http.get(listPath(table), {
-                token: tokens[who],
-              });
-
-              assert.strictEqual(response.status, 404, `${who} ${table}`);
-              assert.strictEqual(
-                response.text.replace(table, "?"),
-                missing.text.replace(MISSING, "?")
-              );
+              yield* unknownOnEveryRoute(tokens[who], table, who);
             }
           }
         })
@@ -296,7 +328,9 @@ describe("platform-tables", () => {
           }
 
           // A create on every platform table the catalog describes.
-          for (const table of platformTables(yield* (yield* Catalog).refresh)) {
+          const snapshot = yield* (yield* Catalog).refresh;
+
+          for (const table of platformTables(snapshot)) {
             const response = yield* http.request("POST", listPath(table), {
               body: {},
               token,
@@ -304,6 +338,17 @@ describe("platform-tables", () => {
 
             assert.strictEqual(response.status, 403, `POST ${table}`);
             assert.strictEqual(yield* tagOf(response), "NotAllowed");
+          }
+
+          // Tables no definition describes are no table at all to them.
+          for (const table of yield* internalTables(snapshot)) {
+            const response = yield* http.request("POST", listPath(table), {
+              body: {},
+              token,
+            });
+
+            assert.strictEqual(response.status, 404, `POST ${table}`);
+            assert.strictEqual(yield* tagOf(response), "UnknownTable");
           }
 
           assert.deepStrictEqual(yield* changeCount(), before);
@@ -358,21 +403,14 @@ describe("platform-tables", () => {
             listNames(before.json).length
           );
 
-          // But no platform table.
-          const missing = yield* http.get(listPath(MISSING), {
-            token: tokens.bob,
-          });
+          // But no platform table and no internal table, on any route.
+          const atC = yield* catalog.refresh;
 
-          for (const table of platformTables(yield* catalog.refresh)) {
-            const response = yield* http.get(listPath(table), {
-              token: tokens.bob,
-            });
-
-            assert.strictEqual(response.status, 404, table);
-            assert.strictEqual(
-              response.text.replace(table, "?"),
-              missing.text.replace(MISSING, "?")
-            );
+          for (const table of [
+            ...platformTables(atC),
+            ...(yield* internalTables(atC)),
+          ]) {
+            yield* unknownOnEveryRoute(tokens.bob, table, "bob with *");
           }
 
           // A local rule naming a platform table is refused.
