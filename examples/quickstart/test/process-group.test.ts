@@ -19,13 +19,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Schedule } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, Ref, Schedule } from "effect";
 
 import {
   groupAlive,
   spawnGroup,
   terminateGroup,
 } from "../src/process-group.ts";
+import type { GroupMember } from "../src/process-group.ts";
 
 const CI = fileURLToPath(new URL("../src/ci.ts", import.meta.url));
 
@@ -125,6 +126,49 @@ const sleeping = (marker: string) =>
     })
   );
 
+/**
+ * The first number a child prints on standard output.
+ * @param child - The child.
+ * @returns The number.
+ */
+const firstNumber = (child: ChildProcess) =>
+  Effect.callback<number>((resume) => {
+    let seen = "";
+
+    child.stdout?.on("data", (chunk: Uint8Array) => {
+      seen += String(chunk);
+
+      const [first, ...rest] = seen.split("\n");
+
+      if (rest.length > 0) {
+        resume(Effect.succeed(Number(first)));
+      }
+    });
+  });
+
+/**
+ * Waits until a process is in a state (`/proc/<pid>/stat`).
+ * @param pid - The process.
+ * @param state - The state letter, such as `Z`.
+ * @returns Succeeds once it is.
+ */
+const inState = (pid: number, state: string) =>
+  Effect.sync(() => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+
+      return stat.slice(stat.lastIndexOf(")") + 2).startsWith(state);
+    } catch {
+      return false;
+    }
+  }).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("50 millis"),
+      times: 100,
+      until: (reached) => reached,
+    })
+  );
+
 /** A shell that starts two background sleeps, says so and waits. */
 const SLEEPERS = "sleep 30 & sleep 30 & echo started; wait";
 
@@ -181,11 +225,97 @@ describe("process-group", () => {
 
       const pgid = child.pid ?? 0;
 
-      yield* terminateGroup(pgid, "300 millis");
+      yield* terminateGroup(pgid, { grace: "300 millis" });
 
       assert.isFalse(groupAlive(pgid));
       assert.deepStrictEqual(processesMarked(marker), []);
     })
+  );
+
+  it.live("a zombie whose parent never reaps it does not hold up cleanup", () =>
+    Effect.gen(function* zombie() {
+      // `setsid` puts the child in a group of its own (no fork: it is not
+      // a group leader); the shell then becomes `sleep 60`, which never
+      // waits, so the child stays a zombie in that group once it exits.
+      const parent = spawn(
+        "/bin/bash",
+        ["-c", "setsid sleep 0.1 & echo $!; exec sleep 60"],
+        { stdio: ["ignore", "pipe", "inherit"] }
+      );
+
+      const zombiePid = yield* firstNumber(parent);
+
+      yield* inState(zombiePid, "Z");
+
+      // Signal 0 still finds the zombie, so waiting on it would hang
+      // until the parent reaps it.
+      assert.doesNotThrow(() => {
+        process.kill(-zombiePid, 0);
+      });
+
+      const started = yield* Clock.currentTimeMillis;
+
+      yield* terminateGroup(zombiePid, {
+        grace: "1 second",
+        killDeadline: "1 second",
+      });
+
+      const elapsed = (yield* Clock.currentTimeMillis) - started;
+
+      assert.isFalse(groupAlive(zombiePid));
+      assert.isBelow(elapsed, 1000);
+
+      parent.kill("SIGKILL");
+      yield* exited(parent);
+    })
+  );
+
+  it.live(
+    "a group still running after SIGKILL fails cleanup within the deadline, naming its processes",
+    () =>
+      Effect.gen(function* stuck() {
+        const stuckMember: GroupMember = { command: "stuck", pid: 4242 };
+        const started = yield* Clock.currentTimeMillis;
+
+        const failure = yield* terminateGroup(2_147_483_646, {
+          grace: "200 millis",
+          killDeadline: "300 millis",
+          members: () => [stuckMember],
+        }).pipe(Effect.flip);
+
+        const elapsed = (yield* Clock.currentTimeMillis) - started;
+
+        assert.strictEqual(failure._tag, "GroupNotEnded");
+        assert.deepStrictEqual(failure.processes, [stuckMember]);
+        assert.include(failure.message, "4242 (stuck)");
+        assert.isBelow(elapsed, 2000);
+      })
+  );
+
+  it.live(
+    "after a cleanup failure the outer finalizers still run (the database is still dropped)",
+    () =>
+      Effect.gen(function* outer() {
+        const dropped = yield* Ref.make(false);
+
+        const run = Effect.scoped(
+          Effect.gen(function* withFinalizers() {
+            yield* Effect.addFinalizer(() => Ref.set(dropped, true));
+            yield* Effect.addFinalizer(() =>
+              terminateGroup(2_147_483_646, {
+                grace: "50 millis",
+                killDeadline: "50 millis",
+                members: () => [{ command: "stuck", pid: 4242 }],
+              }).pipe(Effect.orDie)
+            );
+          })
+        );
+
+        const exit = yield* Effect.exit(run);
+
+        assert.isTrue(Exit.isFailure(exit));
+        assert.isTrue(yield* Ref.get(dropped));
+      })
   );
 
   it.live(

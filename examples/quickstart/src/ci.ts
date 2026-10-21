@@ -15,7 +15,9 @@
  *
  * Credentials: the script runs with a PATH that logs the arguments of every
  * command it starts (`argv-log.ts`), and the run fails if a password shows
- * up in them, so no password reaches a process listing.
+ * up in them, so no password reaches a process listing. Before it runs, a
+ * static check refuses command forms that would bypass that log (a command
+ * by path, `command -p`, `env`, a PATH assignment, ...; `command-forms.ts`).
  *
  * Every command runs in its own process group, ended and awaited when its
  * step ends, also on interruption (`process-group.ts`): a SIGTERM to this
@@ -26,6 +28,7 @@
  * and jq.
  */
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
@@ -35,6 +38,7 @@ import { Console, Effect, Layer, Redacted, Schedule, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 
 import { argvLog, leakedSecrets } from "./argv-log.ts";
+import { commandFormProblems } from "./command-forms.ts";
 import { exitCode, spawnGroup } from "./process-group.ts";
 
 const CLI = fileURLToPath(
@@ -74,7 +78,12 @@ class QuickstartStepFailed extends Schema.TaggedError<
 >()("QuickstartStepFailed", {
   code: Schema.NullOr(Schema.Number),
   detail: Schema.String,
-  reason: Schema.Literals(["exited", "notListening", "secretInArguments"]),
+  reason: Schema.Literals([
+    "commandForms",
+    "exited",
+    "notListening",
+    "secretInArguments",
+  ]),
   step: Schema.String,
 }) {
   /**
@@ -84,6 +93,10 @@ class QuickstartStepFailed extends Schema.TaggedError<
   override get message(): string {
     if (this.reason === "exited") {
       return `${this.step} exited with ${String(this.code)}`;
+    }
+
+    if (this.reason === "commandForms") {
+      return `${this.step} starts commands in forms that bypass the argument log: ${this.detail}`;
     }
 
     return this.reason === "notListening"
@@ -294,6 +307,19 @@ const quickstart = Effect.gen(function* runQuickstart() {
     STD_HTTP_PORT: "0",
   };
 
+  const forms = commandFormProblems(readFileSync(SCRIPT, "utf-8"));
+
+  if (forms.length > 0) {
+    return yield* new QuickstartStepFailed({
+      code: null,
+      detail: forms
+        .map((found) => `line ${found.line}: ${found.problem}`)
+        .join("; "),
+      reason: "commandForms",
+      step: "examples/quickstart.sh",
+    });
+  }
+
   yield* Console.log(`Quickstart on the disposable database ${database.name}`);
   yield* run("std upgrade", process.execPath, [CLI, "upgrade"], env);
   yield* run(
@@ -334,7 +360,8 @@ const quickstart = Effect.gen(function* runQuickstart() {
   }).pipe(
     Effect.tapError(() => Console.error(`\n### std serve log\n${server.log()}`))
   );
-  yield* Console.log("\nquickstart:ci: both runs exited 0");
+
+  return yield* Console.log("\nquickstart:ci: both runs exited 0");
 });
 
 NodeRuntime.runMain(
