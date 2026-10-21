@@ -182,7 +182,7 @@ Resume:
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), each registered when its feature lands.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
 
 | Operation | Refused when | Reported but allowed |
@@ -568,7 +568,7 @@ Every save (create, update, delete; single or batch) runs in one transaction:
 8. Proposed-state access checks (`NotAllowed`, rollback).
 9. Write the change entry (4.2) and one delivery row per matching subscription (4.6).
 10. After-write hooks.
-11. If outermost, commit. After commit, outside the transaction, send a worker wake-up, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE; 0F probe 6, 16 clients of small saves for 60 s: after-commit wake-up 2,643 saves/s at p95 10.1 ms, in-transaction `pg_notify` 296 saves/s at p95 103.5 ms, 11% of the throughput].
+11. If outermost, commit. After commit, outside the transaction, send a worker wake-up if the transaction wrote a delivery row, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE; 0F probe 6, 16 clients of small saves for 60 s: after-commit wake-up 2,643 saves/s at p95 10.1 ms, in-transaction `pg_notify` 296 saves/s at p95 103.5 ms, 11% of the throughput].
 
 Nested saves:
 
@@ -627,8 +627,8 @@ Delivery payloads are filtered for the subscription's identity on the version's 
 
 Producer side (Step 1):
 
-- `core.subscription` is a config record (stable ID, owner layer): class (descendants included), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy.
-- In step 9 each enabled subscription for the class is evaluated in TypeScript on `after` (on `before` for delete). Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`. The payload is built from the change entry at delivery time (4.5).
+- `core.subscription` is a config record (stable ID, owner layer), written through change sets: class (descendants included; never a platform table, whose rows do not pass the save pipeline), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy, `enabled`.
+- In step 9 each active, enabled subscription of the record's concrete class or an ancestor that lists the operation is evaluated in TypeScript on `after` (on `before` for delete), with the request's snapshot. A stored condition that no longer checks against the snapshot is a defect and fails the save. Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`; `subscription_id` and `change_id` are `NO ACTION` foreign keys (3.10, 4.8), and a lease exists exactly while a row is `in_flight`. A row holds IDs only; the payload is built from the change entry at delivery time (4.5). Decision 0013.
 
 Worker (Step 3):
 
@@ -636,7 +636,7 @@ Worker (Step 3):
 - Fencing: the done and failure updates are `WHERE id = $1 AND lease_token = $2 AND status = 'in_flight'`. If 0 rows change, the worker has lost the lease and discards its result; in a delivery transaction that holds record writes, it rolls the whole transaction back. Expired leases are claimable again, and each claim writes a new token.
 - The worker interrupts its effect before `lease_until`. The lease must exceed the effect timeout plus a margin [judgment].
 - Record-service effects run in one delivery transaction that ends with the fenced `done` update (4.1). External calls run outside any transaction, then the fenced `done` update commits.
-- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h [judgment]. After `max_attempts` (default 10 [judgment]) it is `dead`, shown in an admin view and a metric, for an operator to retry or discard.
+- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]) makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
 - Wake-ups (4.1 step 11) only wake workers; they also poll.
 - `done` rows are deleted after 7 days [judgment]; `dead` rows stay.
 - A new subscription receives changes committed after it is created; a change in flight at that moment may or may not get a row [judgment]. Backfill is later.
@@ -656,7 +656,7 @@ order by p.id limit $2
 for update skip locked
 ```
 
-Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven by the SQL-level claim tests and the soak test]
+Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`; the plan uses it both for the claimed rows and for the ordering check [checked: EXPLAIN in the `outbox-claims` test, decision 0013]. The claim commits in its own transaction before the effect starts. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven at SQL level by the `outbox-claims` tests (decision 0013); the soak test is Step 3]
 
 **Considered: a commit-visibility feed** that reads entries stamped with `pg_current_xact_id()` below `pg_snapshot_xmin(pg_current_snapshot())`. This is a safe visibility watermark but gives first-write order, not commit order [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html), [transaction IDs](https://www.postgresql.org/docs/18/transaction-id.html)]. Rejected because one long or idle-in-transaction session anywhere in the cluster stalls every consumer, consumers would still need record versions and per-consumer retry state, and stored XIDs mean nothing after a logical restore into a new cluster [judgment].
 
