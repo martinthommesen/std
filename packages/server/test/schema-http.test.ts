@@ -336,11 +336,25 @@ describe("schema-http", () => {
               assert.strictEqual(response.status, 200, response.text);
             }
 
-            const revisions = responses
-              .map(headerRevision)
-              .toSorted((left, right) => left - right);
+            // The two change sets committed at consecutive revisions, each
+            // editing one rule (a response is served after its own commit,
+            // possibly after the other one's too).
+            const committed = yield* values(
+              `SELECT first_revision::text || ':' || (operations -> 0 ->> 'targetId') AS value
+               FROM core."schema_change" ORDER BY first_revision DESC LIMIT 2`
+            );
 
-            assert.strictEqual(revisions[1], (revisions[0] ?? 0) + 1);
+            const [later, earlier] = committed.map((entry) => entry.split(":"));
+
+            assert.strictEqual(Number(later?.[0]), Number(earlier?.[0]) + 1);
+            assert.sameMembers(
+              [later?.[1], earlier?.[1]],
+              [first?.id, second?.id]
+            );
+
+            for (const response of responses) {
+              assert.isAtLeast(headerRevision(response), Number(earlier?.[0]));
+            }
           })
       );
 
