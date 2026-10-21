@@ -20,7 +20,7 @@ import {
   CORE_SET_DIRECTORY,
 } from "../src/config/set-files.ts";
 import { guardStatements } from "../src/schema/change-set.ts";
-import { checkDdl, phaseOfForm } from "../src/schema/ddl-forms.ts";
+import { checkDdl, maskQuoted, phaseOfForm } from "../src/schema/ddl-forms.ts";
 import { ASSUME_POPULATED, planChangeSet } from "../src/schema/plan.ts";
 import type { Preflight } from "../src/schema/plan.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
@@ -251,6 +251,73 @@ describe("ddl-forms", () => {
         statement
       );
     }
+
+    // SQL keywords inside literals and quoted identifiers are data.
+    const literals = [
+      [
+        `ALTER TABLE ${table} ADD COLUMN "motto" text DEFAULT 'SET NOT NULL'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ADD COLUMN "note" text DEFAULT 'ALTER COLUMN x TYPE int, now()'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ADD COLUMN "quote" text DEFAULT 'it''s DEFAULT now()'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ALTER COLUMN "SET NOT NULL" SET DEFAULT 'x'::text`,
+        "setDefault",
+      ],
+      [`ALTER TABLE ${table} ALTER COLUMN "type" DROP DEFAULT`, "dropDefault"],
+    ] as const;
+
+    for (const [statement, form] of literals) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { form, ok: true },
+        statement
+      );
+    }
+
+    assert.deepStrictEqual(
+      checkDdl(
+        `ALTER TABLE ${table} ADD COLUMN "motto" text DEFAULT 'x'::text || now()`
+      ),
+      { ok: false, reason: "volatileDefault" }
+    );
+    assert.strictEqual(maskQuoted(`a 'b''c' "d" e`), `a '____' "_" e`);
+
+    // Lexical forms the builders never emit are refused before
+    // classification, so a quote inside them cannot hide a volatile default.
+    const hidden = (check: string) =>
+      `CREATE TABLE ${table} (\n  id uuid NOT NULL,\n  CONSTRAINT c CHECK (${check}),\n  "seen" timestamptz(3) DEFAULT now()\n)`;
+
+    const unsupported = [
+      hidden(String.raw`class_id::text <> E'\''`),
+      hidden("class_id::text <> $$'$$"),
+      hidden("class_id::text <> $tag$'$tag$"),
+      hidden(String.raw`class_id::text <> U&'d\0061t\+000061' UESCAPE '!'`),
+      String.raw`ALTER TABLE ${table} ALTER COLUMN U&"d\0061ta" SET DEFAULT 'x'::text`,
+      `ALTER TABLE ${table} ADD COLUMN "c" text DEFAULT 'x'::text -- ' now()`,
+      `ALTER TABLE ${table} ADD COLUMN "c" text DEFAULT /* ' */ now()`,
+    ];
+
+    for (const statement of unsupported) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { ok: false, reason: "unknownForm" },
+        statement
+      );
+    }
+
+    assert.deepStrictEqual(
+      checkDdl(
+        `ALTER TABLE ${table} ADD COLUMN "price" text DEFAULT 'costs $5 -- or E''x'''::text`
+      ),
+      { form: "addColumn", ok: true }
+    );
 
     assert.deepStrictEqual(
       checkDdl(

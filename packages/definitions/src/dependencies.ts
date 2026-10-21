@@ -9,7 +9,7 @@
  */
 import { conditionFieldIds } from "./condition.ts";
 import type { Condition } from "./condition.ts";
-import type { Definition } from "./definition.ts";
+import type { AccessTarget, Definition } from "./definition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
 
@@ -47,6 +47,15 @@ const conditionEdges = (
     : conditionFieldIds(condition).map((fieldId) =>
         edge(id, fieldId, "condition_reads")
       );
+
+// Fields an access rule targets explicitly are references too (`*` names none).
+const targetEdges = (
+  id: DefinitionId,
+  target: AccessTarget
+): readonly Dependency[] =>
+  target.kind === "fields" && target.fields !== "*"
+    ? target.fields.map((fieldId) => edge(id, fieldId, "access_rule_on"))
+    : [];
 
 const edgesOf = (definition: Definition): readonly Dependency[] => {
   const { id } = definition;
@@ -90,6 +99,7 @@ const edgesOf = (definition: Definition): readonly Dependency[] => {
       ...(definition.classId === null
         ? []
         : [edge(id, definition.classId, "access_rule_on")]),
+      ...targetEdges(id, definition.target),
       ...definition.roleIds.map((roleId) => edge(id, roleId, "rule_role")),
       ...conditionEdges(id, definition.condition),
     ];
@@ -107,7 +117,8 @@ const edgesOf = (definition: Definition): readonly Dependency[] => {
  * - field: `field_of` its class, `references_table` a reference's target;
  * - override: `overrides` its field and its class;
  * - index: `index_on` its class and each of its fields;
- * - access rule: `access_rule_on` its class, `rule_role` each role,
+ * - access rule: `access_rule_on` its class and each field it targets by
+ *   ID, `rule_role` each role,
  *   `condition_reads` each field its condition reads;
  * - subscription: `condition_reads` each field its condition reads.
  *

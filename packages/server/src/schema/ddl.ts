@@ -392,6 +392,19 @@ export const setDefault = (
 };
 
 /**
+ * The index key of a field over a value expression: casefolded for
+ * case-insensitive text, as is otherwise.
+ *
+ * @param field - An indexed field.
+ * @param value - The column, or another expression of the field's value.
+ * @returns The key expression.
+ */
+export const keyOf = (field: FieldDefinition, value: string): string =>
+  field.type.kind === "text" && !isCaseSensitive(field.type)
+    ? `casefold(${value} COLLATE pg_unicode_fast)`
+    : value;
+
+/**
  * The index key of a field: the casefold expression for case-insensitive
  * text (Contracts 5.5), the column otherwise.
  *
@@ -399,9 +412,29 @@ export const setDefault = (
  * @returns The key expression.
  */
 export const indexKey = (field: FieldDefinition): string =>
-  field.type.kind === "text" && !isCaseSensitive(field.type)
-    ? `casefold(${quoteIdent(field.name)} COLLATE pg_unicode_fast)`
-    : quoteIdent(field.name);
+  keyOf(field, quoteIdent(field.name));
+
+/**
+ * The value existing rows get in a column added for a field: its constant
+ * default, `false` for booleans, NULL otherwise. Always a typed cast, never
+ * a bare constant: the duplicate preflight puts it in `GROUP BY`, where
+ * Postgres reads a bare integer as a column position and refuses any other
+ * bare constant (42601).
+ *
+ * @param field - A field.
+ * @returns A cast constant of the column's type, such as `'false'::boolean`.
+ */
+export const initialValue = (field: FieldDefinition): string => {
+  const { sqlType } = postgresColumn(field.type);
+
+  if (field.type.kind === "boolean") {
+    return `'${field.default === true ? "true" : "false"}'::${sqlType}`;
+  }
+
+  return field.default === null
+    ? `NULL::${sqlType}`
+    : defaultLiteral(field.type, field.default);
+};
 
 /**
  * `CREATE [UNIQUE] INDEX`, plain or concurrent.

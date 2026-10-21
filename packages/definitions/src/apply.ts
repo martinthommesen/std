@@ -14,7 +14,7 @@ import type { Result } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
 
 import { DefinitionSchema } from "./definition.ts";
-import type { Definition, DefinitionKind } from "./definition.ts";
+import type { Definition, DefinitionKind, Owner } from "./definition.ts";
 import { sameEffective } from "./effective-json.ts";
 import type { DefinitionId } from "./ids.ts";
 import { UPDATABLE } from "./operation.ts";
@@ -246,6 +246,30 @@ const update = (
   }
 };
 
+/**
+ * Whether a replacement keeps the definition's owner layer, set and
+ * protected flag, which only an `adopt` (workstream 1B) may change
+ * (Contracts 8.1).
+ *
+ * @param current - The stored definition.
+ * @param next - The replacement.
+ * @returns True when owner and flag are unchanged.
+ */
+const sameOwnership = (
+  current: Definition,
+  next: { readonly owner: Owner; readonly protected: boolean }
+): boolean => {
+  if (current.protected !== next.protected) {
+    return false;
+  }
+
+  if (current.owner.layer === "app" && next.owner.layer === "app") {
+    return current.owner.setId === next.owner.setId;
+  }
+
+  return current.owner.layer === next.owner.layer;
+};
+
 const setOverride = (
   work: Work,
   operation: Extract<Operation, { readonly op: "setOverride" }>
@@ -260,13 +284,14 @@ const setOverride = (
   if (
     current.kind !== "override" ||
     current.classId !== definition.classId ||
-    current.fieldId !== definition.fieldId
+    current.fieldId !== definition.fieldId ||
+    !sameOwnership(current, definition)
   ) {
     work.problems.push(
       problem(
         "unsupportedChange",
         definition.id,
-        "An override keeps its class and field."
+        "An override keeps its class, field, owner and protected flag."
       )
     );
 

@@ -37,6 +37,7 @@ import { effectiveField } from "@std/definitions/effective-schema";
 import { compareIds, generatedName } from "@std/definitions/ids";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { defaultProblem } from "@std/definitions/validate";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { maxLengthOf } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
@@ -54,6 +55,9 @@ import {
   createSchema,
   createTable,
   createTrigger,
+  indexKey,
+  initialValue,
+  keyOf,
   replaceSubtreeCheck,
   setDefault,
   subtreeExpression,
@@ -286,17 +290,31 @@ const planNamespaces = (
   }
 };
 
+/**
+ * The classes a change set creates, parents before children: by depth in
+ * the hierarchy, then in operation order (the sort is stable), so a level
+ * FK always references a table created before it.
+ *
+ * @param planning - The planning run.
+ * @param applied - The applied change set.
+ * @returns The new standard classes in creation order.
+ */
 const newClasses = (
   planning: Planning,
   applied: AppliedChangeSet
 ): readonly ClassDefinition[] =>
-  changedOf(applied, "class").flatMap((definition) =>
-    definition.kind === "class" &&
-    planning.created.has(definition.id) &&
-    definition.storage === "standard"
-      ? [definition]
-      : []
-  );
+  changedOf(applied, "class")
+    .flatMap((definition) =>
+      definition.kind === "class" &&
+      planning.created.has(definition.id) &&
+      definition.storage === "standard"
+        ? [definition]
+        : []
+    )
+    .toSorted(
+      (left, right) =>
+        planning.after.depth(left.id) - planning.after.depth(right.id)
+    );
 
 const planAncestorChecks = (
   planning: Planning,
@@ -358,6 +376,16 @@ const planNewTables = (
   }
 };
 
+/**
+ * Whether Postgres fills existing rows of a new column with a value: a
+ * constant default, or `false` for booleans.
+ *
+ * @param field - A field.
+ * @returns True when the column has a default.
+ */
+const hasColumnDefault = (field: FieldDefinition): boolean =>
+  field.default !== null || field.type.kind === "boolean";
+
 const planAddedColumns = (
   planning: Planning,
   fields: readonly FieldDefinition[]
@@ -372,7 +400,7 @@ const planAddedColumns = (
 
       planning.tables.push(addColumn(table, field));
 
-      if (field.required && field.default === null && hasRows) {
+      if (field.required && !hasColumnDefault(field) && hasRows) {
         planning.violations.push({
           definitionId: field.id,
           predicate: "true",
@@ -495,6 +523,25 @@ const planAuditKeys = (
   }
 };
 
+/**
+ * Rows a unique index would reject: rows whose key, computed with the
+ * index's own expressions (casefold for case-insensitive text), occurs more
+ * than once. A key with a NULL never matches (`IN` yields NULL), as unique
+ * indexes treat NULLs as distinct.
+ *
+ * @param table - The quoted table.
+ * @param keyExpressions - The key expressions, in index order.
+ * @returns A boolean SQL expression over the table's rows.
+ */
+export const duplicatePredicate = (
+  table: string,
+  keyExpressions: readonly string[]
+): string => {
+  const keys = keyExpressions.join(", ");
+
+  return `(${keys}) IN (SELECT ${keys} FROM ${table} GROUP BY ${keys} HAVING count(*) > 1)`;
+};
+
 const planIndex = (planning: Planning, index: IndexDefinition): void => {
   const table = tableName(planning.after, index.classId);
 
@@ -515,6 +562,23 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
     planning.keys.push(statement);
 
     return;
+  }
+
+  if (index.unique) {
+    planning.violations.push({
+      definitionId: index.id,
+      predicate: duplicatePredicate(
+        table,
+        fields.map((field) =>
+          // A column this change set adds does not exist yet: existing rows
+          // will hold its initial value (default, false, or NULL).
+          planning.created.has(field.id)
+            ? keyOf(field, initialValue(field))
+            : indexKey(field)
+        )
+      ),
+      table,
+    });
   }
 
   const namespace = planning.after.namespace(
@@ -618,6 +682,38 @@ const overridePredicate = (
     : `${subtreeExpression(planning.after.subtreeIds(override.classId))} AND (${predicates.join(" OR ")})`;
 };
 
+/**
+ * The preflight predicate of an override on a field this change set adds:
+ * the column does not exist yet, so existing rows get the field's column
+ * default. If that value breaks the override, every row of the subtree
+ * violates it; otherwise none does. The `validate_override` step rechecks
+ * the real column after the main commit.
+ *
+ * @param planning - The planning run.
+ * @param override - The override.
+ * @param field - The new field.
+ * @returns The predicate, or undefined when the default satisfies it.
+ */
+const prospectivePredicate = (
+  planning: Planning,
+  override: OverrideDefinition,
+  field: FieldDefinition
+): string | undefined => {
+  const effective = effectiveField(planning.after, override.classId, field);
+
+  const value =
+    field.type.kind === "boolean" ? (field.default ?? false) : field.default;
+
+  const violates =
+    value === null
+      ? effective.required
+      : defaultProblem(effective.type, value) !== undefined;
+
+  return violates
+    ? subtreeExpression(planning.after.subtreeIds(override.classId))
+    : undefined;
+};
+
 const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
   for (const definition of changedOf(applied, "override")) {
     const field =
@@ -633,15 +729,23 @@ const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
     if (
       field !== undefined &&
       predicate !== undefined &&
+      definition.kind === "override" &&
       populated(planning, field.classId)
     ) {
       const table = tableName(planning.after, field.classId);
 
-      planning.violations.push({
-        definitionId: definition.id,
-        predicate,
-        table,
-      });
+      const preflight = planning.created.has(field.id)
+        ? prospectivePredicate(planning, definition, field)
+        : predicate;
+
+      if (preflight !== undefined) {
+        planning.violations.push({
+          definitionId: definition.id,
+          predicate: preflight,
+          table,
+        });
+      }
+
       planning.steps.push({
         details: { definitionId: definition.id, predicate, table },
         kind: "validate_override",

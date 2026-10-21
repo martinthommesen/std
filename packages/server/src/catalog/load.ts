@@ -12,9 +12,9 @@ import { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { SnapshotKey } from "@std/definitions/snapshot";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { hygienic } from "../sql/errors.ts";
-import type { DatabaseError } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import {
@@ -34,27 +34,27 @@ const decoders = new Map(
  * @param key - The `(revision, change_set_id)` the transaction runs at.
  * @returns The snapshot; a corrupt row is a defect.
  */
-export const loadSnapshot = (
-  key: SnapshotKey
-): Effect.Effect<ConfigSnapshot, DatabaseError, SqlClient.SqlClient> =>
-  hygienic(
-    Effect.gen(function* loadDefinitions() {
-      const sql = yield* SqlClient.SqlClient;
-      const definitions: Definition[] = [];
+export const loadSnapshot = Effect.fn("Catalog.loadSnapshot")(
+  function* loadSnapshot(
+    key: SnapshotKey
+  ): Effect.fn.Return<ConfigSnapshot, SqlError, SqlClient.SqlClient> {
+    const sql = yield* SqlClient.SqlClient;
+    const definitions: Definition[] = [];
 
-      for (const entry of DEFINITION_TABLES) {
-        const decode = decoders.get(entry.kind);
-        const rows = yield* readOnly(sql.unsafe(selectStatement(entry)));
-        const decoded = decode === undefined ? [] : yield* decode(rows);
+    for (const entry of DEFINITION_TABLES) {
+      const decode = decoders.get(entry.kind);
+      const rows = yield* readOnly(sql.unsafe(selectStatement(entry)));
+      const decoded = decode === undefined ? [] : yield* decode(rows);
 
-        for (const row of decoded) {
-          // A corrupt row throws CorruptDefinitionRow: a defect.
-          definitions.push(
-            yield* Effect.sync(() => definitionFromRow(entry, row))
-          );
-        }
+      for (const row of decoded) {
+        // A corrupt row throws CorruptDefinitionRow: a defect.
+        definitions.push(
+          yield* Effect.sync(() => definitionFromRow(entry, row))
+        );
       }
+    }
 
-      return ConfigSnapshot.make(key, definitions);
-    })
-  );
+    return ConfigSnapshot.make(key, definitions);
+  },
+  hygienic
+);

@@ -6,9 +6,14 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import {
   ACME,
+  coordinatorGone,
+  createClass,
+  insertRecordsFlushed,
+  seqScans,
   addField,
   change,
   createRole,
@@ -21,6 +26,8 @@ import {
 
 const ASSET = '"acme"."asset"';
 
+const BULK = '"acme"."bulk"';
+
 const CLIENTS = 8;
 
 const CHANGE_SETS_PER_CLIENT = 25;
@@ -32,17 +39,6 @@ const relfilenode = (table: string) =>
     `SELECT relfilenode::text AS value FROM pg_class WHERE oid = to_regclass($1)`,
     [table]
   ).pipe(Effect.map(([value]) => value));
-
-const seqScans = (table: string) =>
-  values("SELECT pg_stat_clear_snapshot()::text AS value").pipe(
-    Effect.andThen(
-      values(
-        `SELECT coalesce(seq_scan, 0)::text AS value FROM pg_stat_user_tables WHERE relid = to_regclass($1)`,
-        [table]
-      )
-    ),
-    Effect.map(([value]) => Number(value))
-  );
 
 /**
  * One client: change sets one after another, each creating a role.
@@ -145,47 +141,69 @@ describe("change-sets", () => {
       dbTest.effect(
         "adding fields with constant defaults to 1,000,000 rows rewrites and scans nothing",
         () =>
-          Effect.gen(function* catalogOnlyAddColumn() {
-            yield* loadCoreAndAcme;
-            yield* insertRecords([ASSET], ACME.asset, BIG_TABLE_ROWS, {
-              name: "'asset ' || g",
-            });
+          Effect.scoped(
+            Effect.gen(function* catalogOnlyAddColumn() {
+              yield* loadCoreAndAcme;
 
-            for (const field of [
-              addField(ACME.asset, "in_stock", { kind: "boolean" }),
-              addField(
-                ACME.asset,
-                "quantity",
-                { kind: "integer" },
-                { default: 1, required: true }
-              ),
-            ]) {
-              const node = yield* relfilenode(ASSET);
-              yield* Effect.sleep("300 millis");
-              const scans = yield* seqScans(ASSET);
-              const result = yield* change([field.op]);
+              // A table of its own, filled by a session that flushes its
+              // statistics, so the scan counter below is exact.
+              const bulk = createClass("bulk", { namespaceId: ACME.namespace });
 
-              assert.strictEqual(result.state, "completed");
-              yield* Effect.logInfo(
-                `ADD COLUMN main transaction: ${result.mainTransactionMs} ms`
+              yield* change([
+                bulk.op,
+                addField(bulk.id, "label", { kind: "text" }).op,
+              ]);
+
+              const session = yield* (yield* TestDatabase).session(
+                "bulk-loader"
               );
-              assert.isBelow(
-                result.mainTransactionMs,
-                100,
-                `main transaction took ${result.mainTransactionMs} ms`
-              );
-              assert.strictEqual(yield* relfilenode(ASSET), node);
-              yield* Effect.sleep("300 millis");
-              assert.strictEqual(yield* seqScans(ASSET), scans);
-            }
 
-            assert.deepStrictEqual(
-              yield* values(
-                `SELECT count(*) FILTER (WHERE in_stock = false AND quantity = 1)::text AS value FROM ${ASSET}`
-              ),
-              yield* values(`SELECT count(*)::text AS value FROM ${ASSET}`)
-            );
-          })
+              yield* insertRecordsFlushed(
+                session,
+                [BULK],
+                bulk.id,
+                BIG_TABLE_ROWS,
+                {
+                  label: "'row ' || g",
+                }
+              );
+
+              for (const field of [
+                addField(bulk.id, "in_stock", { kind: "boolean" }),
+                addField(
+                  bulk.id,
+                  "quantity",
+                  { kind: "integer" },
+                  { default: 1, required: true }
+                ),
+              ]) {
+                const node = yield* relfilenode(BULK);
+                const scans = yield* seqScans(BULK);
+                const result = yield* change([field.op]);
+
+                assert.strictEqual(result.state, "completed");
+                yield* Effect.logInfo(
+                  `ADD COLUMN main transaction: ${result.mainTransactionMs} ms`
+                );
+                assert.isBelow(
+                  result.mainTransactionMs,
+                  100,
+                  `main transaction took ${result.mainTransactionMs} ms`
+                );
+                assert.strictEqual(yield* relfilenode(BULK), node);
+                // The coordinator's backend flushes its statistics as it exits.
+                yield* coordinatorGone;
+                assert.strictEqual(yield* seqScans(BULK), scans);
+              }
+
+              assert.deepStrictEqual(
+                yield* values(
+                  `SELECT count(*) FILTER (WHERE in_stock = false AND quantity = 1)::text AS value FROM ${BULK}`
+                ),
+                [String(BIG_TABLE_ROWS)]
+              );
+            })
+          )
       );
     }
   );

@@ -30,24 +30,23 @@ export interface UpgradeReport {
  * @param options - Retry delays of the change sets.
  * @returns The migrations applied and each set's change set.
  */
-export const runUpgrade = (
+export const runUpgrade = Effect.fn("Config.runUpgrade")(function* runUpgrade(
   setDirectories: readonly string[],
   options?: ChangeSetOptions
-) =>
-  Effect.gen(function* upgradeInstall() {
-    const migrations = yield* runPlatformMigrations();
-    const sets: LoadedSet[] = [];
-    const required = new Map<string, Owner>();
+) {
+  const migrations = yield* runPlatformMigrations();
+  const sets: LoadedSet[] = [];
+  const required = new Map<string, Owner>();
 
-    for (const directory of [CORE_SET_DIRECTORY, ...setDirectories]) {
-      const loaded = yield* loadSetDirectory(directory, {
-        ...options,
-        required,
-      });
+  for (const directory of [CORE_SET_DIRECTORY, ...setDirectories]) {
+    const loaded = yield* loadSetDirectory(directory, {
+      ...options,
+      required,
+    });
 
-      required.set(loaded.header.name, loaded.owner);
-      sets.push(loaded);
-    }
+    required.set(loaded.header.name, loaded.owner);
+    sets.push(loaded);
+  }
 
-    return { migrations, sets } satisfies UpgradeReport;
-  });
+  return { migrations, sets } satisfies UpgradeReport;
+});

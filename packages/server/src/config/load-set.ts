@@ -56,41 +56,40 @@ const fromResult = <A>(
  * @param options - Required sets and retry delays.
  * @returns The set's header and the change set's result.
  */
-export const loadSet = (
+export const loadSet = Effect.fn("Config.loadSet")(function* loadSet(
   files: readonly NamedSetFile[],
   options: LoadSetOptions = {}
-): Effect.Effect<LoadedSet, ChangeSetError, ChangeSetServices> =>
-  Effect.gen(function* loadDefinitionSet() {
-    const catalog = yield* Catalog;
-    const installed = yield* catalog.refresh;
+): Effect.fn.Return<LoadedSet, ChangeSetError, ChangeSetServices> {
+  const catalog = yield* Catalog;
+  const installed = yield* catalog.refresh;
 
-    const resolved = yield* fromResult(
-      resolveSet(files, installed, options.required)
-    );
+  const resolved = yield* fromResult(
+    resolveSet(files, installed, options.required)
+  );
 
-    const operations = yield* fromResult(planSet(resolved, installed));
-    const { header } = resolved;
+  const operations = yield* fromResult(planSet(resolved, installed));
+  const { header } = resolved;
 
-    const result = yield* applyChangeSet(
-      {
-        operations,
-        source: {
-          kind: "set",
-          name: header.name,
-          setId: header.id,
-          version: header.version,
-        },
+  const result = yield* applyChangeSet(
+    {
+      operations,
+      source: {
+        kind: "set",
+        name: header.name,
+        setId: header.id,
+        version: header.version,
       },
-      options
-    );
+    },
+    options
+  );
 
-    return {
-      header,
-      operations: operations.length,
-      owner: resolved.owner,
-      result,
-    };
-  });
+  return {
+    header,
+    operations: operations.length,
+    owner: resolved.owner,
+    result,
+  };
+});
 
 /**
  * Reads a set's directory and loads it.
@@ -99,10 +98,13 @@ export const loadSet = (
  * @param options - Required sets and retry delays.
  * @returns The set's header and the change set's result.
  */
-export const loadSetDirectory = (
-  directory: string,
-  options: LoadSetOptions = {}
-): Effect.Effect<LoadedSet, ChangeSetError, ChangeSetServices> =>
-  readSetDirectory(directory).pipe(
-    Effect.flatMap((files) => loadSet(files, options))
-  );
+export const loadSetDirectory = Effect.fn("Config.loadSetDirectory")(
+  function* loadSetDirectory(
+    directory: string,
+    options: LoadSetOptions = {}
+  ): Effect.fn.Return<LoadedSet, ChangeSetError, ChangeSetServices> {
+    const files = yield* readSetDirectory(directory);
+
+    return yield* loadSet(files, options);
+  }
+);

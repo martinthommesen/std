@@ -5,6 +5,8 @@ import { applyOperations } from "../src/apply.ts";
 import type { Condition } from "../src/condition.ts";
 import type {
   AccessRuleDefinition,
+  FieldDefinition,
+  OverrideDefinition,
   RoleDefinition,
 } from "../src/definition.ts";
 import { dependenciesOf } from "../src/dependencies.ts";
@@ -313,6 +315,106 @@ describe("definitions-snapshot", () => {
     assert.isTrue(isFailure(typeChange));
   });
 
+  it("validates override bounds as values of the field's type, without throwing", () => {
+    const h = hierarchy();
+    const count = field(h.asset, "count", { kind: "integer" });
+    const big = field(h.asset, "big", { kind: "bigInteger" });
+
+    const price = field(h.asset, "price", {
+      kind: "decimal",
+      precision: 5,
+      scale: 2,
+    });
+
+    const codes = (
+      extra: Partial<OverrideDefinition>,
+      target: FieldDefinition
+    ) =>
+      validateSnapshot(
+        snapshotOf([
+          h.ns,
+          h.asset,
+          h.laptop,
+          count,
+          big,
+          price,
+          override(h.laptop, target, extra),
+        ])
+      ).map((p) => p.code);
+
+    assert.deepStrictEqual(codes({ min: "oops" }, count), ["overrideInvalid"]);
+    assert.deepStrictEqual(codes({ min: 1.5 }, count), ["overrideInvalid"]);
+    assert.deepStrictEqual(codes({ min: "12x" }, big), ["overrideInvalid"]);
+    assert.deepStrictEqual(codes({ max: "12345.678" }, price), [
+      "overrideInvalid",
+    ]);
+    assert.deepStrictEqual(codes({ max: "999.99", min: "1.00" }, price), []);
+    assert.deepStrictEqual(codes({ max: 10, min: 1 }, count), []);
+  });
+
+  it("checks the effective default after overrides tighten the type", () => {
+    const h = hierarchy();
+
+    const motto = field(
+      h.asset,
+      "motto",
+      { kind: "text" },
+      { default: "long default" }
+    );
+
+    const problems = validateSnapshot(
+      snapshotOf([
+        h.ns,
+        h.asset,
+        h.laptop,
+        motto,
+        override(h.laptop, motto, { maxLength: 3 }),
+      ])
+    );
+
+    assert.deepStrictEqual(
+      problems.map((p) => p.code),
+      ["invalidDefault"]
+    );
+  });
+
+  it("keeps an override's owner and protected flag on replacement", () => {
+    const h = hierarchy();
+    const required = override(h.laptop, h.purchased, { required: true });
+
+    const snapshot = snapshotOf([
+      h.ns,
+      h.asset,
+      h.laptop,
+      h.purchased,
+      required,
+    ]);
+
+    const replaced = applyOperations(
+      snapshot,
+      [
+        {
+          definition: {
+            ...required,
+            owner: { layer: "app", setId: freshId() },
+          },
+          op: "setOverride",
+          version: 1,
+        },
+      ],
+      { changeSetId: KEY.changeSetId, revision: 2 }
+    );
+
+    assert.isTrue(isFailure(replaced));
+
+    if (isFailure(replaced)) {
+      assert.strictEqual(
+        replaced.failure.problems[0]?.code,
+        "unsupportedChange"
+      );
+    }
+  });
+
   it("checks access-rule conditions with the condition engine", () => {
     const h = hierarchy();
 
@@ -393,6 +495,28 @@ describe("definitions-snapshot", () => {
     assert.deepStrictEqual(
       dependenciesOf(h.laptop).map((d) => d.kind),
       ["extends"]
+    );
+    assert.deepStrictEqual(
+      dependenciesOf({
+        actions: ["read"],
+        active: true,
+        classId: h.asset.id,
+        condition: null,
+        description: null,
+        effect: "deny",
+        id: freshId(),
+        kind: "accessRule",
+        owner: { layer: "local" },
+        protected: false,
+        roleIds: [],
+        state: "active",
+        target: { fields: [h.cost.id], kind: "fields" },
+        version: 1,
+      }).map((d) => [d.kind, d.toId]),
+      [
+        ["access_rule_on", h.asset.id],
+        ["access_rule_on", h.cost.id],
+      ].toSorted((a, b) => (`${a[0]}${a[1]}` < `${b[0]}${b[1]}` ? -1 : 1))
     );
 
     const json = effectiveJson(h.name);

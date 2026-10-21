@@ -97,11 +97,15 @@ const columnProblems = (
  * @param classId - A platform class.
  * @returns Fails with `PlatformTableMismatch` when they differ.
  */
-export const verifyPlatformTable = (
-  snapshot: ConfigSnapshot,
-  classId: DefinitionId
-): Effect.Effect<void, PlatformTableMismatch | SqlError, SqlClient.SqlClient> =>
-  Effect.gen(function* verifyPlatformColumns() {
+export const verifyPlatformTable = Effect.fn("Schema.verifyPlatformTable")(
+  function* verifyPlatformTable(
+    snapshot: ConfigSnapshot,
+    classId: DefinitionId
+  ): Effect.fn.Return<
+    void,
+    PlatformTableMismatch | SqlError,
+    SqlClient.SqlClient
+  > {
     const sql = yield* SqlClient.SqlClient;
 
     const rows = yield* readOnly(
@@ -137,7 +141,8 @@ export const verifyPlatformTable = (
     }
 
     return yield* Effect.void;
-  });
+  }
+);
 
 /** The values of the system user's row, by field name. */
 const SYSTEM_USER_VALUES: ReadonlyMap<string, string> = new Map([
@@ -153,10 +158,10 @@ const SYSTEM_USER_VALUES: ReadonlyMap<string, string> = new Map([
  * @param snapshot - The configuration after the change set.
  * @returns An effect in the main transaction.
  */
-export const insertSystemUser = (
-  snapshot: ConfigSnapshot
-): Effect.Effect<void, SqlError, SqlClient.SqlClient> =>
-  Effect.gen(function* insertSystemUserRow() {
+export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
+  function* insertSystemUser(
+    snapshot: ConfigSnapshot
+  ): Effect.fn.Return<void, SqlError, SqlClient.SqlClient> {
     const sql = yield* SqlClient.SqlClient;
 
     const values = snapshot.ownFields(USER_CLASS_ID).flatMap((field) => {
@@ -181,4 +186,5 @@ export const insertSystemUser = (
       `INSERT INTO ${tableName(snapshot, USER_CLASS_ID)} (${columns}) VALUES (${literals})`,
       [SYSTEM_USER_ID, USER_CLASS_ID]
     );
-  });
+  }
+);

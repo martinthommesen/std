@@ -9,10 +9,18 @@
  * `Catalog.current` returns exactly that snapshot, loading it in the same
  * transaction when the cache does not hold it.
  *
- * One load runs at a time per process. The permit is only ever taken inside
- * a transaction that already holds `CONFIG_KEY` (shared or exclusive), so a
- * fiber waiting for the permit never blocks the config commit that the
- * permit holder is waiting for.
+ * The cache is an `effect/Cache` keyed by `revision/change_set_id`, with
+ * room for `CACHED_SNAPSHOTS` snapshots, successes kept until evicted and
+ * failures not kept. Its lookup takes the SQL client of the caller's
+ * transaction (`requireServicesAt: "lookup"`), so a snapshot is always read
+ * in a transaction running at exactly its key.
+ *
+ * One load runs at a time per process: a miss takes a permit around
+ * `Cache.get`, inside the caller's transaction. The permit is only ever
+ * taken inside a transaction that already holds `CONFIG_KEY` (shared or
+ * exclusive), so a fiber waiting for it never blocks the config commit the
+ * permit holder waits for, and a pending lookup never outlives the
+ * transaction that started it.
  *
  * `Catalog.listening` also listens on `std_config` and reloads early when
  * another process commits, including after its listener connection was
@@ -20,7 +28,18 @@
  */
 import type { PgClient } from "@effect/sql-pg";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { Context, Effect, Layer, Option, Ref, Semaphore, Stream } from "effect";
+import {
+  Cache,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Semaphore,
+  Stream,
+} from "effect";
 import type { Scope } from "effect";
 import type { SqlClient } from "effect/sql";
 
@@ -34,6 +53,8 @@ import { loadSnapshot } from "./load.ts";
 /** How many snapshots a process keeps. */
 export const CACHED_SNAPSHOTS = 4;
 
+const KEY_SEPARATOR = "/";
+
 /**
  * The cache key of a configuration state.
  *
@@ -41,7 +62,22 @@ export const CACHED_SNAPSHOTS = 4;
  * @returns `revision/changeSetId`.
  */
 export const snapshotKeyOf = (state: ConfigState): string =>
-  `${state.revision}/${state.changeSetId}`;
+  `${state.revision}${KEY_SEPARATOR}${state.changeSetId}`;
+
+/**
+ * The configuration state of a cache key.
+ *
+ * @param key - `revision/changeSetId`.
+ * @returns The state.
+ */
+const stateOfKey = (key: string): ConfigState => {
+  const separator = key.indexOf(KEY_SEPARATOR);
+
+  return {
+    changeSetId: key.slice(separator + 1),
+    revision: Number(key.slice(0, separator)),
+  };
+};
 
 /** The catalog of one process. */
 export interface CatalogApi {
@@ -63,115 +99,75 @@ export interface CatalogApi {
   ) => Effect.Effect<ConfigSnapshot, DatabaseError, SqlClient.SqlClient>;
   /** Loads the latest configuration in its own request transaction. */
   readonly refresh: Effect.Effect<ConfigSnapshot, DatabaseError>;
-  /** The most recently loaded snapshot, if any. */
+  /**
+   * The snapshot of the database state the last refresh observed, if any:
+   * after a restore to an earlier state, the restored one.
+   */
   readonly latest: Effect.Effect<Option.Option<ConfigSnapshot>>;
   /** How many loads this process has run (for tests and metrics). */
   readonly loads: Effect.Effect<number>;
 }
 
-/** State shared by the catalog's functions. */
-interface CatalogState {
-  readonly permit: Semaphore.Semaphore;
-  readonly cache: Ref.Ref<ReadonlyMap<string, ConfigSnapshot>>;
-  readonly latest: Ref.Ref<Option.Option<ConfigSnapshot>>;
-  readonly loads: Ref.Ref<number>;
-}
-
-const cachedAt = (
-  state: CatalogState,
-  key: string
-): Effect.Effect<Option.Option<ConfigSnapshot>> =>
-  Ref.get(state.cache).pipe(
-    Effect.map((cache) => Option.fromNullishOr(cache.get(key)))
-  );
-
-const remember = (
-  state: CatalogState,
-  key: string,
-  snapshot: ConfigSnapshot
-): Effect.Effect<void> =>
-  Effect.andThen(
-    Ref.update(state.cache, (cache) => {
-      const next = new Map(cache);
-      next.delete(key);
-      next.set(key, snapshot);
-
-      for (const oldest of next.keys()) {
-        if (next.size <= CACHED_SNAPSHOTS) {
-          break;
-        }
-
-        next.delete(oldest);
-      }
-
-      return next;
-    }),
-    Ref.update(state.latest, (latest) =>
-      Option.isSome(latest) && latest.value.revision > snapshot.revision
-        ? latest
-        : Option.some(snapshot)
-    )
-  );
-
-const snapshotAt =
-  (state: CatalogState) =>
-  (
-    config: ConfigState
-  ): Effect.Effect<ConfigSnapshot, DatabaseError, SqlClient.SqlClient> => {
-    const key = snapshotKeyOf(config);
-
-    const load = Effect.gen(function* loadIfMissing() {
-      const cached = yield* cachedAt(state, key);
-
-      if (Option.isSome(cached)) {
-        return cached.value;
-      }
-
-      const snapshot = yield* loadSnapshot(config);
-      yield* Ref.update(state.loads, (count) => count + 1);
-      yield* remember(state, key, snapshot);
-
-      return snapshot;
-    });
-
-    return cachedAt(state, key).pipe(
-      Effect.flatMap((cached) =>
-        Option.isSome(cached)
-          ? Effect.succeed(cached.value)
-          : state.permit.withPermit(load)
-      )
-    );
-  };
-
 /**
- * Builds a catalog.
+ * Builds a catalog: the cache, the load permit, and the snapshot of the
+ * database state the last refresh observed. That snapshot follows the
+ * database even when a restore moves it to an earlier revision: it is
+ * replaced by every refresh, whatever the revision number.
  *
  * @returns The catalog functions over fresh state.
  */
 export const makeCatalog: Effect.Effect<CatalogApi, never, Transactions> =
   Effect.gen(function* makeCatalogState() {
     const { request } = yield* Transactions;
+    const permit = yield* Semaphore.make(1);
+    const observed = yield* Ref.make(Option.none<ConfigSnapshot>());
+    const loads = yield* Ref.make(0);
 
-    const state: CatalogState = {
-      cache: yield* Ref.make<ReadonlyMap<string, ConfigSnapshot>>(new Map()),
-      latest: yield* Ref.make(Option.none<ConfigSnapshot>()),
-      loads: yield* Ref.make(0),
-      permit: yield* Semaphore.make(1),
-    };
+    const load = Effect.fn("Catalog.load")(function* load(key: string) {
+      const snapshot = yield* loadSnapshot(stateOfKey(key));
 
-    const at = snapshotAt(state);
+      yield* Ref.update(loads, (count) => count + 1);
+
+      return snapshot;
+    });
+
+    const cache = yield* Cache.makeWith(load, {
+      capacity: CACHED_SNAPSHOTS,
+      requireServicesAt: "lookup",
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit) ? Duration.infinity : Duration.zero,
+    });
+
+    const at = Effect.fn("Catalog.at")(function* at(state: ConfigState) {
+      const key = snapshotKeyOf(state);
+      const cached = yield* Cache.getSuccess(cache, key);
+
+      if (Option.isSome(cached)) {
+        return cached.value;
+      }
+
+      return yield* permit.withPermit(Cache.get(cache, key));
+    });
+
+    const refresh = request(
+      RequestRevision.pipe(
+        Effect.flatMap(at),
+        Effect.tap((snapshot) => Ref.set(observed, Option.some(snapshot)))
+      )
+    );
 
     return {
       at,
       current: RequestRevision.pipe(Effect.flatMap(at)),
-      latest: Ref.get(state.latest),
-      loads: Ref.get(state.loads),
-      refresh: request(RequestRevision.pipe(Effect.flatMap(at))),
+      latest: Ref.get(observed),
+      loads: Ref.get(loads),
+      refresh,
     };
   });
 
 /**
- * Reloads whenever the signalled state differs from the latest snapshot.
+ * Reloads whenever the signalled state differs from the latest snapshot. A
+ * failed reload is logged; the next signal or request loads again.
  *
  * @param catalog - The catalog to keep fresh.
  * @returns An effect that runs until interrupted.
@@ -187,10 +183,10 @@ export const followSignals = (
           snapshotKeyOf(latest.value) === snapshotKeyOf(signal.state)
             ? Effect.void
             : catalog.refresh.pipe(
-                Effect.asVoid,
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("Catalog reload failed", cause)
-                )
+                Effect.tapError((failure) =>
+                  Effect.logWarning("Catalog reload failed", failure)
+                ),
+                Effect.ignore
               )
         )
       )
@@ -203,7 +199,12 @@ export class Catalog extends Context.Service<Catalog, CatalogApi>()(
 ) {
   /** A catalog without a listener: it loads on demand. */
   static readonly layer: Layer.Layer<Catalog, never, Transactions> =
-    Layer.effect(Catalog, makeCatalog);
+    Layer.effect(
+      Catalog,
+      Effect.gen(function* catalog() {
+        return Catalog.of(yield* makeCatalog);
+      })
+    );
 
   /**
    * A catalog that also listens on `std_config` and reloads as soon as
@@ -217,9 +218,10 @@ export class Catalog extends Context.Service<Catalog, CatalogApi>()(
     Catalog,
     Effect.gen(function* listeningCatalog() {
       const catalog = yield* makeCatalog;
+
       yield* Effect.forkScoped(followSignals(catalog));
 
-      return catalog;
+      return Catalog.of(catalog);
     })
   );
 }
