@@ -21,6 +21,7 @@ import {
 } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
+import { isJsonArray, isJsonObject } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import {
   Context,
@@ -64,6 +65,7 @@ import {
   addRole,
   change,
   createClass,
+  createRole,
   ensureSite,
   freshId,
   values,
@@ -503,6 +505,182 @@ const REFERENCE_CASES: Readonly<
         op: "createSubscription",
       },
     ],
+  ],
+};
+
+/**
+ * The distinct `changes` of a `SchemaChanged` body, each as JSON text,
+ * sorted.
+ * @param response - The response.
+ * @returns The entries.
+ */
+const changesOf = (response: TestResponse): readonly string[] => {
+  const { json } = response;
+
+  const body = json !== undefined && isJsonObject(json) ? json : {};
+  const listed = body.changes ?? null;
+  const changes: readonly JsonValue[] = isJsonArray(listed) ? listed : [];
+
+  // As a set: the generic path may list a field twice (written, and
+  // required without a default).
+  return [...new Set(changes.map((entry) => JSON.stringify(entry)))].toSorted();
+};
+
+/** Visible local definitions the generic walk patches, by role. */
+interface WalkRecords {
+  readonly class: string;
+  readonly field: string;
+  readonly refField: string;
+  readonly index: string;
+  readonly rule: string;
+  readonly override: string;
+  readonly subscription: string;
+  readonly grant: string;
+}
+
+/**
+ * Creates one visible local definition per reference kind to patch.
+ * @returns Their IDs, each at version 1.
+ */
+const createWalkRecords = Effect.gen(function* createWalkRecords() {
+  yield* ensureSite;
+
+  const walkClass = createClass("walk_cls");
+  const child = createClass("walk_child", { parentId: walkClass.id });
+  const field = addField(walkClass.id, "walk_fld", { kind: "text" });
+
+  const refField = addField(walkClass.id, "walk_ref", {
+    kind: "reference",
+    targetClassId: walkClass.id,
+  });
+
+  const index = addIndex(walkClass.id, [field.id], false);
+  const rule = addAccessRule(walkClass.id, [BUILT_IN_ROLE_IDS.admin]);
+  const override = addOverride(child.id, field.id, { required: true });
+  const role = addRole("walk_role");
+  const permission = freshId();
+  const grant = freshId();
+  const subscription = freshId();
+  const local = { owner: { layer: "local" }, protected: false } as const;
+
+  yield* change([
+    walkClass.op,
+    child.op,
+    field.op,
+    refField.op,
+    index.op,
+    rule.op,
+    override.op,
+    role.op,
+    {
+      definition: {
+        ...local,
+        helpText: null,
+        id: permission,
+        kind: "permission",
+        label: "Walk",
+        name: "walk.p",
+      },
+      op: "createPermission",
+    },
+    {
+      definition: {
+        ...local,
+        id: grant,
+        kind: "grant",
+        permissionId: permission,
+        roleId: role.id,
+      },
+      op: "createGrant",
+    },
+    {
+      definition: {
+        ...local,
+        classId: walkClass.id,
+        condition: null,
+        deadLetter: "block",
+        enabled: true,
+        id: subscription,
+        identityId: SYSTEM_USER_ID,
+        kind: "subscription",
+        maxAttempts: 10,
+        name: "walk_sub",
+        operations: ["create"],
+      },
+      op: "createSubscription",
+    },
+  ]);
+
+  return {
+    class: walkClass.id,
+    field: field.id,
+    grant,
+    index: index.id,
+    override: override.id,
+    refField: refField.id,
+    rule: rule.id,
+    subscription,
+  } satisfies WalkRecords;
+});
+
+/** A generic PATCH that makes a walk record refer to `id`. */
+type GenericCase = readonly [
+  keyof Hidden,
+  string,
+  keyof WalkRecords,
+  (id: string) => Readonly<Record<string, JsonValue>>,
+];
+
+/**
+ * For every reference kind the dependency index records, a generic PATCH
+ * whose only new reference of that kind is the given ID.
+ */
+const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
+  access_rule_on: [
+    "field",
+    "core.access_rule",
+    "rule",
+    (id) => ({ fields: [id], target: "fields" }),
+  ],
+  condition_reads: [
+    "field",
+    "core.access_rule",
+    "rule",
+    (id) => ({ condition: { arg: { path: [id] }, op: "empty" } }),
+  ],
+  display_field: [
+    "field",
+    "core.class",
+    "class",
+    (id) => ({ display_field_id: id }),
+  ],
+  extends: ["class", "core.class", "class", (id) => ({ parent_id: id })],
+  field_of: ["class", "core.field", "field", (id) => ({ table_id: id })],
+  grant_of: [
+    "role",
+    "core.role_permission",
+    "grant",
+    (id) => ({ role_id: id }),
+  ],
+  index_on: ["field", "core.index", "index", (id) => ({ field_ids: [id] })],
+  overrides: [
+    "field",
+    "core.field_override",
+    "override",
+    (id) => ({ field_id: id }),
+  ],
+  references_table: [
+    "class",
+    "core.field",
+    "refField",
+    (id) => ({ type: { kind: "reference", targetClassId: id } }),
+  ],
+  rule_role: ["role", "core.access_rule", "rule", (id) => ({ role_ids: [id] })],
+  subscription_on: [
+    "class",
+    "core.subscription",
+    "subscription",
+    (id) => ({ table_id: id }),
   ],
 };
 
@@ -1084,6 +1262,115 @@ describe("schema-http", () => {
                 .find((rule) => rule.id === visible.id)?.roleIds,
               [BUILT_IN_ROLE_IDS.admin]
             );
+
+            // The same walk through generic PATCHes of visible records: the
+            // merged record's references are checked like the endpoint's.
+            const walk = yield* createWalkRecords;
+
+            const genericCases: GenericCase[] = [
+              ...Object.values(GENERIC_CASES),
+              [
+                "permission",
+                "core.role_permission",
+                "grant",
+                (id) => ({ permission_id: id }),
+              ],
+              [
+                "namespace",
+                "core.class",
+                "class",
+                (id) => ({ namespace_id: id }),
+              ],
+            ];
+
+            assert.sameMembers(Object.keys(GENERIC_CASES), [
+              ...DEPENDENCY_KINDS,
+            ]);
+
+            for (const [hiddenKind, table, record, body] of genericCases) {
+              const id = hidden[hiddenKind];
+              const target = walk[record];
+              const label = `${table} ${Object.keys(body(id)).join(",")}`;
+
+              const hiddenPatch = yield* patch(
+                admin,
+                table,
+                target,
+                1,
+                body(id)
+              );
+
+              const missingPatch = yield* patch(
+                admin,
+                table,
+                target,
+                1,
+                body(MISSING_ID)
+              );
+
+              assert.strictEqual(
+                hiddenPatch.status,
+                422,
+                `${label}: ${hiddenPatch.text}`
+              );
+              assert.strictEqual(
+                asMissing(hiddenPatch, id),
+                asMissing(missingPatch, MISSING_ID),
+                label
+              );
+            }
+          })
+      );
+
+      dbTest.effect(
+        "under a revision this database never had, a change-set create lists the scope a generic create lists, and a visible target's scope",
+        () =>
+          Effect.gen(function* unknownRevisionScope() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const current = (yield* (yield* Catalog).refresh).key;
+            const future = `${current.revision + 7}.${current.changeSetId}`;
+            const headers = { "std-schema-revision": future };
+            const visible = addRole("unknown_revision_target");
+
+            yield* change([visible.op]);
+
+            const generic = yield* http.request("POST", listPath("core.role"), {
+              body: { help_text: null, label: "x", name: "stale_gen" },
+              headers,
+              token: admin,
+            });
+
+            const fixed = yield* http.request("POST", CHANGE_SETS, {
+              body: { operations: [createRole("stale_set")] },
+              headers,
+              token: admin,
+            });
+
+            assert.strictEqual(generic.status, 409, generic.text);
+            assert.strictEqual(fixed.status, 409, fixed.text);
+            assert.isNotEmpty(changesOf(generic));
+            assert.deepStrictEqual(changesOf(fixed), changesOf(generic));
+
+            // A visible target adds its scope; a hidden or missing one adds
+            // nothing (compared in the next test).
+            const update = yield* http.request("POST", CHANGE_SETS, {
+              body: {
+                operations: [
+                  {
+                    changes: { label: "y" },
+                    id: visible.id,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+              },
+              headers,
+              token: admin,
+            });
+
+            assert.strictEqual(update.status, 409, update.text);
+            assert.include(update.text, '"field":"label"');
           })
       );
 
@@ -1870,6 +2157,59 @@ describe("schema-http", () => {
           assert.strictEqual(
             (yield* (yield* Catalog).refresh).role(target.id)?.label,
             "Theirs"
+          );
+        })
+    );
+
+    dbTest.effect(
+      "a role hidden between a generic PATCH's checks and its change set is refused like a missing role",
+      () =>
+        Effect.gen(function* referenceHiddenMeanwhile() {
+          const admin = yield* adminToken;
+          const role = addRole("race_role");
+          const rule = addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin]);
+
+          yield* change([role.op, rule.op]);
+
+          const gate = yield* armGate;
+
+          const write = yield* Effect.forkChild(
+            patch(admin, "core.access_rule", rule.id, 1, {
+              role_ids: [role.id],
+            })
+          );
+
+          // Checked visible at preparation; hidden before the change set.
+          yield* Deferred.await(gate.reached);
+
+          const snapshot = yield* (yield* Catalog).refresh;
+          const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+
+          yield* asCoreSet([hideRole(name?.id ?? "", "race_role")]);
+          yield* Deferred.succeed(gate.release, true);
+
+          const toHidden = yield* Fiber.join(write);
+
+          const toMissing = yield* patch(
+            admin,
+            "core.access_rule",
+            rule.id,
+            1,
+            {
+              role_ids: [MISSING_ID],
+            }
+          );
+
+          assert.strictEqual(toHidden.status, 422, toHidden.text);
+          assert.strictEqual(
+            asMissing(toHidden, role.id),
+            asMissing(toMissing, MISSING_ID)
+          );
+          assert.deepStrictEqual(
+            (yield* (yield* Catalog).refresh)
+              .accessRules()
+              .find((entry) => entry.id === rule.id)?.roleIds,
+            [BUILT_IN_ROLE_IDS.admin]
           );
         })
     );

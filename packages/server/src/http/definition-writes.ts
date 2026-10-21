@@ -420,16 +420,19 @@ const visibleTarget = Effect.fn("Http.definitionTarget")(
 /**
  * The checks of a definition write that depend on the request and the
  * records, run in the request transaction and again wherever the change
- * set validates or commits: the stated revision (6.4) first, then the
- * target's visibility and version (a hidden target is `NotFound`, like a
- * missing one), or for a create the visibility of every definition it
- * references (a hidden one is refused like a missing one).
+ * set validates or commits: the stated revision (6.4) first, then for an
+ * update or delete the target's visibility and version (a hidden target is
+ * `NotFound`, like a missing one), then the visibility of every
+ * definition the operations refer to afterwards, as the change-set
+ * endpoint checks it (`checkTargetsVisible`: a create's references and
+ * those an update introduces or keeps; a hidden one is refused like a
+ * missing one).
  *
  * @param stated - The revision the request stated.
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
  * @param write - The write.
- * @param operations - Its operations, for a create.
+ * @param operations - Its operations.
  * @returns Fails with the first refusal.
  */
 const recheck = (
@@ -442,9 +445,11 @@ const recheck = (
   Effect.gen(function* recheckWrite() {
     yield* staleCheck(stated, table, write);
 
-    yield* write.action === "create"
-      ? checkTargetsVisible(operations)
-      : visibleTarget(table, kind, write).pipe(Effect.asVoid);
+    if (write.action !== "create") {
+      yield* visibleTarget(table, kind, write);
+    }
+
+    yield* checkTargetsVisible(operations);
   });
 
 /**
@@ -477,8 +482,6 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
   if (write.action === "create") {
     id = yield* newId;
     operations = [yield* createOperation(kind, id, write.body)];
-
-    yield* checkTargetsVisible(operations);
   } else {
     const current = yield* visibleTarget(table, kind, write);
 
@@ -489,6 +492,7 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
         : yield* updateOperations(current, write.expectedVersion, write.body);
   }
 
+  yield* checkTargetsVisible(operations);
   yield* authorizeOperations(snapshot, actor, operations);
 
   return { actor, id, operations };
