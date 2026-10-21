@@ -1,5 +1,6 @@
 # Read by Oxlint (its default --ignore-path). Unlike ignorePatterns in
 # oxlint.config.ts, an ignore file stops Oxlint from descending into the
-# directory, so it never loads vendor/effect/.oxlintrc.json and its plugins.
-/vendor/
+# directory, so it never loads the upstream repositories' own Oxlint configs
+# (repos/effect/.oxlintrc.json, repos/foldkit/.oxlintrc*.json) and plugins.
+/repos/
 /.claude/
