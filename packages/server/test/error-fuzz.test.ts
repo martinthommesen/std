@@ -24,6 +24,18 @@
  * and error bodies with nothing but their documented members (a unique
  * conflict says only that the value is taken; `Referenced` says nothing
  * else). Each run must reach every outcome, so the property is not vacuous.
+ * A refusal may repeat only what the request sent: no stored value of any
+ * record, the target included; a success may also show the saved record's
+ * own projection.
+ *
+ * A deterministic matrix guarantees what the fuzz only samples: every
+ * constraint (unique on the parent and the child, required, type, length,
+ * the owner's CHECK and NOT NULL, the reference precheck, the FK backstop,
+ * a referenced delete) × every operation it applies to × both endpoints
+ * gives its intended refusal. The FK backstop deletes the target in
+ * another transaction held open until the write waits on its row lock
+ * (observed in `pg_stat_activity`), so Postgres's FK check, not the
+ * record service's precheck, refuses it: still `InvalidReference`.
  */
 import { randomUUID } from "node:crypto";
 
@@ -31,7 +43,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Option, Schema } from "effect";
+import { Deferred, Effect, Fiber, Option, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 import {
@@ -68,6 +80,7 @@ import {
   change,
   createClass,
 } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 const ITEM = "acme.fuzz_item";
 const SPECIAL = "acme.fuzz_special";
@@ -820,8 +833,16 @@ const checkResponse = (
   const requestText =
     `${sent.path} ${JSON.stringify(sent.body ?? null)}`.toLowerCase();
 
-  const sentTexts = new Set(textsOf(sent.body));
   const saved = parsedOf(response).record;
+  const succeeded = response.status < 400;
+
+  // Values a response may repeat: what the request sent and, on success
+  // only, the saved record's own projection. A refusal shows no stored
+  // value, not even the target record's.
+  const allowed = new Set([
+    ...textsOf(sent.body),
+    ...(succeeded ? textsOf(saved?.values) : []),
+  ]);
 
   // IDs a response may show: the actors, what the request named, and the
   // saved record with its own references.
@@ -836,11 +857,9 @@ const checkResponse = (
       assert.notInclude(text, tracked.id, `foreign ID: ${where}`);
     }
 
-    const mine = tracked.id === saved?.id || tracked === sent.target;
-
-    for (const secret of mine ? [] : tracked.secrets) {
-      if (!(sentTexts.has(secret) || requestText.includes(secret))) {
-        assert.notInclude(text, secret, `foreign value: ${where}`);
+    for (const secret of tracked.secrets) {
+      if (!(allowed.has(secret) || requestText.includes(secret))) {
+        assert.notInclude(text, secret, `stored value: ${where}`);
       }
     }
   }
@@ -1331,11 +1350,415 @@ const checkSequences = async (
     { endOnFailure: true, numRuns: RUNS }
   );
 
+/** A constraint the matrix provokes, by name. */
+type Constraint =
+  | "unique"
+  | "uniqueChild"
+  | "required"
+  | "type"
+  | "length"
+  | "ownerCheck"
+  | "ownerNotNull"
+  | "reference"
+  | "referenceBackstop"
+  | "referenced";
+
+/** One cell of the matrix: a constraint, an operation, an endpoint. */
+interface Cell {
+  readonly constraint: Constraint;
+  readonly op: "create" | "update" | "delete";
+  readonly endpoint: typeof ITEM | typeof SPECIAL;
+}
+
+/** What each constraint must give, whatever the operation and endpoint. */
+const INTENDED: Readonly<Record<Constraint, string>> = {
+  length: "422 ValidationFailed InvalidValue:name:tooLong",
+  ownerCheck: "500",
+  ownerNotNull: "500",
+  reference: "422 InvalidReference parent",
+  referenceBackstop: "422 InvalidReference parent",
+  referenced: "409 Referenced",
+  required: "422 ValidationFailed Required:name",
+  type: "422 ValidationFailed InvalidValue:qty:wrongJsonType",
+  unique: "422 ValidationFailed InvalidValue:code:notUnique",
+  uniqueChild: "422 ValidationFailed InvalidValue:tag:notUnique",
+};
+
+const ENDPOINTS = [ITEM, SPECIAL] as const;
+
+const WRITE_CONSTRAINTS: readonly Constraint[] = [
+  "unique",
+  "required",
+  "type",
+  "length",
+  "ownerCheck",
+  "ownerNotNull",
+  "reference",
+  "referenceBackstop",
+];
+
+/** Every cell that applies: writes on both endpoints, the child's own
+ * unique field on its endpoint (the parent cannot name it), deletes of a
+ * referenced record on both. */
+const MATRIX: readonly Cell[] = [
+  ...ENDPOINTS.flatMap((endpoint) =>
+    (["create", "update"] as const).flatMap((op) =>
+      WRITE_CONSTRAINTS.map((constraint) => ({ constraint, endpoint, op }))
+    )
+  ),
+  { constraint: "uniqueChild", endpoint: SPECIAL, op: "create" },
+  { constraint: "uniqueChild", endpoint: SPECIAL, op: "update" },
+  ...ENDPOINTS.map((endpoint): Cell => ({
+    constraint: "referenced",
+    endpoint,
+    op: "delete",
+  })),
+];
+
+const cellKey = (cell: Cell): string =>
+  `${cell.constraint} ${cell.op} ${cell.endpoint}`;
+
+/**
+ * A response as the matrix compares it: status, tag and, for field
+ * errors, `<error>:<field>[:<reason>]`; for `InvalidReference` the field.
+ *
+ * @param response - A response.
+ * @returns The outcome text.
+ */
+const outcomeText = (response: TestResponse): string => {
+  const body = parsedOf(response);
+
+  const details =
+    body._tag === "ValidationFailed"
+      ? (body.errors ?? []).map((error) =>
+          [error._tag, error.field, error.reason]
+            .filter((part) => part !== undefined)
+            .join(":")
+        )
+      : [];
+
+  const json = response.json ?? null;
+  const reference = isJsonObject(json) ? json.field : undefined;
+  const field = body._tag === "InvalidReference" ? textsOf(reference) : [];
+
+  return [String(response.status), body._tag, ...details, ...field]
+    .filter((part) => part !== undefined)
+    .join(" ");
+};
+
+let tokenCount = 0;
+
+/**
+ * A fresh stored token: a prefix and letters that are not hex digits.
+ *
+ * @param prefix - Two letters naming the field.
+ * @returns The token.
+ */
+const freshToken = (prefix: string): string => {
+  tokenCount += 1;
+
+  const letters = String(tokenCount)
+    .padStart(6, "0")
+    .split("")
+    .map((digit) => TOKEN_LETTERS[Number(digit)] ?? "z");
+
+  return `${prefix}${letters.join("")}`;
+};
+
+/**
+ * A valid body for an endpoint, with fresh stored tokens.
+ *
+ * @param endpoint - The endpoint (and class).
+ * @returns The values.
+ */
+const validBody = (endpoint: Cell["endpoint"]): JsonObject => {
+  const body = {
+    code: freshToken("kq"),
+    name: freshToken("nm").slice(0, NAME_MAX_LENGTH),
+    note: freshToken("nt"),
+    qty: 1,
+  } satisfies JsonObject;
+
+  return endpoint === SPECIAL ? { ...body, tag: freshToken("tg") } : body;
+};
+
+/**
+ * Creates a valid record through an endpoint, tracked in the model.
+ *
+ * @param context - Sessions and model.
+ * @param endpoint - The endpoint (and class).
+ * @param extra - More values.
+ * @returns The record's ID and body.
+ */
+const freshRecord = Effect.fn("ErrorMatrix.freshRecord")(function* freshRecord(
+  context: FuzzContext,
+  endpoint: Cell["endpoint"],
+  extra: JsonObject = {}
+) {
+  const body = { ...validBody(endpoint), ...extra };
+
+  const response = yield* send(context, {
+    body,
+    method: "POST",
+    path: listPath(endpoint),
+    target: null,
+    token: context.admin,
+  });
+
+  assert.strictEqual(response.status, 201, response.text);
+
+  track(
+    context.model,
+    response,
+    { concrete: endpoint, kind: endpoint === ITEM ? "item" : "special" },
+    body
+  );
+
+  return { body, id: parsedOf(response).record?.id ?? "" };
+});
+
+/** Some backend of this database waits for a lock. */
+const someoneWaitsOnALock = Effect.gen(function* someoneWaits() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const rows = yield* sql.unsafe<{ readonly waiting: string }>(
+    `SELECT count(*)::text AS waiting FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'`
+  );
+
+  return Number(rows[0]?.waiting ?? "0") > 0;
+});
+
+/**
+ * A unique value another fresh record already holds, in upper case.
+ *
+ * @param context - Sessions and model.
+ * @param endpoint - Where the other record is created.
+ * @param field - The unique field.
+ * @returns The values.
+ */
+const takenValue = (
+  context: FuzzContext,
+  endpoint: Cell["endpoint"],
+  field: "code" | "tag"
+) =>
+  freshRecord(context, endpoint).pipe(
+    Effect.map((other): JsonObject => ({
+      [field]: textsOf(other.body[field]).join("").toUpperCase(),
+    }))
+  );
+
+/**
+ * The values a write sends to provoke each constraint (the reference
+ * backstop's target is set up by `takeCell`).
+ *
+ * @param context - Sessions and model.
+ * @returns Per constraint, the values.
+ */
+const provoking = (
+  context: FuzzContext
+): Readonly<
+  Record<Constraint, Effect.Effect<JsonObject, unknown, Services>>
+> => ({
+  length: Effect.sync(() => ({
+    name: freshToken("nm").padEnd(NAME_MAX_LENGTH + 1, "x"),
+  })),
+  ownerCheck: Effect.succeed({ qty: -1 }),
+  ownerNotNull: Effect.succeed({ note: null }),
+  reference: Effect.sync(() => ({ parent: randomUUID() })),
+  referenceBackstop: Effect.sync(() => ({ parent: randomUUID() })),
+  referenced: Effect.succeed({}),
+  required: Effect.succeed({ name: null }),
+  type: Effect.succeed({ qty: "many" }),
+  unique: takenValue(context, ITEM, "code"),
+  uniqueChild: takenValue(context, SPECIAL, "tag"),
+});
+
+/**
+ * Takes one cell: provokes its constraint through its endpoint and
+ * operation, checks the response like every fuzz response, and returns
+ * the outcome.
+ *
+ * @param context - Sessions and model.
+ * @param cell - The cell.
+ * @returns The outcome text.
+ */
+const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
+  context: FuzzContext,
+  cell: Cell
+) {
+  const { request } = yield* Transactions;
+
+  if (cell.op === "delete") {
+    const target = yield* freshRecord(context, cell.endpoint);
+
+    yield* freshRecord(context, ITEM, { parent: target.id });
+
+    return outcomeText(
+      yield* send(context, {
+        headers: { "if-match": '"1"' },
+        method: "DELETE",
+        path: recordPath(cell.endpoint, target.id),
+        target: null,
+        token: context.admin,
+      })
+    );
+  }
+
+  const subject =
+    cell.op === "update" ? yield* freshRecord(context, cell.endpoint) : null;
+
+  const write = (values: JsonObject) => {
+    const body =
+      subject === null ? { ...validBody(cell.endpoint), ...values } : values;
+
+    return send(context, {
+      body,
+      headers: subject === null ? {} : { "if-match": '"1"' },
+      method: subject === null ? "POST" : "PATCH",
+      path:
+        subject === null
+          ? listPath(cell.endpoint)
+          : recordPath(cell.endpoint, subject.id),
+      target: null,
+      token: context.admin,
+    });
+  };
+
+  if (cell.constraint !== "referenceBackstop") {
+    return outcomeText(
+      yield* write(yield* provoking(context)[cell.constraint])
+    );
+  }
+
+  // The FK backstop: the reference target is visible when the record
+  // service checks it, and gone when Postgres checks the FK. Another
+  // transaction deletes it and holds the delete open until this write
+  // waits on its row lock (observed in pg_stat_activity), then commits.
+  const target = yield* freshRecord(context, ITEM);
+  const deleted = yield* Deferred.make<boolean>();
+  const release = yield* Deferred.make<boolean>();
+
+  const deleter = yield* request(
+    Effect.gen(function* deleteTarget() {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql.unsafe(`DELETE FROM acme.fuzz_item WHERE id = $1::uuid`, [
+        target.id,
+      ]);
+      yield* Deferred.succeed(deleted, true);
+      yield* Deferred.await(release);
+    })
+  ).pipe(Effect.forkChild);
+
+  yield* Deferred.await(deleted);
+
+  const writing = yield* write({ parent: target.id }).pipe(Effect.forkChild);
+
+  yield* waitUntil(someoneWaitsOnALock);
+  yield* Deferred.succeed(release, true);
+  yield* Fiber.join(deleter);
+
+  return outcomeText(yield* Fiber.join(writing));
+});
+
+/**
+ * A synthetic response, for checking the oracle itself.
+ *
+ * @param status - The status.
+ * @param json - The body.
+ * @returns The response.
+ */
+const syntheticResponse = (status: number, json: JsonObject): TestResponse => ({
+  headers: new Headers(),
+  json,
+  status,
+  text: JSON.stringify(json),
+});
+
 describe("error-fuzz", () => {
   it("draws unique values that collide across case", () => {
     assert.isTrue(TOKEN.test("kqghmn"));
     assert.isFalse(TOKEN.test("0192f000"));
     assert.strictEqual("kqghmn".replaceAll(LOWER_LETTER, "x"), "xxxxxx");
+  });
+
+  it("the oracle rejects a stored value of the target in a refusal", () => {
+    const target: Tracked = {
+      concrete: ITEM,
+      deleted: false,
+      id: "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f",
+      kind: "item",
+      secrets: new Set(["nmoldvalue", "ntkeptnote"]),
+      version: 2,
+    };
+
+    const model: Model = {
+      actors: new Set(),
+      outcomes: new Map(),
+      records: [target],
+    };
+
+    const sent: Sent = {
+      body: { name: "nmnewvalue" },
+      path: recordPath(ITEM, target.id),
+      target,
+    };
+
+    // A synthetic leak: a refusal repeating the target's old name.
+    assert.throws(() => {
+      checkResponse(
+        model,
+        sent,
+        syntheticResponse(422, {
+          _tag: "ValidationFailed",
+          errors: [
+            {
+              _tag: "InvalidValue",
+              field: "name",
+              message: "was nmoldvalue",
+              reason: "tooLong",
+            },
+          ],
+        })
+      );
+    }, /stored value/u);
+
+    // The same value in a saved record's projection is the record itself.
+    assert.doesNotThrow(() => {
+      checkResponse(
+        model,
+        sent,
+        syntheticResponse(200, {
+          record: {
+            class: ITEM,
+            id: target.id,
+            values: { name: "nmnewvalue", note: "ntkeptnote" },
+            version: 3,
+          },
+          schemaRevision: 1,
+        })
+      );
+    });
+
+    // A refusal may repeat only what the request sent.
+    assert.doesNotThrow(() => {
+      checkResponse(
+        model,
+        sent,
+        syntheticResponse(422, {
+          _tag: "ValidationFailed",
+          errors: [
+            {
+              _tag: "InvalidValue",
+              field: "name",
+              message: "The value is too long.",
+              reason: "tooLong",
+            },
+          ],
+        })
+      );
+    });
   });
 
   layer(readsTestLayer(), { excludeTestServices: true, timeout: TIMEOUT })(
@@ -1426,6 +1849,28 @@ describe("error-fuzz", () => {
               assert.strictEqual(response.text, "");
             }
           })
+      );
+
+      dbTest.effect(
+        "every constraint on every write path gives its intended refusal",
+        () =>
+          Effect.gen(function* matrix() {
+            const context = yield* setUp;
+            const seen = new Map<string, string>();
+
+            for (const cell of MATRIX) {
+              seen.set(cellKey(cell), yield* takeCell(context, cell));
+            }
+
+            assert.deepStrictEqual(
+              Object.fromEntries(seen),
+              Object.fromEntries(
+                MATRIX.map((cell) => [cellKey(cell), INTENDED[cell.constraint]])
+              )
+            );
+            assert.lengthOf(MATRIX, 36);
+          }),
+        TIMEOUT
       );
 
       dbTest.effect(

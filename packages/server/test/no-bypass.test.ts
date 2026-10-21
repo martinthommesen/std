@@ -3,8 +3,8 @@
  * ordinary role granted by the built-in allow-all rules. With them removed
  * in a test database, admin requests are refused on every path. No code
  * checks a role name: the source names no built-in role, and a role with
- * another name holding copies of the allow-all rules gets exactly what
- * admin got.
+ * another name holding local copies of the allow-all rules gets exactly
+ * what admin got on app tables (platform tables match only core rules).
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -13,6 +13,8 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
+import { parseSync, Visitor } from "oxc-parser";
+import type { VisitorObject } from "oxc-parser";
 
 import { ACME, createFixtureUser } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -47,25 +49,119 @@ const NAME_RESOLVERS = new Set([
   "definitions/src/snapshot.ts",
 ]);
 
-const BUILT_IN_ROLE_NAME = /["'`](?:admin|authenticated|schema_purger)["'`]/u;
+/** Built-in role and permission names: code refers to them by ID only. */
+const BUILT_IN_NAMES = new Set([
+  "admin",
+  "authenticated",
+  "schema_purger",
+  "schema.purge",
+  "schema.snapshot",
+  "rules.run_as",
+]);
 
-const BY_NAME_LOOKUP =
-  /\b(?:roleByName|permissionByName)\s*\(|\.name\s*===?\s*["'`](?:admin|authenticated|schema_purger)/u;
-
-const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/u;
+/** Lookups of roles and permissions by name. */
+const BY_NAME_LOOKUPS = new Set(["roleByName", "permissionByName"]);
 
 /**
- * The lines of a source file that are not comments: comments may name
- * roles, code may not.
+ * A source position as its 1-based line.
  *
  * @param source - The file's text.
- * @returns The code lines, joined.
+ * @param offset - A UTF-16 offset in it.
+ * @returns The line.
  */
-const codeLines = (source: string): string =>
-  source
-    .split("\n")
-    .filter((line) => !COMMENT_LINE.test(line))
-    .join("\n");
+const lineAt = (source: string, offset: number): number =>
+  source.slice(0, offset).split("\n").length;
+
+/** What a literal or a template's text can hold. */
+type LiteralValue = string | number | boolean | bigint | RegExp | null;
+
+/**
+ * Whether a literal's value is a built-in role or permission name.
+ *
+ * @param value - The literal's value.
+ * @returns True for a built-in name.
+ */
+const isBuiltInName = (value: LiteralValue | undefined): boolean =>
+  [...BUILT_IN_NAMES].some((name) => name === value);
+
+/**
+ * The executable uses of built-in role and permission names in one source
+ * file, parsed as TypeScript, so comments neither hide nor cause a finding.
+ * A string literal or template text equal to a built-in name is a finding
+ * anywhere in code (comparisons, `switch` cases, `includes`, map lookups,
+ * constants), except as a plain object key (a name mapped to its ID) or in
+ * a type. A call to `roleByName` or `permissionByName` is a finding outside
+ * the definition-set resolver, where set files' names become IDs.
+ *
+ * @param relative - The file's path below `packages/`.
+ * @param source - Its text.
+ * @returns `<path>:<line> <what>` per finding.
+ */
+const nameChecksIn = (relative: string, source: string): string[] => {
+  const { program, errors } = parseSync(relative, source);
+  const exempt = new Set<number>();
+  const findings: string[] = [];
+
+  const found = (offset: number, what: string) => {
+    findings.push(`${relative}:${lineAt(source, offset)} ${what}`);
+  };
+
+  if (errors.length > 0) {
+    found(0, "does not parse");
+  }
+
+  const onCall: VisitorObject["CallExpression"] = (node) => {
+    const { callee } = node;
+    let name = "";
+
+    if (callee.type === "Identifier") {
+      ({ name } = callee);
+    } else if (
+      callee.type === "MemberExpression" &&
+      callee.property.type === "Identifier"
+    ) {
+      ({ name } = callee.property);
+    }
+
+    if (BY_NAME_LOOKUPS.has(name) && !NAME_RESOLVERS.has(relative)) {
+      found(node.start, `${name}(...)`);
+    }
+  };
+
+  const onLiteral: VisitorObject["Literal"] = (node) => {
+    if (isBuiltInName(node.value) && !exempt.has(node.start)) {
+      found(node.start, JSON.stringify(node.value));
+    }
+  };
+
+  const onProperty: VisitorObject["Property"] = (node) => {
+    if (!node.computed) {
+      exempt.add(node.key.start);
+    }
+  };
+
+  const onLiteralType: VisitorObject["TSLiteralType"] = (node) => {
+    exempt.add(node.literal.start);
+  };
+
+  const onTemplate: VisitorObject["TemplateLiteral"] = (node) => {
+    for (const quasi of node.quasis) {
+      if (isBuiltInName(quasi.value.cooked)) {
+        found(quasi.start, JSON.stringify(quasi.value.cooked));
+      }
+    }
+  };
+
+  new Visitor({
+    CallExpression: onCall,
+    Literal: onLiteral,
+    Property: onProperty,
+    TSLiteralType: onLiteralType,
+    TemplateLiteral: onTemplate,
+  }).visit(program);
+
+  return findings;
+};
 
 const sourceFiles = (directory: string): string[] =>
   readdirSync(directory).flatMap((entry) => {
@@ -155,23 +251,47 @@ const withoutRevision = (json: JsonValue | undefined): JsonValue =>
   );
 
 describe("no-bypass", () => {
-  it("no source file names a built-in role or looks one up by name", () => {
-    const offenders = SOURCE_PACKAGES.flatMap((name) =>
-      sourceFiles(path.join(PACKAGES, name, "src")).flatMap((file) => {
-        const relative = path.relative(PACKAGES, file);
+  it("the scan finds role-name checks in code, whatever the comments", () => {
+    const probe = [
+      '/* rationale */ if (role.name === "admin") { grant(); }',
+      'switch (role.name) { case "authenticated": break; }',
+      'const ok = ["schema_purger"].includes(name);',
+      'const id = roles["admin"];',
+      "const text = `admin`;",
+      'const role = snapshot.roleByName("anything");',
+      "// a comment naming admin is fine",
+      '/** "admin" in JSDoc is fine */',
+      'const ids = { admin: "x", "rules.run_as": "y" };',
+      'type Name = "admin";',
+    ].join("\n");
 
-        const text = codeLines(readFileSync(file, "utf-8"));
+    assert.deepStrictEqual(nameChecksIn("server/src/probe.ts", probe), [
+      'server/src/probe.ts:1 "admin"',
+      'server/src/probe.ts:2 "authenticated"',
+      'server/src/probe.ts:3 "schema_purger"',
+      'server/src/probe.ts:4 "admin"',
+      'server/src/probe.ts:5 "admin"',
+      "server/src/probe.ts:6 roleByName(...)",
+    ]);
 
-        const named = BUILT_IN_ROLE_NAME.test(text);
+    // The definition-set resolver turns set files' names into IDs.
+    assert.deepStrictEqual(
+      nameChecksIn(
+        "definitions/src/set-resolve.ts",
+        "const role = base.roleByName(name);"
+      ),
+      []
+    );
+  });
 
-        const lookedUp =
-          BY_NAME_LOOKUP.test(text) && !NAME_RESOLVERS.has(relative);
-
-        return named || lookedUp ? [relative] : [];
-      })
+  it("no source file checks a built-in role or permission by name", () => {
+    const findings = SOURCE_PACKAGES.flatMap((name) =>
+      sourceFiles(path.join(PACKAGES, name, "src")).flatMap((file) =>
+        nameChecksIn(path.relative(PACKAGES, file), readFileSync(file, "utf-8"))
+      )
     );
 
-    assert.deepStrictEqual(offenders, []);
+    assert.deepStrictEqual(findings, []);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
@@ -265,11 +385,16 @@ describe("no-bypass", () => {
             withoutRevision(before.json)
           );
 
+          // Platform tables match only core rules: the copies are local, so
+          // they stop there. The rule's owner layer decides, not a name.
           const changes = yield* http.get(listPath("core.change"), {
             token: eve,
           });
 
-          assert.strictEqual(changes.status, 200);
+          assert.deepStrictEqual(observe(changes), {
+            status: 404,
+            tag: "UnknownTable",
+          });
         })
     );
   });
