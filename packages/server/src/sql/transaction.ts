@@ -247,9 +247,15 @@ const runActions = (
 ): Effect.Effect<void> =>
   Effect.gen(function* runPostCommitActions() {
     for (const action of actions) {
+      // Supervision boundary: an action cannot fail with a typed error,
+      // so this sees defects only. The commit already happened, so a
+      // defect is logged and the remaining actions still run.
+      // Interruption is not caught.
       yield* action.pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Post-commit action failed", Cause.pretty(cause))
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) =>
+            Effect.logWarning("Post-commit action failed", Cause.pretty(cause))
         )
       );
     }
@@ -352,6 +358,9 @@ const verifyBeforeCommit = (
 const rollBack = (connection: Connection): Effect.Effect<boolean> =>
   connection.executeRaw("ROLLBACK", []).pipe(
     Effect.as(true),
+    // Deliberately the whole cause: after any failed ROLLBACK, a defect or
+    // an interruption included, the connection's state is unknown, and
+    // `false` makes the caller discard it instead of reusing it.
     Effect.catchCause(() =>
       Effect.logWarning("ROLLBACK failed; the connection is discarded").pipe(
         Effect.as(false)
@@ -760,30 +769,31 @@ export interface RequestTransactions {
 export const makeRequestTransactions = (
   client: PgClient.PgClient
 ): RequestTransactions => ({
-  maintenance: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-    options?: MaintenanceOptions
-  ) =>
-    hygienic(
-      currentState.pipe(
-        Effect.flatMap((current) =>
-          Option.isSome(current)
-            ? nestedMaintenance
-            : runMaintenance(client, effect, options)
-        )
-      )
-    ),
-  request: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-    options?: RequestOptions
-  ) =>
-    hygienic(
-      currentState.pipe(
-        Effect.flatMap((current) =>
-          Option.getOrElse(refuseIsolation(options?.isolation), () =>
-            beginOrJoinRequest(client, current, effect)
-          )
-        )
-      )
-    ),
+  maintenance: Effect.fn("Transactions.maintenance")(
+    function* maintenance<A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      options?: MaintenanceOptions
+    ) {
+      const current = yield* currentState;
+
+      return Option.isSome(current)
+        ? yield* nestedMaintenance
+        : yield* runMaintenance(client, effect, options);
+    },
+    (effect) => hygienic(effect)
+  ),
+  request: Effect.fn("Transactions.request")(
+    function* request<A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      options?: RequestOptions
+    ) {
+      const current = yield* currentState;
+      const refused = refuseIsolation(options?.isolation);
+
+      return Option.isSome(refused)
+        ? yield* refused.value
+        : yield* beginOrJoinRequest(client, current, effect);
+    },
+    (effect) => hygienic(effect)
+  ),
 });

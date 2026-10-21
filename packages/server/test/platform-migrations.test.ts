@@ -106,7 +106,30 @@ const childGone = childBackends("").pipe(
 );
 
 /**
- * Starts the migration child process; it is killed when the scope closes.
+ * Kills a child process and waits until it has exited.
+ * @param child - The child.
+ * @returns Succeeds once the child is gone.
+ */
+const killAndAwait = (child: ChildProcess): Effect.Effect<void> =>
+  Effect.callback<boolean>((resume) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resume(Effect.succeed(true));
+
+      return;
+    }
+
+    const done = () => {
+      resume(Effect.succeed(true));
+    };
+
+    child.once("exit", done);
+    child.once("error", done);
+    child.kill("SIGKILL");
+  }).pipe(Effect.asVoid);
+
+/**
+ * Starts the migration child process; it is killed, and awaited, when the
+ * scope closes.
  * @param url - The database to migrate.
  * @param set - The migration list to run.
  * @returns The child process.
@@ -122,16 +145,8 @@ const startChild = (
         stdio: "ignore",
       })
     ),
-    (child) =>
-      Effect.sync(() => {
-        child.kill("SIGKILL");
-      })
+    killAndAwait
   );
-
-const killChild = (child: ChildProcess): Effect.Effect<void> =>
-  Effect.sync(() => {
-    child.kill("SIGKILL");
-  });
 
 /** The output and exit code of one `std` command. */
 interface CliResult {
@@ -140,7 +155,8 @@ interface CliResult {
 }
 
 /**
- * Runs `std <args>` against a database.
+ * Runs `std <args>` against a database. Interrupting it kills the command
+ * and waits for it to exit.
  * @param url - The database.
  * @param args - The command line.
  * @returns Exit code and combined output.
@@ -159,9 +175,14 @@ const runCli = (url: string, args: readonly string[]) =>
 
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
+    child.once("error", (error) => {
+      resume(Effect.die(error));
+    });
     child.on("close", (code) => {
       resume(Effect.succeed({ code, output: chunks.join("") }));
     });
+
+    return killAndAwait(child);
   });
 
 describe("platform-migrations", () => {
@@ -354,7 +375,7 @@ describe("platform-migrations", () => {
                   Effect.map((pids) => pids.length === 1)
                 )
               );
-              yield* killChild(child);
+              yield* killAndAwait(child);
               // The backend finishes its statement, finds the client gone,
               // rolls back and exits, releasing SCHEMA_KEY.
               yield* waitUntil(childGone);
@@ -414,7 +435,7 @@ describe("platform-migrations", () => {
                   "AND query LIKE 'CREATE INDEX CONCURRENTLY%' AND wait_event_type = 'Lock'"
                 ).pipe(Effect.map((pids) => pids.length === 1))
               );
-              yield* killChild(child);
+              yield* killAndAwait(child);
               yield* writer.query("COMMIT");
               // The build goes on without its client; the backend exits
               // when it ends.
@@ -464,7 +485,7 @@ describe("platform-migrations", () => {
                 [CHILD_APPLICATION_NAME]
               );
               yield* waitUntil(childGone);
-              yield* killChild(child);
+              yield* killAndAwait(child);
               yield* writer.query("COMMIT");
 
               assert.isFalse(yield* indexValidity, "an invalid index is left");

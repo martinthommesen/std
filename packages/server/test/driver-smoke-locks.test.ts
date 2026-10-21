@@ -4,8 +4,9 @@
  * config-commit lock-timeout retries.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
+import { TestClock } from "effect/testing";
 
 import {
   TestDatabase,
@@ -17,6 +18,7 @@ import {
   DEFAULT_RETRY_DELAYS,
   MAIN_LOCK_TIMEOUT,
   MAIN_STATEMENT_TIMEOUT,
+  retrySchedule,
   SchemaLockTimeout,
 } from "../src/sql/config-commit.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
@@ -109,6 +111,35 @@ describe("driver-smoke-locks", () => {
       [500, 1000, 2000, 4000]
     );
   });
+
+  it.effect(
+    "the retry policy waits 0.5, 1, 2 and 4 s between the 5 attempts",
+    () =>
+      Effect.gen(function* retryDelays() {
+        const startedAt: number[] = [];
+
+        const attempt = Clock.currentTimeMillis.pipe(
+          Effect.tap((now) => Effect.sync(() => startedAt.push(now))),
+          Effect.andThen(Effect.fail("lock timeout" as const))
+        );
+
+        const retried = yield* Effect.forkChild(
+          Effect.exit(
+            attempt.pipe(Effect.retry(retrySchedule(DEFAULT_RETRY_DELAYS)))
+          )
+        );
+
+        yield* TestClock.adjust(Duration.seconds(10));
+        const exit = yield* Fiber.join(retried);
+
+        assert.isTrue(Exit.isFailure(exit));
+        assert.deepStrictEqual(startedAt, [0, 500, 1500, 3500, 7500]);
+
+        // Without delays there is exactly one attempt.
+        yield* Effect.exit(attempt.pipe(Effect.retry(retrySchedule([]))));
+        assert.lengthOf(startedAt, 6);
+      })
+  );
 
   layer(testDatabaseLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
@@ -311,20 +342,18 @@ describe("driver-smoke-locks", () => {
             );
             yield* log.clear;
 
-            yield* Effect.forkChild(
-              Effect.sleep(Duration.millis(1200)).pipe(
-                Effect.andThen(
-                  blocker.query(
-                    `SELECT pg_advisory_unlock(${CONFIG_KEY.toString()})`
-                  )
-                )
-              )
+            const committer = yield* Effect.forkChild(
+              configCommit(bumpRevision(changeSetId()))
             );
 
-            const started = Date.now();
-            const committed = yield* configCommit(bumpRevision(changeSetId()));
+            // Release the lock once the second attempt has started.
+            yield* waitUntil(lockAttempts.pipe(Effect.map((n) => n >= 2)));
+            yield* blocker.query(
+              `SELECT pg_advisory_unlock(${CONFIG_KEY.toString()})`
+            );
 
-            assert.isAtLeast(Date.now() - started, 1200);
+            const committed = yield* Fiber.join(committer);
+
             assert.strictEqual(committed.revision, before + 1);
             assert.isAtLeast(yield* lockAttempts, 2);
           })

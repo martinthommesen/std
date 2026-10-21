@@ -393,9 +393,9 @@ export const hygienic = <A, E, R>(
     (failure: E): failure is Extract<E, SqlError> => isSqlError(failure),
     (failure: Extract<E, SqlError>) => failSafely(failure)
   ).pipe(
-    Effect.catchCause((cause) =>
-      hasSqlDefect(cause)
-        ? sanitizeDefects(cause).pipe(Effect.flatMap(Effect.failCause))
-        : Effect.failCause(cause)
+    // Not a recovery: a cause holding a driver error as a defect is
+    // re-failed with that defect sanitized; every other cause passes.
+    Effect.catchCauseIf(hasSqlDefect, (cause) =>
+      sanitizeDefects(cause).pipe(Effect.flatMap(Effect.failCause))
     )
   );

@@ -26,7 +26,7 @@ Import each module by its subpath, for example `@std/server/sql/transactions`.
 | `sql/statement-lexer` | `analyzeStatement(sql)`: statement count and leading words, lexed like Postgres (comments, quotes, dollar quotes) |
 | `sql/statement-marks` | `readOnly(effect)` and `lockWaiting(effect)`: the only ways to exempt a statement from poisoning or to make its lock timeout retryable |
 | `sql/transaction-refused` | `TransactionRefused` defect, `reason`: `poisoned`, `isolation-level`, `savepoint`, `transaction-control`, `nesting`, `closed` |
-| `sql/config-commit` | config-commit machinery, `bumpRevision(changeSetId)`, `SchemaLockTimeout` (`attempts`, `holders`: pid, application name, client address, state, granted locks), `CONFIG_CHANNEL = "std_config"`, timeouts and `DEFAULT_RETRY_DELAYS` |
+| `sql/config-commit` | config-commit machinery, `bumpRevision(changeSetId)`, `SchemaLockTimeout` (`attempts`, `holders`: pid, application name, client address, state, granted locks), `CONFIG_CHANNEL = "std_config"`, timeouts, `DEFAULT_RETRY_DELAYS` and `retrySchedule(delays)` |
 | `sql/dedicated` | `makeDedicatedConnection({ applicationName? })`: `processId`, `client`, `transactions`, `execute` (autocommit), `tryAdvisoryLock`, `advisoryUnlock` |
 | `sql/config-listener` | `configSignals`: `Stream<{ reason: "listening" \| "notified", state }>` that never fails and reconnects |
 | `sql/wake-up` | `WorkerWakeup` (`wake`), `WorkerWakeupLayer`, `wakeWorkerAfterCommit`, `WORKER_CHANNEL = "std_worker"` |
@@ -158,6 +158,17 @@ Allow-list entry strings (Contracts 9): with the server list in `packages/server
 ## Review round 5 (API changes)
 
 - `analyzeStatement` lexes string continuations in the first segment's mode and numeric literals as one token (a `LexedToken` for a number now holds the whole literal). `writeClause` no longer counts `INTO` after `AS` or a qualifying `.`.
+
+## Effect-skill conformance review (API changes)
+
+Checked against the `effect` skill (`.agents/skills/effect`) and the 4.0.5 source.
+
+- Named `Effect.fn` boundaries: `Transactions.request`, `Transactions.maintenance`, `Transactions.configCommit`, `ConfigCommit.bumpRevision`, `ConfigCommit.describeLockHolders`, `DedicatedConnection.open`, `.execute`, `.tryAdvisoryLock`, `.advisoryUnlock`, `Platform.checkMigrations`, `Platform.checkUpgradePreconditions`, `Platform.runMigrations`, `Platform.applyMigration`, `Platform.readLedger` and `WorkerWakeup.make`. `Effect.fn` keeps generic signatures in 4.0.5 (TypeScript infers the generic body), so `withSpan` was not needed; `hygienic` and `Effect.scoped` are passed as whole-operation transforms.
+- Config commit retries use `Effect.retry` with `retrySchedule(delays)` (one `Schedule.duration` per delay, concatenated), `Schedule.jittered` (a factor in [0.8, 1.2], as before) and a `Schedule.tap` warning. Each attempt builds a fresh transaction state and sets the same per-attempt lock timeouts; only an attempt that hit its lock timeout is retried, as the internal `AttemptLockTimedOut` (`attempt-lock-timed-out.ts`). `retrySchedule` is new; `RETRY_JITTER` is removed.
+- Cause handling: the wake-up and the test-database janitor and drop recover typed failures only (`catchTag`); post-commit actions log defects and continue but let interruption through (`catchCauseIf`); `hygienic` re-fails with `catchCauseIf`; `rollBack` alone still catches the whole cause, because any failed `ROLLBACK` means the connection is discarded (commented in place).
+- `databaseUrlConfig` (`STD_DATABASE_URL` with its default, as `Config.Redacted`) is new and used by `DatabaseConfig.fromEnv`, the test harness and the migration child. The harness reads it once per layer: `maintenanceUrl` is now an `Effect<string, ConfigError>`, `testDatabaseService` and `testDatabaseLayer` can fail with `ConfigError`, and `ensureTemplate(admin, adminUrl, migrations)` takes the URL.
+- `makeWorkerWakeup(notify)` builds the wake-up over any notify effect; `WorkerWakeupLayer` uses it with the pooled client.
+- Tests: the debounce runs under `TestClock` with a stub notify; registering wake-ups after commit uses a counting stub, and delivery waits on the LISTEN queue; the detached writer is coordinated with `Deferred`s and its interruption is awaited; `waitUntil` is a `Schedule.spaced` repeat with `Effect.timeoutOrElse`; child processes are killed and awaited on release and on interruption; the retry delays are checked under `TestClock`; the retry-until-free test releases the lock once the second attempt is observed. One test still measures wall time: the full default schedule against a real lock (bounds 7 to 12 s), because the 200 ms lock timeouts run in Postgres.
 
 ## Open items
 

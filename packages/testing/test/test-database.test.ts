@@ -33,10 +33,15 @@ const MAX_CREATE_MS = 1000;
 
 const decodeExists = decodeRows(Schema.Struct({ n: Schema.Int }));
 
-const admin = PgConnection.make({
-  applicationName: "std-testing-test",
-  url: Redacted.make(maintenanceUrl()),
-});
+const admin = maintenanceUrl.pipe(
+  Effect.orDie,
+  Effect.flatMap((url) =>
+    PgConnection.make({
+      applicationName: "std-testing-test",
+      url: Redacted.make(url),
+    })
+  )
+);
 
 const databaseExists = (name: string) =>
   Effect.scoped(

@@ -5,7 +5,7 @@ import { PgClient } from "@effect/sql-pg";
  * a failed COMMIT, and `readOnly` on a write.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
@@ -57,26 +57,43 @@ const UNICODE_ISOLATION =
   "SET LOCAL U&\"transaction_\\0069solation\" = 'serializable'";
 
 /**
- * A request whose body detaches a nested unit that writes, signals and then
- * fails later; the body returns as soon as the write happened.
- * @returns The request.
+ * A request whose body detaches a nested unit that writes, signals, and then
+ * waits for a release that never comes; the body returns as soon as the
+ * write happened. The writer reports how it ended.
+ * @returns The request's exit, and an effect awaiting whether the writer was interrupted.
  */
 const detachedWriter = Effect.gen(function* detachWriter() {
   const sql = yield* SqlClient.SqlClient;
   const { request } = yield* Transactions;
   const wrote = yield* Deferred.make<boolean>();
+  const neverReleased = yield* Deferred.make<boolean>();
+  const writerEnded = yield* Deferred.make<boolean>();
 
   const writer = request(
     sql`INSERT INTO lifetime_detached VALUES (1)`.pipe(
       Effect.andThen(Deferred.succeed(wrote, true)),
-      Effect.andThen(Effect.sleep(Duration.millis(300))),
+      Effect.andThen(Deferred.await(neverReleased)),
       Effect.andThen(Effect.fail("late failure" as const))
     )
-  ).pipe(Effect.ignore);
-
-  return yield* request(
-    Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+  ).pipe(
+    Effect.onExit((exit) =>
+      Deferred.succeed(writerEnded, Exit.hasInterrupts(exit))
+    ),
+    Effect.ignore
   );
+
+  const exit = yield* Effect.exit(
+    request(
+      Effect.forkDetach(writer).pipe(Effect.andThen(Deferred.await(wrote)))
+    )
+  );
+
+  return {
+    exit,
+    writerInterrupted: Deferred.await(writerEnded).pipe(
+      Effect.timeout(Duration.seconds(10))
+    ),
+  };
 });
 
 describe("transaction-lifetime", () => {
@@ -141,10 +158,13 @@ describe("transaction-lifetime", () => {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`CREATE TABLE lifetime_detached (id int PRIMARY KEY)`;
 
-          const exit = yield* Effect.exit(detachedWriter);
+          const { exit, writerInterrupted } = yield* detachedWriter;
 
           assert.strictEqual(refusalOf(exit)?.reason, "poisoned");
-          yield* Effect.sleep(Duration.millis(400));
+          assert.isTrue(
+            yield* writerInterrupted,
+            "the sweep interrupted the writer"
+          );
           assert.strictEqual(yield* countRows("lifetime_detached"), 0);
         })
     );

@@ -8,7 +8,9 @@
  * `NOTIFY std_worker` every 250 ms, on a pooled connection, after commit.
  */
 import { PgClient } from "@effect/sql-pg";
-import { Cause, Clock, Context, Duration, Effect, Layer } from "effect";
+import { Clock, Context, Duration, Effect, Layer } from "effect";
+import type { Scope } from "effect";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { CurrentTransaction } from "./transaction-context.ts";
 
@@ -36,6 +38,60 @@ export class WorkerWakeup extends Context.Service<
 >()("@std/server/sql/wake-up/WorkerWakeup") {}
 
 /**
+ * Builds the debounced wake-up over the effect that sends one NOTIFY.
+ * Pending sends are forked into the current scope and stop with it.
+ * @param notify - Sends one wake-up.
+ * @returns The service.
+ */
+export const makeWorkerWakeup: (
+  notify: Effect.Effect<void, SqlError>
+) => Effect.Effect<WorkerWakeupApi, never, Scope.Scope> = Effect.fn(
+  "WorkerWakeup.make"
+)(function* makeWakeup(notify: Effect.Effect<void, SqlError>) {
+  const scope = yield* Effect.scope;
+  let lastSent = Number.NEGATIVE_INFINITY;
+  let pending = false;
+
+  const send = Effect.gen(function* sendWakeup() {
+    lastSent = yield* Clock.currentTimeMillis;
+    pending = false;
+    yield* notify;
+  }).pipe(
+    // Typed recovery only: a failed NOTIFY (a lost connection, a database
+    // that is down) is logged and dropped, because a wake-up is best effort
+    // and workers also poll (Contracts 4.6). Defects and interruption are
+    // not caught.
+    Effect.catchTag("SqlError", (failure) =>
+      Effect.logWarning("Worker wake-up failed", failure)
+    )
+  );
+
+  const schedule = Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) => {
+      const wait = Math.max(0, lastSent + INTERVAL_MILLIS - now);
+
+      return Effect.forkIn(
+        Effect.sleep(Duration.millis(wait)).pipe(Effect.andThen(send)),
+        scope
+      );
+    }),
+    Effect.asVoid
+  );
+
+  const wake = Effect.suspend(() => {
+    if (pending) {
+      return Effect.void;
+    }
+
+    pending = true;
+
+    return schedule;
+  });
+
+  return WorkerWakeup.of({ wake });
+});
+
+/**
  * The wake-up service on the pooled client; pending sends stop with the layer.
  */
 export const WorkerWakeupLayer: Layer.Layer<
@@ -44,46 +100,11 @@ export const WorkerWakeupLayer: Layer.Layer<
   PgClient.PgClient
 > = Layer.effect(
   WorkerWakeup,
-  Effect.gen(function* makeWorkerWakeup() {
-    const client = yield* PgClient.PgClient;
-    const scope = yield* Effect.scope;
-    let lastSent = Number.NEGATIVE_INFINITY;
-    let pending = false;
-
-    const send = Effect.gen(function* sendWakeup() {
-      lastSent = yield* Clock.currentTimeMillis;
-      pending = false;
-      yield* client.notify(WORKER_CHANNEL, "");
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Worker wake-up failed", Cause.pretty(cause))
-      )
-    );
-
-    const schedule = Clock.currentTimeMillis.pipe(
-      Effect.flatMap((now) => {
-        const wait = Math.max(0, lastSent + INTERVAL_MILLIS - now);
-
-        return Effect.forkIn(
-          Effect.sleep(Duration.millis(wait)).pipe(Effect.andThen(send)),
-          scope
-        );
-      }),
-      Effect.asVoid
-    );
-
-    const wake = Effect.suspend(() => {
-      if (pending) {
-        return Effect.void;
-      }
-
-      pending = true;
-
-      return schedule;
-    });
-
-    return { wake };
-  })
+  PgClient.PgClient.pipe(
+    Effect.flatMap((client) =>
+      makeWorkerWakeup(client.notify(WORKER_CHANNEL, ""))
+    )
+  )
 );
 
 /**

@@ -12,23 +12,19 @@
  * When the `CONFIG_KEY` wait, or a DDL statement the caller marked with
  * `lockWaiting` (`statement-marks.ts`), hits its lock timeout (SQLSTATE
  * 55P03), the transaction rolls back and is retried after 0.5, 1, 2 and 4 s
- * with jitter, 5 attempts in total. Then it fails with `SchemaLockTimeout`
- * naming the sessions that blocked the last attempt. Every other failure,
- * a 55P03 from any other statement included, propagates at once.
+ * with jitter, 5 attempts in total (`Effect.retry` with `retrySchedule`,
+ * jittered by `Schedule.jittered`, a factor in [0.8, 1.2]). Every attempt
+ * starts from a fresh transaction state and sets the same lock timeouts.
+ * Then it fails with `SchemaLockTimeout` naming the sessions that blocked
+ * the last attempt. Every other failure, a 55P03 from any other statement
+ * included, propagates at once.
  */
 import type { PgClient } from "@effect/sql-pg";
-import {
-  Duration,
-  Effect,
-  Exit,
-  Option,
-  Random,
-  Schedule,
-  Schema,
-} from "effect";
+import { Duration, Effect, Exit, Option, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import { AttemptLockTimedOut } from "./attempt-lock-timed-out.ts";
 import { hygienic } from "./errors.ts";
 import type { DatabaseError, HygienicError } from "./errors.ts";
 import { advisoryClassId, advisoryObjectId, CONFIG_KEY } from "./locks.ts";
@@ -63,9 +59,6 @@ export const DEFAULT_RETRY_DELAYS: readonly Duration.Duration[] = [
   Duration.seconds(2),
   Duration.seconds(4),
 ];
-
-/** Each delay is multiplied by a random factor in `[1 - JITTER, 1 + JITTER]`. */
-export const RETRY_JITTER = 0.2;
 
 /** How often the blocking sessions of a waiting attempt are sampled. */
 const BLOCKER_SAMPLE_INTERVAL = Duration.millis(50);
@@ -107,6 +100,30 @@ export class SchemaLockTimeout extends Schema.TaggedError<SchemaLockTimeout>()(
     return `Schema lock timeout after ${this.attempts} attempts; blocked by ${blockers}`;
   }
 }
+
+/**
+ * The retry policy of a config commit before jitter: one recurrence after
+ * each delay, in order, then stop.
+ * @param delays - The delays before attempts 2, 3, and so on.
+ * @returns The schedule.
+ */
+export const retrySchedule = (
+  delays: readonly Duration.Input[]
+): Schedule.Schedule<unknown> => {
+  const [first, ...rest] = delays;
+
+  if (first === undefined) {
+    return Schedule.recurs(0);
+  }
+
+  let schedule: Schedule.Schedule<unknown> = Schedule.duration(first);
+
+  for (const delay of rest) {
+    schedule = Schedule.concat(schedule, Schedule.duration(delay));
+  }
+
+  return schedule;
+};
 
 /** Options of a config commit. */
 export interface ConfigCommitOptions {
@@ -174,28 +191,31 @@ const decodePidRows = Schema.decodeUnknownEffect(PidRows);
  * @param pids - Blocking PIDs sampled while the attempt waited.
  * @returns The holders, by PID.
  */
-export const describeLockHolders = (
+export const describeLockHolders: (
   monitor: PgClient.PgClient,
   pids: readonly number[]
-): Effect.Effect<readonly LockHolder[], SqlError> =>
-  monitor
-    .unsafe(HOLDERS_QUERY, [
-      `{${pids.join(",")}}`,
-      String(advisoryClassId(CONFIG_KEY)),
-      String(advisoryObjectId(CONFIG_KEY)),
-    ])
-    .pipe(
-      Effect.flatMap((rows) => decodeHolderRows(rows).pipe(Effect.orDie)),
-      Effect.map((rows) =>
-        rows.map((row) => ({
-          applicationName: row.application_name,
-          clientAddress: row.client_addr,
-          locks: row.locks,
-          pid: row.pid,
-          state: row.state,
-        }))
-      )
-    );
+) => Effect.Effect<readonly LockHolder[], SqlError> = Effect.fn(
+  "ConfigCommit.describeLockHolders"
+)(function* describeHolders(
+  monitor: PgClient.PgClient,
+  pids: readonly number[]
+) {
+  const raw = yield* monitor.unsafe(HOLDERS_QUERY, [
+    `{${pids.join(",")}}`,
+    String(advisoryClassId(CONFIG_KEY)),
+    String(advisoryObjectId(CONFIG_KEY)),
+  ]);
+
+  const rows = yield* decodeHolderRows(raw).pipe(Effect.orDie);
+
+  return rows.map((row): LockHolder => ({
+    applicationName: row.application_name,
+    clientAddress: row.client_addr,
+    locks: row.locks,
+    pid: row.pid,
+    state: row.state,
+  }));
+});
 
 /**
  * Samples `pg_blocking_pids` of a waiting backend until interrupted.
@@ -267,15 +287,6 @@ const configSetup =
       return yield* parseConfigState(rows);
     });
 
-const jittered = (delay: Duration.Input): Effect.Effect<Duration.Duration> =>
-  Random.nextBetween(1 - RETRY_JITTER, 1 + RETRY_JITTER).pipe(
-    Effect.map((factor) =>
-      Duration.millis(
-        Math.round(Duration.toMillis(Duration.fromInputUnsafe(delay)) * factor)
-      )
-    )
-  );
-
 const lockUpgradeRefused = (kind: string): Effect.Effect<never> =>
   Effect.die(
     new TransactionRefused({
@@ -290,60 +301,100 @@ const lockUpgradeRefused = (kind: string): Effect.Effect<never> =>
  * @param monitor - A pooled client used to sample blocking sessions.
  * @returns The `configCommit` function.
  */
-export const makeConfigCommit =
-  (client: PgClient.PgClient, monitor: PgClient.PgClient): ConfigCommit =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>, options?: ConfigCommitOptions) => {
+export const makeConfigCommit = (
+  client: PgClient.PgClient,
+  monitor: PgClient.PgClient
+): ConfigCommit => {
+  /**
+   * One attempt, on a fresh transaction state. A failure after a lock
+   * timeout becomes `AttemptLockTimedOut`, which the retry policy matches.
+   * @param effect - The caller's work.
+   * @returns The attempt.
+   */
+  const attempt = <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<
+    A,
+    E | SqlError | AttemptLockTimedOut,
+    Exclude<R, TransactionServices>
+  > =>
+    Effect.gen(function* configCommitAttempt() {
+      const state = new TransactionState("config", client);
+      const blockers = new Set<number>();
+
+      const exit = yield* Effect.exit(
+        runAtConfigState(state, configSetup(monitor, blockers), effect)
+      );
+
+      if (Exit.isFailure(exit) && state.lockTimedOut) {
+        return yield* new AttemptLockTimedOut({ blockers: [...blockers] });
+      }
+
+      return yield* exit;
+    });
+
+  /**
+   * The outermost config commit: attempts under the retry policy, then
+   * `SchemaLockTimeout` naming the last attempt's blockers.
+   * @param effect - The caller's work.
+   * @param options - Optional retry delays.
+   * @returns The caller's result after commit.
+   */
+  const outermost = <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+    options: ConfigCommitOptions | undefined
+  ): Effect.Effect<
+    A,
+    E | SqlError | SchemaLockTimeout,
+    Exclude<R, TransactionServices>
+  > => {
     const delays = options?.retryDelays ?? DEFAULT_RETRY_DELAYS;
     const attempts = delays.length + 1;
 
-    const attempt = (
-      index: number
-    ): Effect.Effect<
-      A,
-      E | SqlError | SchemaLockTimeout,
-      Exclude<R, TransactionServices>
-    > =>
-      Effect.gen(function* configCommitAttempt() {
-        const state = new TransactionState("config", client);
-        const blockers = new Set<number>();
-
-        const exit = yield* Effect.exit(
-          runAtConfigState(state, configSetup(monitor, blockers), effect)
-        );
-
-        if (Exit.isSuccess(exit) || !state.lockTimedOut) {
-          return yield* exit;
-        }
-
-        if (index + 1 >= attempts) {
-          const holders = yield* describeLockHolders(monitor, [...blockers]);
-
-          return yield* new SchemaLockTimeout({ attempts, holders });
-        }
-
-        const delay = yield* jittered(delays[index] ?? Duration.zero);
-        yield* Effect.logWarning(
-          `Config commit attempt ${index + 1} of ${attempts} hit a lock timeout; retrying in ${Duration.format(delay)}`
-        );
-        yield* Effect.sleep(delay);
-
-        return yield* attempt(index + 1);
-      });
-
-    return hygienic(
-      currentState.pipe(
-        Effect.flatMap((current) =>
-          Option.match(current, {
-            onNone: () => attempt(0),
-            onSome: (state) =>
-              state.kind === "config"
-                ? provideJoined(state, effect)
-                : lockUpgradeRefused(state.kind),
-          })
+    const policy = Schedule.jittered(retrySchedule(delays)).pipe(
+      Schedule.tap(({ attempt: retry, duration }) =>
+        Effect.logWarning(
+          `Config commit attempt ${retry} of ${attempts} hit a lock timeout; retrying in ${Duration.format(duration)}`
         )
       )
     );
+
+    return attempt(effect).pipe(
+      Effect.retry({
+        schedule: policy,
+        while: (error) => error instanceof AttemptLockTimedOut,
+      }),
+      Effect.catchIf(
+        (error): error is AttemptLockTimedOut =>
+          error instanceof AttemptLockTimedOut,
+        (timedOut) =>
+          describeLockHolders(monitor, timedOut.blockers).pipe(
+            Effect.flatMap((holders) =>
+              Effect.fail(new SchemaLockTimeout({ attempts, holders }))
+            )
+          )
+      )
+    );
   };
+
+  return Effect.fn("Transactions.configCommit")(
+    function* configCommit<A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      options?: ConfigCommitOptions
+    ) {
+      const current = yield* currentState;
+
+      if (Option.isNone(current)) {
+        return yield* outermost(effect, options);
+      }
+
+      return current.value.kind === "config"
+        ? yield* provideJoined(current.value, effect)
+        : yield* lockUpgradeRefused(current.value.kind);
+    },
+    (effect) => hygienic(effect)
+  );
+};
 
 /**
  * Bumps `core.config_state` by one and announces the new revision with
@@ -352,36 +403,36 @@ export const makeConfigCommit =
  * @param changeSetId - The change set this commit belongs to.
  * @returns The new configuration state.
  */
-export const bumpRevision = (
+export const bumpRevision: (
   changeSetId: string
-): Effect.Effect<
+) => Effect.Effect<
   ConfigState,
   DatabaseError,
   CurrentTransaction | SqlClient.SqlClient
-> =>
-  hygienic(
-    Effect.gen(function* bumpConfigRevision() {
-      const transaction = yield* CurrentTransaction;
+> = Effect.fn("ConfigCommit.bumpRevision")(
+  function* bumpConfigRevision(changeSetId: string) {
+    const transaction = yield* CurrentTransaction;
 
-      if (transaction.kind !== "config") {
-        return yield* Effect.die(
-          new TransactionRefused({
-            detail: "bumpRevision outside a config commit",
-            reason: "nesting",
-          })
-        );
-      }
+    if (transaction.kind !== "config") {
+      return yield* Effect.die(
+        new TransactionRefused({
+          detail: "bumpRevision outside a config commit",
+          reason: "nesting",
+        })
+      );
+    }
 
-      const sql = yield* SqlClient.SqlClient;
+    const sql = yield* SqlClient.SqlClient;
 
-      const rows = yield* sql`
+    const rows = yield* sql`
         UPDATE core.config_state
         SET revision = revision + 1, change_set_id = ${changeSetId}::uuid
         RETURNING revision, change_set_id`;
 
-      const next = yield* parseConfigState(rows);
-      yield* sql`SELECT pg_notify(${CONFIG_CHANNEL}, ${String(next.revision)})`;
+    const next = yield* parseConfigState(rows);
+    yield* sql`SELECT pg_notify(${CONFIG_CHANNEL}, ${String(next.revision)})`;
 
-      return next;
-    })
-  );
+    return next;
+  },
+  (effect) => hygienic(effect)
+);
