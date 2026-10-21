@@ -1,30 +1,30 @@
 {
   "addClass": {
     "after": {
-      "loadAverage": [2.93, 2.16, 1.01],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.97, 3.98, 3.45],
+      "otherActive": 2,
+      "otherSessions": 14,
+      "testDatabases": 3
     },
     "before": {
-      "loadAverage": [3.06, 2.11, 0.96],
-      "otherActive": 7,
-      "otherSessions": 24,
-      "testDatabases": 9
+      "loadAverage": [2.75, 3.55, 3.31],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
     },
-    "elapsedMs": 24289.094358999995,
+    "elapsedMs": 25925.892273000005,
     "result": [
       {
         "ancestors": [
           {
             "after": {
               "idxScan": 666667,
-              "relfilenode": "969678",
+              "relfilenode": "1516103",
               "seqScan": 4
             },
             "before": {
               "idxScan": 666667,
-              "relfilenode": "969678",
+              "relfilenode": "1516103",
               "seqScan": 4
             },
             "checkValidated": false,
@@ -34,12 +34,12 @@
           {
             "after": {
               "idxScan": 0,
-              "relfilenode": "969698",
+              "relfilenode": "1516123",
               "seqScan": 2
             },
             "before": {
               "idxScan": 0,
-              "relfilenode": "969698",
+              "relfilenode": "1516123",
               "seqScan": 2
             },
             "checkValidated": false,
@@ -49,15 +49,15 @@
         ],
         "attempts": [
           {
-            "heldMs": 3.7867689999984577,
+            "heldMs": 2.6142670000117505,
             "ok": true,
-            "startedAt": 107664.085211
+            "startedAt": 85474.252604
           }
         ],
         "blocking": {
           "kind": "none"
         },
-        "commitMs": 7.629444000005606,
+        "commitMs": 4.647477999998955,
         "foreignClassRefused": "23514",
         "locks": [
           {
@@ -119,22 +119,22 @@
           {
             "label": "widen asset subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 0.3756419999990612
+            "ms": 0.2938490000087768
           },
           {
             "label": "widen laptop subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 0.21737600000051316
+            "ms": 0.11476500000571832
           },
           {
             "label": "create gaming_laptop with level FK",
             "lockWaits": [],
-            "ms": 0.8843239999987418
+            "ms": 0.7126920000009704
           },
           {
             "label": "create gaming_laptop trigger",
             "lockWaits": [],
-            "ms": 0.26066800000262447
+            "ms": 0.08011999999871477
           }
         ]
       },
@@ -143,12 +143,12 @@
           {
             "after": {
               "idxScan": 666667,
-              "relfilenode": "973142",
+              "relfilenode": "1516180",
               "seqScan": 9
             },
             "before": {
               "idxScan": 666667,
-              "relfilenode": "973142",
+              "relfilenode": "1516180",
               "seqScan": 4
             },
             "checkValidated": false,
@@ -158,12 +158,12 @@
           {
             "after": {
               "idxScan": 0,
-              "relfilenode": "973178",
+              "relfilenode": "1516200",
               "seqScan": 5
             },
             "before": {
               "idxScan": 0,
-              "relfilenode": "973178",
+              "relfilenode": "1516200",
               "seqScan": 2
             },
             "checkValidated": false,
@@ -173,20 +173,20 @@
         ],
         "attempts": [
           {
-            "heldMs": 2000.911214000007,
+            "heldMs": 2001.332469999994,
             "ok": false,
-            "startedAt": 111908.331595
+            "startedAt": 89786.814387
           },
           {
-            "heldMs": 14.065786999999546,
+            "heldMs": 14.857675000006566,
             "ok": true,
-            "startedAt": 114362.935241
+            "startedAt": 92373.222847
           }
         ],
         "blocking": {
           "kind": "reader-past-timeout"
         },
-        "commitMs": 2471.5408319999988,
+        "commitMs": 2621.8035579999996,
         "foreignClassRefused": "23514",
         "locks": [
           {
@@ -241,10 +241,10 @@
         "mechanism": "per-statement",
         "newRecordInserted": true,
         "queue": {
-          "plainReadMs": 1988.5356960000063,
+          "plainReadMs": 1989.9760309999983,
           "plainReadQueuedBehindDdl": true,
           "readsDoneBeforeRelease": true,
-          "requestMs": 1988.801244000002,
+          "requestMs": 1990.7958939999953,
           "requestQueuedBehindCommit": true,
           "revisionUnchangedAfterFailedAttempt": true
         },
@@ -255,22 +255,22 @@
           {
             "label": "widen asset subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 11.075786000001244
+            "ms": 10.96298399999796
           },
           {
             "label": "widen laptop subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 0.1542090000002645
+            "ms": 0.2598559999896679
           },
           {
             "label": "create gaming_laptop with level FK",
             "lockWaits": [],
-            "ms": 0.8797449999983655
+            "ms": 1.4753080000082264
           },
           {
             "label": "create gaming_laptop trigger",
             "lockWaits": [],
-            "ms": 0.08977799999411218
+            "ms": 0.12251900001137983
           }
         ]
       },
@@ -279,12 +279,12 @@
           {
             "after": {
               "idxScan": 666667,
-              "relfilenode": "978409",
+              "relfilenode": "1516257",
               "seqScan": 8
             },
             "before": {
               "idxScan": 666667,
-              "relfilenode": "978409",
+              "relfilenode": "1516257",
               "seqScan": 4
             },
             "checkValidated": false,
@@ -294,12 +294,12 @@
           {
             "after": {
               "idxScan": 0,
-              "relfilenode": "978429",
+              "relfilenode": "1516277",
               "seqScan": 5
             },
             "before": {
               "idxScan": 0,
-              "relfilenode": "978429",
+              "relfilenode": "1516277",
               "seqScan": 2
             },
             "checkValidated": false,
@@ -309,16 +309,16 @@
         ],
         "attempts": [
           {
-            "heldMs": 2428.796742000006,
+            "heldMs": 2433.971848000001,
             "ok": true,
-            "startedAt": 118595.156984
+            "startedAt": 97174.53912
           }
         ],
         "blocking": {
           "holdMs": 1200,
           "kind": "staggered"
         },
-        "commitMs": 2433.5768180000014,
+        "commitMs": 2445.9850240000087,
         "foreignClassRefused": "23514",
         "locks": [
           {
@@ -376,29 +376,29 @@
         "revisionDelta": 1,
         "rows": 1000000,
         "staggered": {
-          "observedWaitsMs": [1202.3223689999868, 1201.8951300000044],
-          "requestMs": 2423.4537529999943
+          "observedWaitsMs": [1202.1148339999927, 1203.7973490000004],
+          "requestMs": 2436.994298000005
         },
         "steps": [
           {
             "label": "widen asset subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 1213.65174999999
+            "ms": 1212.2017309999937
           },
           {
             "label": "widen laptop subtree check (NOT VALID)",
             "lockWaits": [],
-            "ms": 1211.9241400000028
+            "ms": 1214.853747999994
           },
           {
             "label": "create gaming_laptop with level FK",
             "lockWaits": [],
-            "ms": 0.9949400000041351
+            "ms": 1.9011040000041248
           },
           {
             "label": "create gaming_laptop trigger",
             "lockWaits": [],
-            "ms": 0.14329799999541137
+            "ms": 1.076362000007066
           }
         ]
       },
@@ -407,12 +407,12 @@
           {
             "after": {
               "idxScan": 666667,
-              "relfilenode": "984017",
+              "relfilenode": "1516429",
               "seqScan": 8
             },
             "before": {
               "idxScan": 666667,
-              "relfilenode": "984017",
+              "relfilenode": "1516429",
               "seqScan": 4
             },
             "checkValidated": false,
@@ -422,12 +422,12 @@
           {
             "after": {
               "idxScan": 0,
-              "relfilenode": "984053",
+              "relfilenode": "1516449",
               "seqScan": 5
             },
             "before": {
               "idxScan": 0,
-              "relfilenode": "984053",
+              "relfilenode": "1516449",
               "seqScan": 2
             },
             "checkValidated": false,
@@ -437,21 +437,21 @@
         ],
         "attempts": [
           {
-            "heldMs": 2001.1535379999987,
+            "heldMs": 2000.872378,
             "ok": false,
-            "startedAt": 125213.967028
+            "startedAt": 104251.91386
           },
           {
-            "heldMs": 3.949995000002673,
+            "heldMs": 4.122375999999349,
             "ok": true,
-            "startedAt": 127721.478731
+            "startedAt": 106684.294252
           }
         ],
         "blocking": {
           "holdMs": 1200,
           "kind": "staggered"
         },
-        "commitMs": 2513.6181300000026,
+        "commitMs": 2440.8925549999985,
         "foreignClassRefused": "23514",
         "locks": [
           {
@@ -509,121 +509,121 @@
         "revisionDelta": 1,
         "rows": 1000000,
         "staggered": {
-          "observedWaitsMs": [1200.4862259999936, 782.0168249999988],
-          "requestMs": 1991.8395159999927
+          "observedWaitsMs": [1201.1235409999936, 785.3350119999959],
+          "requestMs": 1991.8415160000004
         },
         "steps": [
           {
             "label": "widen asset subtree check (NOT VALID)",
             "lockWaits": [
               {
-                "ms": 0.06506100000115111,
+                "ms": 0.06617400000686757,
                 "table": "probe.asset"
               }
             ],
-            "ms": 0.26571700000204146
+            "ms": 0.2203319999971427
           },
           {
             "label": "widen laptop subtree check (NOT VALID)",
             "lockWaits": [
               {
-                "ms": 0.043491000003996305,
+                "ms": 0.038511999999172986,
                 "table": "probe.laptop"
               }
             ],
-            "ms": 0.15451900000334717
+            "ms": 0.14495099999476224
           },
           {
             "label": "create gaming_laptop with level FK",
             "lockWaits": [
               {
-                "ms": 0.05315900000277907,
+                "ms": 0.05127599999832455,
                 "table": "probe.laptop"
               }
             ],
-            "ms": 0.9366310000041267
+            "ms": 0.9871559999883175
           },
           {
             "label": "create gaming_laptop trigger",
             "lockWaits": [],
-            "ms": 0.14133499999297783
+            "ms": 0.11438400000042748
           }
         ]
       }
     ],
-    "startedAt": "2026-10-21T06:35:56.465Z"
+    "startedAt": "2026-10-21T07:03:18.633Z"
   },
   "addColumn": {
     "after": {
-      "loadAverage": [2.55, 2.13, 1.03],
-      "otherActive": 1,
-      "otherSessions": 2,
+      "loadAverage": [4.39, 4, 3.49],
+      "otherActive": 0,
+      "otherSessions": 0,
       "testDatabases": 1
     },
     "before": {
-      "loadAverage": [2.59, 2.14, 1.02],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.39, 4, 3.49],
+      "otherActive": 2,
+      "otherSessions": 5,
+      "testDatabases": 2
     },
-    "elapsedMs": 2348.6634959999938,
+    "elapsedMs": 2746.3668640000105,
     "result": {
       "cases": [
         {
-          "commitMs": 2.7102669999876525,
+          "commitMs": 2.584712000010768,
           "expectedCatalogOnly": true,
           "label": "boolean NOT NULL DEFAULT false",
-          "relfilenodeAfter": "1012830",
-          "relfilenodeBefore": "1012830",
+          "relfilenodeAfter": "1565284",
+          "relfilenodeBefore": "1565284",
           "rows": 1000000,
           "seqScanAfter": 1,
           "seqScanBefore": 1,
           "statement": "ALTER TABLE probe_add_column_0 ADD COLUMN flag boolean NOT NULL DEFAULT false",
-          "statementMs": 0.27903199999127537
+          "statementMs": 0.30364699999336153
         },
         {
-          "commitMs": 2.2082979999831878,
+          "commitMs": 7.870022000017343,
           "expectedCatalogOnly": true,
           "label": "nullable text with a constant default",
-          "relfilenodeAfter": "1013625",
-          "relfilenodeBefore": "1013625",
+          "relfilenodeAfter": "1565296",
+          "relfilenodeBefore": "1565296",
           "rows": 1000000,
           "seqScanAfter": 1,
           "seqScanBefore": 1,
           "statement": "ALTER TABLE probe_add_column_1 ADD COLUMN note text DEFAULT 'none'",
-          "statementMs": 0.18501499999547377
+          "statementMs": 0.4826720000128262
         },
         {
-          "commitMs": 334.8000269999902,
+          "commitMs": 365.69657699999516,
           "expectedCatalogOnly": false,
           "label": "volatile default (contrast case)",
-          "relfilenodeAfter": "1015133",
-          "relfilenodeBefore": "1014451",
+          "relfilenodeAfter": "1565316",
+          "relfilenodeBefore": "1565306",
           "rows": 1000000,
           "seqScanAfter": 4,
           "seqScanBefore": 1,
           "statement": "ALTER TABLE probe_add_column_2 ADD COLUMN noise double precision DEFAULT random()",
-          "statementMs": 315.6524099999806
+          "statementMs": 329.0076219999755
         }
       ],
       "rows": 1000000
     },
-    "startedAt": "2026-10-21T06:36:40.030Z"
+    "startedAt": "2026-10-21T07:04:33.176Z"
   },
   "casefold": {
     "after": {
-      "loadAverage": [2.59, 2.14, 1.02],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.39, 4, 3.49],
+      "otherActive": 4,
+      "otherSessions": 5,
+      "testDatabases": 4
     },
     "before": {
-      "loadAverage": [2.65, 2.14, 1.02],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.34, 3.99, 3.48],
+      "otherActive": 3,
+      "otherSessions": 4,
+      "testDatabases": 3
     },
-    "elapsedMs": 970.7346220000181,
+    "elapsedMs": 1015.4367719999864,
     "result": {
       "boundLookups": 12,
       "boundMatches": 12,
@@ -671,157 +671,157 @@
         }
       ],
       "idxScanDelta": 12,
-      "indexBuildMs": 246.1018810000096,
+      "indexBuildMs": 255.6351100000029,
       "planIndexes": ["probe_casefold_key"],
       "planNodes": ["Index Scan"],
       "provolatile": "i",
       "rows": 1000000,
       "seqScanDelta": 0
     },
-    "startedAt": "2026-10-21T06:36:35.789Z"
+    "startedAt": "2026-10-21T07:04:31.220Z"
   },
   "configPause": {
     "after": {
-      "loadAverage": [4.27, 2.18, 0.93],
-      "otherActive": 2,
-      "otherSessions": 3,
-      "testDatabases": 2
+      "loadAverage": [3.03, 3.69, 3.35],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
     },
     "before": {
-      "loadAverage": [2.98, 1.51, 0.65],
-      "otherActive": 3,
-      "otherSessions": 15,
-      "testDatabases": 6
+      "loadAverage": [3.02, 3.78, 3.35],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
     },
-    "elapsedMs": 52665.276104000004,
+    "elapsedMs": 52841.203731,
     "result": {
       "baseline": {
-        "durationMs": 10000.491743999999,
+        "durationMs": 10000.078374,
         "failed": 0,
-        "longestGapMs": 7.491706000000704,
-        "requests": 152291,
-        "requestsPerSecond": 15228.351154968967,
+        "longestGapMs": 9.738495000000512,
+        "requests": 161933,
+        "requestsPerSecond": 16193.173087625244,
         "stallCount": 0,
         "stalls": [],
         "start": {
-          "count": 152291,
-          "max": 8.401267000001098,
-          "mean": 0.31280779096596,
-          "p50": 0.2753050000010262,
-          "p95": 0.4680350000016915,
-          "p99": 1.2665070000002743
+          "count": 161933,
+          "max": 10.014321000000564,
+          "mean": 0.29195331001092056,
+          "p50": 0.2587130000001707,
+          "p95": 0.42784000000028755,
+          "p99": 1.1621820000000298
         },
         "total": {
-          "count": 152291,
-          "max": 8.907673000001523,
-          "mean": 0.5243854744600261,
-          "p50": 0.4742970000006608,
-          "p95": 0.7811709999987215,
-          "p99": 1.645556999999826
+          "count": 161933,
+          "max": 10.625141999999869,
+          "mean": 0.49318874650626826,
+          "p50": 0.44100499999967724,
+          "p95": 0.7188340000002427,
+          "p99": 1.5238479999998162
         }
       },
       "batchOnly": {
         "commit": {
           "attempts": null,
           "attemptsWithLock": 1,
-          "elapsedMs": 1902.7412699999986,
+          "elapsedMs": 1927.3565989999988,
           "holders": [],
           "outcome": "committed"
         },
         "window": {
-          "durationMs": 1902.7590430000055,
+          "durationMs": 1927.3801430000021,
           "failed": 0,
-          "longestGapMs": 200.7721040000033,
-          "requests": 24773,
-          "requestsPerSecond": 13019.515051649132,
+          "longestGapMs": 200.76683000000048,
+          "requests": 22231,
+          "requestsPerSecond": 11534.309970319126,
           "stallCount": 2,
           "stalls": [
             {
-              "atMs": 0.26101800000469666,
-              "ms": 201.51421200000186
+              "atMs": 0.2813959999984945,
+              "ms": 201.72893900000054
             },
             {
-              "atMs": 659.2630390000049,
-              "ms": 201.20769899999868
+              "atMs": 634.8693340000027,
+              "ms": 201.60115999999834
             }
           ],
           "start": {
-            "count": 24773,
-            "max": 201.25492700000177,
-            "mean": 0.41894384632460663,
-            "p50": 0.26396300000487827,
-            "p95": 0.3998280000014347,
-            "p99": 1.032640999997966
+            "count": 22231,
+            "max": 201.14182200000505,
+            "mean": 0.4746013760964274,
+            "p50": 0.2989889999953448,
+            "p95": 0.4616630000018631,
+            "p99": 1.3099289999954635
           },
           "total": {
-            "count": 24773,
-            "max": 201.51421200000186,
-            "mean": 0.6136104136358159,
-            "p50": 0.4498810000004596,
-            "p95": 0.6577499999984866,
-            "p99": 1.2841209999969578
+            "count": 22231,
+            "max": 201.72893900000054,
+            "mean": 0.6925757341549923,
+            "p50": 0.5061959999948158,
+            "p95": 0.745483000006061,
+            "p99": 1.5915050000039628
           }
         }
       },
-      "boundMs": 2205.932331,
+      "boundMs": 2207.2835259999993,
       "longRequest": {
-        "batchRows": 1111100,
+        "batchRows": 1051200,
         "commit": {
           "attempts": 5,
           "attemptsWithLock": 0,
-          "elapsedMs": 8939.508627,
-          "holders": ["259956 (std-probes)"],
+          "elapsedMs": 9645.193168999998,
+          "holders": ["270202 (std-probes)"],
           "outcome": "SchemaLockTimeout"
         },
-        "longRequestMs": 29521.597537,
+        "longRequestMs": 29522.316752999996,
         "longRequestOutcome": "completed",
-        "longRequestPid": 259956,
+        "longRequestPid": 270202,
         "longRequestRunningAtEnd": true,
         "observedBlockedByLongRequest": true,
         "window": {
-          "durationMs": 8940.114540000002,
+          "durationMs": 9645.926059000001,
           "failed": 0,
-          "longestGapMs": 203.9039300000004,
-          "requests": 121830,
-          "requestsPerSecond": 13627.342183917926,
+          "longestGapMs": 203.37560700000176,
+          "requests": 142476,
+          "requestsPerSecond": 14770.5880315208,
           "stallCount": 5,
           "stalls": [
             {
-              "atMs": 1.090319000002637,
-              "ms": 205.1810970000006
+              "atMs": 1.2902119999998831,
+              "ms": 204.9393310000014
             },
             {
-              "atMs": 636.3798569999999,
-              "ms": 201.5924589999995
+              "atMs": 639.1706059999997,
+              "ms": 202.0012080000015
             },
             {
-              "atMs": 2006.3898469999986,
-              "ms": 201.8142829999997
+              "atMs": 1939.836349000001,
+              "ms": 202.33943999999974
             },
             {
-              "atMs": 4232.097139999998,
-              "ms": 201.58074599999964
+              "atMs": 4458.258456,
+              "ms": 202.00400400000217
             },
             {
-              "atMs": 8736.115312000002,
-              "ms": 201.85896599999978
+              "atMs": 9440.406643999999,
+              "ms": 202.0515919999998
             }
           ],
           "start": {
-            "count": 121830,
-            "max": 203.67958,
-            "mean": 0.375883049642945,
-            "p50": 0.2823080000016489,
-            "p95": 0.4409440000017639,
-            "p99": 1.1911269999982323
+            "count": 142476,
+            "max": 203.21130999999878,
+            "mean": 0.3423326424871507,
+            "p50": 0.25478600000133156,
+            "p95": 0.4069409999974596,
+            "p99": 1.0856289999974251
           },
           "total": {
-            "count": 121830,
-            "max": 205.1810970000006,
-            "mean": 0.5860250378478256,
-            "p50": 0.48546799999894574,
-            "p95": 0.7197659999947064,
-            "p99": 1.494684999997844
+            "count": 142476,
+            "max": 204.9393310000014,
+            "mean": 0.5406672398929729,
+            "p50": 0.43629499999951804,
+            "p95": 0.6769249999997555,
+            "p99": 1.4324980000019423
           }
         }
       },
@@ -838,45 +838,45 @@
       "stream": {
         "commitMs": {
           "count": 50,
-          "max": 13.701515999997355,
-          "mean": 5.56711066000018,
-          "p50": 4.809341000000131,
-          "p95": 9.99080899999899,
-          "p99": 13.701515999997355
+          "max": 28.42008899999928,
+          "mean": 6.9616816800000745,
+          "p50": 6.95009299999947,
+          "p95": 8.260041999999885,
+          "p99": 28.42008899999928
         },
         "commits": 50,
-        "commitsPerSecond": 9.508108315481493,
+        "commitsPerSecond": 9.381012491424897,
         "heldMs": {
           "count": 50,
-          "max": 7.985439000000042,
-          "mean": 3.4909609000003545,
-          "p50": 3.287956000000122,
-          "p95": 5.9323309999999765,
-          "p99": 7.985439000000042
+          "max": 25.387590000000273,
+          "mean": 5.953927419999891,
+          "p50": 6.0598879999997735,
+          "p95": 7.283525999999256,
+          "p99": 25.387590000000273
         },
         "window": {
-          "durationMs": 5258.808614000001,
+          "durationMs": 5330.052534,
           "failed": 0,
-          "longestGapMs": 10.517894000000524,
-          "requests": 57186,
-          "requestsPerSecond": 10874.326144472996,
+          "longestGapMs": 26.484370000000126,
+          "requests": 84656,
+          "requestsPerSecond": 15882.77028415495,
           "stallCount": 0,
           "stalls": [],
           "start": {
-            "count": 57186,
-            "max": 15.18759399999908,
-            "mean": 0.45805356672962216,
-            "p50": 0.3184350000010454,
-            "p95": 1.2065659999971103,
-            "p99": 2.8530549999995856
+            "count": 84656,
+            "max": 27.974685999999565,
+            "mean": 0.30742468240880444,
+            "p50": 0.23871599999984028,
+            "p95": 0.4245040000005247,
+            "p99": 1.1771909999988566
           },
           "total": {
-            "count": 57186,
-            "max": 15.921706000000995,
-            "mean": 0.7343241466792629,
-            "p50": 0.5447590000003402,
-            "p95": 1.7871409999970638,
-            "p99": 3.8020479999977397
+            "count": 84656,
+            "max": 28.32167499999923,
+            "mean": 0.5028025660555464,
+            "p50": 0.42100699999900826,
+            "p95": 0.7379300000011426,
+            "p99": 1.6193569999995816
           }
         }
       },
@@ -884,43 +884,43 @@
         "commit": {
           "attempts": null,
           "attemptsWithLock": 2,
-          "elapsedMs": 2439.766908000005,
+          "elapsedMs": 2497.6131060000043,
           "holders": [],
           "outcome": "committed"
         },
         "window": {
-          "durationMs": 2439.7845409999936,
+          "durationMs": 2497.6314710000006,
           "failed": 0,
-          "longestGapMs": 2001.7102569999988,
-          "requests": 7130,
-          "requestsPerSecond": 2922.3892028915025,
+          "longestGapMs": 2001.8227740000002,
+          "requests": 7882,
+          "requestsPerSecond": 3155.7898318938983,
           "stallCount": 1,
           "stalls": [
             {
-              "atMs": 0.27182799999718554,
-              "ms": 2002.3199170000007
+              "atMs": 0.36275900000327965,
+              "ms": 2002.375086
             }
           ],
           "start": {
-            "count": 7130,
-            "max": 2001.8628820000013,
-            "mean": 2.536581943618467,
-            "p50": 0.26075699999637436,
-            "p95": 0.42223000000376487,
-            "p99": 1.0662630000006175
+            "count": 7882,
+            "max": 2001.9292529999948,
+            "mean": 2.334476472088306,
+            "p50": 0.26266100000066217,
+            "p95": 0.40574900000501657,
+            "p99": 0.9987369999944349
           },
           "total": {
-            "count": 7130,
-            "max": 2002.3199170000007,
-            "mean": 2.736587994249599,
-            "p50": 0.4478079999971669,
-            "p95": 0.7005500000013853,
-            "p99": 1.3848290000023553
+            "count": 7882,
+            "max": 2002.375086,
+            "mean": 2.534014998858151,
+            "p50": 0.45494999999937136,
+            "p95": 0.6642319999955362,
+            "p99": 1.2456190000011702
           }
         }
       }
     },
-    "startedAt": "2026-10-21T06:34:26.547Z"
+    "startedAt": "2026-10-21T07:01:58.262Z"
   },
   "environment": {
     "cores": 16,
@@ -953,26 +953,26 @@
       "work_mem": "4096 kB"
     }
   },
-  "finishedAt": "2026-10-21T06:38:59.722Z",
+  "finishedAt": "2026-10-21T07:06:46.777Z",
   "killedBuild": {
     "after": {
-      "loadAverage": [3.06, 2.11, 0.96],
+      "loadAverage": [2.75, 3.55, 3.31],
       "otherActive": 0,
       "otherSessions": 0,
       "testDatabases": 1
     },
     "before": {
-      "loadAverage": [3.84, 2.16, 0.94],
-      "otherActive": 2,
-      "otherSessions": 3,
-      "testDatabases": 2
+      "loadAverage": [3.03, 3.69, 3.35],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
     },
-    "elapsedMs": 26081.250098999997,
+    "elapsedMs": 27020.447076999997,
     "result": [
       {
         "backendAliveAfterKill": true,
-        "backendExitAfterKillMs": 3034.203781999997,
-        "backendExitAfterReleaseMs": 31.503788999994867,
+        "backendExitAfterKillMs": 3056.356147999999,
+        "backendExitAfterReleaseMs": 32.5048139999999,
         "effectiveCheckInterval": "0",
         "indexState": "valid",
         "lockFreeAfterEnd": true,
@@ -991,8 +991,8 @@
       },
       {
         "backendAliveAfterKill": true,
-        "backendExitAfterKillMs": 3019.032739000002,
-        "backendExitAfterReleaseMs": 10.80113400000846,
+        "backendExitAfterKillMs": 3039.7238780000043,
+        "backendExitAfterReleaseMs": 11.363282999998773,
         "effectiveCheckInterval": "0",
         "indexState": "invalid",
         "lockFreeAfterEnd": true,
@@ -1011,7 +1011,7 @@
       },
       {
         "backendAliveAfterKill": true,
-        "backendExitAfterKillMs": 1894.1891409999953,
+        "backendExitAfterKillMs": 2030.3906089999946,
         "backendExitAfterReleaseMs": null,
         "effectiveCheckInterval": "0",
         "indexState": "valid",
@@ -1031,8 +1031,8 @@
       },
       {
         "backendAliveAfterKill": false,
-        "backendExitAfterKillMs": 238.48159400001168,
-        "backendExitAfterReleaseMs": -2.504862999994657,
+        "backendExitAfterKillMs": 232.62517499999376,
+        "backendExitAfterReleaseMs": -10.70187600000645,
         "effectiveCheckInterval": "250ms",
         "indexState": "invalid",
         "lockFreeAfterEnd": true,
@@ -1051,7 +1051,7 @@
       },
       {
         "backendAliveAfterKill": true,
-        "backendExitAfterKillMs": 289.85080300000845,
+        "backendExitAfterKillMs": 249.34839799998736,
         "backendExitAfterReleaseMs": null,
         "effectiveCheckInterval": "250ms",
         "indexState": "invalid",
@@ -1070,40 +1070,40 @@
         "tryLockRefusedAfterKill": true
       }
     ],
-    "startedAt": "2026-10-21T06:35:29.012Z"
+    "startedAt": "2026-10-21T07:02:51.256Z"
   },
   "lockBudget": {
     "after": {
-      "loadAverage": [2.7, 2.14, 1.01],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.89, 4.06, 3.5],
+      "otherActive": 16,
+      "otherSessions": 46,
+      "testDatabases": 18
     },
     "before": {
-      "loadAverage": [2.85, 2.16, 1.01],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [5.06, 4.07, 3.5],
+      "otherActive": 2,
+      "otherSessions": 3,
+      "testDatabases": 2
     },
-    "elapsedMs": 5056.488497000013,
+    "elapsedMs": 5103.118395999991,
     "result": [
       {
         "attempts": [
           {
-            "heldMs": 2432.626701000001,
+            "heldMs": 2443.6822790000006,
             "ok": true,
-            "startedAt": 128711.720042
+            "startedAt": 125356.966603
           }
         ],
         "holdMs": 1200,
         "mechanism": "per-statement",
-        "observedWaitsMs": [1203.5343050000083, 1203.049927999993],
-        "requestMs": 2425.6809660000145,
+        "observedWaitsMs": [1201.711639999994, 1209.6639260000084],
+        "requestMs": 2437.1419840000017,
         "steps": [
           {
             "label": "CREATE TABLE with two foreign keys",
             "lockWaits": [],
-            "ms": 2432.022541000013
+            "ms": 2440.910678
           }
         ],
         "tableCreated": true
@@ -1111,96 +1111,104 @@
       {
         "attempts": [
           {
-            "heldMs": 2001.3599150000082,
+            "heldMs": 2001.2226729999966,
             "ok": false,
-            "startedAt": 131168.262475
+            "startedAt": 127862.667258
           },
           {
-            "heldMs": 1.6771259999950416,
+            "heldMs": 2.6743489999935264,
             "ok": true,
-            "startedAt": 133745.922574
+            "startedAt": 130418.747203
           }
         ],
         "holdMs": 1200,
         "mechanism": "lock-budget",
-        "observedWaitsMs": [1207.6125900000043, 773.3586060000234],
-        "requestMs": 1991.5573680000089,
+        "observedWaitsMs": [1208.2011009999987, 768.0380480000022],
+        "requestMs": 1991.9639349999925,
         "steps": [
           {
             "label": "CREATE TABLE with two foreign keys",
             "lockWaits": [
               {
-                "ms": 0.05126599999493919,
+                "ms": 0.09232200001133606,
                 "table": "probe_ref_a"
               },
               {
-                "ms": 0.034684999991441146,
+                "ms": 0.08107200000085868,
                 "table": "probe_ref_b"
               }
             ],
-            "ms": 0.9979850000236183
+            "ms": 1.5434860000095796
           }
         ],
         "tableCreated": true
       }
     ],
-    "startedAt": "2026-10-21T06:36:21.715Z"
+    "startedAt": "2026-10-21T07:04:03.179Z"
   },
   "lockInventory": {
     "after": {
-      "loadAverage": [2.65, 2.14, 1.02],
-      "otherActive": 1,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.82, 4.05, 3.5],
+      "otherActive": 7,
+      "otherSessions": 22,
+      "testDatabases": 9
     },
     "before": {
-      "loadAverage": [2.7, 2.14, 1.01],
-      "otherActive": 0,
-      "otherSessions": 2,
-      "testDatabases": 1
+      "loadAverage": [4.82, 4.05, 3.5],
+      "otherActive": 2,
+      "otherSessions": 35,
+      "testDatabases": 8
     },
-    "elapsedMs": 675.4548900000227,
+    "elapsedMs": 1037.8887119999854,
     "result": [
       {
         "added": [
           {
             "kind": "created",
+            "tableMode": null,
+            "mode": "ShareLock",
+            "relation": "pg_toast.pg_toast_1543689"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1543689"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1543689_index"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
             "mode": "ShareLock",
             "relation": "inv.fresh"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "AccessExclusiveLock",
             "relation": "inv.fresh"
           },
           {
             "kind": "created",
-            "mode": "ShareLock",
-            "relation": "pg_toast.pg_toast_1002699"
-          },
-          {
-            "kind": "created",
-            "mode": "AccessExclusiveLock",
-            "relation": "pg_toast.pg_toast_1002699"
-          },
-          {
-            "kind": "created",
-            "mode": "AccessExclusiveLock",
-            "relation": "inv.fresh_id_class"
-          },
-          {
-            "kind": "created",
+            "tableMode": null,
             "mode": "AccessExclusiveLock",
             "relation": "inv.fresh_pkey"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "AccessExclusiveLock",
-            "relation": "pg_toast.pg_toast_1002699_index"
+            "relation": "inv.fresh_id_class"
           }
         ],
         "catalogLocks": 0,
-        "ddlMs": 0.6233449999999721,
+        "catalogModes": [],
+        "ddlMs": 0.7172209999989718,
         "explicitLocks": [],
         "form": "Create root table",
         "violations": []
@@ -1208,63 +1216,75 @@
       {
         "added": [
           {
-            "kind": "implied",
+            "kind": "unbudgeted: index of a locked table",
+            "tableMode": "ShareRowExclusiveLock",
             "mode": "AccessShareLock",
             "relation": "inv.child_id_class"
           },
           {
-            "kind": "created",
-            "mode": "ShareLock",
-            "relation": "pg_toast.pg_toast_1002808"
-          },
-          {
-            "kind": "created",
-            "mode": "AccessExclusiveLock",
-            "relation": "pg_toast.pg_toast_1002808"
-          },
-          {
             "kind": "pre-locked",
+            "tableMode": null,
             "mode": "AccessShareLock",
             "relation": "inv.child"
           },
           {
             "kind": "created",
-            "mode": "AccessExclusiveLock",
-            "relation": "inv.grandchild_id_class"
-          },
-          {
-            "kind": "created",
-            "mode": "AccessExclusiveLock",
-            "relation": "inv.grandchild_pkey"
-          },
-          {
-            "kind": "created",
+            "tableMode": null,
             "mode": "AccessShareLock",
             "relation": "inv.grandchild"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "ShareLock",
             "relation": "inv.grandchild"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "ShareRowExclusiveLock",
             "relation": "inv.grandchild"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "AccessExclusiveLock",
             "relation": "inv.grandchild"
           },
           {
             "kind": "created",
+            "tableMode": null,
             "mode": "AccessExclusiveLock",
-            "relation": "pg_toast.pg_toast_1002808_index"
+            "relation": "pg_toast.pg_toast_1543886_index"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "ShareLock",
+            "relation": "pg_toast.pg_toast_1543886"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1543886"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.grandchild_id_class"
+          },
+          {
+            "kind": "created",
+            "tableMode": null,
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.grandchild_pkey"
           }
         ],
         "catalogLocks": 0,
-        "ddlMs": 0.92758399999002,
+        "catalogModes": [],
+        "ddlMs": 0.7320080000208691,
         "explicitLocks": ["inv.child SHARE ROW EXCLUSIVE"],
         "form": "Create child table with level FK",
         "violations": []
@@ -1272,7 +1292,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.10182999999960884,
+        "catalogModes": [],
+        "ddlMs": 0.1475849999987986,
         "explicitLocks": ["inv.child SHARE ROW EXCLUSIVE"],
         "form": "Create class-change trigger",
         "violations": []
@@ -1280,7 +1301,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.14929899998242036,
+        "catalogModes": [],
+        "ddlMs": 0.2872870000137482,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Rewrite an ancestor's subtree check NOT VALID",
         "violations": []
@@ -1288,7 +1310,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.11973399997805245,
+        "catalogModes": [],
+        "ddlMs": 0.19654699999955483,
         "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
         "form": "Add field with a constant default",
         "violations": []
@@ -1296,7 +1319,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.23443799998494796,
+        "catalogModes": [],
+        "ddlMs": 0.20587500001420267,
         "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
         "form": "Add boolean field",
         "violations": []
@@ -1304,7 +1328,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.08922700001858175,
+        "catalogModes": [],
+        "ddlMs": 0.08879599999636412,
         "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
         "form": "Add reference field: column",
         "violations": []
@@ -1312,23 +1337,27 @@
       {
         "added": [
           {
-            "kind": "implied",
+            "kind": "unbudgeted: index of a locked table",
+            "tableMode": "ShareRowExclusiveLock",
             "mode": "AccessShareLock",
             "relation": "inv.target_pkey"
           },
           {
             "kind": "pre-locked",
+            "tableMode": null,
             "mode": "AccessShareLock",
             "relation": "inv.child"
           },
           {
             "kind": "pre-locked",
+            "tableMode": null,
             "mode": "AccessShareLock",
             "relation": "inv.target"
           }
         ],
         "catalogLocks": 0,
-        "ddlMs": 0.19864200000301935,
+        "catalogModes": [],
+        "ddlMs": 0.2294289999990724,
         "explicitLocks": [
           "inv.child SHARE ROW EXCLUSIVE",
           "inv.target SHARE ROW EXCLUSIVE"
@@ -1339,7 +1368,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.1773209999955725,
+        "catalogModes": [],
+        "ddlMs": 0.15758400000049733,
         "explicitLocks": [
           "inv.child ACCESS EXCLUSIVE",
           "inv.target ACCESS EXCLUSIVE"
@@ -1350,13 +1380,21 @@
       {
         "added": [
           {
-            "kind": "implied",
+            "kind": "unbudgeted: index of a locked table",
+            "tableMode": "AccessExclusiveLock",
             "mode": "AccessExclusiveLock",
             "relation": "inv.child_owner_ix"
+          },
+          {
+            "kind": "unbudgeted: index of a locked table",
+            "tableMode": "AccessExclusiveLock",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.child_owner_serial_ix"
           }
         ],
         "catalogLocks": 0,
-        "ddlMs": 0.20311999999103136,
+        "catalogModes": [],
+        "ddlMs": 0.22082300001056865,
         "explicitLocks": [
           "inv.child ACCESS EXCLUSIVE",
           "inv.target ACCESS EXCLUSIVE"
@@ -1367,13 +1405,15 @@
       {
         "added": [
           {
-            "kind": "implied",
+            "kind": "unbudgeted: index of a locked table",
+            "tableMode": "AccessExclusiveLock",
             "mode": "AccessExclusiveLock",
             "relation": "inv.root_name"
           }
         ],
         "catalogLocks": 0,
-        "ddlMs": 0.34242999998969026,
+        "catalogModes": [],
+        "ddlMs": 0.13181699998676777,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Purge field (with an index)",
         "violations": []
@@ -1381,7 +1421,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.11292099999263883,
+        "catalogModes": [],
+        "ddlMs": 0.08277400000952184,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Rename table (referenced by a level FK)",
         "violations": []
@@ -1389,7 +1430,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.05625500000314787,
+        "catalogModes": [],
+        "ddlMs": 0.06383900000946596,
         "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
         "form": "Rename field",
         "violations": []
@@ -1397,7 +1439,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.13434099999722093,
+        "catalogModes": [],
+        "ddlMs": 0.21169599998393096,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Set default",
         "violations": []
@@ -1405,7 +1448,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.1353829999861773,
+        "catalogModes": [],
+        "ddlMs": 0.14750600000843406,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Drop default",
         "violations": []
@@ -1413,7 +1457,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.1751769999973476,
+        "catalogModes": [],
+        "ddlMs": 0.1174790000077337,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Retire a required field (DROP NOT NULL)",
         "violations": []
@@ -1421,7 +1466,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.15039100000285544,
+        "catalogModes": [],
+        "ddlMs": 0.10211099998559803,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Make required: ADD CONSTRAINT NOT NULL NOT VALID",
         "violations": []
@@ -1429,7 +1475,8 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.15091200001188554,
+        "catalogModes": [],
+        "ddlMs": 0.12796899999375455,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Max length: ADD CONSTRAINT CHECK NOT VALID",
         "violations": []
@@ -1437,29 +1484,30 @@
       {
         "added": [],
         "catalogLocks": 0,
-        "ddlMs": 0.10519699999713339,
+        "catalogModes": [],
+        "ddlMs": 0.09545900000375696,
         "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
         "form": "Drop a check constraint",
         "violations": []
       }
     ],
-    "startedAt": "2026-10-21T06:36:31.405Z"
+    "startedAt": "2026-10-21T07:04:14.804Z"
   },
   "mode": "full",
   "notify": {
     "after": {
-      "loadAverage": [3.47, 2.61, 1.36],
+      "loadAverage": [5.88, 5.21, 4.04],
       "otherActive": 0,
       "otherSessions": 0,
       "testDatabases": 1
     },
     "before": {
-      "loadAverage": [2.82, 2.2, 1.05],
+      "loadAverage": [4.39, 4, 3.49],
       "otherActive": 0,
-      "otherSessions": 2,
+      "otherSessions": 0,
       "testDatabases": 1
     },
-    "elapsedMs": 130527.07797399999,
+    "elapsedMs": 130420.17621899999,
     "result": {
       "options": {
         "clients": 16,
@@ -1470,67 +1518,161 @@
       },
       "runs": [
         {
-          "durationMs": 60000.41287600002,
+          "durationMs": 59999.891965999996,
           "failed": 0,
           "latency": {
-            "count": 317050,
-            "max": 21.684269999997923,
-            "mean": 3.0267614815327333,
-            "p50": 2.7734550000168383,
-            "p95": 4.375300000014249,
-            "p99": 6.6134040000033565
+            "count": 220946,
+            "max": 42.147570000001,
+            "mean": 4.343632810890128,
+            "p50": 3.197587000002386,
+            "p95": 8.254170000000158,
+            "p99": 12.980997000006028
           },
           "notifications": 260,
-          "saves": 317050,
-          "savesPerSecond": 5284.130305156936,
+          "saves": 220946,
+          "savesPerSecond": 3682.4399638119844,
           "variant": "after-commit"
         },
         {
-          "durationMs": 59999.867337,
+          "durationMs": 60000.478638,
           "failed": 0,
           "latency": {
-            "count": 38444,
-            "max": 740.0853709999938,
-            "mean": 24.978602530381945,
-            "p50": 22.548515000002226,
-            "p95": 29.197706000006292,
-            "p99": 61.65121099998942
+            "count": 26539,
+            "max": 133.88297800000873,
+            "mean": 36.16581665138119,
+            "p50": 36.03974200002267,
+            "p95": 47.61330799999996,
+            "p99": 67.50137600000016
           },
-          "notifications": 41924,
-          "saves": 38444,
-          "savesPerSecond": 640.7347500299024,
+          "notifications": 28272,
+          "saves": 26539,
+          "savesPerSecond": 442.3131382020693,
           "variant": "in-transaction"
         }
       ],
-      "throughputRatio": 0.12125642499856426,
+      "throughputRatio": 0.12011414783370862,
       "totals": [
         {
           "latency": {
-            "count": 317050,
-            "max": 21.684269999997923,
-            "mean": 3.0267614815327333,
-            "p50": 2.7734550000168383,
-            "p95": 4.375300000014249,
-            "p99": 6.6134040000033565
+            "count": 220946,
+            "max": 42.147570000001,
+            "mean": 4.343632810890128,
+            "p50": 3.197587000002386,
+            "p95": 8.254170000000158,
+            "p99": 12.980997000006028
           },
-          "savesPerSecond": 5284.130305156936,
+          "savesPerSecond": 3682.4399638119844,
           "variant": "after-commit"
         },
         {
           "latency": {
-            "count": 38444,
-            "max": 740.0853709999938,
-            "mean": 24.978602530381945,
-            "p50": 22.548515000002226,
-            "p95": 29.197706000006292,
-            "p99": 61.65121099998942
+            "count": 26539,
+            "max": 133.88297800000873,
+            "mean": 36.16581665138119,
+            "p50": 36.03974200002267,
+            "p95": 47.61330799999996,
+            "p99": 67.50137600000016
           },
-          "savesPerSecond": 640.7347500299024,
+          "savesPerSecond": 442.3131382020693,
           "variant": "in-transaction"
         }
       ]
     },
-    "startedAt": "2026-10-21T06:36:48.797Z"
+    "startedAt": "2026-10-21T07:04:36.166Z"
   },
-  "startedAt": "2026-10-21T06:34:13.267Z"
+  "startedAt": "2026-10-21T07:01:58.121Z",
+  "unbudgetedWaits": {
+    "after": {
+      "loadAverage": [4.34, 3.99, 3.48],
+      "otherActive": 2,
+      "otherSessions": 14,
+      "testDatabases": 3
+    },
+    "before": {
+      "loadAverage": [4.67, 4.04, 3.5],
+      "otherActive": 2,
+      "otherSessions": 19,
+      "testDatabases": 6
+    },
+    "elapsedMs": 10023.104758000001,
+    "result": [
+      {
+        "attempts": [
+          {
+            "heldMs": 2430.236514999997,
+            "ok": true,
+            "startedAt": 140811.946951
+          }
+        ],
+        "blockers": 2,
+        "form": "Purge reference field",
+        "observedWaitsMs": [1202.109363000025, 1205.5570179999922],
+        "release": "after-hold",
+        "requestedLocks": [
+          "inv.child_owner_ix AccessExclusiveLock",
+          "inv.child_owner_serial_ix AccessExclusiveLock"
+        ],
+        "target": "index"
+      },
+      {
+        "attempts": [
+          {
+            "heldMs": 2000.6882839999744,
+            "ok": false,
+            "startedAt": 143304.905067
+          },
+          {
+            "heldMs": 1.0421670000068843,
+            "ok": true,
+            "startedAt": 145820.966451
+          }
+        ],
+        "blockers": 2,
+        "form": "Purge reference field",
+        "observedWaitsMs": [2000.0364160000172, 0],
+        "release": "after-timeout",
+        "requestedLocks": ["inv.child_owner_ix AccessExclusiveLock"],
+        "target": "index"
+      },
+      {
+        "attempts": [
+          {
+            "heldMs": 2432.2552480000013,
+            "ok": true,
+            "startedAt": 145877.456822
+          }
+        ],
+        "blockers": 2,
+        "form": "Create root table",
+        "observedWaitsMs": [1208.33028200001, 1202.053459000017],
+        "release": "after-hold",
+        "requestedLocks": [
+          "pg_class RowExclusiveLock",
+          "pg_type RowExclusiveLock"
+        ],
+        "target": "catalog"
+      },
+      {
+        "attempts": [
+          {
+            "heldMs": 2000.8156220000237,
+            "ok": false,
+            "startedAt": 148375.438198
+          },
+          {
+            "heldMs": 1.2363610000174958,
+            "ok": true,
+            "startedAt": 150778.328953
+          }
+        ],
+        "blockers": 2,
+        "form": "Create root table",
+        "observedWaitsMs": [1994.0267410000088, 0],
+        "release": "after-timeout",
+        "requestedLocks": ["pg_class RowExclusiveLock"],
+        "target": "catalog"
+      }
+    ],
+    "startedAt": "2026-10-21T07:04:18.630Z"
+  }
 }
