@@ -21,6 +21,16 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | "Number of rows removed by security constraints" | Not shown | Counts and pages come from the same restricted query (3.5). |
 | Field hidden by ACL in a list | Key absent, name listed in `withheld` | A hidden value behaves like empty in filters and sorts (the masking rule). |
 | `sys_user`, `sys_user_role`, `sys_user_has_role` | `core.user`, `core.role`, `core.user_role` | `authenticated` is held implicitly by every active user; deactivated users hold no role. |
+| ACL evaluation order: table ACLs from the most specific (`incident.field`, `incident.*`, `task.field`, …, `*.*`) down, the first matching level decides, then roles, condition and script must all pass | Every applicable rule is collected at once: the record's concrete class, its ancestors and `*`; field rules on a class cover its own and inherited fields (3.2). Any applicable deny refuses, otherwise any allow grants. | No "most specific wins": a broad deny cannot be overridden by a narrower allow, and a broad allow is not shadowed by a narrower rule. Both record and field decisions are needed to read a value (3.2). |
+| Row-level and field-level ACLs both evaluated per record | Record decision compiled into `WHERE`, field decisions into masks | Same outcome per record, computed in Postgres in one statement (3.5). |
+| `security_admin` elevation, "Elevate role" | none | No elevated mode: admin rights are rules, and a deny applies to admins too. |
+| Impersonation (`Impersonate user`) | none | Deliberately absent in v0.1: every request acts as the session's own user. The system user acts only for bootstrap and definition loading and can never sign in or hold a session. Rules that run as another identity need the `rules.run_as` permission (Step 3, 4.1). |
+| `snc_internal` (implicit role of internal users) | `authenticated` | Held by every active user, never assigned; inactive users hold nothing. |
+| Role `contains` roles | none in Step 1 | Flat roles; groups and nested roles come in Step 3. |
+| Granting a role elevated privileges (`elevated_privilege`) | Permissions granted to roles (`core.role_permission`), checked by permission ID | v0.1: `schema.purge`, `schema.snapshot`, `rules.run_as`; admin holds none implicitly (`schema_purger` holds `schema.purge`). |
+| `sys_user` delete | Refused for every caller by a built-in deny | Users are deactivated (`active = false`), which ends their sessions; labels naming them keep resolving. |
+| System tables (`sys_*`) editable by admins through forms and the Table API | Platform tables (definitions, journal, `core.change`) readable by admins, never written through the generic record routes | Definitions change only through change sets (1A routes generic writes to them); history is written only by the save pipeline. Only core rules match platform tables: an app or local `*` rule never reaches them, and one naming them is refused. |
+| `GET /api/now/ui/user/current_user`-style session info | `GET /api/v1/auth/me` | The session's user ID and effective roles. |
 
 ## Record API (Contracts 2, 6)
 
@@ -43,6 +53,7 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | GlideRecord (`addQuery`, `orderBy`, `setLimit`, `query`, `next`) | The list endpoint (generic), the SDK (Step 4, typed) | Server code calls the record service; there is no unrestricted GlideRecord equivalent that bypasses access rules. |
 | `GlideRecordSecure` | Every record-service read | Access rules always apply; the acting user is a required service. |
 | Basic auth or OAuth on REST | `POST /api/v1/auth/sign-in`, `Authorization: Bearer <token>` | API tokens come in Step 3. |
+| REST API Explorer, OpenAPI specs of scripted REST APIs | `GET /api/v1/openapi.json` (OpenAPI 3.1) and the typed client `@std/api/client` | Generated from the one `HttpApi` definition the server routes from, so they cannot drift. |
 
 ## Record writes and history (Contracts 2.2, 3.9, 4, 6.7)
 

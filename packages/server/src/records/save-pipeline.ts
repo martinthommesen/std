@@ -1,4 +1,5 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
+import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
@@ -163,6 +164,29 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
     ? resolved.success
     : yield* resolved.failure;
 });
+
+/**
+ * Platform tables (Contracts 1.9: definition tables, the journal,
+ * `core.change`) are never written through the record service: their rows
+ * come from change sets, the schema coordinator and the pipeline's own
+ * change entries. A generic write by any caller, admins included, is
+ * `NotAllowed`, checked where the access checks run: before anything is
+ * written, and on a by-ID write only after visibility (3.9), so a caller
+ * who cannot see the record still gets `NotFound`.
+ *
+ * Hook for workstream 1A: generic writes on definition tables become
+ * one-operation change sets (Contracts 1.4) before they reach this guard.
+ */
+const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
+  function* refusePlatformTable(
+    snapshot: ConfigSnapshot,
+    classId: DefinitionId
+  ) {
+    return snapshot.class(classId)?.storage === "platform"
+      ? yield* new NotAllowed()
+      : undefined;
+  }
+);
 
 /**
  * Validates the final candidate, then names only fields the caller
@@ -386,6 +410,9 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const hooks = yield* SaveHooks;
     const classId = input.endpointClassId;
     const resolved = yield* resolveBody(snapshot, input, body, "create");
+
+    yield* refusePlatformTable(snapshot, classId);
+
     const fields = effectiveById(snapshot, classId);
     const proposed = proposeCreate([...fields.values()], resolved);
 
@@ -666,6 +693,9 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
 
     const { readable, record } = yield* lockExisting(snapshot, input, lock);
     const { classId } = record;
+
+    yield* refusePlatformTable(snapshot, classId);
+
     const fields = effectiveById(snapshot, classId);
     const proposed = proposeUpdate([...fields.values()], resolved);
 
@@ -787,6 +817,8 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const { record } = yield* lockExisting(snapshot, input, "FOR UPDATE");
+
+    yield* refusePlatformTable(snapshot, record.classId);
 
     yield* access.checkExisting({
       action: "delete",

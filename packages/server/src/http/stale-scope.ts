@@ -101,6 +101,11 @@ export interface ScopeParameters {
   readonly sort?: string;
   readonly fields?: string;
   readonly labels?: string;
+  /**
+   * Field IDs the request names, comma-separated (history's `field`
+   * filter): each is in scope on its own class as it was at R.
+   */
+  readonly fieldIds?: string;
 }
 
 const decodeType = Schema.decodeUnknownOption(FieldTypeSchema);
@@ -430,6 +435,14 @@ export const staleScope = (
 
   for (const item of splitList(parameters.sort ?? "")) {
     resolvePath(collector, [item.startsWith("-") ? item.slice(1) : item]);
+  }
+
+  for (const id of splitList(parameters.fieldIds ?? "")) {
+    const field = definitions.fields.get(id.toLowerCase());
+
+    if (field !== undefined) {
+      add(collector, field.id, field.classId);
+    }
   }
 
   const labels = parameters.labels === "true";

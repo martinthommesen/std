@@ -26,6 +26,7 @@
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "fast-check": "catalog:",
+    "oxc-parser": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
