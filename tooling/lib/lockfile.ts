@@ -59,20 +59,11 @@ export const readCatalog = (workspaceYaml: string): Map<string, string> =>
   readFlatMap(workspaceYaml, "catalog");
 
 /**
- * Reads the one resolved version of `effect`.
+ * Lists the resolved versions of one package.
  *
  * @param lockfile - The text of `pnpm-lock.yaml`.
- * @returns The version; throws unless there is exactly one.
+ * @param name - The package name, such as `effect`.
+ * @returns Its versions, sorted; empty when the lockfile does not resolve it.
  */
-export const lockedEffectVersion = (lockfile: string): string => {
-  const versions = [...(resolvedVersions(lockfile).get("effect") ?? [])];
-  const [only] = versions;
-
-  if (versions.length !== 1 || only === undefined) {
-    throw new Error(
-      `expected exactly one resolved version of effect in the lockfile, found ${versions.length === 0 ? "none" : versions.join(", ")}`
-    );
-  }
-
-  return only;
-};
+export const lockedVersions = (lockfile: string, name: string): string[] =>
+  [...(resolvedVersions(lockfile).get(name) ?? [])].toSorted();

@@ -6,7 +6,7 @@ Status: revised 2026-10-20 after Martin's review. Nothing started yet. Awaiting 
 
 **Direction (Martin, 2026-10-20):** aim for feature parity with ServiceNow, but as a ground-up modern "2.0" without its quirks and tech debt. STD copies the functionality, not the look, names, URLs, API or query syntax. ServiceNow is the feature checklist, not the spec. Switching is handled later by a migration toolkit that maps ServiceNow data onto STD.
 
-**Stack (chosen by Martin):** TypeScript + Effect 4 on Node 26, TypeScript 7 strict, pnpm monorepo, Postgres 18 through `@effect/sql-pg` behind STD's own SQL layer, React + Vite web app. See "Stack" and "Effect".
+**Stack (chosen by Martin):** TypeScript + Effect 4 on Node 26, TypeScript 7 strict, pnpm monorepo, Postgres 18 through `@effect/sql-pg` behind STD's own SQL layer, a [Foldkit](https://foldkit.dev) + Vite web app (Martin, 2026-10-21, replacing React). See "Stack" and "Effect".
 
 ## How this plan is organized
 
@@ -124,7 +124,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 
 **Includes.**
 
-- React and Vite web app with generic list and form pages, related lists, and the history panel (old values rendered at each entry's schema revision).
+- Foldkit and Vite web app, built from Foldkit UI's headless accessible components (`@foldkit/ui`), with generic list and form pages, related lists, and the history panel (old values rendered at each entry's schema revision).
 - Point-and-click filter builder over the condition AST, including relative dates and `inPeriod`.
 - Choice fields with labels, and choice-subset overrides on child classes.
 - Form and list layouts as layered config records (a layout is overridden as a whole).
@@ -223,7 +223,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Server: Effect 4 (`HttpRouter` for generic table routes, `HttpApi` for fixed platform endpoints), Effect services and typed errors, spans exported over OpenTelemetry.
 - Database: Postgres 18 through `@effect/sql-pg`, behind STD's own SQL layer. CI tests Postgres 18 only. Postgres 19 is at RC 1, so support for it is added after its release, in its own PR. [judgment]
 - Validation: Effect Schema, built at run time from definitions, shared by server and browser.
-- Web app: React and Vite. Effect appears there only as Schema and the typed client.
+- Web app: [Foldkit](https://foldkit.dev) (Elm Architecture on Effect: Schema Model, pure `update`, Commands and Subscriptions as Effects) with [Foldkit UI](https://foldkit.dev/ui/overview) components and Vite, chosen by Martin on 2026-10-21 in place of React. Effect runs the whole web app, not only Schema and the typed client. Foldkit pins `effect` and `@effect/platform-browser` to exactly 4.0.0 as peers; STD keeps one 4.0.5 copy (see `AGENTS.md`, "Frontend: Foldkit").
 - Tests: vitest with `@effect/vitest` against a real Postgres 18.
 - Code layering: definitions, the condition engine and access-rule evaluation are plain packages (Effect Schema only); only the server package uses the rest of Effect. A CI import check enforces "Schema only", and the stability diagnostics enforce the unstable-API allow lists (Contracts 9).
 - Node runs one thread per process, so CPU-heavy work (big imports, large exports) runs in worker processes.
@@ -244,7 +244,7 @@ What we accept:
 **Upstream safeguards, adopted** (details in Contracts 9):
 
 - `@effect/tsgo` is the one TypeScript 7 binary for editor and CI, with `unstableApiUsage`, `experimentalApiUsage`, `outdatedApi`, `obsoleteSchemaImport`, `duplicatePackage` and `floatingEffect` set to error.
-- Each package's tsconfig carries its own `allowedUnstableApis` list. Plain packages have empty lists. The shared API-definition package and the web app allow only `effect/http-api` and `effect/http`, which the typed client needs. Experimental APIs are allowed nowhere.
+- Each package's tsconfig carries its own `allowedUnstableApis` list. Plain packages have empty lists. The shared API-definition package allows only `effect/http-api` and `effect/http`, which the typed client needs; the web app also allows `@effect/platform-browser`, which Foldkit's runtime needs. Experimental APIs are allowed nowhere.
 - Stability diagnostics flag only unstable imports, so a separate CI import check limits plain packages to Effect Schema.
 - Each allow-list entry has a one-line reason in the Effect decision note.
 - Effect's runtime packages are pinned to one exact version through a pnpm catalog and upgraded together. `@effect/tsgo` is pinned separately and upgraded in its own PR.
