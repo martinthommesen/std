@@ -42,6 +42,10 @@ Renames go by ID for every kind that has a name: namespaces (`ALTER SCHEMA ... R
 
 A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too: physical renames run one after another, so a swap would collide in the catalog and in the definition tables' live-name unique indexes.
 
+### Preflight identifiers
+
+The preflight (row existence, violation counts, purge counts) runs before any DDL of the change set, so it names tables and columns as they are before the change set: a rename in the same change set has not run yet. DDL and follow-up steps use the final names (review round 1: a table or field rename plus a unique index failed with 42P01 and 42703).
+
 ### Statement order and locks
 
 The main transaction runs drops first (purged columns, then purged tables, children before parents), then renames (schemas, tables, columns), then the retired fields' `DROP NOT NULL`, then the 0006 pipeline. So a name a purge frees can be taken in the same change set. Drops and renames name tables as they are before any DDL; later statements use the names after the change set. All table locks are taken before the first statement (decision 0007), so every lock names the table as it is before any DDL: `lockNames` maps after-names back for the later statements.
@@ -50,7 +54,7 @@ The main transaction runs drops first (purged columns, then purged tables, child
 
 ### Retire, reactivate and the effective schema
 
-Retiring a field sets `required` to false and, for a required non-boolean field, runs `ALTER COLUMN ... DROP NOT NULL` (catalog-only, 1.4 table). Booleans stay `NOT NULL DEFAULT false`, so inserts without them work anyway. A reactivated field therefore comes back optional. Retiring a parent field retires it on every child class: there is one definition, and `effectiveFields` of every class below shows it `retired`, not `selectedByDefault` and not `writable`. A retired table has `effectiveClass(...).acceptsWrites` false; every field on it is not `writable`. The read compiler and the save pipeline (0C) read these flags; the save pipeline reports `DefinitionRetired`.
+Retiring a field sets `required` to false, clears `required` on every override of the field on descendant classes (their other tightenings stay; the journal lists them as the operation's cascade), and, for a required non-boolean field, runs `ALTER COLUMN ... DROP NOT NULL` (catalog-only, 1.4 table). So the field is optional on every class while retired and after reactivation (review round 1). With workstream 1B's layering, clearing an override's `required` becomes a change of the effective override record. Booleans stay `NOT NULL DEFAULT false`, so inserts without them work anyway. A reactivated field therefore comes back optional. Retiring a parent field retires it on every child class: there is one definition, and `effectiveFields` of every class below shows it `retired`, not `selectedByDefault` and not `writable`. A retired table has `effectiveClass(...).acceptsWrites` false; every field on it is not `writable`. The read compiler and the save pipeline (0C) read these flags; the save pipeline reports `DefinitionRetired`.
 
 New definitions may not point at retired ones (a field on a retired table, a reference to one, an index on a retired field, a child of a retired class), but existing ones keep pointing at them. Stored conditions that read a field that is then retired keep working: validation checks conditions with `purpose: "store"` only for definitions whose condition the change set writes, and with `purpose: "evaluate"` for the rest.
 
@@ -68,7 +72,8 @@ The dependency checks run in memory over the snapshot loaded under `CONFIG_KEY` 
 
 - A multi-field unique index refuses the retire of its fields, so a purge can only meet a non-unique multi-field index; both refuse.
 - A table purge is also refused while an access rule or subscription is on the table: leaving them would dangle, and deleting security configuration implicitly is worse.
-- A role delete is refused while any access rule names it (a deleted role cannot stay in a rule); a role retire only while an active rule names it. A deleted role takes its grants along.
+- A role delete is refused while any access rule names it (a deleted role cannot stay in a rule); a role retire only while an active rule names it. A deleted role takes its grants along. Retire and delete report the role's user-role assignments: the server counts `core.user_role` rows on the pool before `CONFIG_KEY` (data, so not under it) and returns and journals the count (`userRoleAssignments`); the assignments stay.
+- Any active reference field pointing at a table keeps it from being retired, whatever the state of the field's own table and including the table's own references to itself; the field's own state decides. The rule holds the other way too: a reference field, or a table carrying an active one, cannot be reactivated while the target table is retired (`DependencyConflict` naming the target). A table's reference to itself becomes active with the table (review round 1).
 - `delete` of an override is refused (it would loosen the field, 2.5).
 
 ### Protected definitions and local additions (1.8)
@@ -80,7 +85,8 @@ The guard runs first for every operation and every origin. Protected definitions
 - A new coordinator, once it holds `SCHEMA_KEY`, first resumes change sets left `applying` (getting the lock proves their coordinator is gone), then refuses with `SchemaNeedsAttention` (409) while any change set is `needs_attention`: its stored step statements name tables and columns as they were, and a rename or drop could invalidate them. Changes without DDL still apply.
 - Resume probes each unfinished step (`done` recorded, `partial` cleaned up and rerun, `not_started` run), takes over the change set (`coordinator_pid`, failed steps back to `pending`), and completes it; a step failing 3 times sets `needs_attention`.
 - `SchemaResumer` (a layer for the server process) and `std upgrade` call `resumePass`: a dedicated connection (`std-resumer`, with the keepalive startup parameters) tries `SCHEMA_KEY` at startup and every `resumeInterval`, resumes `applying` change sets and releases the lock.
-- Abandon runs each unfinished step's abandon action and then `complete` with final state `abandoned`: invalid or unfinished indexes are dropped concurrently before the commit; `NOT VALID` constraints are dropped inside the `complete` config commit under the lock budget, never outside `CONFIG_KEY`. If the change set's own backend still holds `SCHEMA_KEY` (a build waiting on another session, or one whose client died), abandon terminates that backend first; any other holder gives `SchemaBusy`.
+- Abandon first refuses unless the change set is still `applying` or `needs_attention` (`SchemaChangeNotOpen`). It then runs each unfinished step's abandon action and `complete` with final state `abandoned`. After it, the catalog matches the definitions or the enforcement state explains the difference: an unfinished `create_index_concurrently` has its index dropped concurrently (enforcement `failed`, index absent); an unfinished `drop_index_concurrently` is finished with `DROP INDEX CONCURRENTLY IF EXISTS`, which also removes an index a failed drop left invalid (the definition is already a tombstone); an unfinished `validate_constraint` has its `NOT VALID` constraint dropped inside the `complete` config commit under the lock budget, never outside `CONFIG_KEY` (enforcement `failed`); `validate_override` has nothing physical (enforcement `failed`).
+- If `SCHEMA_KEY` is held, abandon terminates a backend only when one statement finds, at the moment it signals, that the backend is running a step of this open change set (step `running` with that backend PID), is the backend that started the step (`backend_start` not later than the step's `started_at`), and holds `SCHEMA_KEY`. A PID the journal only remembers is never enough: a coordinator that resumed this change set and moved on to its own is not touched (review round 1). Otherwise `SchemaBusy`.
 - The watchdog runs on the pool beside each step and writes `Watchdog: waiting N s in phase "..." for PIDs ...` into the step's `last_error`; status also shows the PIDs live. It never cancels. Metrics are not wired yet.
 - The coordinator calls the `StepBoundary` hook at `committed`, `before:<n>:<kind>`, `after:<n>:<kind>` and `before:complete`; production installs nothing.
 
@@ -96,6 +102,5 @@ The guard runs first for every operation and every origin. Protected definitions
 
 - Item 9 (after 0C merges): the change-set HTTP endpoints, generic record writes to definition tables as one-operation change sets, the `Actor` as requester, `DELETE` mapped to the `delete` operation, and the HTTP acceptance tests.
 - Names for access rules and indexes need a migration (0006 once 0003 to 0005 land).
-- User-role assignments are not yet counted in role retire/delete reports (data, not configuration).
 - The watchdog's metric, and `std schema status` warning about index or catalog maintenance sessions (0007 open item).
 - The SQL snapshot (`__snapshots__/ddl-forms.sql`) covers set loads only; lifecycle statements are checked by the guard and probe tests.

@@ -296,43 +296,70 @@ export const schemaKeyHolders = (
     Effect.map((rows) => rows.map((row) => row.pid))
   );
 
-const decodeStepPids = decodeRows(
-  Schema.Struct({ pid: Schema.NullOr(Schema.Int) })
+const ABANDON_LOCK_WAIT = Duration.seconds(60);
+
+const decodeTerminated = decodeRows(
+  Schema.Struct({ pid: Schema.Int, terminated: Schema.Boolean })
 );
 
 /**
- * Backends that ran this change set: its coordinator and its steps.
+ * Terminates the backend that is running a step of this change set right
+ * now, and only that: in one statement, the change set must still be open,
+ * the step `running` with that backend PID, the backend the same one that
+ * started the step (its `backend_start` is not later than the step's
+ * `started_at`, so a reused PID never matches), and the backend must hold
+ * `SCHEMA_KEY`. A PID the journal merely remembers is never enough.
+ */
+const TERMINATE_OWN_BACKEND = `SELECT a.pid, pg_terminate_backend(a.pid) AS terminated
+  FROM core."schema_change_step" s
+  JOIN core."schema_change" c ON c.id = s.change_id AND c.state IN ('applying', 'needs_attention')
+  JOIN pg_stat_activity a ON a.pid = s.backend_pid AND a.backend_start <= s.started_at
+  JOIN pg_locks l ON l.pid = a.pid AND l.locktype = 'advisory' AND l.granted
+    AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    AND l.classid = $2::oid AND l.objid = $3::oid AND l.objsubid = 1
+  WHERE s.change_id = $1::uuid AND s.state = 'running'`;
+
+/**
+ * Fails unless the change set is `applying` or `needs_attention`.
  *
  * @param execute - Runs one statement.
  * @param changeSetId - The change set.
- * @returns Their PIDs.
+ * @returns Fails with `SchemaChangeNotOpen`.
  */
-const ownBackends = (execute: Execute, changeSetId: string) =>
-  execute(
-    `SELECT coordinator_pid AS pid FROM core."schema_change" WHERE id = $1::uuid
-     UNION SELECT backend_pid FROM core."schema_change_step" WHERE change_id = $1::uuid`,
-    [changeSetId]
-  ).pipe(
-    Effect.flatMap(decodeStepPids),
-    Effect.map(
-      (rows) =>
-        new Set(rows.flatMap((row) => (row.pid === null ? [] : [row.pid])))
-    )
-  );
+const requireOpen = Effect.fn("Schema.requireOpen")(function* requireOpen(
+  execute: Execute,
+  changeSetId: string
+) {
+  const open = yield* openChangeSets(execute);
 
-const ABANDON_LOCK_WAIT = Duration.seconds(60);
+  if (!open.some((entry) => entry.id === changeSetId)) {
+    return yield* new SchemaChangeNotOpen({ changeSetId });
+  }
+
+  return yield* Effect.void;
+});
 
 /**
- * Takes `SCHEMA_KEY` for an abandon. If the change set's own backend holds
- * it (its build waits on another session, or its client died mid-build),
- * that backend is terminated, which ends the build and releases the lock.
- * Any other holder means another schema change runs: `SchemaBusy`.
+ * Takes `SCHEMA_KEY` for an abandon. The change set must still be open,
+ * checked before anything else. If the lock is held by the backend that
+ * is running one of this change set's steps right now (a build waiting on
+ * another session, or one whose client died), that backend is terminated,
+ * which ends the build and releases the lock; ownership is re-checked in
+ * the statement that signals. Any other holder means another schema change
+ * runs: `SchemaBusy`.
  *
  * @param changeSetId - The change set to abandon.
  * @returns A connection holding `SCHEMA_KEY`, closed with the scope.
  */
 const lockForAbandon = Effect.fn("Schema.lockForAbandon")(
   function* lockForAbandon(changeSetId: string) {
+    const sql = yield* SqlClient.SqlClient;
+
+    const execute: Execute = (text, params = []) =>
+      hygienic(sql.unsafe(text, params));
+
+    yield* requireOpen(execute, changeSetId);
+
     const first = yield* Effect.result(openCoordinator);
 
     if (first._tag === "Success") {
@@ -343,25 +370,19 @@ const lockForAbandon = Effect.fn("Schema.lockForAbandon")(
       return yield* first.failure;
     }
 
-    const sql = yield* SqlClient.SqlClient;
+    const terminated = yield* execute(TERMINATE_OWN_BACKEND, [
+      changeSetId,
+      ...schemaKeyParams,
+    ]).pipe(Effect.flatMap(decodeTerminated));
 
-    const execute: Execute = (text, params = []) =>
-      hygienic(sql.unsafe(text, params));
-
-    const holders = yield* schemaKeyHolders(execute);
-    const own = yield* ownBackends(execute, changeSetId);
-
-    if (holders.length === 0 || !holders.every((pid) => own.has(pid))) {
+    if (!terminated.some((row) => row.terminated)) {
       return yield* first.failure;
     }
 
-    for (const pid of holders) {
-      yield* Effect.logWarning("Terminating the change set's own backend", {
-        changeSetId,
-        pid,
-      });
-      yield* sql.unsafe("SELECT pg_terminate_backend($1::int4)", [String(pid)]);
-    }
+    yield* Effect.logWarning("Terminated the change set's own backend", {
+      changeSetId,
+      pids: terminated.map((row) => row.pid),
+    });
 
     return yield* openCoordinator.pipe(
       Effect.retry(
@@ -372,9 +393,6 @@ const lockForAbandon = Effect.fn("Schema.lockForAbandon")(
     );
   }
 );
-
-const abandonIndexBuild = (connection: DedicatedConnection, step: StepRow) =>
-  STEP_SPECS.create_index_concurrently.abandon(connection, step);
 
 const constraintDropOf = (step: StepRow) =>
   dropConstraint(
@@ -420,9 +438,16 @@ export const abandonChangeSet = Effect.fn("Schema.abandonChangeSet")(
     yield* connection.execute("SET lock_timeout = 0");
     yield* connection.execute("SET statement_timeout = 0");
 
+    // Index steps are undone here, concurrently and outside any
+    // transaction: an unfinished build's index is dropped, an unfinished
+    // drop is finished. Constraint drops run inside `complete` below;
+    // `validate_override` has nothing physical to undo.
     for (const step of unfinished) {
-      if (step.kind === "create_index_concurrently") {
-        yield* abandonIndexBuild(connection, step);
+      if (
+        step.kind === "create_index_concurrently" ||
+        step.kind === "drop_index_concurrently"
+      ) {
+        yield* STEP_SPECS[step.kind].abandon(connection, step);
       }
 
       yield* connection.execute(

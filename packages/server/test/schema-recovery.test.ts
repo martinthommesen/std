@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import { generatedName } from "@std/definitions/ids";
-import { Duration, Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer, Schema } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -387,6 +387,135 @@ describe("schema-recovery", () => {
             yield* indexValidity("site", generatedName("ix", index.id)),
             "true"
           );
+        })
+    );
+
+    dbTest.effect(
+      "abandon of a change set another coordinator finished never terminates that coordinator",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* abandonFinished() {
+            yield* loadCoreAndAcme;
+
+            const first = createClass("first_a");
+            const second = createClass("second_b");
+            const a = addField(first.id, "a", { kind: "integer" });
+            const b = addField(second.id, "b", { kind: "integer" });
+
+            yield* change([first.op, second.op, a.op, b.op]);
+            yield* insertRecords(['"site"."first_a"'], first.id, 5, { a: "g" });
+            yield* insertRecords(['"site"."second_b"'], second.id, 5, {
+              b: "g",
+            });
+
+            // Change set A stops right after its main commit.
+            yield* Effect.exit(
+              change([addIndex(first.id, [a.id], false).op]).pipe(
+                Effect.provideService(StepBoundary, (label) =>
+                  label === "committed" ? Effect.interrupt : Effect.void
+                )
+              )
+            );
+
+            const changeSetA = yield* applyingChangeSet;
+
+            // B's coordinator resumes and completes A on its connection,
+            // commits its own main transaction, and then waits in its build
+            // for a writer that starts only after that commit.
+            const committed = yield* Deferred.make<boolean>();
+            const proceed = yield* Deferred.make<boolean>();
+
+            const changeSetB = yield* Effect.forkChild(
+              change([addIndex(second.id, [b.id], false).op]).pipe(
+                Effect.provideService(StepBoundary, (label) =>
+                  label === "committed"
+                    ? Deferred.succeed(committed, true).pipe(
+                        Effect.andThen(Deferred.await(proceed)),
+                        Effect.asVoid
+                      )
+                    : Effect.void
+                )
+              )
+            );
+
+            yield* Deferred.await(committed);
+            assert.strictEqual(yield* changeSetState(changeSetA), "completed");
+
+            const database = yield* TestDatabase;
+            const writer = yield* database.session("second-writer");
+
+            yield* writer.query("BEGIN");
+            yield* writer.query(
+              insertRecordsSql(['"site"."second_b"'], second.id, 1, { b: "0" })
+            );
+            yield* Deferred.succeed(proceed, true);
+            yield* waitUntil(
+              values(
+                `SELECT count(*)::text AS value FROM pg_stat_progress_create_index p
+                 JOIN pg_stat_activity a ON a.pid = p.pid WHERE a.datname = current_database()`
+              ).pipe(Effect.map(([count]) => count !== "0"))
+            );
+
+            const [holder] = (yield* schemaStatus()).holders;
+
+            // A's steps remember B's backend PID; abandon must not use it.
+            const refused = yield* Effect.flip(abandonChangeSet(changeSetA));
+
+            assert.strictEqual(refused._tag, "SchemaChangeNotOpen");
+            assert.strictEqual(
+              (yield* schemaStatus()).holders[0]?.pid,
+              holder?.pid
+            );
+
+            yield* writer.query("COMMIT");
+
+            const result = yield* Fiber.join(changeSetB);
+
+            assert.strictEqual(result.state, "completed");
+          })
+        )
+    );
+
+    dbTest.effect(
+      "abandoning an interrupted drop of a unique index finishes the drop",
+      () =>
+        Effect.gen(function* abandonDrop() {
+          yield* loadCoreAndAcme;
+
+          const token = createClass("token_d");
+          const value = addField(token.id, "value", { kind: "integer" });
+          const unique = addIndex(token.id, [value.id], true);
+
+          yield* change([token.op, value.op, unique.op]);
+          yield* insertRecords(['"site"."token_d"'], token.id, 3, {
+            value: "g",
+          });
+
+          yield* Effect.exit(
+            change([{ id: unique.id, op: "delete", version: 1 }]).pipe(
+              Effect.provideService(StepBoundary, (label) =>
+                label === "before:1:drop_index_concurrently"
+                  ? Effect.interrupt
+                  : Effect.void
+              )
+            )
+          );
+
+          const id = yield* applyingChangeSet;
+          const indexName = generatedName("ix", unique.id);
+
+          assert.strictEqual(yield* indexValidity("site", indexName), "true");
+
+          yield* abandonChangeSet(id);
+
+          assert.strictEqual(yield* changeSetState(id), "abandoned");
+          assert.strictEqual(yield* indexValidity("site", indexName), "absent");
+
+          // Duplicates are accepted again: nothing enforces the dropped index.
+          yield* insertRecords(['"site"."token_d"'], token.id, 1, {
+            value: "1",
+          });
+          assert.deepStrictEqual(yield* catalogDrift, []);
         })
     );
 

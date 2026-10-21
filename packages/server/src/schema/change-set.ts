@@ -346,7 +346,9 @@ const checkExistence = Effect.fn("Schema.checkExistence")(
     yield* connection.execute("SET enable_seqscan = off");
 
     for (const classId of existenceChecks) {
-      if (yield* hasRows(connection, tableName(applied.after, classId))) {
+      // Before any DDL: tables still have their names from before the
+      // change set.
+      if (yield* hasRows(connection, tableName(applied.before, classId))) {
         populated.add(classId);
       }
     }

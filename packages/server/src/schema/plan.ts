@@ -58,7 +58,6 @@ import {
   createSchema,
   createTable,
   createTrigger,
-  indexKey,
   initialValue,
   keyOf,
   replaceSubtreeCheck,
@@ -240,6 +239,34 @@ const populated = (planning: Planning, classId: DefinitionId): boolean => {
   return planning.preflight.hasRows(classId);
 };
 
+/**
+ * The quoted table of a class as Postgres names it while the preflight
+ * runs, before any DDL of the change set: its name before the change set
+ * (renames run in the main transaction). A class the change set creates
+ * has no table yet and no rows; its final name is used.
+ *
+ * @param planning - The planning run.
+ * @param classId - The class.
+ * @returns The quoted table.
+ */
+const preflightTable = (planning: Planning, classId: DefinitionId): string => {
+  const was = planning.before.class(classId);
+
+  return was !== undefined && was.state !== "purged"
+    ? tableName(planning.before, classId)
+    : tableName(planning.after, classId);
+};
+
+/**
+ * A field's column as Postgres names it while the preflight runs.
+ *
+ * @param planning - The planning run.
+ * @param field - The field after the change set.
+ * @returns The quoted column.
+ */
+const preflightColumn = (planning: Planning, field: FieldDefinition): string =>
+  quoteIdent(planning.before.field(field.id)?.name ?? field.name);
+
 const markPending = (planning: Planning, id: DefinitionId): void => {
   const definition = planning.definitions.get(id);
 
@@ -415,7 +442,7 @@ const planAddedColumns = (
         planning.violations.push({
           definitionId: field.id,
           predicate: "true",
-          table,
+          table: preflightTable(planning, field.classId),
         });
       }
 
@@ -463,8 +490,8 @@ const planFieldUpdates = (
         if (hasRows) {
           planning.violations.push({
             definitionId: after.id,
-            predicate: `${quoteIdent(after.name)} IS NULL`,
-            table,
+            predicate: `${preflightColumn(planning, after)} IS NULL`,
+            table: preflightTable(planning, after.classId),
           });
           validateStep(
             planning,
@@ -576,19 +603,22 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
   }
 
   if (index.unique) {
+    const before = preflightTable(planning, index.classId);
+
     planning.violations.push({
       definitionId: index.id,
       predicate: duplicatePredicate(
-        table,
+        before,
         fields.map((field) =>
           // A column this change set adds does not exist yet: existing rows
-          // will hold its initial value (default, false, or NULL).
+          // will hold its initial value (default, false, or NULL). Existing
+          // columns go by their names before the change set.
           planning.created.has(field.id)
             ? keyOf(field, initialValue(field))
-            : indexKey(field)
+            : keyOf(field, preflightColumn(planning, field))
         )
       ),
-      table,
+      table: before,
     });
   }
 
@@ -666,11 +696,13 @@ const lengthPredicates = (
  *
  * @param planning - The planning run.
  * @param override - The override after the change set.
+ * @param column - The quoted column, as named when the predicate runs.
  * @returns A boolean SQL expression over the field's table.
  */
 const overridePredicate = (
   planning: Planning,
-  override: OverrideDefinition
+  override: OverrideDefinition,
+  column: string
 ): string | undefined => {
   const field = planning.after.field(override.fieldId);
 
@@ -680,7 +712,6 @@ const overridePredicate = (
 
   const now = effectiveField(planning.after, override.classId, field);
   const was = effectiveField(planning.before, override.classId, field);
-  const column = quoteIdent(field.name);
 
   const predicates = [
     ...(now.required && !was.required ? [`${column} IS NULL`] : []),
@@ -733,8 +764,8 @@ const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
         : undefined;
 
     const predicate =
-      definition.kind === "override"
-        ? overridePredicate(planning, definition)
+      definition.kind === "override" && field !== undefined
+        ? overridePredicate(planning, definition, quoteIdent(field.name))
         : undefined;
 
     if (
@@ -747,13 +778,17 @@ const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
 
       const preflight = planning.created.has(field.id)
         ? prospectivePredicate(planning, definition, field)
-        : predicate;
+        : overridePredicate(
+            planning,
+            definition,
+            preflightColumn(planning, field)
+          );
 
       if (preflight !== undefined) {
         planning.violations.push({
           definitionId: definition.id,
           predicate: preflight,
-          table,
+          table: preflightTable(planning, field.classId),
         });
       }
 

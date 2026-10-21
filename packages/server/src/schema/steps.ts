@@ -169,7 +169,10 @@ export const STEP_SPECS: Readonly<
       ),
   },
   drop_index_concurrently: {
-    abandon: () => Effect.void,
+    // The index definition is already a tombstone, so abandoning the drop
+    // finishes it; `IF EXISTS` and `CONCURRENTLY` also remove an index a
+    // failed drop left invalid.
+    abandon: dropIndex,
     action: runStatement,
     probe: (connection, step) =>
       indexProbe(connection, step).pipe(

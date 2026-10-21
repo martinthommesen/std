@@ -508,6 +508,67 @@ describe("schema-lifecycle", () => {
       );
 
       dbTest.effect(
+        "a rename and a unique index in one change set: the preflight reads the names before the rename",
+        () =>
+          Effect.gen(function* renameWithIndex() {
+            yield* loadCoreAndAcme;
+
+            const card = createClass("card");
+            const serial = addField(card.id, "serial", { kind: "text" });
+            const alias = addField(card.id, "alias", { kind: "integer" });
+
+            yield* change([card.op, serial.op, alias.op]);
+            yield* insertRecords(['"site"."card"'], card.id, 4, {
+              alias: "g",
+              serial: "'s' || g",
+            });
+
+            // A table rename plus a unique index on it.
+            const tableFirst = addIndex(card.id, [serial.id], true);
+
+            const renamedTable = yield* change([
+              { id: card.id, name: "badge", op: "rename", version: 1 },
+              tableFirst.op,
+            ]);
+
+            assert.strictEqual(renamedTable.state, "completed");
+            assert.deepStrictEqual(renamedTable.followUps, [
+              `CREATE UNIQUE INDEX CONCURRENTLY ${generatedName("ix", tableFirst.id)} ON "site"."badge" (casefold("serial" COLLATE pg_unicode_fast))`,
+            ]);
+
+            // A field rename plus a unique index on that field; a duplicate
+            // is found under the column's old name.
+            yield* insertRecords(['"site"."badge"'], card.id, 1, {
+              alias: "1",
+              serial: "'s9'",
+            });
+
+            const columnFirst = addIndex(card.id, [alias.id], true);
+
+            const duplicate = yield* Effect.flip(
+              change([
+                { id: alias.id, name: "nickname", op: "rename", version: 1 },
+                columnFirst.op,
+              ])
+            );
+
+            assert.strictEqual(duplicate._tag, "ExistingDataViolates");
+
+            yield* values(
+              `DELETE FROM "site"."badge" WHERE serial = 's9' RETURNING id::text AS value`
+            );
+
+            const renamedColumn = yield* change([
+              { id: alias.id, name: "nickname", op: "rename", version: 1 },
+              columnFirst.op,
+            ]);
+
+            assert.strictEqual(renamedColumn.state, "completed");
+            assert.deepStrictEqual(yield* catalogDrift, []);
+          })
+      );
+
+      dbTest.effect(
         "DELETE of a field definition is refused; column and data unchanged",
         () =>
           Effect.gen(function* deleteField() {
