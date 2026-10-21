@@ -22,10 +22,13 @@ import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
+import { VersionConflict } from "@std/api/errors/version-conflict";
+import { SessionToken } from "@std/api/session-token";
 import type { Definition, DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
+import type { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
@@ -35,6 +38,7 @@ import { Actor } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { TABLE_OF } from "../catalog/definition-tables.ts";
+import { InstanceSettings } from "../config/instance-settings.ts";
 import {
   currentReadScope,
   getRecord,
@@ -43,10 +47,16 @@ import {
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
-import { applyAsActor, authorizeOperations } from "./change-sets.ts";
+import {
+  applyAsActor,
+  authorizeOperations,
+  sessionAuthorization,
+} from "./change-sets.ts";
 import { jsonWithStatus } from "./record-writes.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
 import { recordServedRevision } from "./schema-revision-header.ts";
+import { checkRequestRevision } from "./stale-request.ts";
+import type { parseRequestRevision } from "./stale-request.ts";
 
 /** Columns no write may set: system, owner, protection and enforcement. */
 const READ_ONLY_COLUMNS: ReadonlySet<string> = new Set([
@@ -319,6 +329,58 @@ const updateOperations = Effect.fn("Http.definitionUpdate")(
   }
 );
 
+/** The revision a request stated, as `parseRequestRevision` read it. */
+type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
+
+/**
+ * The stale-request check of Contracts 6.4 for a definition write: the
+ * written columns for creates and updates, nothing for a delete.
+ *
+ * @param stated - The revision the request stated.
+ * @param table - The qualified table name.
+ * @param write - The write.
+ * @returns Fails with `SchemaChanged` or `UnknownTable`.
+ */
+const staleCheck = (
+  stated: StatedRevision,
+  table: string,
+  write: DefinitionWrite
+) =>
+  write.action === "delete"
+    ? checkRequestRevision(stated, table, {})
+    : checkRequestRevision(
+        stated,
+        table,
+        { fields: Object.keys(write.body).join(",") },
+        { action: write.action }
+      );
+
+/**
+ * A generic write that lost a version race gets `VersionConflict` with the
+ * current version (Contracts 3.8), like a record write; other invalid
+ * definitions stay `DefinitionInvalid`.
+ *
+ * @param failure - The change set's failure.
+ * @param id - The written definition.
+ * @returns The failure to report.
+ */
+const versionConflictOf = (failure: DefinitionInvalid, id: DefinitionId) =>
+  Effect.gen(function* versionConflict() {
+    const conflict = failure.problems.some(
+      (entry) => entry.code === "versionConflict" && entry.definitionId === id
+    );
+
+    if (!conflict) {
+      return yield* failure;
+    }
+
+    const current = (yield* (yield* Catalog).refresh).get(id);
+
+    return yield* new VersionConflict({
+      currentVersion: current?.version ?? 0,
+    });
+  }).pipe(Effect.catchTag("DatabaseError", Effect.die));
+
 /** A write to a definition table. */
 export type DefinitionWrite =
   | {
@@ -347,11 +409,15 @@ export type DefinitionWrite =
  * @returns The actor, the definition's ID and the operations.
  */
 const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
+  stated: StatedRevision,
   table: string,
   kind: DefinitionKind,
   write: DefinitionWrite
 ) {
   const actor: ActingUser = yield* Actor;
+
+  yield* staleCheck(stated, table, write);
+
   const scope = yield* currentReadScope();
 
   yield* resolveTable(scope, table);
@@ -368,6 +434,10 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
 
     if (current?.kind !== kind) {
       return yield* new NotFound();
+    }
+
+    if (current.version !== write.expectedVersion) {
+      return yield* new VersionConflict({ currentVersion: current.version });
     }
 
     ({ id } = current);
@@ -398,28 +468,54 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
   function* writeDefinition(
     transactions: TransactionsApi,
     request: HttpServerRequest,
+    stated: StatedRevision,
     table: string,
     kind: DefinitionKind,
     write: DefinitionWrite
   ) {
+    const token = yield* SessionToken;
+    const catalog = yield* Catalog;
+    const settings = yield* InstanceSettings;
+
     const prepared = yield* inRequestTransaction(
       transactions,
       request,
-      asActor(prepare(table, kind, write))
+      asActor(prepare(stated, table, kind, write))
     );
 
+    // Everything checked above is checked again under the change set's
+    // exclusive CONFIG_KEY, before any write.
+    const authorize = sessionAuthorization({
+      check: (actor) =>
+        staleCheck(stated, table, write).pipe(
+          Effect.provideService(Actor, actor),
+          Effect.provideService(Catalog, catalog),
+          Effect.provideService(InstanceSettings, settings),
+          // A database failure here aborts the main transaction: a 500.
+          Effect.catchTags({ DatabaseError: Effect.die, SqlError: Effect.die })
+        ),
+      operations: prepared.operations,
+      token,
+      userId: prepared.actor.userId,
+    });
+
     yield* applyAsActor(prepared.actor, {
+      authorize,
       operations: prepared.operations,
       source: { kind: "api", route: "records", table },
-    });
+    }).pipe(
+      Effect.catchTag("DefinitionInvalid", (failure) =>
+        versionConflictOf(failure, prepared.id)
+      )
+    );
 
     return yield* inRequestTransaction(
       transactions,
       request,
       asActor(
         Effect.gen(function* answer() {
-          const catalog = yield* Catalog;
-          const snapshot = yield* catalog.current;
+          const reading = yield* Catalog;
+          const snapshot = yield* reading.current;
 
           recordServedRevision(request, snapshot.key);
 

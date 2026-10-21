@@ -29,6 +29,12 @@
  *    `complete` takes its own revision.
  */
 import type { PgClient } from "@effect/sql-pg";
+import type { NotAllowed } from "@std/api/errors/not-allowed";
+import type { SchemaChanged } from "@std/api/errors/schema-changed";
+import type { Unauthenticated } from "@std/api/errors/unauthenticated";
+import type { UnknownField } from "@std/api/errors/unknown-field";
+import type { UnknownTable } from "@std/api/errors/unknown-table";
+import type { VersionConflict } from "@std/api/errors/version-conflict";
 import { applyOperations } from "@std/definitions/apply";
 import type {
   ApplyContext,
@@ -51,6 +57,7 @@ import { SqlClient } from "effect/sql";
 
 import { installSessionRevocation } from "../auth/session-revocation.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import type { ChangeCause } from "../records/change-entry.ts";
 import { bumpRevision } from "../sql/config-commit.ts";
 import type {
   ConfigCommitOptions,
@@ -62,10 +69,12 @@ import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
+import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
 import { DdlRefused } from "./ddl-refused.ts";
+import { writeDefinitionChanges } from "./definition-changes.ts";
 import { ExistingDataViolates } from "./existing-data-violates.ts";
 import { restoreLockTimeout, runDdl, takeTableLocks } from "./lock-budget.ts";
 import { ASSUME_POPULATED, planChangeSet, requiresSchemaKey } from "./plan.ts";
@@ -113,7 +122,37 @@ export interface ChangeSetRequest {
   readonly source?: JsonObject;
   /** A fixed change set ID; `uuidv7()` by default. */
   readonly changeSetId?: string;
+  /**
+   * The cause recorded on the definitions' change entries (Contracts 4.2):
+   * `api` by default, `system` for set loads.
+   */
+  readonly cause?: ChangeCause;
+  /**
+   * Checks the requester again inside the main transaction, against the
+   * snapshot held under exclusive `CONFIG_KEY` and before any write: the
+   * HTTP layer re-checks the session, the stated revision (6.4) and the
+   * access rules there, so nothing can change between the check and the
+   * commit (Contracts 1.4).
+   */
+  readonly authorize?: (
+    snapshot: ConfigSnapshot
+  ) => Effect.Effect<void, ChangeSetAuthorizationError, AuthorizeServices>;
 }
+
+/** What a change set's `authorize` check can refuse with. */
+export type ChangeSetAuthorizationError =
+  | NotAllowed
+  | Unauthenticated
+  | SchemaChanged
+  | UnknownTable
+  | UnknownField
+  | VersionConflict;
+
+/** What a change set's `authorize` check may use: the main transaction. */
+export type AuthorizeServices =
+  | SqlClient.SqlClient
+  | RequestRevision
+  | CurrentTransaction;
 
 /** Options of a change set. */
 export type ChangeSetOptions = ConfigCommitOptions;
@@ -149,6 +188,7 @@ export interface ChangeSetResult {
 export type ChangeSetError =
   | DefinitionInvalid
   | ChangeSetRefusal
+  | ChangeSetAuthorizationError
   | SchemaBusy
   | SchemaNeedsAttention
   | ExistingDataViolates
@@ -170,6 +210,16 @@ const decodeId = decodeRows(Schema.Struct({ id: Schema.String }));
 const decodeExists = decodeRows(Schema.Struct({ present: Schema.Boolean }));
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.String }));
+
+/**
+ * The cause of a change set's change entries when the request names none:
+ * `system` for definition set loads, `api` otherwise.
+ *
+ * @param source - The journal source.
+ * @returns The cause.
+ */
+const causeOf = (source: JsonObject | undefined): ChangeCause =>
+  source?.kind === "set" ? { kind: "system" } : { kind: "api" };
 
 /**
  * The requester and origin of a change set.
@@ -257,6 +307,10 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
 
+    if (input.request.authorize !== undefined) {
+      yield* input.request.authorize(snapshot);
+    }
+
     const applied = yield* apply(snapshot, input.request, input.changeSetId);
 
     const plan = planChangeSet(applied, input.preflight);
@@ -292,6 +346,15 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     }
 
     yield* writeDefinitions(plan.definitions, applied.before, requesterId);
+    yield* writeDefinitionChanges(
+      applied.after,
+      plan.definitions.map((after) => ({
+        after,
+        before: applied.before.get(after.id),
+      })),
+      requesterId,
+      input.request.cause ?? causeOf(input.request.source)
+    );
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);
     yield* writeDependencies(plan.definitions);

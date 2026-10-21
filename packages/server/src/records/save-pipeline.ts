@@ -553,8 +553,6 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
     return yield* new NotFound();
   }
 
-  yield* refuseRetiredClass(snapshot, locked.value.classId);
-
   if (stack.recordIds.has(input.id)) {
     return yield* new RecordInSave();
   }
@@ -576,6 +574,9 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   if (Option.isNone(readable)) {
     return yield* new NotFound();
   }
+
+  // After visibility, so a hidden record stays an identical NotFound.
+  yield* refuseRetiredClass(snapshot, record.classId);
 
   if (record.version !== input.expectedVersion) {
     return yield* new VersionConflict({ currentVersion: record.version });

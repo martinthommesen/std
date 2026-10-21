@@ -11,6 +11,7 @@ import { StdApi } from "@std/api/api";
  *   `NotFound`, like an unknown ID.
  */
 import { NotFound } from "@std/api/errors/not-found";
+import { SessionToken } from "@std/api/session-token";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import { isJsonArray } from "@std/values/json-value";
@@ -25,7 +26,11 @@ import type { ChangeSetServices } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { Transactions } from "../sql/transactions.ts";
-import { applyAsActor, authorizeOperations } from "./change-sets.ts";
+import {
+  applyAsActor,
+  authorizeOperations,
+  sessionAuthorization,
+} from "./change-sets.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
 import { recordServedRevision } from "./schema-revision-header.ts";
 
@@ -172,7 +177,13 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
               )
             );
 
+            // Checked again under the change set's exclusive CONFIG_KEY.
             const result = yield* applyAsActor(actor, {
+              authorize: sessionAuthorization({
+                operations: payload.operations,
+                token: yield* SessionToken,
+                userId: actor.userId,
+              }),
               operations: payload.operations,
               source: { kind: "api", route: "change-sets" },
             });

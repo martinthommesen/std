@@ -20,8 +20,74 @@ import { InvalidRequest } from "./errors/invalid-request.ts";
 import { NotAllowed } from "./errors/not-allowed.ts";
 import { NotFound } from "./errors/not-found.ts";
 import { SchemaBusy } from "./errors/schema-busy.ts";
+import { SchemaChanged } from "./errors/schema-changed.ts";
 import { SchemaLockTimeout } from "./errors/schema-lock-timeout.ts";
 import { SchemaNeedsAttention } from "./errors/schema-needs-attention.ts";
+import { Unauthenticated } from "./errors/unauthenticated.ts";
+import { UnknownField } from "./errors/unknown-field.ts";
+import { UnknownTable } from "./errors/unknown-table.ts";
+import { VersionConflict } from "./errors/version-conflict.ts";
+
+/** `Retry-After` of `SchemaLockTimeout`, in seconds [judgment]. */
+export const LOCK_TIMEOUT_RETRY_AFTER_SECONDS = 5;
+
+const busyBody = Schema.Struct({
+  _tag: Schema.Literal("SchemaBusy"),
+  changeSetId: Schema.NullOr(Schema.String),
+  retryAfterSeconds: Schema.Int,
+});
+
+const lockTimeoutBody = Schema.Struct({
+  _tag: Schema.Literal("SchemaLockTimeout"),
+  attempts: Schema.Int,
+});
+
+/**
+ * The two 503 refusals, `SchemaBusy` and `SchemaLockTimeout`, with the
+ * `Retry-After` header (seconds) Contracts 1.4 requires; the bodies are
+ * the errors as they are.
+ */
+export const SchemaUnavailable = Schema.Union([
+  SchemaBusy,
+  SchemaLockTimeout,
+]).pipe(
+  HttpApiSchema.encodeToWithHeaders(
+    {
+      body: Schema.Union([busyBody, lockTimeoutBody]).pipe(
+        HttpApiSchema.status(503)
+      ),
+      headers: { "retry-after": Schema.String },
+    },
+    {
+      decode: ({ body }) =>
+        body._tag === "SchemaBusy"
+          ? new SchemaBusy({
+              changeSetId: body.changeSetId,
+              retryAfterSeconds: body.retryAfterSeconds,
+            })
+          : new SchemaLockTimeout({ attempts: body.attempts }),
+      encode: (error) =>
+        error._tag === "SchemaBusy"
+          ? {
+              body: {
+                _tag: "SchemaBusy" as const,
+                changeSetId: error.changeSetId,
+                retryAfterSeconds: error.retryAfterSeconds,
+              },
+              headers: { "retry-after": String(error.retryAfterSeconds) },
+            }
+          : {
+              body: {
+                _tag: "SchemaLockTimeout" as const,
+                attempts: error.attempts,
+              },
+              headers: {
+                "retry-after": String(LOCK_TIMEOUT_RETRY_AFTER_SECONDS),
+              },
+            },
+    }
+  )
+);
 
 /**
  * Every refusal a change set can end in, with its HTTP status (Contracts
@@ -36,8 +102,14 @@ export const changeSetErrors = [
   PermissionRequired.pipe(HttpApiSchema.status(403)),
   ExistingDataViolates,
   SchemaNeedsAttention,
-  SchemaBusy,
-  SchemaLockTimeout,
+  SchemaUnavailable,
+  // Checked again under the change set's lock (Contracts 1.4, 6.4).
+  Unauthenticated,
+  NotAllowed,
+  SchemaChanged,
+  UnknownTable,
+  UnknownField,
+  VersionConflict,
 ] as const;
 
 /** The body of `POST /schema/change-sets`: the operations, in order. */
@@ -105,7 +177,7 @@ export type ChangeSetJournal = typeof ChangeSetJournalSchema.Type;
 export class SchemaChangesGroup extends HttpApiGroup.make("schemaChanges")
   .add(
     HttpApiEndpoint.post("applyChangeSet", "/schema/change-sets", {
-      error: [...changeSetErrors, NotAllowed, InvalidRequest],
+      error: [...changeSetErrors, InvalidRequest],
       payload: ChangeSetPayloadSchema,
       success: AppliedChangeSetSchema.pipe(HttpApiSchema.status(201)),
     }),

@@ -10,6 +10,7 @@ import type { Operation } from "@std/definitions/operation";
 import {
   BUILT_IN_ROLE_IDS,
   CORE_NAMESPACE_ID,
+  PLATFORM_CLASS_IDS,
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
@@ -21,7 +22,9 @@ import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   listOf,
@@ -31,7 +34,16 @@ import {
   recordPath,
   tagOf,
 } from "./reads-support.ts";
-import { ACME, addField, ensureSite, values } from "./schema-support.ts";
+import {
+  ACME,
+  addAccessRule,
+  addField,
+  addRole,
+  createClass,
+  ensureSite,
+  values,
+} from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 import { ASSET, LAPTOP, create, patch, remove } from "./writes-support.ts";
 
 const CHANGE_SETS = "/api/v1/schema/change-sets";
@@ -446,6 +458,257 @@ describe("schema-http", () => {
       );
 
       dbTest.effect(
+        "definition writes are checked against field rules, the stated revision and If-Match",
+        () =>
+          Effect.gen(function* fieldRulesAndChecks() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const fixture = yield* AcmeFixture;
+            const auditor = addRole("http_auditor");
+
+            assert.strictEqual(
+              (yield* postChangeSet(admin, [auditor.op])).status,
+              201
+            );
+
+            // A field-level deny on core.role.label for admins.
+            const snapshot = yield* (yield* Catalog).refresh;
+
+            const label = snapshot.fieldByName(
+              PLATFORM_CLASS_IDS.role,
+              "label"
+            );
+
+            const deny = addAccessRule(
+              PLATFORM_CLASS_IDS.role,
+              [BUILT_IN_ROLE_IDS.admin],
+              { fields: [label?.id ?? ""] }
+            );
+
+            const denyRule: Operation =
+              deny.op.op === "createAccessRule"
+                ? {
+                    definition: {
+                      ...deny.op.definition,
+                      actions: ["update"],
+                      effect: "deny",
+                    },
+                    op: "createAccessRule",
+                  }
+                : deny.op;
+
+            assert.strictEqual(
+              (yield* postChangeSet(admin, [denyRule])).status,
+              201
+            );
+
+            const generic = yield* patch(admin, "core.role", auditor.id, 1, {
+              label: "Auditors",
+            });
+
+            assert.strictEqual(generic.status, 403, generic.text);
+
+            const fixed = yield* postChangeSet(admin, [
+              {
+                changes: { label: "Auditors" },
+                id: auditor.id,
+                op: "update",
+                version: 1,
+              },
+            ]);
+
+            assert.strictEqual(fixed.status, 403, fixed.text);
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).role(auditor.id)?.label,
+              "http_auditor"
+            );
+
+            assert.strictEqual(
+              (yield* remove(admin, "core.access_rule", deny.id, 1)).status,
+              200
+            );
+
+            // A stale stated revision: SchemaChanged, nothing applied.
+            const stale = yield* http.request(
+              "PATCH",
+              recordPath("core.role", auditor.id),
+              {
+                body: { label: "Auditors" },
+                headers: {
+                  "if-match": '"1"',
+                  "std-schema-revision": `999999.${fixture.alice.id}`,
+                },
+                token: admin,
+              }
+            );
+
+            assert.strictEqual(stale.status, 409, stale.text);
+            assert.strictEqual(yield* tagOf(stale), "SchemaChanged");
+
+            // A stale If-Match: VersionConflict with the current version.
+            const updated = yield* patch(admin, "core.role", auditor.id, 1, {
+              label: "Auditors",
+            });
+
+            assert.strictEqual(updated.status, 200, updated.text);
+
+            const conflict = yield* patch(admin, "core.role", auditor.id, 1, {
+              label: "Auditing",
+            });
+
+            assert.strictEqual(conflict.status, 409, conflict.text);
+            assert.strictEqual(yield* tagOf(conflict), "VersionConflict");
+            assert.include(conflict.text, '"currentVersion":2');
+          })
+      );
+
+      dbTest.effect(
+        "definition records get one change entry per version, with actor and operation",
+        () =>
+          Effect.gen(function* definitionHistory() {
+            const admin = yield* adminToken;
+            const fixture = yield* AcmeFixture;
+
+            const created = yield* create(admin, "core.role", {
+              name: "historian",
+            });
+
+            assert.strictEqual(created.status, 201, created.text);
+
+            const { id } = yield* recordOf(created);
+
+            for (const [version, label] of [
+              [1, "Historian"],
+              [2, "Chronicler"],
+            ] as const) {
+              assert.strictEqual(
+                (yield* patch(admin, "core.role", id, version, { label }))
+                  .status,
+                200
+              );
+            }
+
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT record_version::text || ':' || kind || ':' || actor_id::text || ':' || (operation_id IS NOT NULL)::text AS value
+                 FROM core."change" WHERE record_id = $1::uuid ORDER BY record_version`,
+                [id]
+              ),
+              [
+                `1:create:${fixture.alice.id}:true`,
+                `2:update:${fixture.alice.id}:true`,
+                `3:update:${fixture.alice.id}:true`,
+              ]
+            );
+          })
+      );
+
+      dbTest.effect("SchemaBusy carries Retry-After on both paths", () =>
+        Effect.scoped(
+          Effect.gen(function* busy() {
+            const admin = yield* adminToken;
+            const database = yield* TestDatabase;
+            const holder = yield* database.session("schema-key-holder");
+
+            yield* holder.query(
+              `SELECT pg_advisory_lock(${SCHEMA_KEY.toString()})`
+            );
+
+            const fixed = yield* postChangeSet(admin, [
+              addField(ACME.asset, "busy_one", { kind: "text" }).op,
+            ]);
+
+            const generic = yield* create(admin, "core.field", {
+              label: "Busy",
+              name: "busy_two",
+              required: false,
+              table_id: ACME.asset,
+              type: { kind: "text" },
+            });
+
+            yield* holder.query(
+              `SELECT pg_advisory_unlock(${SCHEMA_KEY.toString()})`
+            );
+
+            for (const response of [fixed, generic]) {
+              assert.strictEqual(response.status, 503, response.text);
+              assert.strictEqual(yield* tagOf(response), "SchemaBusy");
+              assert.strictEqual(response.headers.get("retry-after"), "5");
+            }
+          })
+        )
+      );
+
+      dbTest.effect(
+        "a write refused for a retired table stays NotFound for records the caller cannot see",
+        () =>
+          Effect.gen(function* retiredHidden() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const alice = yield* http.signIn("alice", "alice-password");
+            const bob = yield* http.signIn("bob", "bob-password");
+            const fixture = yield* AcmeFixture;
+
+            yield* ensureSite;
+
+            const gadget = createClass("hidden_gadget", {
+              parentId: ACME.asset,
+            });
+
+            assert.strictEqual(
+              (yield* postChangeSet(admin, [gadget.op])).status,
+              201
+            );
+
+            const made = yield* create(alice, "site.hidden_gadget", {
+              name: "alice's",
+              owner: fixture.alice.id,
+            });
+
+            assert.strictEqual(made.status, 201, made.text);
+
+            const record = yield* recordOf(made);
+
+            assert.strictEqual(
+              (yield* patch(admin, "core.class", gadget.id, 1, {
+                state: "retired",
+              })).status,
+              200
+            );
+
+            const hidden = yield* patch(
+              bob,
+              "site.hidden_gadget",
+              record.id,
+              record.version,
+              { name: "bob's" }
+            );
+
+            const unknown = yield* patch(
+              bob,
+              "site.hidden_gadget",
+              fixture.alice.id,
+              record.version,
+              { name: "bob's" }
+            );
+
+            assert.strictEqual(hidden.status, 404);
+            assert.strictEqual(hidden.text, unknown.text);
+
+            const own = yield* patch(
+              alice,
+              "site.hidden_gadget",
+              record.id,
+              record.version,
+              { name: "still alice's" }
+            );
+
+            assert.strictEqual(own.status, 403);
+            assert.strictEqual(yield* tagOf(own), "NotAllowed");
+          })
+      );
+
+      dbTest.effect(
         "one revision per request under mixed load while 50 change sets commit",
         () =>
           Effect.gen(function* mixedLoad() {
@@ -528,32 +791,105 @@ describe("schema-http", () => {
             assert.isFalse(all.some(([, response]) => response.status >= 500));
 
             for (const [endpoint, response] of all) {
-              if (response.status === 200) {
-                const revision = headerRevision(response);
-                const body = yield* listOf(response);
+              // Reads succeed with 200 and creates with 201; nothing else.
+              assert.strictEqual(
+                response.status,
+                endpoint === "create" ? 201 : 200,
+                response.text
+              );
 
-                const expected = [...addedAt]
-                  .flatMap(([name, at]) => (at <= revision ? [name] : []))
+              const revision = headerRevision(response);
+
+              const expected = [...addedAt]
+                .flatMap(([name, at]) => (at <= revision ? [name] : []))
+                .toSorted();
+
+              const records =
+                endpoint === "create"
+                  ? [yield* recordOf(response)]
+                  : (yield* listOf(response)).records;
+
+              if (endpoint !== "create") {
+                assert.strictEqual(
+                  (yield* listOf(response)).schemaRevision,
+                  revision
+                );
+              }
+
+              // Through the laptop endpoint (reads and creates) every laptop
+              // field of the header's revision shows, and no later one;
+              // through the asset endpoint no child-only field ever does.
+              for (const record of records) {
+                const loadFields = Object.keys(record.values)
+                  .filter((key) => key.startsWith("load_"))
                   .toSorted();
 
-                // Through the laptop endpoint every laptop field shows; the
-                // asset endpoint never shows child-only fields (2.3).
-                for (const record of body.records) {
-                  if (endpoint === LAPTOP) {
-                    assert.deepStrictEqual(
-                      Object.keys(record.values)
-                        .filter((key) => key.startsWith("load_"))
-                        .toSorted(),
-                      expected,
-                      `revision ${revision}`
-                    );
-                  }
-                }
-
-                assert.strictEqual(body.schemaRevision, revision);
+                assert.deepStrictEqual(
+                  loadFields,
+                  endpoint === ASSET ? [] : expected,
+                  `${endpoint} at revision ${revision}`
+                );
               }
             }
           })
+      );
+
+      dbTest.effect(
+        "a rule revoked between the request's check and the commit refuses the write",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* revokedMeanwhile() {
+              const admin = yield* adminToken;
+              const database = yield* TestDatabase;
+              const target = addRole("revocation_target");
+
+              assert.strictEqual(
+                (yield* postChangeSet(admin, [target.op])).status,
+                201
+              );
+
+              // A session holds CONFIG_KEY shared, so the change set's main
+              // transaction waits for it after the request's own check.
+              const holder = yield* database.session("config-key-holder");
+
+              yield* holder.query("BEGIN");
+              yield* holder.query(
+                `SELECT pg_advisory_xact_lock_shared(${CONFIG_KEY.toString()})`
+              );
+
+              const write = yield* Effect.forkChild(
+                patch(admin, "core.role", target.id, 1, { label: "Revoked?" })
+              );
+
+              yield* waitUntil(
+                values(
+                  `SELECT count(*)::text AS value FROM pg_locks
+                   WHERE locktype = 'advisory' AND NOT granted AND mode = 'ExclusiveLock'
+                     AND objid = $1::oid`,
+                  [String(advisoryObjectId(CONFIG_KEY))]
+                ).pipe(Effect.map(([count]) => count !== "0"))
+              );
+
+              // Meanwhile the admin rules are revoked, as table owner, in a
+              // new revision; then the lock is released.
+              yield* holder.query(
+                `UPDATE core."access_rule" SET active = false WHERE $1::uuid = ANY (SELECT jsonb_array_elements_text(role_ids)::uuid)`,
+                [BUILT_IN_ROLE_IDS.admin]
+              );
+              yield* holder.query(
+                "UPDATE core.config_state SET revision = revision + 1, change_set_id = uuidv7()"
+              );
+              yield* holder.query("COMMIT");
+
+              const response = yield* Fiber.join(write);
+
+              assert.strictEqual(response.status, 403, response.text);
+              assert.strictEqual(
+                (yield* (yield* Catalog).refresh).role(target.id)?.label,
+                "revocation_target"
+              );
+            })
+          )
       );
     }
   );

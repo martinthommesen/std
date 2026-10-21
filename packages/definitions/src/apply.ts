@@ -223,16 +223,49 @@ const changeProblem = (
     return `The property ${key} of a ${current.kind} cannot be changed here.`;
   }
 
-  if (
-    current.kind === "field" &&
-    key === "required" &&
-    current.required &&
-    value === false
-  ) {
+  if (current.kind !== "field" || key !== "required") {
+    return undefined;
+  }
+
+  if (current.required && value === false) {
     return "A required field cannot be made optional; retire it instead.";
   }
 
-  return undefined;
+  // A retired field stays optional (Contracts 1.6): reactivate it first.
+  return current.state === "retired" && value === true
+    ? "A retired field cannot be made required; reactivate it first."
+    : undefined;
+};
+
+/**
+ * Refuses an override that makes a retired field required: a retired
+ * field is optional on every class (Contracts 1.6).
+ *
+ * @param work - The application.
+ * @param id - The override's ID.
+ * @param fieldId - The overridden field.
+ * @param required - The override's `required`.
+ * @returns True when the override may proceed.
+ */
+const overrideKeepsRetiredOptional = (
+  work: Work,
+  id: DefinitionId,
+  fieldId: DefinitionId,
+  required: boolean | null
+): boolean => {
+  if (required !== true || currentOf(work, fieldId)?.state !== "retired") {
+    return true;
+  }
+
+  work.problems.push(
+    problem(
+      "unsupportedChange",
+      id,
+      "A retired field cannot be made required; reactivate it first."
+    )
+  );
+
+  return false;
 };
 
 const firstChangeProblem = (
@@ -374,7 +407,13 @@ const setOverride = (
   const allowed = guardChange(work, current, "setOverride");
 
   const next =
-    allowed === undefined
+    allowed === undefined ||
+    !overrideKeepsRetiredOptional(
+      work,
+      definition.id,
+      definition.fieldId,
+      definition.required
+    )
       ? undefined
       : decodeAs(work, definition.id, {
           ...current,
@@ -409,7 +448,20 @@ const createOverride = (
   }
 
   if (
-    !guardNewOverride(work, definition.id, definition.owner, definition.classId)
+    !(
+      guardNewOverride(
+        work,
+        definition.id,
+        definition.owner,
+        definition.classId
+      ) &&
+      overrideKeepsRetiredOptional(
+        work,
+        definition.id,
+        definition.fieldId,
+        definition.required
+      )
+    )
   ) {
     return;
   }

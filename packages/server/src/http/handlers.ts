@@ -176,6 +176,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             return yield* writeDefinition(
               transactions,
               request,
+              stated,
               params.table,
               kind,
               { action: "create", body }
@@ -201,6 +202,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             return yield* writeDefinition(
               transactions,
               request,
+              stated,
               params.table,
               kind,
               { action: "update", body, expectedVersion, id: params.id }
@@ -232,6 +234,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             return yield* writeDefinition(
               transactions,
               request,
+              stated,
               params.table,
               kind,
               { action: "delete", expectedVersion, id: params.id }

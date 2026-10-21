@@ -347,6 +347,52 @@ describe("lifecycle", () => {
     assert.isTrue(effectiveClass(applied.after, w.asset.id)?.readable);
   });
 
+  it("a retired field cannot be made required again, by an update or an override", () => {
+    const w = world();
+    const grade = field(w.asset, "grade", { kind: "text" });
+    const loose = override(w.laptop, grade, { maxLength: 10 });
+    const tablet = table(w.ns, "tablet", w.asset);
+    const snapshot = w.snapshot.with(KEY, [grade, loose, tablet]);
+    const retired = committed(succeeded(apply(snapshot, [retireOp(grade)])));
+
+    const attempts: readonly Operation[] = [
+      { changes: { required: true }, id: grade.id, op: "update", version: 2 },
+      {
+        definition: { ...loose, required: true },
+        op: "setOverride",
+        version: 1,
+      },
+      {
+        definition: { ...override(tablet, grade, {}), required: true },
+        op: "setOverride",
+        version: null,
+      },
+    ];
+
+    for (const attempt of attempts) {
+      assert.strictEqual(tagOf(apply(retired, [attempt])), "DefinitionInvalid");
+    }
+
+    const reactivated = committed(
+      succeeded(
+        apply(retired, [{ id: grade.id, op: "reactivate", version: 2 }])
+      )
+    );
+
+    assert.isTrue(
+      isSuccess(
+        apply(reactivated, [
+          {
+            changes: { required: true },
+            id: grade.id,
+            op: "update",
+            version: 3,
+          },
+        ])
+      )
+    );
+  });
+
   it("retiring a field clears the required overrides of descendants; reactivated it is optional on every class", () => {
     const w = world();
     const grade = field(w.asset, "grade", { kind: "text" });

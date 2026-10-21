@@ -67,7 +67,7 @@ Covers how definitions change without breaking references, stalling the applicat
 ### 1.4 Change sets, serialization and locks
 
 - Writes to config tables (definitions, roles, access rules, layouts and other config records) through the generic record API become a one-operation change set. They are routed onto the change-set path before `begin_request()`. That transaction takes `CONFIG_KEY` exclusive as its first lock and runs the save steps (access checks, history) under it, never upgrading a lock. Reason: two requests holding `CONFIG_KEY` shared and both asking for exclusive would deadlock.
-- A fixed admin endpoint accepts several operations as one change set. Each operation names the definition's `version`. It is `POST /api/v1/schema/change-sets` (201), and `GET /api/v1/schema/change-sets/{id}` returns the journal entry and steps. The session's `Actor` is the requester; its access rules must allow each operation's write on the definition table of its kind unconditionally (`NotAllowed`). Generic `POST`, `PATCH` (`name` is a rename, `state` a retire or reactivate) and `DELETE` on definition tables take the same path. [decision 0011]
+- A fixed admin endpoint accepts several operations as one change set. Each operation names the definition's `version`. It is `POST /api/v1/schema/change-sets` (201), and `GET /api/v1/schema/change-sets/{id}` returns the journal entry and steps. The session's `Actor` is the requester; its access rules must allow each operation's write on the definition table of its kind, record and written fields, unconditionally (`NotAllowed`), checked again with the session and the stated revision in the main transaction under exclusive `CONFIG_KEY`. Each definition version gets a change entry in `core.change`. Generic `POST`, `PATCH` (`name` is a rename, `state` a retire or reactivate) and `DELETE` on definition tables take the same path. [decision 0011]
 - `DELETE` on a definition record is refused with `UseRetireOrPurge`. Reason: an ordinary delete must never destroy a column.
 
 | Lock | Kind | Holder | Purpose |
@@ -180,7 +180,7 @@ Resume:
 | `retired` | kept with data | only when selected explicitly, under access rules | refused (`DefinitionRetired`) | hidden | `active`, `purged` |
 | `purged` | dropped | no | no | no | none (tombstone) |
 
-- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A reactivated field comes back optional on every class: retiring sets the field's `required` to false and clears `required` on its overrides in descendant classes. Booleans stay `NOT NULL DEFAULT false`. [checked: `schema-lifecycle.test.ts`, `lifecycle.test.ts`]
+- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A retired field cannot be made required, directly or by an override. A reactivated field comes back optional on every class: retiring sets the field's `required` to false and clears `required` on its overrides in descendant classes. Booleans stay `NOT NULL DEFAULT false`. [checked: `schema-lifecycle.test.ts`, `lifecycle.test.ts`]
 - Retiring a parent field retires it on every child class. A retired table accepts reads only: creates, updates and deletes of its records (and of records of its descendants) are refused with `NotAllowed`.
 - Purge needs the `schema.purge` permission (3.1; held by the built-in `schema_purger` role, not by `admin`), a target retired in an earlier committed revision, no blocking dependents (1.7), and a confirmation naming the target's ID and version. It is journaled and audited with the number of values or rows destroyed. The count runs under `SCHEMA_KEY` before `CONFIG_KEY`; a retired field or table refuses writes, so the count is stable.
 - A tombstone keeps ID, last name, type, label and purge revision, so history can interpret old values. The name becomes free; the ID is never reused. The tombstone is the definition row in state `purged`; its purge revision is its first definition revision in that state (4.4). [decision 0011]
@@ -514,7 +514,7 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `DefinitionInvalid` | 422 | a change set's definitions are invalid; lists problems by definition ID |
 | `DependencyConflict`, `UseRetireOrPurge`, `PurgeRefused`, `ExistingDataViolates`, `SchemaNeedsAttention` | 409 | change-set refusals (1.4 to 1.7) |
 | `DefinitionProtected`, `PermissionRequired` | 403 | 1.8, and a missing permission such as `schema.purge` |
-| `SchemaBusy`, `SchemaLockTimeout` | 503 | another schema change holds `SCHEMA_KEY`; locks not obtained in 5 attempts (names no session) |
+| `SchemaBusy`, `SchemaLockTimeout` | 503 with `Retry-After` | another schema change holds `SCHEMA_KEY`; locks not obtained in 5 attempts (names no session) |
 | `Unauthenticated` | 401 | no bearer token, an unknown or expired one, or an inactive user |
 | `InvalidCredentials` | 401 | sign-in refused; unknown login, wrong password and deactivated user alike |
 | `InvalidRequest`, `InvalidFilter`, `InvalidCursor` | 400 | a malformed query parameter, a filter that does not parse or check (after names resolve), a cursor not issued for this sort |
