@@ -10,7 +10,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 1 | `ws/0a-sql-layer` | 0A (driver), 1A/1B groundwork | `@std/server` skeleton, SQL layer, platform migrations, `@std/testing`, driver smoke test | merged |
 | 3 | `ws/0a-sql-read-tuning` | 0A follow-up | `SET LOCAL` planner settings (`max_parallel_workers_per_gather`, `plan_cache_mode`), unprepared `readOnly` statements, for the read compiler's branch form | merged |
 | 2 | `ws/1d-conditions` | 0D, 1D (conditions) | `@std/conditions`: AST, checker, resolver, evaluators, SQL compiler, text syntax, differential test | merged |
-| 2 | `ws/0b-schema-core` | 0B, 1A (core) | `@std/definitions`, platform definition tables, catalog snapshots, change sets, class-table DDL, core definition set | in review |
+| 2 | `ws/0b-schema-core` | 0B, 1A (core) | `@std/definitions`, platform definition tables, catalog snapshots, change sets, class-table DDL, core definition set | merged |
 | 2 | `ws/0f-probes` | 0F | Postgres behavior probes and measurements | merged |
 | 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | in progress |
 | 3 | `ws/0c-writes` | 0B, 0C, 1E (history) | save pipeline, deletes, history and history endpoint, two-user write scenario, `spike:demo` | in progress |
