@@ -32,7 +32,7 @@ packages/
   testing/       @std/testing      test harness: databases, fixtures, HTTP helpers
   codegen/       @std/codegen      plain: SDK code generation from schema snapshots (Step 4)
 apps/
-  web/           @std/web          React + Vite web app (Step 2)
+  web/           @std/web          Foldkit + Foldkit UI + Vite web app (Step 2; see AGENTS.md, "Frontend: Foldkit")
 examples/
   acme/          Stage 0 two-user example (definition set, demo script)
   helpdesk/      Step 2 and 3 example app definition set, import sample
