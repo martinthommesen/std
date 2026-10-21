@@ -312,12 +312,13 @@ const CONFLICTING_MODES: ReadonlyMap<string, readonly string[]> = new Map([
 const CONFLICTING_HOLDERS_QUERY = `
 SELECT DISTINCT pid FROM pg_locks
 WHERE granted AND locktype = 'relation'
-  AND relation = $1::oid AND mode = ANY($2::text[])
+  AND database = $3::oid AND relation = $1::oid AND mode = ANY($2::text[])
   AND pid <> pg_backend_pid()
 ORDER BY pid`;
 
 const WAITED_LOCK_QUERY = `
-SELECT relation::text AS relation, mode FROM pg_locks
+SELECT database::text AS database, relation::text AS relation, mode
+FROM pg_locks
 WHERE pid = $1::int4 AND NOT granted AND locktype = 'relation'
 LIMIT 1`;
 
@@ -332,7 +333,9 @@ interface AttemptWait {
 /**
  * The sessions that blocked a config commit. Without sampled blockers, the
  * sessions holding a lock that conflicts with the relation lock the attempt
- * was seen waiting for; failing that, the sessions holding `CONFIG_KEY`.
+ * was seen waiting for, on the same relation in the same database (relation
+ * oids repeat across databases); failing that, the sessions holding
+ * `CONFIG_KEY`.
  * @param monitor - A pooled client, outside the failed transaction.
  * @param pids - Blocking PIDs sampled while the attempt waited.
  * @param waited - The relation lock the attempt was seen waiting for, if any.
@@ -356,6 +359,7 @@ export const describeLockHolders: (
     const rows = yield* monitor.unsafe(CONFLICTING_HOLDERS_QUERY, [
       waited.relation,
       `{${conflicting.join(",")}}`,
+      waited.database,
     ]);
 
     holderPids = (yield* decodePidRows(rows).pipe(Effect.orDie)).map(

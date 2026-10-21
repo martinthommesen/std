@@ -5,12 +5,23 @@ import { PgClient } from "@effect/sql-pg";
  * config-commit lock-timeout retries.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Clock, Deferred, Duration, Effect, Exit, Fiber, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Schema,
+} from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import {
   TestDatabase,
+  testDatabaseService,
   testDatabaseLayer,
 } from "../../testing/src/test-database.ts";
 import {
@@ -57,7 +68,27 @@ const decodeValid = decodeRows(Schema.Struct({ valid: Schema.Boolean }));
 
 const decodeRevision = decodeRows(Schema.Struct({ revision: Schema.String }));
 
-const decodeRelation = decodeRows(Schema.Struct({ relation: Schema.String }));
+const decodeRelation = decodeRows(
+  Schema.Struct({ database: Schema.String, relation: Schema.String })
+);
+
+/**
+ * Whether a list of lock holders names a session.
+ * @param pid - The session's backend PID.
+ * @param holders - The holders.
+ * @returns `true` when the PID is among them.
+ */
+const namesSession = (
+  pid: number,
+  holders: readonly { readonly pid: number }[]
+): boolean => holders.some((holder) => holder.pid === pid);
+
+const DATABASE_OID_QUERY =
+  "SELECT oid::text AS database FROM pg_database WHERE datname = current_database()";
+
+const decodeDatabaseOid = decodeRows(
+  Schema.Struct({ database: Schema.String })
+);
 
 const configKeyWaiters = SqlClient.SqlClient.pipe(
   Effect.flatMap(
@@ -516,11 +547,13 @@ describe("driver-smoke-locks", () => {
             yield* sql`CREATE TABLE smoke_fallback (id int)`;
 
             const [table] = yield* sql`
-              SELECT 'smoke_fallback'::regclass::oid::text AS relation`.pipe(
+              SELECT 'smoke_fallback'::regclass::oid::text AS relation,
+                     (SELECT oid::text FROM pg_database WHERE datname = current_database()) AS database`.pipe(
               Effect.flatMap(decodeRelation)
             );
 
             const relation = table?.relation ?? "";
+            const databaseOid = table?.database ?? "";
             const blocker = yield* database.session("smoke-fallback-reader");
             yield* blocker.query("BEGIN");
             yield* blocker.query("SELECT count(*) FROM smoke_fallback");
@@ -528,6 +561,7 @@ describe("driver-smoke-locks", () => {
             // As if the sampler missed the whole wait: no blockers, only the
             // relation lock the attempt was seen waiting for.
             const conflicting = yield* describeLockHolders(monitor, [], {
+              database: databaseOid,
               mode: "AccessExclusiveLock",
               relation,
             });
@@ -547,6 +581,7 @@ describe("driver-smoke-locks", () => {
 
             // AccessShareLock does not conflict with RowShareLock.
             const compatible = yield* describeLockHolders(monitor, [], {
+              database: databaseOid,
               mode: "RowShareLock",
               relation,
             });
@@ -558,6 +593,76 @@ describe("driver-smoke-locks", () => {
             );
 
             yield* blocker.query("ROLLBACK");
+          })
+        )
+    );
+
+    dbTest.effect(
+      "the fallback never names a session holding the same relation oid in another database",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* otherDatabase() {
+            const sql = yield* SqlClient.SqlClient;
+            const monitor = yield* PgClient.PgClient;
+
+            // pg_class has the same oid (1259) in every database, so a lock on
+            // it elsewhere is a lock on the same relation oid as ours.
+            const [ours] = yield* sql`
+              SELECT 'pg_catalog.pg_class'::regclass::oid::text AS relation,
+                     (SELECT oid::text FROM pg_database WHERE datname = current_database()) AS database`.pipe(
+              Effect.flatMap(decodeRelation)
+            );
+
+            const relation = ours?.relation ?? "";
+
+            const other = yield* Layer.build(
+              testDatabaseService({ empty: true })
+            ).pipe(Effect.map((context) => Context.get(context, TestDatabase)));
+
+            const foreign = yield* other.session("smoke-other-database");
+            yield* foreign.query("BEGIN");
+            yield* foreign.query("SELECT count(*) FROM pg_catalog.pg_class");
+
+            const [theirs] = yield* decodeDatabaseOid(
+              (yield* foreign.query(DATABASE_OID_QUERY)).rows
+            );
+
+            const [foreignRelation] = yield* decodeRelation(
+              (yield* foreign.query(
+                `SELECT 'pg_catalog.pg_class'::regclass::oid::text AS relation,
+                        (${DATABASE_OID_QUERY}) AS database`
+              )).rows
+            );
+
+            assert.strictEqual(foreignRelation?.relation, relation, "same oid");
+            assert.notStrictEqual(theirs?.database, ours?.database);
+
+            const waited = {
+              database: ours?.database ?? "",
+              mode: "AccessExclusiveLock",
+              relation,
+            };
+
+            assert.isFalse(
+              namesSession(
+                foreign.processId,
+                yield* describeLockHolders(monitor, [], waited)
+              ),
+              "a lock in another database is not ours"
+            );
+
+            // Control: the same lookup for the other database names the session.
+            assert.isTrue(
+              namesSession(
+                foreign.processId,
+                yield* describeLockHolders(monitor, [], {
+                  ...waited,
+                  database: theirs?.database ?? "",
+                })
+              )
+            );
+
+            yield* foreign.query("ROLLBACK");
           })
         )
     );

@@ -5,8 +5,13 @@
  */
 import { Schema } from "effect";
 
-/** A relation lock an attempt was seen waiting for: the relation's oid and the requested mode. */
+/**
+ * A relation lock an attempt was seen waiting for: the oids of its database
+ * and relation (relation oids are unique only within one database) and the
+ * requested mode.
+ */
 export const WaitedLockSchema = Schema.Struct({
+  database: Schema.String,
   mode: Schema.String,
   relation: Schema.String,
 });

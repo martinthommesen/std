@@ -195,7 +195,7 @@ For the reads workstream and the storage benchmark (`docs/decisions/0004-storage
 ## Lock-holder sampling (API changes)
 
 - A config commit attempt's blocker sampler (`pg_blocking_pids` of its backend, at once and then every 50 ms) now only adds to what it has seen. It used to replace the set on every sample, and since it runs until the attempt's scope closes, a sample taken after the lock timeout and the `ROLLBACK` saw no wait and erased the blockers; under load that window is long, so `SchemaLockTimeout` named the `CONFIG_KEY` holders instead of the session holding the table. The per-attempt lock timeouts are unchanged.
-- The sampler also records the relation lock the attempt was last seen waiting for (`pg_locks`, oid and mode). When no blocker was sampled, `describeLockHolders(monitor, pids, waited?)` names the sessions holding a lock on that relation in a mode that conflicts with the waited one; only without either does it fall back to the `CONFIG_KEY` holders. `AttemptLockTimedOut` carries `waited`.
+- The sampler also records the relation lock the attempt was last seen waiting for (the waiter's own ungranted `pg_locks` row: database oid, relation oid and mode). When no blocker was sampled, `describeLockHolders(monitor, pids, waited?)` names the sessions holding a lock on that relation, in the same database (relation oids are unique only within one), in a mode that conflicts with the waited one; only without either does it fall back to the `CONFIG_KEY` holders. `AttemptLockTimedOut` carries `waited`.
 
 ## Open items
 
