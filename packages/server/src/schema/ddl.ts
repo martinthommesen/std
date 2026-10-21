@@ -320,7 +320,111 @@ export const addNotNull = (
 });
 
 /**
- * Drops a field's column (purge, workstream 1A). Dropping a reference
+ * Renames a namespace's schema. Tables, indexes and constraints keep their
+ * OIDs and generated names; no table lock is involved (the rename locks
+ * only the schema object, and STD statements name tables, not schemas).
+ *
+ * @param from - The current name.
+ * @param to - The new name.
+ * @returns The statement.
+ */
+export const renameSchema = (from: string, to: string): DdlStatement => ({
+  form: "renameSchema",
+  locks: [],
+  sql: `ALTER SCHEMA ${quoteIdent(from)} RENAME TO ${quoteIdent(to)}`,
+});
+
+/**
+ * Renames a table (Contracts 1.1); FKs referencing it follow by OID.
+ *
+ * @param table - The quoted table under its current name.
+ * @param lockName - The quoted name the table has when locks are taken,
+ *   before any DDL of the change set runs.
+ * @param to - The new table name.
+ * @returns The statement.
+ */
+export const renameTable = (
+  table: string,
+  lockName: string,
+  to: string
+): DdlStatement => ({
+  form: "renameTable",
+  locks: [lock(lockName, ALTER)],
+  sql: `ALTER TABLE ${table} RENAME TO ${quoteIdent(to)}`,
+});
+
+/**
+ * Renames a field's column (Contracts 1.1); index expressions and CHECKs
+ * follow the column, and generated names never change.
+ *
+ * @param table - The quoted table under its current name.
+ * @param lockName - The quoted name the table has when locks are taken.
+ * @param from - The current column name.
+ * @param to - The new column name.
+ * @returns The statement.
+ */
+export const renameColumn = (
+  table: string,
+  lockName: string,
+  from: string,
+  to: string
+): DdlStatement => ({
+  form: "renameColumn",
+  locks: [lock(lockName, ALTER)],
+  sql: `ALTER TABLE ${table} RENAME COLUMN ${quoteIdent(from)} TO ${quoteIdent(to)}`,
+});
+
+/**
+ * Drops a retired required field's NOT NULL, catalog-only (Contracts 1.6),
+ * so inserts without it work.
+ *
+ * @param table - The quoted table.
+ * @param field - The field.
+ * @returns The statement.
+ */
+export const dropNotNull = (
+  table: string,
+  field: FieldDefinition
+): DdlStatement => ({
+  form: "dropNotNull",
+  locks: [lock(table, ALTER)],
+  sql: `ALTER TABLE ${table} ALTER COLUMN ${quoteIdent(field.name)} DROP NOT NULL`,
+});
+
+/**
+ * Drops a purged class's table. Its level FK and every FK it holds
+ * (reference fields, audit columns) are dropped with it, which removes the
+ * FK triggers on each referenced table, so all of them are locked
+ * `ACCESS EXCLUSIVE`; ancestors come first, root first, as writers lock
+ * them.
+ *
+ * @param table - The quoted table.
+ * @param ancestors - The quoted ancestor tables, root first.
+ * @param referenced - The quoted tables its FKs reference (parent excluded).
+ * @returns The statement.
+ */
+export const dropTable = (
+  table: string,
+  ancestors: readonly string[],
+  referenced: readonly string[]
+): DdlStatement => {
+  const own = new Set([table, ...ancestors]);
+
+  return {
+    form: "dropTable",
+    locks: [
+      ...ancestors.map((ancestor) => lock(ancestor, ALTER)),
+      lock(table, ALTER),
+      ...referenced.flatMap((target) =>
+        own.has(target) ? [] : [lock(target, ALTER)]
+      ),
+    ],
+    sql: `DROP TABLE ${table}`,
+  };
+};
+
+/**
+ * Drops a field's column (purge). Dropping a reference
  * column also drops its FK, which removes the FK triggers on the
  * referenced table, so both tables are locked `ACCESS EXCLUSIVE`.
  *

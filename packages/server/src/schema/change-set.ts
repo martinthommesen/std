@@ -9,10 +9,15 @@
  * 2. Without DDL or a data preflight (labels, roles, access rules), only
  *    `CONFIG_KEY` is taken: the main transaction runs on the pool.
  * 3. Otherwise the coordinator takes `SCHEMA_KEY` on a dedicated connection
- *    (`SchemaBusy` if another change set holds it), checks which tables hold
- *    rows and counts violating rows (`ExistingDataViolates` with up to 20
- *    sample IDs), and checks every planned statement against the allowed DDL
- *    forms (`DdlRefused`), all before `CONFIG_KEY` and before any DDL.
+ *    (`SchemaBusy` if another change set holds it), first resumes change
+ *    sets an earlier coordinator left in `applying` and refuses while one
+ *    is `needs_attention` (`SchemaNeedsAttention`), then checks which tables
+ *    hold rows and counts violating rows (`ExistingDataViolates` with up to
+ *    20 sample IDs), counts the values or rows each purge destroys and
+ *    checks that a purged child class leaves no records behind
+ *    (`PurgeRefused`), and checks every planned statement against the
+ *    allowed DDL forms (`DdlRefused`), all before `CONFIG_KEY` and before
+ *    any DDL.
  * 4. The main transaction (`configCommit`: `CONFIG_KEY` exclusive,
  *    `lock_timeout` 200 ms then 2 s, `statement_timeout` 15 s, retries,
  *    `SchemaLockTimeout`) loads the snapshot at the locked revision,
@@ -33,6 +38,7 @@ import type {
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import type { DefinitionInvalid } from "@std/definitions/problems";
+import { PurgeRefused } from "@std/definitions/purge-refused";
 import type { ChangeSetRefusal } from "@std/definitions/refusals";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "@std/definitions/requester";
 import type { ChangeOrigin, Requester } from "@std/definitions/requester";
@@ -43,7 +49,7 @@ import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Catalog } from "../catalog/catalog.ts";
-import { bumpRevision, MAIN_LOCK_TIMEOUT } from "../sql/config-commit.ts";
+import { bumpRevision } from "../sql/config-commit.ts";
 import type {
   ConfigCommitOptions,
   SchemaLockTimeout,
@@ -54,18 +60,26 @@ import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { lockWaiting } from "../sql/statement-marks.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
-import type { DdlStatement, TableLock } from "./ddl-forms.ts";
 import { DdlRefused } from "./ddl-refused.ts";
 import { ExistingDataViolates } from "./existing-data-violates.ts";
+import { restoreLockTimeout, runDdl, takeTableLocks } from "./lock-budget.ts";
 import { ASSUME_POPULATED, planChangeSet, requiresSchemaKey } from "./plan.ts";
-import type { ChangeSetPlan, Preflight, ViolationCheck } from "./plan.ts";
+import type {
+  ChangeSetPlan,
+  Preflight,
+  PurgeCount,
+  RecordCheck,
+  ViolationCheck,
+} from "./plan.ts";
 import type { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { insertSystemUser, verifyPlatformTable } from "./platform-tables.ts";
+import { stepBoundary } from "./recovery-settings.ts";
+import { settleOpenChangeSets } from "./recovery.ts";
 import type { SchemaBusy } from "./schema-busy.ts";
+import type { SchemaNeedsAttention } from "./schema-needs-attention.ts";
 import { tableName } from "./sql-text.ts";
 import {
   journalOperations,
@@ -118,6 +132,10 @@ export interface ChangeSetResult {
   /** Milliseconds from `BEGIN` of the successful main transaction to `COMMIT`. */
   readonly mainTransactionMs: number;
   readonly error: string | null;
+  /** Values or rows each purged definition destroyed (Contracts 1.6). */
+  readonly destroyed: ReadonlyMap<DefinitionId, number>;
+  /** What the journal recorded per operation (cascades, reported dependents). */
+  readonly operations: readonly JsonObject[];
 }
 
 /** Errors of a change set. Nothing is applied when one is raised. */
@@ -125,6 +143,7 @@ export type ChangeSetError =
   | DefinitionInvalid
   | ChangeSetRefusal
   | SchemaBusy
+  | SchemaNeedsAttention
   | ExistingDataViolates
   | DdlRefused
   | PlatformTableMismatch
@@ -211,84 +230,6 @@ export const guardPlan = (
     ),
   ]);
 
-/**
- * The time one attempt of a main transaction may spend waiting for table
- * locks, across all its DDL statements (Contracts 1.4). Postgres's
- * `lock_timeout` applies per lock, so a fixed 2 s would let an attempt that
- * waits on two ancestors in turn hold `CONFIG_KEY` for twice that.
- */
-export const DDL_LOCK_BUDGET_MS = 2000;
-
-/** The lock-wait budget of one main-transaction attempt. */
-interface LockBudget {
-  readonly deadline: number;
-}
-
-const remainingMs = (budget: LockBudget): Effect.Effect<number> =>
-  Clock.currentTimeMillis.pipe(
-    Effect.map((now) => Math.max(1, budget.deadline - now))
-  );
-
-/**
- * Takes every table lock the DDL needs, one at a time, each with
- * `lock_timeout` set to what is left of the attempt's budget. Postgres
- * applies `lock_timeout` to each lock acquisition separately, so only
- * explicit locks keep the attempt's total wait within the budget; a lock
- * timeout rolls the attempt back and the config commit retries it.
- *
- * @param locks - The plan's locks, in order.
- * @returns The budget for the DDL that follows.
- */
-const takeTableLocks = Effect.fn("Schema.takeTableLocks")(
-  function* takeTableLocks(locks: readonly TableLock[]) {
-    const sql = yield* SqlClient.SqlClient;
-
-    const budget: LockBudget = {
-      deadline: (yield* Clock.currentTimeMillis) + DDL_LOCK_BUDGET_MS,
-    };
-
-    for (const lock of locks) {
-      const remaining = yield* remainingMs(budget);
-
-      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-      yield* lockWaiting(
-        sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
-      );
-    }
-
-    return budget;
-  }
-);
-
-/**
- * Runs DDL whose table locks are already held. `lock_timeout` stays at what
- * is left of the budget (at least 1 ms), so a lock missing from the
- * inventory fails fast as a retryable lock timeout instead of waiting.
- *
- * @param statements - The statements, in order.
- * @param budget - The attempt's budget.
- * @returns An effect in the main transaction.
- */
-const runDdl = Effect.fn("Schema.runDdl")(function* runDdl(
-  statements: readonly DdlStatement[],
-  budget: LockBudget
-) {
-  const sql = yield* SqlClient.SqlClient;
-
-  for (const statement of statements) {
-    const remaining = yield* remainingMs(budget);
-
-    yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-    yield* lockWaiting(sql.unsafe(statement.sql));
-  }
-});
-
-const restoreLockTimeout = SqlClient.SqlClient.pipe(
-  Effect.flatMap((sql) =>
-    sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`)
-  )
-);
-
 /** Everything the main transaction needs besides its services. */
 interface MainInput {
   readonly request: ChangeSetRequest;
@@ -296,6 +237,8 @@ interface MainInput {
   readonly preflight: Preflight;
   readonly coordinatorPid: number | null;
   readonly timing: { started: number; finished: number };
+  /** Values or rows each purge destroys, counted before `CONFIG_KEY`. */
+  readonly destroyed: ReadonlyMap<DefinitionId, number>;
 }
 
 const mainTransaction = Effect.fn("Schema.mainTransaction")(
@@ -342,10 +285,13 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);
     yield* writeDependencies(plan.definitions);
+
+    const operations = journalOperations(applied, input.destroyed);
+
     yield* writeJournal({
       changeSetId: input.changeSetId,
       coordinatorPid: input.coordinatorPid,
-      operations: journalOperations(applied),
+      operations,
       requesterId,
       revision,
       source: input.request.source ?? { kind: "api" },
@@ -355,7 +301,7 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const next = yield* bumpRevision(input.changeSetId);
     input.timing.finished = yield* Clock.currentTimeMillis;
 
-    return { next, plan };
+    return { next, operations, plan };
   }
 );
 
@@ -430,6 +376,57 @@ const countViolations = Effect.fn("Schema.countViolations")(
   }
 );
 
+const countRows = (
+  connection: DedicatedConnection,
+  check: PurgeCount | RecordCheck
+): Effect.Effect<number, DatabaseError> =>
+  connection
+    .execute(
+      `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
+    )
+    .pipe(
+      Effect.flatMap(decodeCount),
+      Effect.map(([row]) => Number(row?.n ?? "0"))
+    );
+
+/**
+ * Counts what each purge destroys (Contracts 1.6), under `SCHEMA_KEY` and
+ * before `CONFIG_KEY`: a retired field or table refuses writes, so the
+ * count is stable. Refuses a purged child class whose records also have
+ * rows in ancestor tables that stay.
+ *
+ * @param connection - The coordinator's connection.
+ * @param plan - The plan.
+ * @returns Values or rows per purged definition.
+ */
+const countPurges = Effect.fn("Schema.countPurges")(function* countPurges(
+  connection: DedicatedConnection,
+  plan: ChangeSetPlan
+): Effect.fn.Return<
+  ReadonlyMap<DefinitionId, number>,
+  PurgeRefused | DatabaseError
+> {
+  for (const check of plan.recordChecks) {
+    const count = yield* countRows(connection, check);
+
+    if (count > 0) {
+      return yield* new PurgeRefused({
+        count,
+        definitionId: check.definitionId,
+        reason: "hasRecords",
+      });
+    }
+  }
+
+  const destroyed = new Map<DefinitionId, number>();
+
+  for (const count of plan.purgeCounts) {
+    destroyed.set(count.definitionId, yield* countRows(connection, count));
+  }
+
+  return destroyed;
+});
+
 const newChangeSetId = hygienic(
   SqlClient.SqlClient.pipe(
     Effect.flatMap((sql) => sql`SELECT uuidv7()::text AS id`),
@@ -441,9 +438,11 @@ const newChangeSetId = hygienic(
 const unchanged: ChangeSetResult = {
   changeSetId: null,
   completeRevision: null,
+  destroyed: new Map(),
   error: null,
   followUps: [],
   mainTransactionMs: 0,
+  operations: [],
   revision: null,
   state: "unchanged",
   statements: [],
@@ -454,16 +453,20 @@ const resultOf = (
   committed: {
     readonly next: { readonly revision: number };
     readonly plan: ChangeSetPlan;
+    readonly operations: readonly JsonObject[];
   },
-  timing: { readonly started: number; readonly finished: number }
+  timing: { readonly started: number; readonly finished: number },
+  destroyed: ReadonlyMap<DefinitionId, number>
 ): ChangeSetResult => ({
   changeSetId,
   completeRevision: null,
+  destroyed,
   error: null,
   followUps: committed.plan.steps.flatMap((step) =>
     step.sql === null ? [] : [step.sql]
   ),
   mainTransactionMs: timing.finished - timing.started,
+  operations: committed.operations,
   revision: committed.next.revision,
   state: "completed",
   statements: [...committed.plan.tables, ...committed.plan.keys].map(
@@ -483,6 +486,9 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
   > {
     const catalog = yield* Catalog;
     const connection = yield* openCoordinator;
+
+    yield* settleOpenChangeSets(connection, options);
+
     const snapshot = yield* catalog.refresh;
     const applied = yield* apply(snapshot, request, changeSetId);
     const preflight = yield* checkExistence(connection, applied);
@@ -492,6 +498,8 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
       yield* countViolations(connection, check);
     }
 
+    const destroyed = yield* countPurges(connection, plan);
+
     yield* guardPlan(plan);
 
     const timing = { finished: 0, started: 0 };
@@ -500,6 +508,7 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
       mainTransaction({
         changeSetId,
         coordinatorPid: connection.processId,
+        destroyed,
         preflight,
         request,
         timing,
@@ -507,11 +516,13 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
       options
     );
 
-    const result = resultOf(changeSetId, committed, timing);
+    const result = resultOf(changeSetId, committed, timing, destroyed);
 
     if (committed.plan.steps.length === 0) {
       return result;
     }
+
+    yield* stepBoundary("committed");
 
     const outcome = yield* runFollowUps(connection, changeSetId, options);
 
@@ -560,6 +571,7 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
       mainTransaction({
         changeSetId,
         coordinatorPid: null,
+        destroyed: new Map(),
         preflight: ASSUME_POPULATED,
         request,
         timing,
@@ -567,6 +579,6 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
       options
     );
 
-    return resultOf(changeSetId, committed, timing);
+    return resultOf(changeSetId, committed, timing, new Map());
   }
 );

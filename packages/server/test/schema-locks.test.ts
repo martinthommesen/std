@@ -17,7 +17,7 @@ import {
 } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
-import { DDL_LOCK_BUDGET_MS } from "../src/schema/change-set.ts";
+import { DDL_LOCK_BUDGET_MS } from "../src/schema/lock-budget.ts";
 import {
   advisoryClassId,
   advisoryObjectId,

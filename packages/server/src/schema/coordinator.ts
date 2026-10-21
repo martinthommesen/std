@@ -7,8 +7,10 @@
  * `complete` step under `CONFIG_KEY`, which takes its own revision.
  *
  * A failing step is retried up to `STEP_ATTEMPTS` times; then the step is
- * `failed` and the change set `needs_attention` (resume and abandon come
- * with workstream 1A).
+ * `failed` and the change set `needs_attention`. While a step runs, the
+ * watchdog (`watchdog.ts`) reports long waits on other sessions. Resume
+ * and abandon (`recovery.ts`) run the same steps after the coordinator is
+ * gone, probing each first.
  */
 import type { PgClient } from "@effect/sql-pg";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
@@ -28,9 +30,14 @@ import type { DatabaseError } from "../sql/errors.ts";
 import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
+import type { DdlStatement } from "./ddl-forms.ts";
+import { runDdl, takeTableLocks } from "./lock-budget.ts";
+import { lockInventory } from "./plan.ts";
+import { stepBoundary } from "./recovery-settings.ts";
 import { SchemaBusy } from "./schema-busy.ts";
 import { STEP_SPECS } from "./steps.ts";
 import type { StepRow } from "./steps.ts";
+import { watchStep } from "./watchdog.ts";
 
 /** `application_name` of the coordinator's connection. */
 export const COORDINATOR_APPLICATION_NAME = "std-coordinator";
@@ -237,7 +244,7 @@ type StepAttempts =
 const runStep = Effect.fn("Schema.runStep")(function* runStep(
   connection: DedicatedConnection,
   step: StepRow
-): Effect.fn.Return<string | null, DatabaseError> {
+): Effect.fn.Return<string | null, DatabaseError, SqlClient.SqlClient> {
   if (step.kind === "complete") {
     return null;
   }
@@ -250,8 +257,16 @@ const runStep = Effect.fn("Schema.runStep")(function* runStep(
     return null;
   }
 
+  const watchedAction = Effect.scoped(
+    Effect.gen(function* watchedStepAction() {
+      yield* Effect.forkScoped(watchStep(step.id, connection.processId));
+
+      return yield* spec.action(connection, step);
+    })
+  );
+
   const attempt = markRunning(connection, step).pipe(
-    Effect.andThen(spec.action(connection, step)),
+    Effect.andThen(watchedAction),
     Effect.tapError((failure) =>
       markFailedAttempt(connection, step, failure.message, false)
     )
@@ -283,10 +298,37 @@ const ENFORCED_TABLES = new Map<string, string>([
   ["validate_override", "field_override"],
 ]);
 
-const completeChangeSet = Effect.fn("Schema.completeChangeSet")(
-  function* completeChangeSet(changeSetId: string) {
+/** How a change set ends: `complete` or the abandon actions plus `complete`. */
+export type FinalState = "completed" | "abandoned";
+
+/**
+ * The `complete` step (Contracts 1.5): a config commit that sets the
+ * enforcement of each step's target (`enforced` when the step is done and
+ * its outcome holds, `failed` otherwise), marks `complete` done and the
+ * change set `completed` or `abandoned`, and takes its own revision. An
+ * abandon also drops the `NOT VALID` constraints of unfinished validation
+ * steps here, under the lock budget.
+ *
+ * @param changeSetId - The change set.
+ * @param final - Its final state.
+ * @param drops - Constraint drops of an abandon.
+ * @returns The new state.
+ */
+export const completeChangeSet = Effect.fn("Schema.completeChangeSet")(
+  function* completeChangeSet(
+    changeSetId: string,
+    final: FinalState = "completed",
+    drops: readonly DdlStatement[] = []
+  ) {
     const sql = yield* SqlClient.SqlClient;
     const { revision } = yield* RequestRevision;
+
+    if (drops.length > 0) {
+      yield* runDdl(
+        drops,
+        yield* takeTableLocks(lockInventory(drops, new Set()))
+      );
+    }
 
     const steps = yield* readSteps(
       (text, params) => sql.unsafe(text, params),
@@ -318,7 +360,7 @@ const completeChangeSet = Effect.fn("Schema.completeChangeSet")(
       WHERE change_id = ${changeSetId}::uuid AND kind = 'complete'`;
     yield* sql`
       UPDATE core."schema_change"
-      SET state = 'completed', last_revision = ${String(revision + 1)}::int8,
+      SET state = ${final}::text, last_revision = ${String(revision + 1)}::int8,
           completed_at = clock_timestamp(), version = version + 1, updated_at = now()
       WHERE id = ${changeSetId}::uuid`;
 
@@ -344,10 +386,13 @@ export const runFollowUps = Effect.fn("Schema.runFollowUps")(
     const steps = yield* readSteps(connection.execute, changeSetId);
 
     for (const step of steps) {
-      if (step.state !== "done") {
+      if (step.state !== "done" && step.kind !== "complete") {
+        yield* stepBoundary(`before:${step.ordinal}:${step.kind}`);
         const failure = yield* runStep(connection, step);
 
-        if (failure !== null) {
+        if (failure === null) {
+          yield* stepBoundary(`after:${step.ordinal}:${step.kind}`);
+        } else {
           yield* markNeedsAttention(connection, changeSetId, failure);
 
           return {
@@ -361,6 +406,7 @@ export const runFollowUps = Effect.fn("Schema.runFollowUps")(
 
     yield* connection.execute("SET lock_timeout = DEFAULT");
     yield* connection.execute("SET statement_timeout = DEFAULT");
+    yield* stepBoundary("before:complete");
 
     const completed = yield* connection.transactions.configCommit(
       completeChangeSet(changeSetId),

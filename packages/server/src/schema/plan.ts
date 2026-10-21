@@ -10,6 +10,9 @@
  *
  * Statement order in the main transaction:
  *
+ * 0. lifecycle (`plan-lifecycle.ts`): purged columns and tables dropped,
+ *    then schemas, tables and columns renamed, then retired required
+ *    fields' NOT NULL dropped;
  * 1. `CREATE SCHEMA` for new namespaces;
  * 2. subtree CHECKs of existing ancestors that gain a class, root first;
  * 3. `CREATE TABLE` and the trigger of each new class, with the columns of
@@ -63,7 +66,11 @@ import {
   subtreeExpression,
   validateConstraint,
 } from "./ddl.ts";
+import { lockNames, planLifecycle } from "./plan-lifecycle.ts";
+import type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 import { defaultLiteral, quoteIdent, tableName } from "./sql-text.ts";
+
+export type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 
 /** Follow-up step kinds (Contracts 1.5); `backfill` arrives in Step 2. */
 export type StepKind =
@@ -137,6 +144,10 @@ export interface ChangeSetPlan {
   readonly existenceChecks: readonly DefinitionId[];
   /** Data checks the preflight must pass (counted only on tables with rows). */
   readonly violations: readonly ViolationCheck[];
+  /** Values or rows each purge destroys, counted under `SCHEMA_KEY`. */
+  readonly purgeCounts: readonly PurgeCount[];
+  /** Records that must not exist for a purge to run. */
+  readonly recordChecks: readonly RecordCheck[];
 }
 
 /** What the preflight found. */
@@ -799,6 +810,53 @@ const orderedSteps = (
 };
 
 /**
+ * The locks of a plan, every table named as it is before any DDL runs:
+ * lifecycle statements already name their locks that way; the others name
+ * tables as the change set leaves them and are mapped back. Tables the
+ * change set creates need no lock, unless a dropped table had the name.
+ *
+ * @param planning - The planning run.
+ * @param applied - The applied change set.
+ * @param first - The lifecycle statements that run first.
+ * @param classes - The classes the change set creates.
+ * @returns The locks to take before any DDL.
+ */
+const planLocks = (
+  planning: Planning,
+  applied: AppliedChangeSet,
+  first: readonly DdlStatement[],
+  classes: readonly ClassDefinition[]
+): readonly TableLock[] => {
+  const names = lockNames(applied);
+  const firstSet = new Set(first);
+
+  const rest = [...planning.tables, ...planning.keys].flatMap(
+    (statement): DdlStatement[] =>
+      firstSet.has(statement)
+        ? []
+        : [
+            {
+              ...statement,
+              locks: statement.locks.map((entry) => ({
+                ...entry,
+                table: names.get(entry.table) ?? entry.table,
+              })),
+            },
+          ]
+  );
+
+  const lockedFirst = new Set(
+    first.flatMap((statement) => statement.locks.map((entry) => entry.table))
+  );
+
+  const created = new Set(
+    [...newTables(planning, classes)].filter((name) => !lockedFirst.has(name))
+  );
+
+  return lockInventory([...first, ...rest], created);
+};
+
+/**
  * Plans a change set.
  *
  * @param applied - The change set applied in memory.
@@ -832,7 +890,21 @@ export const planChangeSet = (
 
   const classes = newClasses(planning, applied);
   const fields = createdFields(applied, created);
+  const lifecycle = planLifecycle(applied);
 
+  planning.tables.push(...lifecycle.first, ...lifecycle.later);
+  planning.steps.push(
+    ...lifecycle.indexDrops.map((drop): PlannedStep => ({
+      details: {
+        definitionId: drop.definitionId,
+        index: generatedName("ix", drop.definitionId),
+        schema: drop.schema,
+      },
+      kind: "drop_index_concurrently",
+      sql: drop.sql,
+      targetId: drop.definitionId,
+    }))
+  );
   planNamespaces(planning, applied);
   const enforcementUpdates = planAncestorChecks(planning, classes);
   planNewTables(planning, classes, fields);
@@ -852,11 +924,10 @@ export const planChangeSet = (
     enforcementUpdates,
     existenceChecks: [...planning.existence].toSorted(compareIds),
     keys: planning.keys,
-    locks: lockInventory(
-      [...planning.tables, ...planning.keys],
-      newTables(planning, classes)
-    ),
+    locks: planLocks(planning, applied, lifecycle.first, classes),
     platformClasses: platformClasses(planning, applied),
+    purgeCounts: lifecycle.purgeCounts,
+    recordChecks: lifecycle.recordChecks,
     seedSystemUser:
       created.has(USER_CLASS_ID) &&
       isStandardClass(applied.after, USER_CLASS_ID),
@@ -877,10 +948,13 @@ export const planChangeSet = (
 export const requiresSchemaKey = (applied: AppliedChangeSet): boolean => {
   const plan = planChangeSet(applied, ASSUME_POPULATED);
 
-  return (
-    plan.tables.length > 0 ||
-    plan.keys.length > 0 ||
-    plan.steps.length > 0 ||
-    plan.violations.length > 0
-  );
+  const work: readonly (readonly unknown[])[] = [
+    plan.tables,
+    plan.keys,
+    plan.steps,
+    plan.violations,
+    plan.purgeCounts,
+  ];
+
+  return work.some((list) => list.length > 0);
 };

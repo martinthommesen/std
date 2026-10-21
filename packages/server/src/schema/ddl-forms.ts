@@ -14,8 +14,13 @@
  * | `addNotNull` | make required: `NOT NULL ... NOT VALID`; valid on an empty table | main |
  * | `replaceSubtreeCheck` | adding a class (2.4): drop and re-add the subtree CHECK `NOT VALID` | main |
  * | `setDefault`, `dropDefault` | set or drop default | main |
- * | `dropColumn` | purge field (workstream 1A) | main |
- * | `dropConstraint` | drop a generated constraint (abandon of a `NOT VALID` constraint, workstream 1A) | main |
+ * | `renameSchema` | rename a namespace | main |
+ * | `renameTable` | rename a table | main |
+ * | `renameColumn` | rename a field | main |
+ * | `dropNotNull` | retire a required field | main |
+ * | `dropColumn` | purge field, purge reference field | main |
+ * | `dropTable` | purge table | main |
+ * | `dropConstraint` | drop a generated constraint (abandon of a `NOT VALID` constraint) | main |
  * | `validateConstraint` | `VALIDATE CONSTRAINT` of a `NOT VALID` constraint | follow-up |
  * | `createIndexConcurrently` | index or unique index on a table with rows | follow-up |
  * | `dropIndexConcurrently` | drop index | follow-up |
@@ -38,7 +43,12 @@ export type DdlForm =
   | "replaceSubtreeCheck"
   | "setDefault"
   | "dropDefault"
+  | "renameSchema"
+  | "renameTable"
+  | "renameColumn"
+  | "dropNotNull"
   | "dropColumn"
+  | "dropTable"
   | "dropConstraint"
   | "validateConstraint"
   | "createIndexConcurrently"
@@ -182,9 +192,32 @@ const FORMS: readonly (readonly [DdlForm, RegExp])[] = [
     ),
   ],
   [
+    "renameSchema",
+    new RegExp(String.raw`^ALTER SCHEMA ${IDENT} RENAME TO ${IDENT}$`, "u"),
+  ],
+  [
+    "renameTable",
+    new RegExp(String.raw`^ALTER TABLE ${TABLE} RENAME TO ${IDENT}$`, "u"),
+  ],
+  [
+    "renameColumn",
+    new RegExp(
+      String.raw`^ALTER TABLE ${TABLE} RENAME COLUMN ${IDENT} TO ${IDENT}$`,
+      "u"
+    ),
+  ],
+  [
+    "dropNotNull",
+    new RegExp(
+      String.raw`^ALTER TABLE ${TABLE} ALTER COLUMN ${IDENT} DROP NOT NULL$`,
+      "u"
+    ),
+  ],
+  [
     "dropColumn",
     new RegExp(String.raw`^ALTER TABLE ${TABLE} DROP COLUMN ${IDENT}$`, "u"),
   ],
+  ["dropTable", new RegExp(String.raw`^DROP TABLE ${TABLE}$`, "u")],
   [
     "dropConstraint",
     new RegExp(
