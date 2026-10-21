@@ -230,6 +230,22 @@ const newId = Effect.gen(function* newDefinitionId() {
 });
 
 /**
+ * The operation a generic `DELETE` stands for.
+ *
+ * @param id - The definition.
+ * @param version - The version from `If-Match`.
+ * @returns The `delete` operation.
+ */
+export const deleteOperation = (
+  id: DefinitionId,
+  version: number
+): Operation => ({
+  id,
+  op: "delete",
+  version,
+});
+
+/**
  * The create operation a `POST` body stands for.
  *
  * @param kind - The definition kind.
@@ -237,7 +253,7 @@ const newId = Effect.gen(function* newDefinitionId() {
  * @param body - Column values.
  * @returns The operation.
  */
-const createOperation = Effect.fn("Http.definitionCreate")(
+export const createOperation = Effect.fn("Http.definitionCreate")(
   function* createOperation(
     kind: DefinitionKind,
     id: DefinitionId,
@@ -276,7 +292,7 @@ const createOperation = Effect.fn("Http.definitionCreate")(
  * @param body - Column values.
  * @returns The operations, in that order.
  */
-const updateOperations = Effect.fn("Http.definitionUpdate")(
+export const updateOperations = Effect.fn("Http.definitionUpdate")(
   function* updateOperations(
     current: Definition,
     version: number,
@@ -488,7 +504,7 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
     ({ id } = current);
     operations =
       write.action === "delete"
-        ? [{ id, op: "delete", version: write.expectedVersion }]
+        ? [deleteOperation(id, write.expectedVersion)]
         : yield* updateOperations(current, write.expectedVersion, write.body);
   }
 

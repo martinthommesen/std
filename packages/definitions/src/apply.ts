@@ -44,7 +44,7 @@ import {
   retire,
 } from "./lifecycle.ts";
 import { idInUseRefusal } from "./occupancy.ts";
-import { UPDATABLE } from "./operation.ts";
+import { OPERATION_FORMS, UPDATABLE } from "./operation.ts";
 import type {
   CreateOperation,
   Operation,
@@ -98,18 +98,6 @@ const KINDS_WITH_ENFORCEMENT: ReadonlySet<DefinitionKind> = new Set([
   "override",
   "index",
 ]);
-
-const CREATED_KIND: Readonly<Record<CreateOperation["op"], DefinitionKind>> = {
-  addField: "field",
-  addIndex: "index",
-  createAccessRule: "accessRule",
-  createClass: "class",
-  createGrant: "grant",
-  createNamespace: "namespace",
-  createPermission: "permission",
-  createRole: "role",
-  createSubscription: "subscription",
-};
 
 /** A definition being built from a draft, before it is decoded. */
 interface DefinitionCandidate {
@@ -175,7 +163,11 @@ const checkActiveReferences = (
 
 const create = (work: Work, operation: CreateOperation): void => {
   const { definition } = operation;
-  const kind = CREATED_KIND[operation.op];
+  const kind = OPERATION_FORMS[operation.op].creates;
+
+  if (kind === null) {
+    return;
+  }
 
   if (currentOf(work, definition.id) !== undefined) {
     work.problems.push(

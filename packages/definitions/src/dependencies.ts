@@ -15,6 +15,7 @@ import type {
   AccessTarget,
   ClassDraft,
   Definition,
+  DefinitionKind,
   FieldDraft,
   GrantDraft,
   IndexDraft,
@@ -69,6 +70,21 @@ export interface Dependency {
   readonly toId: DefinitionId;
   readonly kind: DependencyKind;
 }
+
+/**
+ * The definition kinds that refer to other definitions (`edgesOf`); the
+ * rest (namespaces, roles, permissions) never have dependencies.
+ */
+export const REFERENCING_KINDS: ReadonlySet<DefinitionKind> =
+  new Set<DefinitionKind>([
+    "class",
+    "field",
+    "override",
+    "index",
+    "accessRule",
+    "grant",
+    "subscription",
+  ]);
 
 const edge = (
   fromId: DefinitionId,
@@ -178,7 +194,10 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
 export const dependenciesOf = (
   definition: Definition
 ): readonly Dependency[] => {
-  if (definition.state === "purged") {
+  if (
+    definition.state === "purged" ||
+    !REFERENCING_KINDS.has(definition.kind)
+  ) {
     return [];
   }
 

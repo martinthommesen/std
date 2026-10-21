@@ -11,6 +11,7 @@
  * leak of Contracts 3.6 is exactly "this ID is taken").
  */
 import type { DefinitionId } from "./ids.ts";
+import { OPERATION_FORMS } from "./operation.ts";
 import type { Operation } from "./operation.ts";
 import { DefinitionInvalid, problem } from "./problems.ts";
 
@@ -21,8 +22,8 @@ export interface CreatedId {
 }
 
 /**
- * The IDs a change set's creates choose: every `create*` and `addField`
- * or `addIndex`, and every `setOverride` without a version.
+ * The IDs a change set's creates choose (`OPERATION_FORMS`): every create
+ * tag, and `setOverride` without a version.
  *
  * @param operations - The operations, in order.
  * @returns Each create's ID with its operation's index.
@@ -30,12 +31,19 @@ export interface CreatedId {
 export const createdIds = (
   operations: readonly Operation[]
 ): readonly CreatedId[] =>
-  operations.flatMap((operation, index) =>
-    "definition" in operation &&
-    (operation.op !== "setOverride" || operation.version === null)
+  operations.flatMap((operation, index) => {
+    const { create } = OPERATION_FORMS[operation.op];
+
+    const creates =
+      create === "always" ||
+      (create === "versionless" &&
+        "version" in operation &&
+        operation.version === null);
+
+    return creates && "definition" in operation
       ? [{ id: operation.definition.id, index }]
-      : []
-  );
+      : [];
+  });
 
 /**
  * The refusal of a change set whose create chooses an ID already in use:

@@ -137,6 +137,57 @@ export const OperationSchema = Union([
 /** A change-set operation. */
 export type Operation = typeof OperationSchema.Type;
 
+/** What one operation tag does (Contracts 1.4). */
+export interface OperationForm {
+  /**
+   * Whether it creates a definition under the client-chosen ID of its
+   * draft: always, only without a `version` (`setOverride`), or never.
+   */
+  readonly create: "always" | "versionless" | "never";
+  /** The kind it creates, or null. */
+  readonly creates: DefinitionKind | null;
+  /** Whether it acts on a stored definition named by ID. */
+  readonly target: boolean;
+}
+
+const creating = (kind: DefinitionKind): OperationForm => ({
+  create: "always",
+  creates: kind,
+  target: false,
+});
+
+const targeting: OperationForm = {
+  create: "never",
+  creates: null,
+  target: true,
+};
+
+/**
+ * The form of every operation tag: which tags create (and what kind) and
+ * which act on a stored target. The engine takes created kinds and
+ * client-chosen IDs from it (`apply.ts`, `occupancy.ts`).
+ */
+export const OPERATION_FORMS: Readonly<Record<Operation["op"], OperationForm>> =
+  {
+    addField: creating("field"),
+    addIndex: creating("index"),
+    adopt: targeting,
+    createAccessRule: creating("accessRule"),
+    createClass: creating("class"),
+    createGrant: creating("grant"),
+    createNamespace: creating("namespace"),
+    createPermission: creating("permission"),
+    createRole: creating("role"),
+    createSubscription: creating("subscription"),
+    delete: targeting,
+    purge: targeting,
+    reactivate: targeting,
+    rename: targeting,
+    retire: targeting,
+    setOverride: { create: "versionless", creates: "override", target: true },
+    update: targeting,
+  };
+
 /** An operation's tag. */
 export type OperationName = Operation["op"];
 

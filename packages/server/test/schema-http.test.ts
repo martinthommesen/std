@@ -7,11 +7,15 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { OverrideDraft } from "@std/definitions/definition";
-import { DEPENDENCY_KINDS } from "@std/definitions/dependencies";
+import {
+  DEPENDENCY_KINDS,
+  REFERENCING_KINDS,
+} from "@std/definitions/dependencies";
 import type { DependencyKind } from "@std/definitions/dependencies";
-import { OperationSchema } from "@std/definitions/operation";
+import { OPERATION_FORMS, OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
   CORE_NAMESPACE_ID,
@@ -33,6 +37,7 @@ import {
   Layer,
   Option,
   Ref,
+  Result,
   Schema,
 } from "effect";
 
@@ -45,9 +50,17 @@ import type {
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { tableOf } from "../src/catalog/definition-tables.ts";
+import {
+  DEFINITION_TABLES,
+  tableOf,
+} from "../src/catalog/definition-tables.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
+import {
+  createOperation,
+  deleteOperation,
+  updateOperations,
+} from "../src/http/definition-writes.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
@@ -1147,57 +1160,161 @@ type Coverage = readonly [
 
 const coverageKey = (tuple: Coverage): string => tuple.join(" ");
 
+/** What the product says one operation tag supports. */
+interface ProductFacts {
+  /** A create form (`OPERATION_FORMS`). */
+  readonly create: boolean;
+  /** A targeted form (`OPERATION_FORMS`). */
+  readonly target: boolean;
+  /** Its created kind refers to others (`REFERENCING_KINDS`). */
+  readonly references: boolean;
+  /** Generic POST reaches it (`createOperation`). */
+  readonly genericCreate: boolean;
+  /** Generic PATCH or DELETE reaches it (`updateOperations`, `deleteOperation`). */
+  readonly genericTarget: boolean;
+}
+
 /**
- * Every case the matrix must run, derived from the dimensions: for each
- * operation tag and revision, a create's references (both paths) when it
- * names any and its own ID; a targeted operation's target (both paths
- * when generic writes reach it) and a target created earlier in the
- * batch; and an update's references.
- * @param tags - The operation schema's tags.
+ * Every case the matrix must run, from the product's facts and the
+ * dimensions alone (never from `OPERATION_CASES`): for each operation tag
+ * and revision, a create's references (the change-set path, and the
+ * generic path when it reaches the tag) and its own ID; a target (both
+ * paths when generic writes reach the tag) and a target created earlier
+ * in the batch; and an update's references.
+ * @param facts - The product's facts per tag.
  * @returns The coverage keys.
  */
-const expectedCoverage = (tags: readonly Operation["op"][]): string[] =>
+const expectedCoverage = (
+  facts: ReadonlyMap<Operation["op"], ProductFacts>
+): string[] =>
   MATRIX_REVISIONS.flatMap((revision) => [
-    ...tags.flatMap((tag): Coverage[] => {
-      const spec = OPERATION_CASES[tag];
-
-      const creates: Coverage[] =
-        spec.create === "none"
-          ? []
-          : [
-              ...(spec.create.references
-                ? ([
-                    [tag, "new", "hidden|missing", revision, "change-set"],
-                    [tag, "new", "hidden|missing", revision, "generic"],
-                  ] as const)
-                : []),
-              [tag, "own:hidden|missing", "visible", revision, "change-set"],
-            ];
-
-      const targets: Coverage[] =
-        spec.target === "none"
-          ? []
-          : [
-              [tag, "target:hidden|missing", "none", revision, "change-set"],
-              ...(spec.target.generic === "unreachable"
-                ? []
-                : ([
-                    [tag, "target:hidden|missing", "none", revision, "generic"],
-                  ] as const)),
-              [
-                tag,
-                "created-earlier:hidden|missing",
-                "none",
-                revision,
-                "change-set",
-              ],
-            ];
-
-      return [...creates, ...targets];
-    }),
+    ...[...facts].flatMap(([tag, fact]): Coverage[] => [
+      ...(fact.create && fact.references
+        ? [[tag, "new", "hidden|missing", revision, "change-set"] as const]
+        : []),
+      ...(fact.create && fact.references && fact.genericCreate
+        ? [[tag, "new", "hidden|missing", revision, "generic"] as const]
+        : []),
+      ...(fact.create
+        ? [
+            [
+              tag,
+              "own:hidden|missing",
+              "visible",
+              revision,
+              "change-set",
+            ] as const,
+          ]
+        : []),
+      ...(fact.target
+        ? [
+            [
+              tag,
+              "target:hidden|missing",
+              "none",
+              revision,
+              "change-set",
+            ] as const,
+            [
+              tag,
+              "created-earlier:hidden|missing",
+              "none",
+              revision,
+              "change-set",
+            ] as const,
+          ]
+        : []),
+      ...(fact.target && fact.genericTarget
+        ? [[tag, "target:hidden|missing", "none", revision, "generic"] as const]
+        : []),
+    ]),
     ["update", "visible", "hidden|missing", revision, "change-set"] as const,
     ["update", "visible", "hidden|missing", revision, "generic"] as const,
   ]).map(coverageKey);
+
+/** Bodies that reach every form a generic PATCH stands for. */
+const PATCH_PROBES: readonly Readonly<Record<string, JsonValue>>[] = [
+  { label: "Probe" },
+  { name: "probe" },
+  { description: "Probe" },
+  { active: false },
+  { state: "retired" },
+  { state: "active" },
+];
+
+/**
+ * The tags a generic POST reaches, from `createOperation` on every
+ * definition table, with a body from the create case of the table's kind
+ * (the tag that creates that kind, `OPERATION_FORMS`).
+ * @param tags - The operation schema's tags.
+ * @returns The reached tags.
+ */
+const postReach = Effect.fn("Matrix.postReach")(function* postReach(
+  tags: readonly Operation["op"][]
+) {
+  const reached = new Set<Operation["op"]>();
+
+  for (const entry of DEFINITION_TABLES) {
+    const tag = tags.find(
+      (candidate) => OPERATION_FORMS[candidate].creates === entry.kind
+    );
+
+    const spec = tag === undefined ? "none" : OPERATION_CASES[tag].create;
+
+    assert.notStrictEqual(spec, "none", `no create case for ${entry.kind}`);
+
+    if (spec !== "none") {
+      const sample = genericBody(spec.build(freshId(), VISIBLE_REFS));
+      const created = yield* createOperation(entry.kind, freshId(), sample);
+
+      reached.add(created.op);
+    }
+  }
+
+  return reached;
+});
+
+/**
+ * The tags a generic PATCH or DELETE reaches, from `updateOperations` on a
+ * stored definition of every kind (active and retired) for every probe
+ * body, and `deleteOperation`.
+ * @param snapshot - A configuration with a stored definition of every kind.
+ * @returns The reached tags.
+ */
+const targetReach = Effect.fn("Matrix.targetReach")(function* targetReach(
+  snapshot: ConfigSnapshot
+) {
+  const reached = new Set<Operation["op"]>();
+
+  for (const entry of DEFINITION_TABLES) {
+    const [stored] = snapshot.all(entry.kind);
+
+    assert.isDefined(stored, `no stored ${entry.kind}`);
+
+    const variants =
+      stored === undefined
+        ? []
+        : [stored, { ...stored, state: "retired" as const }];
+
+    for (const current of variants) {
+      reached.add(deleteOperation(current.id, current.version).op);
+
+      for (const body of PATCH_PROBES) {
+        const result = yield* Effect.result(
+          updateOperations(current, current.version, body)
+        );
+
+        for (const operation of Result.isSuccess(result)
+          ? result.success
+          : []) {
+          reached.add(operation.op);
+        }
+      }
+    }
+  }
+
+  return reached;
+});
 
 /**
  * The definition table a create's generic POST goes to.
@@ -2952,6 +3069,7 @@ describe("schema-http", () => {
             );
 
             assert.sameMembers(Object.keys(OPERATION_CASES), tags);
+            assert.sameMembers(Object.keys(OPERATION_FORMS), tags);
 
             // Hidden fixtures: one definition of every referenced kind, and
             // an override that the round 8 batch replaces with its own values.
@@ -2982,7 +3100,68 @@ describe("schema-http", () => {
             const past = (yield* catalog.refresh).key;
             const rule = addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin]);
 
-            yield* change([rule.op]);
+            // A stored subscription, so the generic routes are probed on
+            // every definition kind.
+            yield* change([
+              rule.op,
+              ...(OPERATION_CASES.createSubscription.create === "none"
+                ? []
+                : [
+                    OPERATION_CASES.createSubscription.create.build(
+                      freshId(),
+                      VISIBLE_REFS
+                    ),
+                  ]),
+            ]);
+
+            // What the product supports, per tag; every case must say the
+            // same, and the expected coverage comes from these facts.
+            const postTags = yield* postReach(tags);
+            const targetTags = yield* targetReach(yield* catalog.refresh);
+
+            const facts = new Map(
+              tags.map((tag) => {
+                const form = OPERATION_FORMS[tag];
+
+                return [
+                  tag,
+                  {
+                    create: form.create !== "never",
+                    genericCreate: postTags.has(tag),
+                    genericTarget: targetTags.has(tag),
+                    references:
+                      form.creates !== null &&
+                      REFERENCING_KINDS.has(form.creates),
+                    target: form.target,
+                  } satisfies ProductFacts,
+                ] as const;
+              })
+            );
+
+            for (const [tag, fact] of facts) {
+              const spec = OPERATION_CASES[tag];
+
+              assert.strictEqual(
+                spec.create !== "none",
+                fact.create,
+                `${tag}: create form`
+              );
+              assert.strictEqual(
+                spec.target !== "none",
+                fact.target,
+                `${tag}: target form`
+              );
+              assert.strictEqual(
+                spec.create !== "none" && spec.create.references,
+                fact.create && fact.references,
+                `${tag}: references`
+              );
+              assert.strictEqual(
+                spec.target !== "none" && spec.target.generic !== "unreachable",
+                fact.target && fact.genericTarget,
+                `${tag}: generic target`
+              );
+            }
 
             const requests = matrixRequests(
               http,
@@ -3193,7 +3372,7 @@ describe("schema-http", () => {
               yield* runUpdateReferences(revision);
             }
 
-            assert.sameMembers([...coverage], expectedCoverage(tags));
+            assert.sameMembers([...coverage], expectedCoverage(facts));
           })
       );
 
