@@ -9,10 +9,10 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 1 | `ws/0e-bench` | 0E | storage benchmark at 1M and 10M, decision rule, committed results | in progress |
 | 1 | `ws/0a-sql-layer` | 0A (driver), 1A/1B groundwork | `@std/server` skeleton, SQL layer, platform migrations, `@std/testing`, driver smoke test | in review |
 | 2 | `ws/1d-conditions` | 0D, 1D (conditions) | `@std/conditions`: AST, checker, resolver, evaluators, SQL compiler, text syntax, differential test | merged |
-| 2 | `ws/0b-schema-core` | 0B, 1A (core) | `@std/definitions`, platform definition tables, catalog snapshots, change sets, class-table DDL, core definition set | in progress |
-| 2 | `ws/0f-probes` | 0F | Postgres behavior probes and measurements | in progress |
-| 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | planned |
-| 3 | `ws/0c-writes` | 0B, 0C, 1E (history) | save pipeline, deletes, history and history endpoint, two-user write scenario, `spike:demo` | planned |
+| 2 | `ws/0b-schema-core` | 0B, 1A (core) | `@std/definitions`, platform definition tables, catalog snapshots, change sets, class-table DDL, core definition set | in review |
+| 2 | `ws/0f-probes` | 0F | Postgres behavior probes and measurements | in review |
+| 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | in progress |
+| 3 | `ws/0c-writes` | 0B, 0C, 1E (history) | save pipeline, deletes, history and history endpoint, two-user write scenario, `spike:demo` | in progress |
 | 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | planned |
 | 4 | `ws/1b-config-layers` | 1B | owner layers, sets, overrides, conflicts, `std upgrade --plan`, `doctor` | planned |
 | 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | planned |
