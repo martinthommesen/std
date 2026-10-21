@@ -8,7 +8,9 @@
  *   (`base_when_set` is the shipped value; a value equal to the shipped one
  *   removes the override), limited to the 8.2 properties and tighten-only
  *   rules. The effective change is applied by the same change set, so the
- *   override rows and the effective record commit together. A change to a
+ *   override rows and the effective record commit together; the update
+ *   keeps only the properties whose effective value changes, and stays in
+ *   the change set even when none does, so its version is checked. A change to a
  *   protected definition other than label and help text is left to the
  *   schema engine, which refuses it with `DefinitionProtected` (1.8).
  * - A `setOverride` that replaces a shipped override record is refused: an
@@ -218,9 +220,9 @@ const planShippedUpdate = (
 
   planning.effective.set(definition.id, effective);
 
-  if (Object.keys(changes).length > 0) {
-    planning.operations.push({ ...operation, changes });
-  }
+  // Kept even when nothing changes: the engine still checks its version,
+  // so a stale precondition fails the whole change set (Contracts 3.9).
+  planning.operations.push({ ...operation, changes });
 
   return Effect.void;
 };

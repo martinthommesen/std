@@ -183,6 +183,7 @@ export interface ChangeSetRequest {
 
 /** What a change set's `authorize` check can refuse with. */
 export type ChangeSetAuthorizationError =
+  | DefinitionInvalid
   | NotAllowed
   | NotFound
   | Unauthenticated
@@ -335,6 +336,50 @@ const apply = (
     ? Effect.succeed(applied.success)
     : Effect.fail(applied.failure);
 };
+
+/**
+ * Applies the operations in memory, as every step before the main
+ * transaction does. A request with an `authorize` check runs it first, in
+ * one read transaction against the same snapshot, so no refusal about a
+ * target (a version conflict, an unknown definition, a dependency) reaches
+ * a caller whose stated revision no longer holds or who may not see the
+ * target (Contracts 3.8, 3.9, 6.4); the requester's roles come from that
+ * check. Without one (bootstrap, set loads, internal callers) it applies
+ * against the catalog's current snapshot.
+ *
+ * @param request - The change set.
+ * @param changeSetId - The change set ID the result carries; the
+ *   snapshot's for a probe before the ID is drawn.
+ * @returns The change set applied in memory.
+ */
+const validate = Effect.fn("Schema.validate")(function* validate(
+  request: ChangeSetRequest,
+  changeSetId: string | undefined
+) {
+  const catalog = yield* Catalog;
+  const { authorize } = request;
+
+  if (authorize === undefined) {
+    const snapshot = yield* catalog.refresh;
+
+    return yield* apply(snapshot, request, changeSetId ?? snapshot.changeSetId);
+  }
+
+  const transactions = yield* Transactions;
+
+  return yield* transactions.request(
+    Effect.gen(function* checkedApply() {
+      const snapshot = yield* catalog.at(yield* RequestRevision);
+      const requester = yield* authorize(snapshot);
+
+      return yield* apply(
+        snapshot,
+        { ...request, requester },
+        changeSetId ?? snapshot.changeSetId
+      );
+    })
+  );
+});
 
 /**
  * Checks statements against the allowed DDL forms.
@@ -739,15 +784,13 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
     ChangeSetError,
     ChangeSetServices | Scope.Scope
   > {
-    const catalog = yield* Catalog;
     const connection = options?.coordinator ?? (yield* openCoordinator);
 
     // Whoever holds SCHEMA_KEY (a coordinator of its own, or std upgrade's
     // connection) finishes interrupted change sets first.
     yield* settleOpenChangeSets(connection, options);
 
-    const snapshot = yield* catalog.refresh;
-    const applied = yield* apply(snapshot, request, changeSetId);
+    const applied = yield* validate(request, changeSetId);
     const preflight = yield* checkExistence(connection, applied);
     const plan = planChangeSet(applied, preflight);
 
@@ -811,11 +854,8 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
     request: ChangeSetRequest,
     options?: ChangeSetOptions
   ): Effect.fn.Return<ChangeSetResult, ChangeSetError, ChangeSetServices> {
-    const catalog = yield* Catalog;
     const { configCommit } = yield* Transactions;
-    const snapshot = yield* catalog.refresh;
-    const probeId = request.changeSetId ?? snapshot.changeSetId;
-    const applied = yield* apply(snapshot, request, probeId);
+    const applied = yield* validate(request, request.changeSetId);
 
     if (applied.changes.length === 0 && request.extraWrites?.pending !== true) {
       return unchanged;

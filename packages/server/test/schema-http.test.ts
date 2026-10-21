@@ -16,7 +16,7 @@ import {
 } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Fiber, Ref, Schema } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -26,6 +26,7 @@ import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
+import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { overridesOf } from "./config-support.ts";
@@ -69,6 +70,47 @@ const catalogFingerprint = values(
        FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace WHERE n.nspname NOT IN ${SCHEMAS}
    ) AS f`
 ).pipe(Effect.map(([value]) => value));
+
+/**
+ * A response's body with one ID replaced, to compare refusals that name
+ * different IDs.
+ * @param response - The response.
+ * @param id - The ID.
+ * @returns The body text.
+ */
+const asMissing = (response: TestResponse, id: string): string =>
+  response.text.replaceAll(id, "<id>");
+
+/**
+ * A read-deny rule hiding one role, by name, from admins.
+ * @param nameFieldId - The ID of `core.role.name`.
+ * @param roleName - The role to hide.
+ * @returns The operation.
+ */
+const hideRole = (nameFieldId: string, roleName: string): Operation => {
+  const deny = addAccessRule(
+    PLATFORM_CLASS_IDS.role,
+    [BUILT_IN_ROLE_IDS.admin],
+    {
+      condition: {
+        left: { path: [nameFieldId] },
+        op: "eq",
+        right: { value: roleName },
+      },
+    }
+  );
+
+  return deny.op.op === "createAccessRule"
+    ? {
+        definition: {
+          ...deny.op.definition,
+          actions: ["read"],
+          effect: "deny",
+        },
+        op: "createAccessRule",
+      }
+    : deny.op;
+};
 
 /**
  * A definition's field at a revision: its latest definition revision at or
@@ -172,6 +214,46 @@ const appendResponse =
     ...all,
     [endpoint, response],
   ];
+
+/**
+ * Holds a generic definition write between its request checks and its
+ * change set (`definition-write:prepared`) until the test releases it.
+ */
+class PreparedGate extends Context.Service<
+  PreparedGate,
+  {
+    readonly reached: Deferred.Deferred<boolean>;
+    readonly release: Deferred.Deferred<boolean>;
+  }
+>()("test/schema-http/PreparedGate") {
+  /** The gate and the step-boundary hook that waits on it. */
+  static readonly layer = Layer.effect(
+    StepBoundary,
+    Effect.gen(function* hook() {
+      const gate = yield* PreparedGate;
+
+      return (label: string) =>
+        label === "definition-write:prepared"
+          ? Deferred.succeed(gate.reached, true).pipe(
+              Effect.andThen(Deferred.await(gate.release)),
+              Effect.asVoid
+            )
+          : Effect.void;
+    })
+  ).pipe(
+    Layer.provideMerge(
+      Layer.effect(
+        PreparedGate,
+        Effect.gen(function* gate() {
+          return PreparedGate.of({
+            reached: yield* Deferred.make<boolean>(),
+            release: yield* Deferred.make<boolean>(),
+          });
+        })
+      )
+    )
+  );
+}
 
 describe("schema-http", () => {
   it("change sets live under /api/v1/schema", () => {
@@ -501,6 +583,28 @@ describe("schema-http", () => {
               ),
               []
             );
+
+            // A no-op update still states its version: a stale one fails
+            // the whole batch, though it would change nothing.
+            const { revision } = yield* (yield* Catalog).refresh;
+
+            const stale = yield* postChangeSet(admin, [
+              addRole("after_stale").op,
+              {
+                changes: { label: "Batch cost" },
+                id: ACME.cost,
+                op: "update",
+                version: 999,
+              },
+            ]);
+
+            assert.strictEqual(stale.status, 422, stale.text);
+            assert.include(stale.text, "versionConflict");
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).revision,
+              revision,
+              "nothing committed"
+            );
           })
       );
 
@@ -555,32 +659,10 @@ describe("schema-http", () => {
             const snapshot = yield* (yield* Catalog).refresh;
             const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
 
-            const deny = addAccessRule(
-              PLATFORM_CLASS_IDS.role,
-              [BUILT_IN_ROLE_IDS.admin],
-              {
-                condition: {
-                  left: { path: [name?.id ?? ""] },
-                  op: "eq",
-                  right: { value: "hidden_role" },
-                },
-              }
-            );
-
-            const denyRead: Operation =
-              deny.op.op === "createAccessRule"
-                ? {
-                    definition: {
-                      ...deny.op.definition,
-                      actions: ["read"],
-                      effect: "deny",
-                    },
-                    op: "createAccessRule",
-                  }
-                : deny.op;
-
             assert.strictEqual(
-              (yield* postChangeSet(admin, [denyRead])).status,
+              (yield* postChangeSet(admin, [
+                hideRole(name?.id ?? "", "hidden_role"),
+              ])).status,
               201
             );
 
@@ -601,9 +683,70 @@ describe("schema-http", () => {
               assert.strictEqual(yield* tagOf(response), "NotFound");
             }
 
+            // The change-set endpoint: a hidden target, and a create that
+            // references a hidden role, get exactly what a missing one gets.
+            const missing = yield* postChangeSet(admin, [
+              {
+                changes: { label: "x" },
+                id: MISSING_ID,
+                op: "update",
+                version: 1,
+              },
+            ]);
+
+            assert.strictEqual(missing.status, 422, missing.text);
+
+            const grant = addAccessRule(ACME.asset, [hidden.id]).op;
+            const missingGrant = addAccessRule(ACME.asset, [MISSING_ID]).op;
+
+            const batches = [
+              [
+                {
+                  changes: { label: "x" },
+                  id: hidden.id,
+                  op: "update",
+                  version: 99,
+                },
+              ],
+              [
+                {
+                  changes: { label: "x" },
+                  id: hidden.id,
+                  op: "update",
+                  version: 1,
+                },
+              ],
+              [
+                addRole("bystander").op,
+                { id: hidden.id, op: "retire", version: 1 },
+              ],
+            ] satisfies Operation[][];
+
+            for (const operations of batches) {
+              const response = yield* postChangeSet(admin, operations);
+
+              assert.strictEqual(
+                asMissing(response, hidden.id),
+                asMissing(missing, MISSING_ID)
+              );
+            }
+
+            const hiddenParent = yield* postChangeSet(admin, [grant]);
+            const missingParent = yield* postChangeSet(admin, [missingGrant]);
+
+            assert.strictEqual(hiddenParent.status, 422, hiddenParent.text);
             assert.strictEqual(
-              (yield* (yield* Catalog).refresh).role(hidden.id)?.label,
-              "hidden_role"
+              asMissing(hiddenParent, hidden.id),
+              asMissing(missingParent, MISSING_ID)
+            );
+
+            const after = yield* (yield* Catalog).refresh;
+
+            assert.strictEqual(after.role(hidden.id)?.label, "hidden_role");
+            assert.strictEqual(after.role(hidden.id)?.state, "active");
+            assert.isUndefined(
+              after.roleByName("bystander"),
+              "the whole batch failed"
             );
           })
       );
@@ -1294,4 +1437,53 @@ describe("schema-http", () => {
       );
     }
   );
+
+  layer(readsTestLayer().pipe(Layer.provideMerge(PreparedGate.layer)), {
+    excludeTestServices: true,
+    timeout: 300_000,
+  })((dbTest) => {
+    dbTest.effect(
+      "a target updated and hidden between a generic write's checks and its change set is NotFound, with no version",
+      () =>
+        Effect.gen(function* hiddenMeanwhile() {
+          const admin = yield* adminToken;
+          const gate = yield* PreparedGate;
+          const target = addRole("race_target");
+
+          yield* change([target.op]);
+
+          const write = yield* Effect.forkChild(
+            patch(admin, "core.role", target.id, 1, { label: "Mine" })
+          );
+
+          // The write passed its checks at version 1, visible. Another
+          // commit now updates the role and hides it from admins.
+          yield* Deferred.await(gate.reached);
+
+          const snapshot = yield* (yield* Catalog).refresh;
+          const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+
+          yield* change([
+            {
+              changes: { label: "Theirs" },
+              id: target.id,
+              op: "update",
+              version: 1,
+            },
+            hideRole(name?.id ?? "", "race_target"),
+          ]);
+          yield* Deferred.succeed(gate.release, true);
+
+          const response = yield* Fiber.join(write);
+
+          assert.strictEqual(response.status, 404, response.text);
+          assert.strictEqual(yield* tagOf(response), "NotFound");
+          assert.notInclude(response.text, "currentVersion");
+          assert.strictEqual(
+            (yield* (yield* Catalog).refresh).role(target.id)?.label,
+            "Theirs"
+          );
+        })
+    );
+  });
 });

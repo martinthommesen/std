@@ -48,7 +48,10 @@ import type {
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { ConfigEditRefused } from "./config-edit-refused.ts";
-import { readInstalledState } from "./installed-state.ts";
+import {
+  readCheckedInstalledState,
+  readInstalledState,
+} from "./installed-state.ts";
 import type { InstalledState } from "./installed-state.ts";
 import { NO_OVERRIDE_CHANGES, planLocalEdits } from "./local-edits.ts";
 import {
@@ -318,7 +321,14 @@ const retryStale = <A, R>(
  */
 export const applyLocalChangeSet = Effect.fn("Config.applyLocalChangeSet")(
   function* applyLocalChangeSet(input: LocalChangeSet) {
-    return yield* commitLocal(yield* readInstalledState, input);
+    const authorize = input.acting?.authorize;
+
+    const installed =
+      authorize === undefined
+        ? yield* readInstalledState
+        : yield* readCheckedInstalledState(authorize);
+
+    return yield* commitLocal(installed, input);
   },
   retryStale
 );

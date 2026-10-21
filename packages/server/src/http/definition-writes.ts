@@ -28,9 +28,8 @@ import type { Definition, DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
-import type { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Option, Result, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { SqlClient } from "effect/sql";
 
@@ -44,12 +43,14 @@ import {
   getRecord,
   resolveTable,
 } from "../records/read-records.ts";
-import { readableOnRecord } from "../records/record-access.ts";
+import { stepBoundary } from "../schema/recovery-settings.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
 import {
   applyAsActor,
+  checkTargetsVisible,
+  definitionVisible,
   authorizeOperations,
   sessionAuthorization,
 } from "./change-sets.ts";
@@ -356,32 +357,6 @@ const staleCheck = (
         { action: write.action }
       );
 
-/**
- * A generic write that lost a version race gets `VersionConflict` with the
- * current version (Contracts 3.8), like a record write; other invalid
- * definitions stay `DefinitionInvalid`.
- *
- * @param failure - The change set's failure.
- * @param id - The written definition.
- * @returns The failure to report.
- */
-const versionConflictOf = (failure: DefinitionInvalid, id: DefinitionId) =>
-  Effect.gen(function* versionConflict() {
-    const conflict = failure.problems.some(
-      (entry) => entry.code === "versionConflict" && entry.definitionId === id
-    );
-
-    if (!conflict) {
-      return yield* failure;
-    }
-
-    const current = (yield* (yield* Catalog).refresh).get(id);
-
-    return yield* new VersionConflict({
-      currentVersion: current?.version ?? 0,
-    });
-  }).pipe(Effect.catchTag("DatabaseError", Effect.die));
-
 /** A write to a definition table. */
 export type DefinitionWrite =
   | {
@@ -422,16 +397,15 @@ const visibleTarget = Effect.fn("Http.definitionTarget")(
     write: TargetedWrite
   ) {
     const scope = yield* currentReadScope();
-    const classId = yield* resolveTable(scope, table);
+
+    yield* resolveTable(scope, table);
+
     const current = scope.snapshot.get(write.id);
 
-    if (current?.kind !== kind) {
-      return yield* new NotFound();
-    }
+    const visible =
+      current?.kind === kind && (yield* definitionVisible(scope, current));
 
-    const readable = yield* readableOnRecord(scope, classId, current.id);
-
-    if (Option.isNone(readable)) {
+    if (current === undefined || !visible) {
       return yield* new NotFound();
     }
 
@@ -445,28 +419,32 @@ const visibleTarget = Effect.fn("Http.definitionTarget")(
 
 /**
  * The checks of a definition write that depend on the request and the
- * record, run in the request transaction and again under `CONFIG_KEY`:
- * the stated revision (6.4) first, then the target's visibility and
- * version.
+ * records, run in the request transaction and again wherever the change
+ * set validates or commits: the stated revision (6.4) first, then the
+ * target's visibility and version (a hidden target is `NotFound`, like a
+ * missing one), or for a create the visibility of every definition it
+ * references (a hidden one is refused like a missing one).
  *
  * @param stated - The revision the request stated.
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
  * @param write - The write.
+ * @param operations - Its operations, for a create.
  * @returns Fails with the first refusal.
  */
 const recheck = (
   stated: StatedRevision,
   table: string,
   kind: DefinitionKind,
-  write: DefinitionWrite
+  write: DefinitionWrite,
+  operations: readonly Operation[]
 ) =>
   Effect.gen(function* recheckWrite() {
     yield* staleCheck(stated, table, write);
 
-    if (write.action !== "create") {
-      yield* visibleTarget(table, kind, write);
-    }
+    yield* write.action === "create"
+      ? checkTargetsVisible(operations)
+      : visibleTarget(table, kind, write).pipe(Effect.asVoid);
   });
 
 /**
@@ -499,6 +477,8 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
   if (write.action === "create") {
     id = yield* newId;
     operations = [yield* createOperation(kind, id, write.body)];
+
+    yield* checkTargetsVisible(operations);
   } else {
     const current = yield* visibleTarget(table, kind, write);
 
@@ -545,11 +525,15 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       asActor(prepare(stated, table, kind, write))
     );
 
+    // Tests interleave other commits here, between the request's checks
+    // and the change set (`StepBoundary`; nothing happens in production).
+    yield* stepBoundary("definition-write:prepared");
+
     // Everything checked above is checked again under the change set's
     // exclusive CONFIG_KEY, before any write.
     const authorize = sessionAuthorization({
       check: (actor) =>
-        recheck(stated, table, kind, write).pipe(
+        recheck(stated, table, kind, write, prepared.operations).pipe(
           Effect.provideService(Actor, actor),
           Effect.provideService(Catalog, catalog),
           Effect.provideService(InstanceSettings, settings),
@@ -565,11 +549,7 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       authorize,
       operations: prepared.operations,
       source: { kind: "api", route: "records", table },
-    }).pipe(
-      Effect.catchTag("DefinitionInvalid", (failure) =>
-        versionConflictOf(failure, prepared.id)
-      )
-    );
+    });
 
     return yield* inRequestTransaction(
       transactions,

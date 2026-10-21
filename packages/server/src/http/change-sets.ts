@@ -25,9 +25,15 @@ import { SchemaBusy } from "@std/api/errors/schema-busy";
 import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
 import { DEFINITION_KINDS } from "@std/definitions/definition";
-import type { AccessAction, DefinitionKind } from "@std/definitions/definition";
+import type {
+  AccessAction,
+  DefinitionKind,
+  Definition,
+} from "@std/definitions/definition";
+import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
+import { draftDependencies } from "@std/definitions/set-plan";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
@@ -37,11 +43,15 @@ import { Effect, Option } from "effect";
 import type { Redacted } from "effect";
 
 import type { ActingUser } from "../auth/actor.ts";
+import { Actor } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { tableOf } from "../catalog/definition-tables.ts";
 import type { ConfigEditRefused } from "../config/config-edit-refused.ts";
 import { applyLocalChangeSet } from "../config/config-service.ts";
+import { currentReadScope } from "../records/read-records.ts";
+import type { ReadScope } from "../records/read-view.ts";
+import { readableOnRecord } from "../records/record-access.ts";
 import type {
   AuthorizeServices,
   ChangeSetAuthorizationError,
@@ -84,6 +94,16 @@ const actionOf = (operation: Operation): AccessAction => {
     ? "delete"
     : "update";
 };
+
+/**
+ * The stored definition an operation changes: its target, or the override
+ * a `setOverride` replaces; a new definition's ID for a create.
+ *
+ * @param operation - The operation.
+ * @returns The ID.
+ */
+const targetIdOf = (operation: Operation): DefinitionId =>
+  "definition" in operation ? operation.definition.id : operation.id;
 
 const kindOf = (
   snapshot: ConfigSnapshot,
@@ -171,6 +191,106 @@ export const writtenColumns = (
     NOT_WRITTEN.has(property) ? [] : columnsOf(kind, property)
   );
 };
+
+/**
+ * The definitions an operation needs to see: its target, and for a create
+ * (or a replaced override) the definitions it references (namespace,
+ * parent class, field, role, permission).
+ *
+ * @param operation - The operation.
+ * @returns Their IDs.
+ */
+const neededIds = (operation: Operation): readonly DefinitionId[] => {
+  if (!("definition" in operation)) {
+    return [operation.id];
+  }
+
+  const references = draftDependencies(operation.definition);
+
+  return operation.op === "setOverride" && operation.version !== null
+    ? [operation.definition.id, ...references]
+    : references;
+};
+
+const unknownDefinition = (id: DefinitionId) =>
+  new DefinitionInvalid({
+    problems: [problem("unknownDefinition", id, `No definition has ID ${id}.`)],
+  });
+
+/**
+ * Whether the caller may see a stored definition record (Contracts 3.2):
+ * the record's visibility on its definition table, at the snapshot the
+ * caller's scope was built at.
+ *
+ * @param scope - The caller's read scope.
+ * @param definition - The definition.
+ * @returns True when visible.
+ */
+export const definitionVisible = Effect.fn("Http.definitionVisible")(
+  function* definitionVisible(scope: ReadScope, definition: Definition) {
+    const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[definition.kind]];
+    const readable = yield* readableOnRecord(scope, classId, definition.id);
+
+    return Option.isSome(readable);
+  }
+);
+
+/**
+ * The definitions the operations need that the caller cannot see: every
+ * target, and for a create every definition it references, that is
+ * missing or hidden from the caller (Contracts 3.8). Definitions created
+ * earlier in the same change set count as present.
+ *
+ * @param operations - The operations, in order.
+ * @returns Their IDs, in the order the operations name them.
+ */
+const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
+  operations: readonly Operation[]
+) {
+  const scope = yield* currentReadScope();
+  const created = new Set<DefinitionId>();
+  const hidden: DefinitionId[] = [];
+
+  for (const operation of operations) {
+    for (const id of neededIds(operation)) {
+      const target = scope.snapshot.get(id);
+
+      if (!created.has(id)) {
+        const visible =
+          target !== undefined && (yield* definitionVisible(scope, target));
+
+        if (!visible) {
+          hidden.push(id);
+        }
+      }
+    }
+
+    if ("definition" in operation) {
+      created.add(operation.definition.id);
+    }
+  }
+
+  return hidden;
+});
+
+/**
+ * The target check (Contracts 3.8, 3.9): a definition an operation needs
+ * that is hidden from the caller gets exactly the refusal of a missing one
+ * (`DefinitionInvalid` with `unknownDefinition`), before any version,
+ * validation or dependency check reveals anything about it.
+ *
+ * @param operations - The operations, in order.
+ * @returns Fails with `DefinitionInvalid`.
+ */
+export const checkTargetsVisible = Effect.fn("Http.checkTargetsVisible")(
+  function* checkTargetsVisible(operations: readonly Operation[]) {
+    const [first] = yield* hiddenTargets(operations);
+
+    return first === undefined
+      ? yield* Effect.void
+      : yield* unknownDefinition(first);
+  }
+);
 
 /**
  * The stale-request check of Contracts 6.4 for a change set, the way
@@ -267,16 +387,21 @@ const mayWrite = (
  * @param snapshot - The configuration the request runs at.
  * @param actor - The acting user.
  * @param operations - The operations.
+ * @param hidden - Definitions hidden from the actor, treated as missing.
  * @returns Fails with `NotAllowed`.
  */
 export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
   function* authorizeOperations(
     snapshot: ConfigSnapshot,
     actor: ActingUser,
-    operations: readonly Operation[]
+    operations: readonly Operation[],
+    hidden: ReadonlySet<DefinitionId> = new Set()
   ) {
     for (const operation of operations) {
-      const kind = kindOf(snapshot, operation);
+      // A target the caller cannot see is treated like a missing one.
+      const kind = hidden.has(targetIdOf(operation))
+        ? undefined
+        : kindOf(snapshot, operation);
 
       // An unknown target is reported by the change set (`unknownDefinition`).
       if (kind !== undefined && !mayWrite(snapshot, actor, operation, kind)) {
@@ -285,6 +410,44 @@ export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
     }
 
     return yield* Effect.void;
+  }
+);
+
+/**
+ * Everything the change-set endpoint checks about its request before the
+ * schema engine sees it, in the request transaction and again wherever
+ * the change set validates or commits (`ChangeSetRequest.authorize`): the
+ * stated revision (6.4), the access rules (with hidden targets treated as
+ * missing), then every target's existence and visibility.
+ *
+ * @param stated - The revision the request stated, if any.
+ * @param operations - The operations.
+ * @returns Fails with `SchemaChanged` or `DefinitionInvalid`.
+ */
+export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
+  function* checkChangeSetRequest(
+    stated: Option.Option<ConfigState>,
+    operations: readonly Operation[]
+  ) {
+    yield* checkChangeSetRevision(stated, operations);
+
+    const hidden = yield* hiddenTargets(operations);
+    const actor = yield* Actor;
+
+    // Access rules first, treating hidden targets as missing, so a caller
+    // without definition rights gets NotAllowed whatever they name.
+    yield* authorizeOperations(
+      yield* (yield* Catalog).current,
+      actor,
+      operations,
+      new Set(hidden)
+    );
+
+    const [first] = hidden;
+
+    return first === undefined
+      ? yield* Effect.void
+      : yield* unknownDefinition(first);
   }
 );
 

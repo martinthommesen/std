@@ -30,7 +30,7 @@ import { Transactions } from "../sql/transactions.ts";
 import {
   applyAsActor,
   authorizeOperations,
-  checkChangeSetRevision,
+  checkChangeSetRequest,
   sessionAuthorization,
 } from "./change-sets.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
@@ -174,7 +174,7 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
                 Effect.gen(function* authorize() {
                   const acting = yield* Actor;
 
-                  yield* checkChangeSetRevision(stated, operations);
+                  yield* checkChangeSetRequest(stated, operations);
                   yield* authorizeOperations(
                     yield* catalog.current,
                     acting,
@@ -190,7 +190,7 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
             const result = yield* applyAsActor(actor, {
               authorize: sessionAuthorization({
                 check: (reauthenticated) =>
-                  checkChangeSetRevision(stated, operations).pipe(
+                  checkChangeSetRequest(stated, operations).pipe(
                     Effect.provideService(Actor, reauthenticated),
                     Effect.provideService(Catalog, catalog),
                     Effect.provideService(InstanceSettings, settings),

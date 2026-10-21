@@ -65,7 +65,9 @@ export const recoverySettingsFromEnv: Layer.Layer<never, Config.ConfigError> =
 /**
  * Called by the coordinator at each step boundary with a label such as
  * `committed`, `before:2:create_index_concurrently`, `building:2`,
- * `after:2:create_index_concurrently` or `before:complete`.
+ * `after:2:create_index_concurrently` or `before:complete`, and by a
+ * generic definition write between its request checks and its change set
+ * (`definition-write:prepared`).
  */
 export type StepBoundaryHook = (label: string) => Effect.Effect<void>;
 
