@@ -683,6 +683,42 @@ export const exprArb = (spec: GenerationSpec): Arbitrary<Expr> => {
 };
 
 /**
+ * Atoms of one coverage combination: the operator of `eq|text:ci` on a path
+ * of that type, built by the same atom generators as `exprArb`. The
+ * differential test uses it to reach combinations its timed run missed.
+ *
+ * @param spec - Profile, class and options; the depth is not used.
+ * @param combination - A key from `permittedCombinations`.
+ * @returns The arbitrary, or undefined when no permitted path has the type.
+ */
+export const atomArb = (
+  spec: GenerationSpec,
+  combination: string
+): Arbitrary<Expr> | undefined => {
+  const rules = profileRules(spec.profile, spec.profileOptions);
+  const [operatorName, key] = combination.split("|");
+  const operator = ATOM_OPERATORS.find((atom) => atom === operatorName);
+
+  if (operator === undefined || !profileAllowsOperator(rules, operator)) {
+    return undefined;
+  }
+
+  const generator: Generator = {
+    candidates: pathsFrom(spec.classId, rules.maxHops),
+    rules,
+    spec,
+  };
+
+  const candidates = fitting(generator, operator).filter(
+    (candidate) => kindKey(candidate.field) === key
+  );
+
+  return candidates.length === 0
+    ? undefined
+    : atomFor(generator, operator, candidates);
+};
+
+/**
  * The coverage keys an expression exercises.
  *
  * @param expr - A condition.
