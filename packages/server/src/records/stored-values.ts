@@ -164,17 +164,20 @@ const mismatch = (kind: FieldKind): never => {
 
 type PresentInput = Exclude<DecodedInput, null | Plaintext>;
 
-const bindString = (value: PresentInput): string | undefined =>
+/** A non-null stored or input value: what a binder renders by its kind. */
+type Bindable = Exclude<StoredValue | DecodedInput, null>;
+
+const bindString = (value: Bindable): string | undefined =>
   isString(value) ? value : undefined;
 
-const bindJson = (value: PresentInput): string | undefined =>
+const bindJson = (value: Bindable): string | undefined =>
   isJsonValue(value) ? jsonbParameter(value) : undefined;
 
 /** How each kind renders its parameter text; undefined for a mismatch. */
 const BINDERS: Readonly<
   Record<
     Exclude<FieldKind, "password" | "secret">,
-    (value: PresentInput) => string | undefined
+    (value: Bindable) => string | undefined
   >
 > = {
   bigInteger: (value) => (isBigint(value) ? int8Parameter(value) : undefined),
@@ -196,6 +199,20 @@ const BINDERS: Readonly<
 
 const bindPresent = (kind: FieldKind, value: PresentInput): string =>
   (isWriteOnly(kind) ? undefined : BINDERS[kind](value)) ?? mismatch(kind);
+
+/**
+ * The parameter text of a stored or input value of a readable kind: the
+ * value as its kind binds it. Only the kind decides how a value is read, so
+ * a json value shaped like `{"set": true}` binds as json.
+ *
+ * @param kind - A kind other than password and secret.
+ * @param value - A stored or input value of that kind.
+ * @returns The parameter text.
+ */
+export const bindStoredText = (
+  kind: Exclude<FieldKind, "password" | "secret">,
+  value: Bindable
+): string => BINDERS[kind](value) ?? mismatch(kind);
 
 /**
  * Whether a non-null input value has the TypeScript shape of its kind

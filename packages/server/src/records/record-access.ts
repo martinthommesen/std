@@ -26,7 +26,7 @@ import type { ReadScope } from "./read-view.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import type { StoredRecord } from "./stored-record.ts";
-import { bindValue, isWriteOnly } from "./stored-values.ts";
+import { bindStoredText, isWriteOnly } from "./stored-values.ts";
 
 const ALIAS = "r";
 
@@ -109,8 +109,8 @@ const proposedColumn = (
   if (isWriteOnly(kind)) {
     const set = isPlaintext(value) || (isSecretState(value) && value.set);
     text = set ? WRITE_ONLY_MARK[kind] : null;
-  } else if (value !== null && !isSecretState(value)) {
-    ({ text } = bindValue(kind, value));
+  } else if (value !== null) {
+    text = bindStoredText(kind, value);
   }
 
   return text === null

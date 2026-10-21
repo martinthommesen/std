@@ -46,7 +46,7 @@ import { EntryRowSchema, entryOfRow, readHistory } from "./history-query.ts";
 import type { HistoryEntry, HistoryFilter } from "./history-query.ts";
 import { currentReadScope, resolveTable } from "./read-records.ts";
 import type { ReadScope } from "./read-view.ts";
-import { truthColumn } from "./record-access.ts";
+import { readableOnRecord, truthColumn } from "./record-access.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 
@@ -402,6 +402,30 @@ const filterableLive = (
   ]);
 };
 
+/**
+ * A query-parameter error of a by-ID request, reported only once the
+ * record is known to be visible: an invisible record is `NotFound`,
+ * byte-identical to an unknown ID, whatever the parameters (3.9).
+ *
+ * @param scope - The caller's read scope.
+ * @param classId - The record's concrete class.
+ * @param id - The record ID.
+ * @param failure - The parameter error.
+ * @returns Always fails: `NotFound`, or the parameter error.
+ */
+const visibleOr = Effect.fn("History.visibleOr")(function* visibleOr<E>(
+  scope: ReadScope,
+  classId: DefinitionId,
+  id: string,
+  failure: E
+) {
+  const visible = yield* readableOnRecord(scope, classId, id);
+
+  return Option.isNone(visible)
+    ? yield* new NotFound()
+    : yield* Effect.fail(failure);
+});
+
 // Deleted records' history: admin-only, every field (purged ones too).
 const deletedHistory = Effect.fn("History.deleted")(function* deletedHistory(
   scope: ReadScope,
@@ -488,9 +512,14 @@ export const recordHistory = Effect.fn("Records.history")(
         purged
       );
     } else {
+      const deferred = (refused: InvalidRequest | UnknownField) =>
+        visibleOr(scope, concrete, parsedId.value, refused);
+
       const filter = yield* filterOf(
         request,
         filterableLive(scope, concrete, purged)
+      ).pipe(
+        Effect.catchTags({ InvalidRequest: deferred, UnknownField: deferred })
       );
 
       const live = yield* liveHistory(
