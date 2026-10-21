@@ -124,7 +124,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 
 **Includes.**
 
-- Foldkit and Vite web app with generic list and form pages, related lists, and the history panel (old values rendered at each entry's schema revision).
+- Foldkit and Vite web app, built from Foldkit UI's headless accessible components (`@foldkit/ui`), with generic list and form pages, related lists, and the history panel (old values rendered at each entry's schema revision).
 - Point-and-click filter builder over the condition AST, including relative dates and `inPeriod`.
 - Choice fields with labels, and choice-subset overrides on child classes.
 - Form and list layouts as layered config records (a layout is overridden as a whole).
@@ -223,7 +223,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Server: Effect 4 (`HttpRouter` for generic table routes, `HttpApi` for fixed platform endpoints), Effect services and typed errors, spans exported over OpenTelemetry.
 - Database: Postgres 18 through `@effect/sql-pg`, behind STD's own SQL layer. CI tests Postgres 18 only. Postgres 19 is at RC 1, so support for it is added after its release, in its own PR. [judgment]
 - Validation: Effect Schema, built at run time from definitions, shared by server and browser.
-- Web app: [Foldkit](https://foldkit.dev) (Elm Architecture on Effect: Schema Model, pure `update`, Commands and Subscriptions as Effects) and Vite, chosen by Martin on 2026-10-21 in place of React. Effect runs the whole web app, not only Schema and the typed client. Foldkit pins `effect` and `@effect/platform-browser` to exactly 4.0.0 as peers; STD keeps one 4.0.5 copy (see `AGENTS.md`, "Frontend: Foldkit").
+- Web app: [Foldkit](https://foldkit.dev) (Elm Architecture on Effect: Schema Model, pure `update`, Commands and Subscriptions as Effects) with [Foldkit UI](https://foldkit.dev/ui/overview) components and Vite, chosen by Martin on 2026-10-21 in place of React. Effect runs the whole web app, not only Schema and the typed client. Foldkit pins `effect` and `@effect/platform-browser` to exactly 4.0.0 as peers; STD keeps one 4.0.5 copy (see `AGENTS.md`, "Frontend: Foldkit").
 - Tests: vitest with `@effect/vitest` against a real Postgres 18.
 - Code layering: definitions, the condition engine and access-rule evaluation are plain packages (Effect Schema only); only the server package uses the rest of Effect. A CI import check enforces "Schema only", and the stability diagnostics enforce the unstable-API allow lists (Contracts 9).
 - Node runs one thread per process, so CPU-heavy work (big imports, large exports) runs in worker processes.
