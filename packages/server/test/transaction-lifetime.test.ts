@@ -322,6 +322,10 @@ describe("transaction-lifetime", () => {
           "SELECT update, delete, insert, merge FROM (SELECT 1 AS update, 2 AS delete, 3 AS insert, 4 AS merge) s",
           "SELECT 1 AS update",
           "SELECT insert()",
+          "SELECT 1 AS into",
+          'SELECT s.into FROM (SELECT 1 AS "into") s',
+          'SELECT s. into FROM (SELECT 1 AS "into") s',
+          "SELECT E'a'\n'\\' into' AS c",
           "WITH RECURSIVE r(n) AS NOT MATERIALIZED (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SEARCH DEPTH FIRST BY n SET ord CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT n FROM r",
         ];
 
@@ -340,21 +344,47 @@ describe("transaction-lifetime", () => {
           const sql = yield* SqlClient.SqlClient;
           const { request } = yield* Transactions;
 
-          const outcome = yield* Effect.exit(
-            request(
-              request(
-                readOnly(
-                  sql.unsafe("SELECT 42 AS id INTO lifetime_select_into")
-                ).pipe(Effect.andThen(Effect.fail("nested failure" as const)))
-              ).pipe(Effect.ignore)
-            )
-          );
+          const selectsInto = [
+            "SELECT 42 AS id INTO lifetime_select_into",
+            // An escape string continued on the next line keeps its mode, so
+            // `\'` is an escaped quote and INTO lies outside the constant.
+            "SELECT E'a'\n'\\'x' AS c INTO lifetime_select_into",
+            "SELECT E'a' -- note\n'\\'x' AS c INTO lifetime_select_into",
+            // The `.` of a numeric literal does not qualify a name.
+            "SELECT 1. INTO lifetime_select_into",
+            "SELECT 1_000. INTO lifetime_select_into",
+          ];
 
-          assert.strictEqual(refusalOf(outcome)?.reason, "transaction-control");
-          assert.strictEqual(
-            yield* countRows("pg_class WHERE relname = 'lifetime_select_into'"),
-            0
-          );
+          for (const text of selectsInto) {
+            const outcome = yield* Effect.exit(
+              request(
+                request(
+                  readOnly(sql.unsafe(text)).pipe(
+                    Effect.andThen(Effect.fail("nested failure" as const))
+                  )
+                ).pipe(Effect.ignore)
+              )
+            );
+
+            assert.strictEqual(
+              refusalOf(outcome)?.reason,
+              "transaction-control",
+              text
+            );
+            assert.strictEqual(
+              yield* countRows(
+                "pg_class WHERE relname = 'lifetime_select_into'"
+              ),
+              0,
+              text
+            );
+          }
+
+          // Without readOnly the same statements run, so each is SELECT INTO.
+          for (const text of selectsInto) {
+            yield* request(sql.unsafe(text));
+            yield* sql`DROP TABLE lifetime_select_into`;
+          }
         })
     );
   });
@@ -377,6 +407,21 @@ describe("transaction-lifetime", () => {
       "WITH x AS (SELECT 1)",
       "WITH x AS SELECT 1",
       "WITH /* a */ x -- b\n AS ( /* c */ DELETE FROM t) SELECT 1",
+      // String continuations keep the first segment's mode.
+      "SELECT E'a'\n'\\'x' AS c INTO t",
+      "SELECT E'a'\r\n  \t'\\'x' INTO t",
+      "SELECT E'a' -- c\n-- d\n'\\'x' INTO t",
+      "SELECT U&'a'\n'\\' INTO t",
+      "SELECT 'a'\n'\\' INTO t",
+      // A block comment ends the constant, so the next segment is plain.
+      "SELECT E'a' /* c */\n'\\' INTO t",
+      "SELECT E'a'\n/* c */ '\\' INTO t",
+      // INTO stays a clause after a number's `.` or a quoted "as".
+      "SELECT 1. INTO t",
+      "SELECT 1_000. INTO t",
+      "SELECT .5 INTO t",
+      "SELECT 1.5e3 INTO t",
+      'SELECT "as" INTO t',
     ];
 
     const reads = [
@@ -397,6 +442,16 @@ describe("transaction-lifetime", () => {
       "WITH x AS (VALUES (1)) (SELECT * FROM x)",
       "WITH RECURSIVE r(n) AS (SELECT 1) SEARCH BREADTH FIRST BY n SET o CYCLE n SET c TO 'Y' DEFAULT 'N' USING p SELECT * FROM r",
       'WITH "update" AS (SELECT 1) SELECT * FROM "update"',
+      // INTO as a column label or attribute name.
+      "SELECT 1 AS into",
+      "SELECT s.into FROM t s",
+      "SELECT s. into FROM t s",
+      "SELECT (s).into FROM t",
+      "SELECT $1.into",
+      // Inside continued constants.
+      "SELECT E'a'\n'\\' into' AS c",
+      "SELECT 'a' -- c\n'into t'",
+      "SELECT U&'a'\n\v'into t'",
     ];
 
     for (const sql of writing) {

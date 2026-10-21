@@ -7,9 +7,20 @@
  * comments, nested `/* *\/` block comments, string constants (`'...'` with
  * `''`, escape strings `E'...'` with backslashes), quoted identifiers
  * (`"..."` with `""`), Unicode escapes (`U&'...'`, `U&"..."`), dollar-quoted
- * strings (`$tag$...$tag$`), positional parameters (`$1`) and punctuation.
- * Line comments end at CR, LF or CRLF. Unterminated constructs consume the
- * rest of the text, as Postgres would before rejecting it.
+ * strings (`$tag$...$tag$`), positional parameters (`$1`), numeric
+ * literals and punctuation. Line comments end at CR, LF or CRLF.
+ * Unterminated constructs consume the rest of the text, as Postgres would
+ * before rejecting it.
+ *
+ * String continuation follows Postgres's scanner (`scan.l`, the `xqs` state
+ * and `quotecontinue`): after a string constant, whitespace holding at least
+ * one newline and then `'` continues the same constant in the same mode, so
+ * `E'a'` + newline + `'\'x'` is one escape string. Line comments (`--`) may
+ * sit in that whitespace; a block comment ends the constant. Dollar-quoted
+ * strings do not continue. Numeric literals are one token, so the `.` of
+ * `1.` is not mistaken for a qualifying `.`; a literal followed directly by
+ * letters is a lexical error in Postgres, and the lexer keeps those letters
+ * in the same token.
  */
 
 /** The shape of a SQL text. */
@@ -32,7 +43,8 @@ export interface LexedStatement {
   /**
    * Whether the statement holds a clause that writes although it may start
    * like a query (whether it does is the caller's check): an unquoted `INTO`
-   * anywhere (a fully reserved word, so only `SELECT INTO`, `INSERT INTO` or
+   * anywhere except as a name right after `AS` or a qualifying `.` (a
+   * fully reserved word, so otherwise only `SELECT INTO`, `INSERT INTO` or
    * `MERGE INTO`), or a `WITH` whose top-level entries' bodies or primary
    * statement do not start with `SELECT`, `VALUES`, `TABLE`, `WITH` or `(`
    * (Postgres accepts data-modifying statements only there). A `WITH` that
@@ -161,6 +173,106 @@ const quotedEnd = (
 };
 
 /**
+ * The end of a line comment: just after the first CR or LF, or the text's end.
+ * @param sql - The text.
+ * @param start - Offset of the `--`.
+ * @returns The offset after the line terminator.
+ */
+const lineEnd = (sql: string, start: number): number => {
+  let index = start;
+
+  while (index < sql.length && sql[index] !== "\n" && sql[index] !== "\r") {
+    index += 1;
+  }
+
+  return Math.min(index + 1, sql.length);
+};
+
+const isNewline = (code: number): boolean =>
+  code === LINE_FEED || code === CARRIAGE_RETURN;
+
+/**
+ * Where the next segment of a continued string constant starts, following
+ * `quotecontinue` in Postgres's scanner: blanks, newlines and line comments
+ * (each ended by a newline), at least one newline among them, then `'`.
+ * @param sql - The text.
+ * @param end - Offset just after a string constant's closing quote.
+ * @returns The offset of the continuing `'`, or `undefined` when the constant ends.
+ */
+const continuationAt = (sql: string, end: number): number | undefined => {
+  let index = end;
+  let sawNewline = false;
+
+  for (;;) {
+    const code = codeAt(sql, index);
+
+    if (sql.startsWith("--", index)) {
+      index = lineEnd(sql, index);
+
+      if (!isNewline(codeAt(sql, index - 1))) {
+        return undefined;
+      }
+
+      sawNewline = true;
+    } else if (isBlank(code)) {
+      sawNewline ||= isNewline(code);
+      index += 1;
+    } else {
+      return sawNewline && sql[index] === "'" ? index : undefined;
+    }
+  }
+};
+
+/**
+ * The end of a string constant starting at `start` (on its opening `'`),
+ * with every continuation segment, all in the first segment's mode.
+ * @param sql - The text.
+ * @param start - Offset of the opening quote.
+ * @param backslashEscapes - Whether `\` escapes the next character (`E'...'`).
+ * @returns The offset just after the last segment, or the text's length.
+ */
+const stringEnd = (
+  sql: string,
+  start: number,
+  backslashEscapes: boolean
+): number => {
+  let end = quotedEnd(sql, start, "'", backslashEscapes);
+  let next = continuationAt(sql, end);
+
+  while (next !== undefined) {
+    end = quotedEnd(sql, next, "'", backslashEscapes);
+    next = continuationAt(sql, end);
+  }
+
+  return end;
+};
+
+/**
+ * A numeric literal starting at `start` (a digit, or `.` before a digit):
+ * word characters (digits, `_` separators, `0x`/`0o`/`0b` prefixes,
+ * exponents, trailing junk) and each `.` not followed by another `.`.
+ * Erring towards a longer token only makes a following `INTO` count as a
+ * clause.
+ * @param sql - The text.
+ * @param start - Offset of the literal.
+ * @returns The token.
+ */
+const numberToken = (sql: string, start: number): Token => {
+  let index = start;
+
+  for (;;) {
+    const code = codeAt(sql, index);
+    const isDot = sql[index] === "." && sql[index + 1] !== ".";
+
+    if (!isWordPart(code) && !isDot) {
+      return { end: index, kind: "other" };
+    }
+
+    index += 1;
+  }
+};
+
+/**
  * The end of a nested block comment starting at `start` (on `/*`).
  * @param sql - The text.
  * @param start - Offset of the comment.
@@ -242,14 +354,14 @@ const wordToken = (sql: string, start: number): Token => {
   const word = sql.slice(start, index);
 
   if ((word === "e" || word === "E") && sql[index] === "'") {
-    return { end: quotedEnd(sql, index, "'", true), kind: "literal" };
+    return { end: stringEnd(sql, index, true), kind: "literal" };
   }
 
   const unicodeQuote = sql[index + 1];
 
   if ((word === "u" || word === "U") && sql[index] === "&") {
     if (unicodeQuote === "'") {
-      return { end: quotedEnd(sql, index + 1, "'", false), kind: "literal" };
+      return { end: stringEnd(sql, index + 1, false), kind: "literal" };
     }
 
     if (unicodeQuote === '"') {
@@ -264,22 +376,6 @@ const wordToken = (sql: string, start: number): Token => {
   }
 
   return { end: index, kind: "word", name: word.toLowerCase() };
-};
-
-/**
- * The end of a line comment: just after the first CR or LF, or the text's end.
- * @param sql - The text.
- * @param start - Offset of the `--`.
- * @returns The offset after the line terminator.
- */
-const lineEnd = (sql: string, start: number): number => {
-  let index = start;
-
-  while (index < sql.length && sql[index] !== "\n" && sql[index] !== "\r") {
-    index += 1;
-  }
-
-  return Math.min(index + 1, sql.length);
 };
 
 /**
@@ -309,7 +405,7 @@ const tokenAt = (sql: string, start: number): Token => {
   }
 
   if (char === "'") {
-    return { end: quotedEnd(sql, start, "'", false), kind: "literal" };
+    return { end: stringEnd(sql, start, false), kind: "literal" };
   }
 
   if (char === '"') {
@@ -325,6 +421,10 @@ const tokenAt = (sql: string, start: number): Token => {
 
   if (isWordStart(code)) {
     return wordToken(sql, start);
+  }
+
+  if (isDigit(code) || (char === "." && isDigit(codeAt(sql, start + 1)))) {
+    return numberToken(sql, start);
   }
 
   return { end: start + 1, kind: "other" };
@@ -542,7 +642,12 @@ const withWrites = (tokens: readonly LexedToken[]): boolean => {
  * @returns Whether the text holds a clause that writes.
  */
 const hasWriteClause = (tokens: readonly LexedToken[]): boolean =>
-  tokens.some((token) => isWord(token, "into")) ||
+  tokens.some(
+    (token, index) =>
+      isWord(token, "into") &&
+      !isWord(tokens[index - 1], "as") &&
+      !isPunctuation(tokens[index - 1], ".")
+  ) ||
   (isWord(tokens[0], "with") && withWrites(tokens));
 
 /**
