@@ -42,7 +42,8 @@ import { maxLengthOf } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
 import type { JsonObject } from "@std/values/json-value";
 
-import type { DdlStatement } from "./ddl-forms.ts";
+import { LOCK_MODES } from "./ddl-forms.ts";
+import type { DdlStatement, LockMode, TableLock } from "./ddl-forms.ts";
 import {
   addAuditKey,
   addColumn,
@@ -104,27 +105,6 @@ export interface EnforcementUpdate {
   readonly note: string;
 }
 
-/** Table lock modes the main transaction's DDL takes, weakest first. */
-export const LOCK_MODES = [
-  "SHARE",
-  "SHARE ROW EXCLUSIVE",
-  "ACCESS EXCLUSIVE",
-] as const;
-
-const SHARE_ROW_EXCLUSIVE = "SHARE ROW EXCLUSIVE";
-
-const ACCESS_EXCLUSIVE = "ACCESS EXCLUSIVE";
-
-/** A table lock mode. */
-export type LockMode = (typeof LOCK_MODES)[number];
-
-/** A lock on an existing table that the DDL needs. */
-export interface TableLock {
-  /** The quoted table. */
-  readonly table: string;
-  readonly mode: LockMode;
-}
-
 /** The plan of one change set. */
 export interface ChangeSetPlan {
   /**
@@ -168,6 +148,46 @@ export const WIDENED_CHECK_NOTE =
 /** A preflight that treats every table as holding rows. */
 export const ASSUME_POPULATED: Preflight = { hasRows: () => true };
 
+/**
+ * The locks of a plan's DDL on existing tables: the strongest mode per
+ * table, in the order the statements first need them (ancestors root
+ * first, then altered tables, then FK targets), so no lock is upgraded.
+ *
+ * @param statements - The main-transaction DDL, in order.
+ * @param created - Quoted tables the change set creates; they need no wait.
+ * @returns The locks to take before any DDL.
+ */
+export const lockInventory = (
+  statements: readonly DdlStatement[],
+  created: ReadonlySet<string>
+): readonly TableLock[] => {
+  const modes = new Map<string, LockMode>();
+
+  for (const statement of statements) {
+    for (const lock of statement.locks) {
+      const held = modes.get(lock.table);
+
+      if (
+        !created.has(lock.table) &&
+        (held === undefined ||
+          LOCK_MODES.indexOf(held) < LOCK_MODES.indexOf(lock.mode))
+      ) {
+        modes.set(lock.table, lock.mode);
+      }
+    }
+  }
+
+  return [...modes].map(([table, mode]) => ({ mode, table }));
+};
+
+const newTables = (
+  planning: Planning,
+  classes: readonly ClassDefinition[]
+): ReadonlySet<string> =>
+  new Set(
+    classes.map((definition) => tableName(planning.after, definition.id))
+  );
+
 /** Mutable state of one planning run. */
 interface Planning {
   readonly before: ConfigSnapshot;
@@ -180,35 +200,7 @@ interface Planning {
   readonly steps: PlannedStep[];
   readonly existence: Set<DefinitionId>;
   readonly violations: ViolationCheck[];
-  readonly locks: Map<string, LockMode>;
 }
-
-/**
- * Records that the DDL locks an existing table; new tables need no wait.
- *
- * @param planning - The planning run.
- * @param classId - The table's class.
- * @param mode - The mode the statement takes.
- */
-const requireLock = (
-  planning: Planning,
-  classId: DefinitionId,
-  mode: LockMode
-): void => {
-  if (planning.created.has(classId)) {
-    return;
-  }
-
-  const table = tableName(planning.after, classId);
-  const held = planning.locks.get(table);
-
-  if (
-    held === undefined ||
-    LOCK_MODES.indexOf(held) < LOCK_MODES.indexOf(mode)
-  ) {
-    planning.locks.set(table, mode);
-  }
-};
 
 const isStandardClass = (
   snapshot: ConfigSnapshot,
@@ -249,10 +241,11 @@ const validateStep = (
   planning: Planning,
   definitionId: DefinitionId,
   table: string,
-  constraint: string
+  constraint: string,
+  referencedTable: string | null = null
 ): void => {
   planning.steps.push({
-    details: { constraint, definitionId, table },
+    details: { constraint, definitionId, referencedTable, table },
     kind: "validate_constraint",
     sql: validateConstraint(table, constraint).sql,
     targetId: definitionId,
@@ -326,7 +319,6 @@ const planAncestorChecks = (
   );
 
   for (const ancestor of ordered) {
-    requireLock(planning, ancestor.id, ACCESS_EXCLUSIVE);
     planning.tables.push(
       replaceSubtreeCheck(
         ancestor.id,
@@ -349,10 +341,6 @@ const planNewTables = (
 ): void => {
   for (const definition of classes) {
     const table = tableName(planning.after, definition.id);
-
-    if (definition.parentId !== null) {
-      requireLock(planning, definition.parentId, SHARE_ROW_EXCLUSIVE);
-    }
 
     planning.tables.push(
       createTable({
@@ -382,7 +370,6 @@ const planAddedColumns = (
       const table = tableName(planning.after, field.classId);
       const hasRows = populated(planning, field.classId);
 
-      requireLock(planning, field.classId, ACCESS_EXCLUSIVE);
       planning.tables.push(addColumn(table, field));
 
       if (field.required && field.default === null && hasRows) {
@@ -426,14 +413,12 @@ const planFieldUpdates = (
       const table = tableName(planning.after, after.classId);
 
       if (JSON.stringify(after.default) !== JSON.stringify(before.default)) {
-        requireLock(planning, after.classId, ACCESS_EXCLUSIVE);
         planning.tables.push(setDefault(table, after));
       }
 
       if (after.required && !before.required && after.type.kind !== "boolean") {
         const hasRows = populated(planning, after.classId);
 
-        requireLock(planning, after.classId, ACCESS_EXCLUSIVE);
         planning.tables.push(addNotNull(table, after, !hasRows));
 
         if (hasRows) {
@@ -466,8 +451,6 @@ const planReferenceKeys = (
       const table = tableName(planning.after, field.classId);
       const validated = !populated(planning, field.classId);
 
-      requireLock(planning, field.classId, SHARE_ROW_EXCLUSIVE);
-      requireLock(planning, field.type.targetClassId, SHARE_ROW_EXCLUSIVE);
       planning.keys.push(
         addReferenceKey(
           table,
@@ -478,7 +461,13 @@ const planReferenceKeys = (
       );
 
       if (!validated) {
-        validateStep(planning, field.id, table, generatedName("fk", field.id));
+        validateStep(
+          planning,
+          field.id,
+          table,
+          generatedName("fk", field.id),
+          tableName(planning.after, field.type.targetClassId)
+        );
       }
     }
   }
@@ -496,7 +485,6 @@ const planAuditKeys = (
 
   for (const definition of classes) {
     if (definition.parentId === null) {
-      requireLock(planning, USER_CLASS_ID, SHARE_ROW_EXCLUSIVE);
       const table = tableName(planning.after, definition.id);
 
       planning.keys.push(
@@ -524,7 +512,6 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
   });
 
   if (!concurrently) {
-    requireLock(planning, index.classId, "SHARE");
     planning.keys.push(statement);
 
     return;
@@ -733,7 +720,6 @@ export const planChangeSet = (
     ),
     existence: new Set(),
     keys: [],
-    locks: new Map(),
     preflight,
     steps: [],
     tables: [],
@@ -762,7 +748,10 @@ export const planChangeSet = (
     enforcementUpdates,
     existenceChecks: [...planning.existence].toSorted(compareIds),
     keys: planning.keys,
-    locks: [...planning.locks].map(([table, mode]) => ({ mode, table })),
+    locks: lockInventory(
+      [...planning.tables, ...planning.keys],
+      newTables(planning, classes)
+    ),
     platformClasses: platformClasses(planning, applied),
     seedSystemUser:
       created.has(USER_CLASS_ID) &&

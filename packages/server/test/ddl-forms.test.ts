@@ -237,7 +237,7 @@ describe("ddl-forms", () => {
         `ALTER TABLE ${table} ADD COLUMN "n" integer GENERATED ALWAYS AS IDENTITY`,
         "unknownForm",
       ],
-      [`ALTER TABLE ${table} DROP COLUMN "name"`, "unknownForm"],
+      [`ALTER TABLE ${table} DROP COLUMN "name" CASCADE`, "unknownForm"],
       [
         `CREATE TABLE ${table} (\n  id uuid REFERENCES "core"."user" (id) ON DELETE SET NULL\n)`,
         "unknownForm",

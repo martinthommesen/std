@@ -18,8 +18,16 @@ import {
   postgresColumn,
 } from "@std/values/field-type";
 
-import type { DdlStatement } from "./ddl-forms.ts";
+import type { DdlStatement, LockMode, TableLock } from "./ddl-forms.ts";
 import { defaultLiteral, quoteIdent } from "./sql-text.ts";
+
+const lock = (table: string, mode: LockMode): TableLock => ({ mode, table });
+
+/** `ACCESS EXCLUSIVE`: what `ALTER TABLE` takes for every form STD generates except FKs. */
+const ALTER = "ACCESS EXCLUSIVE";
+
+/** `SHARE ROW EXCLUSIVE`: what adding a foreign key takes on both tables. */
+const FOREIGN_KEY = "SHARE ROW EXCLUSIVE";
 
 /** Columns of a root table before its fields. */
 const ROOT_SYSTEM_COLUMNS = [
@@ -118,6 +126,7 @@ export interface NewTable {
  */
 export const createSchema = (name: string): DdlStatement => ({
   form: "createSchema",
+  locks: [],
   sql: `CREATE SCHEMA ${quoteIdent(name)}`,
 });
 
@@ -159,6 +168,8 @@ export const createTable = (table: NewTable): DdlStatement => {
 
   return {
     form: "createTable",
+    locks:
+      table.parentTable === null ? [] : [lock(table.parentTable, FOREIGN_KEY)],
     sql: `CREATE TABLE ${table.table} (\n  ${body.join(",\n  ")}\n)`,
   };
 };
@@ -177,6 +188,7 @@ export const createTrigger = (
   table: string
 ): DdlStatement => ({
   form: "createTrigger",
+  locks: [lock(table, ALTER)],
   sql: `CREATE TRIGGER ${generatedName("tg", classId)} BEFORE UPDATE ON ${table} FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change()`,
 });
 
@@ -199,6 +211,7 @@ export const replaceSubtreeCheck = (
 
   return {
     form: "replaceSubtreeCheck",
+    locks: [lock(table, ALTER)],
     sql: `ALTER TABLE ${table} DROP CONSTRAINT ${name}, ADD CONSTRAINT ${name} CHECK (${subtreeExpression(subtreeIds)}) NOT VALID`,
   };
 };
@@ -216,6 +229,7 @@ export const addColumn = (
   field: FieldDefinition
 ): DdlStatement => ({
   form: "addColumn",
+  locks: [lock(table, ALTER)],
   sql: `ALTER TABLE ${table} ADD COLUMN ${columnDefinition(field)}`,
 });
 
@@ -238,6 +252,7 @@ export const addReferenceKey = (
   validated: boolean
 ): DdlStatement => ({
   form: "addForeignKey",
+  locks: [lock(table, FOREIGN_KEY), lock(target, FOREIGN_KEY)],
   sql: `ALTER TABLE ${table} ADD CONSTRAINT ${generatedName("fk", field.id)} FOREIGN KEY (${quoteIdent(field.name)}) REFERENCES ${target} (id)${notValid(validated)}`,
 });
 
@@ -257,6 +272,7 @@ export const addAuditKey = (
   userTable: string
 ): DdlStatement => ({
   form: "addForeignKey",
+  locks: [lock(table, FOREIGN_KEY), lock(userTable, FOREIGN_KEY)],
   sql: `ALTER TABLE ${table} ADD CONSTRAINT ${generatedName(column === "created_by" ? "cb" : "ub", classId)} FOREIGN KEY (${quoteIdent(column)}) REFERENCES ${userTable} (id)`,
 });
 
@@ -279,6 +295,7 @@ export const addLengthCheck = (
     ? undefined
     : {
         form: "addCheck",
+        locks: [lock(table, ALTER)],
         sql: `ALTER TABLE ${table} ADD CONSTRAINT ${generatedName("ck", field.id)} CHECK (${check})${notValid(validated)}`,
       };
 };
@@ -298,7 +315,54 @@ export const addNotNull = (
   validated: boolean
 ): DdlStatement => ({
   form: "addNotNull",
+  locks: [lock(table, ALTER)],
   sql: `ALTER TABLE ${table} ADD CONSTRAINT ${generatedName("nn", field.id)} NOT NULL ${quoteIdent(field.name)}${notValid(validated)}`,
+});
+
+/**
+ * Drops a field's column (purge, workstream 1A). Dropping a reference
+ * column also drops its FK, which removes the FK triggers on the
+ * referenced table, so both tables are locked `ACCESS EXCLUSIVE`.
+ *
+ * @param table - The quoted table.
+ * @param field - The field.
+ * @param referencedTable - The quoted target table of a reference field.
+ * @returns The statement.
+ */
+export const dropColumn = (
+  table: string,
+  field: FieldDefinition,
+  referencedTable: string | null
+): DdlStatement => ({
+  form: "dropColumn",
+  locks:
+    referencedTable === null
+      ? [lock(table, ALTER)]
+      : [lock(table, ALTER), lock(referencedTable, ALTER)],
+  sql: `ALTER TABLE ${table} DROP COLUMN ${quoteIdent(field.name)}`,
+});
+
+/**
+ * Drops a generated constraint (the abandon action of a `NOT VALID`
+ * constraint). Dropping an FK removes its triggers on the referenced table
+ * too, so both tables are locked `ACCESS EXCLUSIVE`.
+ *
+ * @param table - The quoted table.
+ * @param constraint - The generated constraint name.
+ * @param referencedTable - The quoted target table of an FK.
+ * @returns The statement.
+ */
+export const dropConstraint = (
+  table: string,
+  constraint: string,
+  referencedTable: string | null
+): DdlStatement => ({
+  form: "dropConstraint",
+  locks:
+    referencedTable === null
+      ? [lock(table, ALTER)]
+      : [lock(table, ALTER), lock(referencedTable, ALTER)],
+  sql: `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${constraint}`,
 });
 
 /**
@@ -317,10 +381,12 @@ export const setDefault = (
   return clause === ""
     ? {
         form: "dropDefault",
+        locks: [lock(table, ALTER)],
         sql: `ALTER TABLE ${table} ALTER COLUMN ${quoteIdent(field.name)} DROP DEFAULT`,
       }
     : {
         form: "setDefault",
+        locks: [lock(table, ALTER)],
         sql: `ALTER TABLE ${table} ALTER COLUMN ${quoteIdent(field.name)} SET${clause}`,
       };
 };
@@ -357,6 +423,7 @@ export const createIndex = (
 
   return {
     form: options.concurrently ? "createIndexConcurrently" : "createIndex",
+    locks: options.concurrently ? [] : [lock(table, "SHARE")],
     sql: `CREATE ${unique}INDEX ${concurrently}${generatedName("ix", indexId)} ON ${table} (${fields.map(indexKey).join(", ")})`,
   };
 };
@@ -373,6 +440,7 @@ export const dropIndexConcurrently = (
   schema: string
 ): DdlStatement => ({
   form: "dropIndexConcurrently",
+  locks: [],
   sql: `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(schema)}.${generatedName("ix", indexId)}`,
 });
 
@@ -388,5 +456,6 @@ export const validateConstraint = (
   constraint: string
 ): DdlStatement => ({
   form: "validateConstraint",
+  locks: [],
   sql: `ALTER TABLE ${table} VALIDATE CONSTRAINT ${constraint}`,
 });

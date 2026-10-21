@@ -17,7 +17,7 @@ import { Effect, Schema } from "effect";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { dropIndexConcurrently } from "./ddl.ts";
+import { dropConstraint, dropIndexConcurrently } from "./ddl.ts";
 import type { StepKind } from "./plan.ts";
 
 /** The state of a step (Contracts 1.5). */
@@ -180,7 +180,11 @@ export const STEP_SPECS: Readonly<
     abandon: (connection, step) =>
       connection
         .execute(
-          `ALTER TABLE ${detailText(step, "table")} DROP CONSTRAINT IF EXISTS ${detailText(step, "constraint")}`
+          dropConstraint(
+            detailText(step, "table"),
+            detailText(step, "constraint"),
+            detailText(step, "referencedTable") || null
+          ).sql
         )
         .pipe(Effect.asVoid),
     action: runStatement,

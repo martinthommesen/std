@@ -37,11 +37,7 @@ import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Catalog } from "../catalog/catalog.ts";
-import {
-  bumpRevision,
-  MAIN_LOCK_TIMEOUT,
-  MAIN_STATEMENT_TIMEOUT,
-} from "../sql/config-commit.ts";
+import { bumpRevision, MAIN_LOCK_TIMEOUT } from "../sql/config-commit.ts";
 import type {
   ConfigCommitOptions,
   SchemaLockTimeout,
@@ -56,16 +52,11 @@ import { lockWaiting } from "../sql/statement-marks.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
-import type { DdlStatement } from "./ddl-forms.ts";
+import type { DdlStatement, TableLock } from "./ddl-forms.ts";
 import { DdlRefused } from "./ddl-refused.ts";
 import { ExistingDataViolates } from "./existing-data-violates.ts";
 import { ASSUME_POPULATED, planChangeSet, requiresSchemaKey } from "./plan.ts";
-import type {
-  ChangeSetPlan,
-  Preflight,
-  TableLock,
-  ViolationCheck,
-} from "./plan.ts";
+import type { ChangeSetPlan, Preflight, ViolationCheck } from "./plan.ts";
 import type { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { insertSystemUser, verifyPlatformTable } from "./platform-tables.ts";
 import type { SchemaBusy } from "./schema-busy.ts";
@@ -233,10 +224,9 @@ const takeTableLocks = (locks: readonly TableLock[]) =>
   });
 
 /**
- * Runs DDL whose table locks are already held. As a backstop for any lock
- * the plan did not take explicitly, `lock_timeout` and `statement_timeout`
- * are set to what is left of the budget; the SQL layer retries a timeout of
- * a `lockWaiting` statement like a lock timeout.
+ * Runs DDL whose table locks are already held. `lock_timeout` stays at what
+ * is left of the budget (at least 1 ms), so a lock missing from the
+ * inventory fails fast as a retryable lock timeout instead of waiting.
  *
  * @param statements - The statements, in order.
  * @param budget - The attempt's budget.
@@ -250,17 +240,13 @@ const runDdl = (statements: readonly DdlStatement[], budget: LockBudget) =>
       const remaining = remainingMs(budget);
 
       yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-      yield* sql.unsafe(`SET LOCAL statement_timeout = '${remaining}ms'`);
       yield* lockWaiting(sql.unsafe(statement.sql));
     }
   });
 
-const restoreTimeouts = SqlClient.SqlClient.pipe(
+const restoreLockTimeout = SqlClient.SqlClient.pipe(
   Effect.flatMap((sql) =>
-    Effect.andThen(
-      sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`),
-      sql.unsafe(`SET LOCAL statement_timeout = '${MAIN_STATEMENT_TIMEOUT}'`)
-    )
+    sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`)
   )
 );
 
@@ -314,7 +300,7 @@ const mainTransaction = (input: MainInput) =>
     yield* runDdl(plan.keys, budget);
 
     if (hasDdl) {
-      yield* restoreTimeouts;
+      yield* restoreLockTimeout;
     }
 
     yield* writeDefinitions(plan.definitions, applied.before, requesterId);

@@ -14,6 +14,8 @@
  * | `addNotNull` | make required: `NOT NULL ... NOT VALID`; valid on an empty table | main |
  * | `replaceSubtreeCheck` | adding a class (2.4): drop and re-add the subtree CHECK `NOT VALID` | main |
  * | `setDefault`, `dropDefault` | set or drop default | main |
+ * | `dropColumn` | purge field (workstream 1A) | main |
+ * | `dropConstraint` | drop a generated constraint (abandon of a `NOT VALID` constraint, workstream 1A) | main |
  * | `validateConstraint` | `VALIDATE CONSTRAINT` of a `NOT VALID` constraint | follow-up |
  * | `createIndexConcurrently` | index or unique index on a table with rows | follow-up |
  * | `dropIndexConcurrently` | drop index | follow-up |
@@ -36,6 +38,8 @@ export type DdlForm =
   | "replaceSubtreeCheck"
   | "setDefault"
   | "dropDefault"
+  | "dropColumn"
+  | "dropConstraint"
   | "validateConstraint"
   | "createIndexConcurrently"
   | "dropIndexConcurrently";
@@ -43,10 +47,33 @@ export type DdlForm =
 /** Where a form runs: in the main transaction or as a follow-up step. */
 export type DdlPhase = "main" | "followUp";
 
-/** One generated statement. */
+/** Table lock modes generated DDL needs, weakest first. */
+export const LOCK_MODES = [
+  "SHARE",
+  "SHARE ROW EXCLUSIVE",
+  "ACCESS EXCLUSIVE",
+] as const;
+
+/** A table lock mode. */
+export type LockMode = (typeof LOCK_MODES)[number];
+
+/** A lock a statement takes on a table. */
+export interface TableLock {
+  /** The quoted table. */
+  readonly table: string;
+  readonly mode: LockMode;
+}
+
+/**
+ * One generated statement, with its lock inventory: every table lock it
+ * takes on a relation other than one it creates. The engine takes these
+ * locks explicitly, one at a time, under the attempt's lock budget before
+ * the statement runs (Contracts 1.4), so the statement itself never waits.
+ */
 export interface DdlStatement {
   readonly form: DdlForm;
   readonly sql: string;
+  readonly locks: readonly TableLock[];
 }
 
 const FOLLOW_UP_FORMS: ReadonlySet<DdlForm> = new Set<DdlForm>([
@@ -151,6 +178,17 @@ const FORMS: readonly (readonly [DdlForm, RegExp])[] = [
     "dropDefault",
     new RegExp(
       String.raw`^ALTER TABLE ${TABLE} ALTER COLUMN ${IDENT} DROP DEFAULT$`,
+      "u"
+    ),
+  ],
+  [
+    "dropColumn",
+    new RegExp(String.raw`^ALTER TABLE ${TABLE} DROP COLUMN ${IDENT}$`, "u"),
+  ],
+  [
+    "dropConstraint",
+    new RegExp(
+      String.raw`^ALTER TABLE ${TABLE} DROP CONSTRAINT IF EXISTS std_(?:fk|ck|nn)_${HEX}$`,
       "u"
     ),
   ],
