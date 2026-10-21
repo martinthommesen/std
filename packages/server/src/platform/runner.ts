@@ -149,54 +149,69 @@ export const checkPlatformMigrations: (
   (effect) => hygienic(effect)
 );
 
+/** What `checkUpgradePreconditions` lets through. */
+export interface PreconditionOptions {
+  /**
+   * Return the PIDs of connected `std-server` sessions instead of refusing
+   * (`std upgrade --plan`, which changes nothing).
+   */
+  readonly allowServers?: boolean;
+}
+
 /**
  * Refuses the upgrade on a non-UTF8 database or while `std-server` sessions
  * are connected to it.
  * @param sql - A client connected to the database.
- * @returns Succeeds when the upgrade may run.
+ * @param options - Whether connected servers are only reported.
+ * @returns The PIDs of connected `std-server` sessions (empty unless allowed).
  */
 export const checkUpgradePreconditions: (
-  sql: SqlClient.SqlClient
-) => Effect.Effect<void, UpgradeRefused | DatabaseError> = Effect.fn(
-  "Platform.checkUpgradePreconditions"
-)(
-  function* checkUpgradeGuards(sql: SqlClient.SqlClient) {
-    const [database] = yield* sql`
+  sql: SqlClient.SqlClient,
+  options?: PreconditionOptions
+) => Effect.Effect<readonly number[], UpgradeRefused | DatabaseError> =
+  Effect.fn("Platform.checkUpgradePreconditions")(
+    function* checkUpgradeGuards(
+      sql: SqlClient.SqlClient,
+      options: PreconditionOptions = {}
+    ) {
+      const [database] = yield* sql`
         SELECT pg_encoding_to_char(encoding) AS encoding,
                encoding = pg_char_to_encoding('UTF8') AS utf8
         FROM pg_database WHERE datname = current_database()`.pipe(
-      Effect.flatMap(decodeEncoding)
-    );
+        Effect.flatMap(decodeEncoding)
+      );
 
-    const encoding = database?.encoding ?? "unknown";
+      const encoding = database?.encoding ?? "unknown";
 
-    if (database?.utf8 !== true) {
-      return yield* new UpgradeRefused({
-        encoding,
-        reason: ENCODING_REFUSAL,
-        sessions: [],
-      });
-    }
+      if (database?.utf8 !== true) {
+        return yield* new UpgradeRefused({
+          encoding,
+          reason: ENCODING_REFUSAL,
+          sessions: [],
+        });
+      }
 
-    const servers = yield* sql`
+      const servers = yield* sql`
         SELECT pid FROM pg_stat_activity
         WHERE datname = current_database()
           AND application_name = ${SERVER_APPLICATION_NAME}
           AND pid <> pg_backend_pid()
         ORDER BY pid`.pipe(Effect.flatMap(decodePids));
 
-    if (servers.length > 0) {
-      return yield* new UpgradeRefused({
-        encoding,
-        reason: SERVERS_REFUSAL,
-        sessions: servers.map((row) => row.pid),
-      });
-    }
+      const pids = servers.map((row) => row.pid);
 
-    return yield* Effect.void;
-  },
-  (effect) => hygienic(effect)
-);
+      if (pids.length > 0 && options.allowServers !== true) {
+        return yield* new UpgradeRefused({
+          encoding,
+          reason: SERVERS_REFUSAL,
+          sessions: pids,
+        });
+      }
+
+      return pids;
+    },
+    (effect) => hygienic(effect)
+  );
 
 const schemaBusy = (
   connection: DedicatedConnection
@@ -320,6 +335,54 @@ const applyMigration: (
 });
 
 /**
+ * Applies the pending migrations on a connection that already holds
+ * `SCHEMA_KEY` (`std upgrade` holds it for the whole run). Refuses an
+ * unknown or changed ledger entry before applying anything.
+ * @param connection - A dedicated connection holding `SCHEMA_KEY`.
+ * @param migrations - The code's migrations (default: all platform migrations).
+ * @returns What happened to each pending migration, in order.
+ */
+export const applyPendingMigrations: (
+  connection: DedicatedConnection,
+  migrations?: readonly PlatformMigration[]
+) => Effect.Effect<
+  readonly MigrationOutcome[],
+  MigrationStateRefused | DatabaseError
+> = Effect.fn("Platform.applyPendingMigrations")(
+  function* applyPendingMigrations(
+    connection: DedicatedConnection,
+    migrations: readonly PlatformMigration[] = PLATFORM_MIGRATIONS
+  ) {
+    const ledger = yield* hygienic(readLedger(connection.client));
+    const comparison = compareLedger(migrations, ledger);
+    const refusal = refusalOf(comparison, true);
+
+    if (refusal !== undefined) {
+      return yield* refusal;
+    }
+
+    const outcomes: MigrationOutcome[] = [];
+
+    for (const migration of comparison.pending) {
+      outcomes.push(yield* applyMigration(connection, migration));
+    }
+
+    return outcomes;
+  }
+);
+
+/**
+ * Refuses with `UpgradeRefused` (`schema-busy`) naming the `SCHEMA_KEY`
+ * holders, after a failed `pg_try_advisory_lock`.
+ * @param connection - The connection that tried to take the lock.
+ * @returns Always fails.
+ */
+export const refuseSchemaBusy = (
+  connection: DedicatedConnection
+): Effect.Effect<never, UpgradeRefused | DatabaseError> =>
+  schemaBusy(connection).pipe(Effect.flatMap(Effect.fail));
+
+/**
  * The migration step of `std upgrade`.
  * @param migrations - The code's migrations (default: all platform migrations).
  * @returns What happened to each pending migration, in order.
@@ -339,22 +402,10 @@ export const runPlatformMigrations: (
     const connection = yield* makeDedicatedConnection();
 
     if (!(yield* connection.tryAdvisoryLock(SCHEMA_KEY))) {
-      return yield* schemaBusy(connection).pipe(Effect.flatMap(Effect.fail));
+      return yield* refuseSchemaBusy(connection);
     }
 
-    const ledger = yield* hygienic(readLedger(connection.client));
-    const comparison = compareLedger(migrations, ledger);
-    const refusal = refusalOf(comparison, true);
-
-    if (refusal !== undefined) {
-      return yield* refusal;
-    }
-
-    const outcomes: MigrationOutcome[] = [];
-
-    for (const migration of comparison.pending) {
-      outcomes.push(yield* applyMigration(connection, migration));
-    }
+    const outcomes = yield* applyPendingMigrations(connection, migrations);
 
     yield* connection.advisoryUnlock(SCHEMA_KEY);
 

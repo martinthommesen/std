@@ -99,13 +99,14 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `platform/` | platform migrations (numbered SQL), ledger, runner, startup checks | 1.9 |
 | `catalog/` | load the effective config snapshot at `(revision, change_set_id)`, per-process cache, reload on NOTIFY, definition revisions | 1.2, 1.3, 4.4 |
 | `schema/` | change sets, `SCHEMA_KEY`/`CONFIG_KEY`, DDL generation for class-table storage, journal and follow-up steps, coordinator, resume, abandon, retire and purge, dependency index, protected definitions | 1, 2 |
-| `config/` | owner layers, definition sets, base and overrides, conflicts, `std upgrade` plan and apply | 8 |
+| `config/` | owner layers, definition sets, base and overrides, conflicts, the config service, `std upgrade` plan and apply | 8 |
 | `auth/` | users, password hashing, sessions, roles and permissions, acting-user service, API tokens (Step 3) | 3.1 |
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, `saveBatch` (Step 3) | 2, 3, 4 |
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `schema pull`, `codegen` | 1.10, 8.5, 8.7 |
+| `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
-| `outbox/` | delivery worker (Step 3) | 4.6 |
+| `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |
 | `import/` | import jobs (Step 3) | 7 |
 | `definitions/` (directory at package root, not in `src`) | the shipped `core` definition set files | 1.8, 3.1 |
 

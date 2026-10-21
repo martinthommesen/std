@@ -844,6 +844,19 @@ const checkSubscription = (
     "class"
   );
 
+  // Platform and config tables change through migrations and change sets,
+  // never through the save pipeline, so a subscription on one would never
+  // receive a delivery (Contracts 4.6).
+  if (snapshot.class(subscription.classId)?.storage === "platform") {
+    problems.push(
+      problem(
+        "invalidSubscription",
+        subscription.id,
+        "A subscription cannot watch a platform table: its rows are not saved through the record service."
+      )
+    );
+  }
+
   if (
     subscription.operations.length === 0 ||
     new Set(subscription.operations).size !== subscription.operations.length

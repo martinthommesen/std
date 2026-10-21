@@ -32,6 +32,9 @@ jobs:
           --health-cmd "pg_isready -U std -d std" --health-interval 2s --health-timeout 3s --health-retries 30
     env:
       STD_DATABASE_URL: postgres://std:std@127.0.0.1:54329/std
+      # The bench smoke test (bench/test/smoke.test.ts) creates and drops its own
+      # 50k-record database here; locally it uses the bench container on 54330.
+      STD_BENCH_DATABASE_URL: postgres://std:std@127.0.0.1:54329/std
     steps:
       - uses: actions/checkout@v5
         with:

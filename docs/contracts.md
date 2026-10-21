@@ -182,7 +182,7 @@ Resume:
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), each registered when its feature lands.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
 
 | Operation | Refused when | Reported but allowed |
@@ -219,12 +219,12 @@ Resume:
 
 ### 1.10 `doctor`
 
-`std doctor [--json]` only reads. Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
+`std doctor [--json]` only reads: one REPEATABLE READ READ ONLY transaction without advisory locks, so it never waits for a config commit or a running schema change (decision 0002). Exit 0 clean, 1 on any error, 2 for warnings only. Informational findings do not affect the exit code. "Clean" means exit 0. Repairs are separate commands with normal authorization and journaling. [judgment]
 
 Checks:
 
 1. Migration ledger matches the code.
-2. Every active and retired table and field matches the catalog (type, nullability, default, keys, level FK).
+2. Every active and retired table and field matches the catalog (type, nullability, default, keys, level FK); every audit ID on a platform table exists in `core.user` (1.9).
 3. Every index and constraint exists under its ID-based name and is valid (`indisvalid`, `convalidated`), or its enforcement state explains why not. A widened subtree check recorded as `enforced` without VALIDATE (2.4) is accepted.
 4. Purged definitions are absent from the catalog.
 5. Orphan tables, columns, indexes or constraints in STD namespaces (reported, never dropped).
@@ -235,7 +235,7 @@ Checks:
 10. Protected definitions match the installed core set by hash.
 11. Column headroom per table, counting dropped columns; warning at 1,400 [judgment].
 12. Inheritance invariants (2.2): each non-root record has its lowest level row; `class_id` is NOT NULL in every table; FK delete and update actions match 3.10.
-13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1).
+13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1). Until imports add the table (Step 3) the check reports "not applicable" as informational.
 14. The fold table's Unicode version equals the server's `unicode_version()` [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html)] (5.5).
 15. The database encoding is UTF8 (5.5), and `client_connection_check_interval` is 0 (1.5).
 16. Each definition's latest `core.definition_revision` row equals its effective record (4.4).
@@ -572,7 +572,7 @@ Every save (create, update, delete; single or batch) runs in one transaction:
 8. Proposed-state access checks (`NotAllowed`, rollback).
 9. Write the change entry (4.2) and one delivery row per matching subscription (4.6).
 10. After-write hooks.
-11. If outermost, commit. After commit, outside the transaction, send a worker wake-up, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE; 0F probe 6, 16 clients of small saves for 60 s: after-commit wake-up 2,643 saves/s at p95 10.1 ms, in-transaction `pg_notify` 296 saves/s at p95 103.5 ms, 11% of the throughput].
+11. If outermost, commit. After commit, outside the transaction, send a worker wake-up if the transaction wrote a delivery row, debounced to at most one per process every 250 ms [judgment]. Reason: a transaction that ran NOTIFY takes a database-wide lock in `PreCommit_Notify` and holds it until after commit, which would serialize the commits of all saves [checked: src/backend/commands/async.c, REL_18_STABLE; 0F probe 6, 16 clients of small saves for 60 s: after-commit wake-up 2,643 saves/s at p95 10.1 ms, in-transaction `pg_notify` 296 saves/s at p95 103.5 ms, 11% of the throughput].
 
 Nested saves:
 
@@ -631,8 +631,8 @@ Delivery payloads are filtered for the subscription's identity on the version's 
 
 Producer side (Step 1):
 
-- `core.subscription` is a config record (stable ID, owner layer): class (descendants included), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy.
-- In step 9 each enabled subscription for the class is evaluated in TypeScript on `after` (on `before` for delete). Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`. The payload is built from the change entry at delivery time (4.5).
+- `core.subscription` is a config record (stable ID, owner layer), written through change sets: class (descendants included; never a platform table, whose rows do not pass the save pipeline), operations, optional condition (subscription profile, 5.10), the identity it runs as, `max_attempts`, dead-letter policy, `enabled`.
+- In step 9 each active, enabled subscription of the record's concrete class or an ancestor that lists the operation is evaluated in TypeScript on `after` (on `before` for delete), with the request's snapshot. A stored condition that no longer checks against the snapshot is a defect and fails the save. Each match inserts into `core.delivery`: `id` (bigint identity, primary key), `subscription_id`, `change_id`, `record_id`, `record_version`, `status` (`pending`, `in_flight`, `done`, `dead`), `attempts`, `next_attempt_at`, `lease_until`, `lease_token uuid`, `last_error`, `UNIQUE (subscription_id, change_id)`; `subscription_id` and `change_id` are `NO ACTION` foreign keys (3.10, 4.8), and a lease exists exactly while a row is `in_flight`. A row holds IDs only; the payload is built from the change entry at delivery time (4.5). Decision 0013.
 
 Worker (Step 3):
 
@@ -640,7 +640,7 @@ Worker (Step 3):
 - Fencing: the done and failure updates are `WHERE id = $1 AND lease_token = $2 AND status = 'in_flight'`. If 0 rows change, the worker has lost the lease and discards its result; in a delivery transaction that holds record writes, it rolls the whole transaction back. Expired leases are claimable again, and each claim writes a new token.
 - The worker interrupts its effect before `lease_until`. The lease must exceed the effect timeout plus a margin [judgment].
 - Record-service effects run in one delivery transaction that ends with the fenced `done` update (4.1). External calls run outside any transaction, then the fenced `done` update commits.
-- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h [judgment]. After `max_attempts` (default 10 [judgment]) it is `dead`, shown in an admin view and a metric, for an operator to retry or discard.
+- Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]), or the expiry of the last allowed claim's lease (dead-lettered by the next claim), makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
 - Wake-ups (4.1 step 11) only wake workers; they also poll.
 - `done` rows are deleted after 7 days [judgment]; `dead` rows stay.
 - A new subscription receives changes committed after it is created; a change in flight at that moment may or may not get a row [judgment]. Backfill is later.
@@ -660,7 +660,7 @@ order by p.id limit $2
 for update skip locked
 ```
 
-Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven by the SQL-level claim tests and the soak test]
+Backed by a partial index on `(subscription_id, record_id, record_version)` where `status <> 'done'`; the plan uses it both for the claimed rows and for the ordering check [checked: EXPLAIN in the `outbox-claims` test, decision 0013]. The claim commits in its own transaction before the effect starts. Per-record order holds because saves of one record are serialized by the root-row lock, so version n's delivery row commits before n+1's, and fencing stops a worker that lost its lease from releasing n+1 early. [judgment, proven at SQL level by the `outbox-claims` tests (decision 0013); the soak test is Step 3]
 
 **Considered: a commit-visibility feed** that reads entries stamped with `pg_current_xact_id()` below `pg_snapshot_xmin(pg_current_snapshot())`. This is a safe visibility watermark but gives first-write order, not commit order [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html), [transaction IDs](https://www.postgresql.org/docs/18/transaction-id.html)]. Rejected because one long or idle-in-transaction session anywhere in the cluster stalls every consumer, consumers would still need record versions and per-consumer retry state, and stored XIDs mean nothing after a logical restore into a new cluster [judgment].
 
@@ -1151,13 +1151,14 @@ Per row: (1) a mapped source ID found in `external_identity` updates that record
 | `core.config_set` | installed sets: ID, layer, version, hash, dependencies | `std upgrade` |
 | `core.config_base` | one row per shipped record: set, version, kind, shipped properties (JSON), hash | `std upgrade` only |
 | `core.config_override` | one row per overridden property: record ID, property, local value, `base_when_set`, who, when | config service on admin edits |
-| `core.config_conflict` | upgrade conflicts and resolutions | opened by `std upgrade`, resolved by admins |
+| `core.config_conflict` | upgrade conflicts and resolutions, and `converged` entries | opened by `std upgrade`, resolved by admins |
 | definition tables | the effective record | config service only, in the same transaction |
 | `core.definition_revision` | effective record per revision (4.4) | config service only, in the same transaction |
 
 - The runtime reads only effective records, so layering stays inside the config service. [judgment]
 - Admin edits to shipped records are stored as overrides; removing one restores the shipped value.
 - Overridable properties [judgment]: field label, help text, default, and tightening of required, read-only and max length (never name or type); table label and display field; choice label, order, hidden (shipped choices cannot be deleted); a layout's element list as one property; role label; rule and access rule `active` only (protected access rules cannot be disabled); protected records label and help text only.
+- In v0.1 a field's max length lives in its type, which never changes, so max length is not overridable yet; and removing a `required` override (or `take_shipped` of one) is a loosening the schema engine refuses until it can drop the NOT NULL it added (decision 0012).
 
 ### 8.3 Applying sets
 
@@ -1193,8 +1194,8 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 
 - Offline in v0.1: stop servers, run `std upgrade`, start servers. It refuses to run while any session with `application_name = 'std-server'` is connected, and when the database encoding is not UTF8 (5.5). Reason: rolling upgrades need expand-and-contract rules, which come with high availability.
 - Order: take `SCHEMA_KEY`; compare versions; run platform migrations; resume interrupted change sets; load core; load app sets; write the report.
-- `--plan` (and `--json`) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes. The real run applies that plan and stops if the database changed since.
-- After a failure, rerunning continues from the last committed migration or change set.
+- `--plan` (and `--json`, which implies it) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes, with a hash over all of them and the configuration state they start from. It runs while servers are connected and reports them as a warning. The real run applies that plan and stops if the database changed since: `--expect <hash>` refuses before anything runs when the plan differs; each set is planned again before it applies and must equal its plan; and its main transaction checks that no other config commit came first (decision 0012).
+- After a failure, rerunning continues from the last committed migration or change set. A change set that ends in `needs_attention` stops the run with an error naming it, and every later run refuses until an admin resumes or abandons it, so unfinished change sets never look upgraded.
 
 ### 8.6 Backup and restore
 

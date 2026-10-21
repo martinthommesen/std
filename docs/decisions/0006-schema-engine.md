@@ -126,9 +126,9 @@ A set is a directory of `.yaml` files (YAML 1.2 core schema, unique keys, unknow
 - Override `required`/`read_only` are jsonb tri-states in `core.field_override`, because STD booleans are never null and the platform table must be describable.
 - Fields of a class are ordered by the set's topological order (ties by ID), not by file position; layouts (Step 2) define display order.
 - Enforcement state and notes are operational: they do not bump a definition's version or produce definition revisions; `complete` still bumps the revision.
-- `core.config_set`/`core.config_base` are not used yet; definitions removed from a set are left alone; changes that need upgrade rules (renames, type changes, retired definitions) refuse the set (1B).
+- `core.config_set`/`core.config_base` are not used yet; definitions removed from a set are left alone; changes that need upgrade rules (renames, type changes, retired definitions) refuse the set (1B). Superseded by decision 0012: set loads go through the config layers.
 - Protected definitions are flagged but not yet enforced against admin edits (1A), and the core namespace's reservation is not enforced.
-- `std upgrade` loads each set as its own change set and does not yet hold `SCHEMA_KEY` across the whole upgrade (1B).
+- `std upgrade` loads each set as its own change set and does not yet hold `SCHEMA_KEY` across the whole upgrade (1B). Superseded by decision 0012: it holds `SCHEMA_KEY` for the whole run.
 - Text fields without `maxLength` get the 255 code-point CHECK of `@std/values`; platform text columns have no CHECK, and verification compares types and nullability only.
 - The catalog uses `effect/Cache` for its snapshots: a cache built once per catalog, keyed by the state's text form, and a permit around `Cache.get` inside the caller's transaction. Cache's built-in shared lookup is not relied on for serialization; the permit is, so a pending lookup never outlives its transaction.
 - `makeCatalog` returns the catalog's functions; the static layers `Catalog.layer` and `Catalog.listening` wrap them with `Catalog.of` inside their generators.

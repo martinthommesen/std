@@ -4,15 +4,15 @@
  * `STD-Schema-Revision` header. Write routes add their handler layers to
  * `ApiHandlers`.
  *
- * `HttpAppLayer` needs the SQL layer's `Transactions`, the `Catalog` and the
- * `InstanceSettings`; `std serve` puts it on a Node HTTP server, tests turn
+ * `HttpAppLayer` needs the SQL layer's `Transactions` and `WorkerWakeup`,
+ * the `Catalog` and the `InstanceSettings`; `std serve` puts it on a Node HTTP server, tests turn
  * it into a web handler (`@std/testing/http-client`).
  */
 import { StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
-import { SaveHooks } from "../records/save-hooks.ts";
+import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
@@ -30,9 +30,10 @@ export const ApiHandlers = Layer.mergeAll(
 
 /**
  * The save pipeline's hook points and password hashing for the write
- * routes: no hooks or subscriptions yet (Step 3, 1E), scrypt as sign-in.
+ * routes: the outbox producer (no hooks or record rules until Step 3),
+ * scrypt as sign-in.
  */
-const SaveServices = Layer.mergeAll(SaveHooks.none, WriteOnlyValues.scrypt);
+const SaveServices = Layer.mergeAll(OutboxSaveHooks, WriteOnlyValues.scrypt);
 
 /**
  * The API routes with their handlers and middleware. The OpenAPI 3.1
