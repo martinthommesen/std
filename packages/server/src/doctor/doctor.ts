@@ -38,6 +38,7 @@ import type { DatabaseError } from "../sql/errors.ts";
 import type { Transactions } from "../sql/transactions.ts";
 import { readCatalogFacts, tableKey } from "./catalog-facts.ts";
 import {
+  checkAuditUsers,
   checkChangeSets,
   checkDefinitionRevisions,
   checkDependencies,
@@ -139,6 +140,7 @@ export const runDoctor = Effect.fn("Doctor.run")(function* runDoctor(
         ...(yield* checkDependencies(snapshot)),
         ...(yield* checkDefinitionRevisions(snapshot)),
         ...(yield* checkLevelRows(snapshot, exists)),
+        ...(yield* checkAuditUsers(snapshot, exists)),
         ...(yield* checkExternalIdentities),
       ];
     })

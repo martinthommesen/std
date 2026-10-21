@@ -127,6 +127,10 @@ const DRIFTS: readonly (readonly [string, readonly string[]])[] = [
     ["6 error changeSetInterrupted"],
   ],
   [
+    `UPDATE core."config_set" SET updated_by = uuidv7() WHERE id = '${FX.set}'::uuid`,
+    ["2 error auditUserMissing"],
+  ],
+  [
     "UPDATE core.config_state SET revision = revision + 7",
     ["7 error revisionMismatch"],
   ],

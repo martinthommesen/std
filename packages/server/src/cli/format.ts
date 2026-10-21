@@ -25,12 +25,33 @@ const versionText = (report: SetReport): string =>
     ? `install v${report.toVersion}`
     : `v${report.fromVersion} -> v${report.toVersion}`;
 
+/**
+ * The record changes of a set: each one, or counts per kind for a first
+ * install (the JSON form always lists each one).
+ *
+ * @param report - The set's report.
+ * @returns Lines to print.
+ */
+const changeLines = (report: SetReport): readonly string[] => {
+  if (report.fromVersion !== null) {
+    return report.changes.map(
+      (change) =>
+        `  ${change.action} ${change.kind} ${change.name}${listed(change.properties)}`
+    );
+  }
+
+  const counts = new Map<string, number>();
+
+  for (const change of report.changes) {
+    counts.set(change.kind, (counts.get(change.kind) ?? 0) + 1);
+  }
+
+  return [...counts].map(([kind, count]) => `  created ${count} ${kind}`);
+};
+
 const setLines = (report: SetReport): readonly string[] => [
   `Set ${report.name} (${report.layer}): ${versionText(report)}, ${report.operations} operations`,
-  ...report.changes.map(
-    (change) =>
-      `  ${change.action} ${change.kind} ${change.name}${listed(change.properties)}`
-  ),
+  ...changeLines(report),
   ...report.removed.map(
     (removal) =>
       `  removed upstream: ${removal.kind} ${removal.name} ${removal.action}${dependents(removal.localDependents)}`

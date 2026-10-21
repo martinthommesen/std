@@ -18,6 +18,7 @@ import { resolveSet } from "@std/definitions/set-resolve";
 import type { Draft } from "@std/definitions/set-resolve";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { displayName } from "@std/definitions/upgrade-report";
+import { USER_CLASS_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -677,6 +678,68 @@ export const checkLevelRows = Effect.fn("Doctor.checkLevelRows")(
             )
           );
         }
+      }
+    }
+
+    return found;
+  }
+);
+
+/**
+ * Check 2, platform part (Contracts 1.9): every audit ID on a platform
+ * table names a `core.user` row. Platform tables carry `created_by` and
+ * `updated_by` without a foreign key, because they exist before
+ * `core.user`.
+ *
+ * @param snapshot - The configuration.
+ * @param existing - Whether a class's table exists.
+ * @returns The findings.
+ */
+export const checkAuditUsers = Effect.fn("Doctor.checkAuditUsers")(
+  function* checkAuditUsers(
+    snapshot: ConfigSnapshot,
+    existing: (classId: DefinitionId) => boolean
+  ): Effect.fn.Return<readonly Finding[], SqlError, SqlClient.SqlClient> {
+    if (!existing(USER_CLASS_ID)) {
+      return [];
+    }
+
+    const sql = yield* SqlClient.SqlClient;
+    const users = tableName(snapshot, USER_CLASS_ID);
+    const found: Finding[] = [];
+
+    const platform = snapshot
+      .all("class")
+      .filter(
+        (definition) =>
+          definition.storage === "platform" &&
+          definition.parentId === null &&
+          existing(definition.id)
+      );
+
+    for (const definition of platform) {
+      const table = tableName(snapshot, definition.id);
+
+      const [row] = yield* sql
+        .unsafe(
+          `SELECT count(*)::text AS n FROM ${table} AS t
+           WHERE NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.created_by)
+              OR NOT EXISTS (SELECT 1 FROM ${users} AS u WHERE u.id = t.updated_by)`
+        )
+        .pipe(Effect.flatMap(decodeCount));
+
+      const count = Number(row?.n ?? "0");
+
+      if (count > 0) {
+        found.push(
+          finding(
+            2,
+            "error",
+            "auditUserMissing",
+            `${count} rows of ${table} name a created_by or updated_by user that core.user does not hold.`,
+            definition.id
+          )
+        );
       }
     }
 
