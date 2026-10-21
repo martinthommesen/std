@@ -9,6 +9,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { migration0001 } from "@std/server/platform/migrations/0001-core";
 import { migration0002 } from "@std/server/platform/migrations/0002-definitions";
+import { migration0003 } from "@std/server/platform/migrations/0003-sessions";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
@@ -71,7 +72,10 @@ describe("test-database", () => {
     const name = templateName(PLATFORM_MIGRATIONS);
 
     assert.isTrue(name.startsWith(TEMPLATE_PREFIX));
-    assert.strictEqual(name, templateName([migration0001, migration0002]));
+    assert.strictEqual(
+      name,
+      templateName([migration0001, migration0002, migration0003])
+    );
     assert.notStrictEqual(
       name,
       templateName([{ ...migration0001, statements: ["SELECT 1"] }])
