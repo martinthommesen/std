@@ -17,6 +17,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 import { Authentication } from "./authentication.ts";
 import { ExistingDataViolates } from "./errors/existing-data-violates.ts";
 import { InvalidRequest } from "./errors/invalid-request.ts";
+import { InvalidSchemaRevision } from "./errors/invalid-schema-revision.ts";
 import { NotAllowed } from "./errors/not-allowed.ts";
 import { NotFound } from "./errors/not-found.ts";
 import { SchemaBusy } from "./errors/schema-busy.ts";
@@ -177,7 +178,12 @@ export type ChangeSetJournal = typeof ChangeSetJournalSchema.Type;
 export class SchemaChangesGroup extends HttpApiGroup.make("schemaChanges")
   .add(
     HttpApiEndpoint.post("applyChangeSet", "/schema/change-sets", {
-      error: [...changeSetErrors, InvalidRequest],
+      error: [
+        ...changeSetErrors,
+        InvalidRequest,
+        InvalidSchemaRevision,
+        NotFound,
+      ],
       payload: ChangeSetPayloadSchema,
       success: AppliedChangeSetSchema.pipe(HttpApiSchema.status(201)),
     }),

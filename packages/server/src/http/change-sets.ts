@@ -26,7 +26,6 @@ import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
 import { DEFINITION_KINDS } from "@std/definitions/definition";
 import type { AccessAction, DefinitionKind } from "@std/definitions/definition";
-import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -34,20 +33,22 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import type { Redacted } from "effect";
 
 import type { ActingUser } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
+import { Catalog } from "../catalog/catalog.ts";
 import { tableOf } from "../catalog/definition-tables.ts";
 import type { ConfigEditRefused } from "../config/config-edit-refused.ts";
-import { editDefinition } from "../config/config-service.ts";
-import { applyChangeSet } from "../schema/change-set.ts";
+import { applyLocalChangeSet } from "../config/config-service.ts";
 import type {
   AuthorizeServices,
   ChangeSetAuthorizationError,
   ChangeSetRequest,
 } from "../schema/change-set.ts";
+import type { ConfigState } from "../sql/request-revision.ts";
+import { checkRequestRevision } from "./stale-request.ts";
 
 /** The platform table of each definition kind. */
 export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
@@ -170,6 +171,53 @@ export const writtenColumns = (
     NOT_WRITTEN.has(property) ? [] : columnsOf(kind, property)
   );
 };
+
+/**
+ * The stale-request check of Contracts 6.4 for a change set, the way
+ * generic writes to definition tables run it: for each operation, its
+ * definition table and the columns it writes (none for a delete or
+ * purge). A stated revision above the current one, or one the journal does
+ * not reach, is `SchemaChanged` with kind `unknown`; operations name
+ * definitions by ID and version, so a reachable older revision changes
+ * nothing relevant unless a written column itself changed.
+ *
+ * @param stated - The revision the request stated, if any.
+ * @param operations - The operations.
+ * @returns Fails with `SchemaChanged`.
+ */
+export const checkChangeSetRevision = Effect.fn("Http.checkChangeSetRevision")(
+  function* checkChangeSetRevision(
+    stated: Option.Option<ConfigState>,
+    operations: readonly Operation[]
+  ) {
+    if (Option.isNone(stated)) {
+      return yield* Effect.void;
+    }
+
+    const snapshot = yield* (yield* Catalog).current;
+
+    for (const operation of operations) {
+      const kind = kindOf(snapshot, operation);
+      const action = actionOf(operation);
+
+      // An unknown target is reported by the change set (`unknownDefinition`).
+      if (kind !== undefined) {
+        const table = `core.${DEFINITION_TABLE[kind]}`;
+
+        yield* action === "delete"
+          ? checkRequestRevision(stated, table, {})
+          : checkRequestRevision(
+              stated,
+              table,
+              { fields: writtenColumns(snapshot, operation, kind).join(",") },
+              { action: action === "create" ? "create" : "update" }
+            );
+      }
+    }
+
+    return yield* Effect.void;
+  }
+);
 
 /**
  * Whether the actor's rules allow an operation unconditionally: the record
@@ -312,7 +360,10 @@ const schemaNeedsAttention = (failure: { readonly changeSetId: string }) =>
  * snapshot held under exclusive `CONFIG_KEY` and before any write (Contracts
  * 1.4): the session is still valid and still the same user, the request's
  * own checks still pass (`check`, e.g. the stated revision), and the
- * access rules at that revision still allow every operation.
+ * access rules at that revision still allow every operation. The
+ * re-authenticated user, with the roles they hold now, becomes the
+ * requester the schema engine checks permissions such as `schema.purge`
+ * against.
  *
  * @param options - The session token, the user it authenticated, the
  *   operations, and an optional extra check run as the re-authenticated
@@ -340,62 +391,36 @@ export const sessionAuthorization =
         yield* options.check(actor);
       }
 
-      return yield* authorizeOperations(snapshot, actor, options.operations);
+      yield* authorizeOperations(snapshot, actor, options.operations);
+
+      return { roleIds: actor.roleIds, userId: actor.userId };
     }).pipe(Effect.catchTag("SqlError", Effect.die));
 
-/**
- * Applies a change set as the actor and maps the schema engine's errors to
- * their API forms; failures that no client should see are defects.
- *
- * @param actor - The acting user, the change set's requester.
- * @param request - Operations and source.
- * @returns The result.
- */
-export const applyAsActor = (
-  actor: ActingUser,
-  request: Omit<ChangeSetRequest, "requester">
-) =>
-  applyChangeSet({
-    ...request,
-    requester: { roleIds: actor.roleIds, userId: actor.userId },
-  }).pipe(
-    Effect.catchTags({
-      ConfigStateChanged: configStateChanged,
-      DatabaseError: Effect.die,
-      DdlRefused: Effect.die,
-      ExistingDataViolates: existingDataViolates,
-      PlatformTableMismatch: Effect.die,
-      SchemaBusy: schemaBusy,
-      SchemaLockTimeout: schemaLockTimeout,
-      SchemaNeedsAttention: schemaNeedsAttention,
-    })
-  );
-
-/** An edit of a shipped config record through the config service. */
-export interface ShippedEdit {
-  readonly id: DefinitionId;
-  readonly version: number;
-  readonly changes: JsonObject;
+/** An admin's change set over HTTP. */
+export interface ActorChangeSet {
+  readonly operations: readonly Operation[];
   /** The request's re-check in the main transaction. */
   readonly authorize: NonNullable<ChangeSetRequest["authorize"]>;
+  readonly source: JsonObject;
 }
 
 /**
- * Edits a shipped config record as the actor through the config service,
- * which stores the change as local overrides (Contracts 8.2), and maps its
- * errors like `applyAsActor`.
+ * Applies a change set as the actor, through the config layers: shipped
+ * updates become overrides and `adopt` removes its base row in the same
+ * main transaction (`applyLocalChangeSet`, the one path of both HTTP write
+ * routes). Maps the errors to their API forms; failures that no client
+ * should see are defects.
  *
- * @param actor - The acting user.
- * @param edit - The record, its version, the changes and the re-check.
- * @returns The change set's result.
+ * @param actor - The acting user, the change set's requester.
+ * @param changeSet - Operations, re-check and source.
+ * @returns The result.
  */
-export const editAsActor = (actor: ActingUser, edit: ShippedEdit) =>
-  editDefinition({
-    acting: { authorize: edit.authorize, roleIds: actor.roleIds },
+export const applyAsActor = (actor: ActingUser, changeSet: ActorChangeSet) =>
+  applyLocalChangeSet({
+    acting: { authorize: changeSet.authorize, roleIds: actor.roleIds },
     actorId: actor.userId,
-    changes: edit.changes,
-    id: edit.id,
-    version: edit.version,
+    operations: changeSet.operations,
+    source: changeSet.source,
   }).pipe(
     Effect.catchTags({
       ConfigEditRefused: configEditRefused,

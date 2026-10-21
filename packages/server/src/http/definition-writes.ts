@@ -28,10 +28,9 @@ import type { Definition, DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
-import { isShipped, PROTECTED_OVERRIDABLE } from "@std/definitions/overridable";
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Result, Schema } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { SqlClient } from "effect/sql";
 
@@ -45,12 +44,12 @@ import {
   getRecord,
   resolveTable,
 } from "../records/read-records.ts";
+import { readableOnRecord } from "../records/record-access.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
 import {
   applyAsActor,
-  editAsActor,
   authorizeOperations,
   sessionAuthorization,
 } from "./change-sets.ts";
@@ -331,37 +330,6 @@ const updateOperations = Effect.fn("Http.definitionUpdate")(
   }
 );
 
-/**
- * The update of a write that only changes properties of a shipped record:
- * the config service stores it as local overrides (Contracts 8.2), so a
- * later upgrade keeps them or reports a conflict instead of replacing
- * them. Renames, retires and creates stay ordinary change sets, and so
- * does anything but label and help text on a protected definition, which
- * the schema engine refuses with `DefinitionProtected` (1.8).
- *
- * @param current - The definition as stored.
- * @param operations - The write's operations.
- * @returns The update, or undefined.
- */
-const shippedEditOf = (
-  current: Definition | undefined,
-  operations: readonly Operation[]
-): Extract<Operation, { readonly op: "update" }> | undefined => {
-  const [operation, ...rest] = operations;
-  const shipped = current !== undefined && isShipped(current);
-
-  const update =
-    shipped && rest.length === 0 && operation?.op === "update"
-      ? operation
-      : undefined;
-
-  const descriptive = Object.keys(update?.changes ?? {}).every((property) =>
-    PROTECTED_OVERRIDABLE.includes(property)
-  );
-
-  return current?.protected === true && !descriptive ? undefined : update;
-};
-
 /** The revision a request stated, as `parseRequestRevision` read it. */
 type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
 
@@ -432,6 +400,75 @@ export type DefinitionWrite =
       readonly expectedVersion: number;
     };
 
+/** An update or delete of a definition record. */
+type TargetedWrite = Exclude<DefinitionWrite, { readonly action: "create" }>;
+
+/**
+ * The definition an update or delete targets, as the actor sees it
+ * (Contracts 3.8): one the actor cannot read gets the same `NotFound` as a
+ * missing one, before the version check and every other error that
+ * depends on the record. Runs in the request transaction and again under
+ * the change set's exclusive `CONFIG_KEY`.
+ *
+ * @param table - The qualified table name.
+ * @param kind - Its definition kind.
+ * @param write - The update or delete.
+ * @returns The definition, or `NotFound` or `VersionConflict`.
+ */
+const visibleTarget = Effect.fn("Http.definitionTarget")(
+  function* visibleTarget(
+    table: string,
+    kind: DefinitionKind,
+    write: TargetedWrite
+  ) {
+    const scope = yield* currentReadScope();
+    const classId = yield* resolveTable(scope, table);
+    const current = scope.snapshot.get(write.id);
+
+    if (current?.kind !== kind) {
+      return yield* new NotFound();
+    }
+
+    const readable = yield* readableOnRecord(scope, classId, current.id);
+
+    if (Option.isNone(readable)) {
+      return yield* new NotFound();
+    }
+
+    if (current.version !== write.expectedVersion) {
+      return yield* new VersionConflict({ currentVersion: current.version });
+    }
+
+    return current;
+  }
+);
+
+/**
+ * The checks of a definition write that depend on the request and the
+ * record, run in the request transaction and again under `CONFIG_KEY`:
+ * the stated revision (6.4) first, then the target's visibility and
+ * version.
+ *
+ * @param stated - The revision the request stated.
+ * @param table - The qualified table name.
+ * @param kind - Its definition kind.
+ * @param write - The write.
+ * @returns Fails with the first refusal.
+ */
+const recheck = (
+  stated: StatedRevision,
+  table: string,
+  kind: DefinitionKind,
+  write: DefinitionWrite
+) =>
+  Effect.gen(function* recheckWrite() {
+    yield* staleCheck(stated, table, write);
+
+    if (write.action !== "create") {
+      yield* visibleTarget(table, kind, write);
+    }
+  });
+
 /**
  * Resolves the table, authorizes the write and builds its operations, in a
  * request transaction as the actor.
@@ -463,15 +500,7 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
     id = yield* newId;
     operations = [yield* createOperation(kind, id, write.body)];
   } else {
-    const current = snapshot.get(write.id);
-
-    if (current?.kind !== kind) {
-      return yield* new NotFound();
-    }
-
-    if (current.version !== write.expectedVersion) {
-      return yield* new VersionConflict({ currentVersion: current.version });
-    }
+    const current = yield* visibleTarget(table, kind, write);
 
     ({ id } = current);
     operations =
@@ -482,12 +511,7 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
 
   yield* authorizeOperations(snapshot, actor, operations);
 
-  return {
-    actor,
-    id,
-    operations,
-    shippedEdit: shippedEditOf(snapshot.get(id), operations),
-  };
+  return { actor, id, operations };
 });
 
 /**
@@ -525,7 +549,7 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
     // exclusive CONFIG_KEY, before any write.
     const authorize = sessionAuthorization({
       check: (actor) =>
-        staleCheck(stated, table, write).pipe(
+        recheck(stated, table, kind, write).pipe(
           Effect.provideService(Actor, actor),
           Effect.provideService(Catalog, catalog),
           Effect.provideService(InstanceSettings, settings),
@@ -537,22 +561,11 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       userId: prepared.actor.userId,
     });
 
-    const { shippedEdit } = prepared;
-
-    yield* (
-      shippedEdit === undefined
-        ? applyAsActor(prepared.actor, {
-            authorize,
-            operations: prepared.operations,
-            source: { kind: "api", route: "records", table },
-          })
-        : editAsActor(prepared.actor, {
-            authorize,
-            changes: shippedEdit.changes,
-            id: shippedEdit.id,
-            version: shippedEdit.version,
-          })
-    ).pipe(
+    yield* applyAsActor(prepared.actor, {
+      authorize,
+      operations: prepared.operations,
+      source: { kind: "api", route: "records", table },
+    }).pipe(
       Effect.catchTag("DefinitionInvalid", (failure) =>
         versionConflictOf(failure, prepared.id)
       )

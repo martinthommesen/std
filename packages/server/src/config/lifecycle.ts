@@ -19,13 +19,13 @@ import type { Definition } from "@std/definitions/definition";
 import { RENAMABLE, RETIRABLE } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import type { LifecycleOperations } from "@std/definitions/set-upgrade";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
 import type { FollowUpOutcome } from "../schema/coordinator.ts";
-import { resumeChangeSet } from "../schema/recovery.ts";
+import { openChangeSets, resumeChangeSet } from "../schema/recovery.ts";
+import type { OpenChangeSet } from "../schema/recovery.ts";
 import type { ConfigCommitOptions } from "../sql/config-commit.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
-import { decodeRows } from "../sql/rows.ts";
 
 const retirable = (
   definition: Definition,
@@ -48,49 +48,25 @@ export const SCHEMA_LIFECYCLE: LifecycleOperations = {
   retire: (definition) => retirable(definition, "retire"),
 };
 
-/** A change set that is not finished. */
-export interface OpenChangeSet {
-  readonly id: string;
-  readonly state: "applying" | "needs_attention";
-}
-
-const decodeOpen = decodeRows(
-  Schema.Struct({
-    id: Schema.String,
-    state: Schema.Literals(["applying", "needs_attention"]),
-  })
-);
-
-const decodePresence = decodeRows(Schema.Struct({ present: Schema.Boolean }));
+/**
+ * A change set that is not finished, as an upgrade plan lists it (the
+ * journal row is read by `openChangeSets` of the schema engine).
+ */
+export type PlannedResume = Pick<OpenChangeSet, "id" | "state">;
 
 /**
- * The change sets left `applying` or `needs_attention`, oldest first.
+ * The change sets left `applying` or `needs_attention`, oldest first, as
+ * an upgrade plan lists them.
  *
  * @param connection - A dedicated connection.
  * @returns The open change sets; none before migration 0002.
  */
-export const openChangeSets = Effect.fn("Config.openChangeSets")(
-  function* openChangeSets(connection: DedicatedConnection) {
-    const [journal] = yield* connection
-      .execute(
-        "SELECT to_regclass('core.schema_change') IS NOT NULL AS present"
-      )
-      .pipe(Effect.flatMap(decodePresence));
-
-    if (journal?.present !== true) {
-      return [];
-    }
-
-    const rows = yield* connection
-      .execute(
-        `SELECT id::text AS id, state FROM core."schema_change"
-         WHERE state IN ('applying', 'needs_attention') ORDER BY first_revision`
-      )
-      .pipe(Effect.flatMap(decodeOpen));
-
-    return rows.map((row): OpenChangeSet => ({ id: row.id, state: row.state }));
-  }
-);
+export const plannedResumes = (connection: DedicatedConnection) =>
+  openChangeSets(connection.execute).pipe(
+    Effect.map((open) =>
+      open.map(({ id, state }): PlannedResume => ({ id, state }))
+    )
+  );
 
 /** What resuming one change set did. */
 export interface ResumedChangeSet {
@@ -112,7 +88,7 @@ export interface ResumedChangeSet {
 export const resumeInterrupted = Effect.fn("Config.resumeInterrupted")(
   function* resumeInterrupted(
     connection: DedicatedConnection,
-    changeSets: readonly OpenChangeSet[],
+    changeSets: readonly PlannedResume[],
     options?: ConfigCommitOptions
   ) {
     const resumed: ResumedChangeSet[] = [];

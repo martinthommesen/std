@@ -74,13 +74,13 @@ Each migration and each set commits on its own, so after any failure the rerun c
 
 | Function | Input | Effect |
 | --- | --- | --- |
-| `edit` | `{ id, version, changes, actorId }` | local definition: one `update` change set; shipped definition: refuses properties outside `overridableProperties` and loosenings (`ConfigEditRefused`, `notOverridable`), checks `version`, stores each changed property as an override with `base_when_set` = the shipped value (a value equal to the shipped one removes the override), updates the effective record |
+| `edit` | `{ id, version, changes, actorId, acting? }` | local definition: one `update` change set; shipped definition: refuses properties outside `overridableProperties` and loosenings (`ConfigEditRefused`, `notOverridable`; anything but label and help text on a protected definition is the engine's `DefinitionProtected`), checks `version`, stores each changed property as an override with `base_when_set` = the shipped value (a value equal to the shipped one removes the override), updates the effective record |
 | `removeOverride` | `{ id, property, actorId }` | restores the shipped value |
 | `resolveConflict` | `{ conflictId, resolution, value?, actorId }` | `keep_local`: `base_when_set` becomes the new shipped value; `take_shipped`: drops the override; `replace`: a new local value |
 | `adopt` | `{ id, actorId }` | owner becomes `local`; base row and overrides deleted |
 | `conflicts` | record ID or null | conflicts and `converged` entries |
 
-Every write is one change set whose main transaction writes the effective record, its definition revision and the override rows together, and checks the planned configuration state; a concurrent config commit makes it recompute (three times). Errors: `ChangeSetError` (`DefinitionInvalid` for unknown IDs and version conflicts) or `ConfigEditRefused` (`notOverridable`, `notRecorded`, `conflictNotFound`, `notAdoptable`). The record service routes admin writes of config records to `edit` with the record's ID, the version the client read and the changed properties.
+Every write is one change set whose main transaction writes the effective record, its definition revision and the override rows together, and checks the planned configuration state; a concurrent config commit makes it recompute (three times). Errors: `ChangeSetError` (`DefinitionInvalid` for unknown IDs and version conflicts) or `ConfigEditRefused` (`notOverridable`, `notRecorded`, `conflictNotFound`, `notAdoptable`). `edit` and `adopt` plan their layer writes with `planLocalEdits` (`config/local-edits.ts`), the same planner `applyLocalChangeSet` runs for both HTTP write paths, so a batch of operations from the change-set endpoint stores overrides and adopts exactly like `edit` and `adopt`. The schema engine refuses an `adopt` whose base-row removal the layer writes do not list.
 
 ## `doctor` API
 

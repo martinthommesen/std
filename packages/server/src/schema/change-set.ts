@@ -30,6 +30,7 @@
  */
 import type { PgClient } from "@effect/sql-pg";
 import type { NotAllowed } from "@std/api/errors/not-allowed";
+import type { NotFound } from "@std/api/errors/not-found";
 import type { SchemaChanged } from "@std/api/errors/schema-changed";
 import type { Unauthenticated } from "@std/api/errors/unauthenticated";
 import type { UnknownField } from "@std/api/errors/unknown-field";
@@ -43,7 +44,7 @@ import type {
 } from "@std/definitions/apply";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
-import type { DefinitionInvalid } from "@std/definitions/problems";
+import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import { PurgeRefused } from "@std/definitions/purge-refused";
 import type { ChangeSetRefusal } from "@std/definitions/refusals";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "@std/definitions/requester";
@@ -125,6 +126,12 @@ export interface ExtraWrites {
    * changes still commits when true.
    */
   readonly pending: boolean;
+  /**
+   * The records whose `adopt` these writes plan: the config layers checked
+   * that their set removed them and delete their base rows (Contracts
+   * 8.1). The schema engine refuses any other `adopt`.
+   */
+  readonly adopted?: readonly DefinitionId[];
   readonly write: (
     context: MainTransactionContext
   ) => Effect.Effect<void, SqlError, SqlClient.SqlClient>;
@@ -158,11 +165,13 @@ export interface ChangeSetRequest {
    * snapshot held under exclusive `CONFIG_KEY` and before any write: the
    * HTTP layer re-checks the session, the stated revision (6.4) and the
    * access rules there, so nothing can change between the check and the
-   * commit (Contracts 1.4).
+   * commit (Contracts 1.4). It returns the requester as authenticated now
+   * (its roles at this snapshot), which every permission check of the
+   * change set (`schema.purge`) then uses, on every commit attempt.
    */
   readonly authorize?: (
     snapshot: ConfigSnapshot
-  ) => Effect.Effect<void, ChangeSetAuthorizationError, AuthorizeServices>;
+  ) => Effect.Effect<Requester, ChangeSetAuthorizationError, AuthorizeServices>;
   /** Other config-table writes in the main transaction. */
   readonly extraWrites?: ExtraWrites;
   /**
@@ -175,6 +184,7 @@ export interface ChangeSetRequest {
 /** What a change set's `authorize` check can refuse with. */
 export type ChangeSetAuthorizationError =
   | NotAllowed
+  | NotFound
   | Unauthenticated
   | SchemaChanged
   | UnknownTable
@@ -273,11 +283,47 @@ export const contextOf = (request: ChangeSetRequest): ApplyContext => ({
   requester: request.requester ?? SYSTEM_REQUESTER,
 });
 
+/**
+ * An `adopt` the config layers did not plan: it would move a record into
+ * the local layer and leave its base row, so the next upgrade could not
+ * plan the set.
+ *
+ * @param request - The change set.
+ * @returns The refusal, or undefined.
+ */
+const unplannedAdopt = (
+  request: ChangeSetRequest
+): DefinitionInvalid | undefined => {
+  const planned: ReadonlySet<string> = new Set(request.extraWrites?.adopted);
+
+  const found = request.operations.find(
+    (operation) => operation.op === "adopt" && !planned.has(operation.id)
+  );
+
+  return found === undefined || found.op !== "adopt"
+    ? undefined
+    : new DefinitionInvalid({
+        problems: [
+          problem(
+            "unsupportedChange",
+            found.id,
+            "adopt runs only through the config layers, which check that the record's set removed it and delete its base row and overrides."
+          ),
+        ],
+      });
+};
+
 const apply = (
   snapshot: ConfigSnapshot,
   request: ChangeSetRequest,
   changeSetId: string
 ): Effect.Effect<AppliedChangeSet, ApplyError> => {
+  const unplanned = unplannedAdopt(request);
+
+  if (unplanned !== undefined) {
+    return Effect.fail(unplanned);
+  }
+
   const applied = applyOperations(
     snapshot,
     request.operations,
@@ -363,14 +409,18 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
 
-    if (input.request.authorize !== undefined) {
-      yield* input.request.authorize(snapshot);
-    }
+    // The requester as re-authenticated under CONFIG_KEY: its roles now,
+    // not when the request was checked, decide every permission.
+    const requester =
+      input.request.authorize === undefined
+        ? contextOf(input.request).requester
+        : yield* input.request.authorize(snapshot);
 
-    const applied = yield* apply(snapshot, input.request, input.changeSetId);
+    const request = { ...input.request, requester };
+    const applied = yield* apply(snapshot, request, input.changeSetId);
 
     const plan = planChangeSet(applied, input.preflight);
-    const requesterId = contextOf(input.request).requester.userId;
+    const requesterId = requester.userId;
     const revision = state.revision + 1;
 
     if (input.coordinatorPid === null && requiresSchemaKey(applied)) {
@@ -409,7 +459,8 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
         before: applied.before.get(after.id),
       })),
       requesterId,
-      input.request.cause ?? causeOf(input.request.source)
+      input.request.cause ?? causeOf(input.request.source),
+      revision
     );
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);

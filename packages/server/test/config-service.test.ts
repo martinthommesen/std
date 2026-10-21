@@ -213,13 +213,13 @@ describe("config-service", () => {
             yield* refusalReason(
               edit("role", BUILT_IN_ROLE_IDS.admin, { name: "root" })
             ),
-            "ConfigEditRefused notOverridable"
+            "DefinitionProtected protected"
           );
           assert.strictEqual(
             yield* refusalReason(
               edit("access_rule", ADMIN_RECORDS_RULE, { active: false })
             ),
-            "ConfigEditRefused notOverridable",
+            "DefinitionProtected protected",
             "a protected access rule cannot be disabled"
           );
           assert.strictEqual((yield* runDoctor()).exitCode, 0);

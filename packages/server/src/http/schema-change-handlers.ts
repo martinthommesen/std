@@ -22,6 +22,7 @@ import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import { InstanceSettings } from "../config/instance-settings.ts";
 import type { ChangeSetServices } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
@@ -29,10 +30,12 @@ import { Transactions } from "../sql/transactions.ts";
 import {
   applyAsActor,
   authorizeOperations,
+  checkChangeSetRevision,
   sessionAuthorization,
 } from "./change-sets.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
 import { recordServedRevision } from "./schema-revision-header.ts";
+import { parseRequestRevision } from "./stale-request.ts";
 
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
 
@@ -151,6 +154,7 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
     function* schemaChangeHandlers(handlers) {
       const transactions = yield* Transactions;
       const catalog = yield* Catalog;
+      const settings = yield* InstanceSettings;
 
       // What a change set runs with: the pool, the catalog, and the database
       // settings for the coordinator's dedicated connection.
@@ -159,6 +163,10 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
       return handlers
         .handle("applyChangeSet", ({ payload, request }) =>
           Effect.gen(function* applyHandler() {
+            // A malformed header is refused before anything else (6.4).
+            const stated = yield* parseRequestRevision(request);
+            const { operations } = payload;
+
             const actor = yield* inRequestTransaction(
               transactions,
               request,
@@ -166,10 +174,11 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
                 Effect.gen(function* authorize() {
                   const acting = yield* Actor;
 
+                  yield* checkChangeSetRevision(stated, operations);
                   yield* authorizeOperations(
                     yield* catalog.current,
                     acting,
-                    payload.operations
+                    operations
                   );
 
                   return acting;
@@ -180,7 +189,18 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
             // Checked again under the change set's exclusive CONFIG_KEY.
             const result = yield* applyAsActor(actor, {
               authorize: sessionAuthorization({
-                operations: payload.operations,
+                check: (reauthenticated) =>
+                  checkChangeSetRevision(stated, operations).pipe(
+                    Effect.provideService(Actor, reauthenticated),
+                    Effect.provideService(Catalog, catalog),
+                    Effect.provideService(InstanceSettings, settings),
+                    // A database failure aborts the main transaction: a 500.
+                    Effect.catchTags({
+                      DatabaseError: Effect.die,
+                      SqlError: Effect.die,
+                    })
+                  ),
+                operations,
                 token: yield* SessionToken,
                 userId: actor.userId,
               }),
@@ -205,7 +225,10 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
               },
               schemaRevision: latest.revision,
             };
-          }).pipe(Effect.provide(services))
+          }).pipe(
+            Effect.provide(services),
+            Effect.provideService(InstanceSettings, settings)
+          )
         )
         .handle("getChangeSet", ({ params, request }) =>
           inRequestTransaction(

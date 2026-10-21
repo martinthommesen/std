@@ -76,32 +76,44 @@ type Execute = (
   params?: readonly unknown[]
 ) => Effect.Effect<readonly unknown[], DatabaseError>;
 
+const decodePresence = decodeRows(Schema.Struct({ present: Schema.Boolean }));
+
 /**
- * The change sets in `applying` or `needs_attention`, oldest first.
+ * The change sets in `applying` or `needs_attention`, oldest first: the one
+ * reader of open change sets, for the resumer, `std schema`, coordinators
+ * and `std upgrade` (which plans before migration 0002 may have run).
  *
  * @param execute - Runs one statement.
- * @returns The open change sets.
+ * @returns The open change sets; none before the journal exists.
  */
-export const openChangeSets = (
-  execute: Execute
-): Effect.Effect<readonly OpenChangeSet[], DatabaseError> =>
-  execute(
-    `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision
-     FROM core."schema_change" WHERE state IN ('applying', 'needs_attention')
-     ORDER BY first_revision`
-  ).pipe(
-    Effect.flatMap(decodeOpen),
-    Effect.map((rows) =>
-      rows.map((row) => ({
-        coordinatorPid: row.coordinator_pid,
-        error: row.error,
-        firstRevision:
-          row.first_revision === null ? null : Number(row.first_revision),
-        id: row.id,
-        state: row.state,
-      }))
-    )
-  );
+export const openChangeSets = Effect.fn("Schema.openChangeSets")(
+  function* openChangeSets(
+    execute: Execute
+  ): Effect.fn.Return<readonly OpenChangeSet[], DatabaseError> {
+    const [journal] = yield* execute(
+      "SELECT to_regclass('core.schema_change') IS NOT NULL AS present"
+    ).pipe(Effect.flatMap(decodePresence));
+
+    if (journal?.present !== true) {
+      return [];
+    }
+
+    const rows = yield* execute(
+      `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision
+       FROM core."schema_change" WHERE state IN ('applying', 'needs_attention')
+       ORDER BY first_revision`
+    ).pipe(Effect.flatMap(decodeOpen));
+
+    return rows.map((row) => ({
+      coordinatorPid: row.coordinator_pid,
+      error: row.error,
+      firstRevision:
+        row.first_revision === null ? null : Number(row.first_revision),
+      id: row.id,
+      state: row.state,
+    }));
+  }
+);
 
 const takeOver = (connection: DedicatedConnection, changeSetId: string) =>
   connection

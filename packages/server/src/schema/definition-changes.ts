@@ -91,6 +91,8 @@ const fieldsOf = (
  * @param changes - Each written definition and its stored predecessor.
  * @param actorId - The requester.
  * @param cause - `api` for requests, `system` for set loads.
+ * @param revision - The revision the main transaction commits, at which
+ *   the entries' field IDs (the core set's) exist.
  * @returns An effect in the main transaction.
  */
 export const writeDefinitionChanges = Effect.fn(
@@ -102,21 +104,25 @@ export const writeDefinitionChanges = Effect.fn(
     readonly after: Definition;
   }[],
   actorId: string,
-  cause: ChangeCause
+  cause: ChangeCause,
+  revision: number
 ) {
   for (const { before, after } of changes) {
     // Before the core set describes the platform tables there is nothing
     // to key the entry by.
     if (snapshot.class(tableOf(after.kind).classId) !== undefined) {
-      yield* writeChangeEntry({
-        actorId,
-        cause,
-        fields: fieldsOf(snapshot, before, after),
-        kind: before === undefined ? "create" : "update",
-        recordClassId: tableOf(after.kind).classId,
-        recordId: after.id,
-        recordVersion: after.version,
-      });
+      yield* writeChangeEntry(
+        {
+          actorId,
+          cause,
+          fields: fieldsOf(snapshot, before, after),
+          kind: before === undefined ? "create" : "update",
+          recordClassId: tableOf(after.kind).classId,
+          recordId: after.id,
+          recordVersion: after.version,
+        },
+        revision
+      );
     }
   }
 });

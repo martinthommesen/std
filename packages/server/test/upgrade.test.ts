@@ -14,8 +14,9 @@ import type { Operation } from "@std/definitions/operation";
 import { Effect, Fiber } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
 import { planLines } from "../src/cli/format.ts";
-import { editDefinition } from "../src/config/config-service.ts";
+import { adopt, editDefinition } from "../src/config/config-service.ts";
 import { readInstalledState } from "../src/config/installed-state.ts";
 import { SCHEMA_LIFECYCLE } from "../src/config/lifecycle.ts";
 import {
@@ -404,6 +405,55 @@ describe("upgrade", () => {
               ["w-0"],
               "the retired field's data came back with it"
             );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a field its set removed is adopted retired, through the config service, and a local reactivation brings it back",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* adoptRetired() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+
+            const v3 = yield* writeSetDirectory(
+              variantOf(yield* readSetDirectory(FIXTURE.v2), {
+                dropFields: ["w"],
+                version: 3,
+              })
+            );
+
+            yield* runUpgrade({ sets: [v3] });
+
+            assert.strictEqual(yield* fieldState(FX.w), "w retired");
+
+            yield* adopt({ actorId: ADMIN, id: FX.w });
+
+            const adopted = (yield* (yield* Catalog).refresh).field(FX.w);
+
+            assert.strictEqual(adopted?.owner.layer, "local");
+            assert.strictEqual(adopted?.state, "retired", "retirement is kept");
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT count(*)::text AS value FROM core."config_base" WHERE id = $1::uuid`,
+                [FX.w]
+              ),
+              ["0"]
+            );
+
+            yield* change([
+              { id: FX.w, op: "reactivate", version: adopted?.version ?? 0 },
+            ]);
+
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
+
+            // The set no longer owns it: rerunning the upgrade leaves it.
+            yield* runUpgrade({ sets: [v3] });
+
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
           })
         )
     );

@@ -24,8 +24,11 @@ import type { TestResponse } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { loadSetDirectory } from "../src/config/load-set.ts";
+import { runDoctor } from "../src/doctor/doctor.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { overridesOf } from "./config-support.ts";
 import {
   listOf,
   listPath,
@@ -36,6 +39,7 @@ import {
 } from "./reads-support.ts";
 import {
   ACME,
+  ACME_SET_DIRECTORY,
   addAccessRule,
   addField,
   addRole,
@@ -44,10 +48,13 @@ import {
   ensureSite,
   values,
 } from "./schema-support.ts";
-import { waitUntil } from "./support.ts";
+import { errorOf, waitUntil } from "./support.ts";
 import { ASSET, LAPTOP, create, patch, remove } from "./writes-support.ts";
 
 const CHANGE_SETS = "/api/v1/schema/change-sets";
+
+/** An ID no definition has. */
+const MISSING_ID = "0b0d6c3e-5a0e-4c33-9a43-6e7f6d1b2a99";
 
 const SCHEMAS = "('pg_catalog', 'information_schema', 'pg_toast')";
 
@@ -62,6 +69,25 @@ const catalogFingerprint = values(
        FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace WHERE n.nspname NOT IN ${SCHEMAS}
    ) AS f`
 ).pipe(Effect.map(([value]) => value));
+
+/**
+ * A definition's field at a revision: its latest definition revision at or
+ * before it.
+ */
+const FIELD_AT = `SELECT effective FROM core."definition_revision"
+  WHERE definition_id = f.key::uuid AND revision <= c.schema_revision
+  ORDER BY revision DESC LIMIT 1`;
+
+/** The version-3 change of a record, read through its revision's fields. */
+const HISTORY_READ_BACK = `SELECT (d.effective ->> 'name') || ':' || (f.value ->> 'before') || '>' || (f.value ->> 'after') AS value
+  FROM core."change" c CROSS JOIN LATERAL jsonb_each(c.fields) AS f(key, value)
+  JOIN LATERAL (${FIELD_AT}) AS d ON true
+  WHERE c.record_id = $1::uuid AND c.record_version = 3`;
+
+/** How many history fields do not exist at their entry's revision. */
+const UNRESOLVED_HISTORY = `SELECT count(*)::text AS value
+  FROM core."change" c CROSS JOIN LATERAL jsonb_each(c.fields) AS f(key, value)
+  WHERE NOT EXISTS (${FIELD_AT})`;
 
 const AppliedSchema = Schema.Struct({
   changeSet: Schema.Struct({
@@ -383,7 +409,7 @@ describe("schema-http", () => {
       );
 
       dbTest.effect(
-        "a generic edit of a shipped definition is stored as a local override; a non-overridable property is refused",
+        "shipped edits through both HTTP paths are stored as overrides and survive an upgrade; non-overridable properties are refused on both",
         () =>
           Effect.gen(function* shippedEdit() {
             const admin = yield* adminToken;
@@ -429,6 +455,199 @@ describe("schema-http", () => {
               ),
               ["Local cost"]
             );
+
+            // The change-set endpoint plans the same override writes, in
+            // the same change set as the effective change.
+            const batch = yield* postChangeSet(admin, [
+              {
+                changes: { label: "Batch cost" },
+                id: ACME.cost,
+                op: "update",
+                version: yield* versionOf(ACME.cost),
+              },
+            ]);
+
+            assert.strictEqual(batch.status, 201, batch.text);
+            assert.deepStrictEqual(yield* overridesOf(ACME.cost), [
+              "label=Batch cost@Cost",
+            ]);
+
+            const batchRefused = yield* postChangeSet(admin, [
+              {
+                changes: { description: "not overridable" },
+                id: rule?.id ?? "",
+                op: "update",
+                version,
+              },
+            ]);
+
+            assert.strictEqual(batchRefused.status, 422, batchRefused.text);
+            assert.strictEqual(yield* tagOf(batchRefused), "DefinitionInvalid");
+
+            // An upgrade (the acme set loaded again) keeps the local label,
+            // and doctor finds the effective record and its override agree.
+            yield* loadSetDirectory(ACME_SET_DIRECTORY);
+
+            assert.deepStrictEqual(
+              yield* values(
+                "SELECT label AS value FROM core.field WHERE id = $1::uuid",
+                [ACME.cost]
+              ),
+              ["Batch cost"]
+            );
+            assert.deepStrictEqual(
+              (yield* runDoctor()).findings.flatMap((entry) =>
+                entry.code === "effectiveMismatch" ? [entry.subject] : []
+              ),
+              []
+            );
+          })
+      );
+
+      dbTest.effect(
+        "adopt runs only through the config layers: a still-shipped record is refused on the endpoint, and an unplanned adopt by the engine",
+        () =>
+          Effect.gen(function* adoptRefused() {
+            const admin = yield* adminToken;
+
+            const adopt: Operation = {
+              id: ACME.cost,
+              op: "adopt",
+              version: yield* versionOf(ACME.cost),
+            };
+
+            const refused = yield* postChangeSet(admin, [adopt]);
+
+            assert.strictEqual(refused.status, 422, refused.text);
+            assert.strictEqual(yield* tagOf(refused), "DefinitionInvalid");
+            assert.include(refused.text, "still shipped");
+
+            const direct = errorOf(yield* Effect.exit(change([adopt])));
+
+            assert.strictEqual(direct?._tag, "DefinitionInvalid");
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).get(ACME.cost)?.owner.layer,
+              "app"
+            );
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT removed::text AS value FROM core."config_base" WHERE id = $1::uuid`,
+                [ACME.cost]
+              ),
+              ["false"]
+            );
+          })
+      );
+
+      dbTest.effect(
+        "a definition the caller cannot read is NotFound on writes, before the version check, like an unknown ID",
+        () =>
+          Effect.gen(function* hiddenDefinition() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const hidden = addRole("hidden_role");
+
+            assert.strictEqual(
+              (yield* postChangeSet(admin, [hidden.op])).status,
+              201
+            );
+
+            const snapshot = yield* (yield* Catalog).refresh;
+            const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+
+            const deny = addAccessRule(
+              PLATFORM_CLASS_IDS.role,
+              [BUILT_IN_ROLE_IDS.admin],
+              {
+                condition: {
+                  left: { path: [name?.id ?? ""] },
+                  op: "eq",
+                  right: { value: "hidden_role" },
+                },
+              }
+            );
+
+            const denyRead: Operation =
+              deny.op.op === "createAccessRule"
+                ? {
+                    definition: {
+                      ...deny.op.definition,
+                      actions: ["read"],
+                      effect: "deny",
+                    },
+                    op: "createAccessRule",
+                  }
+                : deny.op;
+
+            assert.strictEqual(
+              (yield* postChangeSet(admin, [denyRead])).status,
+              201
+            );
+
+            const read = yield* http.get(recordPath("core.role", hidden.id), {
+              token: admin,
+            });
+
+            const responses = [
+              read,
+              yield* patch(admin, "core.role", hidden.id, 99, { label: "x" }),
+              yield* patch(admin, "core.role", hidden.id, 1, { label: "x" }),
+              yield* remove(admin, "core.role", hidden.id, 99),
+              yield* patch(admin, "core.role", MISSING_ID, 1, { label: "x" }),
+            ];
+
+            for (const response of responses) {
+              assert.strictEqual(response.status, 404, response.text);
+              assert.strictEqual(yield* tagOf(response), "NotFound");
+            }
+
+            assert.strictEqual(
+              (yield* (yield* Catalog).refresh).role(hidden.id)?.label,
+              "hidden_role"
+            );
+          })
+      );
+
+      dbTest.effect(
+        "the change-set endpoint checks STD-Schema-Revision: malformed is 400, a revision this database never had is 409, nothing committed",
+        () =>
+          Effect.gen(function* statedRevision() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const before = (yield* (yield* Catalog).refresh).key;
+            const role = addRole("stated_revision");
+            const parsed = parseJson(JSON.stringify({ operations: [role.op] }));
+            const body: JsonValue = parsed.ok ? parsed.value : null;
+
+            const post = (header: string) =>
+              http.request("POST", CHANGE_SETS, {
+                body,
+                headers: { "std-schema-revision": header },
+                token: admin,
+              });
+
+            const broken = yield* post("broken");
+
+            assert.strictEqual(broken.status, 400, broken.text);
+            assert.strictEqual(yield* tagOf(broken), "InvalidSchemaRevision");
+
+            const future = yield* post(
+              `${before.revision + 5}.${before.changeSetId}`
+            );
+
+            assert.strictEqual(future.status, 409, future.text);
+            assert.strictEqual(yield* tagOf(future), "SchemaChanged");
+            assert.deepStrictEqual(
+              (yield* (yield* Catalog).refresh).key,
+              before,
+              "nothing committed"
+            );
+
+            const current = yield* post(
+              `${before.revision}.${before.changeSetId}`
+            );
+
+            assert.strictEqual(current.status, 201, current.text);
           })
       );
 
@@ -662,6 +881,34 @@ describe("schema-http", () => {
                 `3:update:${fixture.alice.id}:true`,
               ]
             );
+
+            // Each entry carries the revision its change set committed.
+            const committed = yield* values(
+              `SELECT first_revision::text AS value FROM core."schema_change"
+               WHERE operations @> jsonb_build_array(jsonb_build_object('targetId', $1::text))
+               ORDER BY first_revision`,
+              [id]
+            );
+
+            assert.lengthOf(committed, 3);
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT schema_revision::text AS value FROM core."change"
+                 WHERE record_id = $1::uuid ORDER BY record_version`,
+                [id]
+              ),
+              committed
+            );
+
+            // 4.4: the old label reads back through the field definitions
+            // as they were at the entry's revision.
+            assert.deepStrictEqual(yield* values(HISTORY_READ_BACK, [id]), [
+              "label:Historian>Chronicler",
+            ]);
+
+            // Every entry, the core set's first load included, names only
+            // fields that exist at its recorded revision.
+            assert.deepStrictEqual(yield* values(UNRESOLVED_HISTORY), ["0"]);
           })
       );
 
@@ -897,6 +1144,94 @@ describe("schema-http", () => {
       );
 
       dbTest.effect(
+        "schema_purger revoked while a purge waits for CONFIG_KEY: the purge is refused and the column stays",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* purgerRevoked() {
+              const admin = yield* adminToken;
+              const fixture = yield* AcmeFixture;
+              const catalog = yield* Catalog;
+              const database = yield* TestDatabase;
+              const { request } = yield* Transactions;
+
+              const doomed = addField(ACME.asset, "purge_target", {
+                kind: "text",
+              });
+
+              yield* change([doomed.op]);
+              yield* change([{ id: doomed.id, op: "retire", version: 1 }]);
+
+              yield* request(
+                Effect.gen(function* grantPurger() {
+                  yield* insertAsOwner(
+                    yield* catalog.current,
+                    USER_ROLE_CLASS_ID,
+                    [
+                      {
+                        values: {
+                          role: BUILT_IN_ROLE_IDS.schema_purger,
+                          user: fixture.alice.id,
+                        },
+                      },
+                    ]
+                  );
+                })
+              );
+
+              const holder = yield* database.session("config-key-holder");
+
+              yield* holder.query("BEGIN");
+              yield* holder.query(
+                `SELECT pg_advisory_xact_lock_shared(${CONFIG_KEY.toString()})`
+              );
+
+              const purge = yield* Effect.forkChild(
+                postChangeSet(admin, [
+                  {
+                    confirm: { id: doomed.id, version: 2 },
+                    id: doomed.id,
+                    op: "purge",
+                    version: 2,
+                  },
+                ])
+              );
+
+              yield* waitUntil(
+                values(
+                  `SELECT count(*)::text AS value FROM pg_locks
+                   WHERE locktype = 'advisory' AND NOT granted AND mode = 'ExclusiveLock'
+                     AND objid = $1::oid`,
+                  [String(advisoryObjectId(CONFIG_KEY))]
+                ).pipe(Effect.map(([count]) => count !== "0"))
+              );
+
+              // Alice loses schema_purger, as table owner, before the commit.
+              yield* holder.query(
+                `DELETE FROM core."user_role" WHERE "user" = $1::uuid AND "role" = $2::uuid`,
+                [fixture.alice.id, BUILT_IN_ROLE_IDS.schema_purger]
+              );
+              yield* holder.query("COMMIT");
+
+              const response = yield* Fiber.join(purge);
+
+              assert.strictEqual(response.status, 403, response.text);
+              assert.strictEqual(yield* tagOf(response), "PermissionRequired");
+              assert.strictEqual(
+                (yield* catalog.refresh).field(doomed.id)?.state,
+                "retired"
+              );
+              assert.deepStrictEqual(
+                yield* values(
+                  `SELECT count(*)::text AS value FROM information_schema.columns
+                   WHERE table_schema = 'acme' AND table_name = 'asset' AND column_name = 'purge_target'`
+                ),
+                ["1"]
+              );
+            })
+          )
+      );
+
+      dbTest.effect(
         "a rule revoked between the request's check and the commit refuses the write",
         () =>
           Effect.scoped(
@@ -945,7 +1280,11 @@ describe("schema-http", () => {
 
               const response = yield* Fiber.join(write);
 
-              assert.strictEqual(response.status, 403, response.text);
+              // With no rule left on core.role the table is unknown to the
+              // caller (3.4), as in the request's own check. This test
+              // runs last: the admin rules stay revoked.
+              assert.strictEqual(response.status, 404, response.text);
+              assert.strictEqual(yield* tagOf(response), "UnknownTable");
               assert.strictEqual(
                 (yield* (yield* Catalog).refresh).role(target.id)?.label,
                 "revocation_target"

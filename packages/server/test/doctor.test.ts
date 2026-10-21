@@ -33,6 +33,7 @@ import { FIXTURE, FX } from "./config-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
+  addField,
   insertRecords,
   insertRecordsSql,
   schemaTestLayer,
@@ -600,6 +601,41 @@ describe("doctor", () => {
             );
           })
         )
+    );
+
+    dbTest.effect(
+      "retired fields keep doctor clean: a retired boolean keeps NOT NULL DEFAULT false, a retired required text field loses NOT NULL",
+      () =>
+        Effect.gen(function* retiredColumns() {
+          yield* install;
+
+          const flag = addField(ACME.asset, "flagged", { kind: "boolean" });
+
+          const note = addField(
+            ACME.asset,
+            "note",
+            { kind: "text" },
+            { default: "none", required: true }
+          );
+
+          yield* applyChangeSet({ operations: [flag.op, note.op] });
+
+          const before = yield* runDoctor();
+
+          assert.deepStrictEqual(notInfo(before.findings), []);
+
+          yield* applyChangeSet({
+            operations: [
+              { id: flag.id, op: "retire", version: 1 },
+              { id: note.id, op: "retire", version: 1 },
+            ],
+          });
+
+          const after = yield* runDoctor();
+
+          assert.deepStrictEqual(notInfo(after.findings), []);
+          assert.strictEqual(after.exitCode, 0);
+        })
     );
 
     dbTest.effect(
