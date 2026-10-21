@@ -1,12 +1,15 @@
 /**
  * The `std` command.
  *
- * Commands (later workstreams add `serve`, `doctor` and `schema ...`):
+ * Commands (later workstreams add `doctor` and `schema ...`):
  *
  * - `std upgrade [--set <dir>]...`: applies pending platform migrations,
  *   then loads the core definition set, then each app set in the order
  *   given (Contracts 8.5). Exit 0 on success, 1 on a refusal or failure,
  *   2 on a usage error.
+ * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
+ *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
+ *   platform migrations.
  */
 import path from "node:path";
 
@@ -15,6 +18,7 @@ import { Console, Effect, Layer } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
 import { runUpgrade } from "../config/upgrade.ts";
+import { ServerLayer } from "../http/serve.ts";
 import {
   CLI_APPLICATION_NAME,
   DatabaseConfig,
@@ -26,7 +30,8 @@ const USAGE = `Usage: std <command>
 Commands:
   upgrade [--set <dir>]...   Apply platform migrations, then the core
                              definition set, then each app set (stop all
-                             STD servers first)`;
+                             STD servers first)
+  serve                      Serve the STD API over HTTP`;
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -113,12 +118,27 @@ const setDirectoriesOf = (
   return directories;
 };
 
+/** `std serve`: runs the HTTP server until interrupted. */
+const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
+  Effect.matchEffect({
+    onFailure: (failure) =>
+      Console.error(`std serve: ${String(failure)}`).pipe(
+        Effect.andThen(setExitCode(EXIT_FAILURE))
+      ),
+    onSuccess: () => Effect.void,
+  })
+);
+
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;
   const directories = setDirectoriesOf(rest);
 
   if (command === "upgrade" && directories !== undefined) {
     return upgrade(directories);
+  }
+
+  if (command === "serve" && rest.length === 0) {
+    return serve;
   }
 
   return Effect.andThen(Console.error(USAGE), setExitCode(EXIT_USAGE));

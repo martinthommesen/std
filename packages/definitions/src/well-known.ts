@@ -61,3 +61,18 @@ export const PERMISSION_IDS = {
   "schema.purge": "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9",
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.user` that code reads (sign-in, sessions, labels). */
+export const USER_FIELD_IDS = {
+  active: "df9bb372-d557-445c-a173-66ab4e7a9c7c",
+  login: "b3cabaa4-77cb-4845-9221-2105b21425eb",
+  name: "13160bfb-1a94-4f0b-a29b-bccf701673c0",
+  // oxlint-disable-next-line sonarjs/no-hardcoded-passwords -- a field's stable ID, not a password
+  password: "e122cfbe-11ea-4469-8c9b-14f4eab4aa74",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.user_role` that code reads (effective roles). */
+export const USER_ROLE_FIELD_IDS = {
+  role: "9640bd3e-c66e-4b43-8b4c-31489d37dfc8",
+  user: "f60c3043-b965-42f2-b9ea-a81c3f3ee84d",
+} as const satisfies Readonly<Record<string, DefinitionId>>;

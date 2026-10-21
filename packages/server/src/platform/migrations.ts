@@ -7,7 +7,8 @@ import { validateMigrations } from "./migration.ts";
 import type { PlatformMigration } from "./migration.ts";
 import { migration0001 } from "./migrations/0001-core.ts";
 import { migration0002 } from "./migrations/0002-definitions.ts";
+import { migration0003 } from "./migrations/0003-sessions.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
-  validateMigrations([migration0001, migration0002]);
+  validateMigrations([migration0001, migration0002, migration0003]);

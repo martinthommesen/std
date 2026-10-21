@@ -36,6 +36,7 @@ import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { installSessionRevocation } from "../auth/session-revocation.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { bumpRevision, MAIN_LOCK_TIMEOUT } from "../sql/config-commit.ts";
 import type {
@@ -305,6 +306,7 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
 
     if (plan.seedSystemUser) {
       yield* insertSystemUser(applied.after);
+      yield* installSessionRevocation(applied.after);
     }
 
     yield* runDdl(plan.keys, budget);

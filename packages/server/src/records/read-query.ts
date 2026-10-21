@@ -1,0 +1,382 @@
+/**
+ * The parameters of a read (Contracts 3.4, 3.5, 6.6): filter, sort,
+ * selection, limit, count and labels, each resolved against the caller's
+ * visible schema before any query runs. A misspelled name and a
+ * never-readable one give the same `UnknownField`, naming what the request
+ * said.
+ */
+import { InvalidFilter } from "@std/api/errors/invalid-filter";
+import { InvalidRequest } from "@std/api/errors/invalid-request";
+import type { FilterIssue } from "@std/api/errors/schemas";
+import { UnknownField } from "@std/api/errors/unknown-field";
+import { checkCondition } from "@std/conditions/check";
+import type { ClassView } from "@std/conditions/class-view";
+import type { ConditionIssue } from "@std/conditions/issue";
+import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
+import { compileCondition } from "@std/conditions/sql";
+import type { CompiledCondition } from "@std/conditions/sql";
+import { locateIssues, parseCondition } from "@std/conditions/syntax-parse";
+import type { DefinitionId } from "@std/definitions/ids";
+import type { FieldKind } from "@std/values/field-type";
+import { Effect, Option } from "effect";
+
+import { AUDIT_FIELDS, fieldInfoOf } from "./read-field.ts";
+import type { ReadField } from "./read-field.ts";
+import type { ReadScope, ReadView } from "./read-view.ts";
+import { recordRelation } from "./relation.ts";
+
+/** The alias of the endpoint's relation in every read statement. */
+export const BASE_ALIAS = "r";
+
+/** Default page size. [judgment] */
+export const DEFAULT_LIMIT = 100;
+
+/** Largest page size. [judgment] */
+export const MAX_LIMIT = 1000;
+
+const DECIMAL_DIGITS = /^\d+$/u;
+
+/**
+ * Parses `limit`.
+ *
+ * @param text - The parameter, if given.
+ * @returns 1 to {@link MAX_LIMIT}, default {@link DEFAULT_LIMIT}.
+ */
+export const parseLimit = Effect.fn("ReadQuery.parseLimit")(
+  function* parseLimit(text: string | undefined) {
+    if (text === undefined) {
+      return DEFAULT_LIMIT;
+    }
+
+    const value = DECIMAL_DIGITS.test(text) ? Number(text) : Number.NaN;
+
+    if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LIMIT) {
+      return yield* new InvalidRequest({
+        message: `limit is a whole number from 1 to ${MAX_LIMIT}.`,
+        parameter: "limit",
+      });
+    }
+
+    return value;
+  }
+);
+
+/**
+ * Parses a `true`/`false` flag.
+ *
+ * @param parameter - Its name, for the error.
+ * @param text - The parameter, if given.
+ * @returns The flag, default false.
+ */
+export const parseFlag = Effect.fn("ReadQuery.parseFlag")(function* parseFlag(
+  parameter: string,
+  text: string | undefined
+) {
+  if (text === undefined || text === "false") {
+    return false;
+  }
+
+  if (text === "true") {
+    return true;
+  }
+
+  return yield* new InvalidRequest({
+    message: `${parameter} is true or false.`,
+    parameter,
+  });
+});
+
+const splitList = (text: string): string[] =>
+  text.split(",").map((item) => item.trim());
+
+const UNSORTABLE: ReadonlySet<FieldKind> = new Set<FieldKind>([
+  "password",
+  "secret",
+  "json",
+  "condition",
+]);
+
+/** One sort key. */
+export interface SortKey {
+  readonly field: ReadField;
+  readonly descending: boolean;
+}
+
+/**
+ * Parses `sort`: comma-separated names, `-` before a name for descending.
+ * Ties always break by `id` (Contracts 3.5).
+ *
+ * @param view - The endpoint's view.
+ * @param text - The parameter, if given.
+ * @returns The keys.
+ */
+export const parseSort = Effect.fn("ReadQuery.parseSort")(function* parseSort(
+  view: ReadView,
+  text: string | undefined
+) {
+  if (text === undefined || text.trim() === "") {
+    return [];
+  }
+
+  const keys: SortKey[] = [];
+
+  for (const item of splitList(text)) {
+    const descending = item.startsWith("-");
+    const name = descending ? item.slice(1) : item;
+
+    if (name === "") {
+      return yield* new InvalidRequest({
+        message: "sort lists field names, each optionally preceded by -.",
+        parameter: "sort",
+      });
+    }
+
+    const field = view.byName(name);
+
+    if (field === undefined) {
+      return yield* new UnknownField({ field: name });
+    }
+
+    if (UNSORTABLE.has(field.type.kind)) {
+      return yield* new InvalidRequest({
+        message: "Fields of this type cannot be sorted.",
+        parameter: "sort",
+      });
+    }
+
+    keys.push({ descending, field });
+  }
+
+  return keys;
+});
+
+/** One selected value: a field of the record, or one hop through a reference. */
+export interface SelectedValue {
+  /** The key in `values`: the field name or the dotted path. */
+  readonly key: string;
+  /** The field of the record (the reference, for a path). */
+  readonly field: ReadField;
+  /** For a path: the target's view and the field read on it. */
+  readonly through?: { readonly view: ReadView; readonly field: ReadField };
+}
+
+const ENVELOPE: ReadonlySet<string> = new Set(["id", "class", "version"]);
+
+/**
+ * The default selection: every readable field (Contracts 3.5), system
+ * envelope members excepted.
+ *
+ * @param view - The record's view.
+ * @returns The selection.
+ */
+export const defaultSelection = (view: ReadView): readonly SelectedValue[] =>
+  view.fields.flatMap((field) =>
+    field.system === undefined || AUDIT_FIELDS.includes(field.system)
+      ? [{ field, key: field.name }]
+      : []
+  );
+
+/**
+ * Parses `fields`: comma-separated names and one-hop paths.
+ *
+ * @param scope - The caller's scope (for reference targets).
+ * @param view - The endpoint's view.
+ * @param text - The parameter, if given.
+ * @returns The selection, or none for the default.
+ */
+export const parseFields = Effect.fn("ReadQuery.parseFields")(
+  function* parseFields(
+    scope: ReadScope,
+    view: ReadView,
+    text: string | undefined
+  ) {
+    if (text === undefined) {
+      return Option.none<readonly SelectedValue[]>();
+    }
+
+    const selection: SelectedValue[] = [];
+
+    for (const item of splitList(text)) {
+      const [name = "", targetName, ...rest] = item.split(".");
+
+      if (name === "" || targetName === "" || rest.length > 0) {
+        return yield* new InvalidRequest({
+          message:
+            "fields lists field names and one-hop paths such as docked_to.name.",
+          parameter: "fields",
+        });
+      }
+
+      const field = view.byName(name);
+
+      if (field === undefined) {
+        return yield* new UnknownField({ field: name });
+      }
+
+      if (targetName === undefined) {
+        if (
+          !ENVELOPE.has(name) &&
+          !selection.some((entry) => entry.key === name)
+        ) {
+          selection.push({ field, key: name });
+        }
+
+        continue;
+      }
+
+      if (field.type.kind !== "reference") {
+        return yield* new UnknownField({ field: item });
+      }
+
+      const target = scope.view(field.type.targetClassId);
+      const targetField = target.byName(targetName);
+
+      if (targetField === undefined) {
+        return yield* new UnknownField({ field: targetName });
+      }
+
+      if (!selection.some((entry) => entry.key === item)) {
+        selection.push({
+          field,
+          key: item,
+          through: { field: targetField, view: target },
+        });
+      }
+    }
+
+    return Option.some<readonly SelectedValue[]>(selection);
+  }
+);
+
+const filterIssue = (found: ConditionIssue): FilterIssue =>
+  found.span === undefined
+    ? { message: found.message, reason: found.reason }
+    : { message: found.message, reason: found.reason, span: found.span };
+
+/**
+ * The condition engine's view of what a caller may name in a filter
+ * (filter profile: the caller's readable fields on every hop).
+ *
+ * @param scope - The caller's scope.
+ * @returns The class view.
+ */
+export const filterClassView = (scope: ReadScope): ClassView => {
+  const fieldOf = (classId: DefinitionId, fieldId: DefinitionId) => {
+    const field = scope.view(classId).byId(fieldId);
+
+    return field === undefined ? undefined : fieldInfoOf(field);
+  };
+
+  return {
+    canRead: (classId, fieldId) => fieldOf(classId, fieldId) !== undefined,
+    field: fieldOf,
+    fieldByName: (classId, name) => {
+      const field = scope.view(classId).byName(name);
+
+      return field === undefined ? undefined : fieldInfoOf(field);
+    },
+  };
+};
+
+/**
+ * Compiles the `filter` parameter (Contracts 3.5, 3.6, 5.9): parsed in the
+ * condition text syntax with names resolved against the visible schema,
+ * checked under the filter profile, resolved with the caller's context and
+ * compiled over masked expressions. A reference hop joins the target's
+ * relation with its visibility as the guard.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The endpoint's view.
+ * @param text - The filter text, if given.
+ * @returns The joins and the predicate, or none without a filter.
+ */
+export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
+  function* compileFilter(
+    scope: ReadScope,
+    view: ReadView,
+    text: string | undefined
+  ) {
+    if (text === undefined || text.trim() === "") {
+      return Option.none<CompiledCondition>();
+    }
+
+    const unresolved: string[] = [];
+    const classView = filterClassView(scope);
+
+    const parsed = parseCondition(text, {
+      classId: view.classId,
+      resolveName: (classId, name) => {
+        const found = classView.fieldByName?.(classId, name);
+
+        if (found === undefined) {
+          unresolved.push(name);
+        }
+
+        return found;
+      },
+    });
+
+    if (!parsed.ok) {
+      const unknownName = unresolved.at(-1);
+      const [first] = parsed.error.issues;
+
+      if (first?.reason === "unknownField" && unknownName !== undefined) {
+        return yield* new UnknownField({ field: unknownName });
+      }
+
+      return yield* new InvalidFilter({
+        issues: parsed.error.issues.map(filterIssue),
+      });
+    }
+
+    const checked = checkCondition(parsed.value.expr, {
+      classId: view.classId,
+      profile: "filter",
+      purpose: "evaluate",
+      view: classView,
+    });
+
+    if (!checked.ok) {
+      return yield* new InvalidFilter({
+        issues: locateIssues(checked.error.issues, parsed.value.spans).map(
+          filterIssue
+        ),
+      });
+    }
+
+    const resolved = resolveCondition(checked.value, {
+      me: scope.context.me,
+      now: scope.context.now,
+      timeZone: timeZoneFor("filter", { instance: scope.context.timeZone }),
+    });
+
+    if (!resolved.ok) {
+      return yield* new InvalidFilter({
+        issues: resolved.error.issues.map(filterIssue),
+      });
+    }
+
+    const compiled: CompiledCondition = compileCondition(resolved.value, {
+      alias: BASE_ALIAS,
+      hooks: {
+        column: (source, field) => {
+          const sourceView = scope.view(source.classId);
+          const readField = sourceView.byId(field.id);
+
+          return readField === undefined
+            ? { parameters: [], parts: ["NULL"] }
+            : sourceView.value(source.alias, readField);
+        },
+        join: (target) => ({
+          guard: scope
+            .view(target.source.classId)
+            .visibility(target.source.alias),
+          relation: recordRelation(scope.snapshot, target.source.classId),
+        }),
+      },
+      joinAliasPrefix: "f",
+    });
+
+    return Option.some(compiled);
+  }
+);
