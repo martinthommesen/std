@@ -309,11 +309,13 @@ const MarkerRow = Schema.Struct({
  * @param plan - Database, sizes and models.
  * @returns Whether the database can be reused.
  */
-export const isGenerated = (
+export const isGenerated: (
   server: ServerConfig,
   plan: GenerationPlan
-): Effect.Effect<boolean, SqlError | BenchError> =>
-  Effect.gen(function* checkMarker() {
+) => Effect.Effect<boolean, SqlError | BenchError> = Effect.fn(
+  "bench.isGenerated"
+)(
+  function* checkMarker(_server: ServerConfig, plan: GenerationPlan) {
     const [exists] = yield* query(
       {
         params: [markerTable],
@@ -343,6 +345,9 @@ export const isGenerated = (
           row.mitigations === ctx.mitigations
       )
     );
-  }).pipe(
-    Effect.provide(clientLayer(server, plan.database, { maxConnections: 1 }))
-  );
+  },
+  (effect, server, plan) =>
+    effect.pipe(
+      Effect.provide(clientLayer(server, plan.database, { maxConnections: 1 }))
+    )
+);

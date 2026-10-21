@@ -90,10 +90,12 @@ export const instancesOf = (
  * @param statements - The request's statements.
  * @returns Each statement's undecoded rows.
  */
-export const runRequest = (
+export const runRequest: (
   statements: readonly Compiled[]
-): Effect.Effect<readonly (readonly unknown[])[], SqlError, PgClient> =>
-  Effect.gen(function* runInTransaction() {
+) => Effect.Effect<readonly (readonly unknown[])[], SqlError, PgClient> =
+  Effect.fnUntraced(function* runInTransaction(
+    statements: readonly Compiled[]
+  ) {
     const sql = yield* PgClient;
 
     return yield* sql.withTransaction(

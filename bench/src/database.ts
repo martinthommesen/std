@@ -12,7 +12,7 @@ import {
   PgClient as PgClientService,
 } from "@effect/sql-pg/PgClient";
 import type { Layer } from "effect";
-import { Effect, Redacted, Schema } from "effect";
+import { Config, Effect, Redacted, Schema } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -38,14 +38,12 @@ const leadingSlash = /^\//u;
 const databaseNamePattern = /^[a-z][a-z0-9_]{0,62}$/u;
 
 /**
- * Reads the bench server's location.
+ * Parses a Postgres URL into the bench server's location.
  *
- * @param url - A Postgres URL; defaults to `STD_BENCH_DATABASE_URL`, then the bench container.
+ * @param url - A Postgres URL such as `postgres://bench:bench@127.0.0.1:54330/bench`.
  * @returns The server configuration.
  */
-export const serverConfig = (
-  url: string = process.env.STD_BENCH_DATABASE_URL ?? defaultServerUrl
-): ServerConfig => {
+export const parseServerUrl = (url: string): ServerConfig => {
   const parsed = new URL(url);
   const database = parsed.pathname.replace(leadingSlash, "");
 
@@ -57,6 +55,11 @@ export const serverConfig = (
     user: decodeURIComponent(parsed.username),
   };
 };
+
+/** The bench server: `STD_BENCH_DATABASE_URL`, falling back to the bench container. */
+export const serverConfig: Config.Config<ServerConfig> = Config.String(
+  "STD_BENCH_DATABASE_URL"
+).pipe(Config.withDefault(defaultServerUrl), Config.map(parseServerUrl));
 
 /** Options for a client pool. */
 export interface ClientOptions {
@@ -197,17 +200,18 @@ const databaseName = (name: string): string => {
  * @param name - The database.
  * @returns Nothing.
  */
-export const recreateDatabase = (
+export const recreateDatabase: (
   server: ServerConfig,
   name: string
-): Effect.Effect<void, SqlError> =>
-  Effect.gen(function* recreate() {
+) => Effect.Effect<void, SqlError> = Effect.fn("bench.recreateDatabase")(
+  function* recreate(server: ServerConfig, name: string) {
     yield* adminStatement(
       server,
       `DROP DATABASE IF EXISTS ${databaseName(name)} WITH (FORCE)`
     );
     yield* adminStatement(server, `CREATE DATABASE ${databaseName(name)}`);
-  });
+  }
+);
 
 /**
  * Drops a database.
@@ -234,11 +238,13 @@ const FoundRow = Schema.Struct({ found: Schema.Boolean });
  * @param name - The database.
  * @returns Whether it exists.
  */
-export const databaseExists = (
+export const databaseExists: (
   server: ServerConfig,
   name: string
-): Effect.Effect<boolean, SqlError | BenchError> =>
-  Effect.gen(function* findDatabase() {
+) => Effect.Effect<boolean, SqlError | BenchError> = Effect.fn(
+  "bench.databaseExists"
+)(
+  function* findDatabase(_server: ServerConfig, name: string) {
     const rows = yield* query(
       {
         params: [name],
@@ -248,4 +254,6 @@ export const databaseExists = (
     );
 
     return rows.length > 0;
-  }).pipe(Effect.provide(adminLayer(server)));
+  },
+  (effect, server, _name) => effect.pipe(Effect.provide(adminLayer(server)))
+);

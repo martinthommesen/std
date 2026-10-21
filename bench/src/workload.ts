@@ -409,12 +409,16 @@ const withCursor = (
  * @param instance - The request.
  * @returns The statements, in order (the page, then the count if requested).
  */
-export const compileInstance = (
+export const compileInstance: (
   model: StorageModel,
   ctx: ModelContext,
   instance: ReadInstance
-): Effect.Effect<readonly Compiled[], SqlError | BenchError, PgClient> =>
-  Effect.gen(function* compileRequest() {
+) => Effect.Effect<readonly Compiled[], SqlError | BenchError, PgClient> =
+  Effect.fnUntraced(function* compileRequest(
+    model: StorageModel,
+    ctx: ModelContext,
+    instance: ReadInstance
+  ) {
     const target: Target = { caller: instance.caller, ctx, model };
 
     if (instance.kind === "get") {
@@ -443,52 +447,52 @@ const UserRow = Schema.Struct({ id: Schema.String });
  * @param count - Samples per kind.
  * @returns The samples.
  */
-export const loadSamples = (
+export const loadSamples: (
   seed: number,
   count: number
-): Effect.Effect<Samples, SqlError | BenchError, PgClient> =>
-  Effect.gen(function* drawSamples() {
-    const params = [String(seed), String(count)];
+) => Effect.Effect<Samples, SqlError | BenchError, PgClient> = Effect.fn(
+  "bench.loadSamples"
+)(function* drawSamples(seed: number, count: number) {
+  const params = [String(seed), String(count)];
 
-    const order =
-      "ORDER BY hashint8extended(n, $1::bigint), n LIMIT $2::integer";
+  const order = "ORDER BY hashint8extended(n, $1::bigint), n LIMIT $2::integer";
 
-    const records = yield* query(
-      {
-        params,
-        text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage ${order}`,
-      },
-      SampleRow
-    );
+  const records = yield* query(
+    {
+      params,
+      text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage ${order}`,
+    },
+    SampleRow
+  );
 
-    const laptops = yield* query(
-      {
-        params,
-        text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage WHERE class_id = '${classDef("laptop").id}'::uuid ${order}`,
-      },
-      SampleRow
-    );
+  const laptops = yield* query(
+    {
+      params,
+      text: `SELECT id::text AS id, owner::text AS owner FROM ${auxSchema}.stage WHERE class_id = '${classDef("laptop").id}'::uuid ${order}`,
+    },
+    SampleRow
+  );
 
-    const users = yield* query(
-      {
-        params,
-        text: `SELECT id::text AS id FROM ${auxSchema}.user_map ORDER BY hashint8extended(k, $1::bigint), k LIMIT $2::integer`,
-      },
-      UserRow
-    );
+  const users = yield* query(
+    {
+      params,
+      text: `SELECT id::text AS id FROM ${auxSchema}.user_map ORDER BY hashint8extended(k, $1::bigint), k LIMIT $2::integer`,
+    },
+    UserRow
+  );
 
-    const [adminRow] = yield* query(
-      {
-        params: [],
-        text: `SELECT id::text AS id FROM ${auxSchema}.user_map WHERE k = 1`,
-      },
-      UserRow
-    );
+  const [adminRow] = yield* query(
+    {
+      params: [],
+      text: `SELECT id::text AS id FROM ${auxSchema}.user_map WHERE k = 1`,
+    },
+    UserRow
+  );
 
-    return {
-      admin: adminRow?.id ?? "",
-      laptops,
-      records,
-      users: users.map((row) => row.id),
-    };
-  });
+  return {
+    admin: adminRow?.id ?? "",
+    laptops,
+    records,
+    users: users.map((row) => row.id),
+  };
+});

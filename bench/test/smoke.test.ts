@@ -42,32 +42,48 @@ const checkOutput = ({ files, report }: BenchmarkOutput): void => {
   }
 };
 
+const temporaryDirectory = Effect.acquireRelease(
+  Effect.sync(() => mkdtempSync(path.join(tmpdir(), "std-bench-smoke-"))),
+  (directory) =>
+    Effect.sync(() => {
+      rmSync(directory, { force: true, recursive: true });
+    })
+);
+
 describe("bench-smoke", () => {
-  it(
+  it("runs every model at 50k records with short measurements", () => {
+    const options = parseOptions(["--smoke"]);
+
+    assert.strictEqual(options.mode, "smoke");
+    assert.deepStrictEqual(options.models, [...modelIds]);
+    assert.deepStrictEqual(
+      options.scales.map((scale) => [scale.records, scale.users]),
+      [[50_000, 2500]]
+    );
+    assert.isTrue(options.runs < 200 && options.writeSeconds < 60);
+  });
+
+  // it.live: the benchmark measures real time against a real Postgres.
+  it.live(
     "runs the smoke benchmark end to end in a fresh database",
-    async () => {
-      const out = mkdtempSync(path.join(tmpdir(), "std-bench-smoke-"));
-      const database = `bench_smoke_${process.pid}_${Date.now()}`;
+    () =>
+      Effect.gen(function* smokeTest() {
+        const out = yield* temporaryDirectory;
+        const database = `bench_smoke_${process.pid}_${Date.now()}`;
 
-      const options = parseOptions([
-        "--smoke",
-        "--database",
-        database,
-        "--out",
-        out,
-      ]);
+        const options = parseOptions([
+          "--smoke",
+          "--database",
+          database,
+          "--out",
+          out,
+        ]);
 
-      try {
-        const output = await Effect.runPromise(
-          runBenchmark(options, "vitest bench-smoke")
-        );
+        const output = yield* runBenchmark(options, "vitest bench-smoke");
 
         checkOutput(output);
         assert.strictEqual(output.report.runs.length, modelIds.length);
-      } finally {
-        rmSync(out, { force: true, recursive: true });
-      }
-    },
+      }),
     smokeTimeout
   );
 });

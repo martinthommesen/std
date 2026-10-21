@@ -4,6 +4,7 @@
  * follow-ups it asks for), and write the results files.
  */
 import type { PgClient } from "@effect/sql-pg/PgClient";
+import type { Config } from "effect";
 import { Effect } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -212,24 +213,29 @@ export interface PreparedModel {
  * @param spec - Model, scale and mitigations.
  * @returns The database, its context and the generation times.
  */
-export const prepareModel = (
+export const prepareModel: (
   server: ServerConfig,
   options: Options,
   spec: RunSpec
-): Effect.Effect<PreparedModel, PipelineError> =>
-  Effect.gen(function* prepareOneModel() {
-    const model = modelById(spec.model);
-    const database = databaseFor(spec.model, spec.scale, spec.mitigations);
-    const ctx = contextFor(spec.scale, "bench", spec.mitigations);
+) => Effect.Effect<PreparedModel, PipelineError> = Effect.fn(
+  "bench.prepareModel"
+)(function* prepareOneModel(
+  server: ServerConfig,
+  options: Options,
+  spec: RunSpec
+) {
+  const model = modelById(spec.model);
+  const database = databaseFor(spec.model, spec.scale, spec.mitigations);
+  const ctx = contextFor(spec.scale, "bench", spec.mitigations);
 
-    const generation = yield* prepareDatabase(
-      server,
-      planFor(database, spec.scale, [{ ctx, model }]),
-      options.reuse
-    );
+  const generation = yield* prepareDatabase(
+    server,
+    planFor(database, spec.scale, [{ ctx, model }]),
+    options.reuse
+  );
 
-    return { ctx, database, generation, model };
-  });
+  return { ctx, database, generation, model };
+});
 
 /** Parameter samples drawn per run. */
 export const samplesPerRun = sampleCount;
@@ -567,13 +573,16 @@ export interface BenchmarkOutput {
  * @param commandLine - The command as typed, for the report.
  * @returns The report and the paths of the Markdown and JSON files.
  */
-export const runBenchmark = (
+export const runBenchmark: (
   options: Options,
   commandLine: string
-): Effect.Effect<BenchmarkOutput, PipelineError> =>
-  Effect.gen(function* benchmark() {
+) => Effect.Effect<BenchmarkOutput, PipelineError | Config.ConfigError> =
+  Effect.fn("bench.runBenchmark")(function* benchmark(
+    options: Options,
+    commandLine: string
+  ) {
     const begin = performance.now();
-    const server = serverConfig();
+    const server = yield* serverConfig;
 
     yield* ensureServer(server);
 

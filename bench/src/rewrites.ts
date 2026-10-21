@@ -12,6 +12,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { Config } from "effect";
 import { Effect } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -340,55 +341,60 @@ const gitCommit: Effect.Effect<string> = command("git", [
  * @param commandLine - The command as typed.
  * @returns The files written.
  */
-export const runRewrites = (
+export const runRewrites: (
   options: Options,
   commandLine: string
-): Effect.Effect<readonly string[], SqlError | BenchError> =>
-  Effect.gen(function* rewrites() {
-    const begin = performance.now();
-    const server: ServerConfig = serverConfig();
+) => Effect.Effect<
+  readonly string[],
+  SqlError | BenchError | Config.ConfigError
+> = Effect.fn("bench.runRewrites")(function* rewrites(
+  options: Options,
+  commandLine: string
+) {
+  const begin = performance.now();
+  const server: ServerConfig = yield* serverConfig;
 
-    yield* ensureServer(server);
+  yield* ensureServer(server);
 
-    const [scale] = options.scales;
+  const [scale] = options.scales;
 
-    if (scale === undefined) {
-      return yield* new BenchError({ message: "--rewrites needs a scale" });
-    }
+  if (scale === undefined) {
+    return yield* new BenchError({ message: "--rewrites needs a scale" });
+  }
 
-    const prepared = yield* prepareModel(server, options, {
-      mitigations: false,
-      model: "class-table",
-      scale,
-    });
-
-    const layer = clientLayer(server, prepared.database, { maxConnections: 2 });
-
-    const measured = yield* measureAll(
-      prepared.model,
-      prepared.ctx,
-      options
-    ).pipe(Effect.provide(layer));
-
-    const postgres = yield* postgresInfo.pipe(Effect.provide(layer));
-
-    if (!options.keep) {
-      yield* dropDatabase(server, prepared.database);
-    }
-
-    const report: RewritesReport = {
-      ...measured,
-      command: commandLine,
-      commit: yield* gitCommit,
-      database: prepared.database,
-      date: new Date().toISOString(),
-      postgres,
-      records: scale.records,
-      runs: options.runs,
-      seed: options.seed,
-      totalSeconds: (performance.now() - begin) / millisecondsPerSecond,
-      warmup: options.warmup,
-    };
-
-    return yield* writeRewrites(report, options);
+  const prepared = yield* prepareModel(server, options, {
+    mitigations: false,
+    model: "class-table",
+    scale,
   });
+
+  const layer = clientLayer(server, prepared.database, { maxConnections: 2 });
+
+  const measured = yield* measureAll(
+    prepared.model,
+    prepared.ctx,
+    options
+  ).pipe(Effect.provide(layer));
+
+  const postgres = yield* postgresInfo.pipe(Effect.provide(layer));
+
+  if (!options.keep) {
+    yield* dropDatabase(server, prepared.database);
+  }
+
+  const report: RewritesReport = {
+    ...measured,
+    command: commandLine,
+    commit: yield* gitCommit,
+    database: prepared.database,
+    date: new Date().toISOString(),
+    postgres,
+    records: scale.records,
+    runs: options.runs,
+    seed: options.seed,
+    totalSeconds: (performance.now() - begin) / millisecondsPerSecond,
+    warmup: options.warmup,
+  };
+
+  return yield* writeRewrites(report, options);
+});

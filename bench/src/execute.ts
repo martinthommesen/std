@@ -25,10 +25,10 @@ const logFailure = (statement: Compiled): Effect.Effect<void> =>
  * @param statement - The SQL text and parameters.
  * @returns The undecoded rows.
  */
-export const execute = (
+export const execute: (
   statement: Compiled
-): Effect.Effect<readonly unknown[], SqlError, PgClient> =>
-  Effect.gen(function* executeStatement() {
+) => Effect.Effect<readonly unknown[], SqlError, PgClient> = Effect.fnUntraced(
+  function* executeStatement(statement: Compiled) {
     const sql = yield* PgClient;
 
     const rows: readonly unknown[] = yield* sql.unsafe(
@@ -37,7 +37,10 @@ export const execute = (
     );
 
     return rows;
-  }).pipe(Effect.tapError(() => logFailure(statement)));
+  },
+  (effect, statement) =>
+    effect.pipe(Effect.tapError(() => logFailure(statement)))
+);
 
 /**
  * Decodes rows with a schema.
@@ -50,7 +53,7 @@ export const decodeRows = <A>(
   schema: RowSchema<A>,
   rows: readonly unknown[]
 ): Effect.Effect<readonly A[], BenchError> =>
-  Schema.decodeEffect(Schema.Array(schema))(rows).pipe(
+  Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
     Effect.mapError(
       (issue) =>
         new BenchError({ message: `unexpected row shape: ${issue.message}` })

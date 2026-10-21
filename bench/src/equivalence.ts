@@ -102,12 +102,16 @@ const checkRead = (
  * @param seed - The run's seed.
  * @returns One line per checked request; fails if any model disagrees.
  */
-export const checkEquivalence = (
+export const checkEquivalence: (
   planned: readonly PlannedModel[],
   samples: Samples,
   seed: number
-): Effect.Effect<readonly string[], SqlError | BenchError, PgClient> =>
-  Effect.gen(function* checkAll() {
+) => Effect.Effect<readonly string[], SqlError | BenchError, PgClient> =
+  Effect.fn("bench.checkEquivalence")(function* checkAll(
+    planned: readonly PlannedModel[],
+    samples: Samples,
+    seed: number
+  ) {
     const results = yield* Effect.all(
       reads.map((def) => checkRead(planned, def, samples, seed))
     );
@@ -145,14 +149,20 @@ const idsOf = (
  * @param count - Instances per read.
  * @returns One line per checked read; fails on any difference.
  */
-export const checkBranchedEquivalence = (
+export const checkBranchedEquivalence: (
   model: StorageModel,
   ctx: ModelContext,
   samples: Samples,
   seed: number,
   count: number
-): Effect.Effect<readonly string[], SqlError | BenchError, PgClient> =>
-  Effect.gen(function* checkBranched() {
+) => Effect.Effect<readonly string[], SqlError | BenchError, PgClient> =
+  Effect.fn("bench.checkBranchedEquivalence")(function* checkBranched(
+    model: StorageModel,
+    ctx: ModelContext,
+    samples: Samples,
+    seed: number,
+    count: number
+  ) {
     const lines: string[] = [];
 
     for (const def of reads) {
