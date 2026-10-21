@@ -29,6 +29,16 @@ export interface LexedStatement {
   readonly statements: number;
   /** How many top-level `;` the text holds. */
   readonly separators: number;
+  /**
+   * Whether the statement holds a clause that writes although it may start
+   * like a query (whether it does is the caller's check): an unquoted `INTO`
+   * anywhere (a fully reserved word, so only `SELECT INTO`, `INSERT INTO` or
+   * `MERGE INTO`), or a `WITH` whose top-level entries' bodies or primary
+   * statement do not start with `SELECT`, `VALUES`, `TABLE`, `WITH` or `(`
+   * (Postgres accepts data-modifying statements only there). A `WITH` that
+   * does not parse is counted as writing.
+   */
+  readonly writeClause: boolean;
 }
 
 /** The kinds of token the classifier sees; see `LexedToken.kind`. */
@@ -320,6 +330,221 @@ const tokenAt = (sql: string, start: number): Token => {
   return { end: start + 1, kind: "other" };
 };
 
+/** Words that start a query: what a `WITH` entry's body or primary statement may start with. */
+const QUERY_STARTS = new Set(["select", "table", "values", "with"]);
+
+/** Marks a parse of a `WITH` that failed; the statement counts as writing. */
+const UNPARSED = -1;
+
+const isWord = (token: LexedToken | undefined, word: string): boolean =>
+  token?.kind === "word" && token.text === word;
+
+const isPunctuation = (token: LexedToken | undefined, char: string): boolean =>
+  token?.kind === "other" && token.text === char;
+
+const isNameToken = (token: LexedToken | undefined): boolean =>
+  token?.kind === "word" || token?.kind === "quoted";
+
+const startsQuery = (token: LexedToken | undefined): boolean =>
+  (token?.kind === "word" && QUERY_STARTS.has(token.text)) ||
+  isPunctuation(token, "(");
+
+/**
+ * The position just after the parenthesis that closes the one at `open`.
+ * @param tokens - The statement's tokens.
+ * @param open - Position of a `(`.
+ * @returns The position, or `UNPARSED` when it is not closed.
+ */
+const afterParentheses = (
+  tokens: readonly LexedToken[],
+  open: number
+): number => {
+  let depth = 0;
+
+  for (let index = open; index < tokens.length; index += 1) {
+    if (isPunctuation(tokens[index], "(")) {
+      depth += 1;
+    } else if (isPunctuation(tokens[index], ")")) {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
+  }
+
+  return UNPARSED;
+};
+
+/**
+ * The position after a list of names separated by commas.
+ * @param tokens - The statement's tokens.
+ * @param start - Position of the first name.
+ * @returns The position, or `UNPARSED`.
+ */
+const afterNames = (tokens: readonly LexedToken[], start: number): number => {
+  if (!isNameToken(tokens[start])) {
+    return UNPARSED;
+  }
+
+  let index = start + 1;
+
+  while (isPunctuation(tokens[index], ",")) {
+    if (!isNameToken(tokens[index + 1])) {
+      return UNPARSED;
+    }
+
+    index += 2;
+  }
+
+  return index;
+};
+
+/**
+ * The position after an optional search clause:
+ * `SEARCH BREADTH FIRST BY names SET name` or the same with `DEPTH`.
+ * @param tokens - The statement's tokens.
+ * @param start - Where the clause would start.
+ * @returns The position, `start` without the clause, or `UNPARSED`.
+ */
+const afterSearch = (tokens: readonly LexedToken[], start: number): number => {
+  if (!isWord(tokens[start], "search")) {
+    return start;
+  }
+
+  const order = tokens[start + 1];
+  const ordered = isWord(order, "breadth") || isWord(order, "depth");
+
+  if (
+    !ordered ||
+    !isWord(tokens[start + 2], "first") ||
+    !isWord(tokens[start + 3], "by")
+  ) {
+    return UNPARSED;
+  }
+
+  const names = afterNames(tokens, start + 4);
+
+  return names !== UNPARSED &&
+    isWord(tokens[names], "set") &&
+    isNameToken(tokens[names + 1])
+    ? names + 2
+    : UNPARSED;
+};
+
+/**
+ * The position after an optional cycle clause:
+ * `CYCLE names SET name [TO value DEFAULT value] USING name`.
+ * `USING` is fully reserved, so the clause ends at the first unquoted
+ * `USING` outside parentheses.
+ * @param tokens - The statement's tokens.
+ * @param start - Where the clause would start.
+ * @returns The position, `start` without the clause, or `UNPARSED`.
+ */
+const afterCycle = (tokens: readonly LexedToken[], start: number): number => {
+  if (!isWord(tokens[start], "cycle")) {
+    return start;
+  }
+
+  let index = start + 1;
+
+  while (index < tokens.length && !isWord(tokens[index], "using")) {
+    index = isPunctuation(tokens[index], "(")
+      ? afterParentheses(tokens, index)
+      : index + 1;
+
+    if (index === UNPARSED) {
+      return UNPARSED;
+    }
+  }
+
+  return isNameToken(tokens[index + 1]) ? index + 2 : UNPARSED;
+};
+
+/**
+ * The position after one `WITH` entry, whose body must start like a query:
+ * `name [(names)] AS [[NOT] MATERIALIZED] (body) [SEARCH ...] [CYCLE ...]`.
+ * @param tokens - The statement's tokens.
+ * @param start - Position of the entry's name.
+ * @returns The position, or `UNPARSED` (also for a body that is no query).
+ */
+const afterWithEntry = (
+  tokens: readonly LexedToken[],
+  start: number
+): number => {
+  if (!isNameToken(tokens[start])) {
+    return UNPARSED;
+  }
+
+  let index = start + 1;
+
+  if (isPunctuation(tokens[index], "(")) {
+    index = afterParentheses(tokens, index);
+  }
+
+  if (!isWord(tokens[index], "as")) {
+    return UNPARSED;
+  }
+
+  index += 1;
+
+  if (isWord(tokens[index], "not")) {
+    index += 1;
+
+    if (!isWord(tokens[index], "materialized")) {
+      return UNPARSED;
+    }
+  }
+
+  if (isWord(tokens[index], "materialized")) {
+    index += 1;
+  }
+
+  if (!isPunctuation(tokens[index], "(") || !startsQuery(tokens[index + 1])) {
+    return UNPARSED;
+  }
+
+  const body = afterParentheses(tokens, index);
+  const search = body === UNPARSED ? UNPARSED : afterSearch(tokens, body);
+
+  return search === UNPARSED ? UNPARSED : afterCycle(tokens, search);
+};
+
+/**
+ * Whether a statement starting with `WITH` may write: an entry's body or
+ * the primary statement does not start like a query, or the list does not
+ * parse. Postgres refuses data-modifying statements in a nested `WITH`, so
+ * only the top-level list is read.
+ * @param tokens - The statement's tokens, `WITH` first.
+ * @returns `true` unless every top-level body and the primary statement start like a query.
+ */
+const withWrites = (tokens: readonly LexedToken[]): boolean => {
+  let index = isWord(tokens[1], "recursive") ? 2 : 1;
+
+  for (;;) {
+    index = afterWithEntry(tokens, index);
+
+    if (index === UNPARSED) {
+      return true;
+    }
+
+    if (!isPunctuation(tokens[index], ",")) {
+      return !startsQuery(tokens[index]);
+    }
+
+    index += 1;
+  }
+};
+
+/**
+ * See `LexedStatement.writeClause`.
+ * @param tokens - The text's tokens, comments and whitespace skipped.
+ * @returns Whether the text holds a clause that writes.
+ */
+const hasWriteClause = (tokens: readonly LexedToken[]): boolean =>
+  tokens.some((token) => isWord(token, "into")) ||
+  (isWord(tokens[0], "with") && withWrites(tokens));
+
 /**
  * Lexes a SQL text into its shape.
  * @param sql - The text sent to the driver.
@@ -332,6 +557,7 @@ export const analyzeStatement = (sql: string): LexedStatement => {
   let statements = 0;
   let separators = 0;
   let inStatement = false;
+  const tokens: LexedToken[] = [];
   let index = 0;
 
   while (index < sql.length) {
@@ -349,11 +575,15 @@ export const analyzeStatement = (sql: string): LexedStatement => {
 
       collecting = false;
     } else if (token.kind !== "blank") {
+      const lexed: LexedToken = {
+        kind: token.kind,
+        text: token.name ?? sql.slice(start, token.end),
+      };
+
+      tokens.push(lexed);
+
       if (leadingTokens.length < MAX_LEADING_TOKENS) {
-        leadingTokens.push({
-          kind: token.kind,
-          text: token.name ?? sql.slice(start, token.end),
-        });
+        leadingTokens.push(lexed);
       }
 
       inStatement = true;
@@ -373,5 +603,6 @@ export const analyzeStatement = (sql: string): LexedStatement => {
     leadingWords,
     separators,
     statements: inStatement ? statements + 1 : statements,
+    writeClause: hasWriteClause(tokens),
   };
 };

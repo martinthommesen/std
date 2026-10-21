@@ -220,14 +220,23 @@ const runAndCloseScope = <A, E, R>(
 /**
  * Runs the transaction's code in its own fiber. When that fiber ends, every
  * fiber it forked has been interrupted and has ended too; if the caller is
- * interrupted, the fiber is interrupted and awaited.
+ * interrupted, the fiber is interrupted and awaited. The fiber records its
+ * id in `state` before the code runs (see `TransactionState.owns`).
+ * @param state - The transaction.
  * @param effect - The transaction's code.
  * @returns Its result.
  */
 const isolate = <A, E, R>(
+  state: TransactionState,
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> =>
-  Effect.forkChild(effect).pipe(
+  Effect.forkChild(
+    Effect.withFiber((fiber) => {
+      state.bodyFiberId = fiber.id;
+
+      return effect;
+    })
+  ).pipe(
     Effect.flatMap((fiber) =>
       Fiber.join(fiber).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber)))
     )
@@ -474,6 +483,7 @@ export const runOutermost = <S, A, E, R>(
         state.tracked = tracked;
 
         return yield* isolate(
+          state,
           runAndCloseScope(body(setupResult, tracked, bodyScope), bodyScope)
         );
       });
