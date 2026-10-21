@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { PgConnection } from "@effect/sql-pg";
 import type {
   ClassDraft,
   FieldDraft,
@@ -13,7 +14,7 @@ import type {
 import type { Operation } from "@std/definitions/operation";
 import { CORE_NAMESPACE_ID, SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
-import { Duration, Effect, Layer, Schema } from "effect";
+import { Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
@@ -258,21 +259,21 @@ export const currentRevision = values(
 ).pipe(Effect.map(([value]) => Number(value)));
 
 /**
- * Inserts records of a class directly, as table owner, in one statement: a
+ * The statement inserting records of a class directly, as table owner: a
  * root row and one level row per class below the root.
  * @param levels - Quoted tables from the root down to the concrete class.
  * @param classId - The concrete class.
  * @param count - How many records.
  * @param rootColumns - Extra root columns and SQL expressions over `g`
  *   (1 to count).
- * @returns The inserted IDs.
+ * @returns One statement returning the inserted IDs as `value`.
  */
-export const insertRecords = (
+export const insertRecordsSql = (
   levels: readonly string[],
   classId: string,
   count: number,
   rootColumns: Readonly<Record<string, string>> = {}
-) => {
+): string => {
   const [root, ...rest] = levels;
   const extra = Object.keys(rootColumns);
 
@@ -291,10 +292,84 @@ export const insertRecords = (
       `, l${index} AS (INSERT INTO ${level} (id, class_id) SELECT id, '${classId}'::uuid FROM inserted RETURNING id)`
   );
 
-  return values(
-    `WITH ids AS (SELECT uuidv7() AS id, g FROM generate_series(1, ${count}) AS g),
+  return `WITH ids AS (SELECT uuidv7() AS id, g FROM generate_series(1, ${count}) AS g),
      inserted AS (INSERT INTO ${root ?? ""} (${columns.join(", ")}) SELECT ${expressions.join(", ")} FROM ids RETURNING id)
      ${levelInserts.join("\n")}
-     SELECT id::text AS value FROM inserted`
-  );
+     SELECT id::text AS value FROM inserted`;
 };
+
+/**
+ * Inserts records of a class directly, as table owner, in one statement.
+ * @param levels - Quoted tables from the root down to the concrete class.
+ * @param classId - The concrete class.
+ * @param count - How many records.
+ * @param rootColumns - Extra root columns and SQL expressions over `g`.
+ * @returns The inserted IDs.
+ */
+export const insertRecords = (
+  levels: readonly string[],
+  classId: string,
+  count: number,
+  rootColumns: Readonly<Record<string, string>> = {}
+) => values(insertRecordsSql(levels, classId, count, rootColumns));
+
+/**
+ * Inserts records on a session of its own and makes that session flush its
+ * statistics at once, so table scan counters read afterwards include
+ * everything the insert did (a backend otherwise flushes them up to 10 s
+ * later, when idle).
+ * @param session - A session outside the SQL layer.
+ * @param levels - Quoted tables from the root down to the concrete class.
+ * @param classId - The concrete class.
+ * @param count - How many records.
+ * @param rootColumns - Extra root columns and SQL expressions over `g`.
+ * @returns The effect.
+ */
+export const insertRecordsFlushed = (
+  session: PgConnection.PgConnection,
+  levels: readonly string[],
+  classId: string,
+  count: number,
+  rootColumns: Readonly<Record<string, string>> = {}
+) =>
+  Effect.gen(function* insertAndFlush() {
+    yield* session.query(
+      insertRecordsSql(levels, classId, count, rootColumns),
+      [],
+      false
+    );
+    yield* session.query("SELECT pg_stat_force_next_flush()", [], false);
+    yield* session.query("SELECT 1", [], false);
+  });
+
+/**
+ * Waits until no coordinator session is connected: a backend flushes its
+ * statistics when it exits, so the coordinator's scans are counted after.
+ * @returns The effect.
+ */
+export const coordinatorGone = values(
+  `SELECT count(*)::text AS value FROM pg_stat_activity
+   WHERE datname = current_database() AND application_name = 'std-coordinator'`
+).pipe(
+  Effect.repeat({
+    schedule: Schedule.spaced(Duration.millis(10)),
+    until: ([count]) => count === "0",
+  }),
+  Effect.timeout(Duration.seconds(10))
+);
+
+/**
+ * The sequential scans of a table, from a fresh statistics snapshot.
+ * @param table - A quoted table.
+ * @returns The `seq_scan` counter.
+ */
+export const seqScans = (table: string) =>
+  values("SELECT pg_stat_clear_snapshot()::text AS value").pipe(
+    Effect.andThen(
+      values(
+        `SELECT coalesce(seq_scan, 0)::text AS value FROM pg_stat_user_tables WHERE relid = to_regclass($1)`,
+        [table]
+      )
+    ),
+    Effect.map(([value]) => Number(value))
+  );

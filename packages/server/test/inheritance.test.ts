@@ -6,11 +6,16 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { CLASS_CHANGE_REFUSED_SQLSTATE } from "../src/platform/migrations/0001-core.ts";
 import { WIDENED_CHECK_NOTE } from "../src/schema/plan.ts";
 import { hygienic } from "../src/sql/errors.ts";
 import {
   ACME,
+  addField,
+  coordinatorGone,
+  insertRecordsFlushed,
+  seqScans,
   change,
   createClass,
   freshId,
@@ -23,6 +28,10 @@ import {
 const ASSET = '"acme"."asset"';
 const LAPTOP = '"acme"."laptop"';
 const MONITOR = '"acme"."monitor"';
+
+const FLEET = '"acme"."fleet"';
+
+const CAR = '"acme"."fleet_car"';
 
 /**
  * The SQLSTATE a statement fails with.
@@ -38,12 +47,6 @@ const sqlStateOf = (text: string) =>
       onSuccess: () => "ok",
     })
   );
-
-const seqScans = (table: string) =>
-  values(
-    `SELECT coalesce(seq_scan, 0)::text AS value FROM pg_stat_user_tables WHERE relid = to_regclass($1)`,
-    [table]
-  ).pipe(Effect.map(([value]) => Number(value)));
 
 const validated = (constraintTable: string, classId: string) =>
   values(
@@ -136,104 +139,125 @@ describe("inheritance-invariants", () => {
     dbTest.effect(
       "a grandchild joins a populated hierarchy without scanning its ancestors",
       () =>
-        Effect.gen(function* grandchild() {
-          yield* insertRecords([ASSET, LAPTOP], ACME.laptop, 1000, {
-            name: "'laptop ' || g",
-            purchased_on: "'2026-01-01'::date",
-          });
-          yield* insertRecords([ASSET], ACME.asset, 1000, {
-            name: "'asset ' || g",
-          });
+        Effect.scoped(
+          Effect.gen(function* grandchild() {
+            yield* loadCoreAndAcme;
 
-          const before = {
-            asset: yield* seqScans(ASSET),
-            laptop: yield* seqScans(LAPTOP),
-          };
+            // A hierarchy of its own, populated by a session that flushes
+            // its statistics, so the scan counters below are exact.
+            const fleet = createClass("fleet", { namespaceId: ACME.namespace });
 
-          const gaming = createClass("gaming_laptop", {
-            namespaceId: ACME.namespace,
-            parentId: ACME.laptop,
-          });
+            const car = createClass("fleet_car", {
+              namespaceId: ACME.namespace,
+              parentId: fleet.id,
+            });
 
-          const result = yield* change([gaming.op]);
+            const label = addField(fleet.id, "label", { kind: "text" });
 
-          assert.strictEqual(result.state, "completed");
-          assert.isAbove(
-            result.statements.findIndex((text) =>
-              text.startsWith(`CREATE TABLE "acme"."gaming_laptop"`)
-            ),
-            1
-          );
-          assert.match(
-            result.statements[0] ?? "",
-            /^ALTER TABLE "acme"."asset" DROP CONSTRAINT std_sc_\w+, ADD CONSTRAINT std_sc_\w+ CHECK .* NOT VALID$/u
-          );
-          assert.match(
-            result.statements[1] ?? "",
-            /^ALTER TABLE "acme"."laptop" DROP CONSTRAINT/u
-          );
-          assert.strictEqual(yield* validated(ASSET, ACME.asset), "false");
-          assert.strictEqual(yield* validated(LAPTOP, ACME.laptop), "false");
-          assert.deepStrictEqual(
-            yield* values(
-              `SELECT enforcement || ': ' || enforcement_note AS value FROM core."class" WHERE id = ANY($1::uuid[]) ORDER BY id`,
-              [`{${ACME.laptop},${ACME.asset}}`]
-            ),
-            [
-              `enforced: ${WIDENED_CHECK_NOTE}`,
-              `enforced: ${WIDENED_CHECK_NOTE}`,
-            ]
-          );
+            yield* change([fleet.op, car.op, label.op]);
 
-          // The coordinator's backend has exited, which flushes its statistics.
-          yield* Effect.sleep("300 millis");
-          yield* values("SELECT pg_stat_clear_snapshot()::text AS value");
-          assert.strictEqual(yield* seqScans(ASSET), before.asset);
-          assert.strictEqual(yield* seqScans(LAPTOP), before.laptop);
+            const session = yield* (yield* TestDatabase).session(
+              "fleet-loader"
+            );
 
-          const table = '"acme"."gaming_laptop"';
+            yield* insertRecordsFlushed(session, [FLEET, CAR], car.id, 1000, {
+              label: "'car ' || g",
+            });
+            yield* insertRecordsFlushed(session, [FLEET], fleet.id, 1000, {
+              label: "'fleet ' || g",
+            });
 
-          const [record] = yield* insertRecords(
-            [ASSET, LAPTOP, table],
-            gaming.id,
-            1,
-            {
-              name: "'G'",
-              purchased_on: "'2026-01-01'::date",
-            }
-          );
+            const before = {
+              car: yield* seqScans(CAR),
+              fleet: yield* seqScans(FLEET),
+            };
 
-          assert.include(
-            ["23503", "23514"],
-            yield* sqlStateOf(
-              `INSERT INTO ${MONITOR} (id, class_id) VALUES ('${record}', '${gaming.id}')`
-            )
-          );
-          assert.strictEqual(
-            yield* sqlStateOf(
-              `INSERT INTO ${table} (id, class_id) VALUES ('${freshId()}', '${ACME.laptop}')`
-            ),
-            "23514"
-          );
-          assert.strictEqual(
-            yield* sqlStateOf(
-              `INSERT INTO ${table} (id, class_id) VALUES ('${freshId()}', '${gaming.id}')`
-            ),
-            "23503"
-          );
-          assert.strictEqual(
-            yield* sqlStateOf(
-              `UPDATE ${table} SET class_id = '${ACME.laptop}' WHERE id = '${record}'`
-            ),
-            CLASS_CHANGE_REFUSED_SQLSTATE
-          );
-          assert.strictEqual(
-            yield* sqlStateOf(
-              `UPDATE ${ASSET} SET class_id = '${ACME.laptop}' WHERE id = '${record}'`
-            ),
-            CLASS_CHANGE_REFUSED_SQLSTATE
-          );
-        })
+            const sports = createClass("fleet_sports", {
+              namespaceId: ACME.namespace,
+              parentId: car.id,
+            });
+
+            const result = yield* change([sports.op]);
+
+            assert.strictEqual(result.state, "completed");
+            assert.match(
+              result.statements[0] ?? "",
+              /^ALTER TABLE "acme"."fleet" DROP CONSTRAINT std_sc_\w+, ADD CONSTRAINT std_sc_\w+ CHECK .* NOT VALID$/u
+            );
+            assert.match(
+              result.statements[1] ?? "",
+              /^ALTER TABLE "acme"."fleet_car" DROP CONSTRAINT/u
+            );
+            assert.match(
+              result.statements[2] ?? "",
+              /^CREATE TABLE "acme"."fleet_sports"/u
+            );
+            assert.strictEqual(yield* validated(FLEET, fleet.id), "false");
+            assert.strictEqual(yield* validated(CAR, car.id), "false");
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT enforcement || ': ' || enforcement_note AS value FROM core."class" WHERE id = ANY($1::uuid[]) ORDER BY id`,
+                [`{${fleet.id},${car.id}}`]
+              ),
+              [
+                `enforced: ${WIDENED_CHECK_NOTE}`,
+                `enforced: ${WIDENED_CHECK_NOTE}`,
+              ]
+            );
+
+            // The coordinator's backend flushes its statistics as it exits.
+            yield* coordinatorGone;
+            assert.strictEqual(yield* seqScans(FLEET), before.fleet);
+            assert.strictEqual(yield* seqScans(CAR), before.car);
+
+            const table = '"acme"."fleet_sports"';
+
+            const [record] = yield* insertRecords(
+              [FLEET, CAR, table],
+              sports.id,
+              1,
+              { label: "'S'" }
+            );
+
+            const [plain] = yield* insertRecords([FLEET], fleet.id, 1, {
+              label: "'P'",
+            });
+
+            assert.strictEqual(
+              yield* sqlStateOf(
+                `INSERT INTO ${table} (id, class_id) VALUES ('${freshId()}', '${car.id}')`
+              ),
+              "23514",
+              "child class_id outside its subtree"
+            );
+            assert.strictEqual(
+              yield* sqlStateOf(
+                `INSERT INTO ${table} (id, class_id) VALUES ('${plain}', '${sports.id}')`
+              ),
+              "23503",
+              "a level row whose class differs from the root"
+            );
+            assert.strictEqual(
+              yield* sqlStateOf(
+                `INSERT INTO ${table} (id, class_id) VALUES ('${freshId()}', '${sports.id}')`
+              ),
+              "23503",
+              "a level row without the rows above it"
+            );
+            assert.strictEqual(
+              yield* sqlStateOf(
+                `UPDATE ${table} SET class_id = '${car.id}' WHERE id = '${record}'`
+              ),
+              CLASS_CHANGE_REFUSED_SQLSTATE
+            );
+            assert.strictEqual(
+              yield* sqlStateOf(
+                `UPDATE ${FLEET} SET class_id = '${car.id}' WHERE id = '${record}'`
+              ),
+              CLASS_CHANGE_REFUSED_SQLSTATE
+            );
+          })
+        )
     );
   });
 });
