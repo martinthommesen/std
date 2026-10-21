@@ -1,0 +1,1536 @@
+{
+  "addClass": {
+    "after": {
+      "loadAverage": [2.93, 2.16, 1.01],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [3.06, 2.11, 0.96],
+      "otherActive": 7,
+      "otherSessions": 24,
+      "testDatabases": 9
+    },
+    "elapsedMs": 24289.094358999995,
+    "result": [
+      {
+        "ancestors": [
+          {
+            "after": {
+              "idxScan": 666667,
+              "relfilenode": "969678",
+              "seqScan": 4
+            },
+            "before": {
+              "idxScan": 666667,
+              "relfilenode": "969678",
+              "seqScan": 4
+            },
+            "checkValidated": false,
+            "table": "asset",
+            "transactionSeqScans": 0
+          },
+          {
+            "after": {
+              "idxScan": 0,
+              "relfilenode": "969698",
+              "seqScan": 2
+            },
+            "before": {
+              "idxScan": 0,
+              "relfilenode": "969698",
+              "seqScan": 2
+            },
+            "checkValidated": false,
+            "table": "laptop",
+            "transactionSeqScans": 0
+          }
+        ],
+        "attempts": [
+          {
+            "heldMs": 3.7867689999984577,
+            "ok": true,
+            "startedAt": 107664.085211
+          }
+        ],
+        "blocking": {
+          "kind": "none"
+        },
+        "commitMs": 7.629444000005606,
+        "foreignClassRefused": "23514",
+        "locks": [
+          {
+            "mode": "ExclusiveLock",
+            "object": "advisory 1398031360:1"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.asset"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_id_class"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_pkey"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop_id_class"
+          }
+        ],
+        "mechanism": "per-statement",
+        "newRecordInserted": true,
+        "queue": null,
+        "revisionDelta": 1,
+        "rows": 1000000,
+        "staggered": null,
+        "steps": [
+          {
+            "label": "widen asset subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 0.3756419999990612
+          },
+          {
+            "label": "widen laptop subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 0.21737600000051316
+          },
+          {
+            "label": "create gaming_laptop with level FK",
+            "lockWaits": [],
+            "ms": 0.8843239999987418
+          },
+          {
+            "label": "create gaming_laptop trigger",
+            "lockWaits": [],
+            "ms": 0.26066800000262447
+          }
+        ]
+      },
+      {
+        "ancestors": [
+          {
+            "after": {
+              "idxScan": 666667,
+              "relfilenode": "973142",
+              "seqScan": 9
+            },
+            "before": {
+              "idxScan": 666667,
+              "relfilenode": "973142",
+              "seqScan": 4
+            },
+            "checkValidated": false,
+            "table": "asset",
+            "transactionSeqScans": 0
+          },
+          {
+            "after": {
+              "idxScan": 0,
+              "relfilenode": "973178",
+              "seqScan": 5
+            },
+            "before": {
+              "idxScan": 0,
+              "relfilenode": "973178",
+              "seqScan": 2
+            },
+            "checkValidated": false,
+            "table": "laptop",
+            "transactionSeqScans": 0
+          }
+        ],
+        "attempts": [
+          {
+            "heldMs": 2000.911214000007,
+            "ok": false,
+            "startedAt": 111908.331595
+          },
+          {
+            "heldMs": 14.065786999999546,
+            "ok": true,
+            "startedAt": 114362.935241
+          }
+        ],
+        "blocking": {
+          "kind": "reader-past-timeout"
+        },
+        "commitMs": 2471.5408319999988,
+        "foreignClassRefused": "23514",
+        "locks": [
+          {
+            "mode": "ExclusiveLock",
+            "object": "advisory 1398031360:1"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.asset"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_id_class"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_pkey"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop_id_class"
+          }
+        ],
+        "mechanism": "per-statement",
+        "newRecordInserted": true,
+        "queue": {
+          "plainReadMs": 1988.5356960000063,
+          "plainReadQueuedBehindDdl": true,
+          "readsDoneBeforeRelease": true,
+          "requestMs": 1988.801244000002,
+          "requestQueuedBehindCommit": true,
+          "revisionUnchangedAfterFailedAttempt": true
+        },
+        "revisionDelta": 1,
+        "rows": 1000000,
+        "staggered": null,
+        "steps": [
+          {
+            "label": "widen asset subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 11.075786000001244
+          },
+          {
+            "label": "widen laptop subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 0.1542090000002645
+          },
+          {
+            "label": "create gaming_laptop with level FK",
+            "lockWaits": [],
+            "ms": 0.8797449999983655
+          },
+          {
+            "label": "create gaming_laptop trigger",
+            "lockWaits": [],
+            "ms": 0.08977799999411218
+          }
+        ]
+      },
+      {
+        "ancestors": [
+          {
+            "after": {
+              "idxScan": 666667,
+              "relfilenode": "978409",
+              "seqScan": 8
+            },
+            "before": {
+              "idxScan": 666667,
+              "relfilenode": "978409",
+              "seqScan": 4
+            },
+            "checkValidated": false,
+            "table": "asset",
+            "transactionSeqScans": 0
+          },
+          {
+            "after": {
+              "idxScan": 0,
+              "relfilenode": "978429",
+              "seqScan": 5
+            },
+            "before": {
+              "idxScan": 0,
+              "relfilenode": "978429",
+              "seqScan": 2
+            },
+            "checkValidated": false,
+            "table": "laptop",
+            "transactionSeqScans": 0
+          }
+        ],
+        "attempts": [
+          {
+            "heldMs": 2428.796742000006,
+            "ok": true,
+            "startedAt": 118595.156984
+          }
+        ],
+        "blocking": {
+          "holdMs": 1200,
+          "kind": "staggered"
+        },
+        "commitMs": 2433.5768180000014,
+        "foreignClassRefused": "23514",
+        "locks": [
+          {
+            "mode": "ExclusiveLock",
+            "object": "advisory 1398031360:1"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.asset"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_id_class"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_pkey"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop_id_class"
+          }
+        ],
+        "mechanism": "per-statement",
+        "newRecordInserted": true,
+        "queue": null,
+        "revisionDelta": 1,
+        "rows": 1000000,
+        "staggered": {
+          "observedWaitsMs": [1202.3223689999868, 1201.8951300000044],
+          "requestMs": 2423.4537529999943
+        },
+        "steps": [
+          {
+            "label": "widen asset subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 1213.65174999999
+          },
+          {
+            "label": "widen laptop subtree check (NOT VALID)",
+            "lockWaits": [],
+            "ms": 1211.9241400000028
+          },
+          {
+            "label": "create gaming_laptop with level FK",
+            "lockWaits": [],
+            "ms": 0.9949400000041351
+          },
+          {
+            "label": "create gaming_laptop trigger",
+            "lockWaits": [],
+            "ms": 0.14329799999541137
+          }
+        ]
+      },
+      {
+        "ancestors": [
+          {
+            "after": {
+              "idxScan": 666667,
+              "relfilenode": "984017",
+              "seqScan": 8
+            },
+            "before": {
+              "idxScan": 666667,
+              "relfilenode": "984017",
+              "seqScan": 4
+            },
+            "checkValidated": false,
+            "table": "asset",
+            "transactionSeqScans": 0
+          },
+          {
+            "after": {
+              "idxScan": 0,
+              "relfilenode": "984053",
+              "seqScan": 5
+            },
+            "before": {
+              "idxScan": 0,
+              "relfilenode": "984053",
+              "seqScan": 2
+            },
+            "checkValidated": false,
+            "table": "laptop",
+            "transactionSeqScans": 0
+          }
+        ],
+        "attempts": [
+          {
+            "heldMs": 2001.1535379999987,
+            "ok": false,
+            "startedAt": 125213.967028
+          },
+          {
+            "heldMs": 3.949995000002673,
+            "ok": true,
+            "startedAt": 127721.478731
+          }
+        ],
+        "blocking": {
+          "holdMs": 1200,
+          "kind": "staggered"
+        },
+        "commitMs": 2513.6181300000026,
+        "foreignClassRefused": "23514",
+        "locks": [
+          {
+            "mode": "ExclusiveLock",
+            "object": "advisory 1398031360:1"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.asset"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.gaming_laptop"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_id_class"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.gaming_laptop_pkey"
+          },
+          {
+            "mode": "AccessExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "ShareRowExclusiveLock",
+            "object": "probe.laptop"
+          },
+          {
+            "mode": "AccessShareLock",
+            "object": "probe.laptop_id_class"
+          }
+        ],
+        "mechanism": "lock-budget",
+        "newRecordInserted": true,
+        "queue": null,
+        "revisionDelta": 1,
+        "rows": 1000000,
+        "staggered": {
+          "observedWaitsMs": [1200.4862259999936, 782.0168249999988],
+          "requestMs": 1991.8395159999927
+        },
+        "steps": [
+          {
+            "label": "widen asset subtree check (NOT VALID)",
+            "lockWaits": [
+              {
+                "ms": 0.06506100000115111,
+                "table": "probe.asset"
+              }
+            ],
+            "ms": 0.26571700000204146
+          },
+          {
+            "label": "widen laptop subtree check (NOT VALID)",
+            "lockWaits": [
+              {
+                "ms": 0.043491000003996305,
+                "table": "probe.laptop"
+              }
+            ],
+            "ms": 0.15451900000334717
+          },
+          {
+            "label": "create gaming_laptop with level FK",
+            "lockWaits": [
+              {
+                "ms": 0.05315900000277907,
+                "table": "probe.laptop"
+              }
+            ],
+            "ms": 0.9366310000041267
+          },
+          {
+            "label": "create gaming_laptop trigger",
+            "lockWaits": [],
+            "ms": 0.14133499999297783
+          }
+        ]
+      }
+    ],
+    "startedAt": "2026-10-21T06:35:56.465Z"
+  },
+  "addColumn": {
+    "after": {
+      "loadAverage": [2.55, 2.13, 1.03],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [2.59, 2.14, 1.02],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "elapsedMs": 2348.6634959999938,
+    "result": {
+      "cases": [
+        {
+          "commitMs": 2.7102669999876525,
+          "expectedCatalogOnly": true,
+          "label": "boolean NOT NULL DEFAULT false",
+          "relfilenodeAfter": "1012830",
+          "relfilenodeBefore": "1012830",
+          "rows": 1000000,
+          "seqScanAfter": 1,
+          "seqScanBefore": 1,
+          "statement": "ALTER TABLE probe_add_column_0 ADD COLUMN flag boolean NOT NULL DEFAULT false",
+          "statementMs": 0.27903199999127537
+        },
+        {
+          "commitMs": 2.2082979999831878,
+          "expectedCatalogOnly": true,
+          "label": "nullable text with a constant default",
+          "relfilenodeAfter": "1013625",
+          "relfilenodeBefore": "1013625",
+          "rows": 1000000,
+          "seqScanAfter": 1,
+          "seqScanBefore": 1,
+          "statement": "ALTER TABLE probe_add_column_1 ADD COLUMN note text DEFAULT 'none'",
+          "statementMs": 0.18501499999547377
+        },
+        {
+          "commitMs": 334.8000269999902,
+          "expectedCatalogOnly": false,
+          "label": "volatile default (contrast case)",
+          "relfilenodeAfter": "1015133",
+          "relfilenodeBefore": "1014451",
+          "rows": 1000000,
+          "seqScanAfter": 4,
+          "seqScanBefore": 1,
+          "statement": "ALTER TABLE probe_add_column_2 ADD COLUMN noise double precision DEFAULT random()",
+          "statementMs": 315.6524099999806
+        }
+      ],
+      "rows": 1000000
+    },
+    "startedAt": "2026-10-21T06:36:40.030Z"
+  },
+  "casefold": {
+    "after": {
+      "loadAverage": [2.59, 2.14, 1.02],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [2.65, 2.14, 1.02],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "elapsedMs": 970.7346220000181,
+    "result": {
+      "boundLookups": 12,
+      "boundMatches": 12,
+      "collisions": [
+        {
+          "constraint": "probe_casefold_unique_key",
+          "first": "Straße",
+          "second": "STRASSE",
+          "sqlState": "23505"
+        },
+        {
+          "constraint": "probe_casefold_unique_key",
+          "first": "ΣΑΣ",
+          "second": "σας",
+          "sqlState": "23505"
+        },
+        {
+          "constraint": "probe_casefold_unique_key",
+          "first": "ﬁle",
+          "second": "FILE",
+          "sqlState": "23505"
+        }
+      ],
+      "defaultCollation": "C.UTF-8 (c)",
+      "foldExamples": [
+        {
+          "defaultCollation": "straße",
+          "input": "Straße",
+          "unicodeFast": "strasse"
+        },
+        {
+          "defaultCollation": "σασ",
+          "input": "ΣΑΣ",
+          "unicodeFast": "σασ"
+        },
+        {
+          "defaultCollation": "i",
+          "input": "İ",
+          "unicodeFast": "i̇"
+        },
+        {
+          "defaultCollation": "ﬁ",
+          "input": "ﬁ",
+          "unicodeFast": "fi"
+        }
+      ],
+      "idxScanDelta": 12,
+      "indexBuildMs": 246.1018810000096,
+      "planIndexes": ["probe_casefold_key"],
+      "planNodes": ["Index Scan"],
+      "provolatile": "i",
+      "rows": 1000000,
+      "seqScanDelta": 0
+    },
+    "startedAt": "2026-10-21T06:36:35.789Z"
+  },
+  "configPause": {
+    "after": {
+      "loadAverage": [4.27, 2.18, 0.93],
+      "otherActive": 2,
+      "otherSessions": 3,
+      "testDatabases": 2
+    },
+    "before": {
+      "loadAverage": [2.98, 1.51, 0.65],
+      "otherActive": 3,
+      "otherSessions": 15,
+      "testDatabases": 6
+    },
+    "elapsedMs": 52665.276104000004,
+    "result": {
+      "baseline": {
+        "durationMs": 10000.491743999999,
+        "failed": 0,
+        "longestGapMs": 7.491706000000704,
+        "requests": 152291,
+        "requestsPerSecond": 15228.351154968967,
+        "stallCount": 0,
+        "stalls": [],
+        "start": {
+          "count": 152291,
+          "max": 8.401267000001098,
+          "mean": 0.31280779096596,
+          "p50": 0.2753050000010262,
+          "p95": 0.4680350000016915,
+          "p99": 1.2665070000002743
+        },
+        "total": {
+          "count": 152291,
+          "max": 8.907673000001523,
+          "mean": 0.5243854744600261,
+          "p50": 0.4742970000006608,
+          "p95": 0.7811709999987215,
+          "p99": 1.645556999999826
+        }
+      },
+      "batchOnly": {
+        "commit": {
+          "attempts": null,
+          "attemptsWithLock": 1,
+          "elapsedMs": 1902.7412699999986,
+          "holders": [],
+          "outcome": "committed"
+        },
+        "window": {
+          "durationMs": 1902.7590430000055,
+          "failed": 0,
+          "longestGapMs": 200.7721040000033,
+          "requests": 24773,
+          "requestsPerSecond": 13019.515051649132,
+          "stallCount": 2,
+          "stalls": [
+            {
+              "atMs": 0.26101800000469666,
+              "ms": 201.51421200000186
+            },
+            {
+              "atMs": 659.2630390000049,
+              "ms": 201.20769899999868
+            }
+          ],
+          "start": {
+            "count": 24773,
+            "max": 201.25492700000177,
+            "mean": 0.41894384632460663,
+            "p50": 0.26396300000487827,
+            "p95": 0.3998280000014347,
+            "p99": 1.032640999997966
+          },
+          "total": {
+            "count": 24773,
+            "max": 201.51421200000186,
+            "mean": 0.6136104136358159,
+            "p50": 0.4498810000004596,
+            "p95": 0.6577499999984866,
+            "p99": 1.2841209999969578
+          }
+        }
+      },
+      "boundMs": 2205.932331,
+      "longRequest": {
+        "batchRows": 1111100,
+        "commit": {
+          "attempts": 5,
+          "attemptsWithLock": 0,
+          "elapsedMs": 8939.508627,
+          "holders": ["259956 (std-probes)"],
+          "outcome": "SchemaLockTimeout"
+        },
+        "longRequestMs": 29521.597537,
+        "longRequestOutcome": "completed",
+        "longRequestPid": 259956,
+        "longRequestRunningAtEnd": true,
+        "observedBlockedByLongRequest": true,
+        "window": {
+          "durationMs": 8940.114540000002,
+          "failed": 0,
+          "longestGapMs": 203.9039300000004,
+          "requests": 121830,
+          "requestsPerSecond": 13627.342183917926,
+          "stallCount": 5,
+          "stalls": [
+            {
+              "atMs": 1.090319000002637,
+              "ms": 205.1810970000006
+            },
+            {
+              "atMs": 636.3798569999999,
+              "ms": 201.5924589999995
+            },
+            {
+              "atMs": 2006.3898469999986,
+              "ms": 201.8142829999997
+            },
+            {
+              "atMs": 4232.097139999998,
+              "ms": 201.58074599999964
+            },
+            {
+              "atMs": 8736.115312000002,
+              "ms": 201.85896599999978
+            }
+          ],
+          "start": {
+            "count": 121830,
+            "max": 203.67958,
+            "mean": 0.375883049642945,
+            "p50": 0.2823080000016489,
+            "p95": 0.4409440000017639,
+            "p99": 1.1911269999982323
+          },
+          "total": {
+            "count": 121830,
+            "max": 205.1810970000006,
+            "mean": 0.5860250378478256,
+            "p50": 0.48546799999894574,
+            "p95": 0.7197659999947064,
+            "p99": 1.494684999997844
+          }
+        }
+      },
+      "options": {
+        "baselineMs": 10000,
+        "batchMs": 2000,
+        "cancelLongRequest": false,
+        "clients": 8,
+        "items": 100000,
+        "longRequestMs": 29500,
+        "streamCommits": 50,
+        "streamGapMs": 100
+      },
+      "stream": {
+        "commitMs": {
+          "count": 50,
+          "max": 13.701515999997355,
+          "mean": 5.56711066000018,
+          "p50": 4.809341000000131,
+          "p95": 9.99080899999899,
+          "p99": 13.701515999997355
+        },
+        "commits": 50,
+        "commitsPerSecond": 9.508108315481493,
+        "heldMs": {
+          "count": 50,
+          "max": 7.985439000000042,
+          "mean": 3.4909609000003545,
+          "p50": 3.287956000000122,
+          "p95": 5.9323309999999765,
+          "p99": 7.985439000000042
+        },
+        "window": {
+          "durationMs": 5258.808614000001,
+          "failed": 0,
+          "longestGapMs": 10.517894000000524,
+          "requests": 57186,
+          "requestsPerSecond": 10874.326144472996,
+          "stallCount": 0,
+          "stalls": [],
+          "start": {
+            "count": 57186,
+            "max": 15.18759399999908,
+            "mean": 0.45805356672962216,
+            "p50": 0.3184350000010454,
+            "p95": 1.2065659999971103,
+            "p99": 2.8530549999995856
+          },
+          "total": {
+            "count": 57186,
+            "max": 15.921706000000995,
+            "mean": 0.7343241466792629,
+            "p50": 0.5447590000003402,
+            "p95": 1.7871409999970638,
+            "p99": 3.8020479999977397
+          }
+        }
+      },
+      "tableLock": {
+        "commit": {
+          "attempts": null,
+          "attemptsWithLock": 2,
+          "elapsedMs": 2439.766908000005,
+          "holders": [],
+          "outcome": "committed"
+        },
+        "window": {
+          "durationMs": 2439.7845409999936,
+          "failed": 0,
+          "longestGapMs": 2001.7102569999988,
+          "requests": 7130,
+          "requestsPerSecond": 2922.3892028915025,
+          "stallCount": 1,
+          "stalls": [
+            {
+              "atMs": 0.27182799999718554,
+              "ms": 2002.3199170000007
+            }
+          ],
+          "start": {
+            "count": 7130,
+            "max": 2001.8628820000013,
+            "mean": 2.536581943618467,
+            "p50": 0.26075699999637436,
+            "p95": 0.42223000000376487,
+            "p99": 1.0662630000006175
+          },
+          "total": {
+            "count": 7130,
+            "max": 2002.3199170000007,
+            "mean": 2.736587994249599,
+            "p50": 0.4478079999971669,
+            "p95": 0.7005500000013853,
+            "p99": 1.3848290000023553
+          }
+        }
+      }
+    },
+    "startedAt": "2026-10-21T06:34:26.547Z"
+  },
+  "environment": {
+    "cores": 16,
+    "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+    "memoryGiB": 62,
+    "node": "v26.12.0",
+    "os": "Linux 7.0.0-38-generic",
+    "postgresVersion": "PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "settings": {
+      "autovacuum": "on",
+      "checkpoint_timeout": "300 s",
+      "client_connection_check_interval": "0 ms",
+      "data_checksums": "on",
+      "deadlock_timeout": "1000 ms",
+      "default_transaction_isolation": "read committed",
+      "effective_io_concurrency": "16",
+      "fsync": "on",
+      "huge_pages": "try",
+      "jit": "on",
+      "lock_timeout": "0 ms",
+      "maintenance_work_mem": "65536 kB",
+      "max_connections": "400",
+      "max_wal_size": "1024 MB",
+      "server_version": "18.6 (Debian 18.6-1.pgdg13+2)",
+      "shared_buffers": "131072 8kB",
+      "statement_timeout": "0 ms",
+      "synchronous_commit": "on",
+      "wal_level": "replica",
+      "wal_sync_method": "fdatasync",
+      "work_mem": "4096 kB"
+    }
+  },
+  "finishedAt": "2026-10-21T06:38:59.722Z",
+  "killedBuild": {
+    "after": {
+      "loadAverage": [3.06, 2.11, 0.96],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [3.84, 2.16, 0.94],
+      "otherActive": 2,
+      "otherSessions": 3,
+      "testDatabases": 2
+    },
+    "elapsedMs": 26081.250098999997,
+    "result": [
+      {
+        "backendAliveAfterKill": true,
+        "backendExitAfterKillMs": 3034.203781999997,
+        "backendExitAfterReleaseMs": 31.503788999994867,
+        "effectiveCheckInterval": "0",
+        "indexState": "valid",
+        "lockFreeAfterEnd": true,
+        "lockHeldAfterKill": true,
+        "phaseAtKill": "waiting for writers before build",
+        "scenario": {
+          "busy": "writer",
+          "checkInterval": "0",
+          "duplicate": false,
+          "holdAfterKillMs": 3000,
+          "label": "waiting for a writer, interval 0",
+          "rows": 100000,
+          "unique": false
+        },
+        "tryLockRefusedAfterKill": true
+      },
+      {
+        "backendAliveAfterKill": true,
+        "backendExitAfterKillMs": 3019.032739000002,
+        "backendExitAfterReleaseMs": 10.80113400000846,
+        "effectiveCheckInterval": "0",
+        "indexState": "invalid",
+        "lockFreeAfterEnd": true,
+        "lockHeldAfterKill": true,
+        "phaseAtKill": "waiting for writers before build",
+        "scenario": {
+          "busy": "writer",
+          "checkInterval": "0",
+          "duplicate": true,
+          "holdAfterKillMs": 3000,
+          "label": "unique, duplicate arrives, interval 0",
+          "rows": 100000,
+          "unique": true
+        },
+        "tryLockRefusedAfterKill": true
+      },
+      {
+        "backendAliveAfterKill": true,
+        "backendExitAfterKillMs": 1894.1891409999953,
+        "backendExitAfterReleaseMs": null,
+        "effectiveCheckInterval": "0",
+        "indexState": "valid",
+        "lockFreeAfterEnd": true,
+        "lockHeldAfterKill": true,
+        "phaseAtKill": "building index: scanning table",
+        "scenario": {
+          "busy": "scan",
+          "checkInterval": "0",
+          "duplicate": false,
+          "holdAfterKillMs": 0,
+          "label": "scanning a large table, interval 0",
+          "rows": 10000000,
+          "unique": false
+        },
+        "tryLockRefusedAfterKill": true
+      },
+      {
+        "backendAliveAfterKill": false,
+        "backendExitAfterKillMs": 238.48159400001168,
+        "backendExitAfterReleaseMs": -2.504862999994657,
+        "effectiveCheckInterval": "250ms",
+        "indexState": "invalid",
+        "lockFreeAfterEnd": true,
+        "lockHeldAfterKill": false,
+        "phaseAtKill": "waiting for writers before build",
+        "scenario": {
+          "busy": "writer",
+          "checkInterval": "250ms",
+          "duplicate": false,
+          "holdAfterKillMs": 3000,
+          "label": "waiting for a writer, interval 250ms",
+          "rows": 100000,
+          "unique": false
+        },
+        "tryLockRefusedAfterKill": false
+      },
+      {
+        "backendAliveAfterKill": true,
+        "backendExitAfterKillMs": 289.85080300000845,
+        "backendExitAfterReleaseMs": null,
+        "effectiveCheckInterval": "250ms",
+        "indexState": "invalid",
+        "lockFreeAfterEnd": true,
+        "lockHeldAfterKill": true,
+        "phaseAtKill": "building index: scanning table",
+        "scenario": {
+          "busy": "scan",
+          "checkInterval": "250ms",
+          "duplicate": false,
+          "holdAfterKillMs": 0,
+          "label": "scanning a large table, interval 250ms",
+          "rows": 10000000,
+          "unique": false
+        },
+        "tryLockRefusedAfterKill": true
+      }
+    ],
+    "startedAt": "2026-10-21T06:35:29.012Z"
+  },
+  "lockBudget": {
+    "after": {
+      "loadAverage": [2.7, 2.14, 1.01],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [2.85, 2.16, 1.01],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "elapsedMs": 5056.488497000013,
+    "result": [
+      {
+        "attempts": [
+          {
+            "heldMs": 2432.626701000001,
+            "ok": true,
+            "startedAt": 128711.720042
+          }
+        ],
+        "holdMs": 1200,
+        "mechanism": "per-statement",
+        "observedWaitsMs": [1203.5343050000083, 1203.049927999993],
+        "requestMs": 2425.6809660000145,
+        "steps": [
+          {
+            "label": "CREATE TABLE with two foreign keys",
+            "lockWaits": [],
+            "ms": 2432.022541000013
+          }
+        ],
+        "tableCreated": true
+      },
+      {
+        "attempts": [
+          {
+            "heldMs": 2001.3599150000082,
+            "ok": false,
+            "startedAt": 131168.262475
+          },
+          {
+            "heldMs": 1.6771259999950416,
+            "ok": true,
+            "startedAt": 133745.922574
+          }
+        ],
+        "holdMs": 1200,
+        "mechanism": "lock-budget",
+        "observedWaitsMs": [1207.6125900000043, 773.3586060000234],
+        "requestMs": 1991.5573680000089,
+        "steps": [
+          {
+            "label": "CREATE TABLE with two foreign keys",
+            "lockWaits": [
+              {
+                "ms": 0.05126599999493919,
+                "table": "probe_ref_a"
+              },
+              {
+                "ms": 0.034684999991441146,
+                "table": "probe_ref_b"
+              }
+            ],
+            "ms": 0.9979850000236183
+          }
+        ],
+        "tableCreated": true
+      }
+    ],
+    "startedAt": "2026-10-21T06:36:21.715Z"
+  },
+  "lockInventory": {
+    "after": {
+      "loadAverage": [2.65, 2.14, 1.02],
+      "otherActive": 1,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [2.7, 2.14, 1.01],
+      "otherActive": 0,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "elapsedMs": 675.4548900000227,
+    "result": [
+      {
+        "added": [
+          {
+            "kind": "created",
+            "mode": "ShareLock",
+            "relation": "inv.fresh"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.fresh"
+          },
+          {
+            "kind": "created",
+            "mode": "ShareLock",
+            "relation": "pg_toast.pg_toast_1002699"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1002699"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.fresh_id_class"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.fresh_pkey"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1002699_index"
+          }
+        ],
+        "catalogLocks": 0,
+        "ddlMs": 0.6233449999999721,
+        "explicitLocks": [],
+        "form": "Create root table",
+        "violations": []
+      },
+      {
+        "added": [
+          {
+            "kind": "implied",
+            "mode": "AccessShareLock",
+            "relation": "inv.child_id_class"
+          },
+          {
+            "kind": "created",
+            "mode": "ShareLock",
+            "relation": "pg_toast.pg_toast_1002808"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1002808"
+          },
+          {
+            "kind": "pre-locked",
+            "mode": "AccessShareLock",
+            "relation": "inv.child"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.grandchild_id_class"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.grandchild_pkey"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessShareLock",
+            "relation": "inv.grandchild"
+          },
+          {
+            "kind": "created",
+            "mode": "ShareLock",
+            "relation": "inv.grandchild"
+          },
+          {
+            "kind": "created",
+            "mode": "ShareRowExclusiveLock",
+            "relation": "inv.grandchild"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.grandchild"
+          },
+          {
+            "kind": "created",
+            "mode": "AccessExclusiveLock",
+            "relation": "pg_toast.pg_toast_1002808_index"
+          }
+        ],
+        "catalogLocks": 0,
+        "ddlMs": 0.92758399999002,
+        "explicitLocks": ["inv.child SHARE ROW EXCLUSIVE"],
+        "form": "Create child table with level FK",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.10182999999960884,
+        "explicitLocks": ["inv.child SHARE ROW EXCLUSIVE"],
+        "form": "Create class-change trigger",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.14929899998242036,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Rewrite an ancestor's subtree check NOT VALID",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.11973399997805245,
+        "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
+        "form": "Add field with a constant default",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.23443799998494796,
+        "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
+        "form": "Add boolean field",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.08922700001858175,
+        "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
+        "form": "Add reference field: column",
+        "violations": []
+      },
+      {
+        "added": [
+          {
+            "kind": "implied",
+            "mode": "AccessShareLock",
+            "relation": "inv.target_pkey"
+          },
+          {
+            "kind": "pre-locked",
+            "mode": "AccessShareLock",
+            "relation": "inv.child"
+          },
+          {
+            "kind": "pre-locked",
+            "mode": "AccessShareLock",
+            "relation": "inv.target"
+          }
+        ],
+        "catalogLocks": 0,
+        "ddlMs": 0.19864200000301935,
+        "explicitLocks": [
+          "inv.child SHARE ROW EXCLUSIVE",
+          "inv.target SHARE ROW EXCLUSIVE"
+        ],
+        "form": "Add reference field: FK NOT VALID",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.1773209999955725,
+        "explicitLocks": [
+          "inv.child ACCESS EXCLUSIVE",
+          "inv.target ACCESS EXCLUSIVE"
+        ],
+        "form": "Drop a reference FK",
+        "violations": []
+      },
+      {
+        "added": [
+          {
+            "kind": "implied",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.child_owner_ix"
+          }
+        ],
+        "catalogLocks": 0,
+        "ddlMs": 0.20311999999103136,
+        "explicitLocks": [
+          "inv.child ACCESS EXCLUSIVE",
+          "inv.target ACCESS EXCLUSIVE"
+        ],
+        "form": "Purge reference field",
+        "violations": []
+      },
+      {
+        "added": [
+          {
+            "kind": "implied",
+            "mode": "AccessExclusiveLock",
+            "relation": "inv.root_name"
+          }
+        ],
+        "catalogLocks": 0,
+        "ddlMs": 0.34242999998969026,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Purge field (with an index)",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.11292099999263883,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Rename table (referenced by a level FK)",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.05625500000314787,
+        "explicitLocks": ["inv.child ACCESS EXCLUSIVE"],
+        "form": "Rename field",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.13434099999722093,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Set default",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.1353829999861773,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Drop default",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.1751769999973476,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Retire a required field (DROP NOT NULL)",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.15039100000285544,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Make required: ADD CONSTRAINT NOT NULL NOT VALID",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.15091200001188554,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Max length: ADD CONSTRAINT CHECK NOT VALID",
+        "violations": []
+      },
+      {
+        "added": [],
+        "catalogLocks": 0,
+        "ddlMs": 0.10519699999713339,
+        "explicitLocks": ["inv.root ACCESS EXCLUSIVE"],
+        "form": "Drop a check constraint",
+        "violations": []
+      }
+    ],
+    "startedAt": "2026-10-21T06:36:31.405Z"
+  },
+  "mode": "full",
+  "notify": {
+    "after": {
+      "loadAverage": [3.47, 2.61, 1.36],
+      "otherActive": 0,
+      "otherSessions": 0,
+      "testDatabases": 1
+    },
+    "before": {
+      "loadAverage": [2.82, 2.2, 1.05],
+      "otherActive": 0,
+      "otherSessions": 2,
+      "testDatabases": 1
+    },
+    "elapsedMs": 130527.07797399999,
+    "result": {
+      "options": {
+        "clients": 16,
+        "durationMs": 60000,
+        "records": 100000,
+        "rounds": 1,
+        "warmupMs": 5000
+      },
+      "runs": [
+        {
+          "durationMs": 60000.41287600002,
+          "failed": 0,
+          "latency": {
+            "count": 317050,
+            "max": 21.684269999997923,
+            "mean": 3.0267614815327333,
+            "p50": 2.7734550000168383,
+            "p95": 4.375300000014249,
+            "p99": 6.6134040000033565
+          },
+          "notifications": 260,
+          "saves": 317050,
+          "savesPerSecond": 5284.130305156936,
+          "variant": "after-commit"
+        },
+        {
+          "durationMs": 59999.867337,
+          "failed": 0,
+          "latency": {
+            "count": 38444,
+            "max": 740.0853709999938,
+            "mean": 24.978602530381945,
+            "p50": 22.548515000002226,
+            "p95": 29.197706000006292,
+            "p99": 61.65121099998942
+          },
+          "notifications": 41924,
+          "saves": 38444,
+          "savesPerSecond": 640.7347500299024,
+          "variant": "in-transaction"
+        }
+      ],
+      "throughputRatio": 0.12125642499856426,
+      "totals": [
+        {
+          "latency": {
+            "count": 317050,
+            "max": 21.684269999997923,
+            "mean": 3.0267614815327333,
+            "p50": 2.7734550000168383,
+            "p95": 4.375300000014249,
+            "p99": 6.6134040000033565
+          },
+          "savesPerSecond": 5284.130305156936,
+          "variant": "after-commit"
+        },
+        {
+          "latency": {
+            "count": 38444,
+            "max": 740.0853709999938,
+            "mean": 24.978602530381945,
+            "p50": 22.548515000002226,
+            "p95": 29.197706000006292,
+            "p99": 61.65121099998942
+          },
+          "savesPerSecond": 640.7347500299024,
+          "variant": "in-transaction"
+        }
+      ]
+    },
+    "startedAt": "2026-10-21T06:36:48.797Z"
+  },
+  "startedAt": "2026-10-21T06:34:13.267Z"
+}
