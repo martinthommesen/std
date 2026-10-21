@@ -13,7 +13,7 @@
 import type { TxMigration } from "../migration.ts";
 
 /** Names of access rules and indexes. Never edit it once applied. */
-export const migration0006DefinitionNames: TxMigration = {
+export const migration0006: TxMigration = {
   id: 6,
   kind: "tx",
   name: "definition-names",

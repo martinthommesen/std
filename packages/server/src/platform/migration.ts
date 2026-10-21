@@ -67,23 +67,13 @@ export const migrationChecksum = (migration: PlatformMigration): string => {
  * Checks a migration list: ids 1, 2, 3 ... in order, and every
  * `concurrent_index` migration's statement builds the index it names.
  * @param migrations - The list, in order.
- * @param reserved - Ids held by migrations of branches not merged yet, which
- *   this list skips; empty once every branch is merged.
  * @returns The same list.
  */
 export const validateMigrations = (
-  migrations: readonly PlatformMigration[],
-  reserved: readonly number[] = []
+  migrations: readonly PlatformMigration[]
 ): readonly PlatformMigration[] => {
-  const skipped = new Set(reserved);
-
-  const expected = Array.from(
-    { length: migrations.length + reserved.length },
-    (_, index) => index + 1
-  ).filter((id) => !skipped.has(id));
-
   for (const [index, migration] of migrations.entries()) {
-    if (migration.id !== expected[index]) {
+    if (migration.id !== index + 1) {
       throw new Error(
         `Platform migration ids must be consecutive from 1; found ${migration.id} at position ${index + 1}`
       );

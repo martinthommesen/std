@@ -54,6 +54,7 @@ import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { installSessionRevocation } from "../auth/session-revocation.ts";
 import { Catalog } from "../catalog/catalog.ts";
@@ -68,9 +69,11 @@ import type { DedicatedConnection } from "../sql/dedicated.ts";
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
+import type { ConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { ConfigStateChanged } from "./config-state-changed.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
 import { DdlRefused } from "./ddl-refused.ts";
@@ -103,6 +106,29 @@ import {
 
 /** How many violating record IDs `ExistingDataViolates` carries. */
 export const SAMPLE_IDS = 20;
+
+/** What the main transaction knows when it writes other config tables. */
+export interface MainTransactionContext {
+  readonly changeSetId: string;
+  /** The revision the main transaction commits. */
+  readonly revision: number;
+  readonly requesterId: DefinitionId;
+}
+
+/**
+ * Writes of other config tables (the config layers, Contracts 8.2) that
+ * belong to a change set's main transaction, after the definition rows.
+ */
+export interface ExtraWrites {
+  /**
+   * Whether the writes change anything: a change set without definition
+   * changes still commits when true.
+   */
+  readonly pending: boolean;
+  readonly write: (
+    context: MainTransactionContext
+  ) => Effect.Effect<void, SqlError, SqlClient.SqlClient>;
+}
 
 /** A change set to apply. */
 export interface ChangeSetRequest {
@@ -137,6 +163,13 @@ export interface ChangeSetRequest {
   readonly authorize?: (
     snapshot: ConfigSnapshot
   ) => Effect.Effect<void, ChangeSetAuthorizationError, AuthorizeServices>;
+  /** Other config-table writes in the main transaction. */
+  readonly extraWrites?: ExtraWrites;
+  /**
+   * The state the change set was planned at. The main transaction fails
+   * with `ConfigStateChanged` when another config commit came first.
+   */
+  readonly expectedState?: ConfigState;
 }
 
 /** What a change set's `authorize` check can refuse with. */
@@ -155,7 +188,14 @@ export type AuthorizeServices =
   | CurrentTransaction;
 
 /** Options of a change set. */
-export type ChangeSetOptions = ConfigCommitOptions;
+export interface ChangeSetOptions extends ConfigCommitOptions {
+  /**
+   * A dedicated connection that already holds `SCHEMA_KEY` (`std upgrade`
+   * holds it for the whole run); the change set uses it instead of taking
+   * the lock on a connection of its own.
+   */
+  readonly coordinator?: DedicatedConnection;
+}
 
 /** What applying a change set did. */
 export interface ChangeSetResult {
@@ -189,6 +229,7 @@ export type ChangeSetError =
   | DefinitionInvalid
   | ChangeSetRefusal
   | ChangeSetAuthorizationError
+  | ConfigStateChanged
   | SchemaBusy
   | SchemaNeedsAttention
   | ExistingDataViolates
@@ -304,6 +345,21 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
   function* mainTransaction(input: MainInput) {
     input.timing.started = yield* Clock.currentTimeMillis;
     const state = yield* RequestRevision;
+    const expected = input.request.expectedState;
+
+    if (
+      expected !== undefined &&
+      (expected.revision !== state.revision ||
+        expected.changeSetId !== state.changeSetId)
+    ) {
+      return yield* new ConfigStateChanged({
+        actualChangeSetId: state.changeSetId,
+        actualRevision: state.revision,
+        expectedChangeSetId: expected.changeSetId,
+        expectedRevision: expected.revision,
+      });
+    }
+
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
 
@@ -374,6 +430,14 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
       source: input.request.source ?? { kind: "api" },
       steps: plan.steps,
     });
+
+    if (input.request.extraWrites !== undefined) {
+      yield* input.request.extraWrites.write({
+        changeSetId: input.changeSetId,
+        requesterId,
+        revision,
+      });
+    }
 
     const next = yield* bumpRevision(input.changeSetId);
     input.timing.finished = yield* Clock.currentTimeMillis;
@@ -625,8 +689,10 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
     ChangeSetServices | Scope.Scope
   > {
     const catalog = yield* Catalog;
-    const connection = yield* openCoordinator;
+    const connection = options?.coordinator ?? (yield* openCoordinator);
 
+    // Whoever holds SCHEMA_KEY (a coordinator of its own, or std upgrade's
+    // connection) finishes interrupted change sets first.
     yield* settleOpenChangeSets(connection, options);
 
     const snapshot = yield* catalog.refresh;
@@ -700,7 +766,7 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
     const probeId = request.changeSetId ?? snapshot.changeSetId;
     const applied = yield* apply(snapshot, request, probeId);
 
-    if (applied.changes.length === 0) {
+    if (applied.changes.length === 0 && request.extraWrites?.pending !== true) {
       return unchanged;
     }
 

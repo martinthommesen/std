@@ -9,8 +9,8 @@ import type { ProtectionReason } from "./definition-protected.ts";
  *
  * - A protected definition accepts no change except label and help text,
  *   unless the change set is the core set itself. Such a change by any
- *   other origin is marked `localOverride`: workstream 1B stores it as an
- *   override of the shipped record.
+ *   other origin is marked `localOverride`; the config service stores it
+ *   as an override of the shipped record.
  * - Rename, retire, reactivate and delete of a definition owned by core or
  *   an app are for its own set only. A retired app definition may be
  *   purged locally (an app removed it upstream, Contracts 8.4).

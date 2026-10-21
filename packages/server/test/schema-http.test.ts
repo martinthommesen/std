@@ -39,6 +39,7 @@ import {
   addAccessRule,
   addField,
   addRole,
+  change,
   createClass,
   ensureSite,
   values,
@@ -327,11 +328,22 @@ describe("schema-http", () => {
         () =>
           Effect.gen(function* concurrentRuleEdits() {
             const admin = yield* adminToken;
-            const snapshot = yield* (yield* Catalog).refresh;
 
-            const [first, second] = snapshot
-              .accessRules()
-              .filter((rule) => rule.owner.layer === "app");
+            const rules = [
+              addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], {
+                description: "local first",
+              }),
+              addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], {
+                description: "local second",
+              }),
+            ];
+
+            // Local rules: edits of shipped ones are overrides (8.2), and
+            // a shipped rule's description is not overridable.
+            yield* change(rules.map((rule) => rule.op));
+
+            const snapshot = yield* (yield* Catalog).refresh;
+            const [first, second] = rules.map((rule) => snapshot.get(rule.id));
 
             const edit = (id: string, version: number, description: string) =>
               patch(admin, "core.access_rule", id, version, { description });
@@ -367,6 +379,56 @@ describe("schema-http", () => {
             for (const response of responses) {
               assert.isAtLeast(headerRevision(response), Number(earlier?.[0]));
             }
+          })
+      );
+
+      dbTest.effect(
+        "a generic edit of a shipped definition is stored as a local override; a non-overridable property is refused",
+        () =>
+          Effect.gen(function* shippedEdit() {
+            const admin = yield* adminToken;
+            const snapshot = yield* (yield* Catalog).refresh;
+
+            const rule = snapshot
+              .accessRules()
+              .find((entry) => entry.owner.layer === "app" && entry.active);
+
+            const version = rule?.version ?? 0;
+
+            const refused = yield* patch(
+              admin,
+              "core.access_rule",
+              rule?.id ?? "",
+              version,
+              { description: "not overridable" }
+            );
+
+            assert.strictEqual(refused.status, 422, refused.text);
+            assert.strictEqual(yield* tagOf(refused), "DefinitionInvalid");
+
+            const label = yield* patch(
+              admin,
+              "core.field",
+              ACME.cost,
+              yield* versionOf(ACME.cost),
+              { label: "Local cost" }
+            );
+
+            assert.strictEqual(label.status, 200, label.text);
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT property || '=' || (value #>> '{}') AS value FROM core."config_override" WHERE record_id = $1::uuid`,
+                [ACME.cost]
+              ),
+              ["label=Local cost"]
+            );
+            assert.deepStrictEqual(
+              yield* values(
+                "SELECT label AS value FROM core.field WHERE id = $1::uuid",
+                [ACME.cost]
+              ),
+              ["Local cost"]
+            );
           })
       );
 

@@ -14,7 +14,7 @@
  * sockets and Postgres is never told; then it resumes the way a server
  * process or `std upgrade` does (`resumePass`) and checks the outcome.
  *
- * Workstream 1B adds a `std doctor` exit-0 assertion to `assertRecovered`.
+ * After the resume, `std doctor` exits 0.
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -26,6 +26,7 @@ import type { Scope } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { runDoctor } from "../src/doctor/doctor.ts";
 import { resumePass } from "../src/schema/recovery.ts";
 import { schemaStatus } from "../src/schema/status.ts";
 import { decodeRows } from "../src/sql/rows.ts";
@@ -245,7 +246,14 @@ const assertRecovered = (setup: Scenario) =>
       "purged"
     );
     assert.deepStrictEqual(yield* catalogDrift, []);
-    // Workstream 1B: assert that `std doctor` exits 0 here.
+
+    const doctor = yield* runDoctor();
+
+    assert.deepStrictEqual(
+      doctor.findings.filter((entry) => entry.severity !== "info"),
+      []
+    );
+    assert.strictEqual(doctor.exitCode, 0);
   });
 
 describe("schema-interrupted", () => {

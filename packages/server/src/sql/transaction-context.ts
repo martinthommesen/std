@@ -7,7 +7,11 @@ import { Context } from "effect";
 import type { Effect } from "effect";
 
 /** What kind of outermost transaction is running. */
-export type TransactionKind = "request" | "config" | "maintenance";
+export type TransactionKind =
+  | "request"
+  | "config"
+  | "maintenance"
+  | "diagnostic";
 
 /** What the code inside a transaction can do with it. */
 export interface TransactionHandle {

@@ -299,12 +299,17 @@ const update = (
 
   // The guard first: a protected definition refuses every change but its
   // label and help text, whatever the change is (Contracts 1.8).
-  const allowed = guardChange(
-    work,
-    current,
-    "update",
-    Object.keys(operation.changes)
-  );
+  // A name changed through `update` (set loads do this for roles and
+  // permissions) follows the ownership rule of `rename`.
+  const renamed =
+    "name" in operation.changes
+      ? guardChange(work, current, "rename")
+      : { localOverride: false };
+
+  const allowed =
+    renamed === undefined
+      ? undefined
+      : guardChange(work, current, "update", Object.keys(operation.changes));
 
   const found =
     allowed === undefined
@@ -336,7 +341,7 @@ const update = (
 
 /**
  * Whether a replacement keeps the definition's owner layer, set and
- * protected flag, which only an `adopt` (workstream 1B) may change
+ * protected flag, which only an `adopt` may change
  * (Contracts 8.1).
  *
  * @param current - The stored definition.
@@ -479,7 +484,43 @@ const createOverride = (
   }
 };
 
-type LifecycleOp = Exclude<TargetedOperation, { readonly op: "update" }>;
+const adopt = (
+  work: Work,
+  operation: Extract<Operation, { readonly op: "adopt" }>
+): void => {
+  const current = checkVersion(work, operation.id, operation.version);
+
+  if (current === undefined) {
+    return;
+  }
+
+  if (current.owner.layer === "local" || current.protected) {
+    work.problems.push(
+      problem(
+        "unsupportedChange",
+        current.id,
+        "Only an unprotected definition of a core or app set can be adopted."
+      )
+    );
+
+    return;
+  }
+
+  const next = decodeAs(work, current.id, {
+    ...current,
+    owner: { layer: "local" },
+    version: nextVersion(work, current.id),
+  });
+
+  if (next !== undefined) {
+    record(work, operation, next);
+  }
+};
+
+type LifecycleOp = Exclude<
+  TargetedOperation,
+  { readonly op: "update" } | { readonly op: "adopt" }
+>;
 
 const applyLifecycle = (work: Work, operation: LifecycleOp): void => {
   if (operation.op === "rename") {
@@ -498,6 +539,8 @@ const applyLifecycle = (work: Work, operation: LifecycleOp): void => {
 const applyOne = (work: Work, operation: Operation): void => {
   if (operation.op === "update") {
     update(work, operation);
+  } else if (operation.op === "adopt") {
+    adopt(work, operation);
   } else if (operation.op === "setOverride") {
     if (operation.version === null) {
       createOverride(work, operation);

@@ -1,11 +1,18 @@
 /**
  * The `std` command.
  *
- * Commands (later workstreams add `doctor`):
+ * Commands:
  *
- * - `std upgrade [--set <dir>]...`: applies pending platform migrations,
- *   resumes interrupted change sets, then loads the core definition set,
- *   then each app set in the order given (Contracts 8.5).
+ * - `std upgrade`, with `--plan`, `--json`, `--expect <hash>`,
+ *   `--report <file>` and `--set <dir>` (repeatable): applies pending
+ *   platform migrations, resumes interrupted change sets, then loads the
+ *   core definition set and each app set in `requires` order (Contracts
+ *   8.5). `--plan` changes nothing and prints the plan with its hash;
+ *   `--expect <hash>` makes the real run refuse unless the database still
+ *   plans exactly that; `--report` also writes the JSON report to a file.
+ *   Exit 0 on success, 1 on a refusal or failure, 2 on a usage error.
+ * - `std doctor [--json]`: read-only checks (Contracts 1.10). Exit 0 when
+ *   clean, 1 on any error, 2 for warnings only, and 1 when it cannot run.
  * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
  *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
  *   platform migrations.
@@ -19,13 +26,16 @@
  * Exit 0 on success, 1 on a refusal or failure (a resume that ends in
  * `needs_attention` included), 2 on a usage error.
  */
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { NodeRuntime } from "@effect/platform-node";
-import { Console, Effect, Layer } from "effect";
+import { Console, Effect, Layer, Schema } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
-import { runUpgrade } from "../config/upgrade.ts";
+import { planUpgrade, runUpgrade } from "../config/upgrade.ts";
+import type { UpgradeOptions } from "../config/upgrade.ts";
+import { runDoctor } from "../doctor/doctor.ts";
 import { ServerLayer } from "../http/serve.ts";
 import { recoverySettingsFromEnv } from "../schema/recovery-settings.ts";
 import { abandonChangeSet, resumeOnRequest } from "../schema/recovery.ts";
@@ -35,20 +45,25 @@ import {
   DatabaseConfig,
 } from "../sql/database-config.ts";
 import { SqlLayer } from "../sql/layer.ts";
+import { doctorLines, planLines, reportLines } from "./format.ts";
 
 const USAGE = `Usage: std <command>
 
 Commands:
-  upgrade [--set <dir>]...   Apply platform migrations, resume interrupted
-                             change sets, then load the core definition
-                             set, then each app set (stop all STD servers
-                             first)
-  serve                      Serve the STD API over HTTP
-  schema status [--json]     Show open change sets, their steps, build
-                             progress and the SCHEMA_KEY holder
-  schema resume <id>         Run the unfinished steps of a change set
-  schema abandon <id>        Undo the unfinished steps of a change set and
-                             complete it as abandoned`;
+  upgrade [--plan] [--json] [--expect <hash>] [--report <file>] [--set <dir>]...
+                  Apply platform migrations, resume interrupted change sets,
+                  then load the core definition set and each app set (stop
+                  all STD servers first). --plan changes nothing.
+  doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings
+  serve           Serve the STD API over HTTP
+  schema status [--json]
+                  Show open change sets, their steps, build progress and the
+                  SCHEMA_KEY holder
+  schema resume <id>
+                  Run the unfinished steps of a change set
+  schema abandon <id>
+                  Undo the unfinished steps of a change set and complete it
+                  as abandoned`;
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -57,16 +72,6 @@ const setExitCode = (code: number): Effect.Effect<void> =>
   Effect.sync(() => {
     process.exitCode = code;
   });
-
-const describeSet = (
-  name: string,
-  version: number,
-  state: string,
-  revision: number | null
-): string =>
-  revision === null
-    ? `Set ${name} v${version}: ${state}`
-    : `Set ${name} v${version}: ${state} at revision ${revision}`;
 
 /** The services every command runs with. */
 const cliServices = Catalog.layer.pipe(
@@ -157,70 +162,137 @@ const schemaCommand = (
   return subcommand === "abandon" ? abandon(argument) : undefined;
 };
 
-const upgrade = (setDirectories: readonly string[]) =>
-  Effect.gen(function* upgradeCommand() {
-    const report = yield* runUpgrade(setDirectories);
+/** Parsed `std upgrade` arguments. */
+interface UpgradeArguments {
+  readonly plan: boolean;
+  readonly json: boolean;
+  readonly expect: string | undefined;
+  readonly report: string | undefined;
+  readonly sets: readonly string[];
+}
 
-    if (report.migrations.length === 0) {
-      yield* Console.log("Platform migrations: up to date");
+const FLAGS = new Set(["--plan", "--json"]);
+
+const VALUED = new Set(["--expect", "--report", "--set"]);
+
+/**
+ * Parses the arguments after `upgrade`.
+ *
+ * @param args - The arguments.
+ * @returns The options, or undefined on a usage error.
+ */
+const upgradeArguments = (
+  args: readonly string[]
+): UpgradeArguments | undefined => {
+  const flags = new Set<string>();
+  const values = new Map<string, string[]>();
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    const next = args[index + 1];
+
+    if (FLAGS.has(arg)) {
+      flags.add(arg);
+    } else if (VALUED.has(arg) && next !== undefined) {
+      values.set(arg, [...(values.get(arg) ?? []), next]);
+      index += 1;
+    } else {
+      return undefined;
     }
+  }
 
-    for (const outcome of report.migrations) {
-      yield* Console.log(
-        `Platform migration ${String(outcome.id).padStart(4, "0")} ${outcome.name}: ${outcome.outcome}`
-      );
-    }
+  return {
+    expect: values.get("--expect")?.at(-1),
+    json: flags.has("--json"),
+    plan: flags.has("--plan"),
+    report: values.get("--report")?.at(-1),
+    sets: (values.get("--set") ?? []).map((entry) => path.resolve(entry)),
+  };
+};
 
-    for (const loaded of report.sets) {
-      const { result } = loaded;
+/** The report file could not be written. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+class ReportNotWritten extends Schema.TaggedError<
+  ReportNotWritten,
+  { readonly brand: unique symbol }
+>()("ReportNotWritten", { file: Schema.String }) {
+  /**
+   * Names the file.
+   * @returns The message.
+   */
+  override get message(): string {
+    return `cannot write the report to ${this.file}`;
+  }
+}
 
-      yield* Console.log(
-        describeSet(
-          loaded.header.name,
-          loaded.header.version,
-          result.state,
-          result.completeRevision ?? result.revision
+const writeReport = (file: string, text: string) =>
+  Effect.tryPromise({
+    catch: () => new ReportNotWritten({ file }),
+    try: async () => {
+      await writeFile(file, `${text}\n`, "utf-8");
+    },
+  });
+
+const print = (lines: readonly string[]) => Console.log(lines.join("\n"));
+
+const upgrade = (args: UpgradeArguments) => {
+  const options: UpgradeOptions =
+    args.expect === undefined
+      ? { sets: args.sets }
+      : { expectedPlanHash: args.expect, sets: args.sets };
+
+  // `--json` alone plans too (Contracts 8.5: `--plan` and `--json` change nothing).
+  const run =
+    args.plan || args.json
+      ? planUpgrade(options).pipe(
+          Effect.map((plan) => ({
+            lines: planLines(plan),
+            refused: plan.refusals.length > 0,
+            text: JSON.stringify(plan, null, 2),
+          }))
         )
-      );
-    }
+      : runUpgrade(options).pipe(
+          Effect.map((report) => ({
+            lines: reportLines(report),
+            refused: false,
+            text: JSON.stringify(report, null, 2),
+          }))
+        );
 
-    for (const resumed of report.resumed) {
-      yield* Console.log(
-        `Resumed change set ${resumed.id}: ${resumed.outcome.state}`
-      );
-    }
-  }).pipe(
+  return run.pipe(
+    Effect.tap((output) =>
+      args.report === undefined
+        ? Effect.void
+        : writeReport(args.report, output.text)
+    ),
+    Effect.tap((output) =>
+      args.json ? Console.log(output.text) : print(output.lines)
+    ),
+    Effect.tap((output) =>
+      output.refused ? setExitCode(EXIT_FAILURE) : Effect.void
+    ),
     Effect.provide(cliServices),
     Effect.matchEffect({
       onFailure: reportFailure("upgrade"),
       onSuccess: () => Effect.void,
     })
   );
-
-/**
- * Parses `--set <dir>` pairs.
- *
- * @param args - The arguments after `upgrade`.
- * @returns The set directories, or undefined on a usage error.
- */
-const setDirectoriesOf = (
-  args: readonly string[]
-): readonly string[] | undefined => {
-  const directories: string[] = [];
-
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index];
-    const value = args[index + 1];
-
-    if (flag !== "--set" || value === undefined) {
-      return undefined;
-    }
-
-    directories.push(path.resolve(value));
-  }
-
-  return directories;
 };
+
+const doctor = (json: boolean) =>
+  runDoctor().pipe(
+    Effect.tap((report) =>
+      json
+        ? Console.log(JSON.stringify(report, null, 2))
+        : print(doctorLines(report))
+    ),
+    Effect.flatMap((report) => setExitCode(report.exitCode)),
+    Effect.provide(cliServices),
+    Effect.matchEffect({
+      onFailure: reportFailure("doctor"),
+      onSuccess: () => Effect.void,
+    })
+  );
 
 /** `std serve`: runs the HTTP server until interrupted. */
 const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
@@ -235,10 +307,17 @@ const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
 
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;
-  const directories = setDirectoriesOf(rest);
 
-  if (command === "upgrade" && directories !== undefined) {
-    return upgrade(directories);
+  if (command === "upgrade") {
+    const parsed = upgradeArguments(rest);
+
+    if (parsed !== undefined) {
+      return upgrade(parsed);
+    }
+  }
+
+  if (command === "doctor" && rest.every((arg) => arg === "--json")) {
+    return doctor(rest.length > 0);
   }
 
   if (command === "serve" && rest.length === 0) {

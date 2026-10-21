@@ -9,25 +9,18 @@ import { migration0001 } from "./migrations/0001-core.ts";
 import { migration0002 } from "./migrations/0002-definitions.ts";
 import { migration0003 } from "./migrations/0003-sessions.ts";
 import { migration0004 } from "./migrations/0004-history.ts";
-import { migration0006DefinitionNames } from "./migrations/0006-definition-names.ts";
+import { migration0005 } from "./migrations/0005-config-layers.ts";
+import { migration0006 } from "./migrations/0006-definition-names.ts";
 import { migration0007 } from "./migrations/0007-outbox.ts";
-
-/**
- * Ids taken by branches merged later: 0005 (config layers,
- * ws/1b-config-layers). Remove it when its migration joins the list below.
- */
-const RESERVED_IDS: readonly number[] = [5];
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
-  validateMigrations(
-    [
-      migration0001,
-      migration0002,
-      migration0003,
-      migration0004,
-      migration0006DefinitionNames,
-      migration0007,
-    ],
-    RESERVED_IDS
-  );
+  validateMigrations([
+    migration0001,
+    migration0002,
+    migration0003,
+    migration0004,
+    migration0005,
+    migration0006,
+    migration0007,
+  ]);

@@ -28,6 +28,7 @@ import type { Definition, DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
+import { isShipped, PROTECTED_OVERRIDABLE } from "@std/definitions/overridable";
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
@@ -49,6 +50,7 @@ import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
 import {
   applyAsActor,
+  editAsActor,
   authorizeOperations,
   sessionAuthorization,
 } from "./change-sets.ts";
@@ -329,6 +331,37 @@ const updateOperations = Effect.fn("Http.definitionUpdate")(
   }
 );
 
+/**
+ * The update of a write that only changes properties of a shipped record:
+ * the config service stores it as local overrides (Contracts 8.2), so a
+ * later upgrade keeps them or reports a conflict instead of replacing
+ * them. Renames, retires and creates stay ordinary change sets, and so
+ * does anything but label and help text on a protected definition, which
+ * the schema engine refuses with `DefinitionProtected` (1.8).
+ *
+ * @param current - The definition as stored.
+ * @param operations - The write's operations.
+ * @returns The update, or undefined.
+ */
+const shippedEditOf = (
+  current: Definition | undefined,
+  operations: readonly Operation[]
+): Extract<Operation, { readonly op: "update" }> | undefined => {
+  const [operation, ...rest] = operations;
+  const shipped = current !== undefined && isShipped(current);
+
+  const update =
+    shipped && rest.length === 0 && operation?.op === "update"
+      ? operation
+      : undefined;
+
+  const descriptive = Object.keys(update?.changes ?? {}).every((property) =>
+    PROTECTED_OVERRIDABLE.includes(property)
+  );
+
+  return current?.protected === true && !descriptive ? undefined : update;
+};
+
 /** The revision a request stated, as `parseRequestRevision` read it. */
 type StatedRevision = Effect.Success<ReturnType<typeof parseRequestRevision>>;
 
@@ -449,7 +482,12 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
 
   yield* authorizeOperations(snapshot, actor, operations);
 
-  return { actor, id, operations };
+  return {
+    actor,
+    id,
+    operations,
+    shippedEdit: shippedEditOf(snapshot.get(id), operations),
+  };
 });
 
 /**
@@ -499,11 +537,22 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       userId: prepared.actor.userId,
     });
 
-    yield* applyAsActor(prepared.actor, {
-      authorize,
-      operations: prepared.operations,
-      source: { kind: "api", route: "records", table },
-    }).pipe(
+    const { shippedEdit } = prepared;
+
+    yield* (
+      shippedEdit === undefined
+        ? applyAsActor(prepared.actor, {
+            authorize,
+            operations: prepared.operations,
+            source: { kind: "api", route: "records", table },
+          })
+        : editAsActor(prepared.actor, {
+            authorize,
+            changes: shippedEdit.changes,
+            id: shippedEdit.id,
+            version: shippedEdit.version,
+          })
+    ).pipe(
       Effect.catchTag("DefinitionInvalid", (failure) =>
         versionConflictOf(failure, prepared.id)
       )

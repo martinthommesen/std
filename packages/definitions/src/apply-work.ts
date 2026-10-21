@@ -38,8 +38,9 @@ export interface OperationNote {
   /**
    * A change by an origin that does not own the definition (a label or
    * help-text change to a protected definition, or a local edit of a
-   * shipped one). It is applied to the effective record here; workstream
-   * 1B stores it as a `core.config_override` row (Contracts 8.2).
+   * shipped one). It is applied to the effective record here; the config
+   * service (`editDefinition`, through which the HTTP layer routes such
+   * edits) stores it as a `core.config_override` row (Contracts 8.2).
    */
   readonly localOverride: boolean;
 }

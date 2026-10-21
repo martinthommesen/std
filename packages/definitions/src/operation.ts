@@ -23,7 +23,12 @@
  *   (follow-up `DROP INDEX CONCURRENTLY`); removes a role, grant, access
  *   rule, subscription or permission, leaving a tombstone.
  *
- * Type changes are refused in v0.1.
+ * - `adopt`: moves a definition its set removed into the `local` layer
+ *   (Contracts 8.1); only the config service issues it.
+ *
+ * Role and permission names may also change through `update`, as set loads
+ * do; a local `update` of a name follows the same ownership rule as
+ * `rename`. Type changes are refused in v0.1.
  */
 import {
   Int,
@@ -117,6 +122,16 @@ export const OperationSchema = Union([
   }),
   /** Deletes a definition record (see the module comment for what each kind does). */
   Struct({ id: DefinitionIdSchema, op: Literal("delete"), version: Version }),
+  /**
+   * Moves a shipped definition its set removed into the `local` layer
+   * (Contracts 8.1). Only the config service issues it, after checking
+   * that the set removed the record; protected definitions refuse it.
+   */
+  Struct({
+    id: DefinitionIdSchema,
+    op: Literal("adopt"),
+    version: Version,
+  }),
 ]);
 
 /** A change-set operation. */
@@ -135,7 +150,10 @@ export type CreateOperation = Extract<
 export type TargetedOperation = Extract<Operation, { readonly id: string }>;
 
 /** The tags of lifecycle operations. */
-export type LifecycleOperationName = Exclude<TargetedOperation["op"], "update">;
+export type LifecycleOperationName = Exclude<
+  TargetedOperation["op"],
+  "update" | "adopt"
+>;
 
 /** The kinds `rename` applies to: the kinds with a name. */
 export const RENAMABLE: ReadonlySet<DefinitionKind> = new Set<DefinitionKind>([
@@ -169,6 +187,8 @@ export const NEVER_DELETED: ReadonlySet<DefinitionKind> =
 /**
  * Properties `update` may change, per kind. Field `required` may only
  * become true (a tightening with a data preflight); `default` is a constant.
+ * Role and permission names may change: rules refer to them by ID, so a
+ * rename needs no DDL (a new set version renames them, Contracts 8.4).
  */
 export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   accessRule: [
@@ -187,8 +207,8 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   index: [],
   namespace: ["helpText", "label"],
   override: [],
-  permission: ["helpText", "label"],
-  role: ["helpText", "label"],
+  permission: ["helpText", "label", "name"],
+  role: ["helpText", "label", "name"],
   subscription: [
     "classId",
     "condition",

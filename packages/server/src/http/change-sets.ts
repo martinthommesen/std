@@ -26,7 +26,9 @@ import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
 import { DEFINITION_KINDS } from "@std/definitions/definition";
 import type { AccessAction, DefinitionKind } from "@std/definitions/definition";
+import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
+import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { PlatformTable } from "@std/definitions/well-known";
@@ -38,6 +40,8 @@ import type { Redacted } from "effect";
 import type { ActingUser } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { tableOf } from "../catalog/definition-tables.ts";
+import type { ConfigEditRefused } from "../config/config-edit-refused.ts";
+import { editDefinition } from "../config/config-service.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
 import type {
   AuthorizeServices,
@@ -136,7 +140,12 @@ export const writtenColumns = (
     return ["state"];
   }
 
-  if (operation.op === "delete" || operation.op === "purge") {
+  // `adopt` changes only the owner layer, which no write supplies.
+  if (
+    operation.op === "delete" ||
+    operation.op === "purge" ||
+    operation.op === "adopt"
+  ) {
     return [];
   }
 
@@ -255,6 +264,43 @@ const schemaBusy = (failure: {
     })
   );
 
+/** The `Retry-After` of a write that lost to another config commit. */
+const STATE_RETRY_SECONDS = 1;
+
+/**
+ * Another config commit came first, after the config service's retries
+ * (a change set without a planned state never fails so): busy, retry soon.
+ *
+ * @returns `SchemaBusy`.
+ */
+const configStateChanged = () =>
+  Effect.fail(
+    new SchemaBusy({
+      changeSetId: null,
+      retryAfterSeconds: STATE_RETRY_SECONDS,
+    })
+  );
+
+/**
+ * The config service refused an edit of a shipped record (Contracts 8.2):
+ * the request is invalid.
+ *
+ * @param failure - The refusal.
+ * @returns `DefinitionInvalid` naming the definition.
+ */
+const configEditRefused = (failure: ConfigEditRefused) =>
+  Effect.fail(
+    new DefinitionInvalid({
+      problems: [
+        problem(
+          "unsupportedChange",
+          failure.definitionId ?? "",
+          failure.detail
+        ),
+      ],
+    })
+  );
+
 const schemaLockTimeout = (failure: { readonly attempts: number }) =>
   Effect.fail(new SchemaLockTimeout({ attempts: failure.attempts }));
 
@@ -314,6 +360,46 @@ export const applyAsActor = (
     requester: { roleIds: actor.roleIds, userId: actor.userId },
   }).pipe(
     Effect.catchTags({
+      ConfigStateChanged: configStateChanged,
+      DatabaseError: Effect.die,
+      DdlRefused: Effect.die,
+      ExistingDataViolates: existingDataViolates,
+      PlatformTableMismatch: Effect.die,
+      SchemaBusy: schemaBusy,
+      SchemaLockTimeout: schemaLockTimeout,
+      SchemaNeedsAttention: schemaNeedsAttention,
+    })
+  );
+
+/** An edit of a shipped config record through the config service. */
+export interface ShippedEdit {
+  readonly id: DefinitionId;
+  readonly version: number;
+  readonly changes: JsonObject;
+  /** The request's re-check in the main transaction. */
+  readonly authorize: NonNullable<ChangeSetRequest["authorize"]>;
+}
+
+/**
+ * Edits a shipped config record as the actor through the config service,
+ * which stores the change as local overrides (Contracts 8.2), and maps its
+ * errors like `applyAsActor`.
+ *
+ * @param actor - The acting user.
+ * @param edit - The record, its version, the changes and the re-check.
+ * @returns The change set's result.
+ */
+export const editAsActor = (actor: ActingUser, edit: ShippedEdit) =>
+  editDefinition({
+    acting: { authorize: edit.authorize, roleIds: actor.roleIds },
+    actorId: actor.userId,
+    changes: edit.changes,
+    id: edit.id,
+    version: edit.version,
+  }).pipe(
+    Effect.catchTags({
+      ConfigEditRefused: configEditRefused,
+      ConfigStateChanged: configStateChanged,
       DatabaseError: Effect.die,
       DdlRefused: Effect.die,
       ExistingDataViolates: existingDataViolates,

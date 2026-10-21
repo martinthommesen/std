@@ -259,7 +259,7 @@ const targetOf = (operation: Operation): DefinitionId =>
  * the change kinds; the definitions it took along (cascade) and the
  * dependents reported but allowed (1.7); whether it is a local change to a
  * definition the origin does not own (`localOverride`, stored as an
- * override by workstream 1B); and for a purge, the number of values or
+ * override by the config service); and for a purge, the number of values or
  * rows destroyed, counted under `SCHEMA_KEY` (the audit record of the
  * purge); for a retired or deleted role, the user-role assignments it had
  * (reported but allowed, Contracts 1.7).

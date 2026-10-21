@@ -1,0 +1,75 @@
+# Dedicated Postgres 18 for the Stage 0 inheritance benchmark (Contracts 2.6).
+# It never shares buffers with the test database on 54329.
+# Limits match the reference machine: 8 vCPU, 32 GB.
+name: std-bench
+services:
+  postgres:
+    image: postgres:18
+    container_name: std-bench-postgres
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "127.0.0.1:54330:5432"
+    cpus: 8
+    mem_limit: 32g
+    shm_size: 2g
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      # Memory: a quarter of RAM for shared buffers, the rest is OS cache.
+      - -c
+      - shared_buffers=8GB
+      - -c
+      - effective_cache_size=24GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=2GB
+      - -c
+      - wal_buffers=64MB
+      # WAL and checkpoints: bulk loads of 10M records must not checkpoint constantly.
+      - -c
+      - max_wal_size=16GB
+      - -c
+      - min_wal_size=2GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_compression=lz4
+      # NVMe storage.
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - maintenance_io_concurrency=200
+      # Parallelism sized for 8 vCPU.
+      - -c
+      - max_worker_processes=16
+      - -c
+      - max_parallel_workers=8
+      - -c
+      - max_parallel_workers_per_gather=4
+      - -c
+      - max_parallel_maintenance_workers=4
+      # JIT off: list and point queries are short; JIT compile time only adds
+      # tail latency when the 10M-row cost estimates cross jit_above_cost.
+      - -c
+      - jit=off
+      - -c
+      - track_io_timing=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - std-bench-pg:/var/lib/postgresql
+volumes:
+  std-bench-pg:
