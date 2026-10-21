@@ -112,6 +112,16 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Update set commit as one big batch, partially applied on error | change set: all operations in one main transaction; nothing applies on any error | Follow-up steps finish after the commit; their progress is in the journal (`core.schema_change`, `core.schema_change_step`). |
 | Update source and audit (`sys_update_xml`, `sys_audit`) | the journal: requester, source, each operation with target ID, kind, old and new name, change kinds, cascades and counts | Definition revisions (`core.definition_revision`) keep every definition as it was at each revision. |
 
+## Schema changes over the API and cache invalidation (Contracts 1.2 to 1.5, 6.2, 6.4)
+
+| ServiceNow | STD | Notes |
+| --- | --- | --- |
+| Creating tables and columns in Studio or the System Definition forms, captured in the current update set | `POST /api/v1/schema/change-sets` with a list of operations (`createNamespace`, `createClass`, `addField`, `setOverride`, `createRole`, `createAccessRule`, `rename`, `retire`, ...), applied as one change set (201) | All operations commit together or not at all; each names the version it was read at. `examples/quickstart.sh` creates its tables and its access rules this way. |
+| Editing a `sys_dictionary` or `sys_security_acl` record through its form or the Table API | Generic `POST`, `PATCH` and `DELETE` on a definition table (`core.field`, `core.access_rule`, ...) | Each becomes a one-operation change set; `PATCH` of `name` is a rename, of `state` a retire or reactivate. |
+| Update set progress and "Preview problems" | `GET /api/v1/schema/change-sets/{id}`: the journal entry and its follow-up steps | Readable by whoever may read `core.schema_change`. |
+| Cache flush after dictionary changes (`cache.do`), nodes picking changes up at different times | Schema revision: every config commit takes the next revision; every request runs at exactly one revision; other processes reload on `std_config` | Every response carries `STD-Schema-Revision`. A client that sends the revision it was built at gets `409 SchemaChanged` naming the changed fields instead of writing against definitions that changed under it (6.4). |
+| "Record has been modified by another user" on form submit | `If-Match` with the record's version; `409 VersionConflict` with the current version | Generic writes to definition records use `If-Match` too; on the change-set endpoint each operation names its `version`, and a stale one refuses the whole change set (`DefinitionInvalid`, `versionConflict`). |
+
 ## Retire versus delete (Contracts 1.6, 1.7)
 
 | ServiceNow | STD | Notes |
@@ -140,3 +150,11 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Instance clone, backup and restore (ServiceNow-operated) | `pg_dump` of the one STD database, restore, `std upgrade`, `std doctor` (8.6) | `docs/runbooks/upgrade-and-recovery.md`. |
 | Instance Scan, health checks | `std doctor [--json]` (1.10): 16 read-only checks, exit 0, 1 or 2 | Checks the catalog against the definitions, config layers, journal, dependency index, protected core definitions and server settings; repairs are separate commands. |
 | Dictionary entries that do not match the database ("dictionary out of sync") | `doctor` checks 2 to 5 | Missing, extra or mistyped columns, invalid indexes and constraints, orphans (reported, never dropped). |
+
+## Installing an instance (Step 1 quickstart; decision 0016)
+
+| ServiceNow | STD | Notes |
+| --- | --- | --- |
+| A new instance, provisioned by ServiceNow (personal developer instance, `zboot`) | `docker compose up`: Postgres, then the one-shot `std upgrade` (platform migrations and the `core` set), then `std serve` | Migrations never run at server start (1.9); the server starts only after the upgrade exits 0. The compose image is for development; the release image comes in Step 4. |
+| The `admin` user that a new instance ships with | `std bootstrap-admin`: creates one active user with the built-in `admin` role from `STD_ADMIN_LOGIN` and `STD_ADMIN_PASSWORD`, unless that login exists | Runs as the system user through the save pipeline (change entries included), once per login; it never resets a password. There is no default password in the server, only the quickstart's disposable demo one. |
+| Creating users and assigning roles in `sys_user` and `sys_user_has_role` | `POST /api/v1/tables/core.user/records` (with `password`, hashed by the service) and `POST /api/v1/tables/core.user_role/records` | Ordinary records: access rules, history and the outbox apply. |

@@ -1,0 +1,53 @@
+# 0016. The Step 1 quickstart: compose services, the first administrator, the script and its CI
+
+Status: accepted, 2026-10-22 (workstream `ws/1-quickstart`, the Step 1 runnable result). Code: `docker-compose.yml`, `docker/quickstart.Dockerfile`, `.dockerignore`, `packages/server/src/auth/bootstrap-admin.ts`, `packages/server/src/cli/main.ts`, `examples/quickstart.sh`, `examples/quickstart/src/ci.ts`, `.github/workflows/ci.yml` (step "Quickstart"), `.github/workflows/quickstart-compose.yml`. Tests: `packages/server/test/bootstrap-admin.test.ts`. Gate map: `docs/gates.md`.
+
+The plan's Step 1 runnable result: "`docker compose up` (which runs `std upgrade` once), then `examples/quickstart.sh`: creates `acme.asset` and `acme.laptop` through change sets, adds laptops, renames and retires a field, signs in as two users and shows what each sees, prints a record's history, and ends with `std doctor` exiting 0."
+
+## The first administrator: `std bootstrap-admin`
+
+Before this workstream, nothing created a user who could sign in. The core set creates only the system user, which never signs in (Contracts 3.1, decision 0014), and every other user is a `core.user` record that someone with access must create. Tests and `spike:demo` seed users through the save pipeline with `WriteAccess.allowAll` (`@std/testing/acme-fixture`), which is test code.
+
+Decision: a CLI command, `std bootstrap-admin`, not an HTTP route and not a definition-set fixture.
+
+- **What it does.** In one request transaction, as the system user, through the save pipeline (`createRecord`, with `WriteAccess.allowAll`, the production outbox hook points and scrypt), it creates an active `core.user` with a password and a `core.user_role` row for the built-in `admin` role (by ID, `BUILT_IN_ROLE_IDS.admin`). Both get change entries, and delivery rows if a subscription matches. Contracts 3.1 already reserves bootstrap for the system user.
+- **Idempotent by login.** When a user with the login exists (compared like sign-in: NFC, trimmed, case-folded), it changes nothing: no new user, no password reset, no role change. So compose can run it after every `std upgrade`, and it can never take over or reset an existing account.
+- **Settings.** `STD_ADMIN_LOGIN` (default `admin`), `STD_ADMIN_NAME` (default `Administrator`) and `STD_ADMIN_PASSWORD` (required, non-empty, read as `Redacted`). The password comes from the environment only, never from the command line, so it stays out of process listings and shell history. The server has no default password; only the quickstart's compose file and script carry a disposable demo one.
+- **Refusals.** Before the core set is loaded: `AdminBootstrapRefused` (`coreSetNotLoaded`, "run std upgrade first"), exit 1. A missing or empty password: a configuration error, exit 1. Extra arguments: usage, exit 2.
+- **Why not HTTP.** An unauthenticated route that creates an administrator is a backdoor for whoever reaches the port first. The CLI runs with the database owner's credentials, like `std upgrade`, outside the HTTP API: whoever can run it can already change every table.
+- **Why not a definition set.** Users are data, not configuration (Contracts 3.1, 8.1); sets carry no data in v0.1 (8.4), and a password in a set file would sit in git.
+
+## Compose
+
+- `upgrade`: a one-shot service, `pnpm --silent std upgrade && pnpm --silent std bootstrap-admin`, after Postgres is healthy. `server`: `std serve`, with `depends_on: upgrade: condition: service_completed_successfully`, so migrations never run at server start (Contracts 1.9) and the server starts only after both commands exit 0. The server listens on `0.0.0.0:8080` in the container and is published on `127.0.0.1:${STD_HTTP_PORT:-8080}`; its healthcheck fetches the OpenAPI document.
+- `postgres` is unchanged except that its host port is `${STD_POSTGRES_PORT:-54329}`, so a second stack can run beside the shared one (`docker compose -p <name>`). `docker compose config --hash postgres` is the same before and after this change, so the shared container is not recreated. `pnpm db:up` still starts only Postgres.
+- Upgrades are offline (Contracts 8.5): a second `docker compose up` while the server runs makes `upgrade` refuse ("std-server sessions are connected") and compose report it. `docker compose down` (the volume stays) and `up` rerun the upgrade, which then changes nothing and finds the administrator.
+- The image, `docker/quickstart.Dockerfile`, is a development image and deliberately minimal: `node:26.12.0-bookworm-slim` (the `devEngines` version, so pnpm downloads nothing), pnpm 12.14.0 (the `packageManager` version), the whole workspace minus `.dockerignore`, `pnpm install --frozen-lockfile --ignore-scripts` (the root `prepare` patches `tsc`, which the image never runs; lefthook needs git), and the `std` command run from its TypeScript sources as the root `pnpm std` script does. It is not the release image, which is Step 4D's (a built, smaller image with the web app).
+
+## The script: curl and jq, not the typed client
+
+`examples/quickstart.sh` uses bash, curl and jq against the HTTP API.
+
+- After `docker compose up`, the host needs nothing from the workspace: no Node 26, no pnpm install. The typed client (`@std/api/client`, `HttpApiClient.make`) would turn the script into a wrapper around an Effect program that needs both.
+- The script shows the wire format a reader would use from any language: the change-set payloads, `If-Match`, the filter text syntax, `labels`, `withheld` and history entries.
+- Drift is caught by CI instead of the type checker: the script runs on every push (below), stops at the first unexpected status (`set -euo pipefail`, and every request but the shown refusals must be 2xx), and checks the refusals it shows by printing their status and tag.
+
+What it does, each step under a heading: two change sets through `POST /api/v1/schema/change-sets` (the namespace, both classes, eight fields and the display field; then two roles and eight access rules modelled on Contracts 3.3: Alice manages every asset, Bob reads and renames his own and never reads `cost`); the users through the generic `core.user` and `core.user_role` routes as the administrator; two laptops and a plain asset added by Alice, then an update by each user for the history; a rename (`serial` to `serial_number`) and a retire (`notes`) as change sets, with the old name's `UnknownField`, the default selection without `notes`, its explicit selection and the `DefinitionRetired` refusal; each user's view of `/acme.asset` and `/acme.laptop`, and two refusals for Bob; the laptop's history as each user (fields under their current names, no `cost` for Bob); and `std doctor`, whose exit status the script exits with.
+
+**Reruns.** Definitions carry fixed IDs in the script, as a definition set's would (Contracts 1.1), so a rerun finds them by ID: the two change sets, the users, the rename and the retire happen only when missing, and the rerun says so. Records are new on every run: each run tags its laptops with `QUICKSTART_RUN` (default: the UTC time), and lists, updates and history only show that run's records. So a second run converges for configuration and clearly adds uniquely named data. Laptops are created with the field names as they are at the time (`serial` or `serial_number`, with `notes` only while it is active), read from `core.field` by ID.
+
+The quickstart needs a database where the `acme` namespace is free: the `acme` app set (`examples/acme`, loaded with `std upgrade --set examples/acme`) reserves it (Contracts 1.8), and the first change set is then refused.
+
+`std doctor` runs through `STD_DOCTOR_COMMAND` (default `docker compose exec -T server pnpm --silent std doctor`): doctor is a CLI command that reads the database directly (Contracts 1.10), not an endpoint.
+
+## CI
+
+- **`pnpm quickstart:ci`** (`examples/quickstart/src/ci.ts`, a workspace package because it needs `@std/testing`) is the `ci.yml` step "Quickstart", so `pnpm ci:local` runs it too. It needs no Docker: on an empty database from the harness (`testDatabaseService({ empty: true })`, dropped at the end or by the janitor), it runs `std upgrade` and `std bootstrap-admin` as child processes, starts `std serve` on a port the system picks (`STD_HTTP_PORT=0`, the address read from the server's "Listening on" log line), and runs the script twice with doctor through the CLI. Any nonzero exit fails the step; the server's log is printed only then. A run takes about 5 s.
+- **`.github/workflows/quickstart-compose.yml`** runs the real path on GitHub: `docker compose up --build --detach --wait`, the script twice, `docker compose down --volumes`. It is a separate workflow because `pnpm ci:local` runs every `run:` step of `ci.yml`, and locally `docker compose up` for the project `std` would touch the Postgres container every checkout shares. Locally the compose path was tried as `std-quickstart-<random>` with other ports (`STD_POSTGRES_PORT`, `STD_HTTP_PORT`), then removed with its volume and images.
+
+## Verified facts
+
+- `docker compose up --wait` (Compose 5.6) treats the one-shot `upgrade` service that exited 0 as done and waits for `server` to be healthy.
+- With `STD_HTTP_PORT=0`, `std serve` listens on a free port and logs it (`Listening on http://127.0.0.1:<port>`).
+- Doctor on the quickstart's database, after both runs, reports only the informational check 13 (`notApplicable`) and exits 0.
+- A rename leaves earlier history entries readable under the new name: the laptop's version 1 shows `serial_number` though it was written as `serial`.
