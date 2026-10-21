@@ -191,7 +191,8 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
 
 /**
  * Checks that every reference value the write sets names a target the
- * caller can see (3.6). Checked per target class, in field order.
+ * caller can see (3.6): one check per written reference field, in field
+ * order; the first failure is reported.
  */
 const checkReferences = Effect.fn("Records.checkReferences")(
   function* checkReferences(
