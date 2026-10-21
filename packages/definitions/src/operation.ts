@@ -56,6 +56,7 @@ import {
 } from "./definition.ts";
 import type { DefinitionKind } from "./definition.ts";
 import { DefinitionIdSchema } from "./ids.ts";
+import type { DefinitionId } from "./ids.ts";
 
 const Version = Int.check(isGreaterThanOrEqualTo(1));
 
@@ -150,43 +151,93 @@ export interface OperationForm {
   readonly target: boolean;
 }
 
-const creating = (kind: DefinitionKind): OperationForm => ({
-  create: "always",
-  creates: kind,
-  target: false,
-});
+/** The operation of one tag. */
+type OperationOf<K extends Operation["op"]> = Extract<
+  Operation,
+  { readonly op: K }
+>;
 
-const targeting: OperationForm = {
-  create: "never",
-  creates: null,
-  target: true,
-};
+/**
+ * The form one tag's schema implies, so a wrong table entry fails to
+ * compile: a create carries a `definition` (only without a `version` when
+ * it has one), its kind is the draft's, and a tag acts on a stored target
+ * when it names an `id` or carries a `version` (`setOverride` replacing
+ * an override).
+ */
+interface FormOf<K extends Operation["op"]> {
+  readonly create: "definition" extends keyof OperationOf<K>
+    ? "version" extends keyof OperationOf<K>
+      ? "versionless"
+      : "always"
+    : "never";
+  readonly creates: OperationOf<K> extends {
+    readonly definition: { readonly kind: infer D };
+  }
+    ? D
+    : null;
+  readonly target: "id" extends keyof OperationOf<K>
+    ? true
+    : "version" extends keyof OperationOf<K>
+      ? true
+      : false;
+}
 
 /**
  * The form of every operation tag: which tags create (and what kind) and
- * which act on a stored target. The engine takes created kinds and
- * client-chosen IDs from it (`apply.ts`, `occupancy.ts`).
+ * which act on a stored target, each entry checked against the tag's
+ * schema by its type. The engine takes created kinds and client-chosen
+ * IDs from it (`apply.ts`, `occupancy.ts`), and the HTTP layer the stored
+ * target it checks for visibility (`storedTargetId`).
  */
-export const OPERATION_FORMS: Readonly<Record<Operation["op"], OperationForm>> =
-  {
-    addField: creating("field"),
-    addIndex: creating("index"),
-    adopt: targeting,
-    createAccessRule: creating("accessRule"),
-    createClass: creating("class"),
-    createGrant: creating("grant"),
-    createNamespace: creating("namespace"),
-    createPermission: creating("permission"),
-    createRole: creating("role"),
-    createSubscription: creating("subscription"),
-    delete: targeting,
-    purge: targeting,
-    reactivate: targeting,
-    rename: targeting,
-    retire: targeting,
-    setOverride: { create: "versionless", creates: "override", target: true },
-    update: targeting,
-  };
+export const OPERATION_FORMS = {
+  addField: { create: "always", creates: "field", target: false },
+  addIndex: { create: "always", creates: "index", target: false },
+  adopt: { create: "never", creates: null, target: true },
+  createAccessRule: { create: "always", creates: "accessRule", target: false },
+  createClass: { create: "always", creates: "class", target: false },
+  createGrant: { create: "always", creates: "grant", target: false },
+  createNamespace: { create: "always", creates: "namespace", target: false },
+  createPermission: { create: "always", creates: "permission", target: false },
+  createRole: { create: "always", creates: "role", target: false },
+  createSubscription: {
+    create: "always",
+    creates: "subscription",
+    target: false,
+  },
+  delete: { create: "never", creates: null, target: true },
+  purge: { create: "never", creates: null, target: true },
+  reactivate: { create: "never", creates: null, target: true },
+  rename: { create: "never", creates: null, target: true },
+  retire: { create: "never", creates: null, target: true },
+  setOverride: { create: "versionless", creates: "override", target: true },
+  update: { create: "never", creates: null, target: true },
+} as const satisfies { readonly [K in Operation["op"]]: FormOf<K> };
+
+/**
+ * The stored definition an operation acts on, as `OPERATION_FORMS` says:
+ * the `id` of a targeted tag, the override a versioned `setOverride`
+ * replaces, nothing for a create.
+ *
+ * @param operation - The operation.
+ * @returns The stored target's ID, or undefined.
+ */
+export const storedTargetId = (
+  operation: Operation
+): DefinitionId | undefined => {
+  const form: OperationForm = OPERATION_FORMS[operation.op];
+
+  if (!form.target) {
+    return undefined;
+  }
+
+  if ("id" in operation) {
+    return operation.id;
+  }
+
+  return "version" in operation && operation.version !== null
+    ? operation.definition.id
+    : undefined;
+};
 
 /** An operation's tag. */
 export type OperationName = Operation["op"];

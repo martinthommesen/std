@@ -48,6 +48,7 @@ import { referencedIds } from "@std/definitions/dependencies";
 import type { Referencing } from "@std/definitions/dependencies";
 import type { DefinitionId } from "@std/definitions/ids";
 import { idInUseRefusal } from "@std/definitions/occupancy";
+import { storedTargetId } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -319,10 +320,9 @@ const neededIds = (
 ): readonly DefinitionId[] => {
   if ("definition" in operation) {
     const references = referencedIds(operation.definition);
+    const target = storedTargetId(operation);
 
-    return operation.op === "setOverride" && operation.version !== null
-      ? [operation.definition.id, ...references]
-      : references;
+    return target === undefined ? references : [target, ...references];
   }
 
   // An earlier create's payload, or a stored target: its references are
@@ -392,7 +392,7 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
       snapshot: scope.snapshot,
     };
 
-    const target = "definition" in operation ? undefined : operation.id;
+    const target = storedTargetId(operation);
 
     // The target first: nothing stored about it (its references included)
     // is read until it has proved visible.

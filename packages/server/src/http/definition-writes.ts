@@ -28,6 +28,7 @@ import type { Definition, DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
+import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
@@ -282,10 +283,55 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
   }
 );
 
+/** A `PATCH` body field whose value stands for its own operation. */
+export interface PatchFieldOperation {
+  /** The body column, the same name as the definition property. */
+  readonly field: "name" | "state";
+  /** The value it stands for; `"any"` for every value. */
+  readonly value: JsonValue;
+  readonly op: "rename" | "retire" | "reactivate";
+}
+
 /**
- * The operations a `PATCH` body stands for: a rename for `name`, a retire
- * or reactivate for `state`, an update for the rest (an override is
- * replaced whole).
+ * How a `PATCH` body's fields become operations (Contracts 1.4): `name`
+ * is a rename, `state` a retire or a reactivation. `updateOperations`
+ * dispatches by reading this inventory and nothing else.
+ */
+export const PATCH_FIELD_OPERATIONS: readonly PatchFieldOperation[] = [
+  { field: "name", op: "rename", value: "any" },
+  { field: "state", op: "retire", value: "retired" },
+  { field: "state", op: "reactivate", value: "active" },
+];
+
+/**
+ * Every other field of a `PATCH` body: an update, or for an override the
+ * override replaced whole.
+ */
+export const PATCH_OTHER_OPERATIONS = {
+  definition: "update",
+  override: "setOverride",
+} as const;
+
+const PATCH_BUILDERS: Readonly<
+  Record<
+    PatchFieldOperation["op"],
+    (id: DefinitionId, version: number, value: JsonValue) => JsonObject
+  >
+> = {
+  reactivate: (id, version) => ({ id, op: "reactivate", version }),
+  rename: (id, version, value) => ({ id, name: value, op: "rename", version }),
+  retire: (id, version) => ({ id, op: "retire", version }),
+};
+
+const sameValue = (left: JsonValue, right: JsonValue | undefined): boolean =>
+  stringifyJson(left) === stringifyJson(right ?? null);
+
+/**
+ * The operations a `PATCH` body stands for, from `PATCH_FIELD_OPERATIONS`
+ * and `PATCH_OTHER_OPERATIONS`: first the other fields as one update (an
+ * override is replaced whole), then each dispatched field in inventory
+ * order. A fixed-value field equal to the stored value stands for nothing;
+ * a value no entry lists is read-only.
  *
  * @param current - The definition as stored.
  * @param version - The version from `If-Match`.
@@ -298,43 +344,72 @@ export const updateOperations = Effect.fn("Http.definitionUpdate")(
     version: number,
     body: Readonly<Record<string, JsonValue>>
   ) {
-    const { name, state, ...changes } = yield* fromResult(
+    const properties = yield* fromResult(
       propertiesOf(current.kind, body, true)
     );
 
+    const dispatched = new Set<string>(
+      PATCH_FIELD_OPERATIONS.map((entry) => entry.field)
+    );
+
+    const changes = Object.fromEntries(
+      Object.entries(properties).filter(([key]) => !dispatched.has(key))
+    );
+
     const { id } = current;
+    const stored: JsonObject = current;
     const operations: JsonObject[] = [];
 
     if (current.kind === "override") {
-      const json: JsonObject = current;
-
       // The draft leaves out what the engine keeps: state, version,
       // enforcement.
       const draft = Object.fromEntries(
-        Object.entries({ ...json, ...changes }).filter(
+        Object.entries({ ...stored, ...changes }).filter(
           ([key]) => !STORED_ONLY.has(key)
         )
       );
 
-      operations.push({ definition: draft, op: "setOverride", version });
-    } else if (Object.keys(changes).length > 0) {
-      operations.push({ changes, id, op: "update", version });
-    }
-
-    if (name !== undefined) {
-      operations.push({ id, name, op: "rename", version });
-    }
-
-    if (state !== undefined && state !== current.state) {
-      if (state !== "retired" && state !== "active") {
-        return yield* readOnlyField("state");
-      }
-
       operations.push({
-        id,
-        op: state === "retired" ? "retire" : "reactivate",
+        definition: draft,
+        op: PATCH_OTHER_OPERATIONS.override,
         version,
       });
+    } else if (Object.keys(changes).length > 0) {
+      operations.push({
+        changes,
+        id,
+        op: PATCH_OTHER_OPERATIONS.definition,
+        version,
+      });
+    }
+
+    for (const field of dispatched) {
+      const value = properties[field];
+
+      const entries = PATCH_FIELD_OPERATIONS.filter(
+        (entry) => entry.field === field
+      );
+
+      const anyValue = entries.some((entry) => entry.value === "any");
+
+      const entry = entries.find(
+        (candidate) =>
+          candidate.value === "any" ||
+          (value !== undefined && sameValue(candidate.value, value))
+      );
+
+      if (
+        value === undefined ||
+        (!anyValue && sameValue(value, stored[field]))
+      ) {
+        continue;
+      }
+
+      if (entry === undefined) {
+        return yield* readOnlyField(field);
+      }
+
+      operations.push(PATCH_BUILDERS[entry.op](id, version, value));
     }
 
     const result: Operation[] = [];

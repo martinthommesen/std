@@ -6,7 +6,7 @@
  * and retired fields through the read compiler and the save pipeline.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { OverrideDraft } from "@std/definitions/definition";
+import type { Definition, OverrideDraft } from "@std/definitions/definition";
 import {
   DEPENDENCY_KINDS,
   REFERENCING_KINDS,
@@ -59,6 +59,8 @@ import { runDoctor } from "../src/doctor/doctor.ts";
 import {
   createOperation,
   deleteOperation,
+  PATCH_FIELD_OPERATIONS,
+  PATCH_OTHER_OPERATIONS,
   updateOperations,
 } from "../src/http/definition-writes.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
@@ -1232,15 +1234,38 @@ const expectedCoverage = (
     ["update", "visible", "hidden|missing", revision, "generic"] as const,
   ]).map(coverageKey);
 
-/** Bodies that reach every form a generic PATCH stands for. */
-const PATCH_PROBES: readonly Readonly<Record<string, JsonValue>>[] = [
-  { label: "Probe" },
-  { name: "probe" },
-  { description: "Probe" },
-  { active: false },
-  { state: "retired" },
-  { state: "active" },
-];
+/**
+ * The probe bodies of a generic PATCH, from the routing inventory: one per
+ * `PATCH_FIELD_OPERATIONS` entry, and one other field of the stored
+ * definition's table (its own value) for `PATCH_OTHER_OPERATIONS`.
+ * @param stored - A stored definition.
+ * @returns The bodies.
+ */
+const patchProbes = (
+  stored: Definition
+): readonly Readonly<Record<string, JsonValue>>[] => {
+  const dispatched = new Set<string>(
+    PATCH_FIELD_OPERATIONS.map((entry) => entry.field)
+  );
+
+  const json: JsonObject = stored;
+
+  const other = tableOf(stored.kind).columns.find(
+    (spec) =>
+      !dispatched.has(spec.property) &&
+      !spec.column.startsWith("enforcement") &&
+      json[spec.property] !== undefined
+  );
+
+  return [
+    ...PATCH_FIELD_OPERATIONS.map((entry) => ({
+      [entry.field]: entry.value === "any" ? "probe_value" : entry.value,
+    })),
+    ...(other === undefined
+      ? []
+      : [{ [other.column]: json[other.property] ?? null }]),
+  ];
+};
 
 /**
  * The tags a generic POST reaches, from `createOperation` on every
@@ -1299,7 +1324,7 @@ const targetReach = Effect.fn("Matrix.targetReach")(function* targetReach(
     for (const current of variants) {
       reached.add(deleteOperation(current.id, current.version).op);
 
-      for (const body of PATCH_PROBES) {
+      for (const body of patchProbes(current)) {
         const result = yield* Effect.result(
           updateOperations(current, current.version, body)
         );
@@ -1311,6 +1336,14 @@ const targetReach = Effect.fn("Matrix.targetReach")(function* targetReach(
         }
       }
     }
+  }
+
+  // The probes reach every tag the inventory can emit.
+  for (const tag of [
+    ...PATCH_FIELD_OPERATIONS.map((entry) => entry.op),
+    ...Object.values(PATCH_OTHER_OPERATIONS),
+  ]) {
+    assert.isTrue(reached.has(tag), `the PATCH probes never reach ${tag}`);
   }
 
   return reached;
