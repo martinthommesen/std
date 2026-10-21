@@ -115,10 +115,10 @@ periodUnit  = day | week | month | quarter | year
 - `= ANY($1::text[])` and `<> ALL(...)` with arrays bound through `@effect/sql-pg` `unsafe(text, values)` work for every cast used (`text`, `int4`, `int8`, `numeric`, `date`, `timestamptz`, `uuid`, `boolean`).
 - The differential test (`differential-postgres.test.ts`), default budget, on this machine: 3,159 generated cases, 20,163 checked conditions over the fixture (every condition-capable type, text and long text in both case settings, a child class, a self-referencing target for three-hop paths, masked fields, hidden targets, previous images), 80,627 row comparisons, all 640 permitted (operator, type, profile) combinations covered at least 18 times; no disagreement. A deliberately broken negated `eq` form is found and shrunk to a one-atom case within seconds; that case is kept as `test/fixtures/differential/negated-eq-keeps-empty-rows.json`.
 - The fold-table equality for every scalar value and `LIKE` escaping for every ASCII character are tested in `@std/values` (`fold-postgres.test.ts`, `like-postgres.test.ts`) and not repeated here.
+- The Postgres tests (`sql-postgres.test.ts`, `differential-postgres.test.ts`) get their database from `@std/testing` (`testDatabaseLayer({ empty: true })`, a dev dependency), so they read values through STD's SQL layer and its text codecs, and their databases are cleaned up by the harness's janitor like every other test database.
 
 ## Open items
 
-- Tests use their own database helper (`test/support/postgres.ts`, codecs copied from `@std/values`'s test helper); switch to `@std/testing` when it lands.
 - `ClassView` will be implemented by `@std/definitions` over the config snapshot; `FieldInfo.choices` should be filled so choice literals naming no choice are refused.
 - The record compiler (0C) supplies the `column` and `join` hooks; the differential test's hooks in `test/support/differential.ts` are a working example of masks, guards and the previous image.
 - The web app passes a pinned Temporal polyfill through `resolveCondition(..., { temporal })` where the global is missing.
