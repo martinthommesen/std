@@ -8,9 +8,11 @@
  * every problem it finds; an empty list means the configuration is valid.
  */
 import { decodeIn } from "@std/values/codec";
-import { maxLengthOf } from "@std/values/field-type";
+import { FieldTypeSchema, maxLengthOf } from "@std/values/field-type";
 import type { FieldKind, FieldType } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
+import { isFailure } from "effect/Result";
+import { decodeUnknownResult } from "effect/Schema";
 
 import { conditionProblems } from "./condition-view.ts";
 import type {
@@ -442,6 +444,43 @@ const checkField = (
   }
 };
 
+const decodeFieldType = decodeUnknownResult(FieldTypeSchema);
+
+/**
+ * Checks an override's bounds as values of the field's type: integers
+ * for integer fields, big integer text in range, decimal text that fits the
+ * precision and scale. Each bound is checked by decoding the field type with
+ * only that bound set, so the type's own rules apply.
+ *
+ * @param inherited - The inherited effective type.
+ * @param override - The override.
+ * @returns A message, or undefined when both bounds are values of the type.
+ */
+const boundValueProblem = (
+  inherited: FieldType,
+  override: OverrideDefinition
+): string | undefined => {
+  const base: Readonly<Record<string, JsonValue>> = inherited;
+
+  const settings = Object.fromEntries(
+    Object.entries(base).filter(([key]) => key !== "min" && key !== "max")
+  );
+
+  for (const [key, bound] of [
+    ["min", override.min],
+    ["max", override.max],
+  ] as const) {
+    if (
+      bound !== null &&
+      isFailure(decodeFieldType({ ...settings, [key]: bound }))
+    ) {
+      return `The ${key === "min" ? "minimum" : "maximum"} is not a valid ${inherited.kind} bound for this field.`;
+    }
+  }
+
+  return undefined;
+};
+
 const overrideBoundsProblem = (
   inherited: FieldType,
   override: OverrideDefinition
@@ -454,6 +493,12 @@ const overrideBoundsProblem = (
 
   if (kind !== "integer" && kind !== "bigInteger" && kind !== "decimal") {
     return `Fields of type ${kind} have no numeric bounds.`;
+  }
+
+  const malformed = boundValueProblem(inherited, override);
+
+  if (malformed !== undefined) {
+    return malformed;
   }
 
   const tightened = tightenType(inherited, override);
@@ -492,6 +537,42 @@ const loosens = (
   problems.push(problem("overrideLoosens", override.id, message));
 };
 
+const checkOverrideMaxLength = (
+  problems: Problems,
+  override: OverrideDefinition,
+  inherited: FieldType
+): void => {
+  if (override.maxLength === null) {
+    return;
+  }
+
+  if (inherited.kind !== "text" && inherited.kind !== "longText") {
+    problems.push(
+      problem(
+        "overrideInvalid",
+        override.id,
+        `Fields of type ${inherited.kind} have no max length.`
+      )
+    );
+
+    return;
+  }
+
+  if (override.maxLength > maxLengthOf(inherited)) {
+    loosens(problems, override, "The max length may only be lowered.");
+  }
+
+  if (override.maxLength < 1) {
+    problems.push(
+      problem(
+        "overrideInvalid",
+        override.id,
+        "The max length must be at least 1."
+      )
+    );
+  }
+};
+
 const checkOverrideTightening = (
   problems: Problems,
   snapshot: ConfigSnapshot,
@@ -510,31 +591,7 @@ const checkOverrideTightening = (
     loosens(problems, override, "A read-only field cannot become editable.");
   }
 
-  if (override.maxLength !== null) {
-    if (inherited.type.kind === "text" || inherited.type.kind === "longText") {
-      if (override.maxLength > maxLengthOf(inherited.type)) {
-        loosens(problems, override, "The max length may only be lowered.");
-      }
-
-      if (override.maxLength < 1) {
-        problems.push(
-          problem(
-            "overrideInvalid",
-            override.id,
-            "The max length must be at least 1."
-          )
-        );
-      }
-    } else {
-      problems.push(
-        problem(
-          "overrideInvalid",
-          override.id,
-          `Fields of type ${inherited.type.kind} have no max length.`
-        )
-      );
-    }
-  }
+  checkOverrideMaxLength(problems, override, inherited.type);
 
   const bounds = overrideBoundsProblem(inherited.type, override);
 
@@ -548,14 +605,19 @@ const checkOverrideTightening = (
     );
   }
 
-  if (override.default !== null) {
-    const found = defaultProblem(
-      tightenType(inherited.type, override),
-      override.default
-    );
+  const effective = effectiveField(snapshot, override.classId, field);
+
+  if (effective.default !== null && bounds === undefined) {
+    const found = defaultProblem(effective.type, effective.default);
 
     if (found !== undefined) {
-      problems.push(problem("invalidDefault", override.id, found));
+      problems.push(
+        problem(
+          "invalidDefault",
+          override.id,
+          `With this override the default of ${field.id} is invalid: ${found}`
+        )
+      );
     }
   }
 };

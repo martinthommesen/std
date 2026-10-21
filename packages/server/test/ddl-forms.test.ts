@@ -20,7 +20,7 @@ import {
   CORE_SET_DIRECTORY,
 } from "../src/config/set-files.ts";
 import { guardStatements } from "../src/schema/change-set.ts";
-import { checkDdl, phaseOfForm } from "../src/schema/ddl-forms.ts";
+import { checkDdl, maskQuoted, phaseOfForm } from "../src/schema/ddl-forms.ts";
 import { ASSUME_POPULATED, planChangeSet } from "../src/schema/plan.ts";
 import type { Preflight } from "../src/schema/plan.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
@@ -251,6 +251,43 @@ describe("ddl-forms", () => {
         statement
       );
     }
+
+    // SQL keywords inside literals and quoted identifiers are data.
+    const literals = [
+      [
+        `ALTER TABLE ${table} ADD COLUMN "motto" text DEFAULT 'SET NOT NULL'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ADD COLUMN "note" text DEFAULT 'ALTER COLUMN x TYPE int, now()'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ADD COLUMN "quote" text DEFAULT 'it''s DEFAULT now()'::text`,
+        "addColumn",
+      ],
+      [
+        `ALTER TABLE ${table} ALTER COLUMN "SET NOT NULL" SET DEFAULT 'x'::text`,
+        "setDefault",
+      ],
+      [`ALTER TABLE ${table} ALTER COLUMN "type" DROP DEFAULT`, "dropDefault"],
+    ] as const;
+
+    for (const [statement, form] of literals) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { form, ok: true },
+        statement
+      );
+    }
+
+    assert.deepStrictEqual(
+      checkDdl(
+        `ALTER TABLE ${table} ADD COLUMN "motto" text DEFAULT 'x'::text || now()`
+      ),
+      { ok: false, reason: "volatileDefault" }
+    );
+    assert.strictEqual(maskQuoted(`a 'b''c' "d" e`), `a '____' "_" e`);
 
     assert.deepStrictEqual(
       checkDdl(

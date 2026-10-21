@@ -212,26 +212,69 @@ export type DdlCheck =
   | { readonly ok: true; readonly form: DdlForm }
   | { readonly ok: false; readonly reason: DdlRefusal };
 
+const QUOTES: ReadonlySet<string> = new Set(["'", '"']);
+
+const MASK = "_";
+
+/**
+ * The statement with the contents of every string literal and quoted
+ * identifier replaced by `_`, same length and same positions, so keyword
+ * checks never read data or names as SQL (a default `'SET NOT NULL'` or a
+ * column named `"type"` is not syntax). A doubled quote inside a literal or
+ * identifier is part of its content.
+ *
+ * @param sql - A statement.
+ * @returns The masked statement.
+ */
+export const maskQuoted = (sql: string): string => {
+  let masked = "";
+  let quote: string | null = null;
+
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql.charAt(index);
+
+    if (quote === null) {
+      masked += char;
+
+      if (QUOTES.has(char)) {
+        quote = char;
+      }
+    } else if (char === quote && sql.charAt(index + 1) === quote) {
+      masked += MASK + MASK;
+      index += 1;
+    } else if (char === quote) {
+      masked += char;
+      quote = null;
+    } else {
+      masked += MASK;
+    }
+  }
+
+  return masked;
+};
+
 const DEFAULT_KEYWORD = " DEFAULT ";
 
 const CLAUSE_ENDS = [",\n", "\n)"] as const;
 
 /**
- * The expressions after every ` DEFAULT ` of a statement, each up to the end
- * of its column definition.
+ * The expressions after every ` DEFAULT ` keyword of a statement, each up to
+ * the end of its column definition. Keywords and clause ends are found in
+ * the masked text, the expressions are taken from the original.
  *
  * @param sql - A statement.
+ * @param masked - The same statement with quoted contents masked.
  * @returns The default expressions.
  */
-const defaultExpressions = (sql: string): readonly string[] => {
+const defaultExpressions = (sql: string, masked: string): readonly string[] => {
   const found: string[] = [];
-  let from = sql.indexOf(DEFAULT_KEYWORD);
+  let from = masked.indexOf(DEFAULT_KEYWORD);
 
   while (from !== -1) {
     const start = from + DEFAULT_KEYWORD.length;
 
     const ends = CLAUSE_ENDS.flatMap((end) => {
-      const index = sql.indexOf(end, start);
+      const index = masked.indexOf(end, start);
 
       return index === -1 ? [] : [index];
     });
@@ -239,14 +282,16 @@ const defaultExpressions = (sql: string): readonly string[] => {
     const end = ends.length === 0 ? sql.length : Math.min(...ends);
 
     found.push(sql.slice(start, end).trim());
-    from = sql.indexOf(DEFAULT_KEYWORD, start);
+    from = masked.indexOf(DEFAULT_KEYWORD, start);
   }
 
   return found;
 };
 
-const hasVolatileDefault = (sql: string): boolean =>
-  defaultExpressions(sql).some((expression) => !CONSTANT_ONLY.test(expression));
+const hasVolatileDefault = (sql: string, masked: string): boolean =>
+  defaultExpressions(sql, masked).some(
+    (expression) => !CONSTANT_ONLY.test(expression)
+  );
 
 const createTableProblem = (sql: string): DdlRefusal | undefined => {
   const actions = [...sql.matchAll(ON_DELETE)].map(
@@ -270,15 +315,17 @@ const createTableProblem = (sql: string): DdlRefusal | undefined => {
  * @returns Its form, or why it is refused.
  */
 export const checkDdl = (sql: string): DdlCheck => {
-  if (TYPE_CHANGE.test(sql)) {
+  const masked = maskQuoted(sql);
+
+  if (TYPE_CHANGE.test(masked)) {
     return { ok: false, reason: "typeChange" };
   }
 
-  if (SET_NOT_NULL.test(sql)) {
+  if (SET_NOT_NULL.test(masked)) {
     return { ok: false, reason: "setNotNull" };
   }
 
-  if (hasVolatileDefault(sql)) {
+  if (hasVolatileDefault(sql, masked)) {
     return { ok: false, reason: "volatileDefault" };
   }
 
@@ -288,7 +335,8 @@ export const checkDdl = (sql: string): DdlCheck => {
     return { ok: false, reason: "unknownForm" };
   }
 
-  const problem = form === "createTable" ? createTableProblem(sql) : undefined;
+  const problem =
+    form === "createTable" ? createTableProblem(masked) : undefined;
 
   return problem === undefined
     ? { form, ok: true }

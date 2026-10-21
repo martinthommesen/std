@@ -92,6 +92,23 @@ describe("core-set", () => {
           ),
           ["asset", "laptop", "monitor"]
         );
+        // The deny rules 5, 6 and 10 target cost, purchased_on and docked_to.
+        assert.deepStrictEqual(
+          yield* values(
+            `SELECT from_id::text || ' ' || to_id::text AS value FROM core.config_dependency
+             WHERE kind = 'access_rule_on' AND from_id = ANY($1::uuid[]) AND to_id = ANY($2::uuid[])
+             ORDER BY 1`,
+            [
+              "{49bb7831-2761-4d26-859d-a0f0c1207b39,51ea7452-4596-4f5c-bc1c-64170b739f99,70aa3177-5c27-4708-a725-d68c63bbe22c}",
+              "{6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717,4da75c5e-eb4d-499d-ae10-ed167bfb3185,83ec3835-6898-46f3-ae2e-afdbc3f5d407}",
+            ]
+          ),
+          [
+            "49bb7831-2761-4d26-859d-a0f0c1207b39 6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717",
+            "51ea7452-4596-4f5c-bc1c-64170b739f99 4da75c5e-eb4d-499d-ae10-ed167bfb3185",
+            "70aa3177-5c27-4708-a725-d68c63bbe22c 83ec3835-6898-46f3-ae2e-afdbc3f5d407",
+          ]
+        );
       })
     );
   });

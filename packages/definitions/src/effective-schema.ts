@@ -9,6 +9,7 @@
  */
 import { compareDecimals, parseDecimal } from "@std/values/decimal";
 import type { FieldType, FieldTypeOf } from "@std/values/field-type";
+import { compareBigIntegers, parseBigInteger } from "@std/values/integer";
 import type { JsonValue } from "@std/values/json-value";
 
 import type { FieldDefinition, OverrideDefinition } from "./definition.ts";
@@ -43,7 +44,8 @@ export type NumericKind = "integer" | "bigInteger" | "decimal";
  * @param kind - `integer`, `bigInteger` or `decimal`.
  * @param left - A bound.
  * @param right - Another bound.
- * @returns Negative, zero or positive; 0 when either does not parse.
+ * @returns Negative, zero or positive; 0 when either is not a value of the
+ *   kind (validation reports malformed bounds before anything compares them).
  */
 export const compareBounds = (
   kind: NumericKind,
@@ -51,17 +53,16 @@ export const compareBounds = (
   right: Bound
 ): number => {
   if (kind === "integer") {
-    return Number(left) - Number(right);
+    const difference = Number(left) - Number(right);
+
+    return Number.isNaN(difference) ? 0 : difference;
   }
 
   if (kind === "bigInteger") {
-    const difference = BigInt(left) - BigInt(right);
+    const a = parseBigInteger(String(left));
+    const b = parseBigInteger(String(right));
 
-    if (difference === 0n) {
-      return 0;
-    }
-
-    return difference < 0n ? -1 : 1;
+    return a.ok && b.ok ? compareBigIntegers(a.value, b.value) : 0;
   }
 
   const a = parseDecimal(String(left));
