@@ -25,4 +25,8 @@ pre-commit:
         - "*.yml"
         - "*.graphql"
         - "*.gql"
+      # Vendored Effect source carries its own Oxlint config with plugins we do not install.
+      exclude:
+        - "vendor/**"
+        - ".claude/**"
       stage_fixed: true
