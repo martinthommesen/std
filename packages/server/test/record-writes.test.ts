@@ -17,6 +17,7 @@ import {
 import { resolveWriteBody } from "../src/records/write-body.ts";
 import {
   changeLog,
+  asUser,
   recordsTestLayer,
   rootVersion,
   rowCount,
@@ -26,10 +27,8 @@ import {
 } from "./records-support.ts";
 import { ACME, values } from "./schema-support.ts";
 
-const actorId = USERS.alice;
-
 const createAs = (endpointClassId: string, body: JsonValue) =>
-  createRecord({ actorId, body, endpointClassId });
+  createRecord({ body, endpointClassId });
 
 const newLaptop = (name: string) =>
   createAs(ACME.laptop, {
@@ -87,7 +86,6 @@ describe("record-writes", () => {
             const laptop = yield* newLaptop(`delete-${endpoint}`);
 
             const updated = yield* updateRecord({
-              actorId,
               body: { status: "spare" },
               endpointClassId: ACME.asset,
               expectedVersion: 1,
@@ -95,7 +93,6 @@ describe("record-writes", () => {
             });
 
             const deleted = yield* deleteRecord({
-              actorId,
               endpointClassId: endpoint,
               expectedVersion: updated.version,
               id: laptop.id,
@@ -121,12 +118,11 @@ describe("record-writes", () => {
           const laptop = yield* newLaptop("version-1");
 
           const updated = yield* updateRecord({
-            actorId: USERS.bob,
             body: { serial: "SN-NEW" },
             endpointClassId: ACME.laptop,
             expectedVersion: 1,
             id: laptop.id,
-          });
+          }).pipe(asUser(USERS.bob));
 
           assert.strictEqual(updated.version, 2);
           assert.strictEqual(yield* rootVersion(laptop.id), 2);
@@ -139,7 +135,6 @@ describe("record-writes", () => {
           );
 
           const stale = yield* updateRecord({
-            actorId,
             body: { cost: "999.00" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -178,7 +173,6 @@ describe("record-writes", () => {
           });
 
           const refused = yield* updateRecord({
-            actorId,
             body: { purchased_on: null },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -193,7 +187,6 @@ describe("record-writes", () => {
           assert.strictEqual(yield* rootVersion(laptop.id), 1);
 
           const accepted = yield* updateRecord({
-            actorId,
             body: { purchased_on: null },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -222,7 +215,6 @@ describe("record-writes", () => {
         });
 
         const refused = yield* deleteRecord({
-          actorId,
           endpointClassId: ACME.monitor,
           expectedVersion: 1,
           id: monitor.id,
@@ -254,7 +246,6 @@ describe("record-writes", () => {
           const monitor = yield* newMonitor("ref-update");
 
           const onUpdate = yield* updateRecord({
-            actorId,
             body: { owner: target },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -275,13 +266,11 @@ describe("record-writes", () => {
       () =>
         Effect.gen(function* unique() {
           yield* createRecord({
-            actorId,
             body: { login: "Carol", name: "Carol" },
             endpointClassId: USER_CLASS_ID,
           });
 
           const refused = yield* createRecord({
-            actorId,
             body: { login: "carol", name: "Carol Two" },
             endpointClassId: USER_CLASS_ID,
           }).pipe(Effect.flip);
@@ -323,7 +312,6 @@ describe("record-writes", () => {
           const laptop = yield* newLaptop("child-fields");
 
           const childOnly = yield* updateRecord({
-            actorId,
             body: { serial: "S" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -357,7 +345,6 @@ describe("record-writes", () => {
         const monitor = yield* newMonitor("subtree");
 
         const viaLaptop = yield* updateRecord({
-          actorId,
           body: { name: "y" },
           endpointClassId: ACME.laptop,
           expectedVersion: 1,
@@ -365,7 +352,6 @@ describe("record-writes", () => {
         }).pipe(Effect.flip);
 
         const random = yield* updateRecord({
-          actorId,
           body: { name: "y" },
           endpointClassId: ACME.laptop,
           expectedVersion: 1,
@@ -382,7 +368,6 @@ describe("record-writes", () => {
         const laptop = yield* newLaptop("no-op");
 
         const same = yield* updateRecord({
-          actorId,
           body: { name: "  no-op ", purchased_on: "2026-01-15" },
           endpointClassId: ACME.laptop,
           expectedVersion: 1,

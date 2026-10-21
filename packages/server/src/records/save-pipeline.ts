@@ -39,7 +39,6 @@ import { VersionConflict } from "@std/api/errors/version-conflict";
  * level FKs cascade; a reference from another record is `Referenced`) and
  * writes its change entry at the current version + 1.
  */
-import type { FieldDefinition } from "@std/definitions/definition";
 import { effectiveFields } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -51,6 +50,7 @@ import type { JsonObject } from "@std/values/json-value";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
 
+import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
@@ -84,34 +84,16 @@ import {
 } from "./write-validation.ts";
 import type { Proposal, ValidationInput } from "./write-validation.ts";
 
-/** Which fields a caller may name in a write body at an endpoint (3.4). */
-export type NameableFields = (
-  snapshot: ConfigSnapshot,
-  endpointClassId: DefinitionId
-) => readonly FieldDefinition[];
-
 /**
- * Phase 1 default: every live field of the endpoint's class and its
- * ancestors. The access layer passes the caller's readable or writable
- * fields instead.
- *
- * @param snapshot - The configuration.
- * @param endpointClassId - The endpoint's class.
- * @returns The fields.
+ * What every save names. The acting user is the `Actor` in the
+ * environment (Contracts 3.1); the fields a body may name come from
+ * `WriteAccess.nameable`.
  */
-export const endpointFields: NameableFields = (snapshot, endpointClassId) =>
-  snapshot.fields(endpointClassId);
-
-/** What every save names. */
 export interface SaveInput {
   /** The class whose endpoint the request came through. */
   readonly endpointClassId: DefinitionId;
-  /** The acting user. */
-  readonly actorId: string;
   /** What produced the save; `{ kind: "api" }` by default. */
   readonly cause?: ChangeCause;
-  /** The fields the body may name; {@link endpointFields} by default. */
-  readonly nameable?: NameableFields;
 }
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
@@ -163,12 +145,16 @@ const effectiveById = (
 const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
   snapshot: ConfigSnapshot,
   input: SaveInput,
-  body: JsonObject
+  body: JsonObject,
+  action: "create" | "update"
 ) {
-  const nameable = (input.nameable ?? endpointFields)(
+  const access = yield* WriteAccess;
+
+  const nameable = access.nameable({
+    action,
+    endpointClassId: input.endpointClassId,
     snapshot,
-    input.endpointClassId
-  );
+  });
 
   const resolved = resolveWriteBody(body, nameable);
 
@@ -307,7 +293,7 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   const stack = yield* SaveStack;
 
   const entry: ChangeEntry = yield* writeChangeEntry({
-    actorId: change.input.actorId,
+    actorId: (yield* Actor).userId,
     cause: change.input.cause ?? API_CAUSE,
     fields: changedFields({
       after: change.after,
@@ -369,7 +355,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const classId = input.endpointClassId;
-    const resolved = yield* resolveBody(snapshot, input, body);
+    const resolved = yield* resolveBody(snapshot, input, body, "create");
     const fields = effectiveById(snapshot, classId);
     const proposed = proposeCreate([...fields.values()], resolved);
 
@@ -422,7 +408,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const id = yield* insertRecord(
       snapshot,
       classId,
-      input.actorId,
+      (yield* Actor).userId,
       writes
     ).pipe(mapConstraints(snapshot, "write"));
 
@@ -627,7 +613,13 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
   function* updateInTransaction(input: UpdateInput, body: JsonObject) {
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
-    const resolved: WriteBody = yield* resolveBody(snapshot, input, body);
+
+    const resolved: WriteBody = yield* resolveBody(
+      snapshot,
+      input,
+      body,
+      "update"
+    );
 
     const lock = updateLock(
       snapshot,
@@ -690,7 +682,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       classId,
       record.id,
       record.version,
-      input.actorId,
+      (yield* Actor).userId,
       writes
     ).pipe(mapConstraints(snapshot, "write"));
 

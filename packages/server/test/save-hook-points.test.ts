@@ -23,11 +23,8 @@ import {
   recordsTestLayer,
   rootVersion,
   setUpAcme,
-  USERS,
 } from "./records-support.ts";
 import { ACME, freshId, values } from "./schema-support.ts";
-
-const actorId = USERS.alice;
 
 type Rewrite = (
   input: BeforeWriteInput
@@ -65,7 +62,6 @@ const refuseStatus =
 
 const newLaptop = (name: string) =>
   createRecord({
-    actorId,
     body: { name, purchased_on: "2026-01-15", serial: `SN-${name}` },
     endpointClassId: ACME.laptop,
   });
@@ -101,7 +97,6 @@ describe("save-hook-points", () => {
       () =>
         Effect.gen(function* hookValidation() {
           const tooLong = yield* createRecord({
-            actorId,
             body: { name: "ok" },
             endpointClassId: ACME.asset,
           }).pipe(withHook(setting(ACME.name, "x".repeat(121))), Effect.flip);
@@ -114,7 +109,6 @@ describe("save-hook-points", () => {
           );
 
           const wrongKind = yield* createRecord({
-            actorId,
             body: { name: "ok" },
             endpointClassId: ACME.asset,
           }).pipe(withHook(setting(ACME.status, 42)), Effect.flip);
@@ -139,7 +133,6 @@ describe("save-hook-points", () => {
           const laptop = yield* newLaptop("hook-update");
 
           const updateTooLong = yield* updateRecord({
-            actorId,
             body: { name: "renamed" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -170,7 +163,6 @@ describe("save-hook-points", () => {
           };
 
           const refused = yield* updateRecord({
-            actorId,
             body: { name: "renamed" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -198,7 +190,6 @@ describe("save-hook-points", () => {
         const laptop = yield* newLaptop("restored");
 
         const saved = yield* updateRecord({
-          actorId,
           body: { name: "changed" },
           endpointClassId: ACME.laptop,
           expectedVersion: 1,
@@ -239,7 +230,6 @@ describe("save-hook-points", () => {
           const laptop = yield* newLaptop("projected");
 
           const saved = yield* updateRecord({
-            actorId,
             body: { status: "spare" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,

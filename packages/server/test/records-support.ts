@@ -1,12 +1,14 @@
 /**
  * Helpers for record-service tests: a test database with the core and acme
  * sets, two users inserted as table owner, and the phase 1 seams (every
- * record visible and allowed, no hooks, no password hashing).
+ * record visible and allowed, no hooks, no password hashing), with Alice
+ * as the default acting user.
  */
 import { SYSTEM_USER_ID, USER_CLASS_ID } from "@std/definitions/well-known";
 import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { Actor } from "../src/auth/actor.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
@@ -37,6 +39,13 @@ export const ACME_FIELDS = {
 export const LOGIN_INDEX_ID = "4941e670-8c9b-4a1a-a758-93854cef07bb";
 
 /**
+ * An acting user without roles (the phase 1 seams allow everything).
+ * @param userId - The user.
+ * @returns The actor.
+ */
+export const actorOf = (userId: string) => Actor.of({ roleIds: [], userId });
+
+/**
  * The record-service test layer: SQL layer, catalog, and the phase 1 seams.
  * @returns The layer.
  */
@@ -44,8 +53,19 @@ export const recordsTestLayer = () =>
   Layer.mergeAll(
     WriteAccess.allowAll,
     SaveHooks.none,
-    WriteOnlyValues.unavailable
+    WriteOnlyValues.unavailable,
+    Layer.succeed(Actor, actorOf(USERS.alice))
   ).pipe(Layer.provideMerge(schemaTestLayer()));
+
+/**
+ * Runs a save as another user.
+ * @param userId - The acting user.
+ * @returns A function providing the actor.
+ */
+export const asUser =
+  (userId: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.provideService(effect, Actor, actorOf(userId));
 
 /**
  * Inserts an active user as table owner.

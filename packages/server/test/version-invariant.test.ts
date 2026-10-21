@@ -19,6 +19,7 @@ import {
   string,
 } from "fast-check";
 
+import type { Actor } from "../src/auth/actor.ts";
 import type { Catalog } from "../src/catalog/catalog.ts";
 import type { SaveHooks } from "../src/records/save-hooks.ts";
 import {
@@ -31,6 +32,7 @@ import type { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import type { Transactions } from "../src/sql/transactions.ts";
 import {
   changeLog,
+  asUser,
   recordsTestLayer,
   rootVersion,
   setUpAcme,
@@ -99,6 +101,7 @@ interface Tracked {
 }
 
 type Services =
+  | Actor
   | SqlClient.SqlClient
   | Transactions
   | Catalog
@@ -123,7 +126,6 @@ const createStep = Effect.fn("VersionInvariant.create")(function* createStep(
   step: CreateStep
 ) {
   const created = yield* createRecord({
-    actorId: USERS.alice,
     body: bodyFor(step.concrete, step.name),
     endpointClassId: CLASS_IDS[step.concrete],
   });
@@ -141,11 +143,10 @@ const deleteStep = Effect.fn("VersionInvariant.delete")(function* deleteStep(
   step: DeleteStep
 ) {
   const deleted = yield* deleteRecord({
-    actorId: USERS.bob,
     endpointClassId: endpointOf(target, step.viaRoot),
     expectedVersion: target.version,
     id: target.id,
-  });
+  }).pipe(asUser(USERS.bob));
 
   target.deleted = true;
   target.version = deleted.version;
@@ -157,7 +158,6 @@ const updateStep = Effect.fn("VersionInvariant.update")(function* updateStep(
   step: UpdateStep
 ) {
   const update = updateRecord({
-    actorId: USERS.alice,
     body: { name: step.name },
     endpointClassId: endpointOf(target, step.viaRoot),
     expectedVersion: step.stale ? target.version - 1 : target.version,

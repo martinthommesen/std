@@ -22,21 +22,14 @@ import { createRecord } from "../src/records/save-pipeline.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import {
-  recordsTestLayer,
-  setUpAcme,
-  TABLES,
-  USERS,
-} from "./records-support.ts";
+import { recordsTestLayer, setUpAcme, TABLES } from "./records-support.ts";
 import { ACME, values } from "./schema-support.ts";
 
 // The `password` field of `core.user`.
 const HASHED_FIELD_ID = "e122cfbe-11ea-4469-8c9b-14f4eab4aa74";
 
-const actorId = USERS.alice;
-
 const newMonitor = (name: string) =>
-  createRecord({ actorId, body: { name }, endpointClassId: ACME.monitor });
+  createRecord({ body: { name }, endpointClassId: ACME.monitor });
 
 const operationIds = (ids: readonly string[]) =>
   values(
@@ -72,7 +65,6 @@ const fakeHasher = WriteOnlyValues.of({
 
 const createUser = (login: string, password: DecodedInput) =>
   createRecord({
-    actorId,
     body: { login, name: login },
     endpointClassId: USER_CLASS_ID,
   }).pipe(

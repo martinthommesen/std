@@ -14,6 +14,7 @@ import type { NotAllowed } from "@std/api/errors/not-allowed";
  * create, update and delete on both states, the target-visibility guard
  * and projection with the caller's read rights.
  */
+import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { encodeOut } from "@std/values/codec";
@@ -67,8 +68,21 @@ export interface ProjectionInput {
   readonly record: StoredRecord;
 }
 
+/** Which fields a write body may name (3.4). */
+export interface NameableInput {
+  readonly snapshot: ConfigSnapshot;
+  readonly endpointClassId: DefinitionId;
+  readonly action: "create" | "update";
+}
+
 /** What the pipeline asks the access layer. */
 export interface WriteAccessApi {
+  /**
+   * The fields of the endpoint's class and its ancestors that the caller
+   * may name in a write body: readable or writable ones (3.4). Any other
+   * name, misspelled or never readable, is `UnknownField`.
+   */
+  readonly nameable: (input: NameableInput) => readonly FieldDefinition[];
   /**
    * Visibility of the existing record, checked in the statement after the
    * root lock and before the version check: `None` when the caller cannot
@@ -159,6 +173,7 @@ export class WriteAccess extends Context.Service<WriteAccess, WriteAccessApi>()(
     WriteAccess.of({
       checkExisting: () => Effect.void,
       checkProposed: () => Effect.void,
+      nameable: (input) => input.snapshot.fields(input.endpointClassId),
       project: (input) => Effect.succeed(projectAll(input)),
       visibility: (input) =>
         Effect.succeedSome<ReadonlySet<DefinitionId>>(

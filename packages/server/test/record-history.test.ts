@@ -19,7 +19,12 @@ import {
   deleteRecord,
   updateRecord,
 } from "../src/records/save-pipeline.ts";
-import { recordsTestLayer, setUpAcme, USERS } from "./records-support.ts";
+import {
+  asUser,
+  recordsTestLayer,
+  setUpAcme,
+  USERS,
+} from "./records-support.ts";
 import { ACME } from "./schema-support.ts";
 
 /** Every field of a laptop except `cost`. */
@@ -82,7 +87,6 @@ describe("record-history", () => {
       () =>
         Effect.gen(function* history() {
           const laptop = yield* createRecord({
-            actorId: USERS.alice,
             body: {
               cost: "1200.00",
               name: "L",
@@ -93,7 +97,6 @@ describe("record-history", () => {
           });
 
           yield* updateRecord({
-            actorId: USERS.alice,
             body: { cost: "1300.00", status: "in_use" },
             endpointClassId: ACME.asset,
             expectedVersion: 1,
@@ -101,7 +104,6 @@ describe("record-history", () => {
           });
 
           yield* updateRecord({
-            actorId: USERS.alice,
             body: { cost: "1400.00" },
             endpointClassId: ACME.asset,
             expectedVersion: 2,
@@ -109,12 +111,11 @@ describe("record-history", () => {
           });
 
           yield* updateRecord({
-            actorId: USERS.bob,
             body: { serial: "SN-2" },
             endpointClassId: ACME.laptop,
             expectedVersion: 3,
             id: laptop.id,
-          });
+          }).pipe(asUser(USERS.bob));
 
           const entries = yield* readHistory({
             readable: READABLE_WITHOUT_COST,
@@ -180,17 +181,15 @@ describe("record-history", () => {
     dbTest.effect("a delete's entry holds every non-empty before value", () =>
       Effect.gen(function* deleteEntry() {
         const monitor = yield* createRecord({
-          actorId: USERS.alice,
           body: { name: "M", size_inches: 27 },
           endpointClassId: ACME.monitor,
         });
 
         yield* deleteRecord({
-          actorId: USERS.bob,
           endpointClassId: ACME.asset,
           expectedVersion: 1,
           id: monitor.id,
-        });
+        }).pipe(asUser(USERS.bob));
 
         const entries = yield* readHistory({
           readable: new Set([
@@ -216,13 +215,11 @@ describe("record-history", () => {
           const login = `private-login-${randomUUID()}`;
 
           yield* createRecord({
-            actorId: USERS.alice,
             body: { login, name: "Dana" },
             endpointClassId: USER_CLASS_ID,
           });
 
           const duplicate = yield* createRecord({
-            actorId: USERS.alice,
             body: { login, name: "Dana Two" },
             endpointClassId: USER_CLASS_ID,
           }).pipe(Effect.exit);
@@ -230,19 +227,16 @@ describe("record-history", () => {
           assertHygienic(duplicate, [login]);
 
           const monitor = yield* createRecord({
-            actorId: USERS.alice,
             body: { name: "referenced" },
             endpointClassId: ACME.monitor,
           });
 
           yield* createRecord({
-            actorId: USERS.alice,
             body: { docked_to: monitor.id, name: "dock" },
             endpointClassId: ACME.monitor,
           });
 
           const referenced = yield* deleteRecord({
-            actorId: USERS.alice,
             endpointClassId: ACME.asset,
             expectedVersion: 1,
             id: monitor.id,
@@ -253,10 +247,11 @@ describe("record-history", () => {
           const unknownActor = randomUUID();
 
           const unmapped = yield* createRecord({
-            actorId: unknownActor,
             body: { name: "orphan" },
             endpointClassId: ACME.monitor,
-          }).pipe(Effect.exit);
+          })
+            .pipe(asUser(unknownActor))
+            .pipe(Effect.exit);
 
           assertHygienic(unmapped, [unknownActor, "orphan"]);
           assert.include(
