@@ -1,0 +1,2 @@
+# Upstream Effect source, vendored with git subtree (docs/decisions/0001-effect.md).
+vendor/effect/** linguist-vendored

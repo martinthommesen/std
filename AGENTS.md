@@ -132,16 +132,20 @@ Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run
 
 Read `docs/architecture.md` first. It fixes the toolchain, layout, package boundaries and workflow; `docs/plan.md` and `docs/contracts.md` are the requirements.
 
-- Run everything through pnpm so the pinned Node 26 is used: `pnpm check`, `pnpm fix`, `pnpm --filter <pkg> typecheck`, `pnpm --filter <pkg> test`.
+- Run everything through pnpm so the pinned Node 26 is used: `pnpm check`, `pnpm fix`, `pnpm typecheck`, `pnpm --filter <pkg> test`, `pnpm check:tooling`. `pnpm ci:local` runs every CI step.
 - Postgres 18 for tests: `pnpm db:up` (127.0.0.1:54329, std/std).
 - Commit with `git commit -s`. Never use `--no-verify`. Never weaken `oxlint.config.ts` or a tsconfig's strictness or Effect allow lists.
 
 ## Effect 4 idioms
 
-Most published Effect material is Effect 3. Effect 4.0.5 is installed; the reference is `node_modules/effect/AGENTS.md`, `node_modules/effect/ai-docs/` and `node_modules/effect/src`. Check an API there before you use it.
+Effect 4.0.5 is installed, but most published Effect material and most model memory is Effect 3. Check every API before you use it: `node_modules/effect/AGENTS.md` and `node_modules/effect/ai-docs/src/` first, then the source at `vendor/effect/packages/*/src` (the `effect@4.0.5` tag) and the v3-to-v4 rename map in `vendor/effect/migration/v3-to-v4.md`.
 
-- `Effect.gen(function* () { ... })` for inline code; `Effect.fn("name")` for reusable traced functions, `Effect.fnUntraced` for hot paths.
-- Errors: `class X extends Schema.TaggedError<X>()("X", { ... }) {}`; fail with `return yield* new X(...)`.
-- Services: `Context.Service` and `Layer`; no `Context.Tag`/`Effect.Tag` from Effect 3.
-- Unstable modules (`effect/sql`, `effect/http`, `effect/http-api`, `effect/observability`, `@effect/sql-pg`, `@effect/platform-node`, `@effect/opentelemetry`, `@effect/vitest`) are allowed only where the package's tsconfig allow list says so (Contracts 9). The type check fails otherwise.
-- Never leave an Effect un-yielded (`floatingEffect` is an error).
+- Inline code: `Effect.gen(function* () { ... })`. Reusable functions: `Effect.fn("name")(function* (...) { ... }, ...combinators)` (combinators as extra arguments, not `.pipe`), or `Effect.fnUntraced` on hot paths.
+- Errors: `class X extends Schema.TaggedError<X>()("X", { ... }) {}`, failed with `return yield* new X({ ... })`, handled with `Effect.catch`, `Effect.catchTag` or `Effect.catchTags`.
+- Services: `class S extends Context.Service<S, Shape>()("std/<package>/S") {}` with an explicit `static readonly layer = Layer.effect(S, ...)`. Effect 3's `Context.Tag`, `Effect.Tag` and `Effect.Service` (and its generated `Default` layer) do not exist.
+- Renamed from Effect 3: `catchAll` → `catch`, `catchAllCause` → `catchCause`, `either` → `result` (`Either` → `Result`), `zipRight` → `andThen`, `fork` → `forkChild`, `forkDaemon` → `forkDetach`, `async` → `callback`. Schema: `Literal(a)` and `Literals([a, b])`, `Union([a, b])`, `Record(key, value)`, `parseJson` → `fromJsonString`, `filter` → `check(makeFilter(...))`, `transform` → `decodeTo(target, SchemaTransformation.transform({ decode, encode }))`.
+- Decode typed input with `Schema.decodeSync` or `Schema.decodeResult`; the `decodeUnknown*` forms are for `unknown` input.
+- Unstable modules have no `unstable` path segment: `effect/sql`, `effect/http`, `effect/http-api`, `effect/observability`, and every module of `@effect/sql-pg`, `@effect/platform-node`, `@effect/opentelemetry` and `@effect/vitest`. A package may use them only as its profile allows (`tooling/tsconfig/`, `docs/decisions/0001-effect.md`); `tsc` fails otherwise. Never install `@effect/sql` or `@effect/platform`.
+- Plain packages' `src/` import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from `effect`, no Node built-ins or host globals (`process`, `globalThis`, `import.meta`, ...), only their own `src/` files, plain packages and the npm packages in `tooling/plain-allowed-deps.json` (`pnpm check:tooling`).
+- `tsc` also fails on an un-yielded Effect (`floatingEffect`), an Effect 3 API (`outdatedApi`) and a second copy of `effect` (`duplicatePackage`).
+- Tests: `it.effect` from `@effect/vitest`, inside a `describe`; use its `assert` inside `it.effect` bodies (lint flags `expect` there).

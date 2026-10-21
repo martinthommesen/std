@@ -1,0 +1,12 @@
+{
+  "name": "@std-canary/plain-bypass",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#fx": "effect/Effect",
+    "#helpers": "./test/helpers.ts"
+  },
+  "std": {
+    "profile": "plain"
+  }
+}

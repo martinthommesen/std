@@ -1,0 +1,39 @@
+---
+lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    devDependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
+      '@effect/sql':
+        specifier: latest
+        version: 0.49.0(effect@4.0.5)
+      '@effect/platform':
+        specifier: latest
+        version: 0.94.0(effect@4.0.5)
+
+packages:
+
+  '@effect/platform@0.94.0':
+    resolution: {integrity: sha512-AAAA}
+
+  '@effect/sql@0.49.0':
+    resolution: {integrity: sha512-BBBB}
+
+  effect@4.0.5:
+    resolution: {integrity: sha512-CCCC}
+
+snapshots:
+
+  '@effect/platform@0.94.0(effect@4.0.5)':
+    dependencies:
+      effect: 4.0.5
+
+  '@effect/sql@0.49.0(effect@4.0.5)':
+    dependencies:
+      effect: 4.0.5
+
+  effect@4.0.5: {}
