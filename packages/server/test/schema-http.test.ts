@@ -9,6 +9,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { DEPENDENCY_KINDS } from "@std/definitions/dependencies";
 import type { DependencyKind } from "@std/definitions/dependencies";
 import type { Operation } from "@std/definitions/operation";
+import { setOrigin } from "@std/definitions/requester";
 import {
   BUILT_IN_ROLE_IDS,
   CORE_NAMESPACE_ID,
@@ -40,6 +41,7 @@ import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -100,7 +102,8 @@ const asMissing = (response: TestResponse, id: string): string =>
 
 /**
  * A read-deny rule hiding definition records of one table, by name, from
- * admins.
+ * admins. Only core rules apply to platform tables (decision 0014), so it
+ * is a core rule, committed with `asCoreSet`.
  * @param classId - The definition table's class.
  * @param nameFieldId - The ID of its `name` field.
  * @param name - The name to hide.
@@ -125,11 +128,21 @@ const hideByName = (
           ...deny.op.definition,
           actions: ["read"],
           effect: "deny",
+          owner: { layer: "core" },
         },
         op: "createAccessRule",
       }
     : deny.op;
 };
+
+/**
+ * Applies operations as the core set would: the only origin whose access
+ * rules reach platform tables.
+ * @param operations - The operations.
+ * @returns The change set's result.
+ */
+const asCoreSet = (operations: readonly Operation[]) =>
+  applyChangeSet({ operations, origin: setOrigin({ layer: "core" }) });
 
 /**
  * A read-deny rule hiding one role, by name, from admins.
@@ -381,7 +394,7 @@ const createHidden = Effect.gen(function* createHidden() {
       name
     );
 
-  yield* change([
+  yield* asCoreSet([
     hide("namespace", "hidden_ns"),
     hide("class", "hidden_cls"),
     hide("field", "hidden_fld"),
@@ -897,12 +910,7 @@ describe("schema-http", () => {
             const snapshot = yield* (yield* Catalog).refresh;
             const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
 
-            assert.strictEqual(
-              (yield* postChangeSet(admin, [
-                hideRole(name?.id ?? "", "hidden_role"),
-              ])).status,
-              201
-            );
+            yield* asCoreSet([hideRole(name?.id ?? "", "hidden_role")]);
 
             const read = yield* http.get(recordPath("core.role", hidden.id), {
               token: admin,
@@ -1092,7 +1100,7 @@ describe("schema-http", () => {
             const snapshot = yield* (yield* Catalog).refresh;
             const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
 
-            yield* change([hideRole(name?.id ?? "", "revision_hidden")]);
+            yield* asCoreSet([hideRole(name?.id ?? "", "revision_hidden")]);
 
             const past = snapshot.key;
             const current = (yield* (yield* Catalog).refresh).key;
@@ -1273,7 +1281,8 @@ describe("schema-http", () => {
               201
             );
 
-            // A field-level deny on core.role.label for admins.
+            // A field-level deny on core.role.label for admins: a core rule,
+            // the only kind that applies to platform tables (decision 0014).
             const snapshot = yield* (yield* Catalog).refresh;
 
             const label = snapshot.fieldByName(
@@ -1294,15 +1303,13 @@ describe("schema-http", () => {
                       ...deny.op.definition,
                       actions: ["update"],
                       effect: "deny",
+                      owner: { layer: "core" },
                     },
                     op: "createAccessRule",
                   }
                 : deny.op;
 
-            assert.strictEqual(
-              (yield* postChangeSet(admin, [denyRule])).status,
-              201
-            );
+            yield* asCoreSet([denyRule]);
 
             const generic = yield* patch(admin, "core.role", auditor.id, 1, {
               label: "Auditors",
@@ -1325,10 +1332,7 @@ describe("schema-http", () => {
               "http_auditor"
             );
 
-            assert.strictEqual(
-              (yield* remove(admin, "core.access_rule", deny.id, 1)).status,
-              200
-            );
+            yield* asCoreSet([{ id: deny.id, op: "delete", version: 1 }]);
 
             // A stale stated revision: SchemaChanged, nothing applied.
             const stale = yield* http.request(
@@ -1847,7 +1851,7 @@ describe("schema-http", () => {
           const snapshot = yield* (yield* Catalog).refresh;
           const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
 
-          yield* change([
+          yield* asCoreSet([
             {
               changes: { label: "Theirs" },
               id: target.id,
@@ -1900,7 +1904,7 @@ describe("schema-http", () => {
           const snapshot = yield* (yield* Catalog).refresh;
           const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.field, "name");
 
-          yield* change([
+          yield* asCoreSet([
             hideByName(PLATFORM_CLASS_IDS.field, name?.id ?? "", "strict_fld"),
           ]);
           yield* Deferred.succeed(generic.release, true);
@@ -1929,7 +1933,7 @@ describe("schema-http", () => {
           );
 
           yield* Deferred.await(batch.reached);
-          yield* change([
+          yield* asCoreSet([
             hideByName(PLATFORM_CLASS_IDS.field, name?.id ?? "", "strict_two"),
           ]);
           yield* Deferred.succeed(batch.release, true);

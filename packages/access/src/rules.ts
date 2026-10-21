@@ -4,7 +4,8 @@
  * A rule applies to caller u, action a and a record of concrete class C
  * when it is active, names a role u holds, includes a, is attached to C, an
  * ancestor of C or `*`, and has a matching target. Its condition decides
- * per record; the decision combines them (`decision.ts`).
+ * per record; the decision combines them (`decision.ts`). Platform tables
+ * are matched only by rules of the `core` owner layer.
  *
  * Field targets: a list names fields by ID; `*` on class T covers the
  * fields of T and its ancestors, never fields added by descendants
@@ -77,13 +78,34 @@ const holdsRole = (caller: Caller, rule: AccessRuleDefinition): boolean => {
 const inForce = (caller: Caller, rule: AccessRuleDefinition): boolean =>
   rule.active && isActive(rule) && holdsRole(caller, rule);
 
+/**
+ * Whether a rule may match a class at all: platform tables (Contracts 1.9,
+ * 3.2) are matched only by rules of the `core` owner layer, so `*` in an
+ * app or local rule never reaches definition tables, the journal or
+ * `core.change` (3.7). The decision uses the table's storage and the rule's
+ * owner, never a role name.
+ *
+ * @param snapshot - The configuration.
+ * @param rule - A rule.
+ * @param classId - The class the rule would apply to.
+ * @returns False for a non-core rule and a platform table.
+ */
+const mayMatch = (
+  snapshot: ConfigSnapshot,
+  rule: AccessRuleDefinition,
+  classId: DefinitionId
+): boolean =>
+  rule.owner.layer === "core" ||
+  snapshot.class(classId)?.storage !== "platform";
+
 const attachedTo = (
   snapshot: ConfigSnapshot,
   rule: AccessRuleDefinition,
   classId: DefinitionId
 ): boolean =>
-  rule.classId === null ||
-  snapshot.lineage(classId).some((level) => level.id === rule.classId);
+  mayMatch(snapshot, rule, classId) &&
+  (rule.classId === null ||
+    snapshot.lineage(classId).some((level) => level.id === rule.classId));
 
 const appliesTo = (
   snapshot: ConfigSnapshot,
@@ -248,12 +270,15 @@ export const knowsTable = (
     ...snapshot.subtreeIds(classId),
   ]);
 
+  // The rule may match the class and is attached to `*` or its reach.
+  const reaches = (rule: AccessRuleDefinition): boolean =>
+    mayMatch(snapshot, rule, classId) &&
+    (rule.classId === null || reach.has(rule.classId));
+
   return snapshot
     .accessRules()
     .some(
       (rule) =>
-        rule.effect === "allow" &&
-        inForce(caller, rule) &&
-        (rule.classId === null || reach.has(rule.classId))
+        rule.effect === "allow" && inForce(caller, rule) && reaches(rule)
     );
 };

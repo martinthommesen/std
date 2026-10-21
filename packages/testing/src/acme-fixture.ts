@@ -7,7 +7,8 @@
  * access rules), so every record has its change entry:
  *
  * - users Alice (role `asset_manager`) and Bob (role `employee`), with
- *   passwords, plus Carol (`employee`, deactivated);
+ *   passwords, plus Carol (`employee`, deactivated) and Ada (the built-in
+ *   `admin` role);
  * - Bob's laptop L (cost 1200, docked to Alice's monitor), monitor M (cost
  *   300, not docked) and plain asset S (cost 2500, status `lost`);
  * - Alice's monitor AM and laptop K.
@@ -65,6 +66,8 @@ export interface AcmeData {
   readonly bob: FixtureUser;
   /** An employee who has been deactivated. */
   readonly carol: FixtureUser;
+  /** An administrator: the built-in `admin` role. */
+  readonly admin: FixtureUser;
   /** Record IDs: Bob's L, M, S; Alice's monitor AM and laptop K. */
   readonly records: {
     readonly L: DefinitionId;
@@ -188,6 +191,14 @@ const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
       roles: ["employee"],
     });
 
+    const admin = yield* createFixtureUser(snapshot, {
+      active: true,
+      login: "ada",
+      name: "Ada",
+      password: "ada-password",
+      roles: ["admin"],
+    });
+
     const AM = yield* asset(alice.id, ACME.monitor, {
       cost: "400",
       name: "Alice monitor",
@@ -231,6 +242,7 @@ const insertAcmeRecords = Effect.fn("AcmeFixture.insertRecords")(
     });
 
     return {
+      admin,
       alice,
       bob,
       carol,

@@ -54,7 +54,7 @@ import { PurgeRefused } from "./purge-refused.ts";
 import { hasPermission } from "./requester.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 import { UseRetireOrPurge } from "./use-retire-or-purge.ts";
-import { PERMISSION_IDS } from "./well-known.ts";
+import { SCHEMA_PURGE_PERMISSION_ID } from "./well-known.ts";
 
 type Op<T extends Operation["op"]> = Extract<Operation, { readonly op: T }>;
 
@@ -607,12 +607,19 @@ const purgePreconditions = (
     return refusal("confirmation");
   }
 
-  const permissionId = PERMISSION_IDS["schema.purge"];
+  // Checked by the permission's stable ID; its name only labels the error.
+  const permissionId = SCHEMA_PURGE_PERMISSION_ID;
 
   if (!hasPermission(work.snapshot, work.context.requester, permissionId)) {
+    const permission = work.snapshot.get(permissionId);
+
     refuse(
       work,
-      new PermissionRequired({ permission: "schema.purge", permissionId })
+      new PermissionRequired({
+        permission:
+          permission?.kind === "permission" ? permission.name : permissionId,
+        permissionId,
+      })
     );
 
     return false;

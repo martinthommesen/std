@@ -745,3 +745,44 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     return yield* Effect.void;
   }
 );
+
+/**
+ * Checks a stated revision for a request that names no table or field
+ * (sign-in, `auth/me`; Contracts 6.4): nothing in its scope can have
+ * changed, so only a revision this database never had at that number (R
+ * above C, or a different change set at R) refuses it, with
+ * `409 SchemaChanged` and no changes listed: the client reloads.
+ *
+ * @param statedRevision - The request's revision, if it sent one.
+ * @returns Nothing, or `SchemaChanged`.
+ */
+export const checkUnscopedRevision = Effect.fn("StaleRequest.checkUnscoped")(
+  function* checkUnscopedRevision(statedRevision: Option.Option<ConfigState>) {
+    if (Option.isNone(statedRevision)) {
+      return yield* Effect.void;
+    }
+
+    const stated = statedRevision.value;
+    const current = yield* RequestRevision;
+
+    if (
+      stated.revision === current.revision &&
+      stated.changeSetId === current.changeSetId
+    ) {
+      return yield* Effect.void;
+    }
+
+    const unreachable =
+      stated.revision >= current.revision || !(yield* journalReaches(stated));
+
+    if (unreachable) {
+      return yield* new SchemaChanged({
+        changes: [],
+        currentRevision: revisionHeaderValue(current),
+        requestRevision: revisionHeaderValue(stated),
+      });
+    }
+
+    return yield* Effect.void;
+  }
+);

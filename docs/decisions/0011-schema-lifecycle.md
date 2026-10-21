@@ -107,6 +107,13 @@ The guard runs first for every operation and every origin. Protected definitions
 - **Retired tables.** The save pipeline refuses writes to a retired table's records after the visibility check, so a record the caller cannot see stays the identical `NotFound`.
 - **Retired fields stay optional.** `update { required: true }` and an override with `required: true` are refused while the field is retired; reactivate it first.
 
+## After merging 1C (authorization on every path)
+
+- **Platform-table guard.** Generic writes on definition tables are routed to one-operation change sets in `http/handlers.ts` before the record service, so 1C's save-pipeline guard now sees only the other platform tables (the journal, `core.change`, the config-layer tables), which stay `NotAllowed` for every caller.
+- **1C tests updated to the contract.** `platform-tables`: an admin's generic writes on `core.access_rule` and creates on definition tables are change sets now (an empty or partial body is `400 InvalidRequest`; an edit or delete of a protected rule `403 DefinitionProtected`), while `core.change` and the other platform tables stay `403 NotAllowed`. `built-ins`: generic edits and deletes of the protected built-in rules are `403 DefinitionProtected`, as its own comment anticipated. `error-fuzz`: its hierarchy moves from the `acme` namespace to the local `site` namespace, because app namespaces are reserved for their sets (1.8). `no-bypass` and `platform-tables` rule drafts gained `name: null` (migration 0006).
+- **Rules on platform tables are core rules.** 1C applies only core-layer rules to platform tables and refuses local ones naming them, so the 1A tests that hide definitions from admins create their deny rules as the core set (`asCoreSet`).
+- **Permission by ID.** `schema.purge` is checked through `SCHEMA_PURGE_PERMISSION_ID`; its name in `PermissionRequired` comes from the permission definition, so no source mentions the name (`no-bypass` scan).
+
 ## Verified facts
 
 - SIGKILL of a coordinator process at each of the ten step boundaries of a change set with `validate_constraint`, `validate_override`, `create_index_concurrently` and `drop_index_concurrently` steps, and during a concurrent index build waiting on a writer, always ended `completed` after `resumePass`, with the catalog matching the definitions (`schema-interrupted.test.ts`). During the build the killed client's backend kept running and held `SCHEMA_KEY`, so `resumePass` did nothing until the build ended (0007 probe 2, now on the real engine).

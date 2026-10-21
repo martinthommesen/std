@@ -819,6 +819,18 @@ const checkAccessRule = (
     refersTo(problems, snapshot, rule, rule.classId, "class", "class");
   }
 
+  // Platform tables are matched only by core rules (Contracts 3.2); an
+  // app or local rule naming one would never apply, so it is refused.
+  if (
+    rule.classId !== null &&
+    rule.owner.layer !== "core" &&
+    snapshot.class(rule.classId)?.storage === "platform"
+  ) {
+    invalid(
+      `Only core access rules apply to platform tables; ${rule.classId} is one.`
+    );
+  }
+
   if (rule.target.kind === "fields") {
     checkRuleFields(snapshot, rule, rule.target.fields, invalid);
   }

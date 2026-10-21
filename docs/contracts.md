@@ -415,7 +415,7 @@ Alternatives on their own trade-offs (the same list as the plan's storage decisi
 - `core.access_rule`: `effect` (allow or deny), `roles`, `class` (one class or `*`), `target` (records, or fields as a list or `*`), `actions` (read, create, update, delete; field rules cannot use delete), optional `condition`.
 - Built-in roles: `admin`; `authenticated`, held implicitly by every active user [judgment]; `schema_purger`, which holds `schema.purge`. Built-in roles, permissions and rules are protected definitions.
 - Password sign-in for every active user (Stage 0: the demo users). API tokens, explain mode and the rule editor come in Step 3.
-- The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap and definition loading.
+- The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap and definition loading: it never signs in and no session authenticates as it, even if it is activated and given a password (decision 0014).
 
 ### 3.2 Decision rule
 
@@ -430,7 +430,11 @@ Rules that apply to caller u, action a and record r of concrete class C: they na
 - System fields (`id`, `class`, `version`, `created_*`, `updated_*`) follow row visibility and are never writable.
 - `password` and `secret` values are never returned by any read, by type rule (6.5).
 
-Built-in rules: allow `admin` everything on `*`; allow `authenticated` read on `core.user` records and its `name` field, for `created_by` labels [judgment]; deny every role delete on `core.user`. Everything else, including definition tables, `core.access_rule` and `core.change`, is reachable only through the admin rule.
+Built-in rules: allow `admin` everything on `*`; allow `authenticated` read on `core.user` records and its `name` field, for `created_by` labels [judgment]; deny every role delete on `core.user` (the deny names `authenticated`, which every caller who can act holds). Everything else, including definition tables, `core.access_rule` and `core.change`, is reachable only through the admin rule.
+
+Platform tables (1.9) are matched only by rules in the `core` owner layer: `*` in an app or local rule never matches a platform table, and an app or local rule that names one is refused at definition validation (`invalidAccessRule`). The decision uses the table's storage and the rule's owner layer, never a role name. [decision 0014]
+
+Platform tables (1.9) are never written through the generic record routes, by any caller: a create, update or delete on one is `NotAllowed` (after visibility, 3.9), so `core.change` entries, the journal and protected definitions cannot be forged or edited outside change sets and the save pipeline. Generic writes on definition tables become one-operation change sets (1.4) before that check. [decision 0014]
 
 ### 3.3 Two-user example
 
@@ -563,10 +567,10 @@ Each test has a name; the plan lists which belong to Stage 0.
 - `two-user-write`: On L at version n: Bob updates `name` through `/acme.laptop` (200, version n+1). Alice, holding version n read through `/acme.asset`, updates `cost` and gets `VersionConflict` with nothing changed. Alice rereads through `/acme.asset` and updates `cost` (version n+2). Bob's update of `status` gets 403 through both `/acme.laptop` and `/acme.asset` (rule 9). Alice setting `purchased_on` to null through `/acme.asset` gets `ValidationFailed` (laptop override). Each user's history through both endpoints shows exactly versions 1..n+2, with no `cost` key for Bob.
 - `referenced`: Alice deleting her monitor, which L references, gets `Referenced` with no ID or count; the monitor remains.
 - `fk-actions`: CI: every FK in STD schemas has `confdeltype` and `confupdtype` `a`, except level FKs with `confdeltype` `c`.
-- `platform-tables` (Step 1): As Bob, the generic `core.change` and `core.access_rule` endpoints return `UnknownTable`.
-- `users` (Step 1): Admin deleting a user gets 403; a deactivated user cannot sign in and labels still resolve.
-- `no-bypass` (Step 1): With the admin allow-all removed in a test database, admin requests are refused.
-- `error-fuzz` (Step 1): Fuzzed constraint violations never return Postgres text or values.
+- `platform-tables` (Step 1): As Bob, the generic `core.change` and `core.access_rule` endpoints return `UnknownTable`; so does every platform and config table on every route for every non-admin. Admin writes to platform tables through the generic routes are `NotAllowed`.
+- `users` (Step 1): Admin deleting a user gets 403; a deactivated user cannot sign in, their sessions end, their effective role set is empty, and labels still resolve.
+- `no-bypass` (Step 1): With the admin allow-all removed in a test database, admin requests are refused on every path; a role with another name holding the same rules gets what admin got, and no source file checks a role name.
+- `error-fuzz` (Step 1): Fuzzed constraint violations (unique, FK on create, update and delete, check, NOT NULL, type and length) on every write path never return Postgres text, constraint names or values; a unique conflict reveals only that the value is taken.
 
 ## 4. History and the outbox
 
@@ -910,11 +914,11 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 | Interface | Consumers | Contract | Types come from |
 | --- | --- | --- | --- |
 | Generic admin UI | list and form pages, filter builder | runtime metadata (6.3) and runtime validation | metadata fetched at run time |
-| Fixed platform endpoints | web app, CLI, SDK | one Effect `HttpApi` definition in a shared package; clients use `HttpApiClient.make` on it; OpenAPI 3.1 generated from it | compile time |
+| Fixed platform endpoints | web app, CLI, SDK | one Effect `HttpApi` definition in a shared package; clients use `HttpApiClient.make` on it; OpenAPI 3.1 generated from it (`GET /api/v1/openapi.json`) [checked: `OpenApi.fromApi` in `effect/http-api` 4.0.5, decision 0014] | compile time |
 | Application SDK | app code for known tables | types generated from a versioned schema snapshot (6.8) | generated code in the app's repo |
 
 - `HttpApiClient.make` exists in Effect v4 [checked: [v4 API docs](https://effect.website/docs/v4/api)]; import paths follow the vendored source. It is tagged unstable, so the shared API-definition package and the web app allow `effect/http-api` and `effect/http` (9).
-- Fixed endpoints: sign-in, metadata, snapshot, form-state, schema-change operations. Generic record routes (`/api/v1/tables/{table}/records`) have a fixed envelope (6.6); `values` are typed only at run time.
+- Fixed endpoints: sign-in, sign-out, the current session (`GET /api/v1/auth/me`: user ID and effective roles), metadata, snapshot, form-state, schema-change operations. Generic record routes (`/api/v1/tables/{table}/records`) have a fixed envelope (6.6); `values` are typed only at run time.
 - Decision: table types are static only in generated SDK code. Reason: a deployed browser cannot gain compile-time types for a table created at run time.
 
 ### 6.2 Schema revision on the wire
@@ -945,6 +949,7 @@ Request revision R (number and change set ID), current revision C:
 - Any relevant change returns `409 SchemaChanged` with `requestRevision`, `currentRevision` and `changes` (`table`, `field`, `fieldId`, `kind`, `revision`). `changes` lists only fields the caller can name at C; a request name that resolves to no such field gets `UnknownField`, as in 3.4. It is checked before validation, access and version checks.
 - The UI reloads metadata, keeps valid values, marks changed fields and asks the user to resubmit; it never resubmits automatically [judgment]. A newer revision on any response, or `NotAllowed`, triggers a background metadata refresh.
 - If the journal no longer reaches R, every field in scope counts as changed with kind `unknown`.
+- Scopes by path [decision 0014]: a delete names no field, so only changes to its table are relevant. History shows the record's fields by current name, so its scope is the endpoint's default selection plus the field IDs of its `field` filter; once the record proved visible, also the default selection of its concrete class, whose child-only fields it shows through any endpoint (2.3). The OpenAPI document (`GET /api/v1/openapi.json`) is checked like sign-in. Sign-in and `auth/me` name no table or field: a malformed header is `InvalidSchemaRevision` and a revision the database never had is `SchemaChanged` with no changes, but no change since an older R is relevant. Sign-out checks only the header's format, so a stale client can always end its session [judgment].
 
 ### 6.5 Field types
 

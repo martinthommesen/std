@@ -16,6 +16,7 @@ import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
+import { MetaHandlers } from "./meta-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
@@ -25,7 +26,8 @@ export const ApiHandlers = Layer.mergeAll(
   SignInHandlers,
   SessionHandlers,
   RecordHandlers,
-  SchemaChangeHandlers
+  SchemaChangeHandlers,
+  MetaHandlers
 );
 
 /**
@@ -35,7 +37,12 @@ export const ApiHandlers = Layer.mergeAll(
  */
 const SaveServices = Layer.mergeAll(OutboxSaveHooks, WriteOnlyValues.scrypt);
 
-/** The API routes with their handlers and middleware. */
+/**
+ * The API routes with their handlers and middleware. The OpenAPI 3.1
+ * document is the `meta` group's endpoint (`meta-handlers.ts`), not
+ * `HttpApiBuilder`'s `openapiPath` route, so it checks the stated revision
+ * like every other endpoint.
+ */
 export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(ApiHandlers),
   Layer.provide(SaveServices),
