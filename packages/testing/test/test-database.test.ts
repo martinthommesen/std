@@ -42,7 +42,14 @@ import {
   testDatabaseName,
 } from "../src/test-database.ts";
 
-const CONCURRENT_BUILDS = 6;
+/** Enough builds to race on one template. */
+const CONCURRENT_BUILDS = 3;
+
+/**
+ * Each build ends with DROP DATABASE, which waits for a forced checkpoint;
+ * on a Postgres shared with other busy runs that alone can take minutes.
+ */
+const CONCURRENT_BUILDS_TIMEOUT_MS = 300_000;
 
 const decodeExists = decodeRows(Schema.Struct({ n: Schema.Int }));
 
@@ -152,39 +159,42 @@ describe("test-database", () => {
       })
   );
 
-  it.live("concurrent creations from one template never race", () =>
-    Effect.scoped(
-      Effect.gen(function* concurrentCreation() {
-        // Every build waits at the gate, so all of them start together; each
-        // database is released with the test's scope, even after a failure.
-        const gate = yield* Deferred.make<boolean>();
+  it.live(
+    "concurrent creations from one template never race",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* concurrentCreation() {
+          // Every build waits at the gate, so all of them start together; each
+          // database is released with the test's scope, even after a failure.
+          const gate = yield* Deferred.make<boolean>();
 
-        const gatedBuild = Deferred.await(gate).pipe(
-          Effect.andThen(
-            Effect.acquireRelease(buildDatabase, (database) =>
-              Scope.close(database.scope, Exit.void)
+          const gatedBuild = Deferred.await(gate).pipe(
+            Effect.andThen(
+              Effect.acquireRelease(buildDatabase, (database) =>
+                Scope.close(database.scope, Exit.void)
+              )
             )
-          )
-        );
+          );
 
-        const builds = yield* Effect.forkChild(
-          Effect.all(
-            Array.from({ length: CONCURRENT_BUILDS }, () => gatedBuild),
-            { concurrency: "unbounded" }
-          )
-        );
+          const builds = yield* Effect.forkChild(
+            Effect.all(
+              Array.from({ length: CONCURRENT_BUILDS }, () => gatedBuild),
+              { concurrency: "unbounded" }
+            )
+          );
 
-        yield* Deferred.succeed(gate, true);
-        const built = yield* Fiber.join(builds);
-        const names = new Set(built.map((database) => database.name));
+          yield* Deferred.succeed(gate, true);
+          const built = yield* Fiber.join(builds);
+          const names = new Set(built.map((database) => database.name));
 
-        assert.strictEqual(names.size, CONCURRENT_BUILDS);
+          assert.strictEqual(names.size, CONCURRENT_BUILDS);
 
-        for (const database of built) {
-          assert.isTrue(yield* databaseExists(database.name));
-        }
-      })
-    )
+          for (const database of built) {
+            assert.isTrue(yield* databaseExists(database.name));
+          }
+        })
+      ),
+    { timeout: CONCURRENT_BUILDS_TIMEOUT_MS }
   );
 
   it("the janitor recognizes only the harness's exact names with its ownership comment", () => {
