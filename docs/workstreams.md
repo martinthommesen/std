@@ -34,18 +34,19 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 5 | `ws/2b-web-pages` | 2B, 2C | table navigation, lists, forms, filter builder, picker, related lists, history panel, stale forms, admin pages, browser tests, compose browser smoke test | merged |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set v1 and v2, upgrade test, rename test, saved filters, compose runnable result, browser-test fixture | merged |
 | 5 | `ws/plan-tmf-oda-itil` | re-plan | Martin's hard requirement (2026-10-22): strict TM Forum (TMF630 on the generic API, TMF621/632/669/672/688/638/639/641/622 with conformance kits), ODA Components on the ODA Canvas, ITIL practices; rework of the plan, contracts and Steps 3–4 | merged (signed off by Martin, 2026-10-22) |
-| 6 | `ws/3a-record-rules` | 3A | record rules as Contracts 4.10 declares them (all four phases; `aggregate` declared, executed by the aggregates workstream) | in review |
+| 6 | `ws/3a-record-rules` | 3A | record rules as Contracts 4.10 declares them (all four phases; `aggregate` declared, executed by the aggregates workstream); `keepSupplied`; any failed nested save poisons its transaction | merged |
 | 6 | `ws/3a-aggregates` | 3A, 3T | aggregates (Contracts 4.9): owner references, locks, settle and persist, aggregate saves | planned |
-| 6 | `ws/3b-outbox-worker` | 3B | delivery worker, leases, dead letters, config subscriptions | in progress |
+| 6 | `ws/3b-outbox-worker` | 3B | delivery worker (`std worker`), leases with fencing, dead letters, config subscriptions, payloads rebuilt from history (fail closed), afterCommit rules run from carrier deliveries | merged |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
 | 6 | `ws/3g-tmf630-api` | 3G | `/api/v2` per Contracts 10 on the TMF630 v5 baseline (Martin, 2026-10-22), `/api/v1` frozen, TMF630 matrix file | in progress |
 | 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
-| 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents (decision 0026) | in review |
+| 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents and Martin's decisions on it (decision 0026; 0021 decisions 34–55); Contracts 8.8 rolling-upgrade draft | merged |
 | 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1) | planned |
-| 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | in review |
+| 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |
 | 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
-| 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6) | in review |
+| 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6): 10 of 10 runs succeeded | merged |
 | 6 | `ws/ci-pin-actions` | CI follow-up | `ci.yml` and `quickstart-compose.yml` pin every action by commit SHA | merged |
+| 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | approved, merging |
 | 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party roles; config subscriptions; TMF632, TMF669, TMF672 | planned |
 | 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
 | 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |

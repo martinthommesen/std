@@ -1,6 +1,6 @@
 # 0027. The ODA Canvas probe (Step 3, 3K)
 
-Status: accepted, 2026-10-22 (workstream `ws/3k-oda-canvas-probe`). The GitHub measurements are pending: Martin dispatches 10 runs after the merge and fills "Results on GitHub" below. Code: `.github/workflows/oda-canvas-probe.yml`, `deploy/oda/probe/probe.sh`, `deploy/oda/probe-stub/`, `deploy/oda/crds/`, `tooling/oda-canvas-probe-summary.ts` with `tooling/lib/oda-probe-summary.ts`, `tooling/check-oda-component-schema.ts` with `tooling/lib/structural-schema.ts`, `tooling/lib/kubernetes-formats.ts`, `tooling/lib/go-url.ts` and `tooling/lib/go-mail.ts`; `tooling/fixtures/kubernetes-formats/` (the Go program that records what the pinned validators answer). Tests: `tooling/test/oda-component-schema.test.ts`, `tooling/test/kubernetes-formats.test.ts`, `tooling/test/oda-probe-summary.test.ts`, `tooling/test/oda-probe-publish.test.ts`. Revised after review rounds 1 and 2 (preflight, ownership, deadlines, atomic result, disk sampling, attempt-based summary, formats; then result parts through files, bounded Docker calls and finishing, unpublished results counted as failures, Go-faithful `uri`, `email` and dates).
+Status: accepted, 2026-10-22 (workstream `ws/3k-oda-canvas-probe`). The GitHub measurements are in "Results on GitHub" below: 10 runs from main at `17cb4b24`, dispatched 2026-10-22, all succeeded. Code: `.github/workflows/oda-canvas-probe.yml`, `deploy/oda/probe/probe.sh`, `deploy/oda/probe-stub/`, `deploy/oda/crds/`, `tooling/oda-canvas-probe-summary.ts` with `tooling/lib/oda-probe-summary.ts`, `tooling/check-oda-component-schema.ts` with `tooling/lib/structural-schema.ts`, `tooling/lib/kubernetes-formats.ts`, `tooling/lib/go-url.ts` and `tooling/lib/go-mail.ts`; `tooling/fixtures/kubernetes-formats/` (the Go program that records what the pinned validators answer). Tests: `tooling/test/oda-component-schema.test.ts`, `tooling/test/kubernetes-formats.test.ts`, `tooling/test/oda-probe-summary.test.ts`, `tooling/test/oda-probe-publish.test.ts`. Revised after review rounds 1 and 2 (preflight, ownership, deadlines, atomic result, disk sampling, attempt-based summary, formats; then result parts through files, bounded Docker calls and finishing, unpublished results counted as failures, Go-faithful `uri`, `email` and dates).
 
 The plan's Step 3 gate: "a stub component is deployed on the pinned ODA Canvas on kind in GitHub Actions, and the measurements are committed (time, disk, failure rate over 10 runs). This step's gate needs the measurements, not a green deployment" (3K; Contracts 13.6). The Step 5 Canvas gate (`oda-canvas-deploy`, 5O) is designed from these numbers: its timeouts, its retry budget for infrastructure steps, and whether it fits a public runner's disk.
 
@@ -120,12 +120,57 @@ Findings from the local runs:
 
 To be filled after the 10 runs dispatched from main: the output of `pnpm oda-probe:summary --runs 10 --commit <the dispatched commit>` (attempts with their commits and configuration, runner image versions, failure rate and failing phases, median, p90 and max per phase and for the bring-up, disk before, sampled peak and least free space, kind node footprint), and the conclusions for Step 5 below. If any run is re-run, its earlier attempts stay in the count.
 
-(empty)
+Output of `pnpm oda-probe:summary --runs 10 --commit 17cb4b24c698288b4fbf70ff31c77e452a765960`, run 2026-10-23:
 
-## What this means for Step 5 (to confirm with the GitHub results)
+### ODA Canvas probe: 10 attempts
 
-- **Timeouts and retries.** The Step 5 workflow's per-phase limits and its two infrastructure retries (Contracts 13.6) should come from the p90 and max above, and the failure phases tell whether retrying the cluster, Istio or Canvas install is the right budget.
-- **Disk.** Contracts and decision 0021 note 14 GB of free disk on a public runner against the Canvas's documented 50 GB; the measured peak, and the kind node footprint, say whether STD's image, the CTKs and their containers still fit, or whether the workflow must free disk first.
+- Attempts: 10 in 10 runs; succeeded 10, failed 0 (failure rate 0%).
+- Failing phases: none.
+- Deployments that reached `Complete` by their results, publication aside: 10 of 10.
+- Commits: 17cb4b24c698.
+- Configurations (probe script, stub chart, pins): 29060ede.
+- Runner images: ubuntu24 20261012.334.1 (Ubuntu 24.04.5 LTS).
+- Exposed API answered through the Canvas gateway (not gating): 10 of 10.
+
+Durations in seconds; p90 by nearest rank. A phase's numbers count only the attempts in which it succeeded. Disk is sampled every few seconds during the probe (the result says how often).
+
+| Phase | Succeeded | Median | p90 | Max | Failed here |
+| --- | --- | --- | --- | --- | --- |
+| tools | 10 | 3 s | 3 s | 3 s | 0 |
+| cluster | 10 | 41 s | 47 s | 48 s | 0 |
+| istio | 10 | 16 s | 19 s | 19 s | 0 |
+| canvas | 10 | 271 s | 279 s | 281 s | 0 |
+| component | 10 | 11 s | 16 s | 16 s | 0 |
+| bring-up (cluster + istio + canvas + component), successful attempts | 10 | 343 s | 352 s | 354 s |  |
+
+| Disk | Attempts | Median | p90 | Max |
+| --- | --- | --- | --- | --- |
+| free before the probe | 10 | 91.9 GB | 91.9 GB | 91.9 GB |
+| peak use above the start (sampled) | 10 | 12.5 GB | 12.6 GB | 12.6 GB |
+| least free during the probe (sampled) | 10 | 79.5 GB | 79.6 GB | 79.6 GB |
+| kind node: /var at the end (images, etcd, logs) | 10 | 10.1 GB | 10.1 GB | 10.1 GB |
+| kind node: image | 10 | 1.0 GB | 1.0 GB | 1.0 GB |
+
+#### Attempts
+
+| Attempt | Commit | Configuration | Started | Outcome | Failed phase |
+| --- | --- | --- | --- | --- | --- |
+| [39860338913 #1](https://github.com/martinthommesen/std/actions/runs/39860338913) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:46Z | success |  |
+| [39860331192 #1](https://github.com/martinthommesen/std/actions/runs/39860331192) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:42Z | success |  |
+| [39860323298 #1](https://github.com/martinthommesen/std/actions/runs/39860323298) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:39Z | success |  |
+| [39860315796 #1](https://github.com/martinthommesen/std/actions/runs/39860315796) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:38Z | success |  |
+| [39860308817 #1](https://github.com/martinthommesen/std/actions/runs/39860308817) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:47Z | success |  |
+| [39860301611 #1](https://github.com/martinthommesen/std/actions/runs/39860301611) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:29Z | success |  |
+| [39860294262 #1](https://github.com/martinthommesen/std/actions/runs/39860294262) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:28Z | success |  |
+| [39860286843 #1](https://github.com/martinthommesen/std/actions/runs/39860286843) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:24Z | success |  |
+| [39860279400 #1](https://github.com/martinthommesen/std/actions/runs/39860279400) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:17Z | success |  |
+| [39860271298 #1](https://github.com/martinthommesen/std/actions/runs/39860271298) | 17cb4b24c698 | 29060ede | 2026-10-22T21:49:15Z | success |  |
+
+## What this means for Step 5
+
+- **Failure rate.** 10 of 10 attempts succeeded with no retries, on one commit and one configuration, against about half of the upstream Canvas workflow's recent runs failing (Contracts 13.6). Ten runs bound the rate only roughly (0 of 10 is compatible with a true rate of up to about 26 % at 95 % confidence), so the Step 5 workflow keeps the two infrastructure retries of Contracts 13.6 and records every attempt.
+- **Timeouts.** Bring-up took 343 s median and 354 s at most; the Canvas install dominates (271 s median, 281 s max). Per-phase limits for `oda-canvas-deploy` of about three times the measured maximum (cluster 150 s, Istio 60 s, Canvas 900 s, component 60 s) leave margin for slower runners while still failing fast [judgment].
+- **Disk.** `ubuntu-latest` runners had 91.9 GB free before the probe, not the 14 GB that Contracts and decision 0021 assumed; the probe's sampled peak was 12.5 GB above the start and the kind node held 10.1 GB. STD's image, the conformance kits and their containers fit without freeing disk first.
 - **Docker Hub.** Each run pulls about 18 images from Docker Hub anonymously. Rate limiting would show as image-pull failures in the `canvas` phase.
 - **End-of-life Istio.** The Canvas supports Kubernetes up to 1.30, and no Istio release that supports 1.30 is still maintained. Upstream works around it by running a current control plane on an unsupported Kubernetes version. Either way the Canvas's mesh in CI gets no security fixes; it is test infrastructure only, but the Step 5 docs must not recommend this combination for production.
 
