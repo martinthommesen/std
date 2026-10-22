@@ -129,7 +129,8 @@ const decodeOverrides = decodeRows(
   })
 );
 
-const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
+/** Config kinds understood by this release; newer kinds stay in storage. */
+export const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "accessRule",
   "class",
   "field",
@@ -146,13 +147,15 @@ const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "recordRule",
 ]);
 
-const isDefinitionKind = (kind: string): kind is DefinitionKind =>
+/**
+ * Narrows a stored kind to those understood by this release.
+ * @param kind - Stored kind name.
+ * @returns Whether this release understands the kind.
+ */
+export const isDefinitionKind = (kind: string): kind is DefinitionKind =>
   DEFINITION_KIND_NAMES.has(kind);
 
-const kindColumn = (kind: string): Effect.Effect<DefinitionKind> =>
-  isDefinitionKind(kind)
-    ? Effect.succeed(kind)
-    : Effect.die(new Error(`core.config_base holds an unknown kind ${kind}`));
+const reportedUnknownKinds = new Set<string>();
 
 /**
  * Whether the layer tables exist (platform migration 0005 applied).
@@ -208,9 +211,18 @@ const readBase = Effect.gen(function* readBase() {
   const base = new Map<DefinitionId, BaseRecord>();
 
   for (const row of rows) {
+    if (!isDefinitionKind(row.kind)) {
+      if (!reportedUnknownKinds.has(row.kind)) {
+        yield* Effect.logInfo(`Ignoring newer configuration kind ${row.kind}`);
+        reportedUnknownKinds.add(row.kind);
+      }
+
+      continue;
+    }
+
     base.set(row.id, {
       id: row.id,
-      kind: yield* kindColumn(row.kind),
+      kind: row.kind,
       removed: row.removed,
       setId: row.set_id,
       setVersion: row.set_version,
@@ -226,7 +238,10 @@ const readOverrides = Effect.gen(function* readOverrides() {
 
   const rows = yield* readOnly(
     sql`SELECT record_id::text AS record_id, property, value::text AS value, base_when_set::text AS base_when_set
-        FROM core."config_override" ORDER BY record_id, property`
+        FROM core."config_override" o
+        WHERE NOT EXISTS (SELECT 1 FROM core.config_base b WHERE b.id = o.record_id
+          AND NOT (b.kind = ANY(${[...DEFINITION_KIND_NAMES]}::text[])))
+        ORDER BY record_id, property`
   ).pipe(Effect.flatMap(decodeOverrides));
 
   const overrides: LocalOverride[] = [];

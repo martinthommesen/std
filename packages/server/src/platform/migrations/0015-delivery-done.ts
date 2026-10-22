@@ -18,6 +18,7 @@ export const migration0015: ConcurrentIndexMigration = {
   index: "delivery_done",
   kind: "concurrent_index",
   name: "delivery-done",
+  phase: "expand",
   schema: "core",
   statement:
     "CREATE INDEX CONCURRENTLY delivery_done ON core.delivery (finished_at) WHERE status = 'done'",

@@ -18,6 +18,7 @@ export const migration0011: TxMigration = {
   id: 11,
   kind: "tx",
   name: "ledger-state",
+  phase: "expand",
   statements: [
     `ALTER TABLE core.platform_migration
   ADD COLUMN state text NOT NULL DEFAULT 'applied'

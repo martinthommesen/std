@@ -18,6 +18,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { CLI_APPLICATION_PREFIX } from "@std/server/sql/database-config";
 import { Transactions } from "@std/server/sql/transactions";
 import { TestDatabase, testDatabaseLayer } from "@std/testing/test-database";
 import { Deferred, Effect, Fiber, Schedule, Schema } from "effect";
@@ -269,13 +270,13 @@ const ledger = values(
 /** Whether this branch's `std upgrade` waits for a lock. */
 const upgradeWaitsForLock = count(
   `SELECT count(*)::text AS value FROM pg_stat_activity
-   WHERE datname = current_database() AND application_name = 'std-cli'
+   WHERE datname = current_database() AND (application_name = '${CLI_APPLICATION_PREFIX}' OR starts_with(application_name, '${CLI_APPLICATION_PREFIX}@'))
      AND wait_event_type = 'Lock'`
 ).pipe(Effect.map((waiting) => waiting > 0));
 
 const cliGone = count(
   `SELECT count(*)::text AS value FROM pg_stat_activity
-   WHERE datname = current_database() AND application_name = 'std-cli'`
+   WHERE datname = current_database() AND (application_name = '${CLI_APPLICATION_PREFIX}' OR starts_with(application_name, '${CLI_APPLICATION_PREFIX}@'))`
 ).pipe(Effect.map((connected) => connected === 0));
 
 /** Users, users with an individual, distinct individuals, individuals. */

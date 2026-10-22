@@ -114,5 +114,6 @@ export const migration0012: DataMigration = {
   id: ID,
   kind: "data",
   name: NAME,
+  phase: "expand",
   remaining,
 };

@@ -19,7 +19,7 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { UPGRADE_BLOCKING_APPLICATION_NAMES } from "../sql/database-config.ts";
+import { UPGRADE_BLOCKING_APPLICATION_PREFIXES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
@@ -28,7 +28,13 @@ import type { DatabaseError } from "../sql/errors.ts";
 import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
-import { compareLedger, readLedger, refusalOf } from "./ledger.ts";
+import {
+  compareLedger,
+  readLedger,
+  refusalOf,
+  LEDGER_COLUMNS,
+  decodeLedgerColumns,
+} from "./ledger.ts";
 import type { MigrationStateRefused } from "./ledger.ts";
 import { isSchemaMigration, migrationChecksum } from "./migration.ts";
 import type {
@@ -199,7 +205,8 @@ export const checkUpgradePreconditions: (
       const servers = yield* sql`
         SELECT pid FROM pg_stat_activity
         WHERE datname = current_database()
-          AND application_name IN ${sql.in(UPGRADE_BLOCKING_APPLICATION_NAMES)}
+          AND EXISTS (SELECT 1 FROM unnest(${UPGRADE_BLOCKING_APPLICATION_PREFIXES}::text[]) AS names(prefix)
+            WHERE application_name = prefix OR starts_with(application_name, prefix || '@'))
           AND pid <> pg_backend_pid()
         ORDER BY pid`.pipe(Effect.flatMap(decodePids));
 
@@ -256,9 +263,15 @@ const applyTx = (
         yield* sql.unsafe(statement).unprepared;
       }
 
-      yield* sql`
-        INSERT INTO core.platform_migration (id, checksum, std_version)
-        VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION})`;
+      const [columns] = yield* sql
+        .unsafe(LEDGER_COLUMNS)
+        .pipe(Effect.flatMap(decodeLedgerColumns));
+
+      yield* columns?.phased === true
+        ? sql`INSERT INTO core.platform_migration (id, checksum, std_version, phase)
+          VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, ${migration.phase})`
+        : sql`INSERT INTO core.platform_migration (id, checksum, std_version)
+          VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION})`;
     }),
     {
       lockTimeout: MIGRATION_LOCK_TIMEOUT,
@@ -303,9 +316,20 @@ const applyConcurrentIndex = (
       yield* connection.execute(migration.statement);
     }
 
+    const [columns] = yield* connection
+      .execute(LEDGER_COLUMNS)
+      .pipe(Effect.flatMap(decodeLedgerColumns));
+
     yield* connection.execute(
-      "INSERT INTO core.platform_migration (id, checksum, std_version) VALUES ($1, $2, $3)",
-      [migration.id, migrationChecksum(migration), STD_VERSION]
+      columns?.phased === true
+        ? "INSERT INTO core.platform_migration (id, checksum, std_version, phase) VALUES ($1, $2, $3, $4)"
+        : "INSERT INTO core.platform_migration (id, checksum, std_version) VALUES ($1, $2, $3)",
+      [
+        migration.id,
+        migrationChecksum(migration),
+        STD_VERSION,
+        ...(columns?.phased === true ? [migration.phase] : []),
+      ]
     );
 
     return outcome;

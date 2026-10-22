@@ -220,8 +220,8 @@ const runOne = Effect.fn("Platform.runDataMigration")(function* runOne(
       SqlClient.SqlClient.pipe(
         Effect.flatMap(
           (sql) => sql`
-            INSERT INTO core.platform_migration (id, checksum, std_version, state)
-            VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, 'running')`
+            INSERT INTO core.platform_migration (id, checksum, std_version, state, phase)
+            VALUES (${migration.id}, ${migrationChecksum(migration)}, ${STD_VERSION}, 'running', ${migration.phase})`
         )
       )
     );

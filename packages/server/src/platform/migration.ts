@@ -36,12 +36,19 @@ import type { WriteOnlyValues } from "../records/write-only-values.ts";
 import type { RequestRevision } from "../sql/request-revision.ts";
 import type { Transactions } from "../sql/transactions.ts";
 
+/** The DDL compatibility phase (execution of phases arrives in Step 5). */
+export type MigrationPhase = "expand" | "contract";
+
+/** Last migration released before phase metadata existed. */
+export const LAST_UNPHASED_MIGRATION = 16;
+
 /** A migration that runs in one transaction. */
 export interface TxMigration {
   readonly id: number;
   /** Short kebab-case description, for reports. */
   readonly name: string;
   readonly kind: "tx";
+  readonly phase: MigrationPhase;
   readonly statements: readonly string[];
 }
 
@@ -50,6 +57,7 @@ export interface ConcurrentIndexMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: "concurrent_index";
+  readonly phase: MigrationPhase;
   /** Schema of the index (and its table). */
   readonly schema: string;
   /** The fixed index name the runner probes for. */
@@ -113,6 +121,7 @@ export interface DataMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: "data";
+  readonly phase: MigrationPhase;
   /**
    * What the migration changes, in words. The ledger's checksum is its
    * hash, so the text changes whenever what the migration does changes.
@@ -183,13 +192,20 @@ const CONCURRENT_INDEX =
 
 /**
  * The checksum recorded in the ledger: SHA-256 over the kind and the
- * statements (of a `data` migration: its name and description).
+ * statements (of a `data` migration: its name and description), and from
+ * migration 0017 onward its phase. Historical checksum inputs stay unchanged.
  * @param migration - A migration.
  * @returns 64 lowercase hex digits.
  */
 export const migrationChecksum = (migration: PlatformMigration): string =>
   createHash("sha256")
-    .update(JSON.stringify([migration.kind, ...checksumInput(migration)]))
+    .update(
+      JSON.stringify([
+        migration.kind,
+        ...(migration.id <= LAST_UNPHASED_MIGRATION ? [] : [migration.phase]),
+        ...checksumInput(migration),
+      ])
+    )
     .digest("hex");
 
 /**
@@ -202,6 +218,12 @@ export const validateMigrations = (
   migrations: readonly PlatformMigration[]
 ): readonly PlatformMigration[] => {
   for (const [index, migration] of migrations.entries()) {
+    if (migration.phase !== "expand" && migration.phase !== "contract") {
+      throw new Error(
+        `Platform migration ${migration.id} has an unknown phase`
+      );
+    }
+
     if (migration.id !== index + 1) {
       throw new Error(
         `Platform migration ids must be consecutive from 1; found ${migration.id} at position ${index + 1}`

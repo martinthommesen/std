@@ -81,6 +81,7 @@ export const migration0005: TxMigration = {
   id: 5,
   kind: "tx",
   name: "config-layers",
+  phase: "expand",
   statements: [
     ...platformTable("config_set", [
       "name text NOT NULL",

@@ -44,6 +44,7 @@ import { SqlClient } from "effect/sql";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
+import { STD_VERSION } from "../version.ts";
 import type { ChangeKind } from "./change-entry.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { AfterWriteInput } from "./save-hooks.ts";
@@ -181,8 +182,8 @@ const insertDeliveries = Effect.fn("Outbox.insertDeliveries")(
     yield* sql.unsafe(
       `INSERT INTO core.delivery (
          subscription_id, change_id, record_id, record_version, status,
-         attempts, next_attempt_at)
-       SELECT s.id, $1::uuid, $2::uuid, $3::int8, 'pending', 0, ${NOW}
+         attempts, next_attempt_at, min_worker_version)
+       SELECT s.id, $1::uuid, $2::uuid, $3::int8, 'pending', 0, ${NOW}, $5::text
        FROM unnest($4::uuid[]) WITH ORDINALITY AS s (id, position)
        ORDER BY s.position`,
       [
@@ -190,6 +191,7 @@ const insertDeliveries = Effect.fn("Outbox.insertDeliveries")(
         entry.recordId,
         String(entry.recordVersion),
         [...subscriptionIds],
+        STD_VERSION,
       ]
     );
   }

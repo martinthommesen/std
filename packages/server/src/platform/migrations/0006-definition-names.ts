@@ -17,6 +17,7 @@ export const migration0006: TxMigration = {
   id: 6,
   kind: "tx",
   name: "definition-names",
+  phase: "expand",
   statements: [
     'ALTER TABLE core."access_rule" ADD COLUMN name text',
     'ALTER TABLE core."index" ADD COLUMN name text',

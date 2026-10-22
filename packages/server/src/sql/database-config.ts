@@ -20,6 +20,8 @@ import type {
 } from "@std/postgres/transport";
 import { Config, Context, Effect, Layer, Redacted } from "effect";
 
+import { STD_VERSION } from "../version.ts";
+
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
 export { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
 
@@ -33,27 +35,36 @@ export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
  * The `application_name` of STD server processes. `std upgrade` refuses to
  * run while a session with this name is connected (Contracts 8.5).
  */
-export const SERVER_APPLICATION_NAME = "std-server";
+export const SERVER_APPLICATION_PREFIX = "std-server";
+
+/** The versioned server connection name. */
+export const SERVER_APPLICATION_NAME = `${SERVER_APPLICATION_PREFIX}@${STD_VERSION}`;
 
 /**
  * The `application_name` of the outbox worker process, `std worker`
  * (Contracts 4.6, 13.1). `std upgrade` refuses to run while a session with
  * this name is connected, like a server's (Contracts 8.5).
  */
-export const WORKER_APPLICATION_NAME = "std-worker";
+export const WORKER_APPLICATION_PREFIX = "std-worker";
+
+/** The versioned worker connection name. */
+export const WORKER_APPLICATION_NAME = `${WORKER_APPLICATION_PREFIX}@${STD_VERSION}`;
 
 /**
  * The sessions `std upgrade` waits for and refuses to run beside
  * (Contracts 8.5): servers and outbox workers. The one place that decides
  * it; `platform/runner.ts` (`checkUpgradePreconditions`) reads it.
  */
-export const UPGRADE_BLOCKING_APPLICATION_NAMES: readonly string[] = [
-  SERVER_APPLICATION_NAME,
-  WORKER_APPLICATION_NAME,
+export const UPGRADE_BLOCKING_APPLICATION_PREFIXES: readonly string[] = [
+  SERVER_APPLICATION_PREFIX,
+  WORKER_APPLICATION_PREFIX,
 ];
 
 /** The `application_name` of the `std` command line tool. */
-export const CLI_APPLICATION_NAME = "std-cli";
+export const CLI_APPLICATION_PREFIX = "std-cli";
+
+/** The versioned CLI connection name. */
+export const CLI_APPLICATION_NAME = `${CLI_APPLICATION_PREFIX}@${STD_VERSION}`;
 
 /** Default size of the connection pool of one process. */
 export const DEFAULT_MAX_CONNECTIONS = 10;

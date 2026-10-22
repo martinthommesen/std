@@ -21,6 +21,7 @@ export const migration0010: ConcurrentIndexMigration = {
   index: "definition_revision_field",
   kind: "concurrent_index",
   name: "definition-revision-field",
+  phase: "expand",
   schema: "core",
   statement:
     "CREATE INDEX CONCURRENTLY definition_revision_field ON core.definition_revision ((effective ->> 'fieldId'), revision) WHERE kind IN ('override', 'choice')",

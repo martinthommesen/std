@@ -37,6 +37,7 @@ import { decodeRows } from "../sql/rows.ts";
 import { TransactionRefused } from "../sql/transaction-refused.ts";
 import { currentState } from "../sql/transaction.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { STD_VERSION } from "../version.ts";
 import { LeaseLost } from "./lease-lost.ts";
 
 /** What a subscription does with later versions while one is dead (4.7). */
@@ -157,7 +158,7 @@ const BLOCKING_STATUSES: Readonly<Record<DeadLetterPolicy, string>> = {
 /**
  * The claim statement (Contracts 4.6): the claim predicate exactly, then
  * the lease. `$1` is the subscription, `$2` the limit, `$3` the lease as
- * an interval. The policy only chooses whether `dead` blocks, so both
+ * an interval, and `$4` is this worker's package version. The policy only chooses whether `dead` blocks, so both
  * texts are constant and bind every value.
  *
  * @param deadLetter - The subscription's dead-letter policy.
@@ -170,6 +171,7 @@ export const claimStatement = (deadLetter: DeadLetterPolicy): string =>
   WHERE p.subscription_id = $1::uuid
     AND ((p.status = 'pending' AND p.next_attempt_at <= now())
       OR (p.status = 'in_flight' AND p.lease_until < now()))
+    AND string_to_array(p.min_worker_version, '.')::numeric[] <= string_to_array($4::text, '.')::numeric[]
     AND NOT EXISTS (
       SELECT 1 FROM core.delivery e
       WHERE e.subscription_id = p.subscription_id AND e.record_id = p.record_id
@@ -199,6 +201,7 @@ const EXPIRE_EXHAUSTED = `WITH exhausted AS (
   SELECT id FROM core.delivery
   WHERE subscription_id = $1::uuid AND status = 'in_flight'
     AND lease_until < now() AND attempts >= $2::int4
+    AND string_to_array(min_worker_version, '.')::numeric[] <= string_to_array($4::text, '.')::numeric[]
   ORDER BY id
   FOR UPDATE SKIP LOCKED
 )
@@ -281,12 +284,14 @@ export const claimInTransaction = Effect.fn("Outbox.claimInTransaction")(
       input.subscriptionId,
       String(input.maxAttempts),
       LEASE_EXPIRED_ERROR,
+      STD_VERSION,
     ]);
 
     const rows = yield* sql.unsafe(claimStatement(input.deadLetter), [
       input.subscriptionId,
       String(input.limit),
       intervalOf(input.lease),
+      STD_VERSION,
     ]);
 
     const claimed: ClaimedDelivery[] = (yield* decodeClaimed(rows)).map(
