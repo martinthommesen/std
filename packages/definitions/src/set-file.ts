@@ -42,6 +42,11 @@
  *   - { id: <uuid>, effect: allow, roles: [admin], table: "*", target: records,
  *       actions: [read, create, update, delete] }
  * subscriptions: []
+ * recordRules:
+ *   - { id: <uuid>, name: needs_notes, table: acme.asset, phase: before,
+ *       kind: guard, operations: [update], order: 10,
+ *       condition: { op: empty, arg: { path: [<notes field ID>] } },
+ *       actions: [{ type: refuse, code: RuleRefused, message: Notes needed }] }
  * ```
  */
 import {
@@ -71,6 +76,12 @@ import {
   SubscriptionOperationSchema,
 } from "./definition.ts";
 import { DefinitionIdSchema } from "./ids.ts";
+import {
+  RuleActionSchema,
+  RuleKindSchema,
+  RuleOperationSchema,
+  RulePhaseSchema,
+} from "./rule-definition.ts";
 
 /** The header of a set (`set:` in exactly one file). */
 export const SetHeaderSchema = Struct({
@@ -327,12 +338,43 @@ export const SubscriptionEntrySchema = Struct({
 /** A subscription entry. */
 export type SubscriptionEntry = typeof SubscriptionEntrySchema.Type;
 
+/**
+ * A record-rule entry (Contracts 4.10, decision 0022). Its condition and
+ * actions are stored JSON, holding field and class IDs like every
+ * condition in a set file; `runAs` (a user) and `subscription` are IDs.
+ * `active` defaults to true, `once` to false, `order` to 0 and
+ * `operations` to none (the `aggregate` phase has none).
+ */
+export const RecordRuleEntrySchema = Struct({
+  actions: SchemaArray(RuleActionSchema),
+  active: optionalKey(SchemaBoolean),
+  condition: optionalKey(ConditionSchema),
+  description: optionalKey(SchemaString),
+  id: DefinitionIdSchema,
+  /** A `before` rule's kind: `derive`, `guard` or `invariant`. */
+  kind: optionalKey(RuleKindSchema),
+  name: SchemaString,
+  once: optionalKey(SchemaBoolean),
+  operations: optionalKey(SchemaArray(RuleOperationSchema)),
+  order: optionalKey(Int),
+  phase: RulePhaseSchema,
+  protected: optionalKey(SchemaBoolean),
+  runAs: optionalKey(DefinitionIdSchema),
+  subscription: optionalKey(DefinitionIdSchema),
+  /** The qualified name of the class the rule is attached to. */
+  table: SchemaString,
+});
+
+/** A record-rule entry. */
+export type RecordRuleEntry = typeof RecordRuleEntrySchema.Type;
+
 /** One file of a set. */
 export const SetFileSchema = Struct({
   accessRules: optionalKey(SchemaArray(AccessRuleEntrySchema)),
   grants: optionalKey(SchemaArray(GrantEntrySchema)),
   namespaces: optionalKey(SchemaArray(NamespaceEntrySchema)),
   permissions: optionalKey(SchemaArray(NamedEntrySchema)),
+  recordRules: optionalKey(SchemaArray(RecordRuleEntrySchema)),
   roles: optionalKey(SchemaArray(NamedEntrySchema)),
   set: optionalKey(SetHeaderSchema),
   subscriptions: optionalKey(SchemaArray(SubscriptionEntrySchema)),

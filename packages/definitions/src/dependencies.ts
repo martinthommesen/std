@@ -10,7 +10,10 @@
  * choice to its field) and `layout_uses` (a layout to its class and to each
  * field it shows), and `saved_filter_on` (a saved filter to its class;
  * the fields its condition reads are `condition_reads`, decision 0019).
- * Step 3 adds `rule_writes`.
+ * Step 3 adds `rule_on` (a record rule to its class, every class its
+ * actions name and an `afterCommit` rule's subscription) and `rule_writes`
+ * (a record rule to every field its actions set; the fields it reads are
+ * `condition_reads`), decision 0022.
  */
 import type { FieldType } from "@std/values/field-type";
 
@@ -32,11 +35,13 @@ import type {
   NamespaceDraft,
   OverrideDraft,
   PermissionDraft,
+  RecordRuleDraft,
   RoleDraft,
   SubscriptionDraft,
 } from "./definition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
+import { ruleReferences } from "./rule-references.ts";
 
 /** Dependency kinds that exist in this version. */
 export const DEPENDENCY_KINDS = [
@@ -55,6 +60,8 @@ export const DEPENDENCY_KINDS = [
   "choice_of",
   "layout_uses",
   "saved_filter_on",
+  "rule_on",
+  "rule_writes",
 ] as const;
 
 /** A dependency kind. */
@@ -79,7 +86,8 @@ export type Referencing =
   | SubscriptionDraft
   | ChoiceDraft
   | LayoutDraft
-  | SavedFilterDraft;
+  | SavedFilterDraft
+  | RecordRuleDraft;
 
 /** One dependency: `from` refers to `to`. */
 export interface Dependency {
@@ -104,6 +112,7 @@ export const REFERENCING_KINDS: ReadonlySet<DefinitionKind> =
     "choice",
     "layout",
     "savedFilter",
+    "recordRule",
   ]);
 
 const edge = (
@@ -237,6 +246,18 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
     ];
   }
 
+  if (definition.kind === "recordRule") {
+    const references = ruleReferences(definition);
+
+    return [
+      ...references.classes.map((classId) => edge(id, classId, "rule_on")),
+      ...references.writes.map((fieldId) => edge(id, fieldId, "rule_writes")),
+      ...references.reads.map((fieldId) =>
+        edge(id, fieldId, "condition_reads")
+      ),
+    ];
+  }
+
   return definition.kind === "subscription"
     ? [
         edge(id, definition.classId, "subscription_on"),
@@ -264,7 +285,10 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
  * - choice: `choice_of` its field;
  * - layout: `layout_uses` its class and each field element;
  * - saved filter: `saved_filter_on` its class, `condition_reads` each
- *   field its condition reads (every hop).
+ *   field its condition reads (every hop);
+ * - record rule: `rule_on` its class, the classes its actions name and
+ *   its subscription, `rule_writes` each field it sets,
+ *   `condition_reads` each field it reads (`rule-references.ts`).
  *
  * @param definition - Any definition.
  * @returns Its dependencies, sorted by kind and target.
