@@ -323,6 +323,12 @@ const localClash = (
       .find((entry) => entry.name === draft.name && isLocal(entry));
   }
 
+  if (draft.kind === "recordRule") {
+    return installed
+      .recordRulesOf(draft.classId)
+      .find((entry) => entry.name === draft.name && isLocal(entry));
+  }
+
   return draft.kind === "subscription"
     ? installed
         .subscriptions()
@@ -699,7 +705,7 @@ const deactivation = (current: Definition): Deactivation => {
     };
   }
 
-  if (current.kind === "accessRule") {
+  if (current.kind === "accessRule" || current.kind === "recordRule") {
     return {
       action: "deactivated",
       op: current.active
@@ -733,7 +739,14 @@ const deactivation = (current: Definition): Deactivation => {
  */
 const SWITCHED_OFF: ReadonlySet<Definition["kind"]> = new Set<
   Definition["kind"]
->(["accessRule", "subscription", "choice", "layout", "savedFilter"]);
+>([
+  "accessRule",
+  "subscription",
+  "choice",
+  "layout",
+  "savedFilter",
+  "recordRule",
+]);
 
 const planRemoval = (
   planning: Planning,

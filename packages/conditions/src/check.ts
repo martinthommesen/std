@@ -109,6 +109,14 @@ export interface CheckOptions {
    * not preloaded are refused. Omitted: every path within the hop limit.
    */
   readonly isPreloaded?: (path: readonly string[]) => boolean;
+  /**
+   * Record-rule action conditions (`forEach.where`, Contracts 4.10): the
+   * class of the rule's own record. Only then may the right side of `eq`
+   * to `ge` be a `scope: "record"` path: one field of that record, or an
+   * empty path for its ID (compared with a reference or uuid field).
+   * Omitted: every scoped path is refused.
+   */
+  readonly recordClassId?: string;
 }
 
 interface Checker {
@@ -232,6 +240,18 @@ const typePath = (
   path: Path,
   at: Segments
 ): TypedPath | undefined => {
+  if (path.scope !== undefined) {
+    checker.issues.push(
+      issue(
+        "scopeNotAllowed",
+        [...at, "scope"],
+        "A record-scoped path may stand only on the right of a comparison."
+      )
+    );
+
+    return undefined;
+  }
+
   if (!checkPathLimits(checker, path, at)) {
     return undefined;
   }
@@ -484,6 +504,87 @@ const checkOperator = (
   return true;
 };
 
+const typeRecordPath = (
+  checker: Checker,
+  left: TypedPath,
+  path: Path,
+  at: Segments
+): CheckedOperand | undefined => {
+  const { recordClassId } = checker.options;
+
+  if (recordClassId === undefined) {
+    checker.issues.push(
+      issue(
+        "scopeNotAllowed",
+        [...at, "scope"],
+        `The ${checker.rules.profile} profile cannot read a rule's own record here.`
+      )
+    );
+
+    return undefined;
+  }
+
+  if (path.image !== undefined) {
+    checker.issues.push(
+      issue(
+        "previousNotAllowed",
+        [...at, "image"],
+        "A record-scoped path reads the rule's record as it is saved."
+      )
+    );
+
+    return undefined;
+  }
+
+  const [fieldId, ...rest] = path.path;
+
+  if (fieldId === undefined) {
+    return requireKind(
+      checker,
+      left.field.type.kind,
+      ID_KINDS,
+      at,
+      "The record's ID"
+    )
+      ? { field: null, kind: "record" }
+      : undefined;
+  }
+
+  if (rest.length > 0) {
+    checker.issues.push(
+      issue(
+        "tooManyHops",
+        [...at, "path"],
+        "A record-scoped path names one field of the rule's record."
+      )
+    );
+
+    return undefined;
+  }
+
+  const field = resolveHop(checker, recordClassId, fieldId, [...at, "path", 0]);
+
+  if (field === undefined) {
+    return undefined;
+  }
+
+  if (
+    comparisonClass(field.type.kind) !== comparisonClass(left.field.type.kind)
+  ) {
+    checker.issues.push(
+      issue(
+        "comparisonClassMismatch",
+        at,
+        "Both sides must be in the same comparison class."
+      )
+    );
+
+    return undefined;
+  }
+
+  return { field, kind: "record" };
+};
+
 const negateIf = (negated: boolean, node: CheckedNode): CheckedNode =>
   negated ? { arg: node, op: "not" } : node;
 
@@ -506,7 +607,9 @@ const typeCompare = (
 
   let right: CheckedOperand | undefined;
 
-  if (isPath(expr.right)) {
+  if (isPath(expr.right) && expr.right.scope === "record") {
+    right = typeRecordPath(checker, left, expr.right, [...at, "right"]);
+  } else if (isPath(expr.right)) {
     const path = typePath(checker, expr.right, [...at, "right"]);
 
     if (path === undefined) {

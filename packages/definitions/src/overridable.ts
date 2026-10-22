@@ -21,7 +21,9 @@
  * - protected definitions: label and help text only (Contracts 1.8), so a
  *   protected access rule cannot be disabled.
  *
- * Record rules join the list with their feature (Step 3). Max-length tightening of a field is listed in 8.2 but
+ * - record rule: `active` only (Contracts 4.10, decision 0022).
+ *
+ * Max-length tightening of a field is listed in 8.2 but
  * lives inside the field's type, which v0.1 never changes, so it is not
  * overridable yet.
  */
@@ -49,6 +51,7 @@ export const OVERRIDABLE: Readonly<Record<DefinitionKind, readonly string[]>> =
     namespace: [],
     override: [],
     permission: [],
+    recordRule: ["active"],
     role: ["label"],
     savedFilter: ["condition", "label"],
     subscription: [],

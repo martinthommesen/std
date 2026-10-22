@@ -104,6 +104,7 @@ describe("config-service", () => {
     assert.deepStrictEqual(OVERRIDABLE.layout, ["elements"]);
     assert.deepStrictEqual(OVERRIDABLE.role, ["label"]);
     assert.deepStrictEqual(OVERRIDABLE.accessRule, ["active"]);
+    assert.deepStrictEqual(OVERRIDABLE.recordRule, ["active"]);
     assert.deepStrictEqual(PROTECTED_OVERRIDABLE, ["helpText", "label"]);
   });
 

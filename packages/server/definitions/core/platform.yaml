@@ -824,3 +824,68 @@ tables:
         name: condition
         type: json
         required: true
+  - id: 72bd1370-a1dd-4a67-b8ed-efc66b50fe43
+    name: core.record_rule
+    label: Record rule
+    storage: platform
+    displayField: name
+    fields:
+      - id: 8c7bced8-f04b-4a5f-a67b-e0ff02e0a422
+        name: owner_layer
+        type: text
+        required: true
+      - id: 333a6536-0620-4a5d-87a5-27f95371d52e
+        name: owner_set_id
+        type: uuid
+      - id: 5937fc9a-6fe9-47da-a2eb-5f87d7dcad18
+        name: state
+        type: text
+        required: true
+      - id: 7013de14-aa58-4ccc-9d24-74bf595c7ef0
+        name: protected
+        type: boolean
+      - id: af9391ba-6454-40f1-99d0-e75859694bd5
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 49210ab0-09dc-4a69-9576-bcaefdba64a4
+        name: name
+        type: text
+        required: true
+      - id: d0e02d85-06e6-480a-a488-64d40b2e2499
+        name: description
+        type: text
+      - id: cdd1595d-845c-47ae-8fef-f89c1186a702
+        name: phase
+        type: text
+        required: true
+      - id: 11bc4bbe-0d41-4e34-b596-0c028733ab17
+        name: rule_kind
+        type: text
+      - id: 3eb1ef73-b7c4-408b-b280-241f337e4cd2
+        name: sort_order
+        type: integer
+        required: true
+      - id: 2d4c29d0-0695-40be-92c2-2feba3e56ed4
+        name: operations
+        type: json
+        required: true
+      - id: 85934e38-328c-4191-8dea-d41ed63f74b1
+        name: condition
+        type: json
+      - id: 14c47ac0-2361-4de0-8f67-8b654d3a9b9a
+        name: once
+        type: boolean
+      - id: bb745173-f213-457f-9e40-1e0ee16df8d1
+        name: run_as_id
+        type: uuid
+      - id: 6c8eebc3-e852-4b28-875c-3d6771da11f0
+        name: subscription_id
+        type: { kind: reference, target: core.subscription }
+      - id: dc461c1e-121c-478b-805b-abe843bc9024
+        name: actions
+        type: json
+        required: true
+      - id: 2a65dc8d-5f9a-496f-823d-4b8b91b1d5a8
+        name: active
+        type: boolean

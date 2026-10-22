@@ -22,6 +22,11 @@
  * snapshot is a defect, not a non-match: the definition checks refuse
  * such a subscription, so the snapshot is inconsistent and the save fails
  * rather than silently dropping a delivery.
+ *
+ * A subscription that an `afterCommit` record rule names (its carrier,
+ * decision 0022) is never matched here: its deliveries are written only
+ * for changes the rule matches, which the record-rule hooks decide with
+ * the rule's own condition and pass to `writeDeliveries`.
  */
 import { checkCondition } from "@std/conditions/check";
 import { ConditionDefectError } from "@std/conditions/defect";
@@ -103,6 +108,25 @@ const conditionHolds = (
 };
 
 /**
+ * The subscriptions that carry `afterCommit` rules (decision 0022).
+ *
+ * @param snapshot - The configuration.
+ * @returns Their IDs.
+ */
+export const ruleCarriers = (
+  snapshot: ConfigSnapshot
+): ReadonlySet<DefinitionId> =>
+  new Set(
+    snapshot
+      .recordRules()
+      .flatMap((rule) =>
+        rule.phase === "afterCommit" && rule.subscriptionId !== null
+          ? [rule.subscriptionId]
+          : []
+      )
+  );
+
+/**
  * The subscriptions a change matches, by ID. Throws `ConditionDefectError`
  * when a stored condition no longer checks or resolves.
  *
@@ -121,11 +145,13 @@ export const matchingSubscriptions = (
   );
 
   const image = imageOf(change.image);
+  const carriers = ruleCarriers(snapshot);
 
   const watches = (subscription: SubscriptionDefinition): boolean =>
     subscription.state === "active" &&
     subscription.enabled &&
-    lineage.has(subscription.classId);
+    lineage.has(subscription.classId) &&
+    !carriers.has(subscription.id);
 
   return snapshot
     .subscriptions()
@@ -175,10 +201,15 @@ const insertDeliveries = Effect.fn("Outbox.insertDeliveries")(
  * matches.
  *
  * @param input - The change entry and both sides of the change.
+ * @param carried - Carrier subscriptions whose `afterCommit` rule matched
+ *   the change (decision 0022); none by default.
  * @returns Nothing.
  */
 export const writeDeliveries = Effect.fn("Outbox.writeDeliveries")(
-  function* writeDeliveries(input: AfterWriteInput) {
+  function* writeDeliveries(
+    input: AfterWriteInput,
+    carried: readonly DefinitionId[] = []
+  ) {
     const image = input.entry.kind === "delete" ? input.before : input.after;
 
     if (image === null) {
@@ -198,14 +229,18 @@ export const writeDeliveries = Effect.fn("Outbox.writeDeliveries")(
       )
     );
 
-    if (matching.length === 0) {
+    const subscriptionIds = [
+      ...new Set([
+        ...matching.map((subscription) => subscription.id),
+        ...carried,
+      ]),
+    ].toSorted(compareIds);
+
+    if (subscriptionIds.length === 0) {
       return yield* Effect.void;
     }
 
-    yield* insertDeliveries(
-      input,
-      matching.map((subscription) => subscription.id)
-    );
+    yield* insertDeliveries(input, subscriptionIds);
 
     const wakeup = yield* WorkerWakeup;
     const transaction = yield* CurrentTransaction;

@@ -3,7 +3,8 @@
  * are records", Contracts 1.4): `POST`, `PATCH` and `DELETE` on
  * `core.namespace`, `core.class`, `core.field`, `core.field_override`,
  * `core.index`, `core.role`, `core.permission`, `core.role_permission`,
- * `core.access_rule` and `core.subscription` become a change set, never a
+ * `core.access_rule`, `core.subscription`, `core.choice`, `core.layout`,
+ * `core.saved_filter` and `core.record_rule` become a change set, never a
  * row write.
  *
  * - The body names the table's columns, as reads return them. `POST`
@@ -36,6 +37,7 @@ import {
   OverrideDraftSchema,
   PermissionDraftSchema,
   RoleDraftSchema,
+  RecordRuleDraftSchema,
   SavedFilterDraftSchema,
   SubscriptionDraftSchema,
 } from "@std/definitions/definition";
@@ -114,6 +116,7 @@ const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
   namespace: "createNamespace",
   override: "setOverride",
   permission: "createPermission",
+  recordRule: "createRecordRule",
   role: "createRole",
   savedFilter: "createSavedFilter",
   subscription: "createSubscription",
@@ -146,12 +149,31 @@ const DEFAULTS = {
   unique: false,
 } satisfies Readonly<Record<string, JsonValue>>;
 
+/** Defaults of a record rule's optional properties (Contracts 4.10). */
+const RECORD_RULE_DEFAULTS = {
+  once: false,
+  order: 0,
+  ruleKind: null,
+  runAsId: null,
+  subscriptionId: null,
+} satisfies Readonly<Record<string, JsonValue>>;
+
 const OVERRIDE_DEFAULTS = {
   choices: null,
   label: null,
   readOnly: null,
   required: null,
 } satisfies Readonly<Record<string, JsonValue>>;
+
+const defaultsOf = (kind: DefinitionKind) => {
+  if (kind === "override") {
+    return { ...DEFAULTS, ...OVERRIDE_DEFAULTS };
+  }
+
+  return kind === "recordRule"
+    ? { ...DEFAULTS, ...RECORD_RULE_DEFAULTS }
+    : DEFAULTS;
+};
 
 /** A definition being built from a body. */
 interface Candidate {
@@ -243,6 +265,7 @@ const DRAFT_SCHEMAS = {
   namespace: NamespaceDraftSchema,
   override: OverrideDraftSchema,
   permission: PermissionDraftSchema,
+  recordRule: RecordRuleDraftSchema,
   role: RoleDraftSchema,
   savedFilter: SavedFilterDraftSchema,
   subscription: SubscriptionDraftSchema,
@@ -437,8 +460,7 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
   ) {
     const properties = yield* fromResult(propertiesOf(kind, body, false));
 
-    const defaults =
-      kind === "override" ? { ...DEFAULTS, ...OVERRIDE_DEFAULTS } : DEFAULTS;
+    const defaults = defaultsOf(kind);
 
     const definition: Candidate = {
       ...defaults,

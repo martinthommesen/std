@@ -28,6 +28,8 @@ import type { DefinitionId } from "./ids.ts";
 export const ConditionPathSchema = Struct({
   image: optionalKey(Literal("previous")),
   path: SchemaArray(DefinitionIdSchema),
+  /** `record`: the rule's own record (record-rule actions, Contracts 4.10). */
+  scope: optionalKey(Literal("record")),
 });
 
 /** A field path. */

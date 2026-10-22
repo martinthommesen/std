@@ -26,6 +26,7 @@ import { UPDATABLE } from "./operation.ts";
 import type { Operation } from "./operation.ts";
 import { DefinitionInvalid, problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
+import { ruleReferences } from "./rule-references.ts";
 import type { Draft, ResolvedSet } from "./set-resolve.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
@@ -41,6 +42,7 @@ const PHASES: Readonly<Record<Draft["kind"], number>> = {
   namespace: 1,
   override: 3,
   permission: 4,
+  recordRule: 5,
   role: 4,
   savedFilter: 5,
   subscription: 5,
@@ -112,6 +114,12 @@ export const draftDependencies = (draft: Draft): readonly DefinitionId[] => {
 
   if (draft.kind === "savedFilter") {
     return [draft.classId];
+  }
+
+  if (draft.kind === "recordRule") {
+    const references = ruleReferences(draft);
+
+    return [...references.classes, ...references.writes, ...references.reads];
   }
 
   return draft.kind === "subscription" ? [draft.classId] : [];
@@ -239,6 +247,10 @@ export const createOperation = (draft: Draft): Operation => {
 
   if (draft.kind === "savedFilter") {
     return { definition: draft, op: "createSavedFilter" };
+  }
+
+  if (draft.kind === "recordRule") {
+    return { definition: draft, op: "createRecordRule" };
   }
 
   return draft.kind === "accessRule"

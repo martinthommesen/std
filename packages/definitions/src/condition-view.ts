@@ -4,6 +4,7 @@
  * subscription condition when it is stored.
  */
 import { checkConditionJson } from "@std/conditions/check";
+import type { CheckOptions } from "@std/conditions/check";
 import type { ClassView, FieldInfo } from "@std/conditions/class-view";
 import type { ChoiceList } from "@std/values/choice";
 import type { ConditionProfile } from "@std/values/field-type";
@@ -111,6 +112,8 @@ export type ConditionPurpose = "store" | "evaluate";
  * @param purpose - `store` for a condition being stored or edited, which
  *   may not use retired fields; `evaluate` for one stored earlier, which
  *   keeps working after a field it reads is retired (Contracts 1.6, 1.7).
+ * @param recordClassId - For a record rule's `forEach.where`: the class of
+ *   the rule's own record, which `scope: "record"` paths read (4.10).
  * @returns Messages, empty when the condition is acceptable.
  */
 export const conditionProblems = (
@@ -118,7 +121,8 @@ export const conditionProblems = (
   classId: DefinitionId | null,
   condition: Condition,
   profile: ConditionProfile,
-  purpose: ConditionPurpose = "store"
+  purpose: ConditionPurpose = "store",
+  recordClassId?: DefinitionId
 ): readonly string[] => {
   if (classId === null) {
     return conditionPaths(condition).length === 0
@@ -128,12 +132,17 @@ export const conditionProblems = (
 
   const json: JsonValue = condition;
 
-  const checked = checkConditionJson(json, {
+  const options: CheckOptions = {
     classId,
     profile,
     purpose,
     view: classViewOf(snapshot),
-  });
+  };
+
+  const checked = checkConditionJson(
+    json,
+    recordClassId === undefined ? options : { ...options, recordClassId }
+  );
 
   return checked.ok
     ? []

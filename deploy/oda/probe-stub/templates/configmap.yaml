@@ -1,0 +1,34 @@
+# The static OpenAPI document that the stub API serves at
+# /std-probe/probe/v1/openapi.json (the Component's specification URL).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: std-probe-api-content
+  labels:
+    app.kubernetes.io/name: std-probe-api
+    oda.tmforum.org/componentName: std-probe
+data:
+  openapi.json: |
+    {
+      "openapi": "3.0.3",
+      "info": {
+        "title": "STD ODA Canvas probe",
+        "version": "1.0.0",
+        "description": "Static stub API of STD's ODA Canvas probe. It serves this document and nothing else."
+      },
+      "servers": [{ "url": "/std-probe/probe/v1" }],
+      "paths": {
+        "/openapi.json": {
+          "get": {
+            "operationId": "getOpenApiDocument",
+            "summary": "This OpenAPI document",
+            "responses": {
+              "200": {
+                "description": "The document",
+                "content": { "application/json": { "schema": { "type": "object" } } }
+              }
+            }
+          }
+        }
+      }
+    }

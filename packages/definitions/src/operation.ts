@@ -52,6 +52,7 @@ import {
   GrantDraftSchema,
   IndexDraftSchema,
   LayoutDraftSchema,
+  RecordRuleDraftSchema,
   SavedFilterDraftSchema,
   NamespaceDraftSchema,
   OverrideDraftSchema,
@@ -90,6 +91,10 @@ export const OperationSchema = Union([
   Struct({
     definition: SavedFilterDraftSchema,
     op: Literal("createSavedFilter"),
+  }),
+  Struct({
+    definition: RecordRuleDraftSchema,
+    op: Literal("createRecordRule"),
   }),
   /**
    * Adds an override (`version` null) or replaces the stored one
@@ -211,6 +216,11 @@ export const OPERATION_FORMS = {
   createLayout: { create: "always", creates: "layout", target: false },
   createNamespace: { create: "always", creates: "namespace", target: false },
   createPermission: { create: "always", creates: "permission", target: false },
+  createRecordRule: {
+    create: "always",
+    creates: "recordRule",
+    target: false,
+  },
   createRole: { create: "always", creates: "role", target: false },
   createSavedFilter: {
     create: "always",
@@ -286,6 +296,7 @@ export const RENAMABLE: ReadonlySet<DefinitionKind> = new Set<DefinitionKind>([
   "accessRule",
   "subscription",
   "savedFilter",
+  "recordRule",
 ]);
 
 /** The kinds `retire` and `reactivate` apply to. */
@@ -341,6 +352,20 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   namespace: ["helpText", "label"],
   override: [],
   permission: ["helpText", "label", "name"],
+  recordRule: [
+    "actions",
+    "active",
+    "classId",
+    "condition",
+    "description",
+    "once",
+    "operations",
+    "order",
+    "phase",
+    "ruleKind",
+    "runAsId",
+    "subscriptionId",
+  ],
   role: ["helpText", "label", "name"],
   savedFilter: ["condition", "label", "name"],
   subscription: [

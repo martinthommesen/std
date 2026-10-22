@@ -179,6 +179,10 @@ const uiConfigName = (
     return `${definition.type} layout of ${snapshot.qualifiedNameOf(definition.classId) ?? definition.classId}`;
   }
 
+  if (definition.kind === "recordRule") {
+    return `record rule ${definition.name} of ${snapshot.qualifiedNameOf(definition.classId) ?? definition.classId}`;
+  }
+
   return definition.kind === "savedFilter"
     ? `saved filter ${definition.name} of ${snapshot.qualifiedNameOf(definition.classId) ?? definition.classId}`
     : undefined;
