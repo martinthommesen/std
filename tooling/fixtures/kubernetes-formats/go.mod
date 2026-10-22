@@ -1,6 +1,8 @@
 module std/tooling/fixtures/kubernetes-formats
 
-go 1.22.2
+go 1.22
+
+toolchain go1.22.2
 
 require k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
 

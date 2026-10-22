@@ -1,3 +1,11 @@
+// Portions derived from Go go1.22.2, src/net/url/url.go.
+// Copyright 2009 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE-go file next to this one.
+//
+// Modified for STD: translated to TypeScript and reduced to a yes/no check;
+// the parsed URL and error messages are not kept.
+
 /**
  * Go's `url.ParseRequestURI` (net/url, Go 1.22.2, the Go of Kubernetes
  * v1.30.0) as a yes/no check: the `uri` format a Kubernetes API server

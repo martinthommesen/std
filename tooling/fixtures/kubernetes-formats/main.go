@@ -3,16 +3,21 @@
 // It calls the validators the server calls: kube-openapi's strfmt.Default at
 // the version Kubernetes v1.30.0 pins, behind apiextensions-apiserver's
 // supportedFormats (formats outside it are dropped, so they accept anything).
-// Built with Go 1.22.2, Kubernetes v1.30.0's Go version.
+// It must run on Go 1.22.2, Kubernetes v1.30.0's Go: the validators call Go's
+// net/url and net/mail, whose answers change between Go releases (Go 1.23
+// accepts domain literals such as a@[192.0.2.1]). go.mod pins the toolchain,
+// and main refuses any other runtime.
 //
 // Regenerate (docs/decisions/0027-oda-canvas-probe.md):
 //
-//	cd tooling/fixtures/kubernetes-formats && go run .
+//	cd tooling/fixtures/kubernetes-formats && GOTOOLCHAIN=go1.22.2 go run .
 package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"k8s.io/kube-openapi/pkg/validation/strfmt"
@@ -60,6 +65,14 @@ var inputs = map[string][]string{
 		"a@[192.0.2.1]", "a+tag@example.org", "a b@example.org", "\"\"@example.org",
 		"Ann Lee <a@example.org>", "a@example.org, b@example.org", "é@example.org",
 		"a\\b@example.org", "\"a\\\"b\"@example.org", "Group: a@example.org;",
+		"=?bogus?Q?Ann?= <a@example.org>", "a@example.org (=?bogus?Q?Ann?=)",
+		"=?utf-8?Q?Ann?= <a@example.org>", "=?ISO-8859-1?q?Ann?= <a@example.org>",
+		"Ann =?bogus?Q?Lee?= <a@example.org>", "=?bogus?B?QW5u?= <a@example.org>",
+		"=?bogus?B?QW5u?= Lee <a@example.org>", "=?bogus?X?Ann?= <a@example.org>",
+		"=?bogus?Q?A=ZZ?= <a@example.org>", "=?bogus?B?QW5?= <a@example.org>",
+		"=?bogus?Q?Ann <a@example.org>", "a@example.org (Ann =?us-ascii?Q?Lee?=)",
+		"a@example.org (Ann =?bogus?Q?Lee?=)", "a@example.org (=?bogus?Q?Ann?)",
+		"=??Q?Ann?= <a@example.org>", "\"=?bogus?Q?Ann?=\" <a@example.org>",
 	},
 	"hostname": {
 		"example.org", "localhost", "-bad.example", "a..b", "a-b", "ab-c",
@@ -89,6 +102,10 @@ var inputs = map[string][]string{
 }
 
 func main() {
+	if runtime.Version() != "go1.22.2" {
+		fmt.Fprintf(os.Stderr, "run with Go 1.22.2 (GOTOOLCHAIN=go1.22.2), not %s\n", runtime.Version())
+		os.Exit(1)
+	}
 	expected := map[string][][2]any{}
 	for format, values := range inputs {
 		for _, value := range values {

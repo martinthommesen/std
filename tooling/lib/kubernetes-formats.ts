@@ -1,3 +1,16 @@
+// Portions derived from:
+// - kube-openapi 70dd3763d340, pkg/validation/strfmt (default.go, date.go,
+//   time.go, duration.go, bson.go), Copyright 2015 go-swagger maintainers,
+//   Licensed under the Apache License, Version 2.0 (STD's LICENSE file);
+// - Kubernetes v1.30.0, staging/src/k8s.io/apiextensions-apiserver/pkg/
+//   apiserver/validation/formats.go, Copyright 2019 The Kubernetes Authors,
+//   Licensed under the Apache License, Version 2.0;
+// - govalidator f61b66f89f4a (github.com/asaskevich/govalidator), Copyright
+//   (c) 2014 Alex Saskevich, MIT License (LICENSE-govalidator next to this
+//   file).
+// Modified for STD: the format list, patterns and checks translated to
+// TypeScript, each reduced to a yes/no check.
+
 /**
  * The string formats a Kubernetes 1.30 API server checks in a
  * CustomResourceDefinition's schema, ported from the validators it uses:

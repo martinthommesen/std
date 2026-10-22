@@ -1,12 +1,21 @@
+// Portions derived from Go go1.22.2, src/net/mail/message.go
+// (Copyright 2011 The Go Authors) and src/mime/encodedword.go
+// (Copyright 2015 The Go Authors). All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE-go file next to this one.
+//
+// Modified for STD: translated to TypeScript and reduced to a yes/no check;
+// decoded text and error messages are not kept.
+
 /**
  * Go's `mail.ParseAddress` (net/mail, Go 1.22.2, the Go of Kubernetes
  * v1.30.0) as a yes/no check: the `email` format a Kubernetes API server
  * validates (kube-openapi's `IsEmail` also requires a non-empty address). A
  * port of `parseSingleAddress`, `parseAddress`, `consumeGroupList`,
  * `consumeAddrSpec`, `consumePhrase`, `consumeQuotedString`, `consumeAtom`,
- * `skipCFWS` and `consumeComment`. RFC 2047 encoded words are taken as
- * plain atoms: their decoding can only change the display name, which the
- * check does not use.
+ * `consumeDisplayNameComment`, `skipCFWS`, `consumeComment` and
+ * `decodeRFC2047Word` (with mime's `WordDecoder.Decode`): an RFC 2047
+ * encoded word in a charset Go does not know fails the address, as in Go.
  */
 
 /** The parser's remaining input, consumed from the front. */
@@ -62,8 +71,11 @@ const consume = (input: Input, char: string): boolean => {
 };
 
 // '(' already consumed; true when the comment closes.
-const consumeComment = (input: Input): boolean => {
+// '(' already consumed; the comment's text, or undefined when it does not
+// close.
+const consumeComment = (input: Input): string | undefined => {
   let depth = 1;
+  let comment = "";
 
   while (input.rest !== "" && depth > 0) {
     if (input.rest.startsWith("\\") && input.rest.length > 1) {
@@ -74,17 +86,70 @@ const consumeComment = (input: Input): boolean => {
       depth -= 1;
     }
 
+    if (depth > 0) {
+      comment += input.rest.charAt(0);
+    }
+
     input.rest = input.rest.slice(1);
   }
 
-  return depth === 0;
+  return depth === 0 ? comment : undefined;
+};
+
+// mime's encoded-word decoding, as far as net/mail's outcome depends on it.
+const goCharsets = new Set(["utf-8", "iso-8859-1", "us-ascii"]);
+
+const strictBase64 =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+
+const qText = /^(?:=[0-9A-Fa-f]{2}|[\t\n\r -<>-~])*$/u;
+const lineBreaks = /[\r\n]/gu;
+
+const utf8Length = (text: string): number =>
+  new TextEncoder().encode(text).length;
+
+const decodes = (encoding: string, text: string): boolean => {
+  if (encoding === "B" || encoding === "b") {
+    return strictBase64.test(text.replaceAll(lineBreaks, ""));
+  }
+
+  return (encoding === "Q" || encoding === "q") && qText.test(text);
+};
+
+/**
+ * Whether `decodeRFC2047Word` fails on a word: a well-formed encoded-word
+ * whose text decodes, in a charset other than UTF-8, ISO-8859-1 and
+ * US-ASCII (net/mail's decoder has no others). Any other word, encoded or
+ * not, is kept as it is.
+ *
+ * @param word - An atom or a word of a comment.
+ * @returns True when Go reports an unsupported charset.
+ */
+const hasUnsupportedCharset = (word: string): boolean => {
+  if (
+    utf8Length(word) < 8 ||
+    !word.startsWith("=?") ||
+    !word.endsWith("?=") ||
+    word.split("?").length !== 5
+  ) {
+    return false;
+  }
+
+  const [charset = "", encoding = "", text = ""] = word.slice(2, -2).split("?");
+
+  return (
+    charset !== "" &&
+    encoding.length === 1 &&
+    decodes(encoding, text) &&
+    !goCharsets.has(charset.toLowerCase())
+  );
 };
 
 const skipCfws = (input: Input): boolean => {
   skipSpace(input);
 
   while (consume(input, "(")) {
-    if (!consumeComment(input)) {
+    if (consumeComment(input) === undefined) {
       return false;
     }
 
@@ -219,11 +284,25 @@ const tryAddrSpec = (input: Input): string | undefined => {
 
 // One word, or undefined when none can be read and there are words already
 // (Go ignores the error then and ends the phrase).
+// An atom is consumed before it is decoded, so a word in an unsupported
+// charset ends the phrase after it, or fails a phrase without words.
+const readWord = (input: Input): string => {
+  if (firstChar(input) === '"') {
+    return consumeQuotedString(input);
+  }
+
+  const atom = consumeAtom(input, true, true);
+
+  if (hasUnsupportedCharset(atom)) {
+    throw new ParseError("charset not supported");
+  }
+
+  return atom;
+};
+
 const consumeWord = (input: Input, haveWords: boolean): string | undefined => {
   try {
-    return firstChar(input) === '"'
-      ? consumeQuotedString(input)
-      : consumeAtom(input, true, true);
+    return readWord(input);
   } catch (error) {
     if (haveWords && error instanceof ParseError) {
       return undefined;
@@ -258,8 +337,14 @@ const consumePhrase = (input: Input): string => {
 };
 
 const consumeDisplayNameComment = (input: Input): void => {
-  if (!consume(input, "(") || !consumeComment(input)) {
+  const comment = consume(input, "(") ? consumeComment(input) : undefined;
+
+  if (comment === undefined) {
     throw new ParseError(misformattedComment);
+  }
+
+  if (comment.split(/[ \t]+/u).some((word) => hasUnsupportedCharset(word))) {
+    throw new ParseError("charset not supported");
   }
 };
 
