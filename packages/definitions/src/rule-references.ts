@@ -49,7 +49,7 @@ const valueReads = (
 ): readonly DefinitionId[] =>
   values.flatMap(({ value }) => {
     if ("copy" in value) {
-      return [value.copy.fieldId];
+      return value.copy.fieldId === null ? [] : [value.copy.fieldId];
     }
 
     return "increment" in value ? [value.increment] : [];

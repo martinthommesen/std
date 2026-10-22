@@ -86,7 +86,7 @@ const setValues = (
         const value = ruleValue(assignment, field.type, {
           me: context.me,
           now: context.now,
-          record: image,
+          record: { id: null, image },
           source: null,
         });
 

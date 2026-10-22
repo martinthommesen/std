@@ -48,16 +48,18 @@ WHERE "record_id" = ${textParameter(rule.id, "uuid")}
 
 /**
  * Checks that a rule may run as another identity: shipped in a set, or
- * written by a user who holds `rules.run_as` now.
+ * written by that identity or by a user who holds `rules.run_as` now.
  *
  * @param snapshot - The configuration.
  * @param rule - The rule.
+ * @param identityId - The identity it runs as.
  * @returns Fails with `NotAllowed` otherwise.
  */
 export const checkRunAsAuthor = Effect.fn("Rules.checkRunAsAuthor")(
   function* checkRunAsAuthor(
     snapshot: ConfigSnapshot,
-    rule: RecordRuleDefinition
+    rule: RecordRuleDefinition,
+    identityId: DefinitionId
   ) {
     if (rule.owner.layer !== "local") {
       return yield* Effect.void;
@@ -65,13 +67,15 @@ export const checkRunAsAuthor = Effect.fn("Rules.checkRunAsAuthor")(
 
     const author = yield* authorOf(rule);
 
+    // Running as oneself needs no permission, as when the rule was written.
     const holds =
-      author !== undefined &&
-      hasPermission(
-        snapshot,
-        yield* loadActor(snapshot, author),
-        PERMISSION_IDS["rules.run_as"]
-      );
+      author === identityId ||
+      (author !== undefined &&
+        hasPermission(
+          snapshot,
+          yield* loadActor(snapshot, author),
+          PERMISSION_IDS["rules.run_as"]
+        ));
 
     return holds ? yield* Effect.void : yield* new NotAllowed();
   }
@@ -97,7 +101,7 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
     return acting;
   }
 
-  yield* checkRunAsAuthor(snapshot, rule);
+  yield* checkRunAsAuthor(snapshot, rule, identityId);
 
   const actor: ActingUser = yield* loadActor(snapshot, identityId);
 

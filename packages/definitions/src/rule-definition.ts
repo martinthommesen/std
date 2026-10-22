@@ -6,7 +6,9 @@
  *   they set (6.5); a context value `{ ctx: "now" | "me" }`; a copy
  *   `{ copy: { from, fieldId } }` of a field of the rule's record
  *   (`record`), the owner (`owner`, aggregate rules only) or the current
- *   `forEach` record (`source`); or `{ increment: fieldId }`, the integer
+ *   `forEach` record (`source`), or with `fieldId` null that record's ID
+ *   (`record.id`, `source.id`; nested saves only, decision 0022); or
+ *   `{ increment: fieldId }`, the integer
  *   field's value on the rule's record plus 1 (1 when it is empty). Each
  *   action's values are a list of `{ fieldId, value }` so the stored JSON
  *   has one canonical order.
@@ -66,7 +68,10 @@ export const RuleValueSchema = Union([
   Struct({ value: Json }),
   Struct({ ctx: Literals(["now", "me"]) }),
   Struct({
-    copy: Struct({ fieldId: DefinitionIdSchema, from: CopySourceSchema }),
+    copy: Struct({
+      fieldId: NullOr(DefinitionIdSchema),
+      from: CopySourceSchema,
+    }),
   }),
   Struct({ increment: DefinitionIdSchema }),
 ]);

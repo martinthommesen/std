@@ -21,12 +21,18 @@ import type { DecodedInput } from "@std/values/field-value";
 import type { JsonValue } from "@std/values/json-value";
 import { isPlaintext, isSecretState } from "@std/values/write-only";
 
+/** A record a value reads: its ID (null before a create) and image. */
+export interface ValueRecord {
+  readonly id: string | null;
+  readonly image: RecordImage;
+}
+
 /** Where values come from. */
 export interface ValueSources {
   /** The rule's record (for `before` rules, as proposed so far). */
-  readonly record: RecordImage;
+  readonly record: ValueRecord;
   /** The current `forEach` record, when the action has one. */
-  readonly source: RecordImage | null;
+  readonly source: ValueRecord | null;
   /** The acting user. */
   readonly me: string;
   /** The evaluation instant, epoch milliseconds. */
@@ -43,8 +49,15 @@ const converted = (type: FieldType, json: JsonValue): DecodedInput => {
   return result.ok ? result.value : defect("a value does not convert");
 };
 
-const read = (image: RecordImage | null, fieldId: string): DecodedInput => {
-  const value = image?.[fieldId];
+const read = (
+  record: ValueRecord | null,
+  fieldId: string | null
+): DecodedInput => {
+  if (fieldId === null) {
+    return record?.id ?? defect("a record without an ID was copied");
+  }
+
+  const value = record?.image[fieldId];
 
   if (value === undefined) {
     return defect(`field ${fieldId} is missing from its image`);

@@ -376,7 +376,7 @@ export const addRecordRule = (
     active: true,
     condition: null,
     description: null,
-    name: `r_${id.replaceAll("-", "").slice(0, 16)}`,
+    name: `r_${id.replaceAll("-", "").slice(-16)}`,
     once: false,
     operations: ["update"],
     order: 0,

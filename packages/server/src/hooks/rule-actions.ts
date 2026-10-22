@@ -51,6 +51,7 @@ import { readRows } from "../records/sql-run.ts";
 import { checkedRuleCondition, imageOf } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { bodyValue, ruleValue } from "./rule-values.ts";
+import type { ValueRecord } from "./rule-values.ts";
 
 /** The record a rule runs for. */
 export interface RuleRecord {
@@ -176,7 +177,7 @@ FROM ${rawSql(rootTable(snapshot, classId))} WHERE "id" = ${textParameter(id, "u
 const bodyOf = (
   input: ActionInput,
   values: readonly RuleAssignment[],
-  source: RecordImage | null
+  source: ValueRecord | null
 ): JsonObject => {
   const body: Record<string, JsonObject[string]> = {};
 
@@ -192,7 +193,7 @@ const bodyOf = (
       ruleValue(assignment, field.type, {
         me: input.context.me,
         now: input.context.now,
-        record: input.record.image,
+        record: input.record,
         source,
       })
     );
@@ -207,7 +208,11 @@ const sourceImage = Effect.fn("Rules.sourceImage")(function* sourceImage(
 ) {
   const loaded = yield* loadRecord(snapshot, selected.classId, selected.id);
 
-  return Option.isSome(loaded) ? imageOf(loaded.value) : null;
+  const found: ValueRecord | null = Option.isSome(loaded)
+    ? { id: selected.id, image: imageOf(loaded.value) }
+    : null;
+
+  return found;
 });
 
 const updateEach = Effect.fn("Rules.updateEach")(function* updateEach(
@@ -225,7 +230,7 @@ const updateEach = Effect.fn("Rules.updateEach")(function* updateEach(
 
     if (target !== "self") {
       const via = input.snapshot.field(target.via);
-      const targetId = source?.[target.via];
+      const targetId = source?.image[target.via];
 
       endpointClassId =
         via?.type.kind === "reference"

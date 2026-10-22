@@ -193,6 +193,29 @@ const sameKind = (
   return source.kind === target.kind;
 };
 
+// A copy of a record's ID: only into a nested save's body (a `before`
+// rule's record has no ID yet on create), into a uuid field or a
+// reference to the record's class or an ancestor.
+const idCopyProblem = (
+  checking: Checking,
+  scope: ValueScope,
+  classId: DefinitionId,
+  target: FieldDefinition
+): string | undefined => {
+  if (!scope.nestedSave) {
+    return "copies a record's ID, which only updateEach and createEach set";
+  }
+
+  const fits =
+    target.type.kind === "uuid" ||
+    (target.type.kind === "reference" &&
+      isA(checking.snapshot, classId, target.type.targetClassId));
+
+  return fits
+    ? undefined
+    : "copies a record's ID into a field that cannot reference it";
+};
+
 const copyProblem = (
   checking: Checking,
   scope: ValueScope,
@@ -212,6 +235,10 @@ const copyProblem = (
 
   if (classId === null) {
     return "copies from source, but its action has no forEach";
+  }
+
+  if (fieldId === null) {
+    return idCopyProblem(checking, scope, classId, target);
   }
 
   const source = fieldOf(checking.snapshot, classId, fieldId);
