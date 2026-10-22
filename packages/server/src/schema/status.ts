@@ -76,7 +76,7 @@ const decodeChangeSets = decodeRows(
     committed_at: Schema.NullOr(Schema.String),
     coordinator_pid: Schema.NullOr(Schema.Int),
     error: Schema.NullOr(Schema.String),
-    first_revision: Schema.NullOr(Schema.String),
+    first_revision_text: Schema.NullOr(Schema.String),
     id: Schema.String,
     state: Schema.String,
   })
@@ -107,7 +107,7 @@ const HOLDERS = `SELECT l.pid, a.application_name, host(a.client_addr) AS client
     AND l.classid = $1::oid AND l.objid = $2::oid AND l.objsubid = 1
   ORDER BY l.pid`;
 
-const CHANGE_SETS = `SELECT id::text AS id, state, error, first_revision::text AS first_revision,
+const CHANGE_SETS = `SELECT id::text AS id, state, error, first_revision::text AS first_revision_text,
     coordinator_pid, committed_at::text AS committed_at
   FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
   ORDER BY sc.first_revision`;
@@ -192,9 +192,9 @@ export const schemaStatus = Effect.fn("Schema.status")(
         coordinatorPid: changeSet.coordinator_pid,
         error: changeSet.error,
         firstRevision:
-          changeSet.first_revision === null
+          changeSet.first_revision_text === null
             ? null
-            : Number(changeSet.first_revision),
+            : Number(changeSet.first_revision_text),
         id: changeSet.id,
         state: changeSet.state,
         steps,
