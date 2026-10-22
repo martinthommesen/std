@@ -223,5 +223,73 @@ describe("stale requests and choices", () => {
           assert.strictEqual(saved.status, 200, saved.text);
         })
     );
+
+    dbTest.effect(
+      "a child's subset change is relevant to creates of the child and to updates through the parent, not to creates of the parent",
+      () =>
+        Effect.gen(function* childSubsetScope() {
+          const http = yield* TestHttpClient;
+          const { fixture, tokens } = yield* signInAll;
+          const target: Target = { id: fixture.records.K, token: tokens.admin };
+          const grade = addField(ACME.asset, "grade", { kind: "choice" });
+
+          yield* change([grade.op]);
+          yield* change([
+            createChoice(choiceDraft(grade.id, "good", 1)),
+            createChoice(choiceDraft(grade.id, "fair", 2)),
+          ]);
+
+          const stated = yield* revisionNow(target);
+
+          // The monitor class restricts `grade` after the request's revision.
+          yield* change([
+            addOverride(ACME.monitor, grade.id, { choices: ["good"] }).op,
+          ]);
+
+          const createOn = (table: string) =>
+            http.request("POST", `/api/v1/tables/${table}/records`, {
+              body: { grade: "good", name: `stale ${table}` },
+              headers: { "std-schema-revision": stated },
+              token: tokens.admin,
+            });
+
+          // A create makes a record of exactly its endpoint's class: the
+          // monitor's subset does not apply to an asset.
+          const parent = yield* createOn("acme.asset");
+
+          assert.strictEqual(parent.status, 201, parent.text);
+
+          // A monitor create is stale, and so is an update through the
+          // parent endpoint, which may reach a monitor record.
+          const before = yield* committedState;
+          const child = yield* createOn("acme.monitor");
+
+          assert.strictEqual(child.status, 409, child.text);
+          assert.deepStrictEqual(changesOf(child.json), [
+            "grade/choicesChanged",
+          ]);
+
+          const [version] = yield* values(
+            "SELECT version::text AS value FROM acme.asset WHERE id = $1::uuid",
+            [fixture.records.M]
+          );
+
+          const throughParent = yield* http.request(
+            "PATCH",
+            recordPath("acme.asset", fixture.records.M),
+            {
+              body: { grade: "good" },
+              headers: {
+                "if-match": `"${version ?? "0"}"`,
+                "std-schema-revision": stated,
+              },
+              token: tokens.admin,
+            }
+          );
+
+          assert.strictEqual(throughParent.status, 409, throughParent.text);
+          assert.deepStrictEqual(yield* committedState, before);
+        })
+    );
   });
 });

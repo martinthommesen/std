@@ -456,21 +456,34 @@ const unknownChanges = (
 };
 
 /**
+ * Which records a request can touch through its endpoint E: a create makes
+ * a record of exactly E (`lineage`: definitions on E and its ancestors
+ * apply), while reads, updates and deletes reach records of every class of
+ * subtree(E), whose own overrides and choice subsets apply to them too
+ * (`subtree`).
+ */
+type Reach = "lineage" | "subtree";
+
+/**
  * Whether a definition on `classId` affects records read on `readOn`: it
- * is on the class, an ancestor or a descendant.
+ * is on the class or an ancestor, or, when the request reaches the
+ * subtree, on a descendant.
  *
  * @param readScope - The caller's scope at C.
+ * @param reach - The records the request can touch.
  * @param classId - The definition's class.
  * @param readOn - The class the field is read on.
  * @returns True when it applies.
  */
 const affects = (
   readScope: ReadScope,
+  reach: Reach,
   classId: DefinitionId,
   readOn: DefinitionId
 ): boolean =>
   readScope.snapshot.lineage(readOn).some((level) => level.id === classId) ||
-  readScope.snapshot.subtreeIds(readOn).includes(classId);
+  (reach === "subtree" &&
+    readScope.snapshot.subtreeIds(readOn).includes(classId));
 
 const classChanges = (
   readScope: ReadScope,
@@ -507,6 +520,7 @@ const classChanges = (
  * or after a change, takes a name the request used (Contracts 1.5, 6.4).
  *
  * @param readScope - The caller's scope at C.
+ * @param reach - The records the request can touch.
  * @param scope - The request's scope at R.
  * @param fieldClass - The class that declares the field.
  * @param names - The field's old and new names.
@@ -514,6 +528,7 @@ const classChanges = (
  */
 const nameMatches = (
   readScope: ReadScope,
+  reach: Reach,
   scope: StaleScope,
   fieldClass: DefinitionId,
   names: readonly (string | undefined | null)[]
@@ -524,7 +539,7 @@ const nameMatches = (
     ...new Set(
       scope.names.flatMap((scoped) =>
         wanted.has(scoped.name) &&
-        affects(readScope, fieldClass, scoped.classId)
+        affects(readScope, reach, fieldClass, scoped.classId)
           ? [scoped.classId]
           : []
       )
@@ -538,12 +553,14 @@ const nameMatches = (
  * request used there.
  *
  * @param readScope - The caller's scope at C.
+ * @param reach - The records the request can touch.
  * @param scope - The request's scope at R.
  * @param entry - The definition's history in (R, C].
  * @returns The touched entries.
  */
 const touched = (
   readScope: ReadScope,
+  reach: Reach,
   scope: StaleScope,
   entry: DefinitionHistory
 ): readonly ScopeEntry[] => {
@@ -562,7 +579,8 @@ const touched = (
 
   const direct = scope.entries.filter(
     (scoped) =>
-      scoped.fieldId === fieldId && affects(readScope, classId, scoped.classId)
+      scoped.fieldId === fieldId &&
+      affects(readScope, reach, classId, scoped.classId)
   );
 
   // A field whose name at R or at C is a name the request used on a class
@@ -572,7 +590,7 @@ const touched = (
       ? [textOf(entry.before, "name"), textOf(entry.after, "name")]
       : [];
 
-  const byName = nameMatches(readScope, scope, classId, names).map(
+  const byName = nameMatches(readScope, reach, scope, classId, names).map(
     (readOn) => ({ classId: readOn, fieldId })
   );
 
@@ -585,6 +603,7 @@ const touched = (
  * `fieldRenamed` when the names differ and `fieldAdded` when it had none.
  *
  * @param readScope - The caller's scope at C.
+ * @param reach - The records the request can touch.
  * @param scope - The request's scope at R.
  * @param operations - The journal's operations in (R, C].
  * @param nameable - Whether the caller can name a field at C.
@@ -592,6 +611,7 @@ const touched = (
  */
 const journalChanges = (
   readScope: ReadScope,
+  reach: Reach,
   scope: StaleScope,
   operations: readonly JournalOperation[],
   nameable: Nameable
@@ -608,7 +628,7 @@ const journalChanges = (
       return [];
     }
 
-    const readOns = nameMatches(readScope, scope, field.classId, [
+    const readOns = nameMatches(readScope, reach, scope, field.classId, [
       operation.oldName,
       operation.newName,
     ]);
@@ -631,6 +651,7 @@ const journalChanges = (
 
 const relevantChanges = (
   readScope: ReadScope,
+  reach: Reach,
   scope: StaleScope,
   history: readonly DefinitionHistory[],
   operations: readonly JournalOperation[],
@@ -638,7 +659,13 @@ const relevantChanges = (
 ): SchemaChange[] => {
   const changes = new Map<string, SchemaChange>();
 
-  for (const change of journalChanges(readScope, scope, operations, nameable)) {
+  for (const change of journalChanges(
+    readScope,
+    reach,
+    scope,
+    operations,
+    nameable
+  )) {
     changes.set(
       `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
       change
@@ -651,7 +678,7 @@ const relevantChanges = (
         ? classChanges(readScope, scope, entry)
         : visibleEntries(
             readScope,
-            { ...scope, entries: touched(readScope, scope, entry) },
+            { ...scope, entries: touched(readScope, reach, scope, entry) },
             nameable
           ).flatMap(({ entry: scoped, name, table }) =>
             kindsOf(entry).flatMap((kind): SchemaChange[] =>
@@ -817,6 +844,7 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
 
     const changes = relevantChanges(
       readScope,
+      write?.action === "create" ? "lineage" : "subtree",
       scope,
       history,
       operations,
