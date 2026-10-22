@@ -226,6 +226,29 @@ describe("a related list's page refused with SchemaChanged", () => {
     key: KEY,
   });
 
+  it("after the reload failed, Try again reloads both metadata instead of asking under the old name", () => {
+    const reloadFailed = after(
+      onFirstPage,
+      Message.ClickedNextRelatedPage({ key: KEY }),
+      refused,
+      Message.SucceededLoadRelatedMetadata({
+        key: KEY,
+        revision: REVISION_6,
+        table: TASKS,
+      }),
+      Message.FailedLoadFormMetadata({ error: "Unavailable" })
+    );
+
+    const retried = update(
+      reloadFailed,
+      Message.ClickedRetryRelatedList({ key: KEY })
+    );
+
+    expect(
+      (retried.commands ?? []).map((command) => command.name)
+    ).toStrictEqual(["LoadFormMetadata", "LoadRelatedMetadata"]);
+  });
+
   it("reloads both metadata, then asks for the first page with the field's current name", () => {
     story(
       update,

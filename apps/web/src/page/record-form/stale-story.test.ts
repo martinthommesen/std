@@ -975,6 +975,11 @@ describe("a record not read again under new definitions (review round 1)", () =>
       given(failedReread),
       message(Message.ClickedSave()),
       Command.expectNone(),
+      model((page) => {
+        // Not judged at all: under the old record the renamed field's edit
+        // would drop out of the body, and the form would say "no changes".
+        expect(page).toStrictEqual(failedReread);
+      }),
       message(Message.ClickedRetry()),
       Command.expectExact(
         LoadRecord({
