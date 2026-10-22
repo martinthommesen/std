@@ -3,8 +3,13 @@
  * `deploy/oda/probe/probe.sh`, docs/decisions/0027-oda-canvas-probe.md) as
  * Markdown: the failure rate and failing phases, and the median and p90 of
  * each phase's duration and of the disk the probe uses.
+ *
+ * The unit is one probe attempt: every attempt of a selected workflow run
+ * counts, so a rerun never hides an earlier failure. An attempt fails when
+ * its result says so, and also when it has no result, an unreadable one, or
+ * one that names another run, attempt or commit.
  */
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 
 const DiskSchema = Schema.Struct({
   availableBytes: Schema.Finite,
@@ -15,14 +20,16 @@ const DiskSchema = Schema.Struct({
 export const ProbeResultSchema = Schema.Struct({
   disk: Schema.Struct({
     before: DiskSchema,
-    kindNode: Schema.optionalKey(
+    kindNode: Schema.NullOr(
       Schema.Struct({
         nodeImageBytes: Schema.NullOr(Schema.Finite),
-        nodeVarBytes: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+        nodeVarBytes: Schema.NullOr(Schema.Finite),
         nodeWritableBytes: Schema.NullOr(Schema.Finite),
       })
     ),
+    minAvailableBytes: Schema.Finite,
     peakUsedBytes: Schema.Finite,
+    sampleIntervalSeconds: Schema.Finite,
   }),
   failedPhase: Schema.NullOr(Schema.String),
   failureExcerpt: Schema.NullOr(Schema.String),
@@ -35,33 +42,144 @@ export const ProbeResultSchema = Schema.Struct({
       status: Schema.Literals(["success", "failure", "skipped"]),
     })
   ),
+  pins: Schema.Record(Schema.String, Schema.String),
+  run: Schema.Struct({
+    githubActions: Schema.Boolean,
+    probeSha256: Schema.String,
+    runAttempt: Schema.String,
+    runId: Schema.String,
+    sha: Schema.String,
+    stubChartSha256: Schema.String,
+  }),
   runner: Schema.Struct({
     imageOS: Schema.String,
     imageVersion: Schema.String,
     os: Schema.String,
   }),
   schemaVersion: Schema.Literal(1),
+  stage: Schema.Literals(["partial", "complete"]),
   startedAt: Schema.String,
 });
 
 /** The parts of a probe's `result.json` that the summary reads. */
 export type ProbeResult = typeof ProbeResultSchema.Type;
 
-/** Decodes the text of a `result.json`. */
-export const decodeProbeResult = Schema.decodeUnknownSync(
+const decodeResultText = Schema.decodeUnknownResult(
   Schema.fromJsonString(ProbeResultSchema)
 );
 
-/** One probe run: a GitHub Actions run or a local result file. */
-export interface ProbeRun {
-  /** The run's ID or the local file's path. */
-  readonly id: string;
-  /** The workflow run's conclusion, such as `success`, or `local`. */
+/**
+ * Decodes the text of a `result.json`.
+ *
+ * @param text - The file's text.
+ * @returns The result, or the decode error's message.
+ */
+export const decodeProbeResult = (
+  text: string
+): Result.Result<ProbeResult, string> => {
+  const decoded = decodeResultText(text);
+
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success)
+    : Result.fail(decoded.failure.message);
+};
+
+/** Where an attempt came from: a workflow run's attempt, or a local file. */
+export interface AttemptSource {
+  /** The run's ID, or the local file's path. */
+  readonly runId: string;
+  /** The attempt number; 1 for a local file. */
+  readonly attempt: number;
+  /** The attempt's conclusion on GitHub, such as `success`, or `local`. */
   readonly conclusion: string;
-  /** Absent when the run left no readable result (cancelled, timed out). */
-  readonly result?: ProbeResult;
+  /** The commit the attempt ran; absent for a local file. */
+  readonly headSha?: string;
   readonly url?: string;
 }
+
+/** One probe attempt and what it left. */
+export interface ProbeAttempt extends AttemptSource {
+  readonly result?: ProbeResult;
+  /** Why the attempt has no usable result; it then counts as a failure. */
+  readonly problem?: string;
+}
+
+/**
+ * Checks that a result belongs to the run attempt it was downloaded for.
+ *
+ * @param source - The attempt on GitHub.
+ * @param result - The result found in its artifact.
+ * @returns The mismatch, or undefined when the result belongs to it.
+ */
+export const provenanceProblem = (
+  source: AttemptSource,
+  result: ProbeResult
+): string | undefined => {
+  const expected = [
+    ["githubActions", "true", String(result.run.githubActions)],
+    ["runId", source.runId, result.run.runId],
+    ["runAttempt", String(source.attempt), result.run.runAttempt],
+    ["sha", source.headSha ?? "", result.run.sha],
+  ];
+
+  const mismatches = expected.flatMap(([field, want, found]) =>
+    want === found ? [] : [`${field} ${found} (expected ${want})`]
+  );
+
+  return mismatches.length === 0
+    ? undefined
+    : `provenance mismatch: ${mismatches.join(", ")}`;
+};
+
+/**
+ * What decides whether two results measured the same thing: the probe
+ * script, the stub chart and the pins (versions and checksums).
+ *
+ * @param result - A result.
+ * @returns A key equal for comparable results.
+ */
+export const configurationKey = (result: ProbeResult): string =>
+  JSON.stringify({
+    pins: Object.entries(result.pins).toSorted(([a], [b]) =>
+      a.localeCompare(b)
+    ),
+    probe: result.run.probeSha256,
+    stub: result.run.stubChartSha256,
+  });
+
+const shortHash = (text: string): string => {
+  // FNV-1a, only to label configurations in the table.
+  let hash = 0x81_1c_9d_c5;
+
+  for (const char of text) {
+    // oxlint-disable-next-line no-bitwise -- FNV-1a is defined on 32-bit words
+    hash = Math.imul(hash ^ (char.codePointAt(0) ?? 0), 0x01_00_01_93) >>> 0;
+  }
+
+  return hash.toString(16).padStart(8, "0");
+};
+
+/**
+ * The distinct configurations among the attempts' results.
+ *
+ * @param attempts - The attempts.
+ * @returns A short label per configuration key.
+ */
+export const configurations = (
+  attempts: readonly ProbeAttempt[]
+): Map<string, string> => {
+  const labels = new Map<string, string>();
+
+  for (const attempt of attempts) {
+    if (attempt.result !== undefined) {
+      const key = configurationKey(attempt.result);
+
+      labels.set(key, shortHash(key));
+    }
+  }
+
+  return labels;
+};
 
 /** The phases that bring a Canvas up, in order; their sum is the bring-up. */
 export const bringUpPhases = ["cluster", "istio", "canvas", "component"];
@@ -176,45 +294,75 @@ const bringUpSeconds = (result: ProbeResult): number | undefined => {
   return total;
 };
 
-const outcomeCell = (run: ProbeRun): string =>
-  run.result?.outcome ?? `no result (${run.conclusion})`;
+/**
+ * A usable result: present, and no problem with it.
+ *
+ * @param attempt - The attempt.
+ * @returns Its result, or undefined.
+ */
+const usable = (attempt: ProbeAttempt): ProbeResult | undefined =>
+  attempt.problem === undefined ? attempt.result : undefined;
+
+const succeeded = (attempt: ProbeAttempt): boolean =>
+  usable(attempt)?.outcome === "success";
+
+/**
+ * Why an attempt failed, for the failure-phase count.
+ *
+ * @param attempt - A failed attempt.
+ * @returns The failed phase or the kind of problem.
+ */
+const failureReason = (attempt: ProbeAttempt): string => {
+  if (attempt.problem !== undefined) {
+    return attempt.problem.startsWith("provenance")
+      ? "result of another run (provenance mismatch)"
+      : "no usable result";
+  }
+
+  return attempt.result?.failedPhase ?? "unknown";
+};
+
+const outcomeCell = (attempt: ProbeAttempt): string => {
+  if (attempt.problem !== undefined) {
+    return `no usable result (${attempt.conclusion})`;
+  }
+
+  return attempt.result?.outcome ?? `no result (${attempt.conclusion})`;
+};
 
 const excerptTail = (excerpt: string | null, lines: number): string =>
   (excerpt ?? "(no log excerpt)").split("\n").slice(-lines).join("\n");
 
-const runLabel = (run: ProbeRun): string =>
-  run.url === undefined ? `\`${run.id}\`` : `[${run.id}](${run.url})`;
+const attemptLabel = (attempt: ProbeAttempt): string => {
+  const name = `${attempt.runId} #${attempt.attempt}`;
 
-const outcomeLines = (runs: readonly ProbeRun[]): string[] => {
-  const withResult = runs.filter((run) => run.result !== undefined);
-  const failed = withResult.filter((run) => run.result?.outcome === "failure");
-  const missing = runs.length - withResult.length;
-  const failures = failed.length + missing;
-  const byPhase = new Map<string, number>();
+  return attempt.url === undefined
+    ? `\`${name}\``
+    : `[${name}](${attempt.url})`;
+};
 
-  for (const run of failed) {
-    const phase = run.result?.failedPhase ?? "unknown";
+const outcomeLines = (attempts: readonly ProbeAttempt[]): string[] => {
+  const failures = attempts.filter((attempt) => !succeeded(attempt));
+  const runs = new Set(attempts.map((attempt) => attempt.runId)).size;
+  const byReason = new Map<string, number>();
 
-    byPhase.set(phase, (byPhase.get(phase) ?? 0) + 1);
+  for (const attempt of failures) {
+    const reason = failureReason(attempt);
+
+    byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
   }
 
-  if (missing > 0) {
-    byPhase.set("no result (run cancelled or timed out)", missing);
-  }
-
-  const phases = [...byPhase.entries()]
-    .map(([phase, count]) => `${phase} ${count}`)
+  const reasons = [...byReason.entries()]
+    .map(([reason, count]) => `${reason} ${count}`)
     .join(", ");
 
   return [
-    `- Runs: ${runs.length}; succeeded ${runs.length - failures}, failed ${failures} (failure rate ${percent(failures, runs.length)}).`,
-    `- Failing phases: ${phases === "" ? "none" : phases}.`,
+    `- Attempts: ${attempts.length} in ${runs} run${runs === 1 ? "" : "s"}; succeeded ${attempts.length - failures.length}, failed ${failures.length} (failure rate ${percent(failures.length, attempts.length)}).`,
+    `- Failing phases: ${reasons === "" ? "none" : reasons}.`,
   ];
 };
 
 const phaseTable = (results: readonly ProbeResult[]): string[] => {
-  const succeeded = results.filter((result) => result.outcome === "success");
-
   const rows = phaseNames(results).map((name) => {
     const failures = results.filter(
       (result) => result.failedPhase === name
@@ -227,35 +375,39 @@ const phaseTable = (results: readonly ProbeResult[]): string[] => {
     return `| ${name} ${spreadCells(durations, seconds)} ${failures} |`;
   });
 
-  const bringUp = defined(succeeded.map(bringUpSeconds));
+  const bringUp = defined(
+    results.flatMap((result) =>
+      result.outcome === "success" ? [bringUpSeconds(result)] : []
+    )
+  );
 
   return [
     "| Phase | Succeeded | Median | p90 | Max | Failed here |",
     "| --- | --- | --- | --- | --- | --- |",
     ...rows,
-    `| bring-up (${bringUpPhases.join(" + ")}), successful runs ${spreadCells(bringUp, seconds)} |`,
+    `| bring-up (${bringUpPhases.join(" + ")}), successful attempts ${spreadCells(bringUp, seconds)} |`,
   ];
 };
 
 const diskTable = (results: readonly ProbeResult[]): string[] => [
-  "| Disk | Runs | Median | p90 | Max |",
+  "| Disk | Attempts | Median | p90 | Max |",
   "| --- | --- | --- | --- | --- |",
   `| free before the probe ${spreadCells(
     results.map((result) => result.disk.before.availableBytes),
     gigabytes
   )}`,
-  `| peak use above the start (root file system) ${spreadCells(
+  `| peak use above the start (sampled) ${spreadCells(
     results.map(
       (result) => result.disk.peakUsedBytes - result.disk.before.usedBytes
     ),
     gigabytes
   )}`,
-  `| kind node: /var (pulled images, etcd, logs) ${spreadCells(
-    defined(results.map((result) => result.disk.kindNode?.nodeVarBytes)),
+  `| least free during the probe (sampled) ${spreadCells(
+    results.map((result) => result.disk.minAvailableBytes),
     gigabytes
   )}`,
-  `| kind node: container's writable layer ${spreadCells(
-    defined(results.map((result) => result.disk.kindNode?.nodeWritableBytes)),
+  `| kind node: /var at the end (images, etcd, logs) ${spreadCells(
+    defined(results.map((result) => result.disk.kindNode?.nodeVarBytes)),
     gigabytes
   )}`,
   `| kind node: image ${spreadCells(
@@ -264,15 +416,89 @@ const diskTable = (results: readonly ProbeResult[]): string[] => [
   )}`,
 ];
 
+const configurationLines = (
+  attempts: readonly ProbeAttempt[],
+  labels: ReadonlyMap<string, string>
+): string[] => {
+  const commits = new Set(
+    attempts.flatMap((attempt) =>
+      attempt.result === undefined ? [] : [attempt.result.run.sha]
+    )
+  );
+
+  const lines = [
+    `- Commits: ${commits.size === 0 ? "none" : [...commits].map((sha) => sha.slice(0, 12)).join(", ")}.`,
+    `- Configurations (probe script, stub chart, pins): ${labels.size === 0 ? "none" : [...labels.values()].join(", ")}.`,
+  ];
+
+  if (labels.size > 1) {
+    lines.push(
+      "- **Warning: the attempts ran different probe scripts, stub charts or pins; their numbers are not comparable.**"
+    );
+  }
+
+  return lines;
+};
+
+const configurationCell = (
+  attempt: ProbeAttempt,
+  labels: ReadonlyMap<string, string>
+): string =>
+  attempt.result === undefined
+    ? ""
+    : (labels.get(configurationKey(attempt.result)) ?? "");
+
+const runsTable = (
+  attempts: readonly ProbeAttempt[],
+  labels: ReadonlyMap<string, string>
+): string[] => [
+  "| Attempt | Commit | Configuration | Started | Outcome | Failed phase |",
+  "| --- | --- | --- | --- | --- | --- |",
+  ...attempts.map(
+    (attempt) =>
+      `| ${attemptLabel(attempt)} | ${(attempt.result?.run.sha ?? attempt.headSha ?? "").slice(0, 12)} | ${configurationCell(attempt, labels)} | ${attempt.result?.startedAt ?? ""} | ${outcomeCell(attempt)} | ${attempt.result?.failedPhase ?? ""} |`
+  ),
+];
+
+const failureHeading = (attempt: ProbeAttempt): string =>
+  attempt.problem ?? `phase ${attempt.result?.failedPhase ?? "unknown"}`;
+
+const failureSection = (attempts: readonly ProbeAttempt[]): string[] => {
+  const failures = attempts.filter((attempt) => !succeeded(attempt));
+
+  if (failures.length === 0) {
+    return [];
+  }
+
+  return [
+    "",
+    "## Failures",
+    ...failures.flatMap((attempt) => [
+      "",
+      `${attemptLabel(attempt)}, ${failureHeading(attempt)}:`,
+      "",
+      "```text",
+      excerptTail(attempt.result?.failureExcerpt ?? null, 15),
+      "```",
+    ]),
+  ];
+};
+
 /**
- * Renders the summary of some probe runs as Markdown.
+ * Renders the summary of some probe attempts as Markdown.
  *
- * @param runs - The runs, newest first.
+ * @param attempts - The attempts, newest run first.
  * @returns The Markdown text.
  */
-export const summarize = (runs: readonly ProbeRun[]): string => {
-  const results = runs.flatMap((run) =>
-    run.result === undefined ? [] : [run.result]
+export const summarize = (attempts: readonly ProbeAttempt[]): string => {
+  const results = attempts.flatMap((attempt) => {
+    const result = usable(attempt);
+
+    return result === undefined ? [] : [result];
+  });
+
+  const labels = configurations(
+    attempts.filter((attempt) => usable(attempt) !== undefined)
   );
 
   const images = [
@@ -289,43 +515,24 @@ export const summarize = (runs: readonly ProbeRun[]): string => {
     (result) => result.gateway?.ok === true
   ).length;
 
-  const failures = runs.filter((run) => run.result?.outcome !== "success");
-
   return [
-    `# ODA Canvas probe: ${runs.length} run${runs.length === 1 ? "" : "s"}`,
+    `# ODA Canvas probe: ${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`,
     "",
-    ...outcomeLines(runs),
+    ...outcomeLines(attempts),
+    ...configurationLines(attempts, labels),
     `- Runner images: ${images.length === 0 ? "unknown" : images.join("; ")}.`,
     `- Exposed API answered through the Canvas gateway (not gating): ${gatewayOk} of ${results.length}.`,
     "",
-    "Durations in seconds; p90 by nearest rank. A phase's numbers count only the runs in which it succeeded.",
+    "Durations in seconds; p90 by nearest rank. A phase's numbers count only the attempts in which it succeeded. Disk is sampled every few seconds during the probe (the result says how often).",
     "",
     ...phaseTable(results),
     "",
     ...diskTable(results),
     "",
-    "## Runs",
+    "## Attempts",
     "",
-    "| Run | Started | Outcome | Failed phase |",
-    "| --- | --- | --- | --- |",
-    ...runs.map(
-      (run) =>
-        `| ${runLabel(run)} | ${run.result?.startedAt ?? ""} | ${outcomeCell(run)} | ${run.result?.failedPhase ?? ""} |`
-    ),
-    ...(failures.length === 0
-      ? []
-      : [
-          "",
-          "## Failures",
-          ...failures.flatMap((run) => [
-            "",
-            `${runLabel(run)}, phase ${run.result?.failedPhase ?? "unknown"}:`,
-            "",
-            "```text",
-            excerptTail(run.result?.failureExcerpt ?? null, 15),
-            "```",
-          ]),
-        ]),
+    ...runsTable(attempts, labels),
+    ...failureSection(attempts),
     "",
   ].join("\n");
 };
