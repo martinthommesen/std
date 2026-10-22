@@ -459,6 +459,13 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
 
     yield* Metric.update(counterOf(recorded), 1);
 
+    if (recorded === "dead") {
+      // Deaths are rare; the gauge shows them at once.
+      yield* refreshDeadGauge().pipe(
+        Effect.catchTag("DatabaseError", () => Effect.void)
+      );
+    }
+
     return recorded;
   }
 );
