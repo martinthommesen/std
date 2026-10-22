@@ -5,25 +5,49 @@
  * built-in rules; their protection; `authenticated` held implicitly by
  * every active user; and the system user, which acts only for bootstrap
  * and definition loading and is never an HTTP actor.
+ *
+ * Protected definitions over HTTP (Contracts 1.8, gate 1.7): every
+ * operation but a label or help-text change, on every protected
+ * definition, through the change-set endpoint and through every generic
+ * form the operation has, is refused and leaves the catalog, the
+ * revision, the definitions, the change entries and the delivery rows as
+ * they were; label and help-text changes succeed on both paths and change
+ * no catalog object.
  */
 import { createHash, randomBytes } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { Definition } from "@std/definitions/definition";
+import { isLive } from "@std/definitions/definition";
+import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
+import type { Operation } from "@std/definitions/operation";
 import {
   BUILT_IN_ROLE_IDS,
   PERMISSION_IDS,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
 } from "@std/definitions/well-known";
+import type { JsonObject } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import type { TestResponse } from "../../testing/src/http-client.ts";
 import { effectiveRoles } from "../src/auth/actor.ts";
 import { hashPassword } from "../src/auth/password.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import {
+  deleteOperation,
+  updateOperations,
+} from "../src/http/definition-writes.ts";
 import { observe, signInAll } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import {
+  committedState,
+  genericFormOf,
+  postChangeSet,
+  sendGeneric,
+} from "./schema-paths-support.ts";
 import { values } from "./schema-support.ts";
 
 /** The built-in rules of `core/access.yaml`, as Contracts 3.2 lists them. */
@@ -91,6 +115,110 @@ const plantSession = (userId: string) =>
 
     return token;
   });
+
+/**
+ * Every operation on a protected definition other than a label or
+ * help-text change (as `schema-protected.test.ts` lists them for the
+ * engine): delete, purge, rename, retire and reactivate where the kind
+ * has them, and an update of each other updatable property to its
+ * current value, so only the guard can refuse it.
+ *
+ * @param definition - A protected definition.
+ * @returns The operations, each tried as its own change set.
+ */
+const refusedOperations = (definition: Definition): readonly Operation[] => {
+  const { id, version } = definition;
+  const current: JsonObject = definition;
+
+  const updates = UPDATABLE[definition.kind]
+    .filter((key) => key !== "label" && key !== "helpText")
+    .map((key): Operation => ({
+      changes: { [key]: current[key] ?? null },
+      id,
+      op: "update",
+      version,
+    }));
+
+  const lifecycle: Operation[] = [
+    { id, op: "delete", version },
+    { confirm: { id, version }, id, op: "purge", version },
+  ];
+
+  if (RENAMABLE.has(definition.kind)) {
+    lifecycle.push({ id, name: "renamed_by_admin", op: "rename", version });
+  }
+
+  if (RETIRABLE.has(definition.kind)) {
+    lifecycle.push(
+      { id, op: "retire", version },
+      { id, op: "reactivate", version }
+    );
+  }
+
+  return [...lifecycle, ...updates];
+};
+
+/** The refusals 1.8 allows for these operations, by status. */
+const PROTECTED_REFUSALS: ReadonlyMap<string, number> = new Map([
+  ["DefinitionProtected", 403],
+  ["UseRetireOrPurge", 409],
+]);
+
+/**
+ * The operations a generic form stands for, by the product's own routing
+ * (`updateOperations`, `deleteOperation`), so the matrix sends exactly
+ * the operation it means.
+ *
+ * @param definition - The stored definition.
+ * @param form - The generic form.
+ * @returns The operations' tags.
+ */
+const routedTags = (
+  definition: Definition,
+  form: NonNullable<ReturnType<typeof genericFormOf>>
+) =>
+  form.method === "DELETE"
+    ? Effect.succeed([deleteOperation(definition.id, definition.version).op])
+    : updateOperations(definition, definition.version, form.body).pipe(
+        Effect.map((operations) => operations.map((operation) => operation.op))
+      );
+
+/**
+ * Checks the matrix's coverage: every kind × operation went through the
+ * endpoint; through the generic path every kind's delete and, where the
+ * kind has them, its rename and retire; a purge never (it has no generic
+ * form).
+ *
+ * @param guarded - The protected definitions.
+ * @param tried - `<path> <kind> <op>` per case tried.
+ */
+const assertMatrixCovered = (
+  guarded: readonly Definition[],
+  tried: ReadonlySet<string>
+): void => {
+  for (const definition of guarded) {
+    const { kind } = definition;
+
+    for (const operation of refusedOperations(definition)) {
+      assert.isTrue(tried.has(`endpoint ${kind} ${operation.op}`));
+    }
+
+    const generic = [
+      "delete",
+      ...(RENAMABLE.has(kind) ? ["rename"] : []),
+      ...(RETIRABLE.has(kind) ? ["retire"] : []),
+    ];
+
+    for (const op of generic) {
+      assert.isTrue(
+        tried.has(`generic ${kind} ${op}`),
+        `generic ${kind} ${op}`
+      );
+    }
+
+    assert.isFalse(tried.has(`generic ${kind} purge`));
+  }
+};
 
 describe("built-ins", () => {
   it("names three roles and three permissions by stable ID", () => {
@@ -317,6 +445,131 @@ describe("built-ins", () => {
             ["5"]
           );
         })
+    );
+
+    dbTest.effect(
+      "every protected definition refuses every operation but label and help text through both HTTP paths; pg_catalog unchanged",
+      () =>
+        Effect.gen(function* protectedMatrix() {
+          const http = yield* TestHttpClient;
+          const token = yield* http.signIn("ada", "ada-password");
+          const snapshot = yield* (yield* Catalog).refresh;
+          const before = yield* committedState;
+
+          const guarded = snapshot
+            .definitions()
+            .filter((definition) => definition.protected && isLive(definition));
+
+          assert.isAbove(guarded.length, 100);
+
+          // `<path> <kind> <op>` per case tried, and `<path> <tag>` counts.
+          const tried = new Set<string>();
+          const outcomes = new Map<string, number>();
+
+          const refused = (
+            path: string,
+            label: string,
+            response: TestResponse
+          ) => {
+            const { status, tag = response.text } = observe(response);
+
+            assert.strictEqual(
+              PROTECTED_REFUSALS.get(tag),
+              status,
+              `${path} ${label}: ${status} ${tag}`
+            );
+            outcomes.set(
+              `${path} ${tag}`,
+              (outcomes.get(`${path} ${tag}`) ?? 0) + 1
+            );
+          };
+
+          for (const definition of guarded) {
+            for (const operation of refusedOperations(definition)) {
+              const label = `${definition.kind} ${operation.op} ${definition.id}`;
+
+              refused(
+                "endpoint",
+                label,
+                yield* postChangeSet(token, [operation])
+              );
+              tried.add(`endpoint ${definition.kind} ${operation.op}`);
+
+              const form = genericFormOf(definition, operation);
+
+              if (form !== undefined) {
+                const routed = yield* Effect.exit(routedTags(definition, form));
+
+                assert.deepStrictEqual(
+                  Exit.isSuccess(routed) ? routed.value : [],
+                  [operation.op],
+                  `routing ${label}`
+                );
+
+                refused(
+                  "generic",
+                  label,
+                  yield* sendGeneric(token, definition, form)
+                );
+                tried.add(`generic ${definition.kind} ${operation.op}`);
+              }
+            }
+          }
+
+          assertMatrixCovered(guarded, tried);
+
+          for (const path of ["endpoint", "generic"]) {
+            for (const tag of PROTECTED_REFUSALS.keys()) {
+              assert.isAbove(
+                outcomes.get(`${path} ${tag}`) ?? 0,
+                0,
+                `${path} ${tag}`
+              );
+            }
+          }
+
+          assert.deepStrictEqual(yield* committedState, before);
+
+          // A label change through the generic path and a help-text change
+          // through the endpoint succeed and change no catalog object.
+          const userClass = snapshot.get(USER_CLASS_ID);
+
+          assert.isDefined(userClass);
+
+          if (userClass === undefined) {
+            return;
+          }
+
+          const relabeled = yield* sendGeneric(token, userClass, {
+            body: { label: "Person" },
+            method: "PATCH",
+            table: "core.class",
+          });
+
+          assert.strictEqual(relabeled.status, 200, relabeled.text);
+
+          const helped = yield* postChangeSet(token, [
+            {
+              changes: { helpText: "Everyone who signs in." },
+              id: USER_CLASS_ID,
+              op: "update",
+              version:
+                (yield* (yield* Catalog).refresh).get(USER_CLASS_ID)?.version ??
+                0,
+            },
+          ]);
+
+          assert.strictEqual(helped.status, 201, helped.text);
+
+          const after = (yield* (yield* Catalog).refresh).get(USER_CLASS_ID);
+
+          assert.deepStrictEqual(
+            after?.kind === "class" ? [after.label, after.helpText] : [],
+            ["Person", "Everyone who signs in."]
+          );
+          assert.strictEqual((yield* committedState).catalog, before.catalog);
+        }),
+      600_000
     );
   });
 });
