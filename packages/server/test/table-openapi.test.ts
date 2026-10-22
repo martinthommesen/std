@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { ChoiceDraft } from "@std/definitions/definition";
+import type { AccessRuleDraft, ChoiceDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -98,6 +98,21 @@ const response = (path: string, method: string, status: string): string =>
 
 const body = (name: "CreateBody" | "UpdateBody"): string =>
   pointer("components", "schemas", name);
+
+const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
+
+const fetchDocument = (session: string) =>
+  Effect.gen(function* documentFor() {
+    const http = yield* TestHttpClient;
+
+    const doc = yield* http.get(`/api/v1/meta/tables/${TABLE}/openapi.json`, {
+      token: session,
+    });
+
+    assert.strictEqual(doc.status, 200, doc.text);
+
+    return { json: objectOf(doc.json), text: doc.text };
+  });
 
 const versionOf = (id: string) =>
   Effect.gen(function* readVersion() {
@@ -262,6 +277,98 @@ describe("per-table OpenAPI document", () => {
 
         assert.deepStrictEqual(failures, []);
       })
+    );
+
+    dbTest.effect(
+      "accepts write-only fields, empty choice fields and input forms of big integers",
+      () =>
+        Effect.gen(function* inputForms() {
+          const http = yield* TestHttpClient;
+          const { fixture, tokens } = yield* signInAll;
+          const { L } = fixture.records;
+          const empty = addField(ACME.asset, "no_keys", { kind: "choice" });
+          const shut = addField(ACME.asset, "all_hidden", { kind: "choice" });
+          const big = addField(ACME.asset, "big", { kind: "bigInteger" });
+          const closed = { ...choice(shut.id, "closed", 1), hidden: true };
+
+          // Bob may write `cost`, which rule 5 still hides from him.
+          const writeCost: AccessRuleDraft = {
+            actions: ["update"],
+            active: true,
+            classId: ACME.asset,
+            condition: null,
+            description: "employees may write cost without reading it",
+            effect: "allow",
+            id: randomUUID(),
+            kind: "accessRule",
+            name: null,
+            owner: { layer: "local" },
+            protected: false,
+            roleIds: [EMPLOYEE],
+            target: { fields: [ACME.cost], kind: "fields" },
+          };
+
+          yield* change([empty.op, shut.op, big.op]);
+          yield* change([
+            createChoice(closed),
+            { definition: writeCost, op: "createAccessRule" },
+          ]);
+
+          const failures: string[] = [];
+
+          const check = (
+            document: JsonObject,
+            ref: string,
+            value: JsonValue,
+            what: string
+          ) => {
+            for (const error of validatorOf(document).errors(ref, value)) {
+              failures.push(`${what}: ${error}`);
+            }
+          };
+
+          // A write-only field: accepted by the server and the document,
+          // never named in it.
+          const bob = yield* fetchDocument(tokens.bob);
+          const costBody: JsonObject = { cost: "301.00" };
+
+          const costWrite = yield* http.request("PATCH", recordPath(TABLE, L), {
+            body: costBody,
+            headers: { "if-match": `"${yield* versionOf(L)}"` },
+            token: tokens.bob,
+          });
+
+          assert.strictEqual(costWrite.status, 200, costWrite.text);
+          assert.notInclude(bob.text, '"cost"');
+          check(bob.json, body("UpdateBody"), costBody, "bob writes cost");
+
+          // Choice fields without a writable key, and a big integer with
+          // leading zeros: the server accepts them, so must the document.
+          const admin = yield* fetchDocument(tokens.admin);
+
+          const created: JsonObject = {
+            all_hidden: null,
+            big: "0001",
+            name: "input forms",
+            no_keys: null,
+          };
+
+          const posted = yield* http.request("POST", RECORDS, {
+            body: created,
+            token: tokens.admin,
+          });
+
+          assert.strictEqual(posted.status, 201, posted.text);
+          check(admin.json, body("CreateBody"), created, "admin create");
+          check(
+            admin.json,
+            response(RECORDS, "post", "201"),
+            posted.json ?? null,
+            "admin create response"
+          );
+
+          assert.deepStrictEqual(failures, []);
+        })
     );
   });
 });

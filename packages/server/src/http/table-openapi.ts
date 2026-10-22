@@ -17,8 +17,18 @@
  * - Read values hold the selected fields, the audit fields and, for a
  *   `fields` selection naming reference paths, dotted members
  *   (`docked_to.name`).
+ * - Read schemas describe each type's canonical output (`encodeOut`), write
+ *   schemas the input its codec accepts (`decodeIn`): big integers with
+ *   leading zeros, decimals at any scale, date-times with offsets, UUIDs in
+ *   any case. What a pattern cannot say (ranges, calendar validity, scale)
+ *   is described and left to the server.
  * - A create body may name active choice keys; an update body also the
- *   hidden ones, which the server keeps only when unchanged (6.5).
+ *   hidden ones, which the server keeps only when unchanged (6.5). A
+ *   choice field with no writable key accepts only null. Read values accept
+ *   any key, since a stored key outlives its choice's deletion.
+ * - Write bodies accept members they do not list: the server accepts
+ *   fields the caller may write but not read (3.4), and the document never
+ *   names a field the caller cannot read.
  * - Write bodies name every field the caller can read: forms send whole
  *   records, and an unchanged field the caller may not write is accepted
  *   (3.9). `x-std-write` states whether the caller may write it (`yes`,
@@ -45,7 +55,39 @@ const nullable = (schema: JsonObject): JsonObject => ({
   anyOf: [schema, { type: "null" }],
 });
 
-const BIG_INTEGER = "^-?(0|[1-9][0-9]*)$";
+// Patterns of each type's canonical output (`encodeOut`, Contracts 6.5)
+// and of the input its codec accepts (`decodeIn`). An input pattern is the
+// parser's own format check; what a pattern cannot express (ranges,
+// calendar validity, digit counts) the server checks and the schema only
+// describes, so the document accepts a superset of what the server accepts
+// and never refuses accepted input.
+const BIG_INTEGER_OUT = "^-?(0|[1-9][0-9]*)$";
+const BIG_INTEGER_IN = "^-?[0-9]+$";
+const DECIMAL_IN = "^-?[0-9]+(\\.[0-9]+)?$";
+const DATE = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$";
+
+const DATE_TIME_OUT =
+  "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$";
+
+const DATE_TIME_IN =
+  "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$";
+
+const UUID_OUT =
+  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+
+const UUID_IN =
+  "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$";
+
+const CHOICE_KEY = "^[0-9a-z][0-9_a-z]{0,62}$";
+
+/**
+ * The canonical decimal of a scale: exactly `scale` fraction digits.
+ *
+ * @param scale - The field's scale.
+ * @returns The pattern.
+ */
+const decimalOut = (scale: number): string =>
+  scale === 0 ? "^-?(0|[1-9][0-9]*)$" : `^-?(0|[1-9][0-9]*)\\.[0-9]{${scale}}$`;
 
 const boundsOf = (
   type: Extract<MetaFieldType, { readonly kind: "integer" }>
@@ -82,27 +124,95 @@ const textSchema = (
       };
 };
 
+const ONLY_NULL: JsonObject = { type: "null" };
+
 const choiceSchema = (field: MetaField, mode: ValueMode): JsonObject => {
   const choices = field.choices ?? [];
+
+  if (mode === "read") {
+    // A stored key stays readable after its choice is hidden or deleted.
+    return nullable({
+      description:
+        "A choice key; `x-std-choices` lists the table's keys. A key whose choice was deleted after it was stored is still returned.",
+      pattern: CHOICE_KEY,
+      type: "string",
+      "x-std-choices": choices.map((choice) => choice.key),
+    });
+  }
 
   const keys = choices.flatMap((choice) =>
     mode === "create" && choice.retired ? [] : [choice.key]
   );
 
+  // No key can be written: only null (an empty `enum` is not valid JSON
+  // Schema, and the server accepts null).
+  if (keys.length === 0) {
+    return ONLY_NULL;
+  }
+
   const hidden = choices.some((choice) => choice.retired);
 
-  return mode === "update" && hidden
-    ? {
-        description:
-          "Hidden (retired) keys are accepted only when they equal the stored value.",
-        enum: keys,
-        type: "string",
-      }
-    : { enum: keys, type: "string" };
+  const schema: JsonObject =
+    mode === "update" && hidden
+      ? {
+          description:
+            "Hidden (retired) keys are accepted only when they equal the stored value.",
+          enum: keys,
+          type: "string",
+        }
+      : { enum: keys, type: "string" };
+
+  return nullable(schema);
 };
+
+const patterned = (pattern: string, extra: JsonObject = {}): JsonObject =>
+  nullable({ ...extra, pattern, type: "string" });
+
+const bigIntegerSchema = (read: boolean): JsonObject =>
+  read
+    ? patterned(BIG_INTEGER_OUT)
+    : patterned(BIG_INTEGER_IN, {
+        description:
+          "Digits as a string, leading zeros allowed (at most 100 characters); the server checks the range and bounds.",
+      });
+
+const decimalSchema = (
+  type: Extract<MetaFieldType, { readonly kind: "decimal" }>,
+  read: boolean
+): JsonObject => {
+  const description = `decimal(${type.precision}, ${type.scale}) as a string`;
+
+  return read
+    ? patterned(decimalOut(type.scale), { description })
+    : patterned(DECIMAL_IN, {
+        description: `${description}; the server refuses values that are not exact at scale ${type.scale}, too many digits and values outside the bounds.`,
+      });
+};
+
+const dateTimeSchema = (read: boolean): JsonObject =>
+  read
+    ? patterned(DATE_TIME_OUT, { format: "date-time" })
+    : patterned(DATE_TIME_IN, {
+        description:
+          "RFC 3339 with Z or an offset; digits past the third fraction digit must be zero.",
+        format: "date-time",
+      });
+
+const uuidSchema = (read: boolean): JsonObject =>
+  patterned(read ? UUID_OUT : UUID_IN, { format: "uuid" });
+
+const writeOnlySchema = (read: boolean): JsonObject =>
+  read
+    ? {
+        properties: { set: { type: "boolean" } },
+        required: ["set"],
+        type: "object",
+      }
+    : nullable({ type: "string", writeOnly: true });
 
 const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
   const { type } = field;
+  const read = mode === "read";
 
   switch (type.kind) {
     case "text":
@@ -115,14 +225,11 @@ const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
     }
 
     case "bigInteger": {
-      return nullable({ pattern: BIG_INTEGER, type: "string" });
+      return bigIntegerSchema(read);
     }
 
     case "decimal": {
-      return nullable({
-        description: `decimal(${type.precision}, ${type.scale}) as a string`,
-        type: "string",
-      });
+      return decimalSchema(type, read);
     }
 
     case "boolean": {
@@ -130,31 +237,25 @@ const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
     }
 
     case "date": {
-      return nullable({ format: "date", type: "string" });
+      return patterned(DATE, { format: "date" });
     }
 
     case "dateTime": {
-      return nullable({ format: "date-time", type: "string" });
+      return dateTimeSchema(read);
     }
 
     case "choice": {
-      return nullable(choiceSchema(field, mode));
+      return choiceSchema(field, mode);
     }
 
     case "reference":
     case "uuid": {
-      return nullable({ format: "uuid", type: "string" });
+      return uuidSchema(read);
     }
 
     case "password":
     case "secret": {
-      return mode === "read"
-        ? {
-            properties: { set: { type: "boolean" } },
-            required: ["set"],
-            type: "object",
-          }
-        : nullable({ type: "string", writeOnly: true });
+      return writeOnlySchema(read);
     }
 
     case "json": {
@@ -239,7 +340,15 @@ const valuesSchema = (
         properties: { ...properties, ...AUDIT_VALUES },
         type: "object",
       }
-    : { additionalProperties: false, properties, type: "object" };
+    : {
+        // Fields the caller may write but not read are accepted by the
+        // server (Contracts 3.4) and never named here (6.3).
+        additionalProperties: true,
+        description:
+          "Field values by name. Fields the caller may write but not read are accepted and not listed.",
+        properties,
+        type: "object",
+      };
 };
 
 const ref = (name: string): JsonObject => ({
