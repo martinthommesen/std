@@ -2,9 +2,10 @@ import type { CurrentUser } from "@std/api/session";
 import { Option } from "effect";
 import type { Url } from "foldkit/url";
 
-import { Model, SignOutRequest } from "./model.ts";
+import { Model, SignOutRequest, Tables } from "./model.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
+import { REVISION_3, adaTables } from "./table-fixture.ts";
 
 /** A signed-in user, as `auth/me` describes her. */
 export const ada: CurrentUser = {
@@ -22,14 +23,37 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
+  maybeRecordForm: Option.none(),
+  maybeRevision: Option.some(REVISION_3),
+  maybeTableList: Option.none(),
+  nextPageId: 1,
   route: AppRoute.Home(),
+  sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
+  tables: Tables.Success({
+    data: { revision: REVISION_3, tables: adaTables.tables },
+  }),
+  user: ada,
+});
+
+/** Ada, just signed in, on the home page: her tables are loading. */
+export const adaEnteringHome = Model.SignedIn({
+  maybeRecordForm: Option.none(),
+  maybeRevision: Option.some(REVISION_3),
+  maybeTableList: Option.none(),
+  nextPageId: 1,
+  route: AppRoute.Home(),
+  sessionId: 1,
+  signOutRequest: SignOutRequest.Idle(),
+  tables: Tables.Loading(),
   user: ada,
 });
 
 /** The sign-in page after a redirect from the home page. */
 export const signInRedirectedFromHome = Model.SignedOut({
   maybeReturnRoute: Option.some(AppRoute.Home()),
+  nextPageId: 1,
+  nextSessionId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
@@ -37,6 +61,8 @@ export const signInRedirectedFromHome = Model.SignedOut({
 /** The sign-in page, opened directly. */
 export const signInOpenedDirectly = Model.SignedOut({
   maybeReturnRoute: Option.none(),
+  nextPageId: 1,
+  nextSessionId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });

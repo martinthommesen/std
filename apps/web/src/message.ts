@@ -1,10 +1,14 @@
 import { CurrentUserSchema } from "@std/api/session";
+import { MetaTableSummarySchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { defineMessageUnion } from "foldkit/message";
 import { UrlRequest } from "foldkit/navigation";
 import { Url } from "foldkit/url";
 
+import { SchemaRevision } from "./domain/schema-revision.ts";
+import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { Message as SignInMessage } from "./page/sign-in/sign-in.ts";
+import { Message as TableListMessage } from "./page/table-list/message.ts";
 
 /** What happens in the app. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -17,11 +21,23 @@ export const Message = defineMessageUnion({
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},
+  FailedAuthentication: { sessionId: Schema.Int },
   FailedLoadCurrentUser: {},
-  FailedSignOut: {},
+  FailedLoadTables: { sessionId: Schema.Int },
+  FailedSignOut: { sessionId: Schema.Int },
+  GotRecordFormMessage: { message: RecordFormMessage, pageId: Schema.Int },
   GotSignInMessage: { message: SignInMessage },
-  SucceededLoadCurrentUser: { maybeUser: Schema.Option(CurrentUserSchema) },
-  SucceededSignOut: {},
+  GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
+  SucceededLoadCurrentUser: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    maybeUser: Schema.Option(CurrentUserSchema),
+  },
+  SucceededLoadTables: {
+    revision: SchemaRevision,
+    sessionId: Schema.Int,
+    tables: Schema.Array(MetaTableSummarySchema),
+  },
+  SucceededSignOut: { sessionId: Schema.Int },
 });
 
 /** What happens in the app. */

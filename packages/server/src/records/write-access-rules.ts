@@ -17,7 +17,9 @@
  *   existing state, after the row writes for the proposed state (the
  *   pipeline then rolls back on `NotAllowed`).
  * - `visibleTargets`: reference targets under the target class's
- *   visibility, so a hidden target is `InvalidReference` like a missing one.
+ *   visibility and the field's allowed-records condition in the caller's
+ *   view (decision 0020), so a hidden target, or one outside the
+ *   condition, is `InvalidReference` like a missing one.
  * - `project`: the response through the endpoint's read view (`getRecord`);
  *   a record the caller can no longer see is only `{ id, version }`.
  * - `nameable`: the fields of the endpoint's lineage that the caller can
@@ -29,6 +31,7 @@ import {
   arrayParameter,
   identSql,
   joinSql,
+  rawSql,
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
@@ -42,7 +45,7 @@ import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { fieldPredicate, recordPredicate } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
-import { filterClassView } from "./read-query.ts";
+import { compileAllowedRecords, filterClassView } from "./read-query.ts";
 import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
 import {
@@ -214,13 +217,32 @@ ${byId(check.snapshot, check.classId, check.id)}`
             return new Set<string>();
           }
 
-          const view = scopeOf(input.snapshot).view(input.targetClassId);
+          const scope = scopeOf(input.snapshot);
+          const view = scope.view(input.targetClassId);
+
+          // The allowed-records condition in the caller's view (decision
+          // 0020): hidden values count as empty, so whether a target is
+          // refused reveals nothing about them.
+          const limit =
+            input.allowedRecords === null
+              ? undefined
+              : compileAllowedRecords(
+                  scope,
+                  input.targetClassId,
+                  input.allowedRecords,
+                  ALIAS
+                );
 
           const rows = yield* readRows(
             sql`SELECT ${identSql(ALIAS, "id")}::text AS "id"
-FROM ${recordRelation(input.snapshot, input.targetClassId)} AS ${identSql(ALIAS)}
+FROM ${recordRelation(input.snapshot, input.targetClassId)} AS ${identSql(ALIAS)}${limit === undefined ? rawSql("") : sql` ${limit.joins}`}
 WHERE ${identSql(ALIAS, "id")} = ANY(${arrayParameter(input.ids, "uuid")})
-  AND ${view.visibility(ALIAS)}`
+  AND ${view.visibility(ALIAS)}${
+    limit === undefined
+      ? rawSql("")
+      : sql`
+  AND (${limit.predicate})`
+  }`
           );
 
           const visible: ReadonlySet<string> = new Set(

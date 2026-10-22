@@ -155,6 +155,42 @@ describe("table metadata", () => {
     assert.isUndefined(tableMetadata(snapshot, nobody, USER_CLASS_ID));
   });
 
+  it("lists each reference that can point at the table once, on the most general table", () => {
+    const docked = {
+      field: "docked_to",
+      fieldLabel: fieldOf(metadataOf(bob, CLASS.asset), "docked_to").label,
+      label: "Asset",
+      table: "acme.asset",
+    };
+
+    // `docked_to` targets assets, so laptops and monitors are its targets
+    // too; it is declared on asset, whose endpoint lists every asset.
+    for (const caller of [alice, bob, admin]) {
+      for (const classId of Object.values(CLASS)) {
+        assert.deepStrictEqual(
+          metadataOf(caller, classId).relatedLists,
+          [docked],
+          classId
+        );
+      }
+    }
+
+    // `owner` points at users: Bob opens `core.user` and sees it there.
+    assert.deepStrictEqual(
+      metadataOf(bob, USER_CLASS_ID).relatedLists.filter(
+        (entry) => entry.table === "acme.asset"
+      ),
+      [
+        {
+          field: "owner",
+          fieldLabel: fieldOf(metadataOf(bob, CLASS.asset), "owner").label,
+          label: "Asset",
+          table: "acme.asset",
+        },
+      ]
+    );
+  });
+
   it("never contains an access-rule condition, a hidden field or a hidden field's ID", () => {
     const text = JSON.stringify(metadataOf(bob, CLASS.asset));
 

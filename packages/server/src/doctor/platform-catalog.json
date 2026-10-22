@@ -3922,6 +3922,15 @@
     "indexes": [
       {
         "included": [],
+        "keys": ["(effective ->> 'fieldId'::text)", "revision"],
+        "method": "btree",
+        "name": "definition_revision_field",
+        "predicate": "kind = ANY (ARRAY['override'::text, 'choice'::text])",
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
         "keys": ["definition_id", "revision"],
         "method": "btree",
         "name": "definition_revision_pkey",

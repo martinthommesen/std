@@ -29,7 +29,8 @@
  *
  * Role and permission names may also change through `update`, as set loads
  * do; a local `update` of a name follows the same ownership rule as
- * `rename`. Type changes are refused in v0.1.
+ * `rename`. Type changes are refused in v0.1, except a reference's
+ * allowed-records condition (decision 0020).
  */
 import {
   Int,
@@ -307,6 +308,8 @@ export const NEVER_DELETED: ReadonlySet<DefinitionKind> =
 /**
  * Properties `update` may change, per kind. Field `required` may only
  * become true (a tightening with a data preflight); `default` is a constant.
+ * Field `type` may change only in a reference's `allowedRecords` (decision
+ * 0020; any other type change is refused when the change set is applied).
  * Role, permission and saved-filter names may change: nothing refers to
  * them by name in stored config, so a rename needs no DDL (a new set version renames them, Contracts 8.4).
  */
@@ -330,6 +333,7 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
     "numberPrefix",
     "readOnly",
     "required",
+    "type",
   ],
   grant: [],
   index: [],

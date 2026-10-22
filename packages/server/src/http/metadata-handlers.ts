@@ -1,16 +1,17 @@
 /**
- * `GET /api/v1/meta/tables/{table}` and its `openapi.json` (Contracts 6.1,
- * 6.3): the caller's metadata of one table, and the table's OpenAPI
- * document built from it. Thin handlers: one request transaction, the
- * session's `Actor`, the snapshot of the request's revision, and the
- * builder in `@std/access/table-metadata`.
+ * `GET /api/v1/meta/tables`, `GET /api/v1/meta/tables/{table}` and its
+ * `openapi.json` (Contracts 6.1, 6.3): the tables the caller can open, the
+ * caller's metadata of one table, and the table's OpenAPI document built
+ * from it. Thin handlers: one request transaction, the session's `Actor`,
+ * the snapshot of the request's revision, and the builders in
+ * `@std/access/table-metadata`.
  *
  * A stated `STD-Schema-Revision` is checked like an endpoint naming no
  * field (6.4): malformed is 400, a revision the database never had 409,
  * and an older one is served, since fresh metadata is what a stale client
  * asks for [judgment].
  */
-import { tableMetadata } from "@std/access/table-metadata";
+import { tableList, tableMetadata } from "@std/access/table-metadata";
 import { StdApi } from "@std/api/api";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import type { MetaTable } from "@std/definitions/table-metadata";
@@ -69,6 +70,34 @@ export const MetadataHandlers = HttpApiBuilder.group(
     const catalog = yield* Catalog;
 
     return handlers
+      .handle("tables", ({ request }) =>
+        Effect.gen(function* tablesHandler() {
+          const stated = yield* parseRequestRevision(request);
+
+          return yield* inRequestTransaction(
+            transactions,
+            request,
+            asActor(
+              Effect.gen(function* tablesRequest() {
+                yield* checkUnscopedRevision(stated);
+
+                const snapshot = yield* catalog.current;
+                const actor = yield* Actor;
+                const { revision } = yield* RequestRevision;
+
+                return jsonResponse({
+                  schemaRevision: revision,
+                  tables: tableList(
+                    snapshot,
+                    actor,
+                    genericWriteLimits(snapshot)
+                  ),
+                });
+              })
+            )
+          );
+        }).pipe(Effect.provideService(Catalog, catalog))
+      )
       .handle("table", ({ params, request }) =>
         Effect.gen(function* tableHandler() {
           const stated = yield* parseRequestRevision(request);

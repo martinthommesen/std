@@ -34,7 +34,13 @@ export interface DefinitionAtRevision {
   readonly definition: Definition;
 }
 
-const definitionOf = (text: string): Definition | undefined => {
+/**
+ * A definition revision's effective JSON as a definition.
+ *
+ * @param text - The `effective` column as text.
+ * @returns The definition, or undefined when it does not decode.
+ */
+export const definitionOf = (text: string): Definition | undefined => {
   const parsed = parseJson(text);
 
   if (!(parsed.ok && isJsonObject(parsed.value))) {
@@ -68,7 +74,7 @@ export const definitionAt = Effect.fn("Catalog.definitionAt")(
       .unsafe(
         `SELECT effective::text AS effective, revision::text AS revision FROM core.definition_revision
          WHERE definition_id = $1::uuid AND revision <= $2::int8
-         ORDER BY revision DESC LIMIT 1`,
+         ORDER BY definition_revision.revision DESC LIMIT 1`,
         [definitionId, String(revision)]
       )
       .pipe(Effect.flatMap(decodeEffective));

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeStdApi } from "../../fake-std-api.ts";
 import { ada } from "../../fixture.ts";
+import { REVISION_3 } from "../../table-fixture.ts";
 import {
   FocusField,
   LOGIN_INPUT_ID,
@@ -138,8 +139,19 @@ describe("sign-in", () => {
         expect(form.submission).toStrictEqual(Submission.Pending());
       }),
       Command.expectExact(SignIn({ login: "ada", password })),
-      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
-      expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
+      Command.resolve(
+        SignIn,
+        Message.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
+      expectOutMessage(
+        OutMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      )
     );
   });
 
@@ -158,8 +170,19 @@ describe("sign-in", () => {
       expectNoOutMessage(),
       message(Message.SubmittedForm()),
       Command.expectExact(SignIn({ login: "ada", password })),
-      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
-      expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
+      Command.resolve(
+        SignIn,
+        Message.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
+      expectOutMessage(
+        OutMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      )
     );
   });
 
@@ -235,11 +258,18 @@ describe("the sign-in request", () => {
   it("sends the password in plain text only in the request body, with STD-Client: web", async () => {
     const { result, seen } = run({
       [COOKIE_SIGN_IN]: signedIn,
-      [ME]: { body: ada, status: 200 },
+      [ME]: {
+        body: ada,
+        headers: { "std-schema-revision": REVISION_3 },
+        status: 200,
+      },
     });
 
     await expect(result).resolves.toStrictEqual(
-      Message.SucceededSignIn({ user: ada })
+      Message.SucceededSignIn({
+        maybeRevision: Option.some(REVISION_3),
+        user: ada,
+      })
     );
     expect(seen.map((request) => request.path)).toStrictEqual([
       COOKIE_SIGN_IN,

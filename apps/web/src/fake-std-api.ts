@@ -1,19 +1,23 @@
 import { authenticationClient, makeStdClient } from "@std/api/client";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import { StdApi } from "./std-client.ts";
+import { StdApi, sendingRequestRevision } from "./std-client.ts";
 
 /** One canned answer of the fake server. */
 export interface FakeAnswer {
   readonly status: number;
   readonly body?: unknown;
+  /** Response headers, such as `std-schema-revision`. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 /** A request the fake server received. */
 export interface SeenRequest {
   readonly method: string;
   readonly path: string;
+  /** The query parameters, decoded. */
+  readonly query: Readonly<Record<string, string>>;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 }
@@ -34,7 +38,8 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
 
   const client = HttpClient.make((request) =>
     Effect.sync(() => {
-      const path = new URL(request.url).pathname;
+      const url = new URL(request.url);
+      const path = decodeURIComponent(url.pathname);
       const answer = answers[path] ?? { status: 599 };
 
       seen.push({
@@ -45,6 +50,13 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
         headers: request.headers,
         method: request.method,
         path,
+        query: Object.fromEntries([
+          ...url.searchParams.entries(),
+          ...request.urlParams.params.map(
+            ([name, value]) =>
+              [name, Redacted.isRedacted(value) ? "<redacted>" : value] as const
+          ),
+        ]),
       });
 
       return HttpClientResponse.fromWeb(
@@ -52,7 +64,10 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
         new Response(
           answer.body === undefined ? null : JSON.stringify(answer.body),
           {
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              ...answer.headers,
+            },
             status: answer.status,
           }
         )
@@ -65,7 +80,11 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
     makeStdClient({ baseUrl: BASE_URL, webClient: true }).pipe(
       Effect.provide(authenticationClient())
     )
-  ).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client)));
+  ).pipe(
+    Layer.provide(
+      Layer.succeed(HttpClient.HttpClient, sendingRequestRevision(client))
+    )
+  );
 
   return { layer, seen };
 };

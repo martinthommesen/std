@@ -15,7 +15,13 @@ import {
 import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
-import { FocusMain, LoadCurrentUser, ReplaceUrl, SignOut } from "./command.ts";
+import {
+  FocusMain,
+  LoadCurrentUser,
+  LoadTables,
+  ReplaceUrl,
+  SignOut,
+} from "./command.ts";
 import {
   ada,
   adaAtHome,
@@ -26,6 +32,7 @@ import { Message } from "./message.ts";
 import { Model } from "./model.ts";
 import { Message as SignInMessage, SignIn } from "./page/sign-in/sign-in.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
+import { REVISION_3, adaTables } from "./table-fixture.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
 
@@ -36,6 +43,8 @@ const primaryNav = role("navigation", { name: "Primary" });
 const signOutButton = role("button", { name: "Sign out" });
 
 const homeNavLink = within(primaryNav, role("link", { name: "Home" }));
+
+const tablesNav = role("navigation", { name: "Tables" });
 
 describe("app", () => {
   it("checking the session has a heading and announces itself", () => {
@@ -86,8 +95,10 @@ describe("app", () => {
       given(adaAtHome),
       click(signOutButton),
       expect(role("button", { name: "Signing out…" })).toBeDisabled(),
-      Command.expectExact(SignOut()),
-      Command.resolve(SignOut, Message.SucceededSignOut()),
+      Command.expectExact(
+        SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
@@ -103,7 +114,7 @@ describe("app", () => {
       { update, view },
       given(adaAtHome),
       click(signOutButton),
-      Command.resolve(SignOut, Message.FailedSignOut()),
+      Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       expect(within(banner, role("alert"))).toHaveText(
         "Signing out did not work. Try again."
       ),
@@ -121,9 +132,32 @@ describe("app", () => {
       Command.expectExact(LoadCurrentUser()),
       Command.resolve(
         LoadCurrentUser,
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
-      expect(within(banner, text("Ada Lovelace"))).toExist()
+      expect(within(banner, text("Ada Lovelace"))).toExist(),
+      expect(role("status")).toHaveText("Loading the tables…"),
+      Command.resolve(
+        LoadTables,
+        Message.SucceededLoadTables({
+          revision: REVISION_3,
+          sessionId: 1,
+          tables: adaTables.tables,
+        })
+      ),
+      expect(within(tablesNav, role("link", { name: "Asset" }))).toHaveAttr(
+        "href",
+        "/tables/acme.asset"
+      ),
+      // Tables of several namespaces are grouped, one heading each.
+      expect(
+        within(tablesNav, role("heading", { level: 3, name: "acme" }))
+      ).toExist(),
+      expect(
+        within(tablesNav, role("heading", { level: 3, name: "core" }))
+      ).toExist()
     );
   });
 
@@ -152,12 +186,24 @@ describe("app", () => {
       type(label("Password"), "ada-password"),
       submit(role("form", { name: "Sign in to STD" })),
       Command.expectExact(SignIn),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
-      Command.expectExact(ReplaceUrl({ url: homeRouter() }), FocusMain()),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
+      Command.expectExact(
+        ReplaceUrl({ url: homeRouter() }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3), sessionId: 1 }),
+        FocusMain()
+      ),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
-        [FocusMain, Message.CompletedFocusMain()]
+        [FocusMain, Message.CompletedFocusMain()],
+        [LoadTables, Message.FailedLoadTables({ sessionId: 1 })]
       ),
+      expect(role("alert")).toContainText("The tables could not be loaded"),
       expect(within(banner, text("Ada Lovelace"))).toExist(),
       expect(role("heading", { name: "Welcome, Ada Lovelace" })).toExist()
     );

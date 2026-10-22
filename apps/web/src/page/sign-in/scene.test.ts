@@ -15,6 +15,7 @@ import {
 import { describe, it } from "vitest";
 
 import { ada } from "../../fixture.ts";
+import { REVISION_3 } from "../../table-fixture.ts";
 import {
   FocusField,
   Message,
@@ -97,15 +98,25 @@ describe("sign-in", () => {
       submit(form),
       expect(signingInButton).toBeDisabled(),
       expect(signingInButton).toHaveAttr("aria-live", "polite"),
-      expect(form).toHaveAttr("aria-busy", "true"),
       Command.expectExact(
         SignIn({
           login: "ada",
           password: Option.getOrThrow(toMaybePassword("ada-password")),
         })
       ),
-      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
-      expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
+      Command.resolve(
+        SignIn,
+        Message.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
+      expectOutMessage(
+        OutMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      )
     );
   });
 

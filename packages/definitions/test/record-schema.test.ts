@@ -66,6 +66,7 @@ const table: MetaTable = {
   label: "T",
   layouts: { form: null, list: null },
   name: "site.t",
+  relatedLists: [],
 };
 
 const codes = (errors: readonly FieldError[]): string[] =>

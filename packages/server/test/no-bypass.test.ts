@@ -30,9 +30,13 @@ import { Effect } from "effect";
 
 import { ACME, createFixtureUser } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestRequestOptions } from "../../testing/src/http-client.ts";
+import type {
+  TestRequestOptions,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
+  arrayOf,
   freshAsset,
   objectOf,
   observe,
@@ -90,6 +94,11 @@ const adminPaths = (records: {
     ["GET", "/api/v1/meta/tables/acme.laptop/openapi.json", {}],
     ["GET", "/api/v1/meta/tables/core.access_rule", {}],
     [
+      "GET",
+      listPath("acme.laptop", { allowedFor: "acme.asset/docked_to" }),
+      {},
+    ],
+    [
       "PATCH",
       recordPath("core.user", records.user),
       { body: { name: "z" }, headers: version },
@@ -115,9 +124,20 @@ const changeSetBody = (operations: readonly Operation[]): JsonValue => {
   return parsed.ok ? parsed.value : null;
 };
 
+/**
+ * The table names of a `GET /meta/tables` response.
+ *
+ * @param response - The response.
+ * @returns The names, in response order.
+ */
+const tableNames = (response: TestResponse): string[] =>
+  arrayOf(objectOf(response.json).tables).map((entry) =>
+    textOf(objectOf(entry).name)
+  );
+
 /** What an admin gets on every path after the allow-all rules are gone. */
 const REFUSED: readonly Observation[] = [
-  ...Array.from({ length: 16 }, () => ({
+  ...Array.from({ length: 17 }, () => ({
     status: 404,
     tag: "UnknownTable",
   })),
@@ -559,6 +579,20 @@ describe("no-bypass", () => {
 
           assert.strictEqual(metadataBefore.status, 200, metadataBefore.text);
 
+          // The tables admin can open with the rules in place.
+          const tablesOf = (token: string) =>
+            http
+              .get("/api/v1/meta/tables", { token })
+              .pipe(Effect.map(tableNames));
+
+          const tablesBefore = yield* tablesOf(tokens.admin);
+
+          assert.includeMembers(tablesBefore, [
+            "acme.asset",
+            "core.access_rule",
+            "core.user",
+          ]);
+
           // What admin reads with the rules in place.
           const before = yield* http.get(
             listPath("acme.asset", { fields: "name,cost", sort: "name" }),
@@ -602,6 +636,10 @@ describe("no-bypass", () => {
           }
 
           assert.deepStrictEqual(refused, REFUSED);
+
+          // The table list follows: only `core.user`, through the
+          // `authenticated` rule, is left.
+          assert.deepStrictEqual(yield* tablesOf(tokens.admin), ["core.user"]);
 
           // Every table of the `core` schema but the user tables, which the
           // `authenticated` rule keeps known, from pg_class: platform and
@@ -757,6 +795,20 @@ describe("no-bypass", () => {
           assert.deepStrictEqual(
             withoutRevision(deputyMetadata.json),
             withoutRevision(metadataBefore.json)
+          );
+
+          // Eve opens the tables admin opened but the platform tables, of
+          // which only `core.user` stays known (the `authenticated` rule):
+          // local rules stop there.
+          const tablesNow = yield* catalog.refresh;
+
+          assert.deepStrictEqual(
+            yield* tablesOf(eve),
+            tablesBefore.filter(
+              (name) =>
+                tablesNow.classByName(name)?.storage !== "platform" ||
+                name === "core.user"
+            )
           );
 
           // Platform tables match only core rules: the copies are local, so

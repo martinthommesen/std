@@ -29,6 +29,7 @@
  *   relevant is left the request proceeds, and names that resolve to no
  *   readable field get `UnknownField` as usual.
  */
+import { knowsTable } from "@std/access/rules";
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
 import { InvalidSchemaRevision } from "@std/api/errors/invalid-schema-revision";
 import { SchemaChanged } from "@std/api/errors/schema-changed";
@@ -799,6 +800,17 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     const readScope = yield* currentReadScope();
     const classId = yield* resolveTable(readScope, table);
 
+    // `allowedFor`'s table, only when the caller may name it: a hidden
+    // table adds nothing, and the list then answers `UnknownTable`.
+    const classByName = (name: string) => {
+      const found = readScope.snapshot.classByName(name);
+
+      return found !== undefined &&
+        knowsTable(readScope.snapshot, readScope.caller, found.id)
+        ? found.id
+        : undefined;
+    };
+
     const nameable =
       write === undefined
         ? readNameable(readScope)
@@ -831,14 +843,18 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
         unknownChanges(
           table,
           readScope,
-          withRequired(staleScope(atC, classId, parameters)),
+          withRequired(staleScope(atC, classId, parameters, classByName)),
           nameable
         )
       );
     }
 
     const atR = yield* definitionsAt(stated.revision);
-    const scope = withRequired(staleScope(atR, classId, parameters));
+
+    const scope = withRequired(
+      staleScope(atR, classId, parameters, classByName)
+    );
+
     const history = yield* readHistory(stated, current);
     const operations = yield* readJournal(stated, current);
 

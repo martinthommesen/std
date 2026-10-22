@@ -54,11 +54,18 @@ const propertyKinds = (before: Definition, after: Definition): string[] => {
   const was: JsonObject = before;
   const now: JsonObject = after;
 
-  return FIELD_PROPERTY_KINDS.flatMap(([property, kind]) =>
-    JSON.stringify(was[property]) === JSON.stringify(now[property])
-      ? []
-      : [kind]
-  );
+  return FIELD_PROPERTY_KINDS.flatMap(([property, kind]) => {
+    if (JSON.stringify(was[property]) === JSON.stringify(now[property])) {
+      return [];
+    }
+
+    // A type that keeps its kind changed a setting: a reference's
+    // allowed-records condition, the only one that may change (decision
+    // 0020).
+    return property === "type" && before.type.kind === after.type.kind
+      ? ["settingsChanged"]
+      : [kind];
+  });
 };
 
 const nameOf = (definition: Definition): string | undefined =>

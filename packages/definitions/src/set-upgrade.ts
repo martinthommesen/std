@@ -25,6 +25,7 @@ import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isSuccess } from "effect/Result";
 
+import { sameTypeApartFromAllowedRecords } from "./allowed-records.ts";
 import { applyOperations } from "./apply.ts";
 import type { AppliedChangeSet, ApplyError } from "./apply.ts";
 import type { Definition, Owner } from "./definition.ts";
@@ -540,7 +541,12 @@ const checkExisting = (
     return false;
   }
 
-  if (current.kind === "field" && !sameJson(current.type, target.type)) {
+  // A reference's allowed-records condition may change with a new set
+  // version (decision 0020); any other type change may not.
+  if (
+    current.kind === "field" &&
+    !sameTypeApartFromAllowedRecords(current.type, target.type)
+  ) {
     refuse(
       planning,
       "typeChanged",

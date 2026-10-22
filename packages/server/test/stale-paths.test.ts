@@ -67,6 +67,8 @@ const PATHS = [
   "openapi",
   "metadata",
   "metadata openapi",
+  "metadata tables",
+  "picker list",
   "change-set apply",
   "change-set read",
   "definition create",
@@ -289,7 +291,19 @@ const take = (
           headers,
           ...as(token),
         }),
+      "metadata tables": () =>
+        http.get("/api/v1/meta/tables", { headers, ...as(token) }),
       openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
+      // The picker's reference field is in scope; `docked_to` is not
+      // touched by the changes below.
+      "picker list": () =>
+        http.get(
+          listPath("acme.asset", {
+            allowedFor: "acme.asset/docked_to",
+            fields: "name",
+          }),
+          { headers, ...as(token) }
+        ),
       // The web app signs in with the cookie form.
       "sign-in": () =>
         http.request(
@@ -355,7 +369,9 @@ const success: Readonly<Record<PathName, number>> = {
   me: 200,
   metadata: 200,
   "metadata openapi": 200,
+  "metadata tables": 200,
   openapi: 200,
+  "picker list": 200,
   "sign-in": 200,
   "sign-out": 204,
   update: 200,
