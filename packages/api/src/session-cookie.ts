@@ -19,8 +19,12 @@ import { HttpApiSecurity } from "effect/http-api";
 /** The cookie's name. */
 export const SESSION_COOKIE = "std_session";
 
-/** The cookie's path: the API only, never the web app's pages. */
-export const SESSION_COOKIE_PATH = "/api/v1";
+/**
+ * The cookie's path: the API only, never the web app's pages. It is `/api`
+ * from Step 3, so one session serves `/api/v1` and `/api/v2` while both
+ * exist (Contracts 10.1).
+ */
+export const SESSION_COOKIE_PATH = "/api";
 
 /**
  * The request header that marks a request as sent by STD's own web app

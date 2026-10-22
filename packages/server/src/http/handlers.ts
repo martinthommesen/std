@@ -48,6 +48,7 @@ import {
   checkUnscopedRevision,
   parseRequestRevision,
 } from "./stale-request.ts";
+import { v1Refusals } from "./v1-frozen.ts";
 
 /**
  * The roles of an actor as `auth/me` shows them.
@@ -281,7 +282,7 @@ export const RecordHandlers = HttpApiBuilder.group(
             request,
             asActor(createInRequest(stated, params.table, body))
           );
-        }).pipe(services)
+        }).pipe(services, v1Refusals)
       )
       .handle("update", ({ headers, params, request }) =>
         Effect.gen(function* updateHandler() {
@@ -314,7 +315,7 @@ export const RecordHandlers = HttpApiBuilder.group(
               })
             )
           );
-        }).pipe(services)
+        }).pipe(services, v1Refusals)
       )
       .handle("remove", ({ headers, params, request }) =>
         Effect.gen(function* deleteHandler() {
@@ -348,7 +349,7 @@ export const RecordHandlers = HttpApiBuilder.group(
               })
             )
           );
-        }).pipe(services)
+        }).pipe(services, v1Refusals)
       )
       .handle("history", ({ params, query, request }) =>
         Effect.gen(function* historyHandler() {

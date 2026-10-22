@@ -1,0 +1,76 @@
+/**
+ * `DefinitionInvalid` as frozen `/api/v1` shows it (Contracts 10.1): the
+ * problem codes of `v0.0.2`, so the v1 OpenAPI document never changes.
+ * Codes added later (`apiNameClash`, Contracts 10.2) reach a v1 client as
+ * the nearest v0.0.2 code ({@link toV1DefinitionInvalid}); `/api/v2` shows
+ * them as they are.
+ */
+import type { DefinitionInvalid } from "@std/definitions/problems";
+import { Schema } from "effect";
+
+/** The problem codes of `v0.0.2`, in their order. */
+const ProblemCodeV1Schema = Schema.Literals([
+  "invalidName",
+  "duplicateName",
+  "duplicateId",
+  "unknownReference",
+  "wrongKind",
+  "notLive",
+  "extendsCycle",
+  "invalidType",
+  "invalidDefault",
+  "defaultNotAllowed",
+  "invalidDisplayField",
+  "overrideNotInherited",
+  "overrideLoosens",
+  "overrideInvalid",
+  "invalidIndex",
+  "invalidGrant",
+  "invalidAccessRule",
+  "invalidCondition",
+  "invalidSubscription",
+  "invalidChoice",
+  "invalidLayout",
+  "invalidAutoNumber",
+  "invalidFlags",
+  "unknownDefinition",
+  "alreadyExists",
+  "idInUse",
+  "versionConflict",
+  "unsupportedChange",
+]);
+
+/** One problem, as v1 shows it. */
+const DefinitionProblemV1Schema = Schema.Struct({
+  code: ProblemCodeV1Schema,
+  /** The definition the problem is about, if any. */
+  definitionId: Schema.NullOr(Schema.String),
+  message: Schema.String,
+});
+
+/** Definitions or a change set are invalid; nothing was applied (v1). */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+export class DefinitionInvalidV1 extends Schema.TaggedError<
+  DefinitionInvalidV1,
+  { readonly brand: unique symbol }
+>()("DefinitionInvalid", {
+  problems: Schema.Array(DefinitionProblemV1Schema),
+}) {}
+
+/**
+ * The v1 form of a refusal: `apiNameClash`, which `v0.0.2` did not have,
+ * becomes `invalidName` (the name is not valid for the API).
+ *
+ * @param error - The refusal.
+ * @returns The same problems with v0.0.2 codes.
+ */
+export const toV1DefinitionInvalid = (
+  error: DefinitionInvalid
+): DefinitionInvalidV1 =>
+  new DefinitionInvalidV1({
+    problems: error.problems.map((found) => ({
+      code: found.code === "apiNameClash" ? "invalidName" : found.code,
+      definitionId: found.definitionId,
+      message: found.message,
+    })),
+  });

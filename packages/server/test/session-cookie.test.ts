@@ -118,13 +118,13 @@ describe("session-cookie", () => {
             cookieAttributes(remote).filter(
               (attribute) => attribute !== expires
             ),
-            ["httponly", "path=/api/v1", "samesite=strict", "secure"]
+            ["httponly", "path=/api", "samesite=strict", "secure"]
           );
           assert.deepStrictEqual(
             cookieAttributes(local).filter(
               (attribute) => !attribute.startsWith("expires=")
             ),
-            ["httponly", "path=/api/v1", "samesite=strict"]
+            ["httponly", "path=/api", "samesite=strict"]
           );
 
           // The same token works as a bearer token: one kind of session.
@@ -247,7 +247,7 @@ describe("session-cookie", () => {
           assert.strictEqual(out.status, 204);
           assert.strictEqual(setCookieValue(out, SESSION_COOKIE), "");
           assert.include(cookieAttributes(out), "max-age=0");
-          assert.include(cookieAttributes(out), "path=/api/v1");
+          assert.include(cookieAttributes(out), "path=/api");
 
           const after = yield* http.get(ME, { cookie });
 

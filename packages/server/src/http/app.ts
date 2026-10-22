@@ -22,6 +22,7 @@ import { MetadataHandlers } from "./metadata-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
+import { V1DeprecationLayer } from "./v1-frozen.ts";
 
 /** Every group's handlers. */
 export const ApiHandlers = Layer.mergeAll(
@@ -52,9 +53,13 @@ export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))
 );
 
-/** The routes plus the global revision header and `Cache-Control: no-store`. */
+/**
+ * The routes plus the global revision header, `Cache-Control: no-store`
+ * and the `/api/v1` deprecation headers.
+ */
 export const HttpAppLayer = Layer.mergeAll(
   ApiRoutes,
   SchemaRevisionHeaderLayer,
-  ApiNoStoreLayer
+  ApiNoStoreLayer,
+  V1DeprecationLayer
 );
