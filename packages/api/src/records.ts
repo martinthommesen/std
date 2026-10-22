@@ -6,6 +6,7 @@
  * writes record bodies itself with `stringifyJson`, so `json` field values
  * keep jsonb's key order; this schema is what clients decode.
  */
+import { MetaFieldTypeSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
@@ -123,12 +124,32 @@ export const IfMatchHeaders = {
   "if-match": Schema.optionalKey(Schema.String),
 } as const;
 
-/** One history entry (Contracts 4.2, 4.5); changes keyed by field name. */
+/**
+ * How a history entry's field is read (Contracts 4.4, decision 0020): its
+ * label, type (as metadata shows types) and choice labels as they were at
+ * the entry's schema revision; `choices` is null for other field types.
+ */
+export const HistoryFieldSchema = Schema.Struct({
+  choices: Schema.NullOr(
+    Schema.Array(Schema.Struct({ key: Schema.String, label: Schema.String }))
+  ),
+  label: Schema.String,
+  type: MetaFieldTypeSchema,
+});
+
+/** How a history entry's field is read. */
+export type HistoryField = typeof HistoryFieldSchema.Type;
+
+/**
+ * One history entry (Contracts 4.2, 4.5); changes keyed by field name, and
+ * `fields` describing exactly those fields, keyed the same way.
+ */
 export const HistoryEntrySchema = Schema.Struct({
   actor: Schema.String,
   cause: Schema.Json,
   changeId: Schema.String,
   changes: Schema.Record(Schema.String, Schema.Json),
+  fields: Schema.Record(Schema.String, HistoryFieldSchema),
   kind: Schema.Literals(["create", "update", "delete"]),
   occurredAt: Schema.String,
   operationId: Schema.String,

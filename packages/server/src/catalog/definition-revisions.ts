@@ -34,7 +34,13 @@ export interface DefinitionAtRevision {
   readonly definition: Definition;
 }
 
-const definitionOf = (text: string): Definition | undefined => {
+/**
+ * A definition revision's effective JSON as a definition.
+ *
+ * @param text - The `effective` column as text.
+ * @returns The definition, or undefined when it does not decode.
+ */
+export const definitionOf = (text: string): Definition | undefined => {
   const parsed = parseJson(text);
 
   if (!(parsed.ok && isJsonObject(parsed.value))) {
