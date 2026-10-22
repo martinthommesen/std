@@ -14,6 +14,7 @@ import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
+import { asObject, V2 } from "./v2-support.ts";
 import { ASSET, LAPTOP } from "./writes-support.ts";
 
 /** One request shape, applied to a record ID. */
@@ -24,113 +25,154 @@ interface Probe {
   readonly options: TestRequestOptions;
 }
 
-const historyPath = (table: string, query: string) => (id: string) =>
-  `${recordPath(table, id)}/history?${query}`;
+/** How an API version spells its by-ID paths and body media type. */
+interface Api {
+  readonly asset: (id: string) => string;
+  readonly laptop: (id: string) => string;
+  /** The content type of a PATCH body. */
+  readonly patchType: string;
+}
 
-const probes = (token: string): readonly Probe[] => [
+const V1_API: Api = {
+  asset: (id) => recordPath(ASSET, id),
+  laptop: (id) => recordPath(LAPTOP, id),
+  patchType: "application/json",
+};
+
+const V2_API: Api = {
+  asset: (id) => `${V2.asset}/${id}`,
+  laptop: (id) => `${V2.laptop}/${id}`,
+  patchType: "application/merge-patch+json",
+};
+
+const historyPath =
+  (path: (id: string) => string, query: string) => (id: string) =>
+    `${path(id)}/history?${query}`;
+
+const probes = (token: string, api: Api): readonly Probe[] => [
   {
     method: "GET",
     name: "GET with an unknown field",
     options: { token },
-    path: (id) => `${recordPath(LAPTOP, id)}?fields=nosuchfield`,
+    path: (id) => `${api.laptop(id)}?fields=nosuchfield`,
   },
   {
     method: "GET",
     name: "GET with a bad labels flag",
     options: { token },
-    path: (id) => `${recordPath(ASSET, id)}?labels=perhaps`,
+    path: (id) => `${api.asset(id)}?labels=perhaps`,
   },
   {
     method: "GET",
     name: "history with an unknown field filter",
     options: { token },
-    path: historyPath(LAPTOP, "field=nosuchfield"),
+    path: historyPath(api.laptop, "field=nosuchfield"),
   },
   {
     method: "GET",
     name: "history with a bad date",
     options: { token },
-    path: historyPath(ASSET, "since=yesterday"),
+    path: historyPath(api.asset, "since=yesterday"),
   },
   {
     method: "GET",
     name: "history with a bad kind and actor",
     options: { token },
-    path: historyPath(ASSET, "kind=rename&actor=nobody"),
+    path: historyPath(api.asset, "kind=rename&actor=nobody"),
   },
   {
     method: "PATCH",
     name: "PATCH with an unknown field",
     options: {
       body: { nosuchfield: 1 },
-      headers: { "if-match": '"1"' },
+      headers: { "content-type": api.patchType, "if-match": '"1"' },
       token,
     },
-    path: (id) => recordPath(LAPTOP, id),
+    path: (id) => api.laptop(id),
   },
   {
     method: "PATCH",
     name: "PATCH naming class",
-    options: { body: { class: "x" }, headers: { "if-match": '"1"' }, token },
-    path: (id) => recordPath(ASSET, id),
+    options: {
+      body: { class: "x" },
+      headers: { "content-type": api.patchType, "if-match": '"1"' },
+      token,
+    },
+    path: (id) => api.asset(id),
   },
   {
     method: "PATCH",
     name: "PATCH with an invalid value and a stale version",
     options: {
       body: { cost: 12.5, name: null },
-      headers: { "if-match": '"99"' },
+      headers: { "content-type": api.patchType, "if-match": '"99"' },
       token,
     },
-    path: (id) => recordPath(ASSET, id),
+    path: (id) => api.asset(id),
   },
   {
     method: "PATCH",
     name: "PATCH with a body that is not JSON",
     options: {
-      headers: { "content-type": "application/json", "if-match": '"1"' },
+      headers: { "content-type": api.patchType, "if-match": '"1"' },
       token,
     },
-    path: (id) => recordPath(LAPTOP, id),
+    path: (id) => api.laptop(id),
   },
   {
     method: "PATCH",
     name: "PATCH with a malformed If-Match",
-    options: { body: { name: "x" }, headers: { "if-match": "1" }, token },
-    path: (id) => recordPath(LAPTOP, id),
+    options: {
+      body: { name: "x" },
+      headers: { "content-type": api.patchType, "if-match": "1" },
+      token,
+    },
+    path: (id) => api.laptop(id),
   },
   {
     method: "DELETE",
     name: "DELETE with a stale version",
     options: { headers: { "if-match": '"99"' }, token },
-    path: (id) => recordPath(ASSET, id),
+    path: (id) => api.asset(id),
   },
   {
     method: "DELETE",
     name: "DELETE without If-Match",
     options: { token },
-    path: (id) => recordPath(LAPTOP, id),
+    path: (id) => api.laptop(id),
   },
 ];
 
+const VERSIONS = [
+  [
+    "v1",
+    "an invisible record and an unknown ID give byte-identical responses",
+    V1_API,
+  ],
+  [
+    "v2",
+    "an invisible record and an unknown ID give byte-identical responses in /api/v2",
+    V2_API,
+  ],
+] as const;
+
 describe("invisible-identity", () => {
   it("covers every by-ID route", () => {
-    const methods = new Set(probes("t").map((probe) => probe.method));
+    const methods = new Set(probes("t", V2_API).map((probe) => probe.method));
 
     assert.deepStrictEqual([...methods].toSorted(), ["DELETE", "GET", "PATCH"]);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "an invisible record and an unknown ID give byte-identical responses",
-      () =>
+    for (const [version, title, api] of VERSIONS) {
+      dbTest.effect(title, () =>
         Effect.gen(function* identical() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
           const bob = yield* http.signIn("bob", "bob-password");
           const unknown = randomUUID();
 
-          for (const probe of probes(bob)) {
+          for (const probe of probes(bob, api)) {
             const hidden = yield* http.request(
               probe.method,
               probe.path(fixture.records.K),
@@ -143,11 +185,20 @@ describe("invisible-identity", () => {
               probe.options
             );
 
-            assert.strictEqual(hidden.status, missing.status, probe.name);
-            assert.strictEqual(hidden.text, missing.text, probe.name);
+            assert.strictEqual(
+              hidden.status,
+              missing.status,
+              `${version} ${probe.name}`
+            );
+            assert.strictEqual(
+              hidden.text,
+              missing.text,
+              `${version} ${probe.name}`
+            );
           }
         })
-    );
+      );
+    }
 
     dbTest.effect(
       "on a visible record the same parameters give their own errors",
@@ -159,7 +210,7 @@ describe("invisible-identity", () => {
           const { L } = fixture.records;
 
           const unknownField = yield* http.get(
-            historyPath(LAPTOP, "field=nosuchfield")(L),
+            historyPath((id) => recordPath(LAPTOP, id), "field=nosuchfield")(L),
             { token: bob }
           );
 
@@ -167,12 +218,39 @@ describe("invisible-identity", () => {
           assert.strictEqual(yield* tagOf(unknownField), "UnknownField");
 
           const badDate = yield* http.get(
-            historyPath(ASSET, "since=yesterday")(L),
+            historyPath((id) => recordPath(ASSET, id), "since=yesterday")(L),
             { token: bob }
           );
 
           assert.strictEqual(badDate.status, 400);
           assert.strictEqual(yield* tagOf(badDate), "InvalidRequest");
+        })
+    );
+
+    dbTest.effect(
+      "on a visible record the same parameters give their own errors in /api/v2",
+      () =>
+        Effect.gen(function* visibleV2() {
+          const http = yield* TestHttpClient;
+          const fixture = yield* AcmeFixture;
+          const bob = yield* http.signIn("bob", "bob-password");
+          const { L } = fixture.records;
+
+          const unknownField = yield* http.get(
+            historyPath(V2_API.laptop, "field=nosuchfield")(L),
+            { token: bob }
+          );
+
+          assert.strictEqual(unknownField.status, 400, unknownField.text);
+          assert.strictEqual(asObject(unknownField.json).code, "UnknownField");
+
+          const badDate = yield* http.get(
+            historyPath(V2_API.asset, "since=yesterday")(L),
+            { token: bob }
+          );
+
+          assert.strictEqual(badDate.status, 400, badDate.text);
+          assert.strictEqual(asObject(badDate.json).code, "InvalidRequest");
         })
     );
   });

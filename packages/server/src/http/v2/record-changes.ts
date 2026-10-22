@@ -78,6 +78,16 @@ const AUDIT_REFERENCES: ReadonlySet<string> = new Set([
   "updated_by",
 ]);
 
+/** The identity attributes a JSON Patch image carries besides fields. */
+const ENVELOPE: ReadonlySet<string> = new Set([
+  "id",
+  "href",
+  "@type",
+  "@baseType",
+  "@schemaLocation",
+  "revision",
+]);
+
 /** What a patch resolved before the lock. */
 interface PatchPlan {
   /** The fields the patch may write. */
@@ -262,8 +272,9 @@ const planJsonPatch = Effect.fn("V2.planJsonPatch")(function* planJsonPatch(
     return yield* new ValidationFailed({ errors: readOnly });
   }
 
+  // Identity and system attributes are in every image (`test /id`).
   const unreadable = [...names.read].find(
-    (name) => view.byApiName(name) === undefined
+    (name) => !ENVELOPE.has(name) && view.byApiName(name) === undefined
   );
 
   if (unreadable !== undefined) {
