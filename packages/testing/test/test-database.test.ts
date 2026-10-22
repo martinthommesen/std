@@ -22,6 +22,7 @@ import { migration0009 } from "@std/server/platform/migrations/0009-saved-filter
 import { migration0010 } from "@std/server/platform/migrations/0010-definition-revision-field";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
+import { connectionConfig } from "@std/server/sql/session";
 import { StatementLog } from "@std/server/sql/statement-log";
 import {
   ConfigProvider,
@@ -76,10 +77,10 @@ const decodeTemplateId = decodeRows(
 const admin = maintenanceUrl.pipe(
   Effect.orDie,
   Effect.flatMap((url) =>
-    PgConnection.make({
+    connectionConfig({
       applicationName: "std-testing-test",
       url: Redacted.make(url),
-    })
+    }).pipe(Effect.flatMap(PgConnection.make))
   )
 );
 

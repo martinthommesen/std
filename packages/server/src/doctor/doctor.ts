@@ -60,6 +60,7 @@ import {
   stdSchemas,
 } from "./check-schema.ts";
 import {
+  checkDatabaseTls,
   checkExternalIdentities,
   checkLedger,
   checkServerSettings,
@@ -126,6 +127,7 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkLedger(options.migrations ?? PLATFORM_MIGRATIONS)),
     ...(yield* checkUnicodeVersion),
     ...(yield* checkServerSettings),
+    ...(yield* checkDatabaseTls),
   ];
 
   // The platform tables are compared with their migrations first and on

@@ -6,13 +6,16 @@
 # checked out: the pinned Node and pnpm, `pnpm install --frozen-lockfile`
 # (dev dependencies included), and the `std` command run from its TypeScript
 # sources, exactly as the root `pnpm std` script runs it.
+# Compose mounts the public Postgres CA at /std-ca/ca.crt and selects verify-full;
+# no certificate or private key is baked into this image.
 
 # Node 26.12.0, the version `devEngines.runtime` pins in package.json, so
 # pnpm finds it and downloads nothing.
-FROM node:26.12.0-bookworm-slim
+FROM node:26.12.0-bookworm-slim@sha256:742a0fe7320e09e0321222b68165e6ac731d30470e7ea7f98f9bfc3a6e1034fe
 
 # pnpm 12.14.0, the version `packageManager` pins.
-RUN npm install --global pnpm@12.14.0 && npm cache clean --force
+ADD --checksum=sha256:ea206e35474bf87be9564a85ca70ed1c8ebdc45da55aafb0a3bf09d1ba69b179 https://registry.npmjs.org/pnpm/-/pnpm-12.14.0.tgz /tmp/std-pnpm.tgz
+RUN npm install --global /tmp/std-pnpm.tgz && rm /tmp/std-pnpm.tgz && npm cache clean --force
 
 WORKDIR /std
 

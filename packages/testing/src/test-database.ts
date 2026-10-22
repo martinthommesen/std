@@ -205,12 +205,6 @@ export const templateName = (
 export const testDatabaseName = (): string =>
   `${TEST_DATABASE_PREFIX}${Date.now().toString(NAME_RADIX)}_${process.pid}_${randomBytes(RANDOM_BYTES).toString("hex")}`;
 
-const connect = (
-  url: string,
-  applicationName: string
-): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
-  hygienic(PgConnection.make({ applicationName, url: Redacted.make(url) }));
-
 /**
  * An extra session with STD's session parameters and text reads, never
  * tapped by the statement log.
@@ -226,6 +220,12 @@ const openSession = (
     Effect.provideService(StatementObserver, ignoreStatements),
     Effect.flatMap((config) => hygienic(PgConnection.make(config)))
   );
+
+const connect = (
+  url: string,
+  applicationName: string
+): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
+  openSession(url, applicationName);
 
 const query = (
   connection: PgConnection.PgConnection,

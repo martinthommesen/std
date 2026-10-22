@@ -8,6 +8,8 @@
  */
 import { Config, Context, Effect, Layer, Redacted } from "effect";
 
+import { databaseTransport } from "./tls.ts";
+
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
 export const DEFAULT_DATABASE_URL = "postgres://std:std@127.0.0.1:54329/std";
 
@@ -63,6 +65,10 @@ export class DatabaseConfig extends Context.Service<
         const directUrl = yield* Config.Redacted(
           "STD_DATABASE_DIRECT_URL"
         ).pipe(Config.withDefault(url));
+
+        // Validate both endpoints before any lazy pool is exposed.
+        yield* databaseTransport(url).pipe(Effect.orDie);
+        yield* databaseTransport(directUrl).pipe(Effect.orDie);
 
         const maxConnections = yield* Config.Int(
           "STD_DATABASE_MAX_CONNECTIONS"

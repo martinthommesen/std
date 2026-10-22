@@ -1,16 +1,22 @@
 /**
  * A minimal Postgres client for the tooling's own checks: protocol 3.0 over
- * TCP without TLS, SCRAM-SHA-256, MD5 or cleartext password authentication,
+ * TCP with STD's TLS policy, SCRAM-SHA-256, MD5 or cleartext password authentication,
  * and simple-query results as text. It exists so `check-postgres` needs no
  * driver dependency; application code uses `@effect/sql-pg`.
  */
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import type { Socket } from "node:net";
-import { connect } from "node:net";
+import { connect, isIP } from "node:net";
+import { connect as connectTls } from "node:tls";
+
+import { Effect, Redacted } from "effect";
+
+import { databaseTransport } from "../../packages/server/src/sql/tls.ts";
 
 /** Connection settings, as in a `postgres://` URL. */
 export interface PgSettings {
+  readonly url: string;
   readonly database: string;
   readonly host: string;
   readonly password: string;
@@ -327,8 +333,16 @@ export const queryOnce = async (
   settings: PgSettings,
   sql: string
 ): Promise<(string | null)[][]> => {
-  const socket = connect({ host: settings.host, port: settings.port });
-  const reader = new MessageReader(socket);
+  const transport = await Effect.runPromise(
+    databaseTransport(Redacted.make(settings.url))
+  );
+
+  let socket = connect(
+    transport.host.startsWith("/")
+      ? { path: `${transport.host}/.s.PGSQL.${settings.port}` }
+      : { host: transport.host, port: settings.port }
+  );
+
   const timeoutMs = 10_000;
 
   socket.setTimeout(timeoutMs, () => {
@@ -337,6 +351,35 @@ export const queryOnce = async (
 
   try {
     await once(socket, "connect");
+
+    if (transport.ssl !== false) {
+      const response = once(socket, "data");
+      const request = Buffer.alloc(8);
+      request.writeInt32BE(8, 0);
+      request.writeInt32BE(80_877_103, 4);
+      socket.write(request);
+      const answers: readonly unknown[] = await response;
+      const [answer] = answers;
+
+      if (
+        !Buffer.isBuffer(answer) ||
+        answer.length !== 1 ||
+        answer[0] !== 0x53
+      ) {
+        throw new Error(
+          "Postgres refused TLS; plaintext fallback is forbidden"
+        );
+      }
+
+      socket = connectTls({
+        ...transport.ssl,
+        servername: isIP(transport.host) === 0 ? transport.host : undefined,
+        socket,
+      });
+      await once(socket, "secureConnect");
+    }
+
+    const reader = new MessageReader(socket);
     socket.write(startupMessage(settings));
     await authenticate(socket, reader, settings);
     socket.write(frame("Q", cString(sql)));
@@ -381,7 +424,10 @@ export const parsePgUrl = (url: string): PgSettings => {
     database: decodeURIComponent(parsed.pathname.slice(1)) || user,
     host: parsed.hostname || "127.0.0.1",
     password: decodeURIComponent(parsed.password),
-    port: parsed.port === "" ? defaultPort : Number(parsed.port),
+    port: Number(
+      parsed.searchParams.getAll("port").at(-1) ?? (parsed.port || defaultPort)
+    ),
+    url,
     user,
   };
 };

@@ -70,6 +70,9 @@ jobs:
         run: pnpm check:tooling
       - name: Type check
         run: pnpm typecheck
+      # Creates and removes its own Postgres 18 with throwaway TLS certificates.
+      - name: Postgres TLS
+        run: pnpm test:tls
       - name: Test
         run: pnpm test
       # Chromium for the browser tests, with its system libraries. A no-op

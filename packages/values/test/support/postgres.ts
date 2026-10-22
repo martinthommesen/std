@@ -10,11 +10,12 @@
  * casts. These tests create no tables, so they use the `std` database as is.
  */
 import { PgClient, PgTypes } from "@effect/sql-pg";
-import type { Layer } from "effect";
-import { Redacted, Result } from "effect";
+import { Effect, Layer, Result } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import { databaseUrlConfig } from "../../../server/src/sql/database-config.ts";
+import { databaseTransport } from "../../../server/src/sql/tls.ts";
 import { civilFromDays, padDigits } from "../../src/calendar.ts";
 
 const OID = {
@@ -227,16 +228,22 @@ export const makeTextRegistry = (): PgTypes.Registry => {
   return registry;
 };
 
-const DEFAULT_URL = "postgres://std:std@127.0.0.1:54329/std";
-
 /** A Postgres client for tests: `TimeZone=UTC`, `DateStyle=ISO`, text reads. */
 export const PostgresTest: Layer.Layer<
   PgClient.PgClient | SqlClient.SqlClient,
   SqlError
-> = PgClient.layer({
-  applicationName: "std-values-tests",
-  maxConnections: 4,
-  startupParameters: { DateStyle: "ISO", TimeZone: "UTC" },
-  types: makeTextRegistry(),
-  url: Redacted.make(process.env.STD_DATABASE_URL ?? DEFAULT_URL),
-});
+> = Layer.unwrap(
+  Effect.gen(function* PostgresTest() {
+    const url = yield* databaseUrlConfig;
+    const { ssl } = yield* databaseTransport(url);
+
+    return PgClient.layer({
+      applicationName: "std-values-tests",
+      maxConnections: 4,
+      ssl,
+      startupParameters: { DateStyle: "ISO", TimeZone: "UTC" },
+      types: makeTextRegistry(),
+      url,
+    });
+  }).pipe(Effect.orDie)
+);
