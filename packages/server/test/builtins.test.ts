@@ -298,12 +298,12 @@ describe("built-ins", () => {
               { headers: { "if-match": `"${version}"` }, token: tokens.admin }
             );
 
-            // 1A: these become one-operation change sets, refused by the
+            // These are one-operation change sets (1A), refused by the
             // schema service's protection check (Contracts 1.8).
             for (const response of [edit, remove]) {
               assert.deepStrictEqual(observe(response), {
                 status: 403,
-                tag: "NotAllowed",
+                tag: "DefinitionProtected",
               });
             }
           }

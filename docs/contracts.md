@@ -38,9 +38,10 @@ Covers how definitions change without breaking references, stalling the applicat
 - Names are separate and can change. Table names are unique per namespace. Field names are unique per hierarchy, counting active and retired fields.
 - Stored configuration refers to definitions by ID only: layouts, rules, access rules (including the roles they name), stored conditions, indexes, the dependency index (1.7), change entries. Names appear only at the edges (API paths, filter text, definition files) and are resolved when parsed.
 - Physical names: tables and columns use STD names, so plain SQL stays readable, and a rename runs `ALTER TABLE ... RENAME [COLUMN]`. Index and constraint names are built from the stable ID (`std_ix_<32 hex>`, `std_nn_<32 hex>`), so renames never touch them and recovery finds them by ID. Identifiers are limited to 63 bytes [checked: [limits](https://www.postgresql.org/docs/18/limits.html)].
-- Shipped definitions carry their ID in the definition file, so they have the same ID on every install. Records and API-created definitions get a UUIDv7 from `uuidv7()` [checked: [UUID functions](https://www.postgresql.org/docs/18/functions-uuid.html)]. STD relies only on uniqueness, not on monotonicity, which the docs do not promise.
+- Shipped definitions carry their ID in the definition file, so they have the same ID on every install. Records and API-created definitions get a UUIDv7 from `uuidv7()` [checked: [UUID functions](https://www.postgresql.org/docs/18/functions-uuid.html)], unless the change set supplies one: a change set may give a create a client-chosen UUID, so later operations of the same batch can refer to it and scripts converge on rerun. An ID already in use, by a tombstone or by a definition the caller cannot see included, is refused, because IDs are never reused: before anything else looks at the batch, the whole change set gets one `DefinitionInvalid` with an `idInUse` problem naming the operation's index and its ID, identical whatever holds the ID (kind, owner, version, state, visible or not); no later operation runs (accepted leak in 3.6). STD relies only on uniqueness, not on monotonicity, which the docs do not promise.
 - Generated SQL never uses `SELECT *`. Reason: adding a column must not change the row shape of a prepared statement.
 - Admins can rename local tables and fields. Core and app definitions are renamed only by a new version of their set (8.4).
+- Renames go by ID for every kind with a name: namespaces (`ALTER SCHEMA ... RENAME TO`), tables, fields, roles, permissions, subscriptions, access rules and indexes (the last two have an optional name, unique per table for indexes and among live access rules; the physical index name stays `std_ix_<id>`). A rename to a name another live definition of the same scope holds before the change set is refused, even if the change set renames that holder too (renames run one after another). [decision 0011]
 - No aliases: after a rename, the old name is an unknown field. Reason: aliases make filter text ambiguous. [judgment]
 - Moving a table between namespaces is not supported in v0.1.
 
@@ -66,7 +67,7 @@ Covers how definitions change without breaking references, stalling the applicat
 ### 1.4 Change sets, serialization and locks
 
 - Writes to config tables (definitions, roles, access rules, layouts and other config records) through the generic record API become a one-operation change set. They are routed onto the change-set path before `begin_request()`. That transaction takes `CONFIG_KEY` exclusive as its first lock and runs the save steps (access checks, history) under it, never upgrading a lock. Reason: two requests holding `CONFIG_KEY` shared and both asking for exclusive would deadlock.
-- A fixed admin endpoint accepts several operations as one change set. Each operation names the definition's `version`.
+- A fixed admin endpoint accepts several operations as one change set. Each operation names the definition's `version`. It is `POST /api/v1/schema/change-sets` (201), and `GET /api/v1/schema/change-sets/{id}` returns the journal entry and steps. The session's `Actor` is the requester; its access rules must allow each operation's write on the definition table of its kind, record and written fields, unconditionally (`NotAllowed`), checked again with the session and the stated revision in the main transaction under exclusive `CONFIG_KEY`. Each definition version gets a change entry in `core.change`. Generic `POST`, `PATCH` (`name` is a rename, `state` a retire or reactivate) and `DELETE` on definition tables take the same path. [decision 0011]
 - `DELETE` on a definition record is refused with `UseRetireOrPurge`. Reason: an ordinary delete must never destroy a column.
 
 | Lock | Kind | Holder | Purpose |
@@ -79,7 +80,7 @@ Covers how definitions change without breaking references, stalling the applicat
 - The coordinator holds `SCHEMA_KEY` on one dedicated connection outside the pool, connected directly to Postgres, and runs every statement of the change set on it. [checked: `PgClient.makeClient` in `@effect/sql-pg` 4.0.5 is a client over one `PgConnection`, outside any pool; decision 0002]
 - Changes without DDL or data preflight (labels, layouts, rules, access rules) take only `CONFIG_KEY`.
 - Lock order is always `SCHEMA_KEY`, `CONFIG_KEY`, table locks. Requests take `CONFIG_KEY` before any table lock. So STD sessions cannot deadlock on these.
-- Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`.
+- Nothing that scans record tables runs while `CONFIG_KEY` is held exclusively. Data counts and preflights run under `SCHEMA_KEY`, before `CONFIG_KEY`, and name tables and columns as they are before the change set's DDL.
 
 Main transaction of a change set:
 
@@ -114,10 +115,12 @@ DDL forms STD generates [checked: [ALTER TABLE](https://www.postgresql.org/docs/
 | Add reference field | `ADD COLUMN` without `REFERENCES`, then `ADD CONSTRAINT ... FOREIGN KEY ... NOT VALID` | ACCESS EXCLUSIVE on the table for the column; SHARE ROW EXCLUSIVE on both tables for the FK, which blocks writes to the target briefly | column: the table ACCESS EXCLUSIVE; FK: the table, then the target, SHARE ROW EXCLUSIVE | none; `VALIDATE` scans | main, then validate as follow-up |
 | Drop a reference FK | `DROP CONSTRAINT <fk>` | ACCESS EXCLUSIVE on the table and on the target (its FK triggers are dropped) [checked: 0F probe 3c] | the table, then the target, ACCESS EXCLUSIVE | none | main |
 | Rename | `RENAME`, `RENAME COLUMN` (cannot combine with other subcommands) | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE (also when FKs reference it) | none | main |
+| Rename namespace | `ALTER SCHEMA ... RENAME TO` | the schema object only; no table lock | none | none | main |
 | Set or drop default | `ALTER COLUMN SET/DROP DEFAULT` | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE | none | main |
 | Retire a required field | `ALTER COLUMN DROP NOT NULL` | ACCESS EXCLUSIVE | the table ACCESS EXCLUSIVE | none | main |
 | Purge field | `DROP COLUMN` | ACCESS EXCLUSIVE; its indexes and constraints are dropped under it | the table ACCESS EXCLUSIVE | none; column becomes invisible | main |
 | Purge reference field | `DROP COLUMN` of a column with an FK | ACCESS EXCLUSIVE on the table and on the target (the FK's triggers on the target are dropped) [checked: 0F probe 3c] | the table, then the target, ACCESS EXCLUSIVE | none | main |
+| Purge table | `DROP TABLE` (no `CASCADE`) | ACCESS EXCLUSIVE on the table, its parent (level FK) and every table its FKs reference, `core.user` for a root's audit FKs (their triggers are dropped) [checked: `lock-inventory.test.ts`] | every ancestor root first, the table, then each referenced table, ACCESS EXCLUSIVE | none | main |
 | Make required on a table with rows | `ADD CONSTRAINT std_nn_<id> NOT NULL col NOT VALID`, then `VALIDATE CONSTRAINT` (new in 18) | add: ACCESS EXCLUSIVE; validate: SHARE UPDATE EXCLUSIVE | add: the table ACCESS EXCLUSIVE; validate: n/a (follow-up) | validate scans without blocking reads or writes | add in main, validate as follow-up |
 | Check constraint (max length) | `ADD CONSTRAINT ... CHECK (...) NOT VALID`, then `VALIDATE`; `DROP CONSTRAINT` to remove it | as above; drop: ACCESS EXCLUSIVE | add and drop: the table ACCESS EXCLUSIVE | as above | as above |
 | Index or unique index on a table with rows | `CREATE [UNIQUE] INDEX CONCURRENTLY` | SHARE UPDATE EXCLUSIVE | n/a: follow-up, no `CONFIG_KEY`, `lock_timeout = 0` with the watchdog (1.5) | two scans | follow-up, outside any transaction |
@@ -126,6 +129,7 @@ DDL forms STD generates [checked: [ALTER TABLE](https://www.postgresql.org/docs/
 - STD adds a reference's FK constraint separately as `NOT VALID`, so no validation scan runs under ACCESS EXCLUSIVE.
 - Refused in v0.1, because each rewrites or scans under ACCESS EXCLUSIVE [checked]: `ADD COLUMN` with a volatile default, identity, stored generated column or constrained domain; `ALTER COLUMN TYPE`; `SET NOT NULL` without a validated constraint that proves it.
 - Adding a required field to a table with rows needs a constant default; without one it is refused with `ExistingDataViolates` before any SQL runs.
+- Statement order in the main transaction: purged columns and tables are dropped first (children before parents), then schemas, tables and columns are renamed, then the rest; so a name a purge frees can be taken in the same change set. Every explicit lock names a table as it is before any DDL. [decision 0011]
 - Postgres column defaults are constants only. The record service computes dynamic defaults (current user, time, numbers) on insert.
 - Max length is `text` plus a CHECK constraint, never `varchar(n)`, so changing it never rewrites. [judgment]
 - UNIQUE constraints have no NOT VALID form; uniqueness is a unique index built concurrently.
@@ -164,6 +168,9 @@ Resume:
 - A build runs on the backend holding `SCHEMA_KEY`, so if the coordinator process dies mid-build, the lock stays held until the build ends and no resume can race it. [checked: 0F probe 2, SIGKILL of the client process with interval 0: the backend kept `SCHEMA_KEY` (another session's `pg_try_advisory_lock` failed) through a 3 s wait and a 2.0 s scan of 10M rows, then left a valid index, or an invalid one (`indisvalid = false`) when a duplicate broke a unique build, and released the lock within 35 ms of the build's end]
 - A step that errors is retried 3 times [judgment], then the change set moves to `needs_attention` and `doctor` reports it. An admin fixes the cause and runs `std schema resume <id>`, or runs `std schema abandon <id>` (abandon actions plus `complete`).
 - A failed concurrent unique build leaves an invalid index that still enforces uniqueness [checked], so abandon drops it at once.
+- A new coordinator, once it holds `SCHEMA_KEY`, first resumes change sets left in `applying`, then refuses with `SchemaNeedsAttention` (409) while any change set is `needs_attention`: stored step statements name tables and columns as they were, and the new change set could rename or drop them. Changes without DDL still apply. [judgment, decision 0011]
+- Abandon applies only to a change set still `applying` or `needs_attention`. It drops unfinished index builds and finishes unfinished index drops concurrently before its `complete`, and drops `NOT VALID` constraints inside the `complete` config commit under the lock budget; afterwards the catalog matches the definitions or the enforcement state explains it. If the backend that is running one of this change set's steps right now holds `SCHEMA_KEY` (a build waiting on another session, or one whose client died), `std schema abandon` terminates it first, checking in the signalling statement the step's state, PID, backend start and the lock; that is the operator's decision. Any other holder gives `SchemaBusy`. [decision 0011]
+- The watchdog runs on a pooled connection beside the step and writes the PIDs the step waits for (`pg_blocking_pids`) and the build phase into `last_error`; `std schema status` shows them live too. [checked: `schema-recovery.test.ts`]
 
 ### 1.6 Field and table lifecycle
 
@@ -173,30 +180,34 @@ Resume:
 | `retired` | kept with data | only when selected explicitly, under access rules | refused (`DefinitionRetired`) | hidden | `active`, `purged` |
 | `purged` | dropped | no | no | no | none (tombstone) |
 
-- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A reactivated field comes back optional.
-- Retiring a parent field retires it on every child class. A retired table accepts reads only.
+- Retiring keeps the data and drops `NOT NULL` (catalog-only), so inserts without the field work. A retired field cannot be made required, directly or by an override. A reactivated field comes back optional on every class: retiring sets the field's `required` to false and clears `required` on its overrides in descendant classes. Booleans stay `NOT NULL DEFAULT false`. [checked: `schema-lifecycle.test.ts`, `lifecycle.test.ts`]
+- Retiring a parent field retires it on every child class. A retired table accepts reads only: creates, updates and deletes of its records (and of records of its descendants) are refused with `NotAllowed`.
 - Purge needs the `schema.purge` permission (3.1; held by the built-in `schema_purger` role, not by `admin`), a target retired in an earlier committed revision, no blocking dependents (1.7), and a confirmation naming the target's ID and version. It is journaled and audited with the number of values or rows destroyed. The count runs under `SCHEMA_KEY` before `CONFIG_KEY`; a retired field or table refuses writes, so the count is stable.
-- A tombstone keeps ID, last name, type, label and purge revision, so history can interpret old values. The name becomes free; the ID is never reused.
+- A tombstone keeps ID, last name, type, label and purge revision, so history can interpret old values. The name becomes free; the ID is never reused. The tombstone is the definition row in state `purged`; its purge revision is its first definition revision in that state (4.4). [decision 0011]
+- A field purge takes its single-field indexes and its overrides along; a table purge takes its fields, indexes and overrides along. Records of a child class also have rows in its ancestors' tables, which dropping the child's table cannot remove: purging a class whose subtree has records while its root table stays is refused (`PurgeRefused`, counted under `SCHEMA_KEY`); a populated hierarchy is purged from its leaves to its root in one change set. [judgment, decision 0011]
 - A purge does not free a column slot: dropped columns count toward the 1,600-column limit [checked: [limits](https://www.postgresql.org/docs/18/limits.html)].
 - A purge leaves history values in place; erasure is deliberately later.
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), `grant_of` (grant to its role and permission), each registered when its feature lands.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
 
 | Operation | Refused when | Reported but allowed |
 | --- | --- | --- |
 | Rename | target is protected, or owned by core or an app and the caller is not its set | nothing |
 | Retire field | protected; display field; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
-| Retire table | protected; has a child class not retired; a non-retired reference field points at it | other dependents |
+| Retire table | protected; has a child class not retired; a non-retired reference field points at it (whatever its own table's state, self-references included) | other dependents |
+| Reactivate field or table | a reference field that would be active points at a retired table | nothing |
 | Purge field | not retired; any non-retired dependent except layout entries and single-field indexes | count of non-null values (counted under `SCHEMA_KEY`) |
-| Purge table | not retired; a child class or incoming reference not purged | row count (counted under `SCHEMA_KEY`) |
-| Delete or retire role | protected; an active access rule names it (`rule_role`) | user-role assignments |
+| Purge table | not retired; a child class or incoming reference not purged; an access rule or subscription on it | row count (counted under `SCHEMA_KEY`) |
+| Delete or retire role | protected; an active access rule names it (`rule_role`); for a delete, any access rule | user-role assignments; a deleted role's grants are deleted with it |
 | Tighten required, unique, max length, override | existing rows violate it (preflight, 1.4) |  |
 | Change type | always, in v0.1 |  |
 
 - Refusal: `DependencyConflict` (409), listing each blocking dependent by ID, kind and name.
+- A multi-field unique index refuses the retire of its fields, so a purge meets only non-unique multi-field indexes; it refuses those too. `DELETE` of an override is refused (it would loosen the field, 2.5). [decision 0011]
+- Other refusals of lifecycle operations: `UseRetireOrPurge` (409, `DELETE` of a field, table or namespace definition), `PurgeRefused` (409: not retired, retired in the same change set, a confirmation that does not name the target's ID and version, or records left in ancestor tables), `PermissionRequired` (403, `schema.purge`) and `DefinitionProtected` (403, 1.8). Each is raised before any lock or SQL, except the record check of a purge, which runs under `SCHEMA_KEY` before `CONFIG_KEY`. The requester (user ID and current role IDs) is passed with the change set; permissions are checked by ID through active grants of its active roles.
 
 ### 1.8 Protected core definitions and local additions
 
@@ -205,6 +216,7 @@ Resume:
 - Admins may add `local` fields to app tables and to core tables marked `extensible` (the user table now), and may create `local` child classes of app classes and of `extensible` core classes. Platform tables (1.9) are never extensible.
 - An upgrade whose set adds a name already used by a local field or class is refused at plan time. The report names the local definition; the admin renames it (1.1) and reruns.
 - The `core` namespace and installed apps' namespaces are reserved.
+- Enforced for every operation by the schema service's guard [decision 0011]: a protected definition accepts only `label` and `helpText` changes unless the change set is the core set itself; rename, retire, reactivate and delete of a core- or app-owned definition are for its own set only (a retired app definition may still be purged locally, 8.4); platform tables, their fields and their namespace are never renamed, retired, purged or deleted; new definitions belong to the change set's owner layer, a new table must be in a namespace that layer owns, and fields, indexes, overrides and child classes go only onto classes the layer owns, app classes or `extensible` core classes. Refusal: `DefinitionProtected` (403) with the reason (`protected`, `owner`, `reserved`, `notExtensible`, `platform`). A label or help-text change by an origin that does not own the definition is marked as a local override in the journal; workstream 1B stores it in `core.config_override`.
 
 ### 1.9 Minimal migration mechanism
 
@@ -251,7 +263,7 @@ Checks:
 - Two concurrent access-rule edits through the generic API both succeed, at consecutive revisions, with no deadlock.
 - `DELETE` of a field definition is refused; column and data unchanged.
 - A retired required field is hidden by default, returned when selected, refuses writes, keeps values, and inserts without it succeed; reactivated it is optional with values intact.
-- Purge is refused when active, retired in the same change set, without `schema.purge`, with a non-retired access rule reading it, or in a multi-field unique index; once causes are removed it succeeds and older history shows the tombstone label.
+- Purge is refused when active, retired in the same change set, without `schema.purge`, with a non-retired access rule reading it, or in a multi-field unique index; once causes are removed it succeeds and older history shows the tombstone label. (A multi-field unique index already refuses the retire; the purge test uses a non-unique multi-field index.)
 - Deleting or retiring a role that an active access rule names is refused with `DependencyConflict`.
 - Every operation other than a label or help-text override on every protected definition, as admin, through both the generic API and the change-set endpoint, is refused and leaves `pg_catalog` unchanged; a label override on a protected definition succeeds and changes no catalog object.
 - Adding a field with a constant default to a 1,000,000-row table leaves `relfilenode` unchanged, finishes under 100 ms [judgment] and does not increase `pg_stat_user_tables.seq_scan`. Adding a required field without a default to a table with rows is refused with `ExistingDataViolates` before any SQL runs.
@@ -477,6 +489,7 @@ It exercises row visibility, a never-readable field, a conditionally readable fi
 - One hop in filters and selection: the reference's own mask first, then the target's visibility in the join condition and its field masks. A hidden target behaves like an empty reference.
 - Writing a reference requires a visible target; otherwise `InvalidReference`, identical to an unknown ID.
 - Accepted leak: UUIDv7 IDs encode creation time. [judgment]
+- Accepted leak: a create with a client-chosen ID that a hidden definition holds is refused with `idInUse` (1.1: IDs are never reused), so the caller learns the ID is taken, and nothing else: the refusal is the same for every occupant, visible ones included. Only a caller that already holds the ID learns anything. Under an unknown or future revision (6.4), the refusal is identical to the missing case. [judgment]
 
 ### 3.7 History access
 
@@ -503,6 +516,10 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `SchemaChanged` | 409 | see 6.4 |
 | `InvalidReference` | 422 | target does not exist or is not visible; identical |
 | `Referenced` | 409 | delete refused because other records reference it; no count or names |
+| `DefinitionInvalid` | 422 | a change set's definitions are invalid; lists problems by definition ID |
+| `DependencyConflict`, `UseRetireOrPurge`, `PurgeRefused`, `ExistingDataViolates`, `SchemaNeedsAttention` | 409 | change-set refusals (1.4 to 1.7) |
+| `DefinitionProtected`, `PermissionRequired` | 403 | 1.8, and a missing permission such as `schema.purge` |
+| `SchemaBusy`, `SchemaLockTimeout` | 503 with `Retry-After` | another schema change holds `SCHEMA_KEY`; locks not obtained in 5 attempts (names no session) |
 | `Unauthenticated` | 401 | no bearer token, an unknown or expired one, or an inactive user |
 | `InvalidCredentials` | 401 | sign-in refused; unknown login, wrong password and deactivated user alike |
 | `InvalidRequest`, `InvalidFilter`, `InvalidCursor` | 400 | a malformed query parameter, a filter that does not parse or check (after names resolve), a cursor not issued for this sort |

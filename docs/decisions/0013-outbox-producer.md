@@ -41,7 +41,7 @@ The producer reads the subscriptions of the request's config snapshot. A subscri
 
 `UNIQUE (subscription_id, change_id)` (`delivery_subscription_change`) and the partial index `delivery_order ON (subscription_id, record_id, record_version) WHERE status <> 'done'`. The table holds IDs only, so no field value and no secret is ever copied into it (4.3); payloads are built from the change entry when the delivery runs. It is a platform table without a root-class layout (its key is a bigint), so the core set does not describe it and the generic API does not reach it; the Step 3 admin view reads it directly.
 
-Migration ids: 0005 belongs to `ws/1b-config-layers` and 0006 to `ws/1a-schema-lifecycle`. `migrations.ts` lists them in `RESERVED_IDS`, and `validateMigrations(migrations, reserved)` (the same change as on `ws/1b-config-layers`) accepts the gap. To renumber at merge: rename `0007-outbox.ts` and its export, change its `id`, and update `RESERVED_IDS` and the id lists in `platform-migrations.test.ts` and `test-database.test.ts`. The checksum covers only the kind and the statements, so the id can change freely before release.
+Migration ids: 0005 belongs to `ws/1b-config-layers` and 0006 to `ws/1a-schema-lifecycle`. While those branches were unmerged, `migrations.ts` listed their ids in `RESERVED_IDS` and `validateMigrations` accepted the gap. Both are merged now, so the list is 0001 to 0007 with no gaps, and `RESERVED_IDS` and the `reserved` parameter are removed.
 
 ## Producer (step 9 and step 11)
 

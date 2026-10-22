@@ -2,7 +2,8 @@
  * `std serve`: the HTTP server process (Contracts 6.1).
  *
  * At startup it refuses to run with pending, unknown or changed platform
- * migrations (`checkPlatformMigrations`, Contracts 1.9), then serves the
+ * migrations (`checkPlatformMigrations`, Contracts 1.9), starts the schema
+ * resumer (`STD_SCHEMA_RESUME_INTERVAL`, Contracts 1.5), then serves the
  * STD API on Node's HTTP server. The catalog listens on `std_config`, so a
  * config commit by any process reloads the snapshot early; correctness
  * still comes from `core.begin_request()` in every request.
@@ -19,6 +20,8 @@ import { HttpRouter } from "effect/http";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { checkPlatformMigrations } from "../platform/runner.ts";
+import { recoverySettingsFromEnv } from "../schema/recovery-settings.ts";
+import { SchemaResumer } from "../schema/recovery.ts";
 import {
   DatabaseConfig,
   SERVER_APPLICATION_NAME,
@@ -60,9 +63,16 @@ const ServicesLayer = Layer.mergeAll(
 /** Refuses to start on a database whose migrations do not match this build. */
 const StartupCheckLayer = Layer.effectDiscard(checkPlatformMigrations());
 
+/**
+ * Resumes interrupted schema changes at startup and every 30 s (Contracts
+ * 1.5): getting `SCHEMA_KEY` proves no coordinator is alive.
+ */
+const ResumerLayer = SchemaResumer.pipe(Layer.provide(recoverySettingsFromEnv));
+
 /** The whole server: launch it with `Layer.launch`. */
 export const ServerLayer = HttpRouter.serve(HttpAppLayer).pipe(
   Layer.provide(NodeServerLayer),
+  Layer.provide(ResumerLayer),
   Layer.provide(StartupCheckLayer),
   Layer.provide(ServicesLayer)
 );

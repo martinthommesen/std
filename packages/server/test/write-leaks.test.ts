@@ -254,6 +254,7 @@ describe("write-leaks", () => {
                 effect: "allow",
                 id: randomUUID(),
                 kind: "accessRule",
+                name: null,
                 owner: { layer: "local" },
                 protected: false,
                 roleIds: [EMPLOYEE],

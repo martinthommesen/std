@@ -196,13 +196,19 @@ const decodeInserted = decodeRows(
  * and shared by every entry of the attempt, nested in a hook or concurrent
  * (see `operations`).
  *
+ * The entry's schema revision is the one its field IDs are read at (4.4):
+ * the request's revision for record writes, and the revision a change
+ * set's main transaction commits for definition rows, whose fields may be
+ * created by that same change set (the core set's first load).
+ *
  * @param input - The change.
+ * @param schemaRevision - The revision to record; the request's by default.
  * @returns The written entry.
  */
 export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
-  function* writeChangeEntry(input: ChangeEntryInput) {
+  function* writeChangeEntry(input: ChangeEntryInput, schemaRevision?: number) {
     const sql = yield* SqlClient.SqlClient;
-    const { revision } = yield* RequestRevision;
+    const revision = schemaRevision ?? (yield* RequestRevision).revision;
     const transaction = yield* CurrentTransaction;
     const operationId = yield* operationOf(transaction);
 

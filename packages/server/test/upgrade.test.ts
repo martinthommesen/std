@@ -14,8 +14,9 @@ import type { Operation } from "@std/definitions/operation";
 import { Effect, Fiber } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
 import { planLines } from "../src/cli/format.ts";
-import { editDefinition } from "../src/config/config-service.ts";
+import { adopt, editDefinition } from "../src/config/config-service.ts";
 import { readInstalledState } from "../src/config/installed-state.ts";
 import { SCHEMA_LIFECYCLE } from "../src/config/lifecycle.ts";
 import {
@@ -70,6 +71,17 @@ const databaseState = Effect.gen(function* databaseState() {
   };
 });
 
+/**
+ * A field's name and state.
+ * @param id - The field.
+ * @returns `name state`.
+ */
+const fieldState = (id: string) =>
+  values(
+    "SELECT name || ' ' || state AS value FROM core.field WHERE id = $1::uuid",
+    [id]
+  ).pipe(Effect.map(([value]) => value));
+
 const installedVersion = (name: string) =>
   values(
     `SELECT set_version::text AS value FROM core."config_set" WHERE name = $1`,
@@ -86,6 +98,7 @@ const localRule = (roleId: string, description: string): Operation => ({
     effect: "allow",
     id: randomUUID(),
     kind: "accessRule",
+    name: null,
     owner: { layer: "local" },
     protected: false,
     roleIds: [roleId],
@@ -332,6 +345,115 @@ describe("upgrade", () => {
               ]),
               [["nameClash", "fx.item.foo"]]
             );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "the schema lifecycle through upgrades: a field renamed by ID, a removed field retired with its data, then reactivated",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* lifecycleUpgrade() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertRecords(['"fx"."item"'], FX.item, 1, { w: "'w-0'" });
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const v3 = yield* writeSetDirectory(
+              variantOf(v2, {
+                dropFields: ["w"],
+                renameFields: { z: "zed" },
+                version: 3,
+              })
+            );
+
+            const plan = yield* planUpgrade({ sets: [v3] });
+
+            assert.deepStrictEqual(plan.refusals, []);
+
+            yield* runUpgrade({ expectedPlanHash: plan.hash, sets: [v3] });
+
+            assert.strictEqual(yield* fieldState(FX.z), "zed active");
+            assert.strictEqual(yield* fieldState(FX.w), "w retired");
+            assert.deepStrictEqual(
+              yield* values(`SELECT zed AS value FROM "fx"."item" LIMIT 0`),
+              [],
+              "the column follows the rename"
+            );
+
+            const settled = yield* databaseState;
+
+            yield* runUpgrade({ sets: [v3] });
+
+            assert.deepStrictEqual(
+              yield* databaseState,
+              settled,
+              "a rerun changes nothing"
+            );
+
+            const v4 = yield* writeSetDirectory(
+              variantOf(v2, { renameFields: { z: "zed" }, version: 4 })
+            );
+
+            yield* runUpgrade({ sets: [v4] });
+
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
+            assert.deepStrictEqual(
+              yield* values(`SELECT w AS value FROM "fx"."item"`),
+              ["w-0"],
+              "the retired field's data came back with it"
+            );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a field its set removed is adopted retired, through the config service, and a local reactivation brings it back",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* adoptRetired() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+
+            const v3 = yield* writeSetDirectory(
+              variantOf(yield* readSetDirectory(FIXTURE.v2), {
+                dropFields: ["w"],
+                version: 3,
+              })
+            );
+
+            yield* runUpgrade({ sets: [v3] });
+
+            assert.strictEqual(yield* fieldState(FX.w), "w retired");
+
+            yield* adopt({ actorId: ADMIN, id: FX.w });
+
+            const adopted = (yield* (yield* Catalog).refresh).field(FX.w);
+
+            assert.strictEqual(adopted?.owner.layer, "local");
+            assert.strictEqual(adopted?.state, "retired", "retirement is kept");
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT count(*)::text AS value FROM core."config_base" WHERE id = $1::uuid`,
+                [FX.w]
+              ),
+              ["0"]
+            );
+
+            yield* change([
+              { id: FX.w, op: "reactivate", version: adopted?.version ?? 0 },
+            ]);
+
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
+
+            // The set no longer owns it: rerunning the upgrade leaves it.
+            yield* runUpgrade({ sets: [v3] });
+
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
           })
         )
     );

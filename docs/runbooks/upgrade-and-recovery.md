@@ -68,7 +68,8 @@ Use this for every STD release and every new version of an app set.
 | `typeChanged` | the new version changes a field's type | the set's author adds a new field and retires the old one |
 | `roleInUse` | the new version removes a role an active access rule still names; the refusal names the rules | change or deactivate those rules, then plan again |
 | `dataViolation` | existing rows violate a tightened definition; the refusal gives the count and up to 20 IDs | fix the data, then plan again |
-| `renameUnsupported`, `removalUnsupported`, `reactivationUnsupported` | the change needs schema lifecycle operations this STD lacks | upgrade STD first |
+| `renameUnsupported`, `removalUnsupported`, `reactivationUnsupported` | the change needs a lifecycle operation the schema engine has no form for (for example renaming a kind without a name) | the set's author changes the set |
+| `lifecycleRefused` | the schema engine refuses a rename, retire or reactivation the set needs; the refusal names the error, such as `DependencyConflict` with each blocking local dependent | change or remove the named dependents, then plan again |
 | `setCycle` | sets require each other | fix the sets' `requires` |
 | `invalid` | the set's definitions do not validate | fix the set files |
 
@@ -115,7 +116,7 @@ SELECT pg_terminate_backend(:'pid'::int);
 SQL
 ```
 
-Or abandon the change set. Set `CHANGE_SET_ID` to its ID from the open change sets (`std schema` comes with workstream 1A):
+Or abandon the change set. Set `CHANGE_SET_ID` to its ID from the open change sets; `std schema status` lists them:
 
 ```bash
 : "${CHANGE_SET_ID:?set CHANGE_SET_ID to the change set ID}"
@@ -137,8 +138,6 @@ SQL
 pnpm std schema resume "$CHANGE_SET_ID"
 pnpm std doctor
 ```
-
-`std schema resume` and `std schema abandon` come with workstream 1A.
 
 ### Interrupted `std upgrade`
 

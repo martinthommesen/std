@@ -39,6 +39,7 @@ export const ProblemCodeSchema = Literals([
   "invalidFlags",
   "unknownDefinition",
   "alreadyExists",
+  "idInUse",
   "versionConflict",
   "unsupportedChange",
 ]);

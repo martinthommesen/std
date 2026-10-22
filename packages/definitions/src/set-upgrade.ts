@@ -26,7 +26,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isSuccess } from "effect/Result";
 
 import { applyOperations } from "./apply.ts";
-import type { AppliedChangeSet } from "./apply.ts";
+import type { AppliedChangeSet, ApplyError } from "./apply.ts";
 import type { Definition, Owner } from "./definition.ts";
 import { dependenciesOf } from "./dependencies.ts";
 import { effectiveJson } from "./effective-json.ts";
@@ -40,6 +40,7 @@ import type {
 } from "./layers.ts";
 import { UPDATABLE } from "./operation.ts";
 import type { Operation } from "./operation.ts";
+import { setOrigin, SYSTEM_REQUESTER } from "./requester.ts";
 import {
   createOperation,
   draftDependencies,
@@ -1028,6 +1029,34 @@ const writesOf = (planning: Planning, named: ConfigSnapshot): LayerWrites => ({
 });
 
 /**
+ * Records why applying the planned operations failed: each validation
+ * problem, or the schema engine's lifecycle refusal (a dependent that
+ * blocks a retire, a protected definition), with the error's tag.
+ *
+ * @param planning - The plan.
+ * @param failure - The failure of `applyOperations`.
+ */
+const refuseApplyError = (planning: Planning, failure: ApplyError): void => {
+  if (failure._tag !== "DefinitionInvalid") {
+    refuse(
+      planning,
+      "lifecycleRefused",
+      "definitionId" in failure ? failure.definitionId : null,
+      failure.message,
+      { error: failure._tag }
+    );
+
+    return;
+  }
+
+  for (const found of failure.problems) {
+    refuse(planning, "invalid", found.definitionId, found.message, {
+      problem: found.code,
+    });
+  }
+};
+
+/**
  * Plans one set over the installed configuration and layer tables.
  *
  * @param input - The resolved set, its hash, and the installed state.
@@ -1057,15 +1086,14 @@ export const planSetUpgrade = (input: SetUpgradeInput): SetUpgrade => {
 
   const applied =
     planning.refusals.length === 0
-      ? applyOperations(input.installed, operations, input.key)
+      ? applyOperations(input.installed, operations, input.key, {
+          origin: setOrigin(owner),
+          requester: SYSTEM_REQUESTER,
+        })
       : undefined;
 
   if (applied !== undefined && !isSuccess(applied)) {
-    for (const found of applied.failure.problems) {
-      refuse(planning, "invalid", found.definitionId, found.message, {
-        problem: found.code,
-      });
-    }
+    refuseApplyError(planning, applied.failure);
   }
 
   const success =

@@ -67,11 +67,11 @@ import { readInstalledState } from "./installed-state.ts";
 import type { InstalledState } from "./installed-state.ts";
 import { jsonHash } from "./layer-store.ts";
 import {
-  openChangeSets,
+  plannedResumes,
   resumeInterrupted,
   SCHEMA_LIFECYCLE,
 } from "./lifecycle.ts";
-import type { OpenChangeSet, ResumedChangeSet } from "./lifecycle.ts";
+import type { PlannedResume, ResumedChangeSet } from "./lifecycle.ts";
 import {
   applySetLoad,
   planSetLoad,
@@ -120,7 +120,7 @@ export interface UpgradePlan {
   };
   readonly migrations: readonly PlannedMigration[];
   /** Open change sets: `applying` ones are resumed, the rest reported. */
-  readonly resume: readonly OpenChangeSet[];
+  readonly resume: readonly PlannedResume[];
   /** Per set, in load order. */
   readonly sets: readonly SetReport[];
   /** Every refusal of every set; any refusal refuses the whole upgrade. */
@@ -392,7 +392,7 @@ const pendingMigrations = Effect.fn("Config.pendingMigrations")(
  * @returns One refusal per change set in `needs_attention`.
  */
 const unfinishedRefusals = (
-  open: readonly OpenChangeSet[]
+  open: readonly PlannedResume[]
 ): readonly Refusal[] =>
   open.flatMap((changeSet) =>
     changeSet.state === "needs_attention"
@@ -481,7 +481,7 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     options.migrations ?? PLATFORM_MIGRATIONS
   );
 
-  const resume = yield* openChangeSets(connection);
+  const resume = yield* plannedResumes(connection);
   const installed = yield* readInstalledState;
 
   const sources = yield* readSources([

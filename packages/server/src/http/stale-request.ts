@@ -209,6 +209,38 @@ const requiredWithoutDefault = (
       : []
   );
 
+/**
+ * One entry per class and field: a field both in the request and required
+ * without a default is listed once, with every kind relevant to either
+ * (an entry without `kinds` takes all kinds).
+ *
+ * @param entries - The scope's entries.
+ * @returns The entries without duplicates, in first-seen order.
+ */
+const mergeEntries = (
+  entries: readonly ScopeEntry[]
+): readonly ScopeEntry[] => {
+  const merged = new Map<string, ScopeEntry>();
+
+  for (const entry of entries) {
+    const key = `${entry.classId}/${entry.fieldId}`;
+    const seen = merged.get(key);
+
+    if (seen === undefined) {
+      merged.set(key, entry);
+    } else if (seen.kinds === undefined || entry.kinds === undefined) {
+      merged.set(key, { classId: entry.classId, fieldId: entry.fieldId });
+    } else {
+      merged.set(key, {
+        ...seen,
+        kinds: [...new Set([...seen.kinds, ...entry.kinds])],
+      });
+    }
+  }
+
+  return [...merged.values()];
+};
+
 const readHistory = Effect.fn("StaleRequest.readHistory")(function* readHistory(
   stated: ConfigState,
   current: ConfigState
@@ -608,6 +640,60 @@ const relevantChanges = (
 };
 
 /**
+ * Whether this database has the stated revision (Contracts 6.4): the same
+ * state as the transaction's, or an older revision whose change set the
+ * journal records at that number. A number above the current one, another
+ * change set at that number, or a journal that no longer reaches it means
+ * the client's revision does not describe this database. Decided without
+ * looking up anything the request names.
+ *
+ * @param statedRevision - The request's revision, if it sent one.
+ * @returns True when absent or known.
+ */
+export const isRevisionKnown = Effect.fn("StaleRequest.isKnown")(
+  function* isRevisionKnown(statedRevision: Option.Option<ConfigState>) {
+    if (Option.isNone(statedRevision)) {
+      return true;
+    }
+
+    const stated = statedRevision.value;
+    const current = yield* RequestRevision;
+
+    const unchanged =
+      stated.revision === current.revision &&
+      stated.changeSetId === current.changeSetId;
+
+    return (
+      unchanged ||
+      (stated.revision < current.revision && (yield* journalReaches(stated)))
+    );
+  }
+);
+
+/**
+ * The refusal of a revision this database does not have: every field in
+ * the request's scope counts as changed, kind `unknown` (Contracts 6.4).
+ *
+ * @param stated - The request's revision.
+ * @param changes - The `unknown` entries of the scope, without duplicates.
+ * @returns `SchemaChanged`.
+ */
+export const unknownRevision = Effect.fn("StaleRequest.unknownRevision")(
+  function* unknownRevision(
+    stated: ConfigState,
+    changes: readonly SchemaChange[]
+  ) {
+    const current = yield* RequestRevision;
+
+    return yield* new SchemaChanged({
+      changes: [...changes],
+      currentRevision: revisionHeaderValue(current),
+      requestRevision: revisionHeaderValue(stated),
+    });
+  }
+);
+
+/**
  * Checks a stated revision against the transaction's (Contracts 6.4). Runs
  * inside the request transaction, for the acting user, before the request's
  * names are resolved at C.
@@ -650,16 +736,15 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
         ? readNameable(readScope)
         : writeNameable(readScope, write.action);
 
-    const withRequired = (scope: StaleScope): StaleScope =>
-      write?.action === "create"
-        ? {
-            ...scope,
-            entries: [
-              ...scope.entries,
-              ...requiredWithoutDefault(readScope, classId),
-            ],
-          }
-        : scope;
+    const withRequired = (scope: StaleScope): StaleScope => ({
+      ...scope,
+      entries: mergeEntries([
+        ...scope.entries,
+        ...(write?.action === "create"
+          ? requiredWithoutDefault(readScope, classId)
+          : []),
+      ]),
+    });
 
     const failure = (changes: SchemaChange[]) =>
       new SchemaChanged({

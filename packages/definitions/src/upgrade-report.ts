@@ -26,6 +26,7 @@ export type RefusalCode =
   | "roleInUse"
   | "dataViolation"
   | "invalid"
+  | "lifecycleRefused"
   | "setCycle"
   | "unfinishedChangeSet"
   | "unknownSet";
@@ -146,7 +147,7 @@ export interface SetReport {
 }
 
 const nameProperty = (definition: Definition | Draft): string | undefined =>
-  "name" in definition ? definition.name : undefined;
+  "name" in definition ? (definition.name ?? undefined) : undefined;
 
 const fieldName = (snapshot: ConfigSnapshot, id: DefinitionId): string => {
   const field = snapshot.field(id);

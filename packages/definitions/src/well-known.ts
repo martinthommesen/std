@@ -60,10 +60,14 @@ export const BUILT_IN_ROLE_IDS = {
   schema_purger: "e5798e3e-7bbb-46e5-94a1-5e94be04c372",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
 
+/** The ID of the built-in `schema.purge` permission (Contracts 1.6, 3.1). */
+export const SCHEMA_PURGE_PERMISSION_ID: DefinitionId =
+  "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9";
+
 /** Built-in permissions (Contracts 3.1), checked by ID. */
 export const PERMISSION_IDS = {
   "rules.run_as": "6de89171-f738-4ade-aa1b-2817f848899c",
-  "schema.purge": "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9",
+  "schema.purge": SCHEMA_PURGE_PERMISSION_ID,
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
 

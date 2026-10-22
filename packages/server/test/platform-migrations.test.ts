@@ -127,7 +127,7 @@ describe("platform-migrations", () => {
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
     assert.deepStrictEqual(
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
-      [1, 2, 3, 4, 5, 7]
+      [1, 2, 3, 4, 5, 6, 7]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
@@ -135,14 +135,6 @@ describe("platform-migrations", () => {
     );
     assert.throws(() => {
       validateMigrations([migration0001, { ...migration0001, id: 3 }]);
-    });
-    // Reserved ids are skipped, and only they.
-    assert.lengthOf(
-      validateMigrations([migration0001, { ...migration0001, id: 3 }], [2]),
-      2
-    );
-    assert.throws(() => {
-      validateMigrations([migration0001, { ...migration0001, id: 4 }], [2]);
     });
     assert.throws(() => {
       validateMigrations([
@@ -168,7 +160,7 @@ describe("platform-migrations", () => {
             const empty = yield* Effect.exit(checkPlatformMigrations());
             assert.deepStrictEqual(
               stateRefusal(errorOf(empty))?.pending,
-              [1, 2, 3, 4, 5, 7]
+              [1, 2, 3, 4, 5, 6, 7]
             );
 
             const applied = yield* runPlatformMigrations([migration0001]);

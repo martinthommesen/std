@@ -114,6 +114,7 @@ const allowAllFor = (roleId: string): Operation[] =>
       effect: "allow",
       id: freshId(),
       kind: "accessRule",
+      name: null,
       owner: { layer: "local" },
       protected: false,
       roleIds: [roleId],

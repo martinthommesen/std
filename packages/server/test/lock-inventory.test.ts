@@ -21,9 +21,12 @@ import type { PgConnection } from "@effect/sql-pg";
  * - `missing`: anything else; the inventory is incomplete.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { applyOperations } from "@std/definitions/apply";
+import { applyOperations, LOCAL_CONTEXT } from "@std/definitions/apply";
+import type { ApplyContext } from "@std/definitions/apply";
 import { generatedName } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
+import { LOCAL_ORIGIN } from "@std/definitions/requester";
+import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { Effect, Result, Schema } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
@@ -43,8 +46,10 @@ import {
   addIndex,
   change,
   createClass,
+  insertRecords,
   loadCoreAndAcme,
   schemaTestLayer,
+  SITE_NAMESPACE_ID,
 } from "./schema-support.ts";
 
 /** Lock modes as `pg_locks.mode` names them, weakest first. */
@@ -293,14 +298,23 @@ const probeLocks = (
     return { forms, missing, unbudgeted };
   });
 
-const planOf = (operations: readonly Operation[], preflight: Preflight) =>
+const planOf = (
+  operations: readonly Operation[],
+  preflight: Preflight,
+  context: ApplyContext = LOCAL_CONTEXT
+) =>
   Effect.gen(function* planInMemory() {
     const snapshot = yield* (yield* Catalog).refresh;
 
-    const applied = applyOperations(snapshot, operations, {
-      changeSetId: snapshot.changeSetId,
-      revision: snapshot.revision + 1,
-    });
+    const applied = applyOperations(
+      snapshot,
+      operations,
+      {
+        changeSetId: snapshot.changeSetId,
+        revision: snapshot.revision + 1,
+      },
+      context
+    );
 
     if (Result.isFailure(applied)) {
       return yield* Effect.die(applied.failure);
@@ -312,6 +326,18 @@ const planOf = (operations: readonly Operation[], preflight: Preflight) =>
   });
 
 const ASSET = '"acme"."asset"';
+
+/**
+ * A purge of a definition retired at version 2.
+ * @param id - The definition.
+ * @returns The operation.
+ */
+const purgeOf = (id: string): Operation => ({
+  confirm: { id, version: 2 },
+  id,
+  op: "purge",
+  version: 2,
+});
 
 const USER = '"core"."user"';
 
@@ -373,11 +399,11 @@ describe("lock-inventory", () => {
           );
 
           const gaming = createClass("gaming_laptop", {
-            namespaceId: ACME.namespace,
+            namespaceId: SITE_NAMESPACE_ID,
             parentId: ACME.laptop,
           });
 
-          const kit = createClass("kit", { namespaceId: ACME.namespace });
+          const kit = createClass("kit", { namespaceId: SITE_NAMESPACE_ID });
 
           const onEmpty = yield* planOf(
             [
@@ -487,6 +513,128 @@ describe("lock-inventory", () => {
           );
         })
       )
+    );
+
+    dbTest.effect(
+      "every lifecycle form takes no lock outside its inventory",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* lifecycleForms() {
+            yield* loadCoreAndAcme;
+
+            const crate = createClass("probe_crate");
+
+            const required = addField(
+              crate.id,
+              "req",
+              { kind: "text" },
+              { required: true }
+            );
+
+            const spare = addField(crate.id, "spare", { kind: "text" });
+
+            const link = addField(crate.id, "link", {
+              kind: "reference",
+              targetClassId: ACME.asset,
+            });
+
+            const kid = createClass("probe_kid", { parentId: crate.id });
+
+            yield* change([crate.op, required.op, spare.op, link.op, kid.op]);
+            yield* insertRecords(['"site"."probe_crate"'], crate.id, 3, {
+              req: "'r' || g",
+            });
+
+            for (const id of [spare.id, link.id, kid.id]) {
+              yield* change([{ id, op: "retire", version: 1 }]);
+            }
+
+            const purger: ApplyContext = {
+              origin: LOCAL_ORIGIN,
+              requester: {
+                roleIds: [BUILT_IN_ROLE_IDS.schema_purger],
+                userId: crate.id,
+              },
+            };
+
+            const purges = yield* planOf(
+              [
+                { id: required.id, op: "retire", version: 1 },
+                purgeOf(spare.id),
+                purgeOf(link.id),
+                purgeOf(kid.id),
+              ],
+              populated,
+              purger
+            );
+
+            // Each rename is planned from the definitions alone and probed
+            // on its own, so every statement names tables as they are.
+            const columnRename = yield* planOf(
+              [{ id: required.id, name: "req2", op: "rename", version: 1 }],
+              populated
+            );
+
+            const tableRename = yield* planOf(
+              [{ id: crate.id, name: "probe_box", op: "rename", version: 1 }],
+              populated
+            );
+
+            const snapshot = yield* (yield* Catalog).refresh;
+            const site = snapshot.namespace(SITE_NAMESPACE_ID);
+
+            const schemaRename = yield* planOf(
+              [
+                {
+                  id: SITE_NAMESPACE_ID,
+                  name: "site_probe",
+                  op: "rename",
+                  version: site?.version ?? 1,
+                },
+              ],
+              populated
+            );
+
+            const session = yield* (yield* TestDatabase).session("lock-probe");
+
+            const probes: {
+              readonly missing: readonly string[];
+              readonly forms: readonly string[];
+            }[] = [];
+
+            for (const statements of [
+              purges,
+              columnRename,
+              tableRename,
+              schemaRename,
+            ]) {
+              probes.push(yield* probeLocks(session, statements));
+            }
+
+            assert.deepStrictEqual(
+              probes.flatMap((probe) => probe.missing),
+              []
+            );
+            assert.sameMembers(
+              [...new Set(probes.flatMap((probe) => probe.forms))],
+              [
+                "dropColumn",
+                "dropTable",
+                "dropNotNull",
+                "renameColumn",
+                "renameTable",
+                "renameSchema",
+              ]
+            );
+            assert.deepStrictEqual(
+              purges.find((statement) => statement.form === "dropTable")?.locks,
+              [
+                { mode: "ACCESS EXCLUSIVE", table: '"site"."probe_crate"' },
+                { mode: "ACCESS EXCLUSIVE", table: '"site"."probe_kid"' },
+              ]
+            );
+          })
+        )
     );
   });
 });

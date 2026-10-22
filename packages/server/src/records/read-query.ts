@@ -170,11 +170,16 @@ const ENVELOPE: ReadonlySet<string> = new Set(["id", "class", "version"]);
  * @returns The selection.
  */
 export const defaultSelection = (view: ReadView): readonly SelectedValue[] =>
-  view.fields.flatMap((field) =>
-    field.system === undefined || AUDIT_FIELDS.includes(field.system)
-      ? [{ field, key: field.name }]
-      : []
-  );
+  view.fields.flatMap((field) => {
+    // A retired field is returned only when selected explicitly
+    // (Contracts 1.6).
+    const selected =
+      field.system === undefined
+        ? !field.retired
+        : AUDIT_FIELDS.includes(field.system);
+
+    return selected ? [{ field, key: field.name }] : [];
+  });
 
 /**
  * Parses `fields`: comma-separated names and one-hop paths.

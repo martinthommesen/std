@@ -3,9 +3,11 @@
  * 3.7): as Bob, the generic `core.change` and `core.access_rule` endpoints
  * return `UnknownTable`, identical to a table that does not exist. The
  * same holds for every platform and config table and every route, for
- * every non-admin. Admins read them through the built-in allow-all rule,
- * but no caller writes them through the generic record routes: their rows
- * come from change sets and the save pipeline only. Internal tables of the
+ * every non-admin. Admins read them through the built-in allow-all rule.
+ * No caller writes them through the record service: a generic write on a
+ * definition table becomes a one-operation change set (Contracts 1.4,
+ * checked by the schema service), and every other platform table (the
+ * journal, `core.change`, the config-layer tables) is refused. Internal tables of the
  * `core` schema that no definition describes (sessions, deliveries, the
  * ledger, ...) are unknown to every caller, admins included.
  *
@@ -23,6 +25,7 @@ import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { deliveries, listNames, signInAll } from "./authz-support.ts";
 import type { Who } from "./authz-support.ts";
 import {
@@ -283,22 +286,38 @@ describe("platform-tables", () => {
 
           const before = yield* changeCount();
 
+          // `core.change` is refused for every caller. A definition table
+          // takes the change-set path (Contracts 1.4): an incomplete body
+          // is no definition, and the first rule (a protected built-in) is
+          // refused by the schema service's protection check (1.8).
           const writes = [
-            ["POST", listPath("core.change"), { body: { kind: "update" } }],
+            [
+              "POST",
+              listPath("core.change"),
+              { body: { kind: "update" } },
+              403,
+              "NotAllowed",
+            ],
             [
               "PATCH",
               recordPath("core.change", changeId),
               { body: { kind: "delete" }, headers: { "if-match": '"1"' } },
+              403,
+              "NotAllowed",
             ],
             [
               "DELETE",
               recordPath("core.change", changeId),
               { headers: { "if-match": '"1"' } },
+              403,
+              "NotAllowed",
             ],
             [
               "POST",
               listPath("core.access_rule"),
               { body: { description: "forged" } },
+              400,
+              "InvalidRequest",
             ],
             [
               "PATCH",
@@ -307,24 +326,28 @@ describe("platform-tables", () => {
                 body: { description: "edited" },
                 headers: { "if-match": `"${ruleVersion}"` },
               },
+              403,
+              "DefinitionProtected",
             ],
             [
               "DELETE",
               recordPath("core.access_rule", ruleId),
               { headers: { "if-match": `"${ruleVersion}"` } },
+              403,
+              "DefinitionProtected",
             ],
           ] as const;
 
           const deliveriesBefore = yield* deliveries();
 
-          for (const [method, path, options] of writes) {
+          for (const [method, path, options, status, tag] of writes) {
             const response = yield* http.request(method, path, {
               ...options,
               token,
             });
 
-            assert.strictEqual(response.status, 403, `${method} ${path}`);
-            assert.strictEqual(yield* tagOf(response), "NotAllowed");
+            assert.strictEqual(response.status, status, `${method} ${path}`);
+            assert.strictEqual(yield* tagOf(response), tag);
           }
 
           // A create on every platform table the catalog describes.
@@ -336,8 +359,19 @@ describe("platform-tables", () => {
               token,
             });
 
-            assert.strictEqual(response.status, 403, `POST ${table}`);
-            assert.strictEqual(yield* tagOf(response), "NotAllowed");
+            // Definition tables take the change-set path, where an empty
+            // body is no definition; every other platform table is refused.
+            const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
+
+            assert.strictEqual(
+              response.status,
+              definitionTable ? 400 : 403,
+              `POST ${table}`
+            );
+            assert.strictEqual(
+              yield* tagOf(response),
+              definitionTable ? "InvalidRequest" : "NotAllowed"
+            );
           }
 
           // Tables no definition describes are no table at all to them.
@@ -378,6 +412,7 @@ describe("platform-tables", () => {
                 effect: "allow",
                 id: freshId(),
                 kind: "accessRule",
+                name: null,
                 owner: { layer: "local" },
                 protected: false,
                 roleIds: [employee],

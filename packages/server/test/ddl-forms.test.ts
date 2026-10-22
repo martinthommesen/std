@@ -9,7 +9,7 @@ import { assert, describe, expect, it, layer } from "@effect/vitest";
 import { applyOperations } from "@std/definitions/apply";
 import type { AppliedChangeSet } from "@std/definitions/apply";
 import type { Owner } from "@std/definitions/definition";
-import type { DefinitionInvalid } from "@std/definitions/problems";
+import { setOrigin, SYSTEM_REQUESTER } from "@std/definitions/requester";
 import { planSet } from "@std/definitions/set-plan";
 import { resolveSet } from "@std/definitions/set-resolve";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -39,7 +39,7 @@ import {
 
 const EMPTY: Preflight = { hasRows: () => false };
 
-const orThrow = <A>(result: Result.Result<A, DefinitionInvalid>): A => {
+const orThrow = <A, E extends Error>(result: Result.Result<A, E>): A => {
   if (Result.isFailure(result)) {
     throw result.failure;
   }
@@ -58,10 +58,15 @@ const loadInMemory = (
       const operations = orThrow(planSet(resolved, snapshot));
 
       return orThrow(
-        applyOperations(snapshot, operations, {
-          changeSetId: snapshot.changeSetId,
-          revision: snapshot.revision + 1,
-        })
+        applyOperations(
+          snapshot,
+          operations,
+          {
+            changeSetId: snapshot.changeSetId,
+            revision: snapshot.revision + 1,
+          },
+          { origin: setOrigin(resolved.owner), requester: SYSTEM_REQUESTER }
+        )
       );
     })
   );
@@ -214,6 +219,40 @@ describe("ddl-forms", () => {
     await expect(`${text}\n`).toMatchFileSnapshot(
       "./__snapshots__/ddl-forms.sql"
     );
+  });
+
+  it("classifies the lifecycle forms and refuses their variants", () => {
+    const table = '"acme"."asset"';
+
+    const accepted = [
+      ['ALTER SCHEMA "acme" RENAME TO "assets"', "renameSchema"],
+      [`ALTER TABLE ${table} RENAME TO "thing"`, "renameTable"],
+      [`ALTER TABLE ${table} RENAME COLUMN "name" TO "title"`, "renameColumn"],
+      [`ALTER TABLE ${table} ALTER COLUMN "name" DROP NOT NULL`, "dropNotNull"],
+      [`DROP TABLE ${table}`, "dropTable"],
+    ] as const;
+
+    for (const [statement, form] of accepted) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { form, ok: true },
+        statement
+      );
+      assert.strictEqual(phaseOfForm(form), "main");
+    }
+
+    for (const statement of [
+      `DROP TABLE ${table} CASCADE`,
+      `DROP TABLE IF EXISTS ${table}`,
+      `ALTER TABLE ${table} RENAME CONSTRAINT std_ix_x TO y`,
+      'DROP SCHEMA "acme"',
+    ]) {
+      assert.deepStrictEqual(
+        checkDdl(statement),
+        { ok: false, reason: "unknownForm" },
+        statement
+      );
+    }
   });
 
   it("refuses volatile defaults, type changes and direct SET NOT NULL", () => {

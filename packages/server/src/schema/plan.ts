@@ -10,6 +10,9 @@
  *
  * Statement order in the main transaction:
  *
+ * 0. lifecycle (`plan-lifecycle.ts`): purged columns and tables dropped,
+ *    then schemas, tables and columns renamed, then retired required
+ *    fields' NOT NULL dropped;
  * 1. `CREATE SCHEMA` for new namespaces;
  * 2. subtree CHECKs of existing ancestors that gain a class, root first;
  * 3. `CREATE TABLE` and the trigger of each new class, with the columns of
@@ -55,7 +58,6 @@ import {
   createSchema,
   createTable,
   createTrigger,
-  indexKey,
   initialValue,
   keyOf,
   replaceSubtreeCheck,
@@ -63,7 +65,11 @@ import {
   subtreeExpression,
   validateConstraint,
 } from "./ddl.ts";
+import { lockNames, planLifecycle } from "./plan-lifecycle.ts";
+import type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 import { defaultLiteral, quoteIdent, tableName } from "./sql-text.ts";
+
+export type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 
 /** Follow-up step kinds (Contracts 1.5); `backfill` arrives in Step 2. */
 export type StepKind =
@@ -137,6 +143,10 @@ export interface ChangeSetPlan {
   readonly existenceChecks: readonly DefinitionId[];
   /** Data checks the preflight must pass (counted only on tables with rows). */
   readonly violations: readonly ViolationCheck[];
+  /** Values or rows each purge destroys, counted under `SCHEMA_KEY`. */
+  readonly purgeCounts: readonly PurgeCount[];
+  /** Records that must not exist for a purge to run. */
+  readonly recordChecks: readonly RecordCheck[];
 }
 
 /** What the preflight found. */
@@ -228,6 +238,34 @@ const populated = (planning: Planning, classId: DefinitionId): boolean => {
 
   return planning.preflight.hasRows(classId);
 };
+
+/**
+ * The quoted table of a class as Postgres names it while the preflight
+ * runs, before any DDL of the change set: its name before the change set
+ * (renames run in the main transaction). A class the change set creates
+ * has no table yet and no rows; its final name is used.
+ *
+ * @param planning - The planning run.
+ * @param classId - The class.
+ * @returns The quoted table.
+ */
+const preflightTable = (planning: Planning, classId: DefinitionId): string => {
+  const was = planning.before.class(classId);
+
+  return was !== undefined && was.state !== "purged"
+    ? tableName(planning.before, classId)
+    : tableName(planning.after, classId);
+};
+
+/**
+ * A field's column as Postgres names it while the preflight runs.
+ *
+ * @param planning - The planning run.
+ * @param field - The field after the change set.
+ * @returns The quoted column.
+ */
+const preflightColumn = (planning: Planning, field: FieldDefinition): string =>
+  quoteIdent(planning.before.field(field.id)?.name ?? field.name);
 
 const markPending = (planning: Planning, id: DefinitionId): void => {
   const definition = planning.definitions.get(id);
@@ -404,7 +442,7 @@ const planAddedColumns = (
         planning.violations.push({
           definitionId: field.id,
           predicate: "true",
-          table,
+          table: preflightTable(planning, field.classId),
         });
       }
 
@@ -452,8 +490,8 @@ const planFieldUpdates = (
         if (hasRows) {
           planning.violations.push({
             definitionId: after.id,
-            predicate: `${quoteIdent(after.name)} IS NULL`,
-            table,
+            predicate: `${preflightColumn(planning, after)} IS NULL`,
+            table: preflightTable(planning, after.classId),
           });
           validateStep(
             planning,
@@ -565,19 +603,22 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
   }
 
   if (index.unique) {
+    const before = preflightTable(planning, index.classId);
+
     planning.violations.push({
       definitionId: index.id,
       predicate: duplicatePredicate(
-        table,
+        before,
         fields.map((field) =>
           // A column this change set adds does not exist yet: existing rows
-          // will hold its initial value (default, false, or NULL).
+          // will hold its initial value (default, false, or NULL). Existing
+          // columns go by their names before the change set.
           planning.created.has(field.id)
             ? keyOf(field, initialValue(field))
-            : indexKey(field)
+            : keyOf(field, preflightColumn(planning, field))
         )
       ),
-      table,
+      table: before,
     });
   }
 
@@ -655,11 +696,13 @@ const lengthPredicates = (
  *
  * @param planning - The planning run.
  * @param override - The override after the change set.
+ * @param column - The quoted column, as named when the predicate runs.
  * @returns A boolean SQL expression over the field's table.
  */
 const overridePredicate = (
   planning: Planning,
-  override: OverrideDefinition
+  override: OverrideDefinition,
+  column: string
 ): string | undefined => {
   const field = planning.after.field(override.fieldId);
 
@@ -669,7 +712,6 @@ const overridePredicate = (
 
   const now = effectiveField(planning.after, override.classId, field);
   const was = effectiveField(planning.before, override.classId, field);
-  const column = quoteIdent(field.name);
 
   const predicates = [
     ...(now.required && !was.required ? [`${column} IS NULL`] : []),
@@ -722,8 +764,8 @@ const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
         : undefined;
 
     const predicate =
-      definition.kind === "override"
-        ? overridePredicate(planning, definition)
+      definition.kind === "override" && field !== undefined
+        ? overridePredicate(planning, definition, quoteIdent(field.name))
         : undefined;
 
     if (
@@ -736,13 +778,17 @@ const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
 
       const preflight = planning.created.has(field.id)
         ? prospectivePredicate(planning, definition, field)
-        : predicate;
+        : overridePredicate(
+            planning,
+            definition,
+            preflightColumn(planning, field)
+          );
 
       if (preflight !== undefined) {
         planning.violations.push({
           definitionId: definition.id,
           predicate: preflight,
-          table,
+          table: preflightTable(planning, field.classId),
         });
       }
 
@@ -799,6 +845,53 @@ const orderedSteps = (
 };
 
 /**
+ * The locks of a plan, every table named as it is before any DDL runs:
+ * lifecycle statements already name their locks that way; the others name
+ * tables as the change set leaves them and are mapped back. Tables the
+ * change set creates need no lock, unless a dropped table had the name.
+ *
+ * @param planning - The planning run.
+ * @param applied - The applied change set.
+ * @param first - The lifecycle statements that run first.
+ * @param classes - The classes the change set creates.
+ * @returns The locks to take before any DDL.
+ */
+const planLocks = (
+  planning: Planning,
+  applied: AppliedChangeSet,
+  first: readonly DdlStatement[],
+  classes: readonly ClassDefinition[]
+): readonly TableLock[] => {
+  const names = lockNames(applied);
+  const firstSet = new Set(first);
+
+  const rest = [...planning.tables, ...planning.keys].flatMap(
+    (statement): DdlStatement[] =>
+      firstSet.has(statement)
+        ? []
+        : [
+            {
+              ...statement,
+              locks: statement.locks.map((entry) => ({
+                ...entry,
+                table: names.get(entry.table) ?? entry.table,
+              })),
+            },
+          ]
+  );
+
+  const lockedFirst = new Set(
+    first.flatMap((statement) => statement.locks.map((entry) => entry.table))
+  );
+
+  const created = new Set(
+    [...newTables(planning, classes)].filter((name) => !lockedFirst.has(name))
+  );
+
+  return lockInventory([...first, ...rest], created);
+};
+
+/**
  * Plans a change set.
  *
  * @param applied - The change set applied in memory.
@@ -832,7 +925,21 @@ export const planChangeSet = (
 
   const classes = newClasses(planning, applied);
   const fields = createdFields(applied, created);
+  const lifecycle = planLifecycle(applied);
 
+  planning.tables.push(...lifecycle.first, ...lifecycle.later);
+  planning.steps.push(
+    ...lifecycle.indexDrops.map((drop): PlannedStep => ({
+      details: {
+        definitionId: drop.definitionId,
+        index: generatedName("ix", drop.definitionId),
+        schema: drop.schema,
+      },
+      kind: "drop_index_concurrently",
+      sql: drop.sql,
+      targetId: drop.definitionId,
+    }))
+  );
   planNamespaces(planning, applied);
   const enforcementUpdates = planAncestorChecks(planning, classes);
   planNewTables(planning, classes, fields);
@@ -852,11 +959,10 @@ export const planChangeSet = (
     enforcementUpdates,
     existenceChecks: [...planning.existence].toSorted(compareIds),
     keys: planning.keys,
-    locks: lockInventory(
-      [...planning.tables, ...planning.keys],
-      newTables(planning, classes)
-    ),
+    locks: planLocks(planning, applied, lifecycle.first, classes),
     platformClasses: platformClasses(planning, applied),
+    purgeCounts: lifecycle.purgeCounts,
+    recordChecks: lifecycle.recordChecks,
     seedSystemUser:
       created.has(USER_CLASS_ID) &&
       isStandardClass(applied.after, USER_CLASS_ID),
@@ -877,10 +983,13 @@ export const planChangeSet = (
 export const requiresSchemaKey = (applied: AppliedChangeSet): boolean => {
   const plan = planChangeSet(applied, ASSUME_POPULATED);
 
-  return (
-    plan.tables.length > 0 ||
-    plan.keys.length > 0 ||
-    plan.steps.length > 0 ||
-    plan.violations.length > 0
-  );
+  const work: readonly (readonly unknown[])[] = [
+    plan.tables,
+    plan.keys,
+    plan.steps,
+    plan.violations,
+    plan.purgeCounts,
+  ];
+
+  return work.some((list) => list.length > 0);
 };

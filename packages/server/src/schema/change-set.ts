@@ -9,10 +9,15 @@
  * 2. Without DDL or a data preflight (labels, roles, access rules), only
  *    `CONFIG_KEY` is taken: the main transaction runs on the pool.
  * 3. Otherwise the coordinator takes `SCHEMA_KEY` on a dedicated connection
- *    (`SchemaBusy` if another change set holds it), checks which tables hold
- *    rows and counts violating rows (`ExistingDataViolates` with up to 20
- *    sample IDs), and checks every planned statement against the allowed DDL
- *    forms (`DdlRefused`), all before `CONFIG_KEY` and before any DDL.
+ *    (`SchemaBusy` if another change set holds it), first resumes change
+ *    sets an earlier coordinator left in `applying` and refuses while one
+ *    is `needs_attention` (`SchemaNeedsAttention`), then checks which tables
+ *    hold rows and counts violating rows (`ExistingDataViolates` with up to
+ *    20 sample IDs), counts the values or rows each purge destroys and
+ *    checks that a purged child class leaves no records behind
+ *    (`PurgeRefused`), and checks every planned statement against the
+ *    allowed DDL forms (`DdlRefused`), all before `CONFIG_KEY` and before
+ *    any DDL.
  * 4. The main transaction (`configCommit`: `CONFIG_KEY` exclusive,
  *    `lock_timeout` 200 ms then 2 s, `statement_timeout` 15 s, retries,
  *    `SchemaLockTimeout`) loads the snapshot at the locked revision,
@@ -24,13 +29,28 @@
  *    `complete` takes its own revision.
  */
 import type { PgClient } from "@effect/sql-pg";
+import type { NotAllowed } from "@std/api/errors/not-allowed";
+import type { NotFound } from "@std/api/errors/not-found";
+import type { SchemaChanged } from "@std/api/errors/schema-changed";
+import type { Unauthenticated } from "@std/api/errors/unauthenticated";
+import type { UnknownField } from "@std/api/errors/unknown-field";
+import type { UnknownTable } from "@std/api/errors/unknown-table";
+import type { VersionConflict } from "@std/api/errors/version-conflict";
 import { applyOperations } from "@std/definitions/apply";
-import type { AppliedChangeSet } from "@std/definitions/apply";
+import type {
+  ApplyContext,
+  ApplyError,
+  AppliedChangeSet,
+} from "@std/definitions/apply";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
-import type { DefinitionInvalid } from "@std/definitions/problems";
+import { DefinitionInvalid, problem } from "@std/definitions/problems";
+import { PurgeRefused } from "@std/definitions/purge-refused";
+import type { ChangeSetRefusal } from "@std/definitions/refusals";
+import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "@std/definitions/requester";
+import type { ChangeOrigin, Requester } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
+import { USER_ROLE_CLASS_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Result, Schema } from "effect";
 import type { Scope } from "effect";
@@ -39,7 +59,8 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { installSessionRevocation } from "../auth/session-revocation.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { bumpRevision, MAIN_LOCK_TIMEOUT } from "../sql/config-commit.ts";
+import type { ChangeCause } from "../records/change-entry.ts";
+import { bumpRevision } from "../sql/config-commit.ts";
 import type {
   ConfigCommitOptions,
   SchemaLockTimeout,
@@ -51,20 +72,30 @@ import type { DatabaseError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { lockWaiting } from "../sql/statement-marks.ts";
+import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { ConfigStateChanged } from "./config-state-changed.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
-import type { DdlStatement, TableLock } from "./ddl-forms.ts";
 import { DdlRefused } from "./ddl-refused.ts";
+import { writeDefinitionChanges } from "./definition-changes.ts";
 import { ExistingDataViolates } from "./existing-data-violates.ts";
+import { restoreLockTimeout, runDdl, takeTableLocks } from "./lock-budget.ts";
 import { ASSUME_POPULATED, planChangeSet, requiresSchemaKey } from "./plan.ts";
-import type { ChangeSetPlan, Preflight, ViolationCheck } from "./plan.ts";
+import type {
+  ChangeSetPlan,
+  Preflight,
+  PurgeCount,
+  RecordCheck,
+  ViolationCheck,
+} from "./plan.ts";
 import type { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { insertSystemUser, verifyPlatformTable } from "./platform-tables.ts";
+import { stepBoundary } from "./recovery-settings.ts";
+import { settleOpenChangeSets } from "./recovery.ts";
 import type { SchemaBusy } from "./schema-busy.ts";
-import { tableName } from "./sql-text.ts";
+import type { SchemaNeedsAttention } from "./schema-needs-attention.ts";
+import { quoteIdent, tableName } from "./sql-text.ts";
 import {
   journalOperations,
   writeDefinitionRevisions,
@@ -95,6 +126,12 @@ export interface ExtraWrites {
    * changes still commits when true.
    */
   readonly pending: boolean;
+  /**
+   * The records whose `adopt` these writes plan: the config layers checked
+   * that their set removed them and delete their base rows (Contracts
+   * 8.1). The schema engine refuses any other `adopt`.
+   */
+  readonly adopted?: readonly DefinitionId[];
   readonly write: (
     context: MainTransactionContext
   ) => Effect.Effect<void, SqlError, SqlClient.SqlClient>;
@@ -103,12 +140,38 @@ export interface ExtraWrites {
 /** A change set to apply. */
 export interface ChangeSetRequest {
   readonly operations: readonly Operation[];
-  /** The acting user; the system user by default (bootstrap and set loads). */
-  readonly requesterId?: DefinitionId;
+  /**
+   * The acting user and the roles they hold; the system user without
+   * roles by default (bootstrap and set loads). Permissions such as
+   * `schema.purge` are checked against it.
+   */
+  readonly requester?: Requester;
+  /**
+   * A local edit (the default) or a definition set load, which owns its
+   * definitions (Contracts 1.8).
+   */
+  readonly origin?: ChangeOrigin;
   /** Where the change set comes from, recorded in the journal. */
   readonly source?: JsonObject;
   /** A fixed change set ID; `uuidv7()` by default. */
   readonly changeSetId?: string;
+  /**
+   * The cause recorded on the definitions' change entries (Contracts 4.2):
+   * `api` by default, `system` for set loads.
+   */
+  readonly cause?: ChangeCause;
+  /**
+   * Checks the requester again inside the main transaction, against the
+   * snapshot held under exclusive `CONFIG_KEY` and before any write: the
+   * HTTP layer re-checks the session, the stated revision (6.4) and the
+   * access rules there, so nothing can change between the check and the
+   * commit (Contracts 1.4). It returns the requester as authenticated now
+   * (its roles at this snapshot), which every permission check of the
+   * change set (`schema.purge`) then uses, on every commit attempt.
+   */
+  readonly authorize?: (
+    snapshot: ConfigSnapshot
+  ) => Effect.Effect<Requester, ChangeSetAuthorizationError, AuthorizeServices>;
   /** Other config-table writes in the main transaction. */
   readonly extraWrites?: ExtraWrites;
   /**
@@ -117,6 +180,23 @@ export interface ChangeSetRequest {
    */
   readonly expectedState?: ConfigState;
 }
+
+/** What a change set's `authorize` check can refuse with. */
+export type ChangeSetAuthorizationError =
+  | DefinitionInvalid
+  | NotAllowed
+  | NotFound
+  | Unauthenticated
+  | SchemaChanged
+  | UnknownTable
+  | UnknownField
+  | VersionConflict;
+
+/** What a change set's `authorize` check may use: the main transaction. */
+export type AuthorizeServices =
+  | SqlClient.SqlClient
+  | RequestRevision
+  | CurrentTransaction;
 
 /** Options of a change set. */
 export interface ChangeSetOptions extends ConfigCommitOptions {
@@ -144,13 +224,25 @@ export interface ChangeSetResult {
   /** Milliseconds from `BEGIN` of the successful main transaction to `COMMIT`. */
   readonly mainTransactionMs: number;
   readonly error: string | null;
+  /** Values or rows each purged definition destroyed (Contracts 1.6). */
+  readonly destroyed: ReadonlyMap<DefinitionId, number>;
+  /**
+   * User-role assignments of each retired or deleted role, reported but
+   * allowed (Contracts 1.7); the assignments themselves stay.
+   */
+  readonly assignments: ReadonlyMap<DefinitionId, number>;
+  /** What the journal recorded per operation (cascades, reported dependents). */
+  readonly operations: readonly JsonObject[];
 }
 
 /** Errors of a change set. Nothing is applied when one is raised. */
 export type ChangeSetError =
   | DefinitionInvalid
+  | ChangeSetRefusal
+  | ChangeSetAuthorizationError
   | ConfigStateChanged
   | SchemaBusy
+  | SchemaNeedsAttention
   | ExistingDataViolates
   | DdlRefused
   | PlatformTableMismatch
@@ -171,20 +263,166 @@ const decodeExists = decodeRows(Schema.Struct({ present: Schema.Boolean }));
 
 const decodeCount = decodeRows(Schema.Struct({ n: Schema.String }));
 
+/**
+ * The cause of a change set's change entries when the request names none:
+ * `system` for definition set loads, `api` otherwise.
+ *
+ * @param source - The journal source.
+ * @returns The cause.
+ */
+const causeOf = (source: JsonObject | undefined): ChangeCause =>
+  source?.kind === "set" ? { kind: "system" } : { kind: "api" };
+
+/**
+ * The requester and origin of a change set.
+ *
+ * @param request - The change set.
+ * @returns Its apply context.
+ */
+export const contextOf = (request: ChangeSetRequest): ApplyContext => ({
+  origin: request.origin ?? LOCAL_ORIGIN,
+  requester: request.requester ?? SYSTEM_REQUESTER,
+});
+
+/**
+ * An `adopt` the config layers did not plan: it would move a record into
+ * the local layer and leave its base row, so the next upgrade could not
+ * plan the set.
+ *
+ * @param request - The change set.
+ * @returns The refusal, or undefined.
+ */
+const unplannedAdopt = (
+  request: ChangeSetRequest
+): DefinitionInvalid | undefined => {
+  const planned: ReadonlySet<string> = new Set(request.extraWrites?.adopted);
+
+  const found = request.operations.find(
+    (operation) => operation.op === "adopt" && !planned.has(operation.id)
+  );
+
+  return found === undefined || found.op !== "adopt"
+    ? undefined
+    : new DefinitionInvalid({
+        problems: [
+          problem(
+            "unsupportedChange",
+            found.id,
+            "adopt runs only through the config layers, which check that the record's set removed it and delete its base row and overrides."
+          ),
+        ],
+      });
+};
+
 const apply = (
   snapshot: ConfigSnapshot,
-  operations: readonly Operation[],
+  request: ChangeSetRequest,
   changeSetId: string
-): Effect.Effect<AppliedChangeSet, DefinitionInvalid> => {
-  const applied = applyOperations(snapshot, operations, {
-    changeSetId,
-    revision: snapshot.revision + 1,
-  });
+): Effect.Effect<AppliedChangeSet, ApplyError> => {
+  const unplanned = unplannedAdopt(request);
+
+  if (unplanned !== undefined) {
+    return Effect.fail(unplanned);
+  }
+
+  const applied = applyOperations(
+    snapshot,
+    request.operations,
+    { changeSetId, revision: snapshot.revision + 1 },
+    contextOf(request)
+  );
 
   return Result.isSuccess(applied)
     ? Effect.succeed(applied.success)
     : Effect.fail(applied.failure);
 };
+
+/**
+ * Applies the operations in memory, as every step before the main
+ * transaction does. A request with an `authorize` check runs it first, in
+ * one read transaction against the same snapshot, so no refusal about a
+ * target (a version conflict, an unknown definition, a dependency) reaches
+ * a caller whose stated revision no longer holds or who may not see the
+ * target (Contracts 3.8, 3.9, 6.4); the requester's roles come from that
+ * check. Without one (bootstrap, set loads, internal callers) it applies
+ * against the catalog's current snapshot.
+ *
+ * @param request - The change set.
+ * @param changeSetId - The change set ID the result carries; the
+ *   snapshot's for a probe before the ID is drawn.
+ * @returns The change set applied in memory.
+ */
+const validate = Effect.fn("Schema.validate")(function* validate(
+  request: ChangeSetRequest,
+  changeSetId: string | undefined
+) {
+  const catalog = yield* Catalog;
+  const { authorize } = request;
+
+  if (authorize === undefined) {
+    const snapshot = yield* catalog.refresh;
+
+    return yield* apply(snapshot, request, changeSetId ?? snapshot.changeSetId);
+  }
+
+  const transactions = yield* Transactions;
+
+  return yield* transactions.request(
+    Effect.gen(function* checkedApply() {
+      const snapshot = yield* catalog.at(yield* RequestRevision);
+      const requester = yield* authorize(snapshot);
+
+      return yield* apply(
+        snapshot,
+        { ...request, requester },
+        changeSetId ?? snapshot.changeSetId
+      );
+    })
+  );
+});
+
+/**
+ * Runs the request's check alone, in a read transaction at the current
+ * snapshot.
+ *
+ * @param request - The change set.
+ * @returns Fails with the check's refusal.
+ */
+const recheck = Effect.fn("Schema.recheck")(function* recheck(
+  request: ChangeSetRequest
+) {
+  const { authorize } = request;
+
+  if (authorize === undefined) {
+    return yield* Effect.void;
+  }
+
+  const catalog = yield* Catalog;
+  const transactions = yield* Transactions;
+
+  return yield* transactions.request(
+    Effect.gen(function* checkNow() {
+      yield* authorize(yield* catalog.at(yield* RequestRevision));
+    })
+  );
+});
+
+/**
+ * Preflight work outside `CONFIG_KEY` (existence, violation and purge
+ * scans, which can take long and must not hold it): any refusal it ends in
+ * may carry target data (counts, sample record IDs), so the request's
+ * check runs again at the then-current snapshot first, and its refusal
+ * wins (Contracts 3.8: a target hidden meanwhile is reported like a
+ * missing one).
+ *
+ * @param request - The change set.
+ * @returns The combinator.
+ */
+const checkedPreflight =
+  (request: ChangeSetRequest) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    // A refusal of the check replaces the preflight's own.
+    effect.pipe(Effect.tapError(() => recheck(request)));
 
 /**
  * Checks statements against the allowed DDL forms.
@@ -224,84 +462,6 @@ export const guardPlan = (
     ),
   ]);
 
-/**
- * The time one attempt of a main transaction may spend waiting for table
- * locks, across all its DDL statements (Contracts 1.4). Postgres's
- * `lock_timeout` applies per lock, so a fixed 2 s would let an attempt that
- * waits on two ancestors in turn hold `CONFIG_KEY` for twice that.
- */
-export const DDL_LOCK_BUDGET_MS = 2000;
-
-/** The lock-wait budget of one main-transaction attempt. */
-interface LockBudget {
-  readonly deadline: number;
-}
-
-const remainingMs = (budget: LockBudget): Effect.Effect<number> =>
-  Clock.currentTimeMillis.pipe(
-    Effect.map((now) => Math.max(1, budget.deadline - now))
-  );
-
-/**
- * Takes every table lock the DDL needs, one at a time, each with
- * `lock_timeout` set to what is left of the attempt's budget. Postgres
- * applies `lock_timeout` to each lock acquisition separately, so only
- * explicit locks keep the attempt's total wait within the budget; a lock
- * timeout rolls the attempt back and the config commit retries it.
- *
- * @param locks - The plan's locks, in order.
- * @returns The budget for the DDL that follows.
- */
-const takeTableLocks = Effect.fn("Schema.takeTableLocks")(
-  function* takeTableLocks(locks: readonly TableLock[]) {
-    const sql = yield* SqlClient.SqlClient;
-
-    const budget: LockBudget = {
-      deadline: (yield* Clock.currentTimeMillis) + DDL_LOCK_BUDGET_MS,
-    };
-
-    for (const lock of locks) {
-      const remaining = yield* remainingMs(budget);
-
-      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-      yield* lockWaiting(
-        sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
-      );
-    }
-
-    return budget;
-  }
-);
-
-/**
- * Runs DDL whose table locks are already held. `lock_timeout` stays at what
- * is left of the budget (at least 1 ms), so a lock missing from the
- * inventory fails fast as a retryable lock timeout instead of waiting.
- *
- * @param statements - The statements, in order.
- * @param budget - The attempt's budget.
- * @returns An effect in the main transaction.
- */
-const runDdl = Effect.fn("Schema.runDdl")(function* runDdl(
-  statements: readonly DdlStatement[],
-  budget: LockBudget
-) {
-  const sql = yield* SqlClient.SqlClient;
-
-  for (const statement of statements) {
-    const remaining = yield* remainingMs(budget);
-
-    yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-    yield* lockWaiting(sql.unsafe(statement.sql));
-  }
-});
-
-const restoreLockTimeout = SqlClient.SqlClient.pipe(
-  Effect.flatMap((sql) =>
-    sql.unsafe(`SET LOCAL lock_timeout = '${MAIN_LOCK_TIMEOUT}'`)
-  )
-);
-
 /** Everything the main transaction needs besides its services. */
 interface MainInput {
   readonly request: ChangeSetRequest;
@@ -309,6 +469,10 @@ interface MainInput {
   readonly preflight: Preflight;
   readonly coordinatorPid: number | null;
   readonly timing: { started: number; finished: number };
+  /** Values or rows each purge destroys, counted before `CONFIG_KEY`. */
+  readonly destroyed: ReadonlyMap<DefinitionId, number>;
+  /** User-role assignments of retired or deleted roles. */
+  readonly assignments: ReadonlyMap<DefinitionId, number>;
 }
 
 const mainTransaction = Effect.fn("Schema.mainTransaction")(
@@ -333,14 +497,18 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const catalog = yield* Catalog;
     const snapshot = yield* catalog.at(state);
 
-    const applied = yield* apply(
-      snapshot,
-      input.request.operations,
-      input.changeSetId
-    );
+    // The requester as re-authenticated under CONFIG_KEY: its roles now,
+    // not when the request was checked, decide every permission.
+    const requester =
+      input.request.authorize === undefined
+        ? contextOf(input.request).requester
+        : yield* input.request.authorize(snapshot);
+
+    const request = { ...input.request, requester };
+    const applied = yield* apply(snapshot, request, input.changeSetId);
 
     const plan = planChangeSet(applied, input.preflight);
-    const requesterId = input.request.requesterId ?? SYSTEM_USER_ID;
+    const requesterId = requester.userId;
     const revision = state.revision + 1;
 
     if (input.coordinatorPid === null && requiresSchemaKey(applied)) {
@@ -372,13 +540,30 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     }
 
     yield* writeDefinitions(plan.definitions, applied.before, requesterId);
+    yield* writeDefinitionChanges(
+      applied.after,
+      plan.definitions.map((after) => ({
+        after,
+        before: applied.before.get(after.id),
+      })),
+      requesterId,
+      input.request.cause ?? causeOf(input.request.source),
+      revision
+    );
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);
     yield* writeDependencies(plan.definitions);
+
+    const operations = journalOperations(
+      applied,
+      input.destroyed,
+      input.assignments
+    );
+
     yield* writeJournal({
       changeSetId: input.changeSetId,
       coordinatorPid: input.coordinatorPid,
-      operations: journalOperations(applied),
+      operations,
       requesterId,
       revision,
       source: input.request.source ?? { kind: "api" },
@@ -396,7 +581,7 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     const next = yield* bumpRevision(input.changeSetId);
     input.timing.finished = yield* Clock.currentTimeMillis;
 
-    return { next, plan };
+    return { next, operations, plan };
   }
 );
 
@@ -429,7 +614,9 @@ const checkExistence = Effect.fn("Schema.checkExistence")(
     yield* connection.execute("SET enable_seqscan = off");
 
     for (const classId of existenceChecks) {
-      if (yield* hasRows(connection, tableName(applied.after, classId))) {
+      // Before any DDL: tables still have their names from before the
+      // change set.
+      if (yield* hasRows(connection, tableName(applied.before, classId))) {
         populated.add(classId);
       }
     }
@@ -471,6 +658,114 @@ const countViolations = Effect.fn("Schema.countViolations")(
   }
 );
 
+const countRows = (
+  connection: DedicatedConnection,
+  check: PurgeCount | RecordCheck
+): Effect.Effect<number, DatabaseError> =>
+  connection
+    .execute(
+      `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
+    )
+    .pipe(
+      Effect.flatMap(decodeCount),
+      Effect.map(([row]) => Number(row?.n ?? "0"))
+    );
+
+/**
+ * Counts what each purge destroys (Contracts 1.6), under `SCHEMA_KEY` and
+ * before `CONFIG_KEY`: a retired field or table refuses writes, so the
+ * count is stable. Refuses a purged child class whose records also have
+ * rows in ancestor tables that stay.
+ *
+ * @param connection - The coordinator's connection.
+ * @param plan - The plan.
+ * @returns Values or rows per purged definition.
+ */
+const countPurges = Effect.fn("Schema.countPurges")(function* countPurges(
+  connection: DedicatedConnection,
+  plan: ChangeSetPlan
+): Effect.fn.Return<
+  ReadonlyMap<DefinitionId, number>,
+  PurgeRefused | DatabaseError
+> {
+  for (const check of plan.recordChecks) {
+    const count = yield* countRows(connection, check);
+
+    if (count > 0) {
+      return yield* new PurgeRefused({
+        count,
+        definitionId: check.definitionId,
+        reason: "hasRecords",
+      });
+    }
+  }
+
+  const destroyed = new Map<DefinitionId, number>();
+
+  for (const count of plan.purgeCounts) {
+    destroyed.set(count.definitionId, yield* countRows(connection, count));
+  }
+
+  return destroyed;
+});
+
+/**
+ * The roles a change set retires or deletes.
+ *
+ * @param applied - The applied change set.
+ * @returns Their IDs.
+ */
+const endedRoles = (applied: AppliedChangeSet): readonly DefinitionId[] =>
+  applied.changes.flatMap(({ before, after }) =>
+    before?.kind === "role" &&
+    before.state !== after.state &&
+    after.state !== "active"
+      ? [after.id]
+      : []
+  );
+
+/**
+ * Counts the user-role assignments of each role the change set retires or
+ * deletes (Contracts 1.7: reported but allowed). It reads data, so it runs
+ * on the pool before `CONFIG_KEY`; the number is a report, and assignments
+ * made meanwhile are not refused anyway.
+ *
+ * @param applied - The applied change set.
+ * @returns Assignments per role.
+ */
+const countAssignments = Effect.fn("Schema.countAssignments")(
+  function* countAssignments(applied: AppliedChangeSet) {
+    const counts = new Map<DefinitionId, number>();
+    const roles = endedRoles(applied);
+    const roleField = applied.before.fieldByName(USER_ROLE_CLASS_ID, "role");
+
+    if (
+      roles.length === 0 ||
+      roleField === undefined ||
+      applied.before.class(USER_ROLE_CLASS_ID)?.storage !== "standard"
+    ) {
+      return counts;
+    }
+
+    const sql = yield* SqlClient.SqlClient;
+    const table = tableName(applied.before, USER_ROLE_CLASS_ID);
+
+    for (const roleId of roles) {
+      const [row] = yield* sql
+        .unsafe(
+          `SELECT count(*) AS n FROM ${table} WHERE ${quoteIdent(roleField.name)} = $1::uuid`,
+          [roleId]
+        )
+        .pipe(Effect.flatMap(decodeCount));
+
+      counts.set(roleId, Number(row?.n ?? "0"));
+    }
+
+    return counts;
+  },
+  hygienic
+);
+
 const newChangeSetId = hygienic(
   SqlClient.SqlClient.pipe(
     Effect.flatMap((sql) => sql`SELECT uuidv7()::text AS id`),
@@ -480,11 +775,14 @@ const newChangeSetId = hygienic(
 );
 
 const unchanged: ChangeSetResult = {
+  assignments: new Map(),
   changeSetId: null,
   completeRevision: null,
+  destroyed: new Map(),
   error: null,
   followUps: [],
   mainTransactionMs: 0,
+  operations: [],
   revision: null,
   state: "unchanged",
   statements: [],
@@ -495,16 +793,22 @@ const resultOf = (
   committed: {
     readonly next: { readonly revision: number };
     readonly plan: ChangeSetPlan;
+    readonly operations: readonly JsonObject[];
   },
-  timing: { readonly started: number; readonly finished: number }
+  timing: { readonly started: number; readonly finished: number },
+  destroyed: ReadonlyMap<DefinitionId, number>,
+  assignments: ReadonlyMap<DefinitionId, number>
 ): ChangeSetResult => ({
+  assignments,
   changeSetId,
   completeRevision: null,
+  destroyed,
   error: null,
   followUps: committed.plan.steps.flatMap((step) =>
     step.sql === null ? [] : [step.sql]
   ),
   mainTransactionMs: timing.finished - timing.started,
+  operations: committed.operations,
   revision: committed.next.revision,
   state: "completed",
   statements: [...committed.plan.tables, ...committed.plan.keys].map(
@@ -516,22 +820,37 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
   function* withCoordinator(
     request: ChangeSetRequest,
     changeSetId: string,
-    options: ChangeSetOptions | undefined
+    options: ChangeSetOptions | undefined,
+    assignments: ReadonlyMap<DefinitionId, number>
   ): Effect.fn.Return<
     ChangeSetResult,
     ChangeSetError,
     ChangeSetServices | Scope.Scope
   > {
-    const catalog = yield* Catalog;
     const connection = options?.coordinator ?? (yield* openCoordinator);
-    const snapshot = yield* catalog.refresh;
-    const applied = yield* apply(snapshot, request.operations, changeSetId);
-    const preflight = yield* checkExistence(connection, applied);
-    const plan = planChangeSet(applied, preflight);
 
-    for (const check of plan.violations) {
-      yield* countViolations(connection, check);
-    }
+    // Whoever holds SCHEMA_KEY (a coordinator of its own, or std upgrade's
+    // connection) finishes interrupted change sets first.
+    yield* settleOpenChangeSets(connection, options);
+
+    const applied = yield* validate(request, changeSetId);
+
+    yield* stepBoundary("before:preflight");
+
+    const { destroyed, plan, preflight } = yield* Effect.gen(function* scans() {
+      const existence = yield* checkExistence(connection, applied);
+      const planned = planChangeSet(applied, existence);
+
+      for (const check of planned.violations) {
+        yield* countViolations(connection, check);
+      }
+
+      return {
+        destroyed: yield* countPurges(connection, planned),
+        plan: planned,
+        preflight: existence,
+      };
+    }).pipe(checkedPreflight(request));
 
     yield* guardPlan(plan);
 
@@ -539,8 +858,10 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
 
     const committed = yield* connection.transactions.configCommit(
       mainTransaction({
+        assignments,
         changeSetId,
         coordinatorPid: connection.processId,
+        destroyed,
         preflight,
         request,
         timing,
@@ -548,11 +869,19 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
       options
     );
 
-    const result = resultOf(changeSetId, committed, timing);
+    const result = resultOf(
+      changeSetId,
+      committed,
+      timing,
+      destroyed,
+      assignments
+    );
 
     if (committed.plan.steps.length === 0) {
       return result;
     }
+
+    yield* stepBoundary("committed");
 
     const outcome = yield* runFollowUps(connection, changeSetId, options);
 
@@ -577,21 +906,19 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
     request: ChangeSetRequest,
     options?: ChangeSetOptions
   ): Effect.fn.Return<ChangeSetResult, ChangeSetError, ChangeSetServices> {
-    const catalog = yield* Catalog;
     const { configCommit } = yield* Transactions;
-    const snapshot = yield* catalog.refresh;
-    const probeId = request.changeSetId ?? snapshot.changeSetId;
-    const applied = yield* apply(snapshot, request.operations, probeId);
+    const applied = yield* validate(request, request.changeSetId);
 
     if (applied.changes.length === 0 && request.extraWrites?.pending !== true) {
       return unchanged;
     }
 
     const changeSetId = request.changeSetId ?? (yield* newChangeSetId);
+    const assignments = yield* countAssignments(applied);
 
     if (requiresSchemaKey(applied)) {
       return yield* Effect.scoped(
-        withCoordinator(request, changeSetId, options)
+        withCoordinator(request, changeSetId, options, assignments)
       );
     }
 
@@ -599,8 +926,10 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
 
     const committed = yield* configCommit(
       mainTransaction({
+        assignments,
         changeSetId,
         coordinatorPid: null,
+        destroyed: new Map(),
         preflight: ASSUME_POPULATED,
         request,
         timing,
@@ -608,6 +937,6 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
       options
     );
 
-    return resultOf(changeSetId, committed, timing);
+    return resultOf(changeSetId, committed, timing, new Map(), assignments);
   }
 );

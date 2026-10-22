@@ -10,6 +10,7 @@ import { SignInGroup } from "./auth.ts";
 import { MetaGroup } from "./meta.ts";
 import { RecordsGroup } from "./records.ts";
 import { RequestDecoding } from "./request-decoding.ts";
+import { SchemaChangesGroup } from "./schema-changes.ts";
 import { SessionGroup } from "./session.ts";
 
 /** The response and request header carrying the schema revision. */
@@ -27,6 +28,7 @@ export class StdApi extends HttpApi.make("std")
   .add(SignInGroup)
   .add(SessionGroup)
   .add(RecordsGroup)
+  .add(SchemaChangesGroup)
   .add(MetaGroup)
   .middleware(RequestDecoding)
   .prefix("/api/v1") {}

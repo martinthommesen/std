@@ -132,23 +132,34 @@ const defaultOf = (field: FieldDefinition): string | null => {
   return field.type.kind === "boolean" ? "false" : null;
 };
 
-const fieldColumn = (field: FieldDefinition): DescribedColumn => {
-  const active = field.state === "active";
+/**
+ * Whether a field's column keeps its NOT NULL constraint: an active
+ * required field or boolean, and a retired boolean (retire drops NOT NULL
+ * only from non-boolean required fields; a boolean column keeps
+ * `NOT NULL DEFAULT false`, so inserts without it still succeed).
+ *
+ * @param field - A field.
+ * @returns True when the column is NOT NULL.
+ */
+const keepsNotNull = (field: FieldDefinition): boolean =>
+  field.state === "active"
+    ? isNotNull(field)
+    : field.state === "retired" && field.type.kind === "boolean";
 
-  return {
-    default: defaultOf(field),
-    name: field.name,
-    notNull:
-      active && field.enforcement === "pending"
-        ? null
-        : active && isNotNull(field),
-    type: formatTypeOf(field.type),
-  };
-};
+const fieldColumn = (field: FieldDefinition): DescribedColumn => ({
+  default: defaultOf(field),
+  name: field.name,
+  notNull:
+    field.state === "active" && field.enforcement === "pending"
+      ? null
+      : keepsNotNull(field),
+  type: formatTypeOf(field.type),
+});
 
 /**
  * The columns a class's table should have: system columns, then its live
- * fields (retired fields keep their column, without NOT NULL).
+ * fields (retired fields keep their column, without NOT NULL unless they
+ * are booleans).
  *
  * @param snapshot - The configuration.
  * @param described - The table.
@@ -336,7 +347,7 @@ const fieldConstraints = (
   const { enforcement } = field;
   const constraints: DescribedConstraint[] = [];
 
-  if (field.state === "active" && isNotNull(field)) {
+  if (keepsNotNull(field)) {
     constraints.push({
       check: 3,
       columns: [field.name],

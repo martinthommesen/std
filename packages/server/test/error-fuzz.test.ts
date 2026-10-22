@@ -3,7 +3,7 @@
  * fuzzed constraint violations on every write path never return Postgres
  * text, constraint names or stored values.
  *
- * A fuzz hierarchy (`acme.fuzz_item`, child `acme.fuzz_special`) is created
+ * A fuzz hierarchy (`site.fuzz_item`, child `site.fuzz_special`) is created
  * through a change set: a case-insensitive unique `code`, a required short
  * `name`, an integer, a decimal, a date, a reference to itself and one to
  * `core.user`; the child adds its own unique `tag`. As table owner the test
@@ -75,16 +75,17 @@ import { Transactions } from "../src/sql/transactions.ts";
 import { deliveryCount, subscribe } from "./outbox-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
-  ACME,
   addField,
   addIndex,
   change,
   createClass,
+  ensureSite,
+  SITE_NAMESPACE_ID,
 } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 
-const ITEM = "acme.fuzz_item";
-const SPECIAL = "acme.fuzz_special";
+const ITEM = "site.fuzz_item";
+const SPECIAL = "site.fuzz_special";
 const USER = "core.user";
 const ASSET = "acme.asset";
 const LAPTOP = "acme.laptop";
@@ -1186,10 +1187,13 @@ const runSequence = Effect.fn("ErrorFuzz.sequence")(function* runSequence(
 
 /** Creates the fuzz hierarchy through one change set. */
 const createFuzzTables = Effect.gen(function* createFuzzTables() {
-  const item = createClass("fuzz_item", { namespaceId: ACME.namespace });
+  // A local namespace: app namespaces are reserved for their sets (1.8).
+  yield* ensureSite;
+
+  const item = createClass("fuzz_item", { namespaceId: SITE_NAMESPACE_ID });
 
   const special = createClass("fuzz_special", {
-    namespaceId: ACME.namespace,
+    namespaceId: SITE_NAMESPACE_ID,
     parentId: item.id,
   });
 
@@ -1240,10 +1244,10 @@ const addOwnerConstraints = Effect.gen(function* addOwnerConstraints() {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql.unsafe(
-    `ALTER TABLE acme.fuzz_item ADD CONSTRAINT xq_qty_nonneg CHECK (qty >= 0)`
+    `ALTER TABLE site.fuzz_item ADD CONSTRAINT xq_qty_nonneg CHECK (qty >= 0)`
   );
   yield* sql.unsafe(
-    `ALTER TABLE acme.fuzz_item ALTER COLUMN note SET NOT NULL`
+    `ALTER TABLE site.fuzz_item ALTER COLUMN note SET NOT NULL`
   );
   yield* sql.unsafe(
     `CREATE FUNCTION acme.xq_boom() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -1257,7 +1261,7 @@ BEGIN
 END $$`
   );
   yield* sql.unsafe(
-    `CREATE TRIGGER xq_boom_trigger BEFORE INSERT OR UPDATE ON acme.fuzz_item
+    `CREATE TRIGGER xq_boom_trigger BEFORE INSERT OR UPDATE ON site.fuzz_item
        FOR EACH ROW EXECUTE FUNCTION acme.xq_boom()`
   );
 });
@@ -1663,7 +1667,7 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
     Effect.gen(function* deleteTarget() {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* sql.unsafe(`DELETE FROM acme.fuzz_item WHERE id = $1::uuid`, [
+      yield* sql.unsafe(`DELETE FROM site.fuzz_item WHERE id = $1::uuid`, [
         target.id,
       ]);
       yield* Deferred.succeed(deleted, true);

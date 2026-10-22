@@ -2,7 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import { isFailure, isSuccess } from "effect/Result";
 
 import { applyOperations } from "../src/apply.ts";
+import type { ApplyContext } from "../src/apply.ts";
 import type { Operation } from "../src/operation.ts";
+import { setOrigin, SYSTEM_REQUESTER } from "../src/requester.ts";
 import type { NamedSetFile } from "../src/set-file.ts";
 import { planSet } from "../src/set-plan.ts";
 import { decodeSetFile, labelFor, resolveSet } from "../src/set-resolve.ts";
@@ -41,6 +43,24 @@ const plan = (files: readonly NamedSetFile[]): readonly Operation[] => {
 const idOf = (operation: Operation): string =>
   "definition" in operation ? operation.definition.id : operation.id;
 
+/**
+ * The context of loading a set: the set is the origin.
+ * @param files - The set's files.
+ * @returns The context.
+ */
+const loadContext = (files: readonly NamedSetFile[]): ApplyContext => {
+  const resolved = resolveSet(files, EMPTY);
+
+  if (isFailure(resolved)) {
+    throw resolved.failure;
+  }
+
+  return {
+    origin: setOrigin(resolved.success.owner),
+    requester: SYSTEM_REQUESTER,
+  };
+};
+
 describe("definition-sets", () => {
   it("derives labels from names", () => {
     assert.strictEqual(labelFor("purchased_on"), "Purchased on");
@@ -64,7 +84,7 @@ describe("definition-sets", () => {
     assert.isBelow(position(ACME.serialIndex), position(ACME.role));
     assert.isBelow(position(ACME.role), position(ACME.rule));
 
-    const applied = applyOperations(EMPTY, forward, KEY);
+    const applied = applyOperations(EMPTY, forward, KEY, loadContext(files));
     assert.isTrue(
       isSuccess(applied),
       isFailure(applied) ? applied.failure.message : ""
@@ -73,7 +93,13 @@ describe("definition-sets", () => {
 
   it("plans nothing when the installed definitions equal the set", () => {
     const files = decoded(acmeFiles());
-    const applied = applyOperations(EMPTY, plan(files), KEY);
+
+    const applied = applyOperations(
+      EMPTY,
+      plan(files),
+      KEY,
+      loadContext(files)
+    );
 
     assert.isTrue(isSuccess(applied));
 

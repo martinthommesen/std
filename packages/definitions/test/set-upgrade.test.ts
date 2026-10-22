@@ -120,6 +120,7 @@ const localRuleOn = (fieldId: string): AccessRuleDraft => ({
   effect: "allow",
   id: LOCAL_RULE,
   kind: "accessRule",
+  name: null,
   owner: { layer: "local" },
   protected: false,
   roleIds: [LOCAL_ROLE],

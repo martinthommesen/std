@@ -15,6 +15,7 @@ import { isFailure } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
 
 import { conditionProblems } from "./condition-view.ts";
+import type { ConditionPurpose } from "./condition-view.ts";
 import type {
   AccessRuleDefinition,
   ClassDefinition,
@@ -697,6 +698,16 @@ const checkIndex = (
     problems.push(problem("invalidIndex", index.id, message));
   };
 
+  if (index.name !== null) {
+    nameProblem(
+      problems,
+      index,
+      "index",
+      index.name,
+      identifierProblem(index.name)
+    );
+  }
+
   if (snapshot.class(index.classId)?.storage === "platform") {
     invalid("Indexes on platform tables belong to platform migrations.");
   }
@@ -712,9 +723,11 @@ const checkIndex = (
   for (const fieldId of index.fieldIds) {
     const field = snapshot.field(fieldId);
 
-    if (field?.classId !== index.classId || !isActive(field)) {
+    // A retired field keeps its indexes (Contracts 1.6); new indexes on
+    // retired fields are refused when they are created (`apply.ts`).
+    if (field?.classId !== index.classId || !isLive(field)) {
       invalid(
-        `The field ${fieldId} is not an active field of the index's own table.`
+        `The field ${fieldId} is not a live field of the index's own table.`
       );
     } else if (!INDEXABLE_KINDS.has(field.type.kind)) {
       invalid(`Fields of type ${field.type.kind} cannot be indexed.`);
@@ -770,11 +783,22 @@ const checkRuleFields = (
 const checkAccessRule = (
   problems: Problems,
   snapshot: ConfigSnapshot,
-  rule: AccessRuleDefinition
+  rule: AccessRuleDefinition,
+  purpose: ConditionPurpose
 ): void => {
   const invalid = (message: string): void => {
     problems.push(problem("invalidAccessRule", rule.id, message));
   };
+
+  if (rule.name !== null) {
+    nameProblem(
+      problems,
+      rule,
+      "access rule",
+      rule.name,
+      identifierProblem(rule.name)
+    );
+  }
 
   if (rule.roleIds.length === 0) {
     invalid("An access rule names at least one role.");
@@ -816,7 +840,8 @@ const checkAccessRule = (
       snapshot,
       rule.classId,
       rule.condition,
-      "accessRule"
+      "accessRule",
+      purpose
     )) {
       problems.push(problem("invalidCondition", rule.id, message));
     }
@@ -826,7 +851,8 @@ const checkAccessRule = (
 const checkSubscription = (
   problems: Problems,
   snapshot: ConfigSnapshot,
-  subscription: SubscriptionDefinition
+  subscription: SubscriptionDefinition,
+  purpose: ConditionPurpose
 ): void => {
   nameProblem(
     problems,
@@ -875,7 +901,8 @@ const checkSubscription = (
       snapshot,
       subscription.classId,
       subscription.condition,
-      "subscription"
+      "subscription",
+      purpose
     )) {
       problems.push(problem("invalidCondition", subscription.id, message));
     }
@@ -934,6 +961,19 @@ const checkUniqueness = (
   );
   duplicates(
     problems,
+    snapshot.all("index").filter(isLive),
+    (index) =>
+      index.name === null ? undefined : `${index.classId}/${index.name}`,
+    (index) => `The index name "${index.name ?? ""}" on its table`
+  );
+  duplicates(
+    problems,
+    snapshot.all("accessRule").filter(isLive),
+    (rule) => rule.name ?? undefined,
+    (rule) => `The access rule name "${rule.name ?? ""}"`
+  );
+  duplicates(
+    problems,
     snapshot.all("subscription").filter(isLive),
     (subscription) => subscription.name,
     (subscription) => `The subscription name "${subscription.name}"`
@@ -959,23 +999,25 @@ const checkNamed = (
 const checkAccessDefinition = (
   problems: Problems,
   snapshot: ConfigSnapshot,
-  definition: Definition
+  definition: Definition,
+  purpose: ConditionPurpose
 ): void => {
   if (definition.kind === "role" || definition.kind === "permission") {
     checkNamed(problems, definition);
   } else if (definition.kind === "grant") {
     checkGrant(problems, snapshot, definition);
   } else if (definition.kind === "accessRule") {
-    checkAccessRule(problems, snapshot, definition);
+    checkAccessRule(problems, snapshot, definition, purpose);
   } else if (definition.kind === "subscription") {
-    checkSubscription(problems, snapshot, definition);
+    checkSubscription(problems, snapshot, definition, purpose);
   }
 };
 
 const checkDefinition = (
   problems: Problems,
   snapshot: ConfigSnapshot,
-  definition: Definition
+  definition: Definition,
+  purpose: ConditionPurpose
 ): void => {
   checkFlags(problems, definition);
 
@@ -990,7 +1032,7 @@ const checkDefinition = (
   } else if (definition.kind === "index") {
     checkIndex(problems, snapshot, definition);
   } else {
-    checkAccessDefinition(problems, snapshot, definition);
+    checkAccessDefinition(problems, snapshot, definition, purpose);
   }
 };
 
@@ -1001,17 +1043,30 @@ const checkDefinition = (
  * @param only - When given, only these definitions are checked (their
  *   references are still resolved against the whole snapshot); uniqueness is
  *   always checked across the whole snapshot.
+ * @param storedConditions - When given, only the conditions of these
+ *   definitions are checked as being stored (they may not read retired
+ *   fields); the others were stored earlier and keep working when a field
+ *   they read is retired. Every condition counts as stored by default.
  * @returns Every problem found, in definition order.
  */
 export const validateSnapshot = (
   snapshot: ConfigSnapshot,
-  only?: ReadonlySet<DefinitionId>
+  only?: ReadonlySet<DefinitionId>,
+  storedConditions?: ReadonlySet<DefinitionId>
 ): readonly DefinitionProblem[] => {
   const problems: Problems = [];
 
   for (const definition of snapshot.definitions()) {
     if (isLive(definition) && (only === undefined || only.has(definition.id))) {
-      checkDefinition(problems, snapshot, definition);
+      const stored =
+        storedConditions === undefined || storedConditions.has(definition.id);
+
+      checkDefinition(
+        problems,
+        snapshot,
+        definition,
+        stored ? "store" : "evaluate"
+      );
     }
   }
 

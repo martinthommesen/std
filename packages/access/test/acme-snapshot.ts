@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { applyOperations } from "@std/definitions/apply";
 import type { Owner } from "@std/definitions/definition";
+import { setOrigin, SYSTEM_REQUESTER } from "@std/definitions/requester";
 import type { NamedSetFile } from "@std/definitions/set-file";
 import { planSet } from "@std/definitions/set-plan";
 import { decodeSetFile, resolveSet } from "@std/definitions/set-resolve";
@@ -63,10 +64,16 @@ const load = (
   const operations = Result.getOrThrow(planSet(resolved, installed));
 
   const applied = Result.getOrThrow(
-    applyOperations(installed, operations, {
-      changeSetId: `00000000-0000-4000-8000-${String(revision).padStart(12, "0")}`,
-      revision,
-    })
+    applyOperations(
+      installed,
+      operations,
+      {
+        changeSetId: `00000000-0000-4000-8000-${String(revision).padStart(12, "0")}`,
+        revision,
+      },
+      // A set load: the set is the origin and owns its definitions.
+      { origin: setOrigin(resolved.owner), requester: SYSTEM_REQUESTER }
+    )
   );
 
   return {

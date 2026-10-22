@@ -20,6 +20,7 @@ import { SqlClient } from "effect/sql";
 
 import { boundValues, tableOf } from "../catalog/definition-tables.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { changeKindsOf } from "./journal-kinds.ts";
 import type { EnforcementUpdate, PlannedStep } from "./plan.ts";
 
 const decodeIds = decodeRows(Schema.Struct({ id: Schema.String }));
@@ -241,37 +242,75 @@ export const writeDependencies = Effect.fn("Schema.writeDependencies")(
   }
 );
 
+/** A journal entry being built. */
+interface JournalOperationEntry {
+  [property: string]: JsonValue;
+}
+
 const nameOf = (definition: Definition | undefined): JsonValue =>
   definition !== undefined && "name" in definition ? definition.name : null;
 
 const targetOf = (operation: Operation): DefinitionId =>
-  operation.op === "update" || operation.op === "adopt"
-    ? operation.id
-    : operation.definition.id;
+  "definition" in operation ? operation.definition.id : operation.id;
 
 /**
- * The journal entry of each operation: tag, kind, target, old and new name
- * (Contracts 1.5), so stale-request checks can match names (6.4).
+ * The journal entry of each operation (Contracts 1.5, 1.6, 6.4): tag,
+ * kind, target, old and new name, so stale-request checks can match names;
+ * the change kinds; the definitions it took along (cascade) and the
+ * dependents reported but allowed (1.7); whether it is a local change to a
+ * definition the origin does not own (`localOverride`, stored as an
+ * override by the config service); and for a purge, the number of values or
+ * rows destroyed, counted under `SCHEMA_KEY` (the audit record of the
+ * purge); for a retired or deleted role, the user-role assignments it had
+ * (reported but allowed, Contracts 1.7).
  *
  * @param applied - The applied change set.
+ * @param destroyed - Values or rows destroyed per purged definition.
+ * @param assignments - User-role assignments per retired or deleted role.
  * @returns One JSON object per operation that changed something.
  */
 export const journalOperations = (
-  applied: AppliedChangeSet
+  applied: AppliedChangeSet,
+  destroyed: ReadonlyMap<DefinitionId, number> = new Map(),
+  assignments: ReadonlyMap<DefinitionId, number> = new Map()
 ): readonly JsonObject[] =>
-  applied.operations.map((operation) => {
+  applied.operations.map((operation, index) => {
     const id = targetOf(operation);
     const before = applied.before.get(id);
     const after = applied.after.get(id);
+    const note = applied.notes[index];
+    const cascade = note?.cascade ?? [];
 
-    return {
+    const counted = [id, ...cascade].flatMap((definitionId) => {
+      const count = destroyed.get(definitionId);
+
+      return count === undefined ? [] : [{ count, definitionId }];
+    });
+
+    const entry: JournalOperationEntry = {
+      cascade: [...cascade],
+      changes: after === undefined ? [] : [...changeKindsOf(before, after)],
       kind: after?.kind ?? null,
+      localOverride: note?.localOverride ?? false,
       newName: nameOf(after),
       oldName: nameOf(before),
       op: operation.op,
+      reported: (note?.reported ?? []).map((dependent) => ({ ...dependent })),
       targetId: id,
       version: before?.version ?? null,
     };
+
+    if (counted.length > 0) {
+      entry.destroyed = counted;
+    }
+
+    const assigned = assignments.get(id);
+
+    if (assigned !== undefined) {
+      entry.userRoleAssignments = assigned;
+    }
+
+    return entry;
   });
 
 /** What the journal records about a change set's main transaction. */

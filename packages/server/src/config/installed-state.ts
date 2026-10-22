@@ -9,13 +9,15 @@ import { EMPTY_LAYERS } from "@std/definitions/layers";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { Catalog } from "../catalog/catalog.ts";
 import { hygienic } from "../sql/errors.ts";
-import type { DatabaseError } from "../sql/errors.ts";
+import type { DatabaseError, HygienicError } from "../sql/errors.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
+import type { TransactionServices } from "../sql/transaction.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { readLayerState } from "./layer-store.ts";
 
@@ -50,6 +52,41 @@ const definitionTablesExist = hygienic(
     return row?.present === true;
   })
 );
+
+/**
+ * Reads the installed configuration after running `check` against the
+ * same snapshot, in the same read transaction: an admin's change set is
+ * planned only once its request checks (session, stated revision, target
+ * visibility, access rules) pass at the state it is planned from, so no
+ * planning refusal reveals a record the caller may not see (Contracts 3.8).
+ *
+ * @param check - The request's check, given the snapshot.
+ * @returns The state, snapshot and layer tables.
+ */
+export const readCheckedInstalledState = <E, R>(
+  check: (snapshot: ConfigSnapshot) => Effect.Effect<unknown, E, R>
+): Effect.Effect<
+  InstalledState,
+  HygienicError<E | SqlError>,
+  Catalog | Transactions | Exclude<R, TransactionServices>
+> =>
+  Effect.gen(function* readChecked() {
+    const catalog = yield* Catalog;
+    const { request } = yield* Transactions;
+
+    return yield* request(
+      Effect.gen(function* readAtOneRevision() {
+        const state = yield* RequestRevision;
+        const snapshot = yield* catalog.at(state);
+
+        yield* check(snapshot);
+
+        const layers = yield* readLayerState;
+
+        return { layers, snapshot, state };
+      })
+    );
+  });
 
 /**
  * Reads the installed configuration. A database whose platform migrations

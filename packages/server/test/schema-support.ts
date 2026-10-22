@@ -5,14 +5,16 @@
 import { randomUUID } from "node:crypto";
 
 import type { PgConnection } from "@effect/sql-pg";
+import type { Condition } from "@std/definitions/condition";
 import type {
+  AccessRuleDraft,
   ClassDraft,
   FieldDraft,
   IndexDraft,
   OverrideDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { CORE_NAMESPACE_ID, SYSTEM_USER_ID } from "@std/definitions/well-known";
+import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 import { Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -70,8 +72,46 @@ export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY);
 /** Loads the acme example set. */
 export const loadAcme = loadSetDirectory(ACME_SET_DIRECTORY);
 
-/** Loads core, then acme. */
-export const loadCoreAndAcme = Effect.andThen(loadCore, loadAcme);
+/**
+ * The local namespace `site`, where tests create their own tables: the
+ * `core` namespace and app namespaces are reserved for their sets
+ * (Contracts 1.8).
+ */
+export const SITE_NAMESPACE_ID = "5173e5f0-0000-4000-8000-00000000517e";
+
+/** Creates the `site` namespace unless it exists. */
+export const ensureSite = Effect.gen(function* createSiteNamespace() {
+  const snapshot = yield* (yield* Catalog).refresh;
+
+  if (snapshot.namespace(SITE_NAMESPACE_ID) !== undefined) {
+    return;
+  }
+
+  yield* applyChangeSet({
+    operations: [
+      {
+        definition: {
+          extensible: false,
+          helpText: null,
+          id: SITE_NAMESPACE_ID,
+          kind: "namespace",
+          label: "Site",
+          name: "site",
+          owner: { layer: "local" },
+          protected: false,
+          storage: "standard",
+        },
+        op: "createNamespace",
+      },
+    ],
+  });
+});
+
+/** Loads core, then acme, then makes sure the local `site` namespace exists. */
+export const loadCoreAndAcme = loadCore.pipe(
+  Effect.andThen(loadAcme),
+  Effect.andThen(ensureSite)
+);
 
 /**
  * A fresh ID.
@@ -106,7 +146,7 @@ export const createClass = (
     kind: "class",
     label: name,
     name,
-    namespaceId: options.namespaceId ?? CORE_NAMESPACE_ID,
+    namespaceId: options.namespaceId ?? SITE_NAMESPACE_ID,
     parentId: options.parentId ?? null,
     storage: "standard",
   };
@@ -167,6 +207,7 @@ export const addIndex = (
     fieldIds,
     id,
     kind: "index",
+    name: null,
     unique,
   };
 
@@ -223,6 +264,57 @@ export const createRole = (name: string): Operation => ({
   },
   op: "createRole",
 });
+
+/**
+ * Creates a role and returns its ID.
+ * @param name - The role name.
+ * @returns The operation and the role ID.
+ */
+export const addRole = (name: string): BuiltOperation => {
+  const operation = createRole(name);
+
+  return {
+    id: "definition" in operation ? operation.definition.id : "",
+    op: operation,
+  };
+};
+
+/**
+ * Creates an access rule.
+ * @param classId - Its class.
+ * @param roleIds - The roles it names.
+ * @param options - Target fields, a condition and a description.
+ * @returns The operation and the rule ID.
+ */
+export const addAccessRule = (
+  classId: string,
+  roleIds: readonly string[],
+  options: {
+    readonly fields?: readonly string[];
+    readonly condition?: Condition;
+    readonly description?: string;
+  } = {}
+): BuiltOperation => {
+  const definition: AccessRuleDraft = {
+    ...local,
+    actions: ["read"],
+    active: true,
+    classId,
+    condition: options.condition ?? null,
+    description: options.description ?? null,
+    effect: "allow",
+    id: freshId(),
+    kind: "accessRule",
+    name: null,
+    roleIds,
+    target:
+      options.fields === undefined
+        ? { kind: "records" }
+        : { fields: options.fields, kind: "fields" },
+  };
+
+  return { id: definition.id, op: { definition, op: "createAccessRule" } };
+};
 
 /**
  * Applies operations as one change set.

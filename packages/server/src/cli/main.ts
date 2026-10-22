@@ -1,7 +1,7 @@
 /**
  * The `std` command.
  *
- * Commands (later workstreams add `schema ...`):
+ * Commands:
  *
  * - `std upgrade`, with `--plan`, `--json`, `--expect <hash>`,
  *   `--report <file>` and `--set <dir>` (repeatable): applies pending
@@ -16,6 +16,15 @@
  * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
  *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
  *   platform migrations.
+ * - `std schema status [--json]`: open change sets, their steps and last
+ *   errors, build progress and the `SCHEMA_KEY` holder (Contracts 8.7).
+ * - `std schema resume <id>`: runs the unfinished steps of a change set in
+ *   `applying` or `needs_attention`, probing each first.
+ * - `std schema abandon <id>`: runs the abandon actions of its unfinished
+ *   steps, then `complete`.
+ *
+ * Exit 0 on success, 1 on a refusal or failure (a resume that ends in
+ * `needs_attention` included), 2 on a usage error.
  */
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -28,6 +37,9 @@ import { planUpgrade, runUpgrade } from "../config/upgrade.ts";
 import type { UpgradeOptions } from "../config/upgrade.ts";
 import { runDoctor } from "../doctor/doctor.ts";
 import { ServerLayer } from "../http/serve.ts";
+import { recoverySettingsFromEnv } from "../schema/recovery-settings.ts";
+import { abandonChangeSet, resumeOnRequest } from "../schema/recovery.ts";
+import { formatStatus, schemaStatus } from "../schema/status.ts";
 import {
   CLI_APPLICATION_NAME,
   DatabaseConfig,
@@ -43,7 +55,15 @@ Commands:
                   then load the core definition set and each app set (stop
                   all STD servers first). --plan changes nothing.
   doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings
-  serve           Serve the STD API over HTTP`;
+  serve           Serve the STD API over HTTP
+  schema status [--json]
+                  Show open change sets, their steps, build progress and the
+                  SCHEMA_KEY holder
+  schema resume <id>
+                  Run the unfinished steps of a change set
+  schema abandon <id>
+                  Undo the unfinished steps of a change set and complete it
+                  as abandoned`;
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -53,10 +73,94 @@ const setExitCode = (code: number): Effect.Effect<void> =>
     process.exitCode = code;
   });
 
-const services = Catalog.layer.pipe(
+/** The services every command runs with. */
+const cliServices = Catalog.layer.pipe(
   Layer.provideMerge(SqlLayer),
-  Layer.provideMerge(DatabaseConfig.fromEnv(CLI_APPLICATION_NAME))
+  Layer.provideMerge(DatabaseConfig.fromEnv(CLI_APPLICATION_NAME)),
+  Layer.provideMerge(recoverySettingsFromEnv)
 );
+
+const reportFailure =
+  (command: string) => (failure: { readonly message: string }) =>
+    Console.error(`std ${command}: ${failure.message}`).pipe(
+      Effect.andThen(setExitCode(EXIT_FAILURE))
+    );
+
+const status = (json: boolean) =>
+  schemaStatus().pipe(
+    Effect.flatMap((current) =>
+      json
+        ? Console.log(JSON.stringify(current, null, 2))
+        : Console.log(formatStatus(current).join("\n"))
+    ),
+    Effect.provide(cliServices),
+    Effect.matchEffect({
+      onFailure: reportFailure("schema status"),
+      onSuccess: () => Effect.void,
+    })
+  );
+
+const resume = (changeSetId: string) =>
+  resumeOnRequest(changeSetId).pipe(
+    Effect.flatMap((outcome) =>
+      outcome.state === "completed"
+        ? Console.log(
+            `Change set ${changeSetId}: completed at revision ${outcome.revision ?? "?"}`
+          )
+        : Console.error(
+            `Change set ${changeSetId}: needs_attention: ${outcome.error ?? ""}`
+          ).pipe(Effect.andThen(setExitCode(EXIT_FAILURE)))
+    ),
+    Effect.provide(cliServices),
+    Effect.matchEffect({
+      onFailure: reportFailure("schema resume"),
+      onSuccess: () => Effect.void,
+    })
+  );
+
+const abandon = (changeSetId: string) =>
+  abandonChangeSet(changeSetId).pipe(
+    Effect.flatMap((outcome) =>
+      Console.log(
+        `Change set ${changeSetId}: abandoned at revision ${outcome.revision} (steps ${outcome.abandonedSteps.join(", ") || "none"} undone)`
+      )
+    ),
+    Effect.provide(cliServices),
+    Effect.matchEffect({
+      onFailure: reportFailure("schema abandon"),
+      onSuccess: () => Effect.void,
+    })
+  );
+
+/**
+ * Runs a `std schema` subcommand.
+ *
+ * @param args - The arguments after `schema`.
+ * @returns The command, or undefined on a usage error.
+ */
+const schemaCommand = (
+  args: readonly string[]
+): Effect.Effect<void> | undefined => {
+  const [subcommand, argument, ...extra] = args;
+
+  if (subcommand === "status" && extra.length === 0) {
+    if (argument === undefined || argument === "--json") {
+      return status(argument === "--json");
+    }
+
+    return undefined;
+  }
+
+  if (argument === undefined || extra.length > 0) {
+    return undefined;
+  }
+
+  if (subcommand === "resume") {
+    return resume(argument);
+  }
+
+  return subcommand === "abandon" ? abandon(argument) : undefined;
+};
 
 /** Parsed `std upgrade` arguments. */
 interface UpgradeArguments {
@@ -167,12 +271,9 @@ const upgrade = (args: UpgradeArguments) => {
     Effect.tap((output) =>
       output.refused ? setExitCode(EXIT_FAILURE) : Effect.void
     ),
-    Effect.provide(services),
+    Effect.provide(cliServices),
     Effect.matchEffect({
-      onFailure: (failure) =>
-        Console.error(`std upgrade: ${failure.message}`).pipe(
-          Effect.andThen(setExitCode(EXIT_FAILURE))
-        ),
+      onFailure: reportFailure("upgrade"),
       onSuccess: () => Effect.void,
     })
   );
@@ -186,12 +287,9 @@ const doctor = (json: boolean) =>
         : print(doctorLines(report))
     ),
     Effect.flatMap((report) => setExitCode(report.exitCode)),
-    Effect.provide(services),
+    Effect.provide(cliServices),
     Effect.matchEffect({
-      onFailure: (failure) =>
-        Console.error(`std doctor: ${failure.message}`).pipe(
-          Effect.andThen(setExitCode(EXIT_FAILURE))
-        ),
+      onFailure: reportFailure("doctor"),
       onSuccess: () => Effect.void,
     })
   );
@@ -224,6 +322,12 @@ const main = (args: readonly string[]): Effect.Effect<void> => {
 
   if (command === "serve" && rest.length === 0) {
     return serve;
+  }
+
+  const schema = command === "schema" ? schemaCommand(rest) : undefined;
+
+  if (schema !== undefined) {
+    return schema;
   }
 
   return Effect.andThen(Console.error(USAGE), setExitCode(EXIT_USAGE));

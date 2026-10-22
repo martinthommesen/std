@@ -78,6 +78,7 @@ const rule = (
     effect,
     id: randomUUID(),
     kind: "accessRule",
+    name: null,
     owner: { layer: "local" },
     protected: false,
     roleIds: [roleId],

@@ -34,8 +34,8 @@ export interface OverrideChanges {
   readonly upserts: readonly LocalOverride[];
   readonly deletes: readonly DroppedOverride[];
   readonly closeConflict: ClosedConflict | null;
-  /** The base row to delete (`adopt`), with its overrides. */
-  readonly removeBase: DefinitionId | null;
+  /** The base rows to delete (`adopt`), with their overrides. */
+  readonly removeBases: readonly DefinitionId[];
 }
 
 /**
@@ -48,7 +48,7 @@ export const hasOverrideChanges = (changes: OverrideChanges): boolean =>
   changes.upserts.length > 0 ||
   changes.deletes.length > 0 ||
   changes.closeConflict !== null ||
-  changes.removeBase !== null;
+  changes.removeBases.length > 0;
 
 const upsertOverrides = Effect.fn("Config.upsertOverrides")(
   function* upsertOverrides(
@@ -142,8 +142,8 @@ export const writeOverrideChanges = Effect.fn("Config.writeOverrideChanges")(
       yield* closeConflict(changes.closeConflict, actorId);
     }
 
-    if (changes.removeBase !== null) {
-      yield* removeBase(changes.removeBase);
+    for (const recordId of changes.removeBases) {
+      yield* removeBase(recordId);
     }
   }
 );

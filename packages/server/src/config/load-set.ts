@@ -14,6 +14,7 @@
 import type { Owner } from "@std/definitions/definition";
 import type { LayerState } from "@std/definitions/layers";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
+import { setOrigin } from "@std/definitions/requester";
 import type { NamedSetFile, SetHeader } from "@std/definitions/set-file";
 import { resolveSet } from "@std/definitions/set-resolve";
 import { hasLayerWrites, planSetUpgrade } from "@std/definitions/set-upgrade";
@@ -22,7 +23,6 @@ import type {
   SetUpgrade,
 } from "@std/definitions/set-upgrade";
 import type { DataViolation, Refusal } from "@std/definitions/upgrade-report";
-import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import { Effect, Result } from "effect";
 
 import { applyChangeSet } from "../schema/change-set.ts";
@@ -239,7 +239,7 @@ export const applySetLoad = Effect.fn("Config.applySetLoad")(
           ),
       },
       operations: upgrade.operations,
-      requesterId: SYSTEM_USER_ID,
+      origin: setOrigin(planned.owner),
       source: {
         conflicts: writes.conflicts.length,
         converged: writes.converged.length,

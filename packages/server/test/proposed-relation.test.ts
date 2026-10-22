@@ -46,6 +46,7 @@ import {
   change,
   createClass,
   createRole,
+  ensureSite,
   freshId,
   loadCore,
   schemaTestLayer,
@@ -182,6 +183,7 @@ interface ProbeSchema {
 
 const setUpProbes = Effect.gen(function* setUpProbes() {
   yield* loadCore;
+  yield* ensureSite;
 
   const probeClass = createClass("probe_all");
 
@@ -212,6 +214,7 @@ const setUpProbes = Effect.gen(function* setUpProbes() {
       effect,
       id: freshId(),
       kind: "accessRule",
+      name: null,
       owner: { layer: "local" },
       protected: false,
       roleIds: [roleId],

@@ -125,6 +125,7 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("classId", "table_id", "uuid"),
     column("fieldIds", "field_ids", "json"),
     column("unique", "is_unique", "boolean"),
+    column("name", "name", "nullableText"),
   ]),
   table("role", "role", LABELS),
   table("permission", "permission", LABELS),
@@ -143,6 +144,7 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
       column("actions", "actions", "json"),
       column("condition", "condition", "nullableJson"),
       column("active", "active", "boolean"),
+      column("name", "name", "nullableText"),
     ],
     [
       column("target", "target", "text"),

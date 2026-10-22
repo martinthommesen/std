@@ -24,6 +24,7 @@ import { UnknownTable } from "./errors/unknown-table.ts";
 import { ValidationFailed } from "./errors/validation-failed.ts";
 import { VersionConflict } from "./errors/version-conflict.ts";
 import { VersionRequired } from "./errors/version-required.ts";
+import { changeSetErrors } from "./schema-changes.ts";
 
 /** One record (Contracts 6.6). */
 export const RecordJsonSchema = Schema.Struct({
@@ -168,12 +169,17 @@ const readErrors = [
   SchemaChanged,
 ] as const;
 
+/**
+ * Write errors. Writes to definition tables become one-operation change
+ * sets (Contracts 1.4), so they can also end in a change set's refusals.
+ */
 const writeErrors = [
   ...readErrors,
   ValidationFailed,
   InvalidReference,
   NotAllowed,
   NotFound,
+  ...changeSetErrors,
 ] as const;
 
 const versionErrors = [VersionRequired, VersionConflict] as const;
@@ -213,6 +219,7 @@ export class RecordsGroup extends HttpApiGroup.make("records")
         NotAllowed,
         Referenced,
         ...versionErrors,
+        ...changeSetErrors,
       ],
       headers: IfMatchHeaders,
       params: { id: Schema.String, table: Schema.String },

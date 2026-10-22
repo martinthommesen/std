@@ -158,6 +158,8 @@ export type OverrideEntry = typeof OverrideEntrySchema.Type;
 export const IndexEntrySchema = Struct({
   fields: SchemaArray(SchemaString),
   id: DefinitionIdSchema,
+  /** An optional name, unique per table. */
+  name: optionalKey(SchemaString),
   protected: optionalKey(SchemaBoolean),
   unique: optionalKey(SchemaBoolean),
 });
@@ -203,6 +205,8 @@ export const AccessRuleEntrySchema = Struct({
   /** With `target: fields`: `"*"` or field names of the table or its ancestors. */
   fields: optionalKey(Union([Literal("*"), SchemaArray(SchemaString)])),
   id: DefinitionIdSchema,
+  /** An optional name, unique among access rules. */
+  name: optionalKey(SchemaString),
   protected: optionalKey(SchemaBoolean),
   roles: SchemaArray(SchemaString),
   /** A qualified table name, or `"*"` for every table. */

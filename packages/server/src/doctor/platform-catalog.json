@@ -120,6 +120,12 @@
         "name": "active",
         "notNull": true,
         "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": false,
+        "type": "text"
       }
     ],
     "constraints": [
@@ -4883,6 +4889,12 @@
         "name": "is_unique",
         "notNull": true,
         "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": false,
+        "type": "text"
       }
     ],
     "constraints": [

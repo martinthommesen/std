@@ -40,7 +40,10 @@ import { VersionConflict } from "@std/api/errors/version-conflict";
  * level FKs cascade; a reference from another record is `Referenced`) and
  * writes its change entry at the current version + 1.
  */
-import { effectiveFields } from "@std/definitions/effective-schema";
+import {
+  effectiveClass,
+  effectiveFields,
+} from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -174,8 +177,11 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
  * written, and on a by-ID write only after visibility (3.9), so a caller
  * who cannot see the record still gets `NotFound`.
  *
- * Hook for workstream 1A: generic writes on definition tables become
- * one-operation change sets (Contracts 1.4) before they reach this guard.
+ * Generic writes on definition tables never get here: the HTTP layer
+ * routes them to one-operation change sets first (Contracts 1.4,
+ * `http/handlers.ts` and `http/definition-writes.ts`). What reaches this
+ * guard is every other platform table (the journal, `core.change`, the
+ * config-layer tables), refused for every caller.
  */
 const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
   function* refusePlatformTable(
@@ -403,12 +409,32 @@ const hookChanges = (
     return same ? [] : [fieldId];
   });
 
+/**
+ * A retired table accepts reads only (Contracts 1.6): creates, updates and
+ * deletes of records whose concrete class, or an ancestor of it, is
+ * retired are refused with `NotAllowed`, which names no rule.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The record's concrete class.
+ * @returns Fails with `NotAllowed`.
+ */
+const refuseRetiredClass = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId
+): Effect.Effect<void, NotAllowed> =>
+  effectiveClass(snapshot, classId)?.acceptsWrites === false
+    ? Effect.fail(new NotAllowed())
+    : Effect.void;
+
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInTransaction(input: CreateInput, body: JsonObject) {
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const classId = input.endpointClassId;
+
+    yield* refuseRetiredClass(snapshot, classId);
+
     const resolved = yield* resolveBody(snapshot, input, body, "create");
 
     yield* refusePlatformTable(snapshot, classId);
@@ -577,6 +603,9 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   if (Option.isNone(readable)) {
     return yield* new NotFound();
   }
+
+  // After visibility, so a hidden record stays an identical NotFound.
+  yield* refuseRetiredClass(snapshot, record.classId);
 
   if (record.version !== input.expectedVersion) {
     return yield* new VersionConflict({ currentVersion: record.version });

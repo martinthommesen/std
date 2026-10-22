@@ -7,23 +7,58 @@
  * set gets one new version. An operation that changes nothing configured
  * (same effective JSON) is dropped, so rerunning an unchanged definition set
  * changes nothing.
+ *
+ * Every operation passes the protected-definition and ownership guard
+ * (`guards.ts`, Contracts 1.8) first; lifecycle operations also pass the
+ * dependency checks of Contracts 1.7 (`lifecycle.ts`). The first refusal
+ * fails the change set.
  */
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { isSuccess, fail, succeed } from "effect/Result";
+import { fail, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
-import { decodeUnknownResult } from "effect/Schema";
 
-import { DefinitionSchema } from "./definition.ts";
-import type { Definition, DefinitionKind, Owner } from "./definition.ts";
-import { sameEffective } from "./effective-json.ts";
+import {
+  checkVersion,
+  currentOf,
+  decodeAs,
+  nextVersion,
+  PLAIN_NOTE,
+  record,
+  startWork,
+} from "./apply-work.ts";
+import type { ApplyContext, OperationNote, Work } from "./apply-work.ts";
+import type {
+  Definition,
+  DefinitionKind,
+  OverrideDraft,
+  Owner,
+} from "./definition.ts";
+import { isActive } from "./definition.ts";
+import { guardChange, guardCreate, guardNewOverride } from "./guards.ts";
 import type { DefinitionId } from "./ids.ts";
-import { UPDATABLE } from "./operation.ts";
-import type { CreateOperation, Operation } from "./operation.ts";
+import {
+  deleteDefinition,
+  purge,
+  reactivate,
+  rename,
+  retire,
+} from "./lifecycle.ts";
+import { idInUseRefusal } from "./occupancy.ts";
+import { OPERATION_FORMS, UPDATABLE } from "./operation.ts";
+import type {
+  CreateOperation,
+  Operation,
+  TargetedOperation,
+} from "./operation.ts";
 import { DefinitionInvalid, problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
+import type { ChangeSetRefusal } from "./refusals.ts";
+import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "./requester.ts";
 import { ConfigSnapshot } from "./snapshot.ts";
 import type { SnapshotKey } from "./snapshot.ts";
 import { validateSnapshot } from "./validate.ts";
+
+export type { ApplyContext, OperationNote } from "./apply-work.ts";
 
 /** One definition touched by a change set. */
 export interface DefinitionChange {
@@ -41,7 +76,21 @@ export interface AppliedChangeSet {
   readonly changes: readonly DefinitionChange[];
   /** The operations that changed something, in order. */
   readonly operations: readonly Operation[];
+  /** One note per operation: cascades, reported dependents, local overrides. */
+  readonly notes: readonly OperationNote[];
 }
+
+/** Why a change set cannot be applied. */
+export type ApplyError = DefinitionInvalid | ChangeSetRefusal;
+
+/**
+ * A local edit by the system user, which holds no permission: the default
+ * context, and the most restricted one.
+ */
+export const LOCAL_CONTEXT: ApplyContext = {
+  origin: LOCAL_ORIGIN,
+  requester: SYSTEM_REQUESTER,
+};
 
 const KINDS_WITH_ENFORCEMENT: ReadonlySet<DefinitionKind> = new Set([
   "class",
@@ -50,85 +99,75 @@ const KINDS_WITH_ENFORCEMENT: ReadonlySet<DefinitionKind> = new Set([
   "index",
 ]);
 
-const decodeDefinition = decodeUnknownResult(DefinitionSchema);
-
-const CREATED_KIND: Readonly<Record<CreateOperation["op"], DefinitionKind>> = {
-  addField: "field",
-  addIndex: "index",
-  createAccessRule: "accessRule",
-  createClass: "class",
-  createGrant: "grant",
-  createNamespace: "namespace",
-  createPermission: "permission",
-  createRole: "role",
-  createSubscription: "subscription",
-};
-
 /** A definition being built from a draft, before it is decoded. */
 interface DefinitionCandidate {
   [property: string]: JsonValue;
 }
 
-/** Mutable bookkeeping of one application. */
-interface Work {
-  readonly snapshot: ConfigSnapshot;
-  readonly current: Map<DefinitionId, Definition>;
-  readonly order: DefinitionId[];
-  readonly problems: DefinitionProblem[];
-  readonly applied: Operation[];
-}
+/**
+ * The definitions a new definition points at that must be active: its
+ * parent class, its own class, a reference target, indexed fields.
+ *
+ * @param operation - The create operation.
+ * @returns The IDs.
+ */
+const mustBeActive = (
+  operation: CreateOperation
+): readonly (DefinitionId | null)[] => {
+  const { definition } = operation;
 
-const currentOf = (work: Work, id: DefinitionId): Definition | undefined =>
-  work.current.get(id) ?? work.snapshot.get(id);
+  if (definition.kind === "class") {
+    return [definition.parentId];
+  }
 
-// The version a touched definition gets: one more than its stored version,
-// or 1 when this change set creates it.
-const nextVersion = (work: Work, id: DefinitionId): number => {
-  const stored = work.snapshot.get(id);
+  if (definition.kind === "field") {
+    return [
+      definition.classId,
+      definition.type.kind === "reference"
+        ? definition.type.targetClassId
+        : null,
+    ];
+  }
 
-  return stored === undefined ? 1 : stored.version + 1;
+  return definition.kind === "index"
+    ? [definition.classId, ...definition.fieldIds]
+    : [];
 };
 
-const decodeAs = (
+/**
+ * Reports what a new definition may not point at: a retired or purged
+ * class or field. Existing definitions may keep pointing at retired ones
+ * (Contracts 1.6).
+ *
+ * @param work - The application.
+ * @param operation - The create operation.
+ */
+const checkActiveReferences = (
   work: Work,
-  id: DefinitionId,
-  candidate: JsonObject
-): Definition | undefined => {
-  const decoded = decodeDefinition(candidate);
+  operation: CreateOperation
+): void => {
+  for (const id of mustBeActive(operation)) {
+    const found = id === null ? undefined : currentOf(work, id);
 
-  if (isSuccess(decoded)) {
-    return decoded.success;
+    if (found !== undefined && !isActive(found)) {
+      work.problems.push(
+        problem(
+          "notLive",
+          operation.definition.id,
+          `It refers to the ${found.kind} ${found.id}, which is ${found.state}.`
+        )
+      );
+    }
   }
-
-  work.problems.push(
-    problem(
-      "unsupportedChange",
-      id,
-      `The resulting definition is malformed: ${decoded.failure.message}`
-    )
-  );
-
-  return undefined;
-};
-
-const record = (work: Work, operation: Operation, next: Definition): void => {
-  const previous = currentOf(work, next.id);
-
-  if (previous !== undefined && sameEffective(previous, next)) {
-    return;
-  }
-
-  if (!work.current.has(next.id)) {
-    work.order.push(next.id);
-  }
-
-  work.current.set(next.id, next);
-  work.applied.push(operation);
 };
 
 const create = (work: Work, operation: CreateOperation): void => {
   const { definition } = operation;
-  const kind = CREATED_KIND[operation.op];
+  const kind = OPERATION_FORMS[operation.op].creates;
+
+  if (kind === null) {
+    return;
+  }
 
   if (currentOf(work, definition.id) !== undefined) {
     work.problems.push(
@@ -141,6 +180,12 @@ const create = (work: Work, operation: CreateOperation): void => {
 
     return;
   }
+
+  if (!guardCreate(work, operation)) {
+    return;
+  }
+
+  checkActiveReferences(work, operation);
 
   const draft: JsonObject = definition;
 
@@ -162,38 +207,6 @@ const create = (work: Work, operation: CreateOperation): void => {
   }
 };
 
-const checkVersion = (
-  work: Work,
-  id: DefinitionId,
-  expected: number
-): Definition | undefined => {
-  const stored = currentOf(work, id);
-
-  if (stored === undefined) {
-    work.problems.push(
-      problem("unknownDefinition", id, `No definition has ID ${id}.`)
-    );
-
-    return undefined;
-  }
-
-  const storedVersion = work.snapshot.get(id)?.version ?? 1;
-
-  if (storedVersion !== expected) {
-    work.problems.push(
-      problem(
-        "versionConflict",
-        id,
-        `The definition is at version ${storedVersion}, not ${expected}.`
-      )
-    );
-
-    return undefined;
-  }
-
-  return stored;
-};
-
 const changeProblem = (
   current: Definition,
   key: string,
@@ -203,13 +216,65 @@ const changeProblem = (
     return `The property ${key} of a ${current.kind} cannot be changed here.`;
   }
 
-  if (
-    current.kind === "field" &&
-    key === "required" &&
-    current.required &&
-    value === false
-  ) {
+  if (current.kind !== "field" || key !== "required") {
+    return undefined;
+  }
+
+  if (current.required && value === false) {
     return "A required field cannot be made optional; retire it instead.";
+  }
+
+  // A retired field stays optional (Contracts 1.6): reactivate it first.
+  return current.state === "retired" && value === true
+    ? "A retired field cannot be made required; reactivate it first."
+    : undefined;
+};
+
+/**
+ * Refuses an override that makes a retired field required: a retired
+ * field is optional on every class (Contracts 1.6).
+ *
+ * @param work - The application.
+ * @param id - The override's ID.
+ * @param fieldId - The overridden field.
+ * @param required - The override's `required`.
+ * @returns True when the override may proceed.
+ */
+const overrideKeepsRetiredOptional = (
+  work: Work,
+  id: DefinitionId,
+  fieldId: DefinitionId,
+  required: boolean | null
+): boolean => {
+  if (required !== true || currentOf(work, fieldId)?.state !== "retired") {
+    return true;
+  }
+
+  work.problems.push(
+    problem(
+      "unsupportedChange",
+      id,
+      "A retired field cannot be made required; reactivate it first."
+    )
+  );
+
+  return false;
+};
+
+const firstChangeProblem = (
+  current: Definition,
+  changes: Readonly<Record<string, JsonValue>>
+): string | undefined => {
+  if (current.state === "purged") {
+    return "A purged definition cannot change.";
+  }
+
+  for (const [key, value] of Object.entries(changes)) {
+    const found = changeProblem(current, key, value);
+
+    if (found !== undefined) {
+      return found;
+    }
   }
 
   return undefined;
@@ -225,24 +290,45 @@ const update = (
     return;
   }
 
-  for (const [key, value] of Object.entries(operation.changes)) {
-    const found = changeProblem(current, key, value);
+  // The guard first: a protected definition refuses every change but its
+  // label and help text, whatever the change is (Contracts 1.8).
+  // A name changed through `update` (set loads do this for roles and
+  // permissions) follows the ownership rule of `rename`.
+  const renamed =
+    "name" in operation.changes
+      ? guardChange(work, current, "rename")
+      : { localOverride: false };
 
-    if (found !== undefined) {
-      work.problems.push(problem("unsupportedChange", current.id, found));
+  const allowed =
+    renamed === undefined
+      ? undefined
+      : guardChange(work, current, "update", Object.keys(operation.changes));
 
-      return;
-    }
+  const found =
+    allowed === undefined
+      ? undefined
+      : firstChangeProblem(current, operation.changes);
+
+  if (found !== undefined) {
+    work.problems.push(problem("unsupportedChange", current.id, found));
+
+    return;
   }
 
-  const next = decodeAs(work, current.id, {
-    ...current,
-    ...operation.changes,
-    version: nextVersion(work, current.id),
-  });
+  const next =
+    allowed === undefined
+      ? undefined
+      : decodeAs(work, current.id, {
+          ...current,
+          ...operation.changes,
+          version: nextVersion(work, current.id),
+        });
 
-  if (next !== undefined) {
-    record(work, operation, next);
+  if (allowed !== undefined && next !== undefined) {
+    record(work, operation, next, {
+      ...PLAIN_NOTE,
+      localOverride: allowed.localOverride,
+    });
   }
 };
 
@@ -270,6 +356,29 @@ const sameOwnership = (
   return current.owner.layer === next.owner.layer;
 };
 
+/**
+ * Whether a replacement override is the same live override: same class,
+ * field, owner and protected flag.
+ *
+ * @param current - The stored definition.
+ * @param next - The replacement draft.
+ * @returns True when it may replace it.
+ */
+const replacesOverride = (
+  current: Definition,
+  next: OverrideDraft
+): boolean => {
+  if (current.kind !== "override" || current.state === "purged") {
+    return false;
+  }
+
+  return (
+    current.classId === next.classId &&
+    current.fieldId === next.fieldId &&
+    sameOwnership(current, next)
+  );
+};
+
 const setOverride = (
   work: Work,
   operation: Extract<Operation, { readonly op: "setOverride" }>
@@ -281,12 +390,7 @@ const setOverride = (
     return;
   }
 
-  if (
-    current.kind !== "override" ||
-    current.classId !== definition.classId ||
-    current.fieldId !== definition.fieldId ||
-    !sameOwnership(current, definition)
-  ) {
+  if (!replacesOverride(current, definition)) {
     work.problems.push(
       problem(
         "unsupportedChange",
@@ -298,14 +402,28 @@ const setOverride = (
     return;
   }
 
-  const next = decodeAs(work, definition.id, {
-    ...current,
-    ...definition,
-    version: nextVersion(work, definition.id),
-  });
+  const allowed = guardChange(work, current, "setOverride");
 
-  if (next !== undefined) {
-    record(work, operation, next);
+  const next =
+    allowed === undefined ||
+    !overrideKeepsRetiredOptional(
+      work,
+      definition.id,
+      definition.fieldId,
+      definition.required
+    )
+      ? undefined
+      : decodeAs(work, definition.id, {
+          ...current,
+          ...definition,
+          version: nextVersion(work, definition.id),
+        });
+
+  if (allowed !== undefined && next !== undefined) {
+    record(work, operation, next, {
+      ...PLAIN_NOTE,
+      localOverride: allowed.localOverride,
+    });
   }
 };
 
@@ -324,6 +442,25 @@ const createOverride = (
       )
     );
 
+    return;
+  }
+
+  if (
+    !(
+      guardNewOverride(
+        work,
+        definition.id,
+        definition.owner,
+        definition.classId
+      ) &&
+      overrideKeepsRetiredOptional(
+        work,
+        definition.id,
+        definition.fieldId,
+        definition.required
+      )
+    )
+  ) {
     return;
   }
 
@@ -373,6 +510,25 @@ const adopt = (
   }
 };
 
+type LifecycleOp = Exclude<
+  TargetedOperation,
+  { readonly op: "update" } | { readonly op: "adopt" }
+>;
+
+const applyLifecycle = (work: Work, operation: LifecycleOp): void => {
+  if (operation.op === "rename") {
+    rename(work, operation);
+  } else if (operation.op === "retire") {
+    retire(work, operation);
+  } else if (operation.op === "reactivate") {
+    reactivate(work, operation);
+  } else if (operation.op === "purge") {
+    purge(work, operation);
+  } else {
+    deleteDefinition(work, operation);
+  }
+};
+
 const applyOne = (work: Work, operation: Operation): void => {
   if (operation.op === "update") {
     update(work, operation);
@@ -384,10 +540,35 @@ const applyOne = (work: Work, operation: Operation): void => {
     } else {
       setOverride(work, operation);
     }
-  } else {
+  } else if ("definition" in operation) {
     create(work, operation);
+  } else {
+    applyLifecycle(work, operation);
   }
 };
+
+const conditionText = (definition: Definition | undefined): string =>
+  definition?.kind === "accessRule" || definition?.kind === "subscription"
+    ? JSON.stringify(definition.condition)
+    : "";
+
+/**
+ * The definitions whose condition this change set stores: new ones and
+ * changed conditions. Only these are checked against retired fields.
+ *
+ * @param changes - The changes.
+ * @returns Their IDs.
+ */
+const newConditions = (
+  changes: readonly DefinitionChange[]
+): ReadonlySet<DefinitionId> =>
+  new Set(
+    changes.flatMap(({ before, after }) =>
+      before === undefined || conditionText(before) !== conditionText(after)
+        ? [after.id]
+        : []
+    )
+  );
 
 const immutableProblems = (
   changes: readonly DefinitionChange[]
@@ -412,27 +593,43 @@ const immutableProblems = (
 
 /**
  * Applies operations to a snapshot in memory and validates the result.
+ * Protected-definition, ownership, permission and dependency checks run
+ * first, operation by operation; the first refusal wins.
  *
  * @param snapshot - The configuration the change set starts from.
  * @param operations - The operations, in order.
  * @param key - The revision and change set ID of the result.
- * @returns The applied change set, or every problem found.
+ * @param context - Requester and origin; a local edit without permissions
+ *   by default.
+ * @returns The applied change set, the first refusal, or every problem.
  */
 export const applyOperations = (
   snapshot: ConfigSnapshot,
   operations: readonly Operation[],
-  key: SnapshotKey
-): Result<AppliedChangeSet, DefinitionInvalid> => {
-  const work: Work = {
-    applied: [],
-    current: new Map(),
-    order: [],
-    problems: [],
-    snapshot,
-  };
+  key: SnapshotKey,
+  context: ApplyContext = LOCAL_CONTEXT
+): Result<AppliedChangeSet, ApplyError> => {
+  // A create whose ID something stored already holds stops the change set
+  // before any operation looks at the occupant (Contracts 1.1, 3.6).
+  const taken = idInUseRefusal(
+    (id) => snapshot.get(id) !== undefined,
+    operations
+  );
+
+  if (taken !== undefined) {
+    return fail(taken);
+  }
+
+  const work = startWork(snapshot, key, context);
 
   for (const operation of operations) {
     applyOne(work, operation);
+  }
+
+  const [refusal] = work.refusals;
+
+  if (refusal !== undefined) {
+    return fail(refusal);
   }
 
   const changes = work.order.flatMap((id): DefinitionChange[] => {
@@ -449,7 +646,9 @@ export const applyOperations = (
   const problems = [
     ...work.problems,
     ...immutableProblems(changes),
-    ...(work.problems.length === 0 ? validateSnapshot(after) : []),
+    ...(work.problems.length === 0
+      ? validateSnapshot(after, undefined, newConditions(changes))
+      : []),
   ];
 
   if (problems.length > 0) {
@@ -460,6 +659,7 @@ export const applyOperations = (
     after,
     before: snapshot,
     changes,
+    notes: work.notes,
     operations: work.applied,
   });
 };

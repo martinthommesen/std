@@ -35,7 +35,6 @@ import type { BaseRecord, LocalOverride } from "@std/definitions/layers";
 import type { Operation } from "@std/definitions/operation";
 import { isShipped, overrideProblem } from "@std/definitions/overridable";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
-import type { DroppedOverride } from "@std/definitions/set-upgrade";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Context, Effect, Layer, Option } from "effect";
 
@@ -49,8 +48,12 @@ import type {
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { ConfigEditRefused } from "./config-edit-refused.ts";
-import { readInstalledState } from "./installed-state.ts";
+import {
+  readCheckedInstalledState,
+  readInstalledState,
+} from "./installed-state.ts";
 import type { InstalledState } from "./installed-state.ts";
+import { NO_OVERRIDE_CHANGES, planLocalEdits } from "./local-edits.ts";
 import {
   hasOverrideChanges,
   readConflicts,
@@ -66,6 +69,16 @@ import type {
 /** How often an edit is recomputed when another config commit came first. */
 const STALE_RETRIES = 3;
 
+/**
+ * The acting admin as an HTTP request sees them: the roles they hold, for
+ * the schema engine's permission checks, and the request's re-check in the
+ * main transaction (`ChangeSetRequest.authorize`).
+ */
+export interface ActingAdmin {
+  readonly roleIds: readonly DefinitionId[];
+  readonly authorize?: ChangeSetRequest["authorize"];
+}
+
 /** An admin edit of a config record. */
 export interface EditDefinitionInput {
   readonly id: DefinitionId;
@@ -74,6 +87,8 @@ export interface EditDefinitionInput {
   /** The properties to change and their new values. */
   readonly changes: JsonObject;
   readonly actorId: DefinitionId;
+  /** Roles and re-check of an HTTP request; none by default. */
+  readonly acting?: ActingAdmin;
 }
 
 /** Removing one override. */
@@ -123,40 +138,83 @@ const refused = (
   detail: string
 ): ConfigEditRefused => new ConfigEditRefused({ definitionId, detail, reason });
 
-/** One change set of the config service. */
-interface Commit {
-  readonly installed: InstalledState;
+/** A local change set: the admin's operations, before layer planning. */
+export interface LocalChangeSet {
   readonly operations: readonly Operation[];
-  readonly overrides: OverrideChanges;
   readonly actorId: DefinitionId;
-  readonly action: string;
+  /** The HTTP request's admin; none for internal callers. */
+  readonly acting: ActingAdmin | null;
+  /** Where it comes from, recorded in the journal. */
+  readonly source: JsonObject;
 }
 
+/** One change set of the config service, with its layer writes. */
+interface Commit extends LocalChangeSet {
+  readonly installed: InstalledState;
+  readonly overrides: OverrideChanges;
+}
+
+/**
+ * Applies a change set with its layer writes in the same main transaction.
+ * A change set that writes layer rows checks that the configuration is
+ * still at the state they were planned from (`ConfigStateChanged`
+ * otherwise, and the caller plans again).
+ *
+ * @param input - The operations, the layer writes and who asks.
+ * @returns The change set's result.
+ */
 const commit = (input: Commit) => {
-  const request: ChangeSetRequest = {
+  const authorize = input.acting?.authorize;
+  const pending = hasOverrideChanges(input.overrides);
+
+  const unchecked: ChangeSetRequest = {
     extraWrites: {
-      pending: hasOverrideChanges(input.overrides),
+      adopted: input.overrides.removeBases,
+      pending,
       write: (context) =>
         writeOverrideChanges(input.overrides, context.requesterId),
     },
     operations: input.operations,
-    requesterId: input.actorId,
-    source: { action: input.action, kind: "config" },
+    requester: { roleIds: input.acting?.roleIds ?? [], userId: input.actorId },
+    source: input.source,
   };
 
+  const request: ChangeSetRequest =
+    authorize === undefined ? unchecked : { ...unchecked, authorize };
+
   return applyChangeSet(
-    input.installed.state === null
+    input.installed.state === null || !pending
       ? request
       : { ...request, expectedState: input.installed.state }
   );
 };
 
-const NO_OVERRIDE_CHANGES: OverrideChanges = {
-  closeConflict: null,
-  deletes: [],
-  removeBase: null,
-  upserts: [],
-};
+/**
+ * Plans a local change set's layer writes (`planLocalEdits`) and applies
+ * it.
+ *
+ * @param installed - The state it is planned from.
+ * @param input - The operations and who asks.
+ * @returns The change set's result.
+ */
+const commitLocal = Effect.fn("Config.commitLocal")(function* commitLocal(
+  installed: InstalledState,
+  input: LocalChangeSet
+): Effect.fn.Return<ChangeSetResult, ConfigEditError, ChangeSetServices> {
+  const planned = yield* planLocalEdits(installed, input.operations);
+
+  return yield* commit({
+    ...input,
+    installed,
+    operations: planned.operations,
+    overrides: planned.overrides,
+  });
+});
+
+const configSource = (action: string): JsonObject => ({
+  action,
+  kind: "config",
+});
 
 /** A shipped definition with its base and overrides. */
 interface Shipped {
@@ -195,52 +253,6 @@ const shippedRecord = Effect.fn("Config.shippedRecord")(function* shippedRecord(
   };
 });
 
-/** Override rows and effective changes that set properties to local values. */
-interface OverridePlan {
-  readonly upserts: LocalOverride[];
-  readonly deletes: DroppedOverride[];
-  readonly effective: Record<string, JsonValue>;
-}
-
-/**
- * Plans overrides for new local values: a value equal to the shipped one
- * removes the override, any other value sets it.
- *
- * @param record - The shipped record.
- * @param values - Property to local value.
- * @returns The override rows and the effective changes.
- */
-const planOverrides = (
-  record: Shipped,
-  values: ReadonlyMap<string, JsonValue>
-): OverridePlan => {
-  const effective = effectiveJson(record.definition);
-  const plan: OverridePlan = { deletes: [], effective: {}, upserts: [] };
-
-  for (const [property, value] of values) {
-    const shipped = record.base.shipped[property] ?? null;
-
-    if (sameJson(value, shipped)) {
-      if (record.overrides.has(property)) {
-        plan.deletes.push({ property, recordId: record.definition.id });
-      }
-    } else {
-      plan.upserts.push({
-        baseWhenSet: shipped,
-        property,
-        recordId: record.definition.id,
-        value,
-      });
-    }
-
-    if (!sameJson(value, effective[property])) {
-      plan.effective[property] = value;
-    }
-  }
-
-  return plan;
-};
-
 const updateOperations = (
   definition: Definition,
   changes: Readonly<Record<string, JsonValue>>
@@ -266,54 +278,24 @@ const editOnce = Effect.fn("Config.editOnce")(function* editOnce(
     return yield* unknownDefinition(input.id);
   }
 
-  if (!isShipped(definition)) {
-    return yield* commit({
-      action: "edit",
-      actorId: input.actorId,
-      installed,
-      operations: [
-        {
-          changes: input.changes,
-          id: input.id,
-          op: "update",
-          version: input.version,
-        },
-      ],
-      overrides: NO_OVERRIDE_CHANGES,
-    });
-  }
+  const shipped = isShipped(definition);
 
-  const record = yield* shippedRecord(installed, input.id);
-
-  if (definition.version !== input.version) {
+  if (shipped && definition.version !== input.version) {
     return yield* versionConflict(definition, input.version);
   }
 
-  const problems = Object.entries(input.changes).flatMap(
-    ([property, value]) => {
-      const found = overrideProblem(
-        definition,
-        property,
-        value,
-        record.base.shipped[property] ?? null
-      );
-
-      return found === undefined ? [] : [found];
-    }
-  );
-
-  if (problems.length > 0) {
-    return yield* refused("notOverridable", input.id, problems.join(" "));
-  }
-
-  const plan = planOverrides(record, new Map(Object.entries(input.changes)));
-
-  return yield* commit({
-    action: "override",
+  return yield* commitLocal(installed, {
+    acting: input.acting ?? null,
     actorId: input.actorId,
-    installed,
-    operations: updateOperations(definition, plan.effective),
-    overrides: { ...NO_OVERRIDE_CHANGES, ...plan },
+    operations: [
+      {
+        changes: input.changes,
+        id: input.id,
+        op: "update",
+        version: input.version,
+      },
+    ],
+    source: configSource(shipped ? "override" : "edit"),
   });
 });
 
@@ -326,6 +308,30 @@ const retryStale = <A, R>(
       while: (failure) => failure._tag === "ConfigStateChanged",
     })
   );
+
+/**
+ * Applies an admin's change set (the HTTP change-set endpoint and generic
+ * writes to definition tables): shipped updates become overrides, `adopt`
+ * removes its base row, both in the same main transaction as the
+ * effective changes (`planLocalEdits`); planned again when another config
+ * commit came first.
+ *
+ * @param input - The operations, the actor and the request's re-check.
+ * @returns The change set's result.
+ */
+export const applyLocalChangeSet = Effect.fn("Config.applyLocalChangeSet")(
+  function* applyLocalChangeSet(input: LocalChangeSet) {
+    const authorize = input.acting?.authorize;
+
+    const installed =
+      authorize === undefined
+        ? yield* readInstalledState
+        : yield* readCheckedInstalledState(authorize);
+
+    return yield* commitLocal(installed, input);
+  },
+  retryStale
+);
 
 /**
  * Edits a config record as an admin: a local definition directly, a
@@ -467,7 +473,7 @@ export const resolveConflict = Effect.fn("Config.resolveConflict")(
     const { value, ...overrides } = plan;
 
     return yield* commit({
-      action: `resolve:${input.resolution}`,
+      acting: null,
       actorId: input.actorId,
       installed,
       operations: updateOperations(
@@ -477,6 +483,7 @@ export const resolveConflict = Effect.fn("Config.resolveConflict")(
           : { [conflict.property]: value }
       ),
       overrides,
+      source: configSource(`resolve:${input.resolution}`),
     });
   },
   retryStale
@@ -494,24 +501,17 @@ export const adopt = Effect.fn("Config.adopt")(function* adopt(
   input: AdoptInput
 ): Effect.fn.Return<ChangeSetResult, ConfigEditError, ChangeSetServices> {
   const installed = yield* readInstalledState;
-  const record = yield* shippedRecord(installed, input.id);
+  const definition = installed.snapshot.get(input.id);
 
-  if (!record.base.removed || record.definition.protected) {
-    return yield* refused(
-      "notAdoptable",
-      input.id,
-      `Only an unprotected record its set removed can be adopted; ${input.id} is still shipped or protected.`
-    );
+  if (definition === undefined) {
+    return yield* unknownDefinition(input.id);
   }
 
-  return yield* commit({
-    action: "adopt",
+  return yield* commitLocal(installed, {
+    acting: null,
     actorId: input.actorId,
-    installed,
-    operations: [
-      { id: input.id, op: "adopt", version: record.definition.version },
-    ],
-    overrides: { ...NO_OVERRIDE_CHANGES, removeBase: input.id },
+    operations: [{ id: input.id, op: "adopt", version: definition.version }],
+    source: configSource("adopt"),
   });
 }, retryStale);
 

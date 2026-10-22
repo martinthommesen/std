@@ -69,6 +69,10 @@ export interface SetVariant {
   readonly labels?: Readonly<Record<string, string>>;
   /** Replaces field types, by field name. */
   readonly types?: Readonly<Record<string, TypeEntry>>;
+  /** Replaces field names, by field name (a rename by ID). */
+  readonly renameFields?: Readonly<Record<string, string>>;
+  /** Fields to leave out, by name (removed upstream). */
+  readonly dropFields?: readonly string[];
   /** Fields appended to every table. */
   readonly addFields?: readonly FieldEntry[];
   /** Indexes appended to every table. */
@@ -84,14 +88,21 @@ export interface SetVariant {
 const changeField = (field: FieldEntry, variant: SetVariant): FieldEntry => {
   const label = variant.labels?.[field.name] ?? field.label;
   const type = variant.types?.[field.name] ?? field.type;
+  const name = variant.renameFields?.[field.name] ?? field.name;
 
-  return label === undefined ? { ...field, type } : { ...field, label, type };
+  return label === undefined
+    ? { ...field, name, type }
+    : { ...field, label, name, type };
 };
 
 const changeTable = (table: TableEntry, variant: SetVariant): TableEntry => ({
   ...table,
   fields: [
-    ...(table.fields ?? []).map((field) => changeField(field, variant)),
+    ...(table.fields ?? []).flatMap((field) =>
+      variant.dropFields?.includes(field.name) === true
+        ? []
+        : [changeField(field, variant)]
+    ),
     ...(variant.addFields ?? []),
   ],
   indexes: [...(table.indexes ?? []), ...(variant.addIndexes ?? [])],
