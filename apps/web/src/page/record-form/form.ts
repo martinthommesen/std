@@ -14,6 +14,10 @@ import type { JsonValue } from "@std/values/json-value";
 import { Match, Option, Record, pipe } from "effect";
 import { AsyncData } from "foldkit";
 
+import {
+  definitionProblems,
+  withRecordLimits,
+} from "../../domain/definition-limits.ts";
 import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
 import {
   buildBody,
@@ -88,7 +92,9 @@ export const editedRecordOf = (model: Model): Option.Option<RecordJson> =>
 
 /**
  * The fields of the endpoint as the form describes them (decision 0020):
- * the concrete class's description when the page has it.
+ * the concrete class's description when the page has it, with the schema
+ * engine's per-record limits of a definition table applied
+ * (`definition-limits.ts`).
  *
  * @param model - The page.
  * @returns The fields; none before the metadata arrives.
@@ -96,7 +102,12 @@ export const editedRecordOf = (model: Model): Option.Option<RecordJson> =>
 export const fieldsOf = (model: Model): readonly MetaField[] =>
   Option.match(metaOf(model), {
     onNone: () => [],
-    onSome: (meta) => formFieldsOf(meta.table, classMetaOf(model)),
+    onSome: (meta) =>
+      withRecordLimits(
+        meta.table.name,
+        formFieldsOf(meta.table, classMetaOf(model)),
+        editedRecordOf(model)
+      ),
   });
 
 /**
@@ -298,6 +309,11 @@ export interface FormCheck {
   readonly unknownFields: readonly string[];
 }
 
+const joinProblems = (
+  left: readonly string[],
+  right: readonly string[]
+): readonly string[] => [...left, ...right];
+
 /**
  * Builds the body from the edits and judges it.
  *
@@ -314,15 +330,30 @@ export const checkForm = (model: Model): FormCheck => {
 
   const fieldErrors = errorsByFieldId(fieldsOf(model), verdict.errors);
 
+  const engineProblems = Option.match(metaOf(model), {
+    onNone: () => ({}),
+    onSome: (meta) =>
+      definitionProblems(
+        meta.table.name,
+        fieldsOf(model),
+        built.body.values,
+        editedRecordOf(model)
+      ),
+  });
+
   return {
     body: built.body,
     problems: Record.union(
-      pipe(
-        built.problems,
-        Record.map((problem) => [problem])
+      Record.union(
+        pipe(
+          built.problems,
+          Record.map((problem) => [problem])
+        ),
+        fieldErrors,
+        joinProblems
       ),
-      fieldErrors,
-      (shaping, rules) => [...shaping, ...rules]
+      engineProblems,
+      joinProblems
     ),
     unknownFields: verdict.unknownFields,
   };

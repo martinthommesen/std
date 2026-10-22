@@ -111,6 +111,14 @@ const currentTable = (route: AppRoute): Option.Option<string> =>
     Match.orElse(() => Option.none())
   );
 
+/**
+ * A table's namespace: the part of its name before the first dot.
+ *
+ * @param table - The table's name, such as `helpdesk.incident`.
+ * @returns The namespace, such as `helpdesk`.
+ */
+const namespaceOf = (table: string): string => table.split(".")[0] ?? table;
+
 const tablesNavList = (
   tables: readonly MetaTableSummary[],
   current: AppRoute,
@@ -123,28 +131,51 @@ const tablesNavList = (
     isItemCurrent: (table) => Option.contains(currentTable(current), table),
     items: tables.map((table) => table.name),
     toHref: tableHref,
-    toView: ({ items, nav }) =>
-      h.nav(
+    toView: ({ items, nav }) => {
+      const namespaces = [
+        ...new Set(items.map((item) => namespaceOf(item.value))),
+      ];
+
+      const listOf = (shown: typeof items) =>
+        h.ul(
+          [h.Class("nav-list nav-list-vertical")],
+          shown.map((item) =>
+            h.keyed("li")(
+              item.value,
+              [],
+              [
+                h.a(
+                  [...item.link, h.Class("nav-link")],
+                  [labels.get(item.value) ?? item.value]
+                ),
+              ]
+            )
+          )
+        );
+
+      return h.nav(
         [...nav, h.Class("tables-nav")],
         [
           h.h2([h.Class("tables-nav-heading")], ["Tables"]),
-          h.ul(
-            [h.Class("nav-list nav-list-vertical")],
-            items.map((item) =>
-              h.keyed("li")(
-                item.value,
-                [],
-                [
-                  h.a(
-                    [...item.link, h.Class("nav-link")],
-                    [labels.get(item.value) ?? item.value]
-                  ),
-                ]
-              )
-            )
-          ),
+          ...(namespaces.length < 2
+            ? [listOf(items)]
+            : namespaces.map((namespace) =>
+                h.keyed("div")(
+                  namespace,
+                  [h.Class("tables-nav-group")],
+                  [
+                    h.h3([h.Class("tables-nav-namespace")], [namespace]),
+                    listOf(
+                      items.filter(
+                        (item) => namespaceOf(item.value) === namespace
+                      )
+                    ),
+                  ]
+                )
+              )),
         ]
-      ),
+      );
+    },
   });
 };
 
