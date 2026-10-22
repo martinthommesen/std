@@ -121,7 +121,10 @@ const requestInit = (
     options.body === undefined ? options.rawBody : JSON.stringify(options.body);
 
   if (text !== undefined) {
-    headers.set("content-type", "application/json");
+    if (!headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
+
     init.body = text;
   }
 

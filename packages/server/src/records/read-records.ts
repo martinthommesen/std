@@ -729,18 +729,16 @@ export interface PageSpec {
   /** Rows to skip (0 for none); never together with a cursor. */
   readonly offset: number;
   /** A keyset position: the page after it, or the page just before it. */
-  readonly cursor:
-    | {
-        readonly position: CursorPosition;
-        readonly direction: "after" | "before";
-      }
-    | undefined;
+  /** Rows strictly after this position, when given. */
+  readonly after: CursorPosition | undefined;
+  /** Rows strictly before this position, when given (with `after`, a range). */
+  readonly before: CursorPosition | null;
   readonly withCount: boolean;
   readonly withLabels: boolean;
   /** Whether references carry their visible target's class (v2 EntityRefs). */
   readonly withTargets: boolean;
   /** `plain` forces the plain form (see {@link ListRequest}). */
-  readonly form: "plain" | "auto" | undefined;
+  readonly form: "plain" | "auto" | null;
 }
 
 /** One page as read. */
@@ -748,6 +746,8 @@ export interface Page {
   readonly records: readonly DecodedRecord[];
   /** The cursor after the page's last record when more follow it. */
   readonly nextCursor: string | null;
+  /** The cursor at the page's first record (`before` it reads back). */
+  readonly firstCursor: string | null;
   /** Whether more records follow the page. */
   readonly hasMore: boolean;
   /** The count of the page's `FROM` and `WHERE`, when asked for. */
@@ -775,23 +775,36 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
   view: ReadView,
   spec: PageSpec
 ) {
-  const reversed = spec.cursor?.direction === "before";
-  const ordered = reversed ? spec.sortKeys.map(flip) : spec.sortKeys;
+  // Only `before` reads the reversed order; a range reads forward.
+  const reversed = spec.before !== null && spec.after === undefined;
 
-  const keys: CompiledKey[] = ordered.map((key) => ({
-    expression: keyExpression(
-      key.field.type,
-      view.value(BASE_ALIAS, key.field)
-    ),
-    key,
-  }));
+  const compiled = (sortKeys: readonly SortKey[]): CompiledKey[] =>
+    sortKeys.map((key) => ({
+      expression: keyExpression(
+        key.field.type,
+        view.value(BASE_ALIAS, key.field)
+      ),
+      key,
+    }));
+
+  const flipped = compiled(spec.sortKeys.map(flip));
+  const keys = reversed ? flipped : compiled(spec.sortKeys);
+
+  const positions = [
+    ...(spec.after === undefined
+      ? []
+      : [cursorPredicate(keys, spec.after, ID, reversed)]),
+    ...(spec.before === null
+      ? []
+      : [cursorPredicate(flipped, spec.before, ID, true)]),
+  ];
 
   const relation = recordRelation(scope.snapshot, view.classId);
-  const filterJoins = spec.filters.map((compiled) => compiled.joins);
+  const filterJoins = spec.filters.map((filterSpec) => filterSpec.joins);
 
   const conditions = [
     view.visibility(BASE_ALIAS),
-    ...spec.filters.map((compiled) => compiled.predicate),
+    ...spec.filters.map((filterSpec) => filterSpec.predicate),
   ];
 
   const projection = project(
@@ -804,13 +817,7 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
 
   const parts: PageParts = {
     branches: spec.form === "plain" ? [] : view.visibilityBranches(BASE_ALIAS),
-    conditions:
-      spec.cursor === undefined
-        ? conditions
-        : [
-            ...conditions,
-            cursorPredicate(keys, spec.cursor.position, ID, reversed),
-          ],
+    conditions: [...conditions, ...positions],
     joins: [...filterJoins, ...projection.joins],
     keys,
     limit: spec.limit + 1,
@@ -848,10 +855,20 @@ export const readPage = Effect.fn("Records.readPage")(function* readPage(
         })
       : null;
 
+  const first = rows.at(0);
+
+  const firstCursor =
+    first === undefined
+      ? null
+      : encodeCursor(spec.sortKeys, {
+          id: first.id ?? "",
+          values: keys.map((_, index) => first[`k${index}`] ?? null),
+        });
+
   const records = rows.map(projection.decode);
 
   if (!spec.withCount) {
-    return { hasMore, nextCursor, records } satisfies Page;
+    return { firstCursor, hasMore, nextCursor, records } satisfies Page;
   }
 
   const [counted] = yield* readRows(
@@ -862,6 +879,7 @@ WHERE ${whereAll(conditions)}`
 
   return {
     count: Number(counted?.count ?? "0"),
+    firstCursor,
     hasMore,
     nextCursor,
     records,
@@ -903,16 +921,16 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
 
   const position =
     request.cursor === undefined
-      ? undefined
+      ? null
       : yield* decodeCursor(sortKeys, request.cursor);
 
   const page = yield* readPage(scope, view, {
-    cursor:
-      position === undefined ? undefined : { direction: "after", position },
+    after: position ?? undefined,
+    before: null,
     filters: [filter, allowed].flatMap((compiled) =>
       compiled === undefined ? [] : [compiled]
     ),
-    form: request.form,
+    form: request.form ?? null,
     limit,
     offset: 0,
     selection,
