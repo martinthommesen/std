@@ -1,11 +1,10 @@
 /**
  * Retire, purge and role-dependency refusals and refused local additions
  * over HTTP (Contracts 1.6 to 1.8; gates 1.4 to 1.7): each refusal through
- * the generic API on
- * definition tables and through the change-set endpoint, wherever the
- * operation has a form there, leaving the data, the catalog, the
- * definitions, the committed revision, the change entries and the
- * outbox's delivery rows as they were.
+ * the generic API on definition tables and through the change-set
+ * endpoint, wherever the operation has a form there, leaving the data, the
+ * catalog, the definitions, the committed revision, the change entries and
+ * the outbox's delivery rows as they were.
  *
  * Purge has no generic form: a `PATCH` maps `state` to a retire or a
  * reactivation only, so `{ "state": "purged" }` is `ReadOnlyField`; every
