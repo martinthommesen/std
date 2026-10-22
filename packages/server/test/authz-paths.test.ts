@@ -9,18 +9,27 @@
  * from hooks run at the record-service level with a test hook (the seam
  * of decision 0009), as the acting user.
  *
- * Paths that do not exist yet are marked `1A:` below: the change-set
- * endpoints arrive with workstream 1A, and their rows join this table.
+ * Definitions have their own table (`DEFINITION_ROWS`), with the
+ * administrator's outcome too: the change-set endpoints (apply and read)
+ * and generic writes on definition tables, which run as one-operation
+ * change sets (Contracts 1.4, decision 0011). A refusal there commits
+ * nothing: no revision, change entry, delivery, journal, definition or
+ * config-layer row.
  */
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { Operation } from "@std/definitions/operation";
+import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Option, Ref } from "effect";
 import type { Layer } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestRequestOptions } from "../../testing/src/http-client.ts";
+import type {
+  TestRequestOptions,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 import { Actor, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { InstanceSettings } from "../src/config/instance-settings.ts";
@@ -33,6 +42,7 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   arrayOf,
+  committedState,
   deliveries,
   freshAsset,
   listNames,
@@ -53,7 +63,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import { ACME, createRole, values } from "./schema-support.ts";
 import { versionOf } from "./writes-support.ts";
 
 /** The services the rows use: the acme fixture and the HTTP client. */
@@ -772,10 +782,243 @@ const WRITE_ROWS: readonly PathRow[] = [
         body: { description: "mine" },
       }).pipe(Effect.map(writeStatus)),
   },
-  // 1A: add the change-set endpoints here (create, apply and read a change
-  // set, and generic writes on definition tables routed to one-operation
-  // change sets), with the outcome for Alice and Bob: UnknownTable or
-  // NotAllowed for both, as neither holds a rule on definition tables.
+];
+
+/** A path on definitions, with the administrator's outcome too. */
+interface DefinitionRow extends PathRow {
+  readonly admin: Observation;
+}
+
+const CHANGE_SETS = "/api/v1/schema/change-sets";
+
+/**
+ * A definition write's outcome. A refusal must commit nothing: no
+ * revision, change entry, delivery, journal or definition row; if it did,
+ * the observation says so and no expected outcome matches it.
+ *
+ * @param writing - The request.
+ * @returns The observation.
+ */
+const measuredWrite = (
+  writing: Effect.Effect<TestResponse, unknown, Services>
+) =>
+  Effect.gen(function* measureWrite() {
+    const before = yield* committedState();
+    const response = yield* writing;
+    const seen = writeStatus(response);
+
+    return response.status >= 400 && (yield* committedState()) !== before
+      ? { ...seen, detail: "committed" }
+      : seen;
+  });
+
+/**
+ * A change set as a caller posts it.
+ *
+ * @param callers - The fixture's callers.
+ * @param who - The caller.
+ * @param operations - The operations.
+ * @returns The response.
+ */
+const postChangeSet = (
+  callers: Callers,
+  who: Who,
+  operations: readonly Operation[]
+) => {
+  const parsed = parseJson(JSON.stringify({ operations }));
+
+  return send(callers, who, "POST", CHANGE_SETS, {
+    body: parsed.ok ? parsed.value : null,
+  });
+};
+
+/**
+ * A fresh local role, created by the administrator through the
+ * change-set endpoint.
+ *
+ * @param callers - The fixture's callers.
+ * @returns The role's ID and the change set's ID.
+ */
+const freshRole = (callers: Callers) =>
+  Effect.gen(function* createFreshRole() {
+    const role = createRole(`role_${randomUUID().slice(0, 8)}`);
+    const id = role.op === "createRole" ? role.definition.id : "";
+    const response = yield* postChangeSet(callers, "admin", [role]);
+
+    assert.strictEqual(response.status, 201, response.text);
+
+    const changeSet = objectOf(objectOf(response.json).changeSet).id;
+
+    return { changeSetId: textOf(changeSet), id };
+  });
+
+/**
+ * The stored version of a definition, as table owner.
+ *
+ * @param table - Its definition table.
+ * @param id - The definition.
+ * @returns The version.
+ */
+const definitionVersion = (table: string, id: string) =>
+  values(
+    `SELECT version::text AS value FROM core."${table}" WHERE id = $1::uuid`,
+    [id]
+  ).pipe(Effect.map(([version]) => Number(version ?? "0")));
+
+const DEFINITION_ROWS: readonly DefinitionRow[] = [
+  {
+    admin: { status: 201 },
+    alice: refused(403, "NotAllowed"),
+    bob: refused(403, "NotAllowed"),
+    path: "POST /schema/change-sets (create a local role)",
+    run: (callers, who) =>
+      postChangeSet(callers, who, [
+        createRole(`role_${randomUUID().slice(0, 8)}`),
+      ]).pipe(measuredWrite),
+  },
+  {
+    admin: refused(403, "DefinitionProtected"),
+    alice: refused(422, "DefinitionInvalid"),
+    bob: refused(422, "DefinitionInvalid"),
+    path: "POST /schema/change-sets (rename an app table; hidden is missing)",
+    run: (callers, who) =>
+      Effect.gen(function* renameApp() {
+        const version = yield* definitionVersion("class", ACME.asset);
+
+        return yield* measuredWrite(
+          postChangeSet(callers, who, [
+            { id: ACME.asset, name: "thing", op: "rename", version },
+          ])
+        );
+      }),
+  },
+  {
+    admin: { status: 200 },
+    alice: refused(404, "NotFound"),
+    bob: refused(404, "NotFound"),
+    path: "GET /schema/change-sets/{id} (a committed change set)",
+    run: (callers, who) =>
+      Effect.gen(function* readChangeSet() {
+        const { changeSetId } = yield* freshRole(callers);
+
+        return yield* measuredWrite(
+          send(callers, who, "GET", `${CHANGE_SETS}/${changeSetId}`)
+        );
+      }),
+  },
+  {
+    admin: refused(404, "NotFound"),
+    alice: refused(404, "NotFound"),
+    bob: refused(404, "NotFound"),
+    path: "GET /schema/change-sets/{random ID}",
+    run: (callers, who) =>
+      send(callers, who, "GET", `${CHANGE_SETS}/${randomUUID()}`).pipe(
+        Effect.map(writeStatus)
+      ),
+  },
+  {
+    admin: { status: 201 },
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "POST /core.role (generic create, a one-operation change set)",
+    run: (callers, who) =>
+      send(callers, who, "POST", listPath("core.role"), {
+        body: { label: "Generic", name: `role_${randomUUID().slice(0, 8)}` },
+      }).pipe(measuredWrite),
+  },
+  {
+    admin: { status: 200 },
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "PATCH /core.role/{local role} (label)",
+    run: (callers, who) =>
+      Effect.gen(function* relabelRole() {
+        const { id } = yield* freshRole(callers);
+
+        return yield* measuredWrite(
+          send(callers, who, "PATCH", recordPath("core.role", id), {
+            body: { label: "Relabelled" },
+            headers: ifMatch(1),
+          })
+        );
+      }),
+  },
+  {
+    admin: { status: 200 },
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "PATCH /core.role/{local role} (retire)",
+    run: (callers, who) =>
+      Effect.gen(function* retireRole() {
+        const { id } = yield* freshRole(callers);
+
+        return yield* measuredWrite(
+          send(callers, who, "PATCH", recordPath("core.role", id), {
+            body: { state: "retired" },
+            headers: ifMatch(1),
+          })
+        );
+      }),
+  },
+  {
+    admin: { status: 200 },
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "DELETE /core.role/{local role}",
+    run: (callers, who) =>
+      Effect.gen(function* deleteRole() {
+        const { id } = yield* freshRole(callers);
+
+        return yield* measuredWrite(
+          send(callers, who, "DELETE", recordPath("core.role", id), {
+            headers: ifMatch(1),
+          })
+        );
+      }),
+  },
+  {
+    admin: { status: 200 },
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "PATCH /core.class/{acme.asset} (label: a local override)",
+    run: (callers, who) =>
+      Effect.gen(function* relabelApp() {
+        const version = yield* definitionVersion("class", ACME.asset);
+
+        return yield* measuredWrite(
+          send(callers, who, "PATCH", recordPath("core.class", ACME.asset), {
+            body: { label: `Asset ${randomUUID().slice(0, 4)}` },
+            headers: ifMatch(version),
+          })
+        );
+      }),
+  },
+  {
+    admin: refused(409, "UseRetireOrPurge"),
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "DELETE /core.field/{acme cost}",
+    run: (callers, who) =>
+      Effect.gen(function* deleteField() {
+        const version = yield* definitionVersion("field", ACME.cost);
+
+        return yield* measuredWrite(
+          send(callers, who, "DELETE", recordPath("core.field", ACME.cost), {
+            headers: ifMatch(version),
+          })
+        );
+      }),
+  },
+  {
+    admin: refused(403, "NotAllowed"),
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "POST /core.change (the history, never written generically)",
+    run: (callers, who) =>
+      send(callers, who, "POST", listPath("core.change"), {
+        body: { kind: "update" },
+      }).pipe(measuredWrite),
+  },
 ];
 
 describe("authz-paths", () => {
@@ -826,6 +1069,22 @@ describe("authz-paths", () => {
           }
         }
       })
+    );
+
+    dbTest.effect(
+      "every definition and change-set path, for Alice, Bob and the admin",
+      () =>
+        Effect.gen(function* definitionPaths() {
+          const callers = yield* signInAll;
+
+          for (const row of DEFINITION_ROWS) {
+            for (const who of ["alice", "bob", "admin"] as const) {
+              const seen = yield* row.run(callers, who);
+
+              assert.deepStrictEqual(seen, row[who], `${who}: ${row.path}`);
+            }
+          }
+        })
     );
 
     dbTest.effect(
