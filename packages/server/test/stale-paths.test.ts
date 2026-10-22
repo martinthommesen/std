@@ -18,6 +18,8 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { OPENAPI_PATH } from "@std/api/api";
 import type { Operation } from "@std/definitions/operation";
+import { setOrigin } from "@std/definitions/requester";
+import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
@@ -31,6 +33,7 @@ import type {
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { staleScope } from "../src/http/stale-scope.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import {
   freshAsset,
   objectOf,
@@ -552,6 +555,72 @@ describe("stale-paths", () => {
 
           assert.strictEqual(invisible.status, 404);
           assert.strictEqual(invisible.text, random.text);
+        })
+    );
+
+    dbTest.effect(
+      "a definition write built before its column became read-only is SchemaChanged on both paths",
+      () =>
+        Effect.gen(function* definitionColumnChanged() {
+          const http = yield* TestHttpClient;
+          const callers = yield* signInAll;
+          const catalog = yield* Catalog;
+          const { id } = yield* roleByAdmin(callers);
+          const built = yield* catalog.refresh;
+          const stated = revisionHeaderValue(built);
+
+          const label = built.fieldByName(PLATFORM_CLASS_IDS.role, "label");
+
+          assert.isDefined(label);
+
+          // The core set makes core.role's label read-only: a change to a
+          // column of a definition table, which only the core set can make.
+          yield* applyChangeSet({
+            operations: [
+              {
+                changes: { readOnly: true },
+                id: label?.id ?? "",
+                op: "update",
+                version: label?.version ?? 1,
+              },
+            ],
+            origin: setOrigin({ layer: "core" }),
+          });
+
+          const version = yield* roleVersion(id);
+          const headers = { [HEADER]: stated };
+          const token = callers.tokens.admin;
+
+          const generic = yield* http.request(
+            "PATCH",
+            recordPath("core.role", id),
+            {
+              body: { label: "Too late" },
+              headers: { ...headers, "if-match": `"${version}"` },
+              token,
+            }
+          );
+
+          const endpoint = yield* http.request("POST", CHANGE_SETS, {
+            body: changeSetBody([
+              {
+                changes: { label: "Too late" },
+                id,
+                op: "update",
+                version: Number(version),
+              },
+            ]),
+            headers,
+            token,
+          });
+
+          for (const response of [generic, endpoint]) {
+            assert.deepStrictEqual(observe(response), CHANGED, response.text);
+            assert.include(response.text, "readOnlyChanged");
+            assert.include(response.text, '"label"');
+          }
+
+          assert.strictEqual(yield* roleVersion(id), version);
         })
     );
   });
