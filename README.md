@@ -37,7 +37,7 @@ Each step prints a heading. Every refusal it shows is checked for its exact stat
 
 The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` (and `QUICKSTART_ALICE_PASSWORD`, `QUICKSTART_BOB_PASSWORD`) for anything but a demo. The script never puts a password or a session token into a command's arguments. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT` and `STD_TIME_ZONE` (UTC by default). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
 
-The compose image (`docker/quickstart.Dockerfile`) is a development image that runs the TypeScript sources; the release image comes in Step 4. Without Docker, `pnpm quickstart:ci` runs the same script against `std serve` on a disposable database, as CI does.
+The compose image (`docker/quickstart.Dockerfile`) is a development image that runs the TypeScript sources; the release image comes in Step 4. Without Docker, `pnpm quickstart:ci` runs the same script against `std serve` on a disposable database, as CI does. It needs Linux and `strace`: it traces every program the script starts and fails if a password reaches any program's arguments.
 
 ## Getting started
 

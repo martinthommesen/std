@@ -13,22 +13,22 @@
  * `std doctor`, and any nonzero exit fails this command. The server's log
  * is printed only when a step fails.
  *
- * Credentials: the script runs with a PATH that logs the arguments of every
- * command it starts (`argv-log.ts`), and the run fails if a password shows
- * up in them, so no password reaches a process listing. Before it runs, a
- * static check refuses command forms that would bypass that log (a command
- * by path, `command -p`, `env`, a PATH assignment, ...; `command-forms.ts`).
+ * Credentials: each script run runs under `strace -f -e trace=execve`
+ * (`exec-trace.ts`), which records every program the script and its
+ * descendants start, whatever started them. The run fails if any argument
+ * holds one of the run's random passwords or an authorization header, if
+ * any execve failed, or if the trace lacks curl, jq or the doctor command.
  *
  * Every command runs in its own process group, ended and awaited when its
  * step ends, also on interruption (`process-group.ts`): a SIGTERM to this
  * command leaves no curl, jq, doctor or server process behind, and the
  * database is dropped only after they are gone.
  *
- * Needs the Postgres at `STD_DATABASE_URL` (as every test does), bash, curl
- * and jq.
+ * Needs Linux, the Postgres at `STD_DATABASE_URL` (as every test does),
+ * bash, curl, jq and strace; without strace it fails and says how to
+ * install it.
  */
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
@@ -37,8 +37,8 @@ import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect, Layer, Redacted, Schedule, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 
-import { argvLog, leakedSecrets } from "./argv-log.ts";
-import { commandFormProblems } from "./command-forms.ts";
+import { findStrace, program, traceScript } from "./exec-trace.ts";
+import type { ExpectedProgram } from "./exec-trace.ts";
 import { exitCode, spawnGroup } from "./process-group.ts";
 
 const CLI = fileURLToPath(
@@ -78,12 +78,7 @@ class QuickstartStepFailed extends Schema.TaggedError<
 >()("QuickstartStepFailed", {
   code: Schema.NullOr(Schema.Number),
   detail: Schema.String,
-  reason: Schema.Literals([
-    "commandForms",
-    "exited",
-    "notListening",
-    "secretInArguments",
-  ]),
+  reason: Schema.Literals(["exited", "notListening", "trace"]),
   step: Schema.String,
 }) {
   /**
@@ -95,13 +90,9 @@ class QuickstartStepFailed extends Schema.TaggedError<
       return `${this.step} exited with ${String(this.code)}`;
     }
 
-    if (this.reason === "commandForms") {
-      return `${this.step} starts commands in forms that bypass the argument log: ${this.detail}`;
-    }
-
     return this.reason === "notListening"
       ? `${this.step} is not listening yet`
-      : `${this.step} put a password into process arguments: ${this.detail}`;
+      : `${this.step}: its execve trace failed the check: ${this.detail}`;
   }
 }
 
@@ -267,33 +258,63 @@ const dropAliceRoles = Effect.fn("QuickstartCi.dropAliceRoles")(
   Effect.provide(Fetch)
 );
 
+/** What every script run must have started. */
+const EXPECTED: readonly ExpectedProgram[] = [
+  program("curl"),
+  program("jq"),
+  {
+    name: "the doctor command",
+    ran: (call) => call.argv.includes(CLI) && call.argv.at(-1) === "doctor",
+  },
+];
+
 /**
- * Fails when a password appears in the logged arguments of any command.
- * @param step - The step that ran.
- * @param log - The argument log.
- * @returns Succeeds when no password leaked.
+ * Runs the quickstart script under strace and checks every execve.
+ * @param step - The heading.
+ * @param env - Its environment.
+ * @returns Fails when the script fails or the trace has a problem.
  */
-const noSecretsIn = (step: string, log: string) =>
-  Effect.gen(function* checkArguments() {
-    const leaked = yield* leakedSecrets(log, Object.values(PASSWORDS));
+const runTraced = Effect.fn("QuickstartCi.runTraced")(function* runTraced(
+  step: string,
+  env: NodeJS.ProcessEnv
+) {
+  yield* Console.log(`\n### ${step}`);
 
-    if (leaked.length > 0) {
-      return yield* new QuickstartStepFailed({
-        code: null,
-        detail: leaked.join("; "),
-        reason: "secretInArguments",
-        step,
-      });
-    }
-
-    return yield* Console.log(
-      `${step}: no password in the arguments of the commands it started`
-    );
+  const traced = yield* traceScript({
+    env,
+    expected: EXPECTED,
+    script: SCRIPT,
+    secrets: Object.values(PASSWORDS),
   });
 
+  if (traced.code !== 0) {
+    return yield* new QuickstartStepFailed({
+      code: traced.code,
+      detail: "",
+      reason: "exited",
+      step,
+    });
+  }
+
+  if (traced.problems.length > 0) {
+    return yield* new QuickstartStepFailed({
+      code: null,
+      detail: traced.problems.join("; "),
+      reason: "trace",
+      step,
+    });
+  }
+
+  return yield* Console.log(
+    `${step}: ${traced.calls} execve calls traced; no password or token in any argument`
+  );
+});
+
 const quickstart = Effect.gen(function* runQuickstart() {
+  // Before anything else: without strace the credential check cannot run.
+  yield* findStrace();
+
   const database = yield* TestDatabase;
-  const log = yield* argvLog;
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -306,19 +327,6 @@ const quickstart = Effect.gen(function* runQuickstart() {
     STD_HTTP_HOST: "127.0.0.1",
     STD_HTTP_PORT: "0",
   };
-
-  const forms = commandFormProblems(readFileSync(SCRIPT, "utf-8"));
-
-  if (forms.length > 0) {
-    return yield* new QuickstartStepFailed({
-      code: null,
-      detail: forms
-        .map((found) => `line ${found.line}: ${found.problem}`)
-        .join("; "),
-      reason: "commandForms",
-      step: "examples/quickstart.sh",
-    });
-  }
 
   yield* Console.log(`Quickstart on the disposable database ${database.name}`);
   yield* run("std upgrade", process.execPath, [CLI, "upgrade"], env);
@@ -333,13 +341,12 @@ const quickstart = Effect.gen(function* runQuickstart() {
 
   yield* Effect.gen(function* runWithServer() {
     const url = yield* listeningAt(server);
-    const scriptEnv = { ...env, ...log.env, STD_URL: url };
+    const scriptEnv = { ...env, STD_URL: url };
 
-    yield* run("examples/quickstart.sh (first run)", "bash", [SCRIPT], {
+    yield* runTraced("examples/quickstart.sh (first run)", {
       ...scriptEnv,
       QUICKSTART_RUN: "ci-1",
     });
-    yield* noSecretsIn("first run", yield* log.read);
 
     const dropped = yield* dropAliceRoles(url);
 
@@ -349,14 +356,10 @@ const quickstart = Effect.gen(function* runQuickstart() {
       );
     }
 
-    yield* run(
+    return yield* runTraced(
       "examples/quickstart.sh (second run, same database, after a partial setup)",
-      "bash",
-      [SCRIPT],
       { ...scriptEnv, QUICKSTART_RUN: "ci-2" }
     );
-
-    return yield* noSecretsIn("second run", yield* log.read);
   }).pipe(
     Effect.tapError(() => Console.error(`\n### std serve log\n${server.log()}`))
   );

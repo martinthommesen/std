@@ -3,6 +3,11 @@
 # examples/quickstart.sh against it, twice. The `ci.yml` step "Quickstart"
 # runs the same script without Docker.
 #
+# This job skips the credential check (the execve trace of decision 0016):
+# the check is a TypeScript program that would need Node and the workspace
+# here, and the doctor runs inside the container, outside the script's
+# process tree. The `ci.yml` step runs the check on the same script.
+#
 # This workflow is deliberately NOT part of `pnpm ci:local`, which reads only
 # ci.yml: locally, `docker compose up` for the project `std` would recreate
 # the Postgres container that every checkout shares. To try the compose path
