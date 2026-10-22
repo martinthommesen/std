@@ -1,25 +1,42 @@
-import type { Decision } from "@std/access/decision";
 /**
  * Delivery payloads (Contracts 4.3, 4.5, 4.6): built when a delivery runs,
  * from the change entry it names, and filtered for the subscription's
  * identity on the version's own image under current rules.
  *
- * - **The version's own image** is the record as that version left it: for
- *   a create or an update, the fold of the record's change entries up to
- *   and including the version (a create records every non-empty value, an
- *   update every changed one); for a delete, the entry's `before` values.
- *   It is read from history alone, so a payload never depends on the
- *   record's state when the delivery runs. Fields the current snapshot no
- *   longer describes (purged) are left out; a field no entry mentions holds
- *   its empty value.
+ * - **The version's own image** is the record as that version left it,
+ *   reconstructed from history and the fields' definition revisions alone,
+ *   so a payload never depends on the record's state when the delivery
+ *   runs. A field's value at version n is:
+ *   - the `after` of the latest entry up to n that changed it (for a
+ *     delete, the delete entry's `before`, which holds every non-empty
+ *     value);
+ *   - otherwise, if the field existed when the record was created (the
+ *     create entry's schema revision is at or after the field's first
+ *     definition revision), its empty value: a create records every
+ *     non-empty value;
+ *   - otherwise the record predates the field, and Postgres gave the
+ *     existing row the field's default when the column was added (false for
+ *     a boolean without one): that is the value if version n was written
+ *     after the field existed, the record's table is not a platform table
+ *     (migrations add their columns, not field definitions) and the field is
+ *     not auto-numbered (a backfill step numbered the row);
+ *   - otherwise **unknown**: a version written before the field existed, a
+ *     backfilled number, a field without a definition revision, history
+ *     that does not start with the create entry.
+ *
+ *   Unknown is never assumed empty. An unknown field is left out of the
+ *   image, so it never appears in a payload, and an access-rule condition
+ *   that needs it to decide fails closed (below). Fields the current
+ *   snapshot no longer describes (purged) are left out.
  * - **Filtered for the identity under current rules**: the identity's
  *   roles now, the current snapshot's access rules, and their conditions
  *   evaluated in TypeScript (`@std/conditions`, the evaluator the
  *   differential test holds equal to the SQL one) on that image, with `me`
  *   = the identity and `now` = the delivery time. The record is visible
  *   when the record read decision holds; a field is readable when it is
- *   visible and the field read decision holds (Contracts 3.2). A rule
- *   condition that no longer checks or resolves fails closed, as in SQL.
+ *   visible, known, and its field read decision holds (Contracts 3.2). A
+ *   rule condition that no longer checks or resolves, or that reads an
+ *   unknown field before its outcome is decided, denies.
  * - Password and secret fields never appear, neither as values nor as the
  *   `{"changed": true}` marker of the change entry (4.3).
  *
@@ -27,25 +44,33 @@ import type { Decision } from "@std/access/decision";
  * the same way: their change entries are keyed by the field IDs the core
  * set describes for the definition table.
  */
-import { recordDecision, fieldDecision } from "@std/access/rules";
+import type { Decision } from "@std/access/decision";
+import { fieldDecision, recordDecision } from "@std/access/rules";
 import type { Caller } from "@std/access/rules";
 import { checkCondition } from "@std/conditions/check";
 import { evaluateCondition } from "@std/conditions/evaluate";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
-import { sql, textParameter } from "@std/conditions/sql-fragment";
+import {
+  arrayParameter,
+  sql,
+  textParameter,
+} from "@std/conditions/sql-fragment";
 import { classViewOf } from "@std/definitions/condition-view";
+import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { decodeIn, emptyValue } from "@std/values/codec";
+import { decodeIn, emptyValue, encodeOut } from "@std/values/codec";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   parseJsonbText,
   parseTimestamptzText,
 } from "@std/values/postgres-text";
+import { isPlaintext } from "@std/values/write-only";
 import { Effect, Schema } from "effect";
 
+import { definitionOf } from "../catalog/definition-revisions.ts";
 import type { AccessContext } from "../records/access-sql.ts";
 import { ChangeKindSchema } from "../records/change-entry.ts";
 import type { ChangeKind } from "../records/change-entry.ts";
@@ -76,7 +101,7 @@ export interface DeliveryPayload {
   readonly actorId: string | null;
   /**
    * The version's own image (the before image for a delete): field ID to
-   * canonical JSON, readable fields only.
+   * canonical JSON, readable and known fields only.
    */
   readonly image: JsonObject;
   /**
@@ -113,8 +138,20 @@ export interface StoredEntry {
   readonly kind: ChangeKind;
   readonly actorId: string;
   readonly occurredAt: number;
+  /** The schema revision the entry's save ran at. */
+  readonly schemaRevision: number;
   /** Field ID to `{ before, after }` or `{ changed: true }`. */
   readonly fields: JsonObject;
+}
+
+/** How a field came to exist, from its first definition revision. */
+export interface FieldOrigin {
+  /** The revision that created the field. */
+  readonly revision: number;
+  /** Its default then (the value `ADD COLUMN` gave existing rows). */
+  readonly default: JsonValue | null;
+  /** Whether it was auto-numbered then (a backfill step numbered rows). */
+  readonly numbered: boolean;
 }
 
 const EntryTextSchema = Schema.Struct({
@@ -126,9 +163,18 @@ const EntryTextSchema = Schema.Struct({
   operation_id: Schema.String,
   record_class_id: Schema.String,
   record_version: Schema.FiniteFromString,
+  schema_revision: Schema.FiniteFromString,
 });
 
 const decodeEntryText = Schema.decodeUnknownEffect(EntryTextSchema);
+
+const OriginTextSchema = Schema.Struct({
+  effective: Schema.String,
+  id: Schema.String,
+  revision: Schema.FiniteFromString,
+});
+
+const decodeOriginText = Schema.decodeUnknownEffect(OriginTextSchema);
 
 const unreadable = (reason: string) => new PayloadUnreadable({ reason });
 
@@ -153,6 +199,7 @@ const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
     operationId: text.operation_id,
     recordClassId: text.record_class_id,
     recordVersion: text.record_version,
+    schemaRevision: text.schema_revision,
   };
 
   return entry;
@@ -173,7 +220,7 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
   "record_class_id"::text AS "record_class_id",
   "record_version"::text AS "record_version", "kind",
   "actor_id"::text AS "actor_id", "occurred_at"::text AS "occurred_at",
-  "fields"::text AS "fields"
+  "schema_revision"::text AS "schema_revision", "fields"::text AS "fields"
 FROM core."change" AS "c"
 WHERE "record_id" = ${textParameter(recordId, "uuid")}
   AND "record_version" <= ${textParameter(String(version), "int8")}
@@ -190,9 +237,6 @@ ORDER BY "c"."record_version"`
   }
 );
 
-const sideOf = (change: JsonValue, side: "before" | "after"): JsonValue =>
-  isJsonObject(change) ? (change[side] ?? null) : null;
-
 /**
  * The fields a payload may carry: live and not write-only.
  *
@@ -203,45 +247,208 @@ const sideOf = (change: JsonValue, side: "before" | "after"): JsonValue =>
 const payloadFields = (snapshot: ConfigSnapshot, classId: DefinitionId) =>
   snapshot.fields(classId).filter((field) => !isWriteOnly(field.type.kind));
 
+const originOf = Effect.fnUntraced(function* originOf(row: TextRow) {
+  const text = yield* decodeOriginText(row).pipe(
+    Effect.mapError(() => unreadable("A definition revision does not decode."))
+  );
+
+  const definition = definitionOf(text.effective);
+
+  // Not a field: no origin, so its values count as unknown.
+  const origin: FieldOrigin | null =
+    definition?.kind === "field"
+      ? {
+          default: definition.default,
+          numbered: definition.numberPrefix !== null,
+          revision: text.revision,
+        }
+      : null;
+
+  return [text.id, origin] as const;
+});
+
+/**
+ * The origin of each payload field of a class: its first definition
+ * revision. A field without one is left out (its values count as unknown).
+ *
+ * @param snapshot - The current configuration.
+ * @param classId - The record's concrete class.
+ * @returns Field ID to origin.
+ */
+export const readFieldOrigins = Effect.fn("Outbox.readFieldOrigins")(
+  function* readFieldOrigins(snapshot: ConfigSnapshot, classId: DefinitionId) {
+    const fieldIds = payloadFields(snapshot, classId).map((field) => field.id);
+
+    const rows = yield* readRows(
+      sql`SELECT DISTINCT ON ("definition_id") "definition_id"::text AS "id",
+  "revision"::text AS "revision", "effective"::text AS "effective"
+FROM core."definition_revision"
+WHERE "definition_id" = ANY(${arrayParameter(fieldIds, "uuid")})
+ORDER BY "definition_id", "revision"`
+    );
+
+    const origins = new Map<DefinitionId, FieldOrigin>();
+
+    for (const row of rows) {
+      const [fieldId, origin] = yield* originOf(row);
+
+      if (origin !== null) {
+        origins.set(fieldId, origin);
+      }
+    }
+
+    return origins;
+  }
+);
+
+/** A version's image: the fields whose value is known, and the rest. */
+export interface VersionImage {
+  /** Field ID to canonical JSON. */
+  readonly known: ReadonlyMap<DefinitionId, JsonValue>;
+  /** Fields whose value at the version cannot be reconstructed. */
+  readonly unknown: ReadonlySet<DefinitionId>;
+}
+
+const sideOf = (change: JsonValue, side: "before" | "after"): JsonValue =>
+  isJsonObject(change) ? (change[side] ?? null) : null;
+
+/**
+ * The value `ADD COLUMN` gave rows that existed when the field was added.
+ *
+ * @param field - The field as the current snapshot has it.
+ * @param origin - Its origin.
+ * @returns Its default then, in canonical JSON (false for a boolean
+ *   without one), or undefined when it does not decode.
+ */
+const addedValue = (
+  field: FieldDefinition,
+  origin: FieldOrigin
+): JsonValue | undefined => {
+  if (origin.default === null) {
+    return emptyValue(field.type.kind);
+  }
+
+  const decoded = decodeIn(field.type, origin.default);
+
+  return decoded.ok && !isPlaintext(decoded.value)
+    ? encodeOut(field.type, decoded.value)
+    : undefined;
+};
+
+/** Where an unmentioned field's value at a version comes from. */
+interface Unmentioned {
+  readonly field: FieldDefinition;
+  readonly origin: FieldOrigin | undefined;
+  /** The entry the version's image is read at (create/update: the last). */
+  readonly at: StoredEntry;
+  /** The create entry, when history starts with it. */
+  readonly created: StoredEntry | undefined;
+  readonly platform: boolean;
+}
+
+const unmentionedValue = (input: Unmentioned): JsonValue | undefined => {
+  const { at, created, field, origin } = input;
+
+  if (origin === undefined) {
+    return undefined;
+  }
+
+  // A delete entry holds every non-empty value the row had.
+  if (at.kind === "delete") {
+    return at.schemaRevision >= origin.revision
+      ? emptyValue(field.type.kind)
+      : undefined;
+  }
+
+  if (created === undefined) {
+    return undefined;
+  }
+
+  // A create entry records every non-empty value of the fields it had.
+  if (created.schemaRevision >= origin.revision) {
+    return emptyValue(field.type.kind);
+  }
+
+  // The record predates the field: the column's added value, if the
+  // version was written after the field existed and nothing else wrote it.
+  const reconstructible =
+    !input.platform && !origin.numbered && at.schemaRevision >= origin.revision;
+
+  return reconstructible ? addedValue(field, origin) : undefined;
+};
+
 /**
  * The version's own image in canonical JSON, from the record's entries up
- * to and including it (the last entry is the delivery's).
+ * to and including it (the last entry is the delivery's) and its fields'
+ * origins. See the module comment for the rules.
  *
  * @param snapshot - The current configuration.
  * @param entries - The record's entries in version order.
- * @returns Field ID to canonical JSON for every payload field.
+ * @param origins - The payload fields' origins.
+ * @returns The known values and the unknown fields.
  */
-export const versionImageJson = (
+export const versionImage = (
   snapshot: ConfigSnapshot,
-  entries: readonly StoredEntry[]
-): ReadonlyMap<DefinitionId, JsonValue> => {
-  const last = entries.at(-1);
+  entries: readonly StoredEntry[],
+  origins: ReadonlyMap<DefinitionId, FieldOrigin>
+): VersionImage => {
+  const at = entries.at(-1);
+  const known = new Map<DefinitionId, JsonValue>();
+  const unknown = new Set<DefinitionId>();
 
-  if (last === undefined) {
-    return new Map();
+  if (at === undefined) {
+    return { known, unknown };
   }
 
-  const fields = payloadFields(snapshot, last.recordClassId);
-  const image = new Map<DefinitionId, JsonValue>();
+  const [first] = entries;
 
-  for (const field of fields) {
-    image.set(field.id, emptyValue(field.type.kind));
-  }
+  const startsWithCreate =
+    first?.kind === "create" &&
+    first.recordVersion === 1 &&
+    entries.length === at.recordVersion;
 
-  const applied = last.kind === "delete" ? [last] : entries;
-  const side = last.kind === "delete" ? "before" : "after";
+  const mentioned = new Map<DefinitionId, JsonValue>();
+  const applied = at.kind === "delete" ? [at] : entries;
+  const side = at.kind === "delete" ? "before" : "after";
 
   for (const entry of applied) {
     for (const [fieldId, change] of Object.entries(entry.fields)) {
-      if (image.has(fieldId)) {
-        image.set(fieldId, sideOf(change, side));
-      }
+      mentioned.set(fieldId, sideOf(change, side));
     }
   }
 
-  return image;
+  const platform = snapshot.class(at.recordClassId)?.storage === "platform";
+
+  for (const field of payloadFields(snapshot, at.recordClassId)) {
+    const value = mentioned.has(field.id)
+      ? mentioned.get(field.id)
+      : unmentionedValue({
+          at,
+          created: startsWithCreate ? first : undefined,
+          field,
+          origin: origins.get(field.id),
+          platform,
+        });
+
+    if (value === undefined) {
+      unknown.add(field.id);
+    } else {
+      known.set(field.id, value);
+    }
+  }
+
+  return { known, unknown };
 };
 
+/**
+ * The known fields as a record image for the evaluator. Unknown fields are
+ * absent, so a condition that reads one throws and denies.
+ *
+ * @param snapshot - The current configuration.
+ * @param classId - The record's concrete class.
+ * @param json - The known values in canonical JSON.
+ * @returns The image, or `PayloadUnreadable`.
+ */
 const decodedImage = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId,
@@ -250,15 +457,19 @@ const decodedImage = (
   const image: Record<string, NonNullable<RecordImage[string]> | null> = {};
 
   for (const field of payloadFields(snapshot, classId)) {
-    const decoded = decodeIn(field.type, json.get(field.id) ?? null);
+    const value = json.get(field.id);
 
-    if (!decoded.ok) {
-      return unreadable(
-        `A stored value of field ${field.id} does not decode under the current schema.`
-      );
+    if (value !== undefined) {
+      const decoded = decodeIn(field.type, value);
+
+      if (!decoded.ok) {
+        return unreadable(
+          `A stored value of field ${field.id} does not decode under the current schema.`
+        );
+      }
+
+      image[field.id] = decoded.value;
     }
-
-    image[field.id] = decoded.value;
   }
 
   return image;
@@ -266,8 +477,9 @@ const decodedImage = (
 
 /**
  * Whether a decision holds on an image, in TypeScript. A condition that no
- * longer checks or resolves, or that meets a defect, denies (fail closed,
- * like the SQL compiler's `FALSE`).
+ * longer checks or resolves, or that meets a defect (such as a field the
+ * image does not hold), denies (fail closed, like the SQL compiler's
+ * `FALSE`).
  *
  * @param snapshot - The current configuration.
  * @param decision - The decision.
@@ -324,11 +536,12 @@ export interface Readability {
 
 /**
  * What a caller may read of a record image under the snapshot's rules.
+ * Fields the image does not hold are never readable.
  *
  * @param snapshot - The current configuration.
  * @param caller - The identity's roles.
  * @param classId - The record's concrete class.
- * @param image - The version's own image.
+ * @param image - The version's own image (known fields only).
  * @param context - `me`, `now` and the instance time zone.
  * @returns Visibility and the readable fields.
  */
@@ -356,7 +569,10 @@ export const readabilityOf = (
   for (const field of payloadFields(snapshot, classId)) {
     const decision = fieldDecision(snapshot, caller, "read", classId, field.id);
 
-    if (decisionHolds(snapshot, decision, classId, image, context)) {
+    if (
+      Object.hasOwn(image, field.id) &&
+      decisionHolds(snapshot, decision, classId, image, context)
+    ) {
       fields.add(field.id);
     }
   }
@@ -366,23 +582,27 @@ export const readabilityOf = (
 
 /**
  * The payload of one delivery from its record's entries, filtered for a
- * caller (pure: the entries are read by `readEntries`).
+ * caller (pure: the entries and origins are read by `readEntries` and
+ * `readFieldOrigins`).
  *
  * @param snapshot - The current configuration.
  * @param caller - The identity's roles.
- * @param recordId - The record.
- * @param entries - The record's entries up to the delivery's, which is last.
+ * @param input - The record, its entries up to the delivery's (last), and
+ *   its fields' origins.
  * @param context - `me` (the identity), `now` and the instance time zone.
  * @returns The payload, or `PayloadUnreadable`.
  */
 export const payloadOf = (
   snapshot: ConfigSnapshot,
   caller: Caller,
-  recordId: string,
-  entries: readonly StoredEntry[],
+  input: {
+    readonly recordId: string;
+    readonly entries: readonly StoredEntry[];
+    readonly origins: ReadonlyMap<DefinitionId, FieldOrigin>;
+  },
   context: AccessContext
 ): DeliveryPayload | PayloadUnreadable => {
-  const entry = entries.at(-1);
+  const entry = input.entries.at(-1);
 
   if (entry === undefined) {
     return unreadable("The delivery's change entry does not exist.");
@@ -394,8 +614,8 @@ export const payloadOf = (
     );
   }
 
-  const json = versionImageJson(snapshot, entries);
-  const image = decodedImage(snapshot, entry.recordClassId, json);
+  const { known } = versionImage(snapshot, input.entries, input.origins);
+  const image = decodedImage(snapshot, entry.recordClassId, known);
 
   if (image instanceof PayloadUnreadable) {
     return image;
@@ -409,22 +629,20 @@ export const payloadOf = (
     context
   );
 
-  const visibleJson = (fieldId: DefinitionId) => readable.fields.has(fieldId);
+  const shown = (fieldId: DefinitionId) => readable.fields.has(fieldId);
 
   return {
     actorId: readable.visible ? entry.actorId : null,
     changeId: entry.changeId,
     changes: Object.fromEntries(
-      Object.entries(entry.fields).filter(([fieldId]) => visibleJson(fieldId))
+      Object.entries(entry.fields).filter(([fieldId]) => shown(fieldId))
     ),
     classId: entry.recordClassId,
-    image: Object.fromEntries(
-      [...json].filter(([fieldId]) => visibleJson(fieldId))
-    ),
+    image: Object.fromEntries([...known].filter(([fieldId]) => shown(fieldId))),
     kind: entry.kind,
     occurredAt: entry.occurredAt,
     operationId: entry.operationId,
-    recordId,
+    recordId: input.recordId,
     recordVersion: entry.recordVersion,
     visible: readable.visible,
   };

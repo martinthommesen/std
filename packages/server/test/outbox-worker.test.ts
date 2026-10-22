@@ -505,7 +505,10 @@ const deletePayload = Effect.gen(function* deletePayloadTest() {
   yield* deleteAsset(admin, AM, 1);
   assert.strictEqual(yield* workerPass(), 2);
 
-  const [ofL, ofAM] = yield* Ref.get(payloads);
+  // Both run in one pass, concurrently: find each by its record.
+  const delivered = yield* Ref.get(payloads);
+  const ofL = delivered.find((delivery) => delivery.recordId === L);
+  const ofAM = delivered.find((delivery) => delivery.recordId === AM);
 
   assert.strictEqual(ofL?.payload.kind, "delete");
   assert.strictEqual(ofL?.payload.recordVersion, 2);

@@ -241,61 +241,53 @@ const refuseNested = Effect.die(
   })
 );
 
+const invalidClaim = (input: ClaimInput): RangeError | undefined => {
+  if (!Number.isInteger(input.limit) || input.limit < 1) {
+    return new RangeError("A claim takes at least one row.");
+  }
+
+  if (Duration.toMillis(input.lease) <= 0) {
+    return new RangeError("A lease must be positive.");
+  }
+
+  return !Number.isInteger(input.maxAttempts) || input.maxAttempts < 1
+    ? new RangeError("A subscription allows at least one attempt.")
+    : undefined;
+};
+
 /**
- * Claims due deliveries of one subscription in per-record version order,
- * sets them `in_flight` under a new lease token, and commits. Expired
- * leases of rows claimed `maxAttempts` times become `dead` first. It must not
- * run inside a transaction (it dies with `TransactionRefused`): a claim
- * that did not commit would hold its rows locked and hide the lease from
- * other workers.
+ * The claim's statements in the running transaction, which the caller
+ * commits before any effect starts. The worker uses it to revalidate the
+ * subscription in the same transaction (`worker.ts`); everyone else uses
+ * `claimDeliveries`.
  *
  * @param input - Subscription, dead-letter policy, `max_attempts`, limit
  *   and lease.
  * @returns The claimed rows, by row ID.
  */
-export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
-  function* claimDeliveries(input: ClaimInput) {
-    if (!Number.isInteger(input.limit) || input.limit < 1) {
-      return yield* Effect.die(
-        new RangeError("A claim takes at least one row.")
-      );
+export const claimInTransaction = Effect.fn("Outbox.claimInTransaction")(
+  function* claimInTransaction(input: ClaimInput) {
+    const invalid = invalidClaim(input);
+
+    if (invalid !== undefined) {
+      return yield* Effect.die(invalid);
     }
 
-    if (Duration.toMillis(input.lease) <= 0) {
-      return yield* Effect.die(new RangeError("A lease must be positive."));
-    }
+    const sql = yield* SqlClient.SqlClient;
 
-    if (!Number.isInteger(input.maxAttempts) || input.maxAttempts < 1) {
-      return yield* Effect.die(
-        new RangeError("A subscription allows at least one attempt.")
-      );
-    }
+    // First, so that under `block` the new dead row holds later versions
+    // back in the claim below, and under `skip` they proceed.
+    yield* sql.unsafe(EXPIRE_EXHAUSTED, [
+      input.subscriptionId,
+      String(input.maxAttempts),
+      LEASE_EXPIRED_ERROR,
+    ]);
 
-    if (Option.isSome(yield* currentState)) {
-      return yield* refuseNested;
-    }
-
-    const { request } = yield* Transactions;
-
-    const rows = yield* request(
-      Effect.gen(function* claim() {
-        const sql = yield* SqlClient.SqlClient;
-
-        // First, so that under `block` the new dead row holds later
-        // versions back in the claim below, and under `skip` they proceed.
-        yield* sql.unsafe(EXPIRE_EXHAUSTED, [
-          input.subscriptionId,
-          String(input.maxAttempts),
-          LEASE_EXPIRED_ERROR,
-        ]);
-
-        return yield* sql.unsafe(claimStatement(input.deadLetter), [
-          input.subscriptionId,
-          String(input.limit),
-          intervalOf(input.lease),
-        ]);
-      })
-    );
+    const rows = yield* sql.unsafe(claimStatement(input.deadLetter), [
+      input.subscriptionId,
+      String(input.limit),
+      intervalOf(input.lease),
+    ]);
 
     const claimed: ClaimedDelivery[] = (yield* decodeClaimed(rows)).map(
       (row) => ({
@@ -311,6 +303,36 @@ export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
     );
 
     return claimed.toSorted(byRowId);
+  }
+);
+
+/**
+ * Claims due deliveries of one subscription in per-record version order,
+ * sets them `in_flight` under a new lease token, and commits. Expired
+ * leases of rows claimed `maxAttempts` times become `dead` first. It must not
+ * run inside a transaction (it dies with `TransactionRefused`): a claim
+ * that did not commit would hold its rows locked and hide the lease from
+ * other workers.
+ *
+ * @param input - Subscription, dead-letter policy, `max_attempts`, limit
+ *   and lease.
+ * @returns The claimed rows, by row ID.
+ */
+export const claimDeliveries = Effect.fn("Outbox.claimDeliveries")(
+  function* claimDeliveries(input: ClaimInput) {
+    const invalid = invalidClaim(input);
+
+    if (invalid !== undefined) {
+      return yield* Effect.die(invalid);
+    }
+
+    if (Option.isSome(yield* currentState)) {
+      return yield* refuseNested;
+    }
+
+    const { request } = yield* Transactions;
+
+    return yield* request(claimInTransaction(input));
   }
 );
 
@@ -400,3 +422,32 @@ export const markFailed = Effect.fn("Outbox.markFailed")(function* markFailed(
 
   return outcome;
 });
+
+/**
+ * Gives a claimed delivery back without running it, fenced by its lease:
+ * `pending`, due now, and the claim not counted as an attempt. The worker
+ * does this when the subscription's configuration changed after the claim
+ * (disabled, retired, no longer served, or served by another kind of
+ * effect; decision 0023), so the delivery runs later under the new
+ * configuration or waits while the subscription is paused.
+ *
+ * @param lease - The claim's row ID and token.
+ * @returns Nothing; `LeaseLost` when the lease is gone.
+ */
+export const releaseClaim = Effect.fn("Outbox.releaseClaim")(
+  function* releaseClaim(lease: DeliveryLease) {
+    const { request } = yield* Transactions;
+
+    return yield* request(
+      fenced(
+        lease,
+        `UPDATE core.delivery
+         SET status = 'pending', attempts = greatest(attempts - 1, 0),
+           lease_until = NULL, lease_token = NULL, next_attempt_at = now()
+         WHERE ${FENCE}
+         RETURNING id::text AS id`,
+        []
+      )
+    );
+  }
+);

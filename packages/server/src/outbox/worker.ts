@@ -1,32 +1,41 @@
 /**
  * The outbox worker (Contracts 4.6, 4.7; decision 0023).
  *
- * A pass loads the latest configuration and, for every active, enabled
- * subscription that a `DeliveryHandler` serves, claims up to `batchSize`
- * due deliveries (`claimDeliveries`: the 4.6 claim predicate with
- * `FOR UPDATE SKIP LOCKED`, a new `lease_token` per claim, committed before
- * any effect starts) and runs them, all at once: one claim holds at most one
- * row per record, because a record's later versions wait for the earlier
- * one. Deliveries of subscriptions no handler serves are never claimed.
+ * A pass loads the latest configuration to find the subscriptions a
+ * `DeliveryHandler` serves. For each, one claim transaction (a request
+ * transaction: `begin_request()` under `CONFIG_KEY` shared, Contracts 1.3)
+ * resolves the subscription again from its own snapshot, so a disable,
+ * retire or policy change committed after the pass's refresh is honoured;
+ * only an active, enabled, served subscription is claimed for, with its
+ * current dead-letter policy and `max_attempts`. The claim (with `FOR UPDATE SKIP LOCKED`,
+ * and a new `lease_token`) commits before any effect starts, and
+ * its rows run at once: one claim holds at most one row per record.
  *
- * One delivery:
+ * One delivery has one deadline, `effectTimeout` after the worker started
+ * the claim, which is before `lease_until` by at least `leaseMargin`. The
+ * deadline covers everything before the effect too:
  *
- * 1. The payload is built for the subscription's identity (4.5); an
- *    identity that is missing or inactive fails the attempt.
- * 2. A `record` effect runs in one request transaction with the payload
- *    reads before it and the fenced `done` update after it: its writes and
- *    `done` commit together, or not at all. An `external` effect runs
- *    outside any transaction, then the fenced `done` commits on its own.
- * 3. The effect is interrupted when the claim's effect deadline passes:
- *    `effectTimeout` after the worker started the claim, so before
- *    `lease_until`, which the database sets `effectTimeout + leaseMargin`
- *    after the claim began.
+ * 1. Preparation, in a request transaction (for a `record` effect, the
+ *    delivery transaction itself): the subscription is resolved once more
+ *    from that transaction's snapshot. Disabled, retired, no longer served,
+ *    or served by another kind of effect: the effect is not run and the
+ *    claim is released (`releaseClaim`, not counted as an attempt). Else
+ *    the effect runs with the snapshot's subscription, so its current
+ *    identity, whose roles filter the payload (4.5); a missing or inactive
+ *    identity fails the attempt.
+ * 2. Once the deadline has passed, the handler is never invoked, however
+ *    long acquiring a connection or preparing took: the attempt is treated
+ *    as a lost lease (nothing recorded; the lease expires and the next
+ *    claim counts it). Otherwise the effect gets exactly the time left and
+ *    is interrupted at the deadline (`TimeoutError`, recorded as a failure
+ *    within the margin).
+ * 3. A `record` effect's writes and the fenced `done` commit in one
+ *    transaction, or not at all; an `external` effect runs outside any
+ *    transaction, then `done` commits on its own.
  * 4. A fenced update that finds the lease lost (`LeaseLost`) discards the
- *    result; in a delivery transaction the whole transaction rolls back. Any
- *    other failure is recorded with the fenced failure update: `pending`
- *    with backoff (10 s doubling to 1 h, minus up to 20 %), or `dead` after
- *    `max_attempts` claims. An interrupted worker records nothing: the
- *    lease expires and the next claim counts it as an attempt.
+ *    result. Any other failure is recorded: `pending` with backoff (10 s
+ *    doubling to 1 h, minus up to 20 %), or `dead` after `max_attempts`
+ *    claims. An interrupted worker records nothing.
  *
  * Between passes the worker waits for a wake-up (LISTEN `std_worker`, sent
  * by saves after commit, debounced, 4.1 step 11) or the poll interval,
@@ -36,6 +45,9 @@
  * Housekeeping, every `housekeepingInterval`: `done` rows whose
  * `finished_at` is more than 7 days old are deleted, in batches; `dead`
  * rows stay. The dead-delivery gauge is refreshed.
+ *
+ * `WorkerProbes` lets tests observe and delay the worker at fixed points;
+ * it does nothing in production.
  */
 import { PgClient } from "@effect/sql-pg";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
@@ -54,6 +66,7 @@ import {
   Option,
   Predicate,
   Queue,
+  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -70,7 +83,13 @@ import { sqlStateOf } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { WORKER_CHANNEL } from "../sql/wake-up.ts";
-import { claimDeliveries, markDone, markFailed } from "./delivery-claims.ts";
+import { AttemptRefused } from "./attempt-refused.ts";
+import {
+  claimInTransaction,
+  markDone,
+  markFailed,
+  releaseClaim,
+} from "./delivery-claims.ts";
 import type { ClaimedDelivery } from "./delivery-claims.ts";
 import { DeliveryHandlers, effectFor } from "./delivery-effects.ts";
 import type { Delivery, DeliveryEffect } from "./delivery-effects.ts";
@@ -79,6 +98,7 @@ import {
   payloadOf,
   PayloadUnreadable,
   readEntries,
+  readFieldOrigins,
 } from "./delivery-payload.ts";
 import {
   deliveriesDead,
@@ -92,7 +112,10 @@ import {
 export interface WorkerSettingsValues {
   /** Rows claimed per subscription and pass. */
   readonly batchSize: number;
-  /** How long one delivery's effect may run before it is interrupted. */
+  /**
+   * How long one delivery may take from the start of its claim, preparation
+   * included, before its effect is interrupted.
+   */
   readonly effectTimeout: Duration.Duration;
   /** How much longer than the effect timeout a lease lasts. */
   readonly leaseMargin: Duration.Duration;
@@ -181,6 +204,33 @@ export class WorkerSettings extends Context.Service<
     );
 }
 
+/** What the worker loop reports when it is about to wait. */
+export interface IdleState {
+  /** Wake-ups received so far (the first when LISTEN is established). */
+  readonly wakeSignals: number;
+  /** Wake-ups queued and not yet taken (0 or 1). */
+  readonly pendingWakeups: number;
+}
+
+/** Points where tests observe or delay the worker. */
+export interface WorkerProbesApi {
+  /** Before a claimed delivery acquires its transaction. */
+  readonly beforeAttempt: (claimed: ClaimedDelivery) => Effect.Effect<void>;
+  /** Before the loop waits for a wake-up or the poll interval. */
+  readonly idle: (state: IdleState) => Effect.Effect<void>;
+}
+
+/** The worker's probes: no-ops unless a test provides its own. */
+export const WorkerProbes = Context.Reference<WorkerProbesApi>(
+  "@std/server/outbox/worker/WorkerProbes",
+  {
+    defaultValue: () => ({
+      beforeAttempt: () => Effect.void,
+      idle: () => Effect.void,
+    }),
+  }
+);
+
 /**
  * The lease a claim takes: the effect timeout plus the margin, so the
  * worker interrupts the effect before another worker can claim the row.
@@ -192,10 +242,41 @@ export const leaseOf = (settings: WorkerSettingsValues): Duration.Duration =>
   Duration.sum(settings.effectTimeout, settings.leaseMargin);
 
 /** A subscription and the effect that serves it. */
-interface Served {
+export interface Served {
   readonly subscription: SubscriptionDefinition;
   readonly effect: DeliveryEffect;
 }
+
+/**
+ * A subscription as a configuration serves it: active, enabled and served
+ * by a handler, with that handler's effect.
+ *
+ * @param snapshot - The configuration.
+ * @param handlers - The worker's handlers.
+ * @param subscriptionId - The subscription.
+ * @returns It and its effect, or undefined when it is not served.
+ */
+const resolveServed = (
+  snapshot: ConfigSnapshot,
+  handlers: DeliveryHandlers["Service"],
+  subscriptionId: DefinitionId
+): Served | undefined => {
+  const subscription = snapshot
+    .subscriptions()
+    .find((candidate) => candidate.id === subscriptionId);
+
+  if (
+    subscription === undefined ||
+    subscription.state !== "active" ||
+    !subscription.enabled
+  ) {
+    return undefined;
+  }
+
+  const effect = effectFor(handlers, subscription, snapshot);
+
+  return effect === undefined ? undefined : { effect, subscription };
+};
 
 /** How one attempt ended. */
 export type AttemptOutcome =
@@ -204,8 +285,11 @@ export type AttemptOutcome =
   | "dead"
   | "lease-lost"
   | "expired"
+  | "released"
   | "interrupted"
   | "unrecorded";
+
+const LEASE_LOST: AttemptOutcome = "lease-lost";
 
 const IDENTITY_UNAVAILABLE =
   "The subscription's identity is missing or inactive.";
@@ -233,32 +317,52 @@ const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
   return actor;
 });
 
+/** What preparation hands the effect. */
+interface Prepared {
+  readonly actor: ActingUser;
+  readonly delivery: Delivery;
+  readonly effect: DeliveryEffect;
+}
+
 /**
  * Builds what an effect receives, inside a request transaction: the
- * identity, and the payload from history under the transaction's
- * configuration.
+ * subscription and its effect resolved from that transaction's snapshot
+ * (`AttemptRefused` "configuration" when it no longer runs an effect of
+ * the claimed kind), its current identity, and the payload from history.
  */
 const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
-  subscription: SubscriptionDefinition,
+  kind: DeliveryEffect["kind"],
   claimed: ClaimedDelivery
 ) {
   const snapshot = yield* (yield* Catalog).current;
+  const handlers = yield* DeliveryHandlers;
+  const served = resolveServed(snapshot, handlers, claimed.subscriptionId);
+
+  if (served === undefined || served.effect.kind !== kind) {
+    return yield* new AttemptRefused({ reason: "configuration" });
+  }
+
+  const { subscription } = served;
   const actor = yield* identityOf(snapshot, subscription.identityId);
   const { timeZone } = yield* InstanceSettings;
   const now = yield* Clock.currentTimeMillis;
   const entries = yield* readEntries(claimed.recordId, claimed.recordVersion);
+  const entry = entries.at(-1);
 
-  if (entries.at(-1)?.changeId !== claimed.changeId) {
+  if (entry?.changeId !== claimed.changeId) {
     return yield* new PayloadUnreadable({
       reason: `The change entry ${claimed.changeId} is not the record's entry at version ${claimed.recordVersion}.`,
     });
   }
 
-  const payload = payloadOf(snapshot, actor, claimed.recordId, entries, {
-    me: actor.userId,
-    now,
-    timeZone,
-  });
+  const origins = yield* readFieldOrigins(snapshot, entry.recordClassId);
+
+  const payload = payloadOf(
+    snapshot,
+    actor,
+    { entries, origins, recordId: claimed.recordId },
+    { me: actor.userId, now, timeZone }
+  );
 
   if (payload instanceof PayloadUnreadable) {
     return yield* payload;
@@ -282,24 +386,124 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
     subscription,
   };
 
-  return { actor, delivery };
+  return { actor, delivery, effect: served.effect } satisfies Prepared;
 });
+
+const overdue = new AttemptRefused({ reason: "deadline" });
+
+/**
+ * Runs `effect` only before the deadline, and interrupts it there with
+ * `AttemptRefused` "deadline": for everything before the handler.
+ *
+ * @param deadline - Epoch milliseconds.
+ * @returns The bounded effect.
+ */
+const beforeDeadline =
+  (deadline: number) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        now >= deadline
+          ? Effect.fail(overdue)
+          : effect.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(deadline - now),
+                orElse: () => Effect.fail(overdue),
+              })
+            )
+      )
+    );
+
+/**
+ * The time left before the deadline, or `AttemptRefused` "deadline" when
+ * none is: the last check before the handler is invoked.
+ *
+ * @param deadline - Epoch milliseconds.
+ * @returns The time left.
+ */
+const timeLeft = (deadline: number) =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      now >= deadline
+        ? Effect.fail(overdue)
+        : Effect.succeed(Duration.millis(deadline - now))
+    )
+  );
+
+/**
+ * One attempt: preparation, the handler and `done`, under the deadline.
+ *
+ * @param kind - The kind of effect the claim was made for.
+ * @param claimed - The claimed row.
+ * @param deadline - Epoch milliseconds.
+ * @returns The attempt.
+ */
+const attemptOf = (
+  kind: DeliveryEffect["kind"],
+  claimed: ClaimedDelivery,
+  deadline: number
+) =>
+  Effect.gen(function* attempt() {
+    const { request } = yield* Transactions;
+
+    if (kind === "record") {
+      return yield* request(
+        Effect.gen(function* recordDelivery() {
+          const prepared = yield* prepare(kind, claimed).pipe(
+            beforeDeadline(deadline)
+          );
+
+          if (prepared.effect.kind !== "record") {
+            return yield* new AttemptRefused({ reason: "configuration" });
+          }
+
+          const left = yield* timeLeft(deadline);
+
+          yield* prepared.effect
+            .run(prepared.delivery)
+            .pipe(
+              Effect.timeout(left),
+              Effect.provide(RuleWriteAccess),
+              Effect.provideService(Actor, prepared.actor)
+            );
+
+          // The last statement: the effect's writes and `done` commit
+          // together, or roll back together on a lost lease.
+          return yield* markDone(claimed);
+        })
+      );
+    }
+
+    const prepared = yield* request(prepare(kind, claimed)).pipe(
+      beforeDeadline(deadline)
+    );
+
+    if (prepared.effect.kind !== "external") {
+      return yield* new AttemptRefused({ reason: "configuration" });
+    }
+
+    const left = yield* timeLeft(deadline);
+
+    yield* prepared.effect.run(prepared.delivery).pipe(Effect.timeout(left));
+
+    return yield* markDone(claimed);
+  });
 
 const TaggedSchema = Schema.Struct({ _tag: Schema.String });
 
 const isTagged = Schema.is(TaggedSchema);
 
 /**
- * The tag of an attempt's typed failure, if it has one.
+ * The typed failure of an attempt, if it has one.
  *
  * @param cause - The attempt's failure.
- * @returns The `_tag`, or undefined for a defect or an untagged failure.
+ * @returns The error, or undefined for a defect or an untagged failure.
  */
-const failureTag = (cause: Cause.Cause<unknown>): string | undefined => {
+const taggedFailure = (cause: Cause.Cause<unknown>) => {
   const error = Cause.findErrorOption(cause);
 
   return Option.isSome(error) && isTagged(error.value)
-    ? error.value._tag
+    ? error.value
     : undefined;
 };
 
@@ -316,13 +520,13 @@ const describeFailure = (
   cause: Cause.Cause<unknown>,
   timeout: Duration.Duration
 ): string => {
-  const error = Cause.findErrorOption(cause);
+  const failure = taggedFailure(cause);
 
-  if (Option.isNone(error)) {
-    return "Defect: the attempt died; see the worker log.";
+  if (failure === undefined) {
+    return Option.isNone(Cause.findErrorOption(cause))
+      ? "Defect: the attempt died; see the worker log."
+      : "Failure: the effect failed.";
   }
-
-  const failure = error.value;
 
   if (
     failure instanceof DeliveryFailed ||
@@ -331,21 +535,19 @@ const describeFailure = (
     return `${failure._tag}: ${failure.reason}`;
   }
 
-  const tag = failureTag(cause);
-
-  if (tag === "TimeoutError") {
+  if (failure._tag === "TimeoutError") {
     return `TimeoutError: the effect did not finish within ${Duration.toMillis(timeout)} ms.`;
   }
 
-  if (tag === "DatabaseError" && Predicate.hasProperty(failure, "sqlState")) {
+  if (
+    failure._tag === "DatabaseError" &&
+    Predicate.hasProperty(failure, "sqlState")
+  ) {
     return `DatabaseError: SQLSTATE ${String(failure.sqlState)}`;
   }
 
-  return tag ?? "Failure: the effect failed.";
+  return failure._tag;
 };
-
-const isLeaseLost = (cause: Cause.Cause<unknown>): boolean =>
-  failureTag(cause) === "LeaseLost";
 
 /**
  * The counter of a recorded failure.
@@ -362,9 +564,39 @@ const counterOf = (outcome: AttemptOutcome) => {
 };
 
 /**
+ * What happens to a claim whose effect was not run: past the deadline it
+ * is left to its lease; under a changed configuration it is released.
+ *
+ * @param refused - Why.
+ * @param claimed - The claimed row.
+ * @returns The outcome.
+ */
+const refusedOutcome = Effect.fnUntraced(function* refusedOutcome(
+  refused: AttemptRefused,
+  claimed: ClaimedDelivery
+) {
+  if (refused.reason === "deadline") {
+    yield* Metric.update(deliveriesLeaseLost, 1);
+    yield* Effect.logWarning(
+      `Outbox delivery ${claimed.id}: its deadline passed before the effect started; left to its lease`
+    );
+
+    return "expired" satisfies AttemptOutcome;
+  }
+
+  return yield* releaseClaim(claimed).pipe(
+    Effect.as<AttemptOutcome>("released"),
+    Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
+    Effect.catchTag("DatabaseError", () =>
+      Effect.succeed<AttemptOutcome>("unrecorded")
+    )
+  );
+});
+
+/**
  * Runs one claimed delivery and records its outcome.
  *
- * @param served - The subscription and its effect.
+ * @param served - The subscription, as the claim resolved it, and its effect.
  * @param claimed - The claimed row.
  * @param deadline - When the effect must be interrupted (epoch ms).
  * @returns How the attempt ended.
@@ -376,45 +608,13 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
     deadline: number
   ) {
     const settings = yield* WorkerSettings;
-    const { request } = yield* Transactions;
-    const now = yield* Clock.currentTimeMillis;
-    const remaining = deadline - now;
+    const probes = yield* WorkerProbes;
 
-    if (remaining <= 0) {
-      // Too late to start: the lease expires and the next claim retries.
-      return "expired" satisfies AttemptOutcome;
-    }
+    yield* probes.beforeAttempt(claimed);
 
-    const { effect, subscription } = served;
-
-    const attempt =
-      effect.kind === "record"
-        ? request(
-            Effect.gen(function* recordDelivery() {
-              const { actor, delivery } = yield* prepare(subscription, claimed);
-
-              yield* effect
-                .run(delivery)
-                .pipe(
-                  Effect.timeout(remaining),
-                  Effect.provide(RuleWriteAccess),
-                  Effect.provideService(Actor, actor)
-                );
-
-              // The last statement: the effect's writes and `done` commit
-              // together, or roll back together on a lost lease.
-              yield* markDone(claimed);
-            })
-          )
-        : Effect.gen(function* externalDelivery() {
-            const { delivery } = yield* request(prepare(subscription, claimed));
-            const left = deadline - (yield* Clock.currentTimeMillis);
-
-            yield* effect.run(delivery).pipe(Effect.timeout(Math.max(left, 0)));
-            yield* markDone(claimed);
-          });
-
-    const exit = yield* Effect.exit(attempt);
+    const exit = yield* Effect.exit(
+      attemptOf(served.effect.kind, claimed, deadline)
+    );
 
     if (Exit.isSuccess(exit)) {
       yield* Metric.update(deliveriesDone, 1);
@@ -426,13 +626,19 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
       return "interrupted" satisfies AttemptOutcome;
     }
 
-    if (isLeaseLost(exit.cause)) {
+    const failure = taggedFailure(exit.cause);
+
+    if (failure instanceof AttemptRefused) {
+      return yield* refusedOutcome(failure, claimed);
+    }
+
+    if (failure?._tag === "LeaseLost") {
       yield* Metric.update(deliveriesLeaseLost, 1);
       yield* Effect.logWarning(
         `Outbox delivery ${claimed.id}: the lease was lost; the result is discarded`
       );
 
-      return "lease-lost" satisfies AttemptOutcome;
+      return LEASE_LOST;
     }
 
     if (Option.isNone(Cause.findErrorOption(exit.cause))) {
@@ -444,15 +650,13 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
 
     const recorded = yield* markFailed(claimed, {
       error: describeFailure(exit.cause, settings.effectTimeout),
-      maxAttempts: subscription.maxAttempts,
+      maxAttempts: served.subscription.maxAttempts,
     }).pipe(
       Effect.map((outcome): AttemptOutcome => outcome),
-      Effect.catchTag("LeaseLost", () =>
-        Effect.succeed<AttemptOutcome>("lease-lost")
-      ),
-      Effect.catchTag("DatabaseError", (failure) =>
+      Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
+      Effect.catchTag("DatabaseError", (databaseError) =>
         Effect.logWarning(
-          `Outbox delivery ${claimed.id}: the failure was not recorded (SQLSTATE ${failure.sqlState})`
+          `Outbox delivery ${claimed.id}: the failure was not recorded (SQLSTATE ${databaseError.sqlState})`
         ).pipe(Effect.as<AttemptOutcome>("unrecorded"))
       )
     );
@@ -471,62 +675,62 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
 );
 
 /**
- * Claims one batch of a subscription's due deliveries and runs them.
+ * Claims one batch of a subscription's due deliveries and runs them. The
+ * claim transaction resolves the subscription from its own snapshot and
+ * claims nothing unless it is still active, enabled and served; the claim
+ * uses its current dead-letter policy and `max_attempts`.
  *
- * @param served - The subscription and its effect.
+ * @param subscriptionId - The subscription.
  * @returns How many rows were claimed.
  */
-const serveSubscription = Effect.fn("Outbox.serveSubscription")(
-  function* serveSubscription(served: Served) {
+export const serveSubscription = Effect.fn("Outbox.serveSubscription")(
+  function* serveSubscription(subscriptionId: DefinitionId) {
     const settings = yield* WorkerSettings;
+    const handlers = yield* DeliveryHandlers;
+    const { request } = yield* Transactions;
     const started = yield* Clock.currentTimeMillis;
 
-    const claimed = yield* claimDeliveries({
-      deadLetter: served.subscription.deadLetter,
-      lease: leaseOf(settings),
-      limit: settings.batchSize,
-      maxAttempts: served.subscription.maxAttempts,
-      subscriptionId: served.subscription.id,
-    });
+    const claim = yield* request(
+      Effect.gen(function* claimServed() {
+        const snapshot = yield* (yield* Catalog).current;
+        const served = resolveServed(snapshot, handlers, subscriptionId);
+
+        if (served === undefined) {
+          return null;
+        }
+
+        const rows = yield* claimInTransaction({
+          deadLetter: served.subscription.deadLetter,
+          lease: leaseOf(settings),
+          limit: settings.batchSize,
+          maxAttempts: served.subscription.maxAttempts,
+          subscriptionId,
+        });
+
+        return { rows, served };
+      })
+    );
+
+    if (claim === null) {
+      return 0;
+    }
 
     const deadline = started + Duration.toMillis(settings.effectTimeout);
 
     // oxlint-disable-next-line github/array-foreach -- Effect.forEach, not Array.prototype.forEach
     yield* Effect.forEach(
-      claimed,
-      (row) => runDelivery(served, row, deadline),
+      claim.rows,
+      (row) => runDelivery(claim.served, row, deadline),
       { concurrency: "unbounded", discard: true }
     );
 
-    return claimed.length;
+    return claim.rows.length;
   }
 );
 
 /**
- * The subscriptions a worker serves under a configuration: active, enabled
- * and served by a handler.
- *
- * @param snapshot - The configuration.
- * @param handlers - The worker's handlers.
- * @returns Each with its effect.
- */
-const servedSubscriptions = (
-  snapshot: ConfigSnapshot,
-  handlers: DeliveryHandlers["Service"]
-): readonly Served[] =>
-  snapshot.subscriptions().flatMap((subscription) => {
-    if (subscription.state !== "active" || !subscription.enabled) {
-      return [];
-    }
-
-    const effect = effectFor(handlers, subscription, snapshot);
-
-    return effect === undefined ? [] : [{ effect, subscription }];
-  });
-
-/**
- * One pass over every served subscription. Database failures of a claim
- * are logged; the next pass tries again.
+ * One pass over every subscription the latest configuration serves.
+ * Database failures of a claim are logged; the next pass tries again.
  *
  * @returns How many rows the pass claimed.
  */
@@ -536,14 +740,21 @@ export const workerPass = Effect.fn("Outbox.workerPass")(
     const handlers = yield* DeliveryHandlers;
     const snapshot = yield* (yield* Catalog).refresh;
 
+    const candidates = snapshot
+      .subscriptions()
+      .filter(
+        (subscription) =>
+          resolveServed(snapshot, handlers, subscription.id) !== undefined
+      );
+
     // oxlint-disable-next-line github/array-foreach -- Effect.forEach, not Array.prototype.forEach
     const counts = yield* Effect.forEach(
-      servedSubscriptions(snapshot, handlers),
-      (served) =>
-        serveSubscription(served).pipe(
+      candidates,
+      (subscription) =>
+        serveSubscription(subscription.id).pipe(
           Effect.catchTag("DatabaseError", (failure) =>
             Effect.logWarning(
-              `Outbox claim for subscription ${served.subscription.id} failed (SQLSTATE ${failure.sqlState})`
+              `Outbox claim for subscription ${subscription.id} failed (SQLSTATE ${failure.sqlState})`
             ).pipe(Effect.as(0))
           )
         ),
@@ -659,10 +870,16 @@ export const workerWakeups: Stream.Stream<true, never, PgClient.PgClient> =
  */
 export const runWorker = Effect.gen(function* runOutboxWorker() {
   const settings = yield* WorkerSettings;
+  const probes = yield* WorkerProbes;
   const wake = yield* Queue.sliding<true>(1);
+  const received = yield* Ref.make(0);
 
   yield* workerWakeups.pipe(
-    Stream.runForEach((signal) => Queue.offer(wake, signal)),
+    Stream.runForEach((signal) =>
+      Ref.update(received, (count) => count + 1).pipe(
+        Effect.andThen(Queue.offer(wake, signal))
+      )
+    ),
     Effect.forkScoped
   );
 
@@ -673,11 +890,16 @@ export const runWorker = Effect.gen(function* runOutboxWorker() {
   );
 
   const step = Effect.gen(function* workerStep() {
-    const n = yield* workerPass();
+    const claimed = yield* workerPass();
 
-    if (n > 0) {
+    if (claimed > 0) {
       return;
     }
+
+    yield* probes.idle({
+      pendingWakeups: yield* Queue.size(wake),
+      wakeSignals: yield* Ref.get(received),
+    });
 
     yield* Queue.take(wake).pipe(Effect.timeoutOption(settings.pollInterval));
   });
