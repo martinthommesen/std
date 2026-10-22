@@ -189,7 +189,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Aggregate parts (Contracts 6.5, 11.1) and the requirements matrix with its CI check (Contracts 15).
 - TMF621 Trouble Ticket over ITIL incident and problem management; the helpdesk set v3 rebuilt on it (Contracts 11.2, 14).
 - The ODA Canvas probe (Contracts 13.6).
-- TLS to Postgres and signed releases (Contracts 8.9), and the rolling-upgrade rules every migration follows from now on (Contracts 8.8, RU1 to RU10).
+- TLS to Postgres and signed releases (Contracts 8.9), and the rolling-upgrade rules every migration follows from now on (Contracts 8.8, RU1 to RU12).
 
 **Workstreams.**
 
