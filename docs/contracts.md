@@ -251,7 +251,7 @@ Checks:
 13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1). Until imports add the table (Step 3) the check reports "not applicable" as informational.
 14. The fold table's Unicode version equals the server's `unicode_version()` [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html)] (5.5).
 15. The database encoding is UTF8 (5.5), and `client_connection_check_interval` is 0 (1.5).
-16. Each definition's latest `core.definition_revision` row equals its effective record (4.4).
+16. Each definition's latest `core.definition_revision` row equals its effective record (4.4). A row written before a release added a property is read with that property's documented default (absent `numberPrefix` and `choices` are null), so old rows are not drift and real differences still are [decision 0017].
 
 ### Acceptance tests
 
@@ -1225,6 +1225,8 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 
 - Offline in v0.1: stop servers, run `std upgrade`, start servers. It refuses to run while any session with `application_name = 'std-server'` is connected, and when the database encoding is not UTF8 (5.5). Reason: rolling upgrades need expand-and-contract rules, which come with high availability.
 - Order: take `SCHEMA_KEY`; compare versions; run platform migrations; resume interrupted change sets; load core; load app sets; write the report.
+- Planning reads the catalog version-aware: before pending platform migrations ran, a definition table or column a later migration adds reads as empty or null, so the plan of a previous release's database is made without migrating it first (which `--plan` must not do, and which would change the state the `--expect` hash covers) [decision 0017].
+- Release compatibility (CI): a database made by the previous release (`v0.0.1`) with that release's own quickstart data is upgraded by this version, `doctor` exits 0, and the previous release's unchanged quickstart script runs against this version's server, as does this version's own. Request schemas accept payloads of the previous release: a property added later may be absent and decodes to its default [judgment, decision 0017].
 - `--plan` (and `--json`, which implies it) changes nothing and prints migrations, per-set diffs, conflicts, refusals and security changes, with a hash over all of them and the configuration state they start from. It runs while servers are connected and reports them as a warning. The real run applies that plan and stops if the database changed since: `--expect <hash>` refuses before anything runs when the plan differs; each set is planned again before it applies and must equal its plan; and its main transaction checks that no other config commit came first (decision 0012).
 - After a failure, rerunning continues from the last committed migration or change set. A change set that ends in `needs_attention` stops the run with an error naming it, and every later run refuses until an admin resumes or abandons it, so unfinished change sets never look upgraded.
 

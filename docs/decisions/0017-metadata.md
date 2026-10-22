@@ -102,9 +102,18 @@ Roles, access rules, choices and layouts are written through the generic record 
 
 Every refusal in the new suites is checked to commit nothing with `committed-state.ts`. The metadata endpoints read only, so `error-fuzz` and `schema-fuzz` (which fuzz stored values in error bodies) gain nothing from them.
 
-## API change for change-set clients
+## Release compatibility (review round 1)
 
-Drafts carry every property, nullable ones as `null` (as `default` and `helpText` always did), so change-set payloads change: an `addField` draft needs `numberPrefix` (`null` for an ordinary field) and a `setOverride` draft `choices` and `numberPrefix`. A v0.0.1 payload without them is `400 InvalidRequest`. Plain packages cannot use Effect-valued decoding defaults, and a silent default would differ from every other draft property, so clients send the keys; `examples/quickstart.sh` does (found by the quickstart CI step).
+Step 4 upgrades from real releases, so a `v0.0.1` database and `v0.0.1` clients must keep working.
+
+- **Planning reads the catalog version-aware** (`catalog/load.ts`): it reads which columns of the definition tables exist from `pg_attribute`; a missing table reads as empty and a missing column as null. Migrating first was rejected: `std upgrade --plan` must change nothing, and the plan's `--expect` hash covers the starting state. Before, upgrading a real `v0.0.1` database failed with 42703 (`number_prefix`) while planning. Test: `catalog-release-shape.test.ts`.
+- **Payloads of the previous release decode** (`nullWhenAbsent` in `definition.ts`): the field's `numberPrefix` and the override's `choices` and `numberPrefix` may be absent on the wire and decode to null; the decoded type stays non-optional. It is built from `Schema` and `SchemaGetter` only, as plain packages require. It applies to drafts and definitions, so stored `v0.0.1` definition revisions decode too. `examples/quickstart.sh` is byte-identical to `v0.0.1` again. Test: `definitions/test/release-compat.test.ts`. The section below records the round-0 state this replaced.
+- **Doctor normalizes old revisions** (`withAddedDefaults`, `ADDED_PROPERTY_DEFAULTS`): before check 16 compares a stored revision with the effective record, properties a later release added are filled with their documented defaults. Writing refreshed revisions during the upgrade was rejected: it would record definition changes that never happened at revisions that did not make them. A later release that adds a property adds its default to the list. Before, an upgraded `v0.0.1` database had 185 `definitionRevisionStale` findings.
+- **CI step** `pnpm release-compat:ci` (`examples/quickstart/src/release-compat.ts`, last step of `.github/workflows/ci.yml`, checkout with tags; about 10 s). The previous release's tree comes from `git archive` of the tag set once in `examples/quickstart/src/previous-release.ts` (`PREVIOUS_RELEASE`). On a fresh harness database it runs that release's own `std upgrade`, `std bootstrap-admin`, `std serve` and quickstart; then this version's `std upgrade` and `std doctor` (must exit 0); then this version's server with the previous release's quickstart, unchanged, and with this version's own. It also runs the previous quickstart against a fresh database on this version. Each of the three defects above fails it.
+
+## API change for change-set clients (round 0, superseded)
+
+Round 0 made `numberPrefix`, `choices` and `numberPrefix` required in `addField` and `setOverride` drafts and changed `examples/quickstart.sh` to send them, which broke unchanged `v0.0.1` clients with `400 InvalidRequest`. Review round 1 replaced that with the defaults above.
 
 ## Open items
 
