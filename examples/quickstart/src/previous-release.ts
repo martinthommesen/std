@@ -4,4 +4,4 @@
  * release's databases and clients keep working (docs/architecture.md,
  * "Checks and scripts").
  */
-export const PREVIOUS_RELEASE = "v0.0.1";
+export const PREVIOUS_RELEASE = "v0.0.2";

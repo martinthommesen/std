@@ -86,6 +86,8 @@ export const PERMISSION_IDS = {
 /** Fields of `core.user` that code reads (sign-in, sessions, labels). */
 export const USER_FIELD_IDS = {
   active: "df9bb372-d557-445c-a173-66ab4e7a9c7c",
+  /** The user's individual (Contracts 11.3), read-only, unique. */
+  individual: "e8d96833-a256-4f38-8752-3f7b5fde3afd",
   login: "b3cabaa4-77cb-4845-9221-2105b21425eb",
   name: "13160bfb-1a94-4f0b-a29b-bccf701673c0",
   // oxlint-disable-next-line sonarjs/no-hardcoded-passwords -- a field's stable ID, not a password
@@ -96,4 +98,18 @@ export const USER_FIELD_IDS = {
 export const USER_ROLE_FIELD_IDS = {
   role: "9640bd3e-c66e-4b43-8b4c-31489d37dfc8",
   user: "f60c3043-b965-42f2-b9ea-a81c3f3ee84d",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** The party classes of the core set (Contracts 11.3, decision 0024). */
+export const PARTY_CLASS_IDS = {
+  individual: "a1d5e868-1a22-4b6e-8a65-605e046f24ab",
+  organization: "f94b83bf-19a4-4793-b06f-d5b4b0727fac",
+  party: "566904e7-72b9-455a-8ea1-5df797c43ae9",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.party` and `core.individual` that code reads and sets. */
+export const PARTY_FIELD_IDS = {
+  familyName: "bd493796-8b5e-4907-9e12-6a047dac62e7",
+  givenName: "f41d3f02-c469-428e-85cb-c6f55a2902de",
+  name: "7292e739-5395-415e-a5b6-138c247bad45",
 } as const satisfies Readonly<Record<string, DefinitionId>>;

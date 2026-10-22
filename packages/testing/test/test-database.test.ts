@@ -9,6 +9,7 @@ import { PgConnection } from "@effect/sql-pg";
  * slow: no test bounds it by wall time; they check what happened instead.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { isSchemaMigration } from "@std/server/platform/migration";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { migration0001 } from "@std/server/platform/migrations/0001-core";
 import { migration0002 } from "@std/server/platform/migrations/0002-definitions";
@@ -20,8 +21,10 @@ import { migration0007 } from "@std/server/platform/migrations/0007-outbox";
 import { migration0008 } from "@std/server/platform/migrations/0008-ui-config";
 import { migration0009 } from "@std/server/platform/migrations/0009-saved-filters";
 import { migration0010 } from "@std/server/platform/migrations/0010-definition-revision-field";
-import { migration0011 } from "@std/server/platform/migrations/0011-outbox-worker";
-import { migration0012 } from "@std/server/platform/migrations/0012-delivery-done";
+import { migration0011 } from "@std/server/platform/migrations/0011-ledger-state";
+import { migration0012 } from "@std/server/platform/migrations/0012-user-individuals";
+import { migration0013 } from "@std/server/platform/migrations/0013-outbox-worker";
+import { migration0014 } from "@std/server/platform/migrations/0014-delivery-done";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
@@ -245,6 +248,8 @@ describe("test-database", () => {
         migration0010,
         migration0011,
         migration0012,
+        migration0013,
+        migration0014,
       ])
     );
     assert.notStrictEqual(
@@ -745,7 +750,11 @@ describe("test-database", () => {
       Effect.gen(function* migratedWithLog() {
         const sql = yield* SqlClient.SqlClient;
         const log = yield* StatementLog;
-        yield* checkPlatformMigrations();
+        // A template holds every tx and concurrent_index migration; data
+        // migrations need the sets loaded first (Contracts 1.9).
+        yield* checkPlatformMigrations(
+          PLATFORM_MIGRATIONS.filter(isSchemaMigration)
+        );
         yield* log.clear;
         yield* sql`SELECT 1 AS one`;
 

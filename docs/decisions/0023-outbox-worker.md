@@ -1,6 +1,6 @@
 # 0023. Outbox worker: leases, effects, payloads, dead letters, config subscriptions
 
-Status: accepted, 2026-10-22 (workstream 3B, the outbox worker; plan Step 3). Builds on decisions 0013 (the producer, claims and fencing at SQL level), 0014 (access rules and platform tables), 0021 (config subscriptions, decision 27). Code: `packages/server/src/outbox/{worker,worker-process,delivery-effects,delivery-failed,delivery-payload,dead-letters,metrics,delivery-claims}.ts`, `packages/server/src/schema/config-deliveries.ts`, `packages/server/src/platform/migrations/0011-outbox-worker.ts`.
+Status: accepted, 2026-10-22 (workstream 3B, the outbox worker; plan Step 3). Builds on decisions 0013 (the producer, claims and fencing at SQL level), 0014 (access rules and platform tables), 0021 (config subscriptions, decision 27). Code: `packages/server/src/outbox/{worker,worker-process,delivery-effects,delivery-failed,delivery-payload,dead-letters,metrics,delivery-claims}.ts`, `packages/server/src/schema/config-deliveries.ts`, `packages/server/src/platform/migrations/{0013-outbox-worker,0014-delivery-done}.ts`.
 
 ## Decision
 
@@ -18,7 +18,7 @@ The worker claims deliveries per subscription with the 4.6 claim predicate uncha
 | `outbox/dead-letters` | `listDeadDeliveries`, `retryDeadDelivery`, `discardDeadDelivery` (admins only) |
 | `outbox/metrics` | the gauge `std_outbox_dead_deliveries`, counters for done, failed, dead and lease-lost attempts, `refreshDeadGauge` |
 | `schema/config-deliveries` | `writeConfigDeliveries`: role bumps and config deliveries in a change set's main transaction |
-| `platform/migrations/0011-outbox-worker`, `0012-delivery-done` | `core.delivery.finished_at` (nullable, no constraint); the partial index `delivery_done`, built concurrently |
+| `platform/migrations/0013-outbox-worker`, `0014-delivery-done` | `core.delivery.finished_at` (nullable, no constraint); the partial index `delivery_done`, built concurrently |
 | `outbox/attempt-refused` | `AttemptRefused` (`deadline`, `configuration`): the worker did not run a claimed delivery's effect |
 | `sql/database-config` | `WORKER_APPLICATION_NAME` (`std-worker`); `platform/runner` refuses `std upgrade` while one is connected |
 
@@ -72,7 +72,7 @@ Each worker listens on `std_worker` with reconnect (the producer's after-commit,
 
 ## Retention
 
-Migration 0011 adds `finished_at`, which the worker sets on `done` and `dead` and clears on retry; existing finished rows get the migration's time. It has no CHECK, so the previous release's fenced updates, which do not set it, stay valid (expand-only migrations, rolling upgrades); a `done` row such code writes has no `finished_at` and is not deleted by retention. Migration 0012 builds the partial index `delivery_done` concurrently. Housekeeping deletes `done` rows whose `finished_at` is more than 7 days old, 1,000 per statement with `SKIP LOCKED`, through that index; `dead` rows stay.
+Migration 0013 adds `finished_at`, which the worker sets on `done` and `dead` and clears on retry; existing finished rows get the migration's time. It has no CHECK, so the previous release's fenced updates, which do not set it, stay valid (expand-only migrations, rolling upgrades); a `done` row such code writes has no `finished_at` and is not deleted by retention. Migration 0014 builds the partial index `delivery_done` concurrently. Housekeeping deletes `done` rows whose `finished_at` is more than 7 days old, 1,000 per statement with `SKIP LOCKED`, through that index; `dead` rows stay.
 
 ## Where the worker runs
 
@@ -107,7 +107,7 @@ Migration 0011 adds `finished_at`, which the worker sets on `done` and `dead` an
 
 ## Rolling upgrades (expand-only)
 
-- Migrations 0011 and 0012 are additive: a nullable column without a constraint, a data update of finished rows, an index built concurrently.
+- Migrations 0013 and 0014 are additive: a nullable column without a constraint, a data update of finished rows, an index built concurrently.
 - `WORKER_APPLICATION_NAME` (`std-worker`) and `UPGRADE_BLOCKING_APPLICATION_NAMES` (the sessions `std upgrade` refuses beside) are each defined once, in `sql/database-config.ts`; `platform/runner.ts` reads the list.
 - **Known break:** the previous release validates the whole snapshot on every change set and refuses subscriptions on platform tables. Once a subscription on `core.role` or `core.access_rule` exists, a server of the previous release refuses every change set (`invalidSubscription`) until it is replaced. Config subscriptions should therefore be created only after every server and worker runs this release; the rolling-upgrade design has to gate such new uses of existing definition kinds.
 - New role versions (bumps) and config delivery rows are plain data the previous release reads unchanged.

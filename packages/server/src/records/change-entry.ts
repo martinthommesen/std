@@ -59,7 +59,13 @@ export const ChangeCauseSchema = Schema.Union([
     accessRules: Schema.Array(Schema.String),
     kind: Schema.Literal("system"),
   }),
-  Schema.Struct({ kind: Schema.Literal("system") }),
+  Schema.Struct({
+    kind: Schema.Literal("system"),
+    /** The `data` migration that made the change (Contracts 1.9, 3.1). */
+    migration: Schema.optionalKey(
+      Schema.Struct({ id: Schema.Int, name: Schema.String })
+    ),
+  }),
 ]);
 
 /** The cause of a change. */

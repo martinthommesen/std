@@ -5,8 +5,9 @@
  *
  * - `std upgrade`, with `--plan`, `--json`, `--expect <hash>`,
  *   `--report <file>` and `--set <dir>` (repeatable): applies pending
- *   platform migrations, resumes interrupted change sets, then loads the
- *   core definition set and each app set in `requires` order (Contracts
+ *   platform migrations, resumes interrupted change sets, loads the core
+ *   definition set and each app set in `requires` order, then runs the
+ *   `data` migrations that are pending or were interrupted (Contracts
  *   8.5). `--plan` changes nothing and prints the plan with its hash;
  *   `--expect <hash>` makes the real run refuse unless the database still
  *   plans exactly that; `--report` also writes the JSON report to a file.
@@ -15,10 +16,10 @@
  *   clean, 1 on any error, 2 for warnings only, and 1 when it cannot run.
  * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
  *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
- *   platform migrations.
+ *   platform migrations or an incomplete `data` migration.
  * - `std worker`: runs the outbox worker (Contracts 4.6) until interrupted;
- *   refuses to start with pending platform migrations
- *   (`outbox/worker-process.ts`, decision 0023).
+ *   refuses to start like `std serve` (`outbox/worker-process.ts`,
+ *   decision 0023).
  * - `std schema status [--json]`: open change sets, their steps and last
  *   errors, build progress and the `SCHEMA_KEY` holder (Contracts 8.7).
  * - `std schema resume <id>`: runs the unfinished steps of a change set in
@@ -64,8 +65,9 @@ const USAGE = `Usage: std <command>
 Commands:
   upgrade [--plan] [--json] [--expect <hash>] [--report <file>] [--set <dir>]...
                   Apply platform migrations, resume interrupted change sets,
-                  then load the core definition set and each app set (stop
-                  all STD servers first). --plan changes nothing.
+                  load the core definition set and each app set, then run
+                  data migrations (stop all STD servers first). --plan
+                  changes nothing.
   doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings
   serve           Serve the STD API over HTTP
   worker          Run the outbox worker (deliveries and their effects)
@@ -286,7 +288,7 @@ const upgrade = (args: UpgradeArguments) => {
     Effect.tap((output) =>
       output.refused ? setExitCode(EXIT_FAILURE) : Effect.void
     ),
-    Effect.provide(cliServices),
+    Effect.provide(Layer.merge(cliServices, InstanceSettings.layer)),
     Effect.matchEffect({
       onFailure: reportFailure("upgrade"),
       onSuccess: () => Effect.void,
