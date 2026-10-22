@@ -65,7 +65,7 @@ Values a `derive` rule sets count as supplied fields (3.9): the existing-state a
 ### The seams for aggregates (4.9)
 
 - `SaveInput.mode`: `"user"` (default) or `"settled"`. A settled save runs only `invariant` rules; 4.9's persistence passes it for part saves and aggregate saves.
-- `applyDeriveRules({snapshot, classId, operation, image, previous, context, supplied})` runs only the `derive` rules on an in-memory image and returns the image and the values set, for settling. Settling passes `supplied` = `suppliedFieldsOf(recordId)` (`records/supplied-fields.ts`): every user-mode save adds the fields its body named to its record's set, per transaction attempt and accumulated across the operation, so a `keepSupplied` action keeps protecting a value a user wrote even when a part write makes the owner settle later in the same operation (review round 2) [judgment].
+- `applyDeriveRules({snapshot, classId, operation, image, previous, context, supplied})` runs only the `derive` rules on an in-memory image and returns the image and the values set, for settling. Settling passes `supplied` = `suppliedFieldsOf(recordId)` (`records/supplied-fields.ts`): every user-mode create or update that passes every check (an accepted no-op included) adds the fields its body named to its record's set just before its after-write hooks run, a refused save adds nothing, and a delete drops the record's set, per transaction attempt and accumulated across the operation, so a `keepSupplied` action keeps protecting a value a user wrote even when a part write makes the owner settle later in the same operation (review round 2) [judgment].
 
 ### `after` (step 10) and nested saves
 

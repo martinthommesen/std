@@ -38,7 +38,11 @@ import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
 import { imageOf } from "../src/hooks/rule-condition.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
-import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
+import {
+  createRecord,
+  deleteRecord,
+  updateRecord,
+} from "../src/records/save-pipeline.ts";
 import type { SaveResult } from "../src/records/save-pipeline.ts";
 import { loadRecord } from "../src/records/save-sql.ts";
 import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
@@ -595,6 +599,86 @@ describe("record-rules", () => {
             yield* settleOwner(owner, () => Effect.succeed(new Set<string>())),
             10
           );
+        })
+    );
+
+    dbTest.effect(
+      "only saves that pass every check add supplied fields, and a delete drops them",
+      () =>
+        Effect.gen(function* suppliedLifecycle() {
+          const { request } = yield* Transactions;
+          const access = yield* WriteAccess;
+
+          const refusing = WriteAccess.of({
+            ...access,
+            checkExisting: () => Effect.fail(new NotAllowed()),
+          });
+
+          // The `inc-` rule increments `score` unless the write names it.
+          const record = yield* createParent({ name: "inc-denied" });
+
+          const settled = yield* request(
+            Effect.gen(function* refusedThenSettled() {
+              // A refused outermost update naming `score` writes nothing;
+              // the caller catches it and the operation goes on.
+              const refused = yield* updateRecord({
+                body: { score: 9 },
+                endpointClassId: PARENT.id,
+                expectedVersion: record.version,
+                id: record.id,
+              }).pipe(
+                Effect.provideService(WriteAccess, refusing),
+                Effect.flip
+              );
+
+              assert.strictEqual(refused._tag, "NotAllowed");
+
+              const supplied = yield* suppliedFieldsOf(record.id);
+              const snapshot = yield* (yield* Catalog).current;
+              const loaded = yield* loadRecord(snapshot, PARENT.id, record.id);
+              const image = Option.isSome(loaded) ? imageOf(loaded.value) : {};
+
+              const derived = yield* applyDeriveRules({
+                classId: PARENT.id,
+                context: { me: USERS.alice, now: 0, timeZone: "UTC" },
+                image,
+                operation: "update",
+                previous: image,
+                snapshot,
+                supplied,
+              });
+
+              return [supplied.has(P.score.id), derived.image[P.score.id]];
+            })
+          );
+
+          // The stored 1 is re-derived: the refused 9 was never supplied.
+          assert.deepStrictEqual(settled, [false, 2]);
+
+          const afterDelete = yield* request(
+            Effect.gen(function* updateThenDelete() {
+              const updated = yield* updateRecord({
+                body: { score: 9 },
+                endpointClassId: PARENT.id,
+                expectedVersion: record.version,
+                id: record.id,
+              });
+
+              const named = (yield* suppliedFieldsOf(record.id)).has(
+                P.score.id
+              );
+
+              yield* deleteRecord({
+                endpointClassId: PARENT.id,
+                expectedVersion: updated.version,
+                id: record.id,
+              });
+
+              return [named, (yield* suppliedFieldsOf(record.id)).size];
+            })
+          );
+
+          assert.deepStrictEqual(afterDelete, [true, 0]);
         })
     );
 

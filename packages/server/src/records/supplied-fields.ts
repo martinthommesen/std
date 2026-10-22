@@ -1,8 +1,10 @@
 /**
  * The fields callers supplied, per record, for the running transaction
- * (Contracts 4.9, 4.10, decision 0022): every user-mode save adds the
- * field IDs its body named, whatever their values, to the set of its
- * record. Settling reads the set when it runs an owner's `derive` rules
+ * (Contracts 4.9, 4.10, decision 0022): every user-mode create or update
+ * that passed every check (an accepted no-op included) adds the field IDs
+ * its body named, whatever their values, to the set of its record, just
+ * before its after-write hooks run; a refused save adds nothing, and a
+ * delete drops the record's set. Settling reads the set when it runs an owner's `derive` rules
  * (`applyDeriveRules`'s `supplied`), so a `keepSupplied` action keeps
  * protecting a value a user wrote earlier in the operation, also when a
  * part write makes the owner settle afterwards.
@@ -52,6 +54,23 @@ export const recordSupplied = Effect.fnUntraced(function* recordSupplied(
 
   for (const fieldId of fieldIds) {
     fields.add(fieldId);
+  }
+});
+
+/**
+ * Drops a record's supplied fields after its delete: a deleted record is
+ * never settled (4.9).
+ *
+ * @param recordId - The deleted record.
+ * @returns Nothing.
+ */
+export const forgetSupplied = Effect.fnUntraced(function* forgetSupplied(
+  recordId: string
+) {
+  const transaction = yield* Effect.serviceOption(CurrentTransaction);
+
+  if (Option.isSome(transaction)) {
+    suppliedByTransaction.get(transaction.value)?.delete(recordId);
   }
 });
 

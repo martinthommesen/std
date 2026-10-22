@@ -85,7 +85,7 @@ import {
 } from "./save-stack.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
-import { recordSupplied } from "./supplied-fields.ts";
+import { forgetSupplied, recordSupplied } from "./supplied-fields.ts";
 import { WriteAccess } from "./write-access.ts";
 import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
@@ -382,6 +382,33 @@ const reload = Effect.fn("Records.reload")(function* reload(
     : yield* Effect.die(new Error("A saved record cannot be read back"));
 });
 
+/**
+ * Keeps the operation's supplied fields of a record for settling (4.9),
+ * once its save has passed every check: a user-mode create or update (an
+ * accepted no-op included) adds the fields its body named, a delete drops
+ * the record's entry. A refused save adds nothing.
+ *
+ * @param input - The save.
+ * @param recordId - The saved record.
+ * @param kind - What the save did.
+ * @param supplied - The fields the body named.
+ * @returns Nothing.
+ */
+const noteSupplied = (
+  input: SaveInput,
+  recordId: string,
+  kind: ChangeKind,
+  supplied: Iterable<DefinitionId>
+) => {
+  if (kind === "delete") {
+    return forgetSupplied(recordId);
+  }
+
+  return (input.mode ?? "user") === "user"
+    ? recordSupplied(recordId, supplied)
+    : Effect.void;
+};
+
 // Steps 9 and 10: the change entry, its deliveries, after-write hooks.
 const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   snapshot: ConfigSnapshot,
@@ -394,6 +421,8 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     readonly before: StoredRecord | null;
     readonly after: StoredRecord | null;
     readonly writeOnly: ReadonlySet<DefinitionId>;
+    /** The fields the caller's body named (none for a delete). */
+    readonly supplied: Iterable<DefinitionId>;
   }
 ) {
   const hooks = yield* SaveHooks;
@@ -423,6 +452,12 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   };
 
   yield* hooks.deliveries(hookInput);
+  yield* noteSupplied(
+    change.input,
+    change.recordId,
+    change.kind,
+    change.supplied
+  );
   yield* withinSave(hooks.afterWrite(hookInput), stack, change.recordId);
 
   return entry;
@@ -550,10 +585,6 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       writes
     ).pipe(mapConstraints(snapshot, "write"));
 
-    if ((input.mode ?? "user") === "user") {
-      yield* recordSupplied(id, resolved.entries.keys());
-    }
-
     const after = yield* reload(snapshot, classId, id);
 
     yield* access.checkProposed({
@@ -572,6 +603,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       input,
       kind: "create",
       recordId: id,
+      supplied: resolved.entries.keys(),
       version: after.version,
       writeOnly: writeOnlySet(fields, proposal.values, null),
     });
@@ -787,11 +819,6 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
 
     yield* refusePlatformTable(snapshot, classId);
 
-    // For settling later in the operation (4.9): what this user supplied.
-    if ((input.mode ?? "user") === "user") {
-      yield* recordSupplied(record.id, resolved.entries.keys());
-    }
-
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields);
     const proposed = proposeUpdate(rules, resolved, record);
@@ -811,6 +838,8 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     });
 
     if (bodyWritten.size === 0) {
+      yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
+
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
@@ -834,6 +863,8 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     }
 
     if (written.size === 0) {
+      yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
+
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
@@ -877,6 +908,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       input,
       kind: "update",
       recordId: record.id,
+      supplied: resolved.entries.keys(),
       version,
       writeOnly: writeOnlySet(fields, changes, record),
     });
@@ -959,6 +991,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
       input,
       kind: "delete",
       recordId: record.id,
+      supplied: [],
       version,
       writeOnly: new Set(),
     });
