@@ -28,6 +28,7 @@ import { AsyncData } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import {
+  ID_FIELD,
   cellOf,
   formatInstant,
   listColumns,
@@ -97,6 +98,34 @@ const relatedCellView = (
   );
 };
 
+/**
+ * The ID cell, the related list's only column when its table has no other
+ * to show (decision 0020): the record's ID, linking to its form.
+ *
+ * @param table - The related table.
+ * @param record - The record.
+ * @param h - The builder.
+ * @returns The cell.
+ */
+const relatedIdCellView = (
+  table: MetaTable,
+  record: RecordJson,
+  h: HtmlBuilder<Message>
+): Html =>
+  h.keyed("td")(
+    ID_FIELD,
+    [h.DataAttribute("cell", "value")],
+    [
+      h.a(
+        [
+          h.Href(recordRouter({ id: record.id, table: table.name })),
+          h.Class("link"),
+        ],
+        [record.id]
+      ),
+    ]
+  );
+
 const relatedTableView = (
   list: RelatedList,
   table: MetaTable,
@@ -104,6 +133,8 @@ const relatedTableView = (
   h: HtmlBuilder<Message>
 ): Html => {
   const columns = listColumns(table);
+
+  const isIdOnly = columns.length === 0;
 
   return h.table(
     [
@@ -117,9 +148,11 @@ const relatedTableView = (
         [
           h.tr(
             [],
-            columns.map((field) =>
-              h.keyed("th")(field.id, [h.Scope("col")], [field.label])
-            )
+            isIdOnly
+              ? [h.keyed("th")(ID_FIELD, [h.Scope("col")], ["ID"])]
+              : columns.map((field) =>
+                  h.keyed("th")(field.id, [h.Scope("col")], [field.label])
+                )
           ),
         ]
       ),
@@ -129,9 +162,11 @@ const relatedTableView = (
           h.keyed("tr")(
             record.id,
             [h.DataAttribute("record-id", record.id)],
-            columns.map((field, index) =>
-              relatedCellView(table, record, field, index === 0, h)
-            )
+            isIdOnly
+              ? [relatedIdCellView(table, record, h)]
+              : columns.map((field, index) =>
+                  relatedCellView(table, record, field, index === 0, h)
+                )
           )
         )
       ),

@@ -15,6 +15,8 @@ import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import type { RecordJson } from "@std/api/records";
+import { MetaFieldSchema } from "@std/definitions/table-metadata";
+import type { MetaField } from "@std/definitions/table-metadata";
 import { isJsonString } from "@std/values/json-value";
 import { Effect, Option, Result, Schema } from "effect";
 import { Command, Dom } from "foldkit";
@@ -24,6 +26,7 @@ import { replaceUrl } from "foldkit/navigation";
 import { WriteOnlyValue, sentBody } from "../../domain/form-input.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
+import { valueText } from "../../domain/value-text.ts";
 import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
 import { fetchTableMetadata } from "../table-list/command.ts";
 import type { RecordPage } from "../table-list/model.ts";
@@ -451,37 +454,67 @@ export const DeleteRecord = Command.define("DeleteRecord", {
   ],
 });
 
-const displayOf = (record: RecordJson, displayField: string): string => {
-  const value = record.values[displayField];
+/**
+ * A target's label in a picker: its display field's value as text (a
+ * choice by its label, a date-time as the UTC instant), else its ID.
+ *
+ * @param record - The target as listed.
+ * @param display - The display field.
+ * @returns The label.
+ */
+const displayOf = (record: RecordJson, display: MetaField): string => {
+  const value = record.values[display.name];
 
-  return value !== undefined && isJsonString(value) && value !== ""
-    ? value
-    : record.id;
+  if (value === undefined || value === null) {
+    return record.id;
+  }
+
+  const text = valueText(display.type, value, {
+    choices: display.choices,
+    maybeLabel: Option.none(),
+  });
+
+  return text === "" ? record.id : text;
 };
+
+const optionalParameter = (
+  name: string,
+  maybeText: Option.Option<string>
+): Readonly<Record<string, string>> =>
+  Option.match(maybeText, {
+    onNone: () => ({}),
+    onSome: (text) => ({ [name]: text }),
+  });
 
 /**
  * Searches a reference picker's targets (`GET /tables/{target}/records`
  * with `allowedFor=<table>/<field>`), so only targets the caller can see
  * and the field's allowed-records condition admits are offered (decision
- * 0020), at the form's revision, sorted by the display field.
+ * 0020), at the form's revision, in the order `sort` names, from `cursor`
+ * when the picker asks for more. A `SchemaChanged` refusal is told apart,
+ * so the page reloads the definitions and searches again.
  */
 export const SearchTargets = Command.define("SearchTargets", {
   args: {
     allowedFor: Schema.String,
-    displayField: Schema.Option(Schema.String),
+    cursor: Schema.Option(Schema.String),
+    display: Schema.Option(MetaFieldSchema),
     fieldId: Schema.String,
     filter: Schema.Option(Schema.String),
     generation: Schema.Int,
     revision: SchemaRevision,
+    sort: Schema.Option(Schema.String),
     target: Schema.String,
   },
   execute: ({
     allowedFor,
-    displayField,
+    cursor,
+    display,
     fieldId,
     filter,
     generation,
     revision,
+    sort,
     target,
   }) =>
     Effect.gen(function* searchTargets() {
@@ -492,38 +525,56 @@ export const SearchTargets = Command.define("SearchTargets", {
           params: { table: target },
           query: {
             allowedFor,
+            fields: Option.match(display, {
+              onNone: () => "id",
+              onSome: (field) => field.name,
+            }),
             limit: String(PICKER_LIMIT),
-            ...Option.match(displayField, {
-              onNone: () => ({ fields: "id" }),
-              onSome: (name) => ({ fields: name, sort: name }),
-            }),
-            ...Option.match(filter, {
-              onNone: () => ({}),
-              onSome: (text) => ({ filter: text }),
-            }),
+            ...optionalParameter("sort", sort),
+            ...optionalParameter("filter", filter),
+            ...optionalParameter("cursor", cursor),
           },
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
 
       return Message.SucceededSearchTargets({
+        cursor,
         fieldId,
         generation,
         items: listed.records.map((record) => ({
           id: record.id,
-          label: Option.match(displayField, {
+          label: Option.match(display, {
             onNone: () => record.id,
-            onSome: (name) => displayOf(record, name),
+            onSome: (field) => displayOf(record, field),
           }),
         })),
+        maybeNextCursor: Option.fromNullishOr(listed.nextCursor),
         maybeRevision: responseRevision(response),
       });
     }).pipe(
+      Effect.catchTag("SchemaChanged", (changed) =>
+        Effect.succeed(
+          Message.FailedSearchTargets({
+            error: "SchemaChanged",
+            fieldId,
+            generation,
+            maybeRevision: decodeRevision(changed.currentRevision),
+            revision,
+          })
+        )
+      ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedSearchTargets({ fieldId, generation })
+        Message.FailedSearchTargets({
+          error: UNAVAILABLE,
+          fieldId,
+          generation,
+          maybeRevision: Option.none(),
+          revision,
+        })
       )
     ),
   messages: [

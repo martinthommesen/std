@@ -27,6 +27,7 @@ import {
   restrictedTicketRecord,
   ticketRecord,
   ticketTable,
+  ticketWithRelated,
 } from "../../form-fixture.ts";
 import { userTable } from "../../table-fixture.ts";
 import { FocusField, LoadRecord, UpdateRecord } from "./command.ts";
@@ -482,6 +483,111 @@ describe("a stale form", () => {
         ).toExist()
       ),
       expect(role("button", { name: "Save" })).toBeEnabled()
+    );
+  });
+
+  it("holds Save back, with a way to reload the record, when the record could not be read under the new definition", () => {
+    const notReread = after(
+      reloaded,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: renamedAndRetired,
+      }),
+      Message.FailedLoadRecord({
+        error: "Unavailable",
+        generation: 3,
+        maybeRevision: Option.none(),
+      })
+    );
+
+    scene(
+      { update, view },
+      given(notReread),
+      acknowledgePicker,
+      expect(
+        text(/The record could not be read again under the new definition/u)
+      ).toExist(),
+      expect(role("button", { name: "Save" })).toBeDisabled(),
+      click(role("button", { name: "Reload the record" })),
+      Command.expectExact(
+        LoadRecord({
+          generation: 4,
+          purpose: "Refresh",
+          recordId: TICKET_ID,
+          revision: REVISION_6,
+          table: TICKET,
+        })
+      ),
+      Command.resolve(
+        LoadRecord,
+        Message.FailedLoadRecord({
+          error: "Unavailable",
+          generation: 4,
+          maybeRevision: Option.none(),
+        })
+      )
+    );
+  });
+});
+
+describe("a related list without columns", () => {
+  const bareTasks = {
+    ...ticketTable,
+    displayField: null,
+    fields: ticketTable.fields.filter((field) => field.type.kind === "json"),
+    label: "Task",
+    layouts: { form: null, list: null },
+    name: "help.task",
+  };
+
+  const TASK_ID = "019a0000-0000-7000-8000-0000000f2001";
+
+  const shown = after(
+    init({
+      id: 1,
+      maybeAppRevision: Option.none(),
+      mode: FormMode.Edit({ recordId: TICKET_ID }),
+      table: TICKET,
+    }).model,
+    Message.SucceededLoadFormMetadata({
+      revision: REVISION_5,
+      table: ticketWithRelated,
+    }),
+    Message.SucceededLoadRecord({
+      generation: 1,
+      maybeRevision: Option.none(),
+      purpose: "Open",
+      record: ticketRecord,
+    }),
+    Message.SucceededLoadTarget({ table: userTable }),
+    Message.ToggledRelatedList({ isOpen: true, key: "help.task/parent" }),
+    Message.SucceededLoadRelatedMetadata({
+      key: "help.task/parent",
+      revision: REVISION_5,
+      table: bareTasks,
+    }),
+    Message.SucceededLoadRelatedRecords({
+      generation: 1,
+      key: "help.task/parent",
+      maybeRevision: Option.none(),
+      page: {
+        maybeCount: Option.some(1),
+        maybeNextCursor: Option.none(),
+        records: [{ class: "help.task", id: TASK_ID, values: {}, version: 1 }],
+      },
+    })
+  );
+
+  it("shows each record's ID, linking to its form", () => {
+    scene(
+      { update, view },
+      given(shown),
+      acknowledgePicker,
+      expect(role("columnheader", { name: "ID" })).toExist(),
+      expect(role("link", { name: TASK_ID })).toHaveAttr(
+        "href",
+        `/tables/help.task/records/${TASK_ID}`
+      )
     );
   });
 });

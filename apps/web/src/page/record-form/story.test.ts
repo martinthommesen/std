@@ -373,7 +373,11 @@ describe("editing and saving", () => {
       ),
       model((page) => {
         expect(page.submission).toStrictEqual(
-          Submission.Saving({ generation: 2 })
+          Submission.Saving({
+            generation: 2,
+            revision: REVISION_5,
+            sentEdits: page.edits,
+          })
         );
         // A second click while the save is in flight sends nothing.
         expect(
@@ -984,9 +988,11 @@ describe("the reference picker", () => {
       Command.resolve(
         SearchTargets,
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 2,
           items: [],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.none(),
         })
       )
@@ -1019,28 +1025,34 @@ describe("the reference picker", () => {
       Command.expectExact(
         SearchTargets({
           allowedFor: `${TICKET}/assignee`,
-          displayField: Option.some("name"),
+          cursor: Option.none(),
+          display: Option.fromNullishOr(userTable.fields[0]),
           fieldId: TICKET_FIELDS.assignee,
           filter: Option.some('name contains "Sa"'),
           generation: 1,
           revision: REVISION_5,
+          sort: Option.some("name"),
           target: "core.user",
         })
       ),
       Command.resolve(
         SearchTargets,
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 1,
           items: [{ id: USERS.sam, label: "Sam Agent" }],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.none(),
         })
       ),
       message(
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 0,
           items: [{ id: USERS.alex, label: "Alex Agent" }],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.none(),
         })
       ),
@@ -1082,9 +1094,11 @@ describe("the reference picker", () => {
       Command.resolve(
         SearchTargets,
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 2,
           items: [],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.none(),
         })
       ),

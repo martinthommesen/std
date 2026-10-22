@@ -16,6 +16,7 @@ import type { MetaChoice, MetaField } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { Match, Option, Record, pipe } from "effect";
+import { AsyncData } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { childAttributes } from "foldkit/html";
 
@@ -40,8 +41,14 @@ import {
   storedLabelOf,
 } from "./form.ts";
 import { Message } from "./message.ts";
-import type { Model, Picker } from "./model.ts";
-import { ReferenceCombobox, restingLabelOf } from "./update.ts";
+import type { Model, Picker, PickerError } from "./model.ts";
+import { isSearchableByText } from "./picker-search.ts";
+import {
+  MORE_RESULTS_ITEM,
+  MORE_RESULTS_TEXT,
+  ReferenceCombobox,
+  restingLabelOf,
+} from "./update.ts";
 
 const RESTRICTED_TEXT = "Restricted";
 
@@ -516,24 +523,50 @@ const dateTimeControl = (
     ]
   );
 
+const SEARCH_FAILED_TEXT =
+  "The records could not be searched. Type to try again.";
+
+const SCHEMA_CHANGED_SEARCH_TEXT =
+  "The definitions changed. They are being reloaded, and the search runs again.";
+
+const searchFailureText = (error: PickerError): string =>
+  error === "SchemaChanged" ? SCHEMA_CHANGED_SEARCH_TEXT : SEARCH_FAILED_TEXT;
+
 const pickerStatusText = (picker: Picker): string =>
   Match.value(picker.results).pipe(
     Match.tag("Loading", () => "Searching…"),
     Match.tag("Refreshing", () => "Searching…"),
-    Match.tag(
-      "Failure",
-      () => "The records could not be searched. Type to try again."
-    ),
-    Match.tag(
-      "Stale",
-      () => "The records could not be searched. Type to try again."
-    ),
+    Match.tag("Failure", ({ error }) => searchFailureText(error)),
+    Match.tag("Stale", ({ error }) => searchFailureText(error)),
     Match.tag("Success", ({ data }) =>
       data.length === 0 ? "No records match." : ""
     ),
     Match.tag("Idle", () => ""),
     Match.exhaustive
   );
+
+/**
+ * The hint of a picker whose target can be found only by ID: it has no
+ * display field the caller can read, or one no search applies to.
+ *
+ * @param model - The page.
+ * @param field - The reference field.
+ * @returns The hint, or nothing.
+ */
+const idOnlyHintOf = (model: Model, field: MetaField): readonly string[] => {
+  const isIdOnly = pipe(
+    Option.fromNullishOr(
+      field.type.kind === "reference" ? field.type.target : null
+    ),
+    Option.flatMap((table) => Record.get(model.targets, table)),
+    Option.flatMap(AsyncData.getData),
+    Option.exists((target) => !isSearchableByText(target))
+  );
+
+  return isIdOnly
+    ? ["These records have no searchable name: type a record's ID to find it."]
+    : [];
+};
 
 const pickerItemsOf = (
   picker: Picker
@@ -542,6 +575,21 @@ const pickerItemsOf = (
     Match.tag("Success", "Refreshing", "Stale", ({ data }) => data),
     Match.orElse(() => [])
   );
+
+/**
+ * The picker's list: its results, then "Show more results" when the
+ * server has more and no search runs.
+ *
+ * @param picker - The picker.
+ * @returns The Combobox's items.
+ */
+const pickerListOf = (picker: Picker): readonly string[] => [
+  ...pickerItemsOf(picker).map((item) => item.id),
+  ...(Option.isSome(picker.maybeNextCursor) &&
+  AsyncData.isSuccess(picker.results)
+    ? [MORE_RESULTS_ITEM]
+    : []),
+];
 
 const referenceControl = (
   model: Model,
@@ -554,7 +602,15 @@ const referenceControl = (
     onSome: (picker) => {
       const items = pickerItemsOf(picker);
 
-      const labels = new Map(items.map((item) => [item.id, item.label]));
+      const labels = new Map([
+        ...items.map((item) => [item.id, item.label] as const),
+        [MORE_RESULTS_ITEM, MORE_RESULTS_TEXT] as const,
+      ]);
+
+      const hints = [
+        ...config.notes.hints,
+        ...idOnlyHintOf(model, config.field),
+      ];
 
       const maybeSelected = FieldInput.guards.Reference(input)
         ? input.maybeId
@@ -589,14 +645,17 @@ const referenceControl = (
               inputAttributes: childAttributes([
                 h.Class(INPUT_CLASS),
                 ...requiredAttributes(config.field, h),
-                ...(hasNotes(config.notes) || status !== ""
+                ...(hasNotes(config.notes) || hints.length > 0 || status !== ""
                   ? [h.AriaDescribedBy(descriptionIdOf(config.controlId))]
                   : []),
               ]),
               inputPlaceholder: "Type to search",
               isInvalid: config.isInvalid,
               itemToConfig: (id, context) => ({
-                className: "combobox-option",
+                className:
+                  id === MORE_RESULTS_ITEM
+                    ? "combobox-option combobox-more"
+                    : "combobox-option",
                 content: h.span(
                   context.isSelected ? [h.DataAttribute("selected", "")] : [],
                   [labels.get(id) ?? id]
@@ -604,7 +663,7 @@ const referenceControl = (
               }),
               itemToDisplayText: (id) => labels.get(id) ?? id,
               itemToValue: (id) => id,
-              items: items.map((item) => item.id),
+              items: pickerListOf(picker),
               itemsAttributes: childAttributes([h.Class("combobox-options")]),
               maybeSelectedValue: maybeSelected,
               restingInputValue: restingLabelOf(input),
@@ -614,10 +673,7 @@ const referenceControl = (
             config.controlId,
             {
               ...config.notes,
-              hints:
-                status === ""
-                  ? config.notes.hints
-                  : [...config.notes.hints, status],
+              hints: status === "" ? hints : [...hints, status],
             },
             h
           ),

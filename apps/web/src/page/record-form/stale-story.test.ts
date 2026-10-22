@@ -20,12 +20,16 @@ import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
 import {
+  INCIDENT,
+  INCIDENT_ID,
   REVISION_5,
   REVISION_6,
   TICKET,
   TICKET_FIELDS,
   TICKET_ID,
   USERS,
+  incidentRecord,
+  incidentTable,
   restrictedTicketRecord,
   ticketRecord,
   ticketTable,
@@ -34,6 +38,7 @@ import {
 import { REVISION_3, revision, userTable } from "../../table-fixture.ts";
 import {
   FocusField,
+  LoadClassMetadata,
   LoadFormMetadata,
   LoadHistory,
   LoadRecord,
@@ -45,7 +50,7 @@ import { checkForm, controlIdOf, fieldOf } from "./form.ts";
 import { Message, OutMessage } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
-import { init, update } from "./update.ts";
+import { init, isRecordOutdated, update } from "./update.ts";
 
 const REVISION_7 = revision("7.00000000-0000-4000-8000-000000000c07");
 
@@ -652,9 +657,11 @@ describe("a newer revision on any answer", () => {
       given(typed),
       message(
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 0,
           items: [{ id: USERS.alex, label: "Alex Agent" }],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.some(REVISION_6),
         })
       ),
@@ -751,9 +758,11 @@ describe("a newer revision on any answer", () => {
       given(typed),
       message(
         Message.SucceededSearchTargets({
+          cursor: Option.none(),
           fieldId: TICKET_FIELDS.assignee,
           generation: 0,
           items: [],
+          maybeNextCursor: Option.none(),
           maybeRevision: Option.some(REVISION_5),
         })
       ),
@@ -843,5 +852,260 @@ describe("reads and deletes refused as stale", () => {
       "LoadFormMetadata",
     ]);
     expect(refused.model.deletion._tag).toBe("Failed");
+  });
+});
+
+describe("edits made while a save is in flight (review round 1)", () => {
+  it("survive its success, on top of the saved record, and the next save sends them", () => {
+    const sending = update(
+      after(
+        ready,
+        Message.UpdatedText({
+          fieldId: TICKET_FIELDS.shortDescription,
+          text: "A",
+        }),
+        Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "5" })
+      ),
+      Message.ClickedSave()
+    );
+
+    expect(
+      sending.commands?.map((command) => [command.name, command.args])
+    ).toStrictEqual([
+      [
+        "UpdateRecord",
+        {
+          generation: 2,
+          recordId: TICKET_ID,
+          revision: REVISION_5,
+          secrets: {},
+          table: TICKET,
+          values: { points: 5, short_description: "A" },
+          version: 3,
+        },
+      ],
+    ]);
+
+    // Typed before the answer: the same field, and another one.
+    const typedWhileSaving = after(
+      sending.model,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "AB",
+      }),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "Later",
+      })
+    );
+
+    story(
+      update,
+      given(typedWhileSaving),
+      message(
+        Message.SucceededSaveRecord({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_5),
+          saved: {
+            ...ticketRecord,
+            values: {
+              ...ticketRecord.values,
+              points: 5,
+              short_description: "A",
+            },
+            version: 4,
+          },
+        })
+      ),
+      model((page) => {
+        // Only what the save sent and was not changed since is gone.
+        expect(page.edits).toStrictEqual({
+          [TICKET_FIELDS.description]: FieldInput.Text({ text: "Later" }),
+          [TICKET_FIELDS.shortDescription]: FieldInput.Text({ text: "AB" }),
+        });
+        expect(page.submission).toStrictEqual(
+          Submission.Saved({ isVisible: true })
+        );
+      }),
+      message(Message.ClickedSave()),
+      Command.expectExact(
+        UpdateRecord({
+          generation: 3,
+          recordId: TICKET_ID,
+          revision: REVISION_5,
+          secrets: {},
+          table: TICKET,
+          values: { description: "Later", short_description: "AB" },
+          version: 4,
+        })
+      ),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 3,
+          maybeRevision: Option.none(),
+          saved: ticketRecord,
+        })
+      )
+    );
+  });
+});
+
+describe("a record not read again under new definitions (review round 1)", () => {
+  it("holds Save back until the record is read under them, then sends the renamed field", () => {
+    const failedReread = after(
+      typed,
+      Message.ClickedReloadDefinition(),
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: changedTable,
+      }),
+      Message.FailedLoadRecord({
+        error: "Unavailable",
+        generation: 2,
+        maybeRevision: Option.none(),
+      })
+    );
+
+    expect(failedReread.record._tag).toBe("Stale");
+    expect(isRecordOutdated(failedReread)).toBeTruthy();
+
+    story(
+      update,
+      given(failedReread),
+      message(Message.ClickedSave()),
+      Command.expectNone(),
+      message(Message.ClickedRetry()),
+      Command.expectExact(
+        LoadRecord({
+          generation: 3,
+          purpose: "Refresh",
+          recordId: TICKET_ID,
+          revision: REVISION_6,
+          table: TICKET,
+        })
+      ),
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_6),
+          purpose: "Refresh",
+          record: changedRecord,
+        })
+      ),
+      model((page) => {
+        expect(isRecordOutdated(page)).toBeFalsy();
+      }),
+      message(Message.ClickedSave()),
+      Command.expectExact(
+        UpdateRecord({
+          generation: 4,
+          recordId: TICKET_ID,
+          revision: REVISION_6,
+          secrets: {},
+          table: TICKET,
+          values: { summary: "Mine" },
+          version: 3,
+        })
+      ),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 4,
+          maybeRevision: Option.none(),
+          saved: changedRecord,
+        })
+      )
+    );
+  });
+});
+
+describe("the concrete class's metadata arriving after the record's reread (review round 1)", () => {
+  /** The incident at revision 6: its short description read-only. */
+  const lockedIncident = changeFields(incidentTable, (field) =>
+    field.id === TICKET_FIELDS.shortDescription
+      ? [{ ...field, readOnly: true, write: { create: "no", update: "no" } }]
+      : [field]
+  );
+
+  it("reconciles the edits again, dropping with a note one the class made read-only", () => {
+    const incidentForm = after(
+      init({
+        id: 1,
+        maybeAppRevision: Option.some(REVISION_3),
+        mode: FormMode.Edit({ recordId: INCIDENT_ID }),
+        table: TICKET,
+      }).model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: ticketTable,
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Open",
+        record: incidentRecord,
+      }),
+      Message.SucceededLoadClassMetadata({ table: incidentTable }),
+      Message.SucceededLoadTarget({ table: userTable }),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Mine",
+      })
+    );
+
+    story(
+      update,
+      given(incidentForm),
+      message(Message.ClickedReloadDefinition()),
+      Command.resolve(
+        LoadFormMetadata,
+        Message.SucceededLoadFormMetadata({
+          revision: REVISION_6,
+          table: ticketTable,
+        })
+      ),
+      Command.expectExact(
+        LoadRecord({
+          generation: 2,
+          purpose: "Refresh",
+          recordId: INCIDENT_ID,
+          revision: REVISION_6,
+          table: TICKET,
+        }),
+        LoadClassMetadata({ revision: REVISION_6, table: INCIDENT })
+      ),
+      // The record first: the form still describes the fields by the ticket.
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_6),
+          purpose: "Refresh",
+          record: incidentRecord,
+        })
+      ),
+      model((page) => {
+        expect(Object.keys(page.edits)).toStrictEqual([
+          TICKET_FIELDS.shortDescription,
+        ]);
+      }),
+      Command.resolve(
+        LoadClassMetadata,
+        Message.SucceededLoadClassMetadata({ table: lockedIncident })
+      ),
+      model((page) => {
+        expect(page.edits).toStrictEqual({});
+        expect(page.droppedEdits).toStrictEqual([
+          {
+            fieldId: TICKET_FIELDS.shortDescription,
+            label: "Short description",
+            maybeText: Option.some("Mine"),
+            reason: "ReadOnly",
+          },
+        ]);
+      })
+    );
   });
 });

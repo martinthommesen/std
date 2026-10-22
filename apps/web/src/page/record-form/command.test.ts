@@ -3,6 +3,7 @@
  * client: what each request sends (revision, `If-Match`, query, body with
  * the password unwrapped only there) and what each answer becomes.
  */
+import type { MetaField } from "@std/definitions/table-metadata";
 import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -16,6 +17,7 @@ import {
   TICKET_ID,
   ticketRecord,
 } from "../../form-fixture.ts";
+import { userTable } from "../../table-fixture.ts";
 import {
   CreateRecord,
   DeleteRecord,
@@ -28,6 +30,46 @@ import { Message } from "./message.ts";
 import { WriteError } from "./model.ts";
 
 const RECORD_PATH = `/api/v1/tables/${TICKET}/records/${TICKET_ID}`;
+
+/**
+ * A value the test knows is there.
+ *
+ * @param value - The value, or undefined.
+ * @returns The value.
+ */
+const present = <A>(value: A | undefined): A => {
+  if (value === undefined) {
+    throw new RangeError("the fixture lacks a value the test needs");
+  }
+
+  return value;
+};
+
+const NAME = present(userTable.fields.find((field) => field.name === "name"));
+
+/** An integer display field, for labels that are not text. */
+const BADGE: MetaField = {
+  ...NAME,
+  id: "00000000-0000-4000-8000-00000000b0b0",
+  label: "Badge",
+  name: "badge",
+  type: { kind: "integer" },
+};
+
+const searchArgs = (
+  overrides: Partial<Parameters<typeof SearchTargets>[0]> = {}
+): Parameters<typeof SearchTargets>[0] => ({
+  allowedFor: `${TICKET}/assignee`,
+  cursor: Option.none(),
+  display: Option.some(NAME),
+  fieldId: "f",
+  filter: Option.none(),
+  generation: 3,
+  revision: REVISION_5,
+  sort: Option.some("name"),
+  target: "core.user",
+  ...overrides,
+});
 
 const REVISION_HEADER = { "std-schema-revision": REVISION_6 };
 
@@ -292,25 +334,21 @@ describe("form Commands against the server", () => {
     });
 
     const result = await Effect.runPromise(
-      SearchTargets({
-        allowedFor: `${TICKET}/assignee`,
-        displayField: Option.some("name"),
-        fieldId: "f",
-        filter: Option.some('name contains "Al"'),
-        generation: 3,
-        revision: REVISION_5,
-        target: "core.user",
-      }).effect.pipe(Effect.provide(api.layer))
+      SearchTargets(
+        searchArgs({ filter: Option.some('name contains "Al"') })
+      ).effect.pipe(Effect.provide(api.layer))
     );
 
     expect(result).toStrictEqual(
       Message.SucceededSearchTargets({
+        cursor: Option.none(),
         fieldId: "f",
         generation: 3,
         items: [
           { id: "u1", label: "Alex Agent" },
           { id: "u2", label: "u2" },
         ],
+        maybeNextCursor: Option.none(),
         maybeRevision: Option.none(),
       })
     );
@@ -322,6 +360,88 @@ describe("form Commands against the server", () => {
       sort: "name",
     });
     expect(api.seen[0]?.headers["std-schema-revision"]).toBe(REVISION_5);
+  });
+
+  it("a picker asks for more from the cursor, and labels a target by a numeric display field's value", async () => {
+    const api = fakeStdApi({
+      "/api/v1/tables/core.user/records": {
+        body: {
+          nextCursor: "c3",
+          records: [
+            { class: "core.user", id: "u3", values: { badge: 42 }, version: 1 },
+            {
+              class: "core.user",
+              id: "u4",
+              values: { badge: null },
+              version: 1,
+            },
+          ],
+          schemaRevision: 5,
+        },
+        status: 200,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      SearchTargets(
+        searchArgs({
+          cursor: Option.some("c2"),
+          display: Option.some(BADGE),
+          filter: Option.some("badge = 42"),
+          sort: Option.some("badge"),
+        })
+      ).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.SucceededSearchTargets({
+        cursor: Option.some("c2"),
+        fieldId: "f",
+        generation: 3,
+        items: [
+          { id: "u3", label: "42" },
+          { id: "u4", label: "u4" },
+        ],
+        maybeNextCursor: Option.some("c3"),
+        maybeRevision: Option.none(),
+      })
+    );
+    expect(api.seen[0]?.query).toStrictEqual({
+      allowedFor: `${TICKET}/assignee`,
+      cursor: "c2",
+      fields: "badge",
+      filter: "badge = 42",
+      limit: "10",
+      sort: "badge",
+    });
+  });
+
+  it("a picker's search tells a SchemaChanged refusal apart, with the revision it was sent at", async () => {
+    const api = fakeStdApi({
+      "/api/v1/tables/core.user/records": {
+        body: {
+          _tag: "SchemaChanged",
+          changes: [],
+          currentRevision: REVISION_6,
+          requestRevision: REVISION_5,
+        },
+        status: 409,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      SearchTargets(searchArgs()).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.FailedSearchTargets({
+        error: "SchemaChanged",
+        fieldId: "f",
+        generation: 3,
+        maybeRevision: Option.some(REVISION_6),
+        revision: REVISION_5,
+      })
+    );
   });
 
   it("a record read asks for labels", async () => {

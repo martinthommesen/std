@@ -124,7 +124,9 @@ export type WriteError = typeof WriteError.Type;
  *
  * - `Idle`: nothing sent since the form opened or was last edited.
  * - `Saving`: a save is in flight (`generation` matches its answer);
- *   another click does nothing.
+ *   another click does nothing. `revision` is the revision it was sent at
+ *   and `sentEdits` the edits it was built from: edits made while it is in
+ *   flight differ from them and survive its success (decision 0020).
  * - `Saved`: the last save succeeded; `isVisible` is false when the record
  *   is no longer visible to the caller (Contracts 3.9).
  * - `Unchanged`: the user saved without changing anything; nothing was
@@ -142,7 +144,11 @@ export const Submission = defineTaggedUnion({
   Idle: {},
   Outdated: {},
   Saved: { isVisible: Schema.Boolean },
-  Saving: { generation: Schema.Int },
+  Saving: {
+    generation: Schema.Int,
+    revision: SchemaRevision,
+    sentEdits: Schema.Record(Schema.String, FieldInput),
+  },
   Unchanged: {},
 });
 
@@ -170,9 +176,13 @@ export const PickerItem = Schema.Struct({
 /** One record a reference picker offers. */
 export type PickerItem = typeof PickerItem.Type;
 
-/** Why a picker's search did not answer. */
+/**
+ * Why a picker's search did not answer: the definitions changed since the
+ * form's revision (the page reloads them and searches again), or no
+ * answer.
+ */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
-export const PickerError = Schema.Literals(["Unavailable"]);
+export const PickerError = Schema.Literals(["SchemaChanged", "Unavailable"]);
 
 /** Why a picker's search did not answer. */
 export type PickerError = typeof PickerError.Type;
@@ -189,13 +199,18 @@ export type PickerResults = typeof PickerResults.schema.Type;
 
 /**
  * The reference picker of one field (Foldkit UI Combobox): its state, the
- * text of its latest search (`""` lists the first targets), its results,
- * and the number of its latest search (older answers are ignored).
+ * text of its latest search (`""` lists the first targets), its results
+ * (the pages loaded so far), the cursor of the next page when there is
+ * one, the number of its latest search (older answers are ignored), and,
+ * after a search refused with `SchemaChanged`, the revision it was sent at
+ * (it is searched again once the definitions moved on).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Picker = Schema.Struct({
   combobox: Combobox.Model,
   generation: Schema.Int,
+  maybeNextCursor: Schema.Option(Schema.String),
+  maybeRefusedAt: Schema.Option(SchemaRevision),
   query: Schema.String,
   results: PickerResults.schema,
 });
@@ -235,7 +250,9 @@ export type RelatedRecords = typeof RelatedRecords.schema.Type;
 /**
  * One related list (Contracts 6.3): the records of `entry.table` whose
  * reference `entry.field` points at this record, shown in a disclosure and
- * loaded when it is first opened, with keyset paging.
+ * loaded when it is first opened, with keyset paging. `cursors` is the
+ * stack of the page shown; `maybePendingCursors` the stack of the page
+ * being loaded, which becomes `cursors` only when it loads.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const RelatedList = Schema.Struct({
@@ -243,6 +260,9 @@ export const RelatedList = Schema.Struct({
   entry: MetaRelatedListSchema,
   generation: Schema.Int,
   isOpen: Schema.Boolean,
+  maybePendingCursors: Schema.Option(
+    Schema.Array(Schema.Option(Schema.String))
+  ),
   metadata: RelatedMetadata.schema,
   records: RelatedRecords.schema,
 });
@@ -300,6 +320,8 @@ export type History = typeof History.Type;
  * - `metadata`: the endpoint's metadata and the revision it was built at,
  *   which every request of the form sends (Contracts 6.2).
  * - `record`: the record as read (edit only).
+ * - `maybeRecordRevision`: the metadata revision the record was read or
+ *   saved at; a save waits until it is the metadata's (decision 0020).
  * - `classMetadata`: the concrete class's metadata, when it differs.
  * - `edits`: the user's inputs, by field ID; a field without one shows the
  *   stored value and is never sent.
@@ -337,6 +359,7 @@ export const Model = Schema.Struct({
   isShowingProblems: Schema.Boolean,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeEditsFrom: Schema.Option(RecordJsonSchema),
+  maybeRecordRevision: Schema.Option(SchemaRevision),
   maybeToday: Schema.Option(CalendarDate),
   metadata: Metadata.schema,
   mode: FormMode,

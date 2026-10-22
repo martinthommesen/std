@@ -10,6 +10,7 @@ import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { MetaError, RecordPage } from "../table-list/model.ts";
 import {
   HistoryError,
+  PickerError,
   PickerItem,
   RecordError,
   RelatedError,
@@ -86,7 +87,13 @@ export const Message = defineMessageUnion({
     generation: Schema.Int,
     maybeRevision: Schema.Option(SchemaRevision),
   },
-  FailedSearchTargets: { fieldId: Schema.String, generation: Schema.Int },
+  FailedSearchTargets: {
+    error: PickerError,
+    fieldId: Schema.String,
+    generation: Schema.Int,
+    maybeRevision: Schema.Option(SchemaRevision),
+    revision: SchemaRevision,
+  },
   GotDatePickerMessage: {
     fieldId: Schema.String,
     message: DatePicker.Message,
@@ -132,9 +139,11 @@ export const Message = defineMessageUnion({
     saved: SavedRecord,
   },
   SucceededSearchTargets: {
+    cursor: Schema.Option(Schema.String),
     fieldId: Schema.String,
     generation: Schema.Int,
     items: Schema.Array(PickerItem),
+    maybeNextCursor: Schema.Option(Schema.String),
     maybeRevision: Schema.Option(SchemaRevision),
   },
   ToggledFlag: { fieldId: Schema.String, isChecked: Schema.Boolean },

@@ -12,21 +12,19 @@
  * asked again after the refresh; a save never is: the user saves again.
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
-import type { Expr } from "@std/conditions/ast";
 import type {
   MetaField,
   MetaRelatedList,
   MetaTable,
 } from "@std/definitions/table-metadata";
-import { Option, Record, Result, pipe } from "effect";
+import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { modifyFields } from "foldkit/struct";
 
 import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
-import { listColumns } from "../../domain/list-columns.ts";
-import { filterParameter } from "../../domain/list-query.ts";
+import { listFieldsParameter } from "../../domain/list-columns.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
@@ -97,12 +95,19 @@ import type {
   HistoryError,
   Model,
   Picker,
+  PickerError,
   PickerItem,
   RecordError,
   RelatedError,
   RelatedList,
   StoredRecord as StoredRecordState,
 } from "./model.ts";
+import {
+  PickerFilter,
+  displayFieldOf,
+  pickerFilterOf,
+  pickerSortOf,
+} from "./picker-search.ts";
 
 type UpdateReturn = Update.ReturnWithOutMessage<
   Model,
@@ -135,6 +140,22 @@ const modifyEntry = <A>(
     onNone: () => entries,
     onSome: (entry) => Record.set(entries, key, change(entry)),
   });
+
+/**
+ * Runs steps one after the other, each on the Model the one before made.
+ *
+ * @param steps - The steps.
+ * @returns One step.
+ */
+const inSequence =
+  (steps: readonly Step[]): Step =>
+  (model) => {
+    const [first, ...rest] = steps;
+
+    return first === undefined
+      ? { model }
+      : Update.combine(model, [first, inSequence(rest)]);
+  };
 
 /** The calendar's today until the page has read it (never shown in practice). */
 const FALLBACK_TODAY: CalendarDate = { day: 1, month: 1, year: 2000 };
@@ -189,6 +210,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     isShowingProblems: false,
     maybeAppRevision: config.maybeAppRevision,
     maybeEditsFrom: Option.none(),
+    maybeRecordRevision: Option.none(),
     maybeToday: Option.none(),
     metadata: Metadata.Loading(),
     mode: config.mode,
@@ -246,6 +268,8 @@ const newPicker = (model: Model, field: MetaField): Picker => ({
     { inputValue: () => restingLabelOf(inputOf(model, field)) }
   ),
   generation: 0,
+  maybeNextCursor: Option.none(),
+  maybeRefusedAt: Option.none(),
   query: "",
   results: PickerResults.Idle(),
 });
@@ -384,25 +408,82 @@ const closedRelatedList = (entry: MetaRelatedList): RelatedList => ({
   entry,
   generation: 0,
   isOpen: false,
+  maybePendingCursors: Option.none(),
   metadata: RelatedMetadata.Idle(),
   records: RelatedRecords.Idle(),
 });
 
+/**
+ * The list a new entry continues when its key is new: after the
+ * back-reference field was renamed, the one list of the same table whose
+ * key went away, when that table has exactly one such list and one such
+ * new entry (related lists carry no IDs, so anything less certain starts
+ * afresh).
+ *
+ * @param lists - The lists before.
+ * @param entries - The new metadata's entries.
+ * @param entry - The new entry.
+ * @returns The list it continues.
+ */
+const renamedListOf = (
+  lists: Readonly<Record<string, RelatedList>>,
+  entries: readonly MetaRelatedList[],
+  entry: MetaRelatedList
+): Option.Option<RelatedList> => {
+  const newKeys = new Set(entries.map(relatedKeyOf));
+
+  const gone = Record.values(lists).filter(
+    (list) =>
+      list.entry.table === entry.table && !newKeys.has(relatedKeyOf(list.entry))
+  );
+
+  const added = entries.filter(
+    (candidate) =>
+      candidate.table === entry.table &&
+      !Record.has(lists, relatedKeyOf(candidate))
+  );
+
+  const [only] = gone;
+
+  return gone.length === 1 && added.length === 1
+    ? Option.fromNullishOr(only)
+    : Option.none();
+};
+
+const listOfEntry = (
+  lists: Readonly<Record<string, RelatedList>>,
+  entries: readonly MetaRelatedList[],
+  entry: MetaRelatedList
+): RelatedList =>
+  Option.match(
+    Option.orElse(Record.get(lists, relatedKeyOf(entry)), () =>
+      renamedListOf(lists, entries, entry)
+    ),
+    {
+      onNone: () => closedRelatedList(entry),
+      onSome: (list) => modifyFields(list, { entry: () => entry }),
+    }
+  );
+
+/**
+ * The related lists of new metadata: each entry keeps its list (with the
+ * entry as the metadata now states it, so requests use the field's current
+ * name), a renamed back-reference continues its list, and a new entry gets
+ * a closed one.
+ *
+ * @param model - The page.
+ * @param table - The endpoint's new metadata.
+ * @returns The page.
+ */
 const syncRelatedLists = (model: Model, table: MetaTable): Model =>
   isCreating(model)
     ? model
     : modifyFields(model, {
         relatedLists: (lists) =>
-          Record.fromIterableWith(table.relatedLists, (entry) => {
-            const key = relatedKeyOf(entry);
-
-            return [
-              key,
-              Option.getOrElse(Record.get(lists, key), () =>
-                closedRelatedList(entry)
-              ),
-            ];
-          }),
+          Record.fromIterableWith(table.relatedLists, (entry) => [
+            relatedKeyOf(entry),
+            listOfEntry(lists, table.relatedLists, entry),
+          ]),
       });
 
 const writeRelatedList = (
@@ -423,16 +504,16 @@ const reloadingRelated = (records: RelatedList["records"]) =>
     onSome: (data) => RelatedRecords.Refreshing({ data }),
   });
 
-const columnNamesOf = (table: MetaTable): string =>
-  listColumns(table)
-    .map((field) => field.name)
-    .join(",");
+type CursorStack = readonly Option.Option<string>[];
+
+const FIRST_PAGE: CursorStack = [Option.none()];
 
 const loadingRelatedPage =
-  (generation: number) =>
+  (generation: number, cursors: CursorStack) =>
   (list: RelatedList): RelatedList =>
     modifyFields(list, {
       generation: () => generation,
+      maybePendingCursors: () => Option.some(cursors),
       records: reloadingRelated,
     });
 
@@ -440,7 +521,8 @@ const relatedPageRequest = (
   model: Model,
   key: string,
   list: RelatedList,
-  recordId: string
+  recordId: string,
+  cursors: CursorStack
 ): PlainReturn =>
   Option.match(AsyncData.getData(list.metadata), {
     onNone: () => ({ model }),
@@ -450,8 +532,8 @@ const relatedPageRequest = (
       return {
         commands: [
           LoadRelatedRecords({
-            cursor: Option.flatten(Option.fromNullishOr(list.cursors.at(-1))),
-            fields: columnNamesOf(meta.table),
+            cursor: Option.flatten(Option.fromNullishOr(cursors.at(-1))),
+            fields: listFieldsParameter(meta.table),
             filter: relatedFilterOf(list, recordId),
             generation,
             key,
@@ -459,35 +541,46 @@ const relatedPageRequest = (
             table: list.entry.table,
           }),
         ],
-        model: writeRelatedList(model, key, loadingRelatedPage(generation)),
+        model: writeRelatedList(
+          model,
+          key,
+          loadingRelatedPage(generation, cursors)
+        ),
       };
     },
   });
 
 /**
- * Asks for a related list's current page, once its table's metadata and
- * the record are known.
+ * Asks for a page of a related list, once its table's metadata and the
+ * record are known. The page's cursor stack becomes the list's only when
+ * the page loads (`receiveRelatedRecords`).
  *
  * @param key - The related list.
+ * @param toCursors - The cursor stack of the page, from the list.
  * @returns The step.
  */
 const requestRelatedPage =
-  (key: string): Step =>
+  (key: string, toCursors: (list: RelatedList) => CursorStack): Step =>
   (model) =>
     Option.match(
       Option.all([Record.get(model.relatedLists, key), recordOf(model)]),
       {
         onNone: () => ({ model }),
         onSome: ([list, record]) =>
-          relatedPageRequest(model, key, list, record.id),
+          relatedPageRequest(model, key, list, record.id, toCursors(list)),
       }
     );
 
+const firstRelatedPage = (key: string): Step =>
+  requestRelatedPage(key, () => FIRST_PAGE);
+
 const loadingRelatedMetadata = (list: RelatedList): RelatedList =>
   modifyFields(list, {
-    cursors: () => [Option.none()],
-    metadata: () => RelatedMetadata.Loading(),
-    records: () => RelatedRecords.Idle(),
+    metadata: (metadata) =>
+      Option.match(AsyncData.getData(metadata), {
+        onNone: () => RelatedMetadata.Loading(),
+        onSome: (data) => RelatedMetadata.Refreshing({ data }),
+      }),
   });
 
 const loadRelatedMetadata =
@@ -535,9 +628,7 @@ const isRelatedPaging = (list: RelatedList): boolean =>
 const pageRelated = (
   model: Model,
   key: string,
-  toCursors: (
-    list: RelatedList
-  ) => Option.Option<readonly Option.Option<string>[]>
+  toCursors: (list: RelatedList) => Option.Option<CursorStack>
 ): UpdateReturn =>
   Option.match(
     pipe(
@@ -547,18 +638,11 @@ const pageRelated = (
     ),
     {
       onNone: () => ({ model }),
-      onSome: (cursors) =>
-        requestRelatedPage(key)(
-          writeRelatedList(model, key, (list) =>
-            modifyFields(list, { cursors: () => cursors })
-          )
-        ),
+      onSome: (cursors) => requestRelatedPage(key, () => cursors)(model),
     }
   );
 
-const nextRelatedCursors = (
-  list: RelatedList
-): Option.Option<readonly Option.Option<string>[]> =>
+const nextRelatedCursors = (list: RelatedList): Option.Option<CursorStack> =>
   Option.map(
     Option.flatMap(
       AsyncData.getData(list.records),
@@ -569,23 +653,37 @@ const nextRelatedCursors = (
 
 const previousRelatedCursors = (
   list: RelatedList
-): Option.Option<readonly Option.Option<string>[]> =>
+): Option.Option<CursorStack> =>
   list.cursors.length > 1
     ? Option.some(list.cursors.slice(0, -1))
     : Option.none();
 
+/**
+ * A related list's table metadata arrived: its first page is asked for,
+ * unless the endpoint's own metadata is reloading (its `relatedLists` may
+ * rename the back-reference); the page is then asked for when that
+ * arrives (`requestWaitingRelated`).
+ *
+ * @param model - The page.
+ * @param key - The related list.
+ * @param meta - The related table's metadata and its revision.
+ * @returns The page.
+ */
 const receiveRelatedMetadata = (
   model: Model,
   key: string,
   meta: { readonly revision: SchemaRevision; readonly table: MetaTable }
-): UpdateReturn =>
-  requestRelatedPage(key)(
-    writeRelatedList(model, key, (list) =>
-      modifyFields(list, {
-        metadata: () => RelatedMetadata.Success({ data: meta }),
-      })
-    )
+): UpdateReturn => {
+  const known = writeRelatedList(model, key, (list) =>
+    modifyFields(list, {
+      metadata: () => RelatedMetadata.Success({ data: meta }),
+    })
   );
+
+  return AsyncData.isPending(model.metadata)
+    ? { model: known }
+    : firstRelatedPage(key)(known);
+};
 
 const failRelatedMetadata = (
   model: Model,
@@ -594,7 +692,11 @@ const failRelatedMetadata = (
 ): PlainReturn => ({
   model: writeRelatedList(model, key, (list) =>
     modifyFields(list, {
-      metadata: () => RelatedMetadata.Failure({ error }),
+      metadata: (metadata) =>
+        Option.match(AsyncData.getData(metadata), {
+          onNone: () => RelatedMetadata.Failure({ error }),
+          onSome: (data) => RelatedMetadata.Stale({ data, error }),
+        }),
     })
   ),
 });
@@ -608,21 +710,35 @@ const receiveRelatedRecords = (
   model: writeRelatedList(model, key, (list) =>
     list.generation === generation
       ? modifyFields(list, {
+          cursors: (cursors) =>
+            Option.getOrElse(list.maybePendingCursors, () => cursors),
+          maybePendingCursors: () => Option.none(),
           records: () => RelatedRecords.Success({ data: page }),
         })
       : list
   ),
 });
 
+const isCurrentRelated = (
+  model: Model,
+  key: string,
+  generation: number
+): boolean =>
+  Option.exists(
+    Record.get(model.relatedLists, key),
+    (list) => list.generation === generation
+  );
+
 const failRelatedRecords = (
   model: Model,
   key: string,
   generation: number,
   error: RelatedError
-): PlainReturn => ({
-  model: writeRelatedList(model, key, (list) =>
+): Model =>
+  writeRelatedList(model, key, (list) =>
     list.generation === generation
       ? modifyFields(list, {
+          maybePendingCursors: () => Option.none(),
           records: (records) =>
             Option.match(AsyncData.getData(records), {
               onNone: () => RelatedRecords.Failure({ error }),
@@ -630,8 +746,7 @@ const failRelatedRecords = (
             }),
         })
       : list
-  ),
-});
+  );
 
 // HISTORY
 
@@ -787,6 +902,90 @@ const sawRevision = (
     )
   );
 
+// RELATED LISTS AFTER A REFRESH
+
+const isRefusedRelatedPage = (list: RelatedList): boolean =>
+  Option.contains(AsyncData.getError(list.records), "SchemaChanged");
+
+/**
+ * A related list's page that did not load; the cursor stays on the page
+ * shown. Refused with `SchemaChanged` (decision 0020), the page reloads
+ * the endpoint's metadata (its `relatedLists` name the back-reference
+ * field as it is now) and the related table's, and asks for the first page
+ * once both arrived (`receiveRelatedMetadata`, `requestWaitingRelated`).
+ *
+ * @param model - The page.
+ * @param key - The related list.
+ * @param generation - The answered request's number.
+ * @param error - Why it did not load.
+ * @returns The page, reloading what the refusal needs.
+ */
+const failRelatedPage = (
+  model: Model,
+  key: string,
+  generation: number,
+  error: RelatedError
+): UpdateReturn => {
+  if (!isCurrentRelated(model, key, generation)) {
+    return { model };
+  }
+
+  const failed = failRelatedRecords(model, key, generation, error);
+
+  return error === "SchemaChanged"
+    ? Update.combine(failed, [refreshMetadata, loadRelatedMetadata(key)])
+    : { model: failed };
+};
+
+const isWaitingForPage = (list: RelatedList): boolean => {
+  const isUnasked =
+    AsyncData.isIdle(list.records) || isRefusedRelatedPage(list);
+
+  return list.isOpen && AsyncData.isSuccess(list.metadata) && isUnasked;
+};
+
+/**
+ * Asks for the first page of each open related list that waits for one
+ * (never loaded, or refused with `SchemaChanged`) and whose table's
+ * metadata is loaded, after the endpoint's metadata arrived.
+ *
+ * @param model - The page.
+ * @returns It, with the requests.
+ */
+const requestWaitingRelated: Step = (model) =>
+  inSequence(
+    Record.toEntries(model.relatedLists).flatMap(([key, list]) =>
+      isWaitingForPage(list) ? [firstRelatedPage(key)] : []
+    )
+  )(model);
+
+/**
+ * "Try again" on a related list: after a `SchemaChanged` refusal, or when
+ * its table's metadata did not load, both metadata are reloaded (the first
+ * page follows); otherwise the page shown is asked for again, with the
+ * back-reference's current name.
+ *
+ * @param model - The page.
+ * @param key - The related list.
+ * @returns The page and its Commands.
+ */
+const retryRelatedList = (model: Model, key: string): UpdateReturn =>
+  Option.match(Record.get(model.relatedLists, key), {
+    onNone: () => ({ model }),
+    onSome: (list) => {
+      if (isRefusedRelatedPage(list)) {
+        return Update.combine(model, [
+          refreshMetadata,
+          loadRelatedMetadata(key),
+        ]);
+      }
+
+      return AsyncData.isSuccess(list.metadata)
+        ? requestRelatedPage(key, (current) => current.cursors)(model)
+        : loadRelatedMetadata(key)(model);
+    },
+  });
+
 // HISTORY AFTER A REFRESH
 
 /**
@@ -829,298 +1028,6 @@ const retryRefusedHistory: Step = (model) =>
   Option.contains(AsyncData.getError(model.history.entries), "SchemaChanged")
     ? requestHistory(model)
     : { model };
-
-// THE RECORD
-
-const reloadingRecord = (record: StoredRecordState): StoredRecordState =>
-  Option.match(AsyncData.getData(record), {
-    onNone: () => StoredRecord.Loading(),
-    onSome: (data) => StoredRecord.Refreshing({ data }),
-  });
-
-const requestRecord =
-  (purpose: ReadPurpose): Step =>
-  (model) =>
-    Option.match(metaOf(model), {
-      onNone: () => ({ model }),
-      onSome: (meta) =>
-        FormMode.guards.Edit(model.mode)
-          ? {
-              commands: [
-                LoadRecord({
-                  generation: model.generation + 1,
-                  purpose,
-                  recordId: model.mode.recordId,
-                  revision: meta.revision,
-                  table: model.table,
-                }),
-              ],
-              model: modifyFields(model, {
-                generation: (generation) => generation + 1,
-                record: reloadingRecord,
-              }),
-            }
-          : { model },
-    });
-
-/**
- * Loads the concrete class's metadata when the record's class is not the
- * endpoint's (and the page does not have it at this revision).
- *
- * @param model - The page, with the record.
- * @returns It, loading the class's metadata if needed.
- */
-const requestClassMetadata: Step = (model) =>
-  Option.match(Option.all([metaOf(model), recordOf(model)]), {
-    onNone: () => ({ model }),
-    onSome: ([meta, record]) => {
-      const isOther = record.class !== meta.table.name;
-
-      const isCurrent = Option.exists(
-        classMetaOf(model),
-        (concrete) => concrete.name === record.class
-      );
-
-      return isOther && !isCurrent && !AsyncData.isPending(model.classMetadata)
-        ? {
-            commands: [
-              LoadClassMetadata({
-                revision: meta.revision,
-                table: record.class,
-              }),
-            ],
-            model: modifyFields(model, {
-              classMetadata: () => ClassMetadata.Loading(),
-            }),
-          }
-        : { model };
-    },
-  });
-
-/**
- * Whether the last save was refused with `SchemaChanged`: once the
- * metadata moved on, the user can save again (the changed fields stay
- * marked through `staleChanges`).
- *
- * @param submission - Where saving stands.
- * @returns True after a `SchemaChanged` refusal.
- */
-const isRefusedAsStale = (submission: Submission): boolean =>
-  Submission.guards.Failed(submission) &&
-  WriteError.guards.SchemaChanged(submission.error);
-
-/**
- * Applies a reconciliation of the edits (decision 0020): keeps the edits
- * that still apply, notes the dropped ones, and forgets the server's
- * errors of dropped fields.
- *
- * @param model - The page.
- * @param reconciled - What reconciling found.
- * @returns The page.
- */
-const withReconciled = (model: Model, reconciled: Reconciled): Model =>
-  reconciled.dropped.length === 0
-    ? model
-    : modifyFields(model, {
-        droppedEdits: (notes) => mergeDropped(notes, reconciled.dropped),
-        edits: () => reconciled.edits,
-        serverErrors: Record.filter(
-          (_texts, fieldId) =>
-            !reconciled.dropped.some((note) => note.fieldId === fieldId)
-        ),
-      });
-
-/**
- * What new metadata asks of the record: the first read (or the one a
- * `SchemaChanged` refusal stopped); a reread when the metadata moved to
- * another revision, so the record's names are the metadata's (a rename
- * changes them); else only the concrete class's metadata, reloaded.
- *
- * @param isFirstRead - Whether the record was never read at a revision.
- * @param isOtherRevision - Whether the metadata's revision changed.
- * @returns The step.
- */
-const nextRecordStep = (
-  isFirstRead: boolean,
-  isOtherRevision: boolean
-): Step => {
-  if (isFirstRead) {
-    return requestRecord("Open");
-  }
-
-  return isOtherRevision
-    ? (model) =>
-        Update.combine(model, [requestRecord("Refresh"), requestClassMetadata])
-    : requestClassMetadata;
-};
-
-const receiveMetadata = (
-  model: Model,
-  table: MetaTable,
-  revision: SchemaRevision
-): UpdateReturn => {
-  if (table.name !== model.table) {
-    return { model };
-  }
-
-  const isFirstLoad = Option.isNone(metaOf(model));
-
-  const isOtherRevision = Option.exists(
-    metaOf(model),
-    (meta) => meta.revision !== revision
-  );
-
-  const hadRecordRefused = Option.exists(
-    AsyncData.getError(model.record),
-    (reason) => reason === "SchemaChanged"
-  );
-
-  // NOTE: edits are reconciled with the endpoint's new fields only; the
-  // concrete class's metadata and the record follow, and the record's
-  // reread reconciles again (`receiveRecord`).
-  const reconciled = isOtherRevision
-    ? reconcileWithMetadata(
-        model.edits,
-        fieldsOf(model),
-        formFieldsOf(table, Option.none()),
-        isCreating(model)
-      )
-    : { dropped: [], edits: model.edits };
-
-  const loaded = syncRelatedLists(
-    withReconciled(
-      modifyFields(model, {
-        classMetadata: (classMetadata) =>
-          isFirstLoad ? classMetadata : ClassMetadata.Idle(),
-        metadata: () => Metadata.Success({ data: { revision, table } }),
-        submission: (submission) =>
-          isOtherRevision && isRefusedAsStale(submission)
-            ? Submission.Outdated()
-            : submission,
-      }),
-      reconciled
-    ),
-    table
-  );
-
-  const next = Update.combine(loaded, [
-    nextRecordStep(isFirstLoad || hadRecordRefused, isOtherRevision),
-    setUpControls,
-    isOtherRevision
-      ? retryRefusedHistory
-      : (stepModel) => ({ model: stepModel }),
-  ]);
-
-  return sawRevision(next, Option.some(revision));
-};
-
-const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
-  model: modifyFields(model, {
-    metadata: (metadata) =>
-      Option.match(AsyncData.getData(metadata), {
-        onNone: () => Metadata.Failure({ error }),
-        onSome: (data) =>
-          error === "UnknownTable"
-            ? Metadata.Failure({ error })
-            : Metadata.Stale({ data, error }),
-      }),
-  }),
-});
-
-const receiveRecord = (
-  model: Model,
-  generation: number,
-  record: Parameters<typeof StoredRecord.Success>[0]["data"],
-  purpose: ReadPurpose,
-  maybeRevision: Option.Option<SchemaRevision>
-): UpdateReturn => {
-  // NOTE: a reread that left before a save and arrives after it holds an
-  // older version than the saved record; it is not shown.
-  const isOlder = Option.exists(
-    recordOf(model),
-    (current) => current.id === record.id && current.version > record.version
-  );
-
-  if (generation !== model.generation || isOlder) {
-    return { model };
-  }
-
-  const afterConflict = purpose === "ReloadAfterConflict";
-
-  const isChangedUnderEdits =
-    purpose !== "Open" &&
-    !Record.isEmptyRecord(model.edits) &&
-    Option.exists(
-      recordOf(model),
-      (before) => before.version !== record.version
-    );
-
-  const read = modifyFields(model, {
-    deletion: (deletion) => (afterConflict ? Deletion.Idle() : deletion),
-    maybeEditsFrom: (editsFrom) =>
-      isChangedUnderEdits
-        ? Option.orElse(editsFrom, () => recordOf(model))
-        : editsFrom,
-    record: () => StoredRecord.Success({ data: record }),
-    submission: (submission) =>
-      afterConflict ? Submission.Idle() : submission,
-  });
-
-  const shown =
-    purpose === "Open"
-      ? read
-      : withReconciled(
-          read,
-          reconcileWithRecord(read.edits, fieldsOf(read), (field) =>
-            fieldShowOf(field, Option.some(record))
-          )
-        );
-
-  return sawRevision(
-    Update.combine(resetPickerInputs(shown), [
-      requestClassMetadata,
-      setUpControls,
-      refreshIfNewer(maybeRevision),
-    ]),
-    maybeRevision
-  );
-};
-
-const failRecord = (
-  model: Model,
-  generation: number,
-  error: RecordError,
-  maybeRevision: Option.Option<SchemaRevision>
-): UpdateReturn => {
-  if (generation !== model.generation) {
-    return { model };
-  }
-
-  const refused = modifyFields(model, {
-    record: (record) =>
-      Option.match(AsyncData.getData(record), {
-        onNone: () => StoredRecord.Failure({ error }),
-        onSome: (data) =>
-          error === "NotFound"
-            ? StoredRecord.Failure({ error })
-            : StoredRecord.Stale({ data, error }),
-      }),
-  });
-
-  if (error !== "SchemaChanged") {
-    return { model: refused };
-  }
-
-  return Update.withOutMessage(
-    refreshMetadata(refused),
-    Option.getOrUndefined(
-      pipe(
-        maybeRevision,
-        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
-      )
-    )
-  );
-};
 
 // EDITS
 
@@ -1283,52 +1190,21 @@ const writePicker = (
   });
 
 /**
- * The search a picker sends: the target's display field contains the
- * typed text, printed with the target's names.
- *
- * @param target - The target table's metadata.
- * @param text - The typed text.
- * @returns The `filter` parameter; none for an empty text, or when the
- *   caller cannot read the target's display field.
+ * The item a picker lists after its results when the server has more: it
+ * is never a target, and choosing it loads the next page into the list.
  */
-const pickerFilterOf = (
-  target: MetaTable,
-  text: string
-): Option.Option<string> => {
-  const needle = text.trim();
+export const MORE_RESULTS_ITEM = "std:more-results";
 
-  const maybeDisplay = Option.flatMap(
-    Option.fromNullishOr(target.displayField),
-    (name) =>
-      Option.fromNullishOr(target.fields.find((field) => field.name === name))
-  );
-
-  return pipe(
-    maybeDisplay,
-    Option.filter(() => needle !== ""),
-    Option.flatMap((display) => {
-      const condition: Expr = {
-        left: { path: [display.id] },
-        op: "contains",
-        right: needle,
-      };
-
-      return Result.getSuccess(
-        filterParameter(
-          condition,
-          target.name,
-          new Map([[target.name, target]])
-        )
-      );
-    })
-  );
-};
+/** The text of the "more results" item. */
+export const MORE_RESULTS_TEXT = "Show more results";
 
 const searchingPicker =
-  (generation: number, query: string) =>
+  (generation: number, query: string, isMore: boolean) =>
   (picker: Picker): Picker =>
     modifyFields(picker, {
       generation: () => generation,
+      maybeNextCursor: (cursor) => (isMore ? cursor : Option.none()),
+      maybeRefusedAt: () => Option.none(),
       query: () => query,
       results: (results) =>
         Option.match(AsyncData.getData(results), {
@@ -1401,17 +1277,77 @@ const reloadFailedTarget = (
   };
 };
 
+/** What one picker search asks for. */
+interface PickerSearchRequest {
+  readonly allowedFor: string;
+  readonly cursor: Option.Option<string>;
+  readonly fieldId: string;
+  readonly generation: number;
+  readonly query: string;
+  readonly revision: SchemaRevision;
+  readonly target: MetaTable;
+}
+
+const withNoResults = (picker: Picker): Picker =>
+  modifyFields(picker, {
+    results: () => PickerResults.Success({ data: [] }),
+  });
+
 /**
- * Asks for a picker's targets: those the caller can see that the field's
- * allowed-records condition admits (`allowedFor`), whose display field
- * contains the text. Waits for the target's metadata.
+ * Sends a picker's search, or, for a text no target can match, shows no
+ * results without asking.
+ *
+ * @param waiting - The page, its picker searching.
+ * @param request - The search.
+ * @returns The page and the request, if any.
+ */
+const searchOrNothing = (
+  waiting: Model,
+  request: PickerSearchRequest
+): PlainReturn => {
+  const filter = pickerFilterOf(request.target, request.query);
+
+  if (PickerFilter.guards.NothingMatches(filter)) {
+    return { model: writePicker(waiting, request.fieldId, withNoResults) };
+  }
+
+  return {
+    commands: [
+      SearchTargets({
+        allowedFor: request.allowedFor,
+        cursor: request.cursor,
+        display: displayFieldOf(request.target),
+        fieldId: request.fieldId,
+        filter: filter.filter,
+        generation: request.generation,
+        revision: request.revision,
+        sort: pickerSortOf(request.target),
+        target: request.target.name,
+      }),
+    ],
+    model: waiting,
+  };
+};
+
+/**
+ * Asks for a picker's targets (decision 0020): those the caller can see
+ * that the field's allowed-records condition admits (`allowedFor`), whose
+ * display field matches the text by an operation its type supports, or
+ * whose ID it is (`picker-search.ts`), from `cursor` when the picker asks
+ * for more. A text nothing can match asks nothing. Waits for the target's
+ * metadata.
  *
  * @param fieldId - The reference field.
  * @param query - The typed text; `""` lists the first targets.
+ * @param cursor - The next page's cursor, for "more results".
  * @returns The step.
  */
 const searchTargets =
-  (fieldId: string, query: string): Step =>
+  (
+    fieldId: string,
+    query: string,
+    cursor: Option.Option<string> = Option.none()
+  ): Step =>
   (model) =>
     Option.match(Option.all([fieldOf(model, fieldId), metaOf(model)]), {
       onNone: () => ({ model }),
@@ -1433,28 +1369,50 @@ const searchTargets =
         const waiting = writePicker(
           model,
           fieldId,
-          searchingPicker(generation, query)
+          searchingPicker(generation, query, Option.isSome(cursor))
         );
 
         return Option.match(maybeTargetMeta, {
           onNone: () => reloadFailedTarget(waiting, target, meta.revision),
-          onSome: (targetMeta) => ({
-            commands: [
-              SearchTargets({
-                allowedFor: `${model.table}/${field.name}`,
-                displayField: Option.fromNullishOr(targetMeta.displayField),
-                fieldId,
-                filter: pickerFilterOf(targetMeta, query),
-                generation,
-                revision: meta.revision,
-                target: targetMeta.name,
-              }),
-            ],
-            model: waiting,
-          }),
+          onSome: (targetMeta) =>
+            searchOrNothing(waiting, {
+              allowedFor: `${model.table}/${field.name}`,
+              cursor,
+              fieldId,
+              generation,
+              query,
+              revision: meta.revision,
+              target: targetMeta,
+            }),
         });
       },
     });
+
+/**
+ * "Show more results": the next page of the picker's latest search,
+ * added to its list.
+ *
+ * @param fieldId - The reference field.
+ * @returns The step; nothing while a search runs or without a next page.
+ */
+const loadMoreTargets =
+  (fieldId: string): Step =>
+  (model) =>
+    Option.match(
+      pipe(
+        Record.get(model.pickers, fieldId),
+        Option.filter((picker) => !AsyncData.isPending(picker.results))
+      ),
+      {
+        onNone: () => ({ model }),
+        onSome: (picker) =>
+          Option.match(picker.maybeNextCursor, {
+            onNone: () => ({ model }),
+            onSome: (cursor) =>
+              searchTargets(fieldId, picker.query, Option.some(cursor))(model),
+          }),
+      }
+    );
 
 const foldPicker = Update.foldChildAt({
   foldOutMessage: (fieldId: string) =>
@@ -1479,9 +1437,10 @@ const foldPicker = Update.foldChildAt({
 });
 
 /**
- * A picker's Message: the Combobox's own update, then a search when the
- * user opens the list (the first targets) or types (targets containing
- * the text).
+ * A picker's Message: choosing "Show more results" loads the next page
+ * and leaves the Combobox open as it is (it is never a selection);
+ * otherwise the Combobox's own update, then a search when the user opens
+ * the list (the first targets) or types.
  *
  * @param model - The page.
  * @param fieldId - The reference field.
@@ -1493,6 +1452,10 @@ const updatePicker = (
   fieldId: string,
   message: Combobox.Message
 ): UpdateReturn => {
+  if (message._tag === "SelectedItem" && message.item === MORE_RESULTS_ITEM) {
+    return loadMoreTargets(fieldId)(model);
+  }
+
   const folded = foldPicker(model, fieldId, message);
 
   if (message._tag === "UpdatedInputValue") {
@@ -1508,20 +1471,43 @@ const updatePicker = (
 };
 
 /**
- * Runs steps one after the other, each on the Model the one before made.
+ * Searches again, as a new search of its text, each picker whose search
+ * was refused with `SchemaChanged` (decision 0020), once the form's
+ * metadata moved past the revision the search was sent at and its
+ * target's metadata is loaded, neither of them still loading.
  *
- * @param steps - The steps.
- * @returns One step.
+ * @param model - The page.
+ * @returns It, with the searches.
  */
-const inSequence =
-  (steps: readonly Step[]): Step =>
-  (model) => {
-    const [first, ...rest] = steps;
+const retryRefusedSearches: Step = (model) =>
+  Option.match(
+    pipe(
+      metaOf(model),
+      Option.filter(() => !AsyncData.isPending(model.metadata))
+    ),
+    {
+      onNone: () => ({ model }),
+      onSome: (meta) =>
+        inSequence(
+          Record.toEntries(model.pickers).flatMap(([fieldId, picker]) => {
+            const isTargetLoaded = pipe(
+              Option.fromNullishOr(targetOfField(model, fieldId)),
+              Option.flatMap((table) => Record.get(model.targets, table)),
+              Option.exists(AsyncData.isSuccess)
+            );
 
-    return first === undefined
-      ? { model }
-      : Update.combine(model, [first, inSequence(rest)]);
-  };
+            const isRefusedBefore = Option.exists(
+              picker.maybeRefusedAt,
+              (revision) => revision !== meta.revision
+            );
+
+            return isRefusedBefore && isTargetLoaded
+              ? [searchTargets(fieldId, picker.query)]
+              : [];
+          })
+        )(model),
+    }
+  );
 
 const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
   const known = modifyFields(model, {
@@ -1536,7 +1522,7 @@ const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
         : []
   );
 
-  return inSequence(waiting)(known);
+  return inSequence([...waiting, retryRefusedSearches])(known);
 };
 
 /**
@@ -1560,34 +1546,491 @@ const failTarget = (
     table
   );
 
+/**
+ * A picker's results: a new search's replace the list, "more results"
+ * are added to it (a target listed already is not listed twice).
+ *
+ * @param model - The page.
+ * @param fieldId - The reference field.
+ * @param answer - The search's number, its cursor, the targets and the
+ *   next page's cursor.
+ * @returns The page.
+ */
+/** A picker search's answer. */
+interface SearchAnswer {
+  readonly cursor: Option.Option<string>;
+  readonly generation: number;
+  readonly items: readonly PickerItem[];
+  readonly maybeNextCursor: Option.Option<string>;
+}
+
+const resultsWith = (
+  results: Picker["results"],
+  answer: SearchAnswer
+): Picker["results"] => {
+  const shown = Option.isSome(answer.cursor)
+    ? Option.getOrElse(AsyncData.getData(results), () => [])
+    : [];
+
+  const shownIds = new Set(shown.map((item) => item.id));
+
+  return PickerResults.Success({
+    data: [...shown, ...answer.items.filter((item) => !shownIds.has(item.id))],
+  });
+};
+
+const answeredPicker =
+  (answer: SearchAnswer) =>
+  (picker: Picker): Picker =>
+    picker.generation === answer.generation
+      ? modifyFields(picker, {
+          maybeNextCursor: () => answer.maybeNextCursor,
+          results: (results) => resultsWith(results, answer),
+        })
+      : picker;
+
 const receiveSearch = (
   model: Model,
   fieldId: string,
-  generation: number,
-  items: readonly PickerItem[]
+  answer: SearchAnswer
 ): PlainReturn => ({
-  model: writePicker(model, fieldId, (picker) =>
-    picker.generation === generation
-      ? modifyFields(picker, {
-          results: () => PickerResults.Success({ data: items }),
-        })
-      : picker
-  ),
+  model: writePicker(model, fieldId, answeredPicker(answer)),
 });
 
+const reloadingTarget = (
+  known: Model["targets"],
+  name: string
+): Model["targets"][string] =>
+  Option.match(Option.flatMap(Record.get(known, name), AsyncData.getData), {
+    onNone: () => TargetMetadata.Loading(),
+    onSome: (data) => TargetMetadata.Refreshing({ data }),
+  });
+
+/**
+ * Reloads a target's metadata in the background, keeping it for the
+ * pickers until the new one arrives.
+ *
+ * @param table - The target table.
+ * @returns The step.
+ */
+const refreshTarget =
+  (table: string | null): Step =>
+  (model) =>
+    Option.match(Option.all([Option.fromNullishOr(table), metaOf(model)]), {
+      onNone: () => ({ model }),
+      onSome: ([name, meta]) => ({
+        commands: [LoadTarget({ revision: meta.revision, table: name })],
+        model: modifyFields(model, {
+          targets: (known) =>
+            Record.set(known, name, reloadingTarget(known, name)),
+        }),
+      }),
+    });
+
+/**
+ * A picker's search that did not answer. Refused with `SchemaChanged`
+ * (decision 0020), the refusal is kept on the picker and the page reloads
+ * the target's metadata (its display field may have changed) and its own
+ * (the field's allowed records may have); the search runs again once both
+ * arrived (`retryRefusedSearches`).
+ *
+ * @param model - The page.
+ * @param fieldId - The reference field.
+ * @param failure - The search's number, why it failed, the revision it was
+ *   sent at and the refusal's current revision.
+ * @returns The page, and what the app should know.
+ */
 const failSearch = (
   model: Model,
   fieldId: string,
-  generation: number
-): PlainReturn => ({
-  model: writePicker(model, fieldId, (picker) =>
-    picker.generation === generation
-      ? modifyFields(picker, {
-          results: () => PickerResults.Failure({ error: "Unavailable" }),
-        })
-      : picker
-  ),
+  failure: {
+    readonly error: PickerError;
+    readonly generation: number;
+    readonly maybeRevision: Option.Option<SchemaRevision>;
+    readonly revision: SchemaRevision;
+  }
+): UpdateReturn => {
+  const isCurrent = Option.exists(
+    Record.get(model.pickers, fieldId),
+    (picker) => picker.generation === failure.generation
+  );
+
+  if (!isCurrent) {
+    return { model };
+  }
+
+  const failed = writePicker(model, fieldId, (picker) =>
+    modifyFields(picker, {
+      maybeRefusedAt: () =>
+        failure.error === "SchemaChanged"
+          ? Option.some(failure.revision)
+          : Option.none(),
+      results: (results) =>
+        Option.match(AsyncData.getData(results), {
+          onNone: () => PickerResults.Failure({ error: failure.error }),
+          onSome: (data) => PickerResults.Stale({ data, error: failure.error }),
+        }),
+    })
+  );
+
+  if (failure.error !== "SchemaChanged") {
+    return { model: failed };
+  }
+
+  return Update.withOutMessage(
+    Update.combine(failed, [
+      refreshTarget(targetOfField(model, fieldId)),
+      refreshMetadata,
+    ]),
+    Option.getOrUndefined(
+      pipe(
+        failure.maybeRevision,
+        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
+      )
+    )
+  );
+};
+
+// THE RECORD
+
+const reloadingRecord = (record: StoredRecordState): StoredRecordState =>
+  Option.match(AsyncData.getData(record), {
+    onNone: () => StoredRecord.Loading(),
+    onSome: (data) => StoredRecord.Refreshing({ data }),
+  });
+
+const requestRecord =
+  (purpose: ReadPurpose): Step =>
+  (model) =>
+    Option.match(metaOf(model), {
+      onNone: () => ({ model }),
+      onSome: (meta) =>
+        FormMode.guards.Edit(model.mode)
+          ? {
+              commands: [
+                LoadRecord({
+                  generation: model.generation + 1,
+                  purpose,
+                  recordId: model.mode.recordId,
+                  revision: meta.revision,
+                  table: model.table,
+                }),
+              ],
+              model: modifyFields(model, {
+                generation: (generation) => generation + 1,
+                record: reloadingRecord,
+              }),
+            }
+          : { model },
+    });
+
+/**
+ * Loads the concrete class's metadata when the record's class is not the
+ * endpoint's (and the page does not have it at this revision).
+ *
+ * @param model - The page, with the record.
+ * @returns It, loading the class's metadata if needed.
+ */
+const requestClassMetadata: Step = (model) =>
+  Option.match(Option.all([metaOf(model), recordOf(model)]), {
+    onNone: () => ({ model }),
+    onSome: ([meta, record]) => {
+      const isOther = record.class !== meta.table.name;
+
+      const isCurrent = Option.exists(
+        classMetaOf(model),
+        (concrete) => concrete.name === record.class
+      );
+
+      return isOther && !isCurrent && !AsyncData.isPending(model.classMetadata)
+        ? {
+            commands: [
+              LoadClassMetadata({
+                revision: meta.revision,
+                table: record.class,
+              }),
+            ],
+            model: modifyFields(model, {
+              classMetadata: () => ClassMetadata.Loading(),
+            }),
+          }
+        : { model };
+    },
+  });
+
+/**
+ * Whether the last save was refused with `SchemaChanged`: once the
+ * metadata moved on, the user can save again (the changed fields stay
+ * marked through `staleChanges`).
+ *
+ * @param submission - Where saving stands.
+ * @returns True after a `SchemaChanged` refusal.
+ */
+const isRefusedAsStale = (submission: Submission): boolean =>
+  Submission.guards.Failed(submission) &&
+  WriteError.guards.SchemaChanged(submission.error);
+
+/**
+ * Applies a reconciliation of the edits (decision 0020): keeps the edits
+ * that still apply, notes the dropped ones, and forgets the server's
+ * errors of dropped fields.
+ *
+ * @param model - The page.
+ * @param reconciled - What reconciling found.
+ * @returns The page.
+ */
+const withReconciled = (model: Model, reconciled: Reconciled): Model =>
+  reconciled.dropped.length === 0
+    ? model
+    : modifyFields(model, {
+        droppedEdits: (notes) => mergeDropped(notes, reconciled.dropped),
+        edits: () => reconciled.edits,
+        serverErrors: Record.filter(
+          (_texts, fieldId) =>
+            !reconciled.dropped.some((note) => note.fieldId === fieldId)
+        ),
+      });
+
+/**
+ * The concrete class's metadata arrived (decision 0020): the form now
+ * describes the fields by it, so the edits are reconciled again, with the
+ * class's definitions and with the record as they show it. An edit the
+ * class makes read-only (or no longer offers) is dropped with a note,
+ * whether the record's reread came before or after.
+ *
+ * @param model - The page.
+ * @param table - The class's metadata.
+ * @returns The page, with the controls the class's fields need.
+ */
+const receiveClassMetadata = (model: Model, table: MetaTable): UpdateReturn => {
+  if (
+    !Option.exists(recordOf(model), (record) => record.class === table.name)
+  ) {
+    return { model };
+  }
+
+  const loaded = modifyFields(model, {
+    classMetadata: () => ClassMetadata.Success({ data: table }),
+  });
+
+  const byDefinitions = withReconciled(
+    loaded,
+    reconcileWithMetadata(
+      loaded.edits,
+      fieldsOf(model),
+      fieldsOf(loaded),
+      isCreating(loaded)
+    )
+  );
+
+  const byRecord = withReconciled(
+    byDefinitions,
+    reconcileWithRecord(byDefinitions.edits, fieldsOf(byDefinitions), (field) =>
+      fieldShowOf(field, editedRecordOf(byDefinitions))
+    )
+  );
+
+  return setUpControls(byRecord);
+};
+
+/**
+ * What new metadata asks of the record: the first read (or the one a
+ * `SchemaChanged` refusal stopped); a reread when the metadata moved to
+ * another revision, so the record's names are the metadata's (a rename
+ * changes them); else only the concrete class's metadata, reloaded.
+ *
+ * @param isFirstRead - Whether the record was never read at a revision.
+ * @param isOtherRevision - Whether the metadata's revision changed.
+ * @returns The step.
+ */
+const nextRecordStep = (
+  isFirstRead: boolean,
+  isOtherRevision: boolean
+): Step => {
+  if (isFirstRead) {
+    return requestRecord("Open");
+  }
+
+  return isOtherRevision
+    ? (model) =>
+        Update.combine(model, [requestRecord("Refresh"), requestClassMetadata])
+    : requestClassMetadata;
+};
+
+const receiveMetadata = (
+  model: Model,
+  table: MetaTable,
+  revision: SchemaRevision
+): UpdateReturn => {
+  if (table.name !== model.table) {
+    return { model };
+  }
+
+  const isFirstLoad = Option.isNone(metaOf(model));
+
+  const isOtherRevision = Option.exists(
+    metaOf(model),
+    (meta) => meta.revision !== revision
+  );
+
+  const hadRecordRefused = Option.exists(
+    AsyncData.getError(model.record),
+    (reason) => reason === "SchemaChanged"
+  );
+
+  // NOTE: edits are reconciled with the endpoint's new fields only; the
+  // concrete class's metadata and the record follow, and the record's
+  // reread reconciles again (`receiveRecord`).
+  const reconciled = isOtherRevision
+    ? reconcileWithMetadata(
+        model.edits,
+        fieldsOf(model),
+        formFieldsOf(table, Option.none()),
+        isCreating(model)
+      )
+    : { dropped: [], edits: model.edits };
+
+  const loaded = syncRelatedLists(
+    withReconciled(
+      modifyFields(model, {
+        classMetadata: (classMetadata) =>
+          isFirstLoad ? classMetadata : ClassMetadata.Idle(),
+        metadata: () => Metadata.Success({ data: { revision, table } }),
+        submission: (submission) =>
+          isOtherRevision && isRefusedAsStale(submission)
+            ? Submission.Outdated()
+            : submission,
+      }),
+      reconciled
+    ),
+    table
+  );
+
+  const next = Update.combine(loaded, [
+    nextRecordStep(isFirstLoad || hadRecordRefused, isOtherRevision),
+    setUpControls,
+    isOtherRevision
+      ? retryRefusedHistory
+      : (stepModel) => ({ model: stepModel }),
+    requestWaitingRelated,
+    retryRefusedSearches,
+  ]);
+
+  return sawRevision(next, Option.some(revision));
+};
+
+const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
+  model: modifyFields(model, {
+    metadata: (metadata) =>
+      Option.match(AsyncData.getData(metadata), {
+        onNone: () => Metadata.Failure({ error }),
+        onSome: (data) =>
+          error === "UnknownTable"
+            ? Metadata.Failure({ error })
+            : Metadata.Stale({ data, error }),
+      }),
+  }),
 });
+
+const receiveRecord = (
+  model: Model,
+  generation: number,
+  record: Parameters<typeof StoredRecord.Success>[0]["data"],
+  purpose: ReadPurpose,
+  maybeRevision: Option.Option<SchemaRevision>
+): UpdateReturn => {
+  // NOTE: a reread that left before a save and arrives after it holds an
+  // older version than the saved record; it is not shown.
+  const isOlder = Option.exists(
+    recordOf(model),
+    (current) => current.id === record.id && current.version > record.version
+  );
+
+  if (generation !== model.generation || isOlder) {
+    return { model };
+  }
+
+  const afterConflict = purpose === "ReloadAfterConflict";
+
+  const isChangedUnderEdits =
+    purpose !== "Open" &&
+    !Record.isEmptyRecord(model.edits) &&
+    Option.exists(
+      recordOf(model),
+      (before) => before.version !== record.version
+    );
+
+  const read = modifyFields(model, {
+    deletion: (deletion) => (afterConflict ? Deletion.Idle() : deletion),
+    maybeEditsFrom: (editsFrom) =>
+      isChangedUnderEdits
+        ? Option.orElse(editsFrom, () => recordOf(model))
+        : editsFrom,
+    // NOTE: every change of the metadata's revision asks for the record
+    // again (a newer `generation`), so a read answered here was sent at
+    // the metadata's current revision.
+    maybeRecordRevision: () =>
+      Option.map(metaOf(model), (meta) => meta.revision),
+    record: () => StoredRecord.Success({ data: record }),
+    submission: (submission) =>
+      afterConflict ? Submission.Idle() : submission,
+  });
+
+  const shown =
+    purpose === "Open"
+      ? read
+      : withReconciled(
+          read,
+          reconcileWithRecord(read.edits, fieldsOf(read), (field) =>
+            fieldShowOf(field, Option.some(record))
+          )
+        );
+
+  return sawRevision(
+    Update.combine(resetPickerInputs(shown), [
+      requestClassMetadata,
+      setUpControls,
+      refreshIfNewer(maybeRevision),
+    ]),
+    maybeRevision
+  );
+};
+
+const failRecord = (
+  model: Model,
+  generation: number,
+  error: RecordError,
+  maybeRevision: Option.Option<SchemaRevision>
+): UpdateReturn => {
+  if (generation !== model.generation) {
+    return { model };
+  }
+
+  const refused = modifyFields(model, {
+    record: (record) =>
+      Option.match(AsyncData.getData(record), {
+        onNone: () => StoredRecord.Failure({ error }),
+        onSome: (data) =>
+          error === "NotFound"
+            ? StoredRecord.Failure({ error })
+            : StoredRecord.Stale({ data, error }),
+      }),
+  });
+
+  if (error !== "SchemaChanged") {
+    return { model: refused };
+  }
+
+  return Update.withOutMessage(
+    refreshMetadata(refused),
+    Option.getOrUndefined(
+      pipe(
+        maybeRevision,
+        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
+      )
+    )
+  );
+};
 
 // SAVE
 
@@ -1602,6 +2045,22 @@ const failSearch = (
 export const isReloading = (model: Model): boolean =>
   AsyncData.isRefreshing(model.metadata) ||
   (!isCreating(model) && AsyncData.isRefreshing(model.record));
+
+/**
+ * Whether the record on screen was read under other definitions than the
+ * form's metadata (its reread after a metadata change did not load): its
+ * values may carry old field names, so a save waits until it is read
+ * again (decision 0020).
+ *
+ * @param model - The page.
+ * @returns True while the record is not the metadata's.
+ */
+export const isRecordOutdated = (model: Model): boolean =>
+  !isCreating(model) &&
+  Option.isSome(recordOf(model)) &&
+  !Option.exists(metaOf(model), (meta) =>
+    Option.contains(model.maybeRecordRevision, meta.revision)
+  );
 
 const firstProblemField = (
   model: Model,
@@ -1634,7 +2093,8 @@ const save = (model: Model): UpdateReturn => {
   if (
     Submission.guards.Saving(model.submission) ||
     !isReady(model) ||
-    isReloading(model)
+    isReloading(model) ||
+    isRecordOutdated(model)
   ) {
     return { model };
   }
@@ -1688,7 +2148,12 @@ const save = (model: Model): UpdateReturn => {
         model: modifyFields(model, {
           generation: () => generation,
           isShowingProblems: () => false,
-          submission: () => Submission.Saving({ generation }),
+          submission: () =>
+            Submission.Saving({
+              generation,
+              revision: meta.revision,
+              sentEdits: model.edits,
+            }),
         }),
       };
     },
@@ -1733,19 +2198,40 @@ const labelsAfterSave = (
     ({ name, text }) => [name, text] as const
   );
 
+/**
+ * The edits made while a save was in flight (decision 0020): those that
+ * differ from what the save was built from. They stay, on top of the
+ * saved record.
+ *
+ * @param edits - The edits now.
+ * @param sentEdits - The edits the save was built from.
+ * @returns The later edits.
+ */
+export const editsAfterSave = (
+  edits: Readonly<Record<string, FieldInput>>,
+  sentEdits: Readonly<Record<string, FieldInput>>
+): Readonly<Record<string, FieldInput>> =>
+  pipe(
+    edits,
+    Record.filter(
+      (input, fieldId) =>
+        !Option.exists(Record.get(sentEdits, fieldId), (sent) =>
+          Equal.equals(sent, input)
+        )
+    )
+  );
+
 const receiveSave = (
   model: Model,
   generation: number,
   saved: SavedRecord,
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
+  const { submission } = model;
+
   if (
-    !Option.contains(
-      Submission.guards.Saving(model.submission)
-        ? Option.some(model.submission.generation)
-        : Option.none(),
-      generation
-    )
+    !Submission.guards.Saving(submission) ||
+    submission.generation !== generation
   ) {
     return { model };
   }
@@ -1782,21 +2268,34 @@ const receiveSave = (
 
   const withLabels = {
     ...saved,
-    labels: labelsAfterSave(model, saved),
+    labels: labelsAfterSave(
+      modifyFields(model, { edits: () => submission.sentEdits }),
+      saved
+    ),
   };
 
   const stored = modifyFields(model, {
     droppedEdits: () => [],
-    edits: () => ({}),
+    edits: (edits) => editsAfterSave(edits, submission.sentEdits),
     maybeEditsFrom: () => Option.none(),
+    maybeRecordRevision: () => Option.some(submission.revision),
     record: () => StoredRecord.Success({ data: withLabels }),
     serverErrors: () => ({}),
     staleChanges: () => [],
     submission: () => Submission.Saved({ isVisible: true }),
   });
 
+  // NOTE: the later edits now apply to the saved record; one it withholds
+  // or shows read-only is dropped with a note, as after any reread.
+  const rebased = withReconciled(
+    stored,
+    reconcileWithRecord(stored.edits, fieldsOf(stored), (field) =>
+      fieldShowOf(field, Option.some(withLabels))
+    )
+  );
+
   return sawRevision(
-    Update.combine(resetPickerInputs(stored), [
+    Update.combine(resetPickerInputs(rebased), [
       refreshHistory,
       refreshIfNewer(maybeRevision),
     ]),
@@ -2026,7 +2525,8 @@ const listUrlOf = (table: string): string =>
 
 /**
  * "Try again": the metadata when the page has none, a refresh when it is
- * stale, else the record.
+ * stale, else the record (reread keeping the edits when the page has one,
+ * such as a record not read under the current metadata).
  *
  * @param model - The page.
  * @returns The page and its Commands.
@@ -2044,23 +2544,14 @@ const retry = (model: Model): UpdateReturn => {
     };
   }
 
-  return AsyncData.isStale(model.metadata)
-    ? refreshMetadata(model)
+  if (AsyncData.isStale(model.metadata)) {
+    return refreshMetadata(model);
+  }
+
+  return Option.isSome(recordOf(model))
+    ? requestRecord("Refresh")(model)
     : requestRecord("Open")(model);
 };
-
-const retryRelatedList = (model: Model, key: string): UpdateReturn =>
-  Option.match(Record.get(model.relatedLists, key), {
-    onNone: () => ({ model }),
-    onSome: (list) =>
-      AsyncData.hasData(list.metadata) &&
-      !Option.exists(
-        AsyncData.getError(list.records),
-        (reason) => reason === "SchemaChanged"
-      )
-        ? requestRelatedPage(key)(model)
-        : loadRelatedMetadata(key)(model),
-  });
 
 // UPDATE
 
@@ -2149,15 +2640,15 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       failRelatedMetadata(model, key, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadRelatedRecords: ({ error, generation, key }) =>
-      failRelatedRecords(model, key, generation, error),
+      failRelatedPage(model, key, generation, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadTarget: ({ error, table }) => failTarget(model, table, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedSaveRecord: ({ error, generation, maybeRevision }) =>
       failSave(model, generation, error, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedSearchTargets: ({ fieldId, generation }) =>
-      failSearch(model, fieldId, generation),
+    FailedSearchTargets: ({ fieldId, ...failure }) =>
+      failSearch(model, fieldId, failure),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotDatePickerMessage: ({ fieldId, message: pickerMessage }) =>
       foldDatePicker(model, fieldId, pickerMessage),
@@ -2189,16 +2680,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadClassMetadata: ({ table }) => ({
-      model: Option.exists(
-        recordOf(model),
-        (record) => record.class === table.name
-      )
-        ? modifyFields(model, {
-            classMetadata: () => ClassMetadata.Success({ data: table }),
-          })
-        : model,
-    }),
+    SucceededLoadClassMetadata: ({ table }) =>
+      receiveClassMetadata(model, table),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadFormMetadata: ({ revision, table }) =>
       receiveMetadata(model, table, revision),
@@ -2233,10 +2716,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededSaveRecord: ({ generation, maybeRevision, saved }) =>
       receiveSave(model, generation, saved, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededSearchTargets: ({ fieldId, generation, items, maybeRevision }) =>
+    SucceededSearchTargets: ({ fieldId, maybeRevision, ...answer }) =>
       sawRevision(
         Update.combine(model, [
-          (stepModel) => receiveSearch(stepModel, fieldId, generation, items),
+          (stepModel) => receiveSearch(stepModel, fieldId, answer),
           refreshIfNewer(maybeRevision),
         ]),
         maybeRevision

@@ -32,7 +32,7 @@ import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { historyView, relatedListsView } from "./panels-view.ts";
-import { isReloading } from "./update.ts";
+import { isRecordOutdated, isReloading } from "./update.ts";
 
 const HEADING_ID = "record-form-heading";
 
@@ -400,6 +400,45 @@ const staleMetadataView = (model: Model, h: HtmlBuilder<Message>): Html =>
       )
     : h.empty;
 
+/**
+ * A record that could not be read again (decision 0020): after the
+ * definitions changed, saving waits until it is, so the form never sends
+ * values under old names; the user can try again.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The alert and "Reload the record", or nothing.
+ */
+const staleRecordView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const isWaiting =
+    !AsyncData.isPending(model.record) &&
+    (isRecordOutdated(model) || AsyncData.isStale(model.record));
+
+  return isWaiting && !AsyncData.isStale(model.metadata)
+    ? h.div(
+        [h.Class(FAILURE_CLASS)],
+        [
+          h.p(
+            [h.Role("alert"), h.Class(ALERT_CLASS)],
+            [
+              isRecordOutdated(model)
+                ? "The record could not be read again under the new definition. Your changes are kept; reload the record before saving."
+                : "The record could not be read again. Your changes are kept. Try again.",
+            ]
+          ),
+          buttonView(
+            {
+              onClick: Message.ClickedRetry(),
+              text: "Reload the record",
+              variant: "quiet",
+            },
+            h
+          ),
+        ]
+      )
+    : h.empty;
+};
+
 // FORM
 
 const sectionView = (
@@ -452,7 +491,7 @@ const isSaving = (model: Model): boolean =>
   Submission.guards.Saving(model.submission);
 
 const isSaveBlocked = (model: Model): boolean =>
-  isSaving(model) || isReloading(model);
+  isSaving(model) || isReloading(model) || isRecordOutdated(model);
 
 const saveText = (model: Model): string => {
   if (isSaving(model)) {
@@ -602,6 +641,7 @@ const readyView = (
       h.h1([h.Id(HEADING_ID)], [headingOf(model)]),
       recordFactsView(model, meta, h),
       staleMetadataView(model, h),
+      isCreating(model) ? h.empty : staleRecordView(model, h),
       isCreating(model) && !meta.table.creatable
         ? notCreatableView(meta, h)
         : formBodyView(model, meta, h),
