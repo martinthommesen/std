@@ -93,9 +93,10 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm --filter @std/web test:browser` | The web app in Playwright's Chromium against a real `std serve` on a disposable database (decision 0018); needs `pnpm --filter @std/web exec playwright install chromium` once |
 | `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template), `check-oda-component-schema` (the Canvas probe's stub Component validates against the pinned Component CRD's `v1` schema, decision 0027) |
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
-| `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
+| `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/`, and the tests of the `oda-component-schema` check and the Canvas probe summary (decision 0027) |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 | `pnpm release-compat:ci` | Release compatibility, below |
+| `pnpm oda-probe:summary` | Summarizes the last runs of the `oda-canvas-probe` workflow (downloaded with `gh`) or local probe results as Markdown (decision 0027) |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 
