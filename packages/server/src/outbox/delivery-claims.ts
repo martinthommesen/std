@@ -22,6 +22,8 @@
  *   with `LeaseLost`. They run in the caller's transaction when there is
  *   one (a delivery transaction that holds the effect's record writes, 4.1)
  *   and fail inside it, so the whole transaction rolls back.
+ * - `done` and `dead` set `finished_at` (migration 0011): `done` rows are
+ *   deleted 7 days after it, `dead` rows stay.
  * - A failure returns the row to `pending` after `retryDelay` (10 s doubling
  *   to 1 h, minus up to 20 % jitter), or makes it `dead` once it has been
  *   claimed `maxAttempts` times. `attempts` counts claims, so a crashed
@@ -201,7 +203,8 @@ const EXPIRE_EXHAUSTED = `WITH exhausted AS (
   FOR UPDATE SKIP LOCKED
 )
 UPDATE core.delivery d
-SET status = 'dead', lease_until = NULL, lease_token = NULL, last_error = $3::text
+SET status = 'dead', lease_until = NULL, lease_token = NULL, last_error = $3::text,
+  finished_at = now()
 FROM exhausted x
 WHERE d.id = x.id`;
 
@@ -348,7 +351,8 @@ export const markDone = Effect.fn("Outbox.markDone")(function* markDone(
     fenced(
       lease,
       `UPDATE core.delivery
-       SET status = 'done', lease_until = NULL, lease_token = NULL
+       SET status = 'done', lease_until = NULL, lease_token = NULL,
+         finished_at = now()
        WHERE ${FENCE}
        RETURNING id::text AS id`,
       []
@@ -382,7 +386,7 @@ export const markFailed = Effect.fn("Outbox.markFailed")(function* markFailed(
       outcome === "dead"
         ? `UPDATE core.delivery
            SET status = 'dead', lease_until = NULL, lease_token = NULL,
-             last_error = $3::text
+             last_error = $3::text, finished_at = now()
            WHERE ${FENCE}
            RETURNING id::text AS id`
         : `UPDATE core.delivery

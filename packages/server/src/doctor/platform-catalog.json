@@ -4008,6 +4008,12 @@
         "name": "last_error",
         "notNull": false,
         "type": "text"
+      },
+      {
+        "default": null,
+        "name": "finished_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
       }
     ],
     "constraints": [
@@ -4060,6 +4066,19 @@
         "referencedColumns": [],
         "references": null,
         "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK (((status = ANY (ARRAY['done'::text, 'dead'::text])) = (finished_at IS NOT NULL)))",
+        "columns": ["status", "finished_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "delivery_finished",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
         "updateAction": " ",
         "validated": true
       },
@@ -4221,6 +4240,15 @@
       }
     ],
     "indexes": [
+      {
+        "included": [],
+        "keys": ["finished_at"],
+        "method": "btree",
+        "name": "delivery_done",
+        "predicate": "status = 'done'::text",
+        "unique": false,
+        "valid": true
+      },
       {
         "included": [],
         "keys": ["subscription_id", "record_id", "record_version"],
