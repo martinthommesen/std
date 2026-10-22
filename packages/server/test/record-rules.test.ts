@@ -62,6 +62,7 @@ const CHILD = createClass("rr_child", { parentId: PARENT.id });
 const LOG = createClass("rr_log");
 
 const P = {
+  big: addField(PARENT.id, "big", { kind: "bigInteger" }),
   legacy: addField(PARENT.id, "legacy", { kind: "text", maxLength: 20 }),
   locked: addField(PARENT.id, "locked", { kind: "text" }, { readOnly: true }),
   name: addField(
@@ -473,6 +474,56 @@ describe("record-rules", () => {
               : [readOnly._tag],
             ["invalidRecordRule"]
           );
+        })
+    );
+
+    dbTest.effect(
+      "increments keep their field's kind and start from 1 only when empty",
+      () =>
+        Effect.gen(function* increments() {
+          yield* change([
+            addRecordRule(PARENT.id, {
+              actions: [set([P.big.id, { increment: P.big.id }])],
+              condition: prefixed(P.name.id, "big-"),
+              operations: ["update"],
+              ruleKind: "derive",
+            }).op,
+          ]);
+
+          const record = yield* createParent({
+            big: "3000000000",
+            name: "big-1",
+          });
+
+          const bumped = yield* updateRecord({
+            body: { name: "big-2" },
+            endpointClassId: PARENT.id,
+            expectedVersion: record.version,
+            id: record.id,
+          });
+
+          assert.strictEqual(valuesOf(bumped).big, "3000000001");
+
+          // An integer source never sets a big integer field, or the other
+          // way round.
+          for (const [target, source] of [
+            [P.big.id, P.score.id],
+            [P.score.id, P.big.id],
+          ] as const) {
+            const refused = yield* change([
+              addRecordRule(PARENT.id, {
+                actions: [set([target, { increment: source }])],
+                ruleKind: "derive",
+              }).op,
+            ]).pipe(Effect.flip);
+
+            assert.deepStrictEqual(
+              refused._tag === "DefinitionInvalid"
+                ? refused.problems.map((problem) => problem.code)
+                : [refused._tag],
+              ["invalidRecordRule"]
+            );
+          }
         })
     );
 

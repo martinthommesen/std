@@ -68,12 +68,21 @@ const read = (
     : value;
 };
 
+// The source's value plus 1, or 1 when it is empty. Definition validation
+// keeps source and target the same kind; anything else is a defect, never
+// silently 1.
 const incremented = (type: FieldType, value: DecodedInput): DecodedInput => {
-  if (type.kind === "bigInteger") {
-    return isBigint(value) ? value + 1n : 1n;
+  if (value === null) {
+    return type.kind === "bigInteger" ? 1n : 1;
   }
 
-  return isNumber(value) ? value + 1 : 1;
+  if (type.kind === "bigInteger" && isBigint(value)) {
+    return value + 1n;
+  }
+
+  return type.kind === "integer" && isNumber(value)
+    ? value + 1
+    : defect("an increment's source is not of its field's kind");
 };
 
 /**

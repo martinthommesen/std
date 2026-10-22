@@ -299,11 +299,13 @@ const valueProblem = (
     value.increment
   );
 
+  // The same kind on both sides: integer and big integer are represented
+  // differently, so an increment never converts between them.
   return source !== undefined &&
     INTEGER_KINDS.has(source.type.kind) &&
-    INTEGER_KINDS.has(field.type.kind)
+    source.type.kind === field.type.kind
     ? undefined
-    : "increments a field that is not an integer field of the rule's record";
+    : "increments a field that is not an integer field of the rule's record of the same kind as the field it sets";
 };
 
 const checkAssignment = (
