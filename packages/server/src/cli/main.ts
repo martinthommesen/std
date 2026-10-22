@@ -281,7 +281,7 @@ const upgrade = (args: UpgradeArguments) => {
     Effect.tap((output) =>
       output.refused ? setExitCode(EXIT_FAILURE) : Effect.void
     ),
-    Effect.provide(cliServices),
+    Effect.provide(Layer.merge(cliServices, InstanceSettings.layer)),
     Effect.matchEffect({
       onFailure: reportFailure("upgrade"),
       onSuccess: () => Effect.void,

@@ -27,10 +27,11 @@ import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
 import { compareLedger, readLedger, refusalOf } from "./ledger.ts";
 import type { MigrationStateRefused } from "./ledger.ts";
-import { migrationChecksum } from "./migration.ts";
+import { isSchemaMigration, migrationChecksum } from "./migration.ts";
 import type {
   ConcurrentIndexMigration,
   PlatformMigration,
+  SchemaMigration,
   TxMigration,
 } from "./migration.ts";
 import { PLATFORM_MIGRATIONS } from "./migrations.ts";
@@ -98,7 +99,7 @@ export class UpgradeRefused extends Schema.TaggedError<UpgradeRefused>()(
 export interface MigrationOutcome {
   readonly id: number;
   readonly name: string;
-  readonly kind: PlatformMigration["kind"];
+  readonly kind: SchemaMigration["kind"];
   /**
    * `applied`: ran now. `recorded`: a valid index already existed (a build
    * that finished after its client died). `rebuilt`: an invalid index was
@@ -308,12 +309,12 @@ const applyConcurrentIndex = (
 
 const applyMigration: (
   connection: DedicatedConnection,
-  migration: PlatformMigration
+  migration: SchemaMigration
 ) => Effect.Effect<MigrationOutcome, DatabaseError> = Effect.fn(
   "Platform.applyMigration"
 )(function* applyPlatformMigration(
   connection: DedicatedConnection,
-  migration: PlatformMigration
+  migration: SchemaMigration
 ) {
   yield* Effect.logInfo(
     `Applying platform migration ${migration.id} (${migration.name})`
@@ -335,9 +336,11 @@ const applyMigration: (
 });
 
 /**
- * Applies the pending migrations on a connection that already holds
- * `SCHEMA_KEY` (`std upgrade` holds it for the whole run). Refuses an
- * unknown or changed ledger entry before applying anything.
+ * Applies the pending `tx` and `concurrent_index` migrations on a
+ * connection that already holds `SCHEMA_KEY` (`std upgrade` holds it for
+ * the whole run). Refuses an unknown or changed ledger entry before
+ * applying anything. `data` migrations need the sets loaded first; they
+ * run later (`data-migrations.ts`).
  * @param connection - A dedicated connection holding `SCHEMA_KEY`.
  * @param migrations - The code's migrations (default: all platform migrations).
  * @returns What happened to each pending migration, in order.
@@ -363,7 +366,7 @@ export const applyPendingMigrations: (
 
     const outcomes: MigrationOutcome[] = [];
 
-    for (const migration of comparison.pending) {
+    for (const migration of comparison.pending.filter(isSchemaMigration)) {
       outcomes.push(yield* applyMigration(connection, migration));
     }
 
@@ -383,7 +386,8 @@ export const refuseSchemaBusy = (
   schemaBusy(connection).pipe(Effect.flatMap(Effect.fail));
 
 /**
- * The migration step of `std upgrade`.
+ * The migration step of `std upgrade` (`tx` and `concurrent_index`
+ * migrations; the test harness builds its templates with it).
  * @param migrations - The code's migrations (default: all platform migrations).
  * @returns What happened to each pending migration, in order.
  */

@@ -33,6 +33,7 @@ import { Catalog } from "@std/server/catalog/catalog";
 import { InstanceSettings } from "@std/server/config/instance-settings";
 import { loadSetDirectory } from "@std/server/config/load-set";
 import { CORE_SET_DIRECTORY } from "@std/server/config/set-files";
+import { runDataMigrations } from "@std/server/platform/data-migrations";
 import { OutboxSaveHooks } from "@std/server/records/outbox-producer";
 import { createRecord } from "@std/server/records/save-pipeline";
 import { readRows } from "@std/server/records/sql-run";
@@ -416,6 +417,8 @@ export class HelpdeskFixture extends Context.Service<
         yield* loadSetDirectory(HELPDESK_SET_DIRECTORIES[version], {
           required: new Map([[core.header.name, core.owner]]),
         });
+        // As `std upgrade` does after the sets (every user gets its individual).
+        yield* runDataMigrations();
 
         const demo = yield* seedHelpdeskDemo(defaultHelpdeskAccounts()).pipe(
           Effect.orDie
