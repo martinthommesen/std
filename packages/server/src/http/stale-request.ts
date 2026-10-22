@@ -20,9 +20,11 @@
  *   Names are class-qualified: a name used on one class never matches a
  *   field of an unrelated class. Relevant kinds:
  *   `fieldAdded`, `fieldRenamed`, `fieldRetired`, `fieldPurged`,
- *   `typeChanged`, `settingsChanged`, `requiredChanged`, `readOnlyChanged`,
- *   `tableRetired`. Labels' texts, display field choice and access rules
- *   are not relevant.
+ *   `typeChanged`, `settingsChanged`, `choicesChanged` (a choice of the
+ *   field added, hidden or shown again, or deleted, or an override's
+ *   choice subset changed), `requiredChanged`, `readOnlyChanged`,
+ *   `tableRetired`. Labels' texts (choice labels and order included),
+ *   display field choice and access rules are not relevant.
  * - `changes` lists only fields the caller can name at C; when nothing
  *   relevant is left the request proceeds, and names that resolve to no
  *   readable field get `UnknownField` as usual.
@@ -181,7 +183,45 @@ const overrideKinds = (entry: DefinitionHistory): SchemaChangeKind[] => {
     kinds.push("settingsChanged");
   }
 
+  if (!same(after.choices, before?.choices ?? null)) {
+    kinds.push("choicesChanged");
+  }
+
   return kinds;
+};
+
+/**
+ * A choice's change as its field sees it: a choice added, hidden or shown
+ * again, or deleted changes which keys a write may set, so it is
+ * `choicesChanged`; a label or order change is not relevant (6.4).
+ *
+ * @param entry - The choice's history in (R, C].
+ * @returns `choicesChanged` or nothing.
+ */
+const choiceKinds = (entry: DefinitionHistory): SchemaChangeKind[] => {
+  const { before, after } = entry;
+
+  const relevant =
+    before === undefined ||
+    !same(after.hidden, before.hidden) ||
+    textOf(after, "state") !== textOf(before, "state") ||
+    textOf(after, "key") !== textOf(before, "key");
+
+  return relevant ? ["choicesChanged"] : [];
+};
+
+/**
+ * The change kinds of a field, override or choice definition's history.
+ *
+ * @param entry - The definition's history in (R, C].
+ * @returns The kinds.
+ */
+const kindsOf = (entry: DefinitionHistory): SchemaChangeKind[] => {
+  if (entry.kind === "field") {
+    return fieldKinds(entry);
+  }
+
+  return entry.kind === "choice" ? choiceKinds(entry) : overrideKinds(entry);
 };
 
 /**
@@ -250,7 +290,7 @@ const readHistory = Effect.fn("StaleRequest.readHistory")(function* readHistory(
   SELECT DISTINCT "definition_id" FROM "core"."definition_revision"
   WHERE "revision" > ${textParameter(String(stated.revision), "int8")}
     AND "revision" <= ${textParameter(String(current.revision), "int8")}
-    AND "kind" = ANY('{field,override,class}'::text[]))
+    AND "kind" = ANY('{field,override,class,choice}'::text[]))
 SELECT "c"."definition_id"::text AS "id", "a"."kind" AS "kind", "a"."revision"::text AS "revision",
   "a"."effective"::text AS "after",
   (SELECT "b"."effective"::text FROM "core"."definition_revision" AS "b"
@@ -507,10 +547,14 @@ const touched = (
   scope: StaleScope,
   entry: DefinitionHistory
 ): readonly ScopeEntry[] => {
-  const classId = textOf(entry.after, "classId");
-
   const fieldId =
     entry.kind === "field" ? entry.id : textOf(entry.after, "fieldId");
+
+  // A choice belongs to its field, so it affects the field's class.
+  const classId =
+    entry.kind === "choice"
+      ? readScope.snapshot.field(fieldId ?? "")?.classId
+      : textOf(entry.after, "classId");
 
   if (classId === undefined || fieldId === undefined) {
     return [];
@@ -610,10 +654,7 @@ const relevantChanges = (
             { ...scope, entries: touched(readScope, scope, entry) },
             nameable
           ).flatMap(({ entry: scoped, name, table }) =>
-            (entry.kind === "field"
-              ? fieldKinds(entry)
-              : overrideKinds(entry)
-            ).flatMap((kind): SchemaChange[] =>
+            kindsOf(entry).flatMap((kind): SchemaChange[] =>
               scoped.kinds === undefined || scoped.kinds.includes(kind)
                 ? [
                     {
