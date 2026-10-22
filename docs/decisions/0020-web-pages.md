@@ -79,6 +79,19 @@ The contracts named "the field's allowed-records condition" (7.4) without defini
 - The condition is not applied by `WriteAccess.allowAll`; Step 3's imports must apply it in the importing user's view (Contracts 7.4).
 - The history definitions lookup scans `core.definition_revision` for overrides and choices; add an expression index on `effective ->> 'fieldId'` if Step 4 measures it.
 
+### Review round 1
+
+Supersedes the "Cost" bullet under History definitions and the third open item above: the index exists now.
+
+- **Revisions sort as numbers (A1).** The lookup selected `"revision"::text AS "revision"` and ordered by `"revision"`, which Postgres resolves to the output alias, so rows sorted as text and `snapshotAt`'s `findLast` picked revision 9 for an entry at 10 or later. The order now names the bigint column of a qualified relation. `definitionAt` in `catalog/definition-revisions.ts` (Step 1) had the same bug in `ORDER BY revision DESC LIMIT 1` and is fixed the same way. Rule (Contracts 4.4): order by the column, never by its text rendering.
+- **An index per lookup branch (A2).** Platform migration 0010 adds `core.definition_revision_field`, a partial index on `((effective ->> 'fieldId'), revision) WHERE kind IN ('override', 'choice')`. It is a `concurrent_index` migration [judgment: `core.definition_revision` grows with every change set, and a concurrent build does not block config changes while `std upgrade` runs]. The statement (`definitionRevisionsStatement`) is a `UNION ALL` of two branches: definitions by ID on the primary key, and overrides and choices by field ID on the new index, the second leaving out rows the first reads. With the index, Postgres 18 also plans the old `OR` as a `BitmapOr` of both indexes; the split keeps each branch's plan independent of how the planner weighs the `OR` [judgment]. Doctor's platform catalog is regenerated with its generator (`STD_WRITE_PLATFORM_CATALOG=1`); `release-compat:ci` applies 0010 to an upgraded v0.0.1 database and `std doctor` exits 0.
+
+| Test | What it proves | Can-fail evidence |
+| --- | --- | --- |
+| `history-definitions` "an entry at revision 10 or later shows its own revision's definitions, not revision 9's" | a choice field and a choice relabeled once per revision from 5 to 10; the entry at 10 shows `Tier 10` and `Gold 10`, the entry before shows the originals; `definitionAt(field, 10)` returns revision 10 | the old `ORDER BY "revision"`: "expected label 'Tier 9' ... to deeply equal 'Tier 10'" (choice `Gold 9`); `definitionAt` with the old order: "expected 9 to equal 10" |
+| `history-definitions` "the lookup uses an index per branch, not a scan of every revision" | with 100,000 unrelated field, override and choice revisions and `ANALYZE`, both the custom plan for actual values and the generic plan (`force_generic_plan`, `PREPARE`, `EXPLAIN EXECUTE`) use `definition_revision_pkey` and `definition_revision_field`, and no `Seq Scan` | migration 0010 left out of the list: the second branch is a `Seq Scan on definition_revision`, "expected false to be true" |
+| `platform-migrations`, `test-database` (testing), `doctor-platform` | migration ids 1 to 10, pending list on an empty database, the template name over all ten, the regenerated catalog |  |
+
 ## Web app
 
 Code: `apps/web/src/{std-client,command,message,model,update,view,route}.ts`, `apps/web/src/domain/{schema-revision,table-view,list-columns,list-query}.ts`, `apps/web/src/filter-builder/{model,operators,condition,tree,filter-builder,view}.ts`, `apps/web/src/page/{home,record}.ts`, `apps/web/src/page/table-list/{model,message,command,update,view}.ts`, `apps/web/src/view/{controls,date-picker}.ts`, `apps/web/src/styles.css`. Tests: `apps/web/src/filter-builder/{condition,story}.test.ts`, `apps/web/src/page/table-list/{story,scene}.test.ts`, `apps/web/src/{story,scene}.test.ts`, `apps/web/test/browser/{app.ts,list-pages.test.ts}`.

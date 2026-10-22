@@ -12,17 +12,22 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { renderSql } from "@std/conditions/sql-fragment";
+import type { SqlFragment, SqlParameter } from "@std/conditions/sql-fragment";
 import type { ChoiceDraft } from "@std/definitions/definition";
 import type { Requester } from "@std/definitions/requester";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { definitionAt } from "../src/catalog/definition-revisions.ts";
+import { definitionRevisionsStatement } from "../src/records/history-definitions.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
+import { decodeRows } from "../src/sql/rows.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import { ACME, addField, change, currentRevision } from "./schema-support.ts";
@@ -32,6 +37,89 @@ const local = { owner: { layer: "local" }, protected: false } as const;
 
 /** The last revision whose number has one digit. */
 const MAX_SINGLE_DIGIT = 9;
+
+/** Revision rows of other definitions, seeded before the plan is read. */
+const UNRELATED_REVISIONS = 100_000;
+
+const decodePlan = decodeRows(Schema.Struct({ "QUERY PLAN": Schema.String }));
+
+const decodePlanValues = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Tuple([Schema.String]))
+);
+
+/**
+ * A statement's plan for its values.
+ *
+ * @param statement - The statement.
+ * @returns The plan's lines.
+ */
+const customPlan = (statement: SqlFragment) =>
+  Effect.gen(function* explainCustom() {
+    const sql = yield* SqlClient.SqlClient;
+    const { text, values } = renderSql(statement);
+
+    const rows = yield* decodePlan(
+      yield* sql.unsafe(`EXPLAIN (COSTS OFF) ${text}`, values)
+    );
+
+    return rows.map((row) => row["QUERY PLAN"]);
+  });
+
+/**
+ * A parameter's type, as `PREPARE` declares it.
+ *
+ * @param parameter - The parameter.
+ * @returns Its type.
+ */
+const typeOf = (parameter: SqlParameter): string =>
+  parameter.kind === "textArray" ? `${parameter.cast}[]` : parameter.cast;
+
+/**
+ * A parameter as a typed literal; test values are UUIDs and numbers.
+ *
+ * @param parameter - The parameter.
+ * @returns The literal.
+ */
+const literalOf = (parameter: SqlParameter): string =>
+  parameter.kind === "textArray"
+    ? `'{${parameter.values.join(",")}}'::${typeOf(parameter)}`
+    : `'${parameter.value}'::${typeOf(parameter)}`;
+
+/**
+ * A statement's generic plan, as a prepared statement runs it after five
+ * executions: prepared on one connection with `force_generic_plan`, then
+ * explained with `EXECUTE`. `EXECUTE` takes literals, because a utility
+ * statement's placeholders get no types.
+ *
+ * @param statement - The statement.
+ * @returns The plan's lines.
+ */
+const genericPlan = (statement: SqlFragment) =>
+  Effect.scoped(
+    Effect.gen(function* explainGeneric() {
+      const sql = yield* SqlClient.SqlClient;
+      const connection = yield* sql.reserve;
+      const { text } = renderSql(statement);
+
+      const run = (command: string) =>
+        connection.executeValuesUnprepared(command, []);
+
+      const types = statement.parameters.map(typeOf).join(", ");
+      const literals = statement.parameters.map(literalOf).join(", ");
+
+      yield* run("SET plan_cache_mode = force_generic_plan");
+      yield* run(`PREPARE history_revisions (${types}) AS ${text}`);
+
+      const rows = yield* decodePlanValues(
+        yield* run(`EXPLAIN (COSTS OFF) EXECUTE history_revisions(${literals})`)
+      );
+
+      yield* run("DEALLOCATE history_revisions");
+      yield* run("RESET plan_cache_mode");
+
+      return rows.map(([line]) => line);
+    })
+  );
 
 const PURGER: Requester = {
   roleIds: [BUILT_IN_ROLE_IDS.schema_purger],
@@ -340,6 +428,60 @@ describe("history-definitions", () => {
             (yield* definitionAt(tier.id, revision))?.revision,
             revision
           );
+        })
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "the lookup uses an index per branch, not a scan of every revision",
+      () =>
+        Effect.gen(function* indexedLookup() {
+          const sql = yield* SqlClient.SqlClient;
+
+          const shade = addField(ACME.asset, "shade", { kind: "choice" });
+
+          yield* change([shade.op]);
+          yield* change([choice(shade.id, "dark", "Dark", 1).op]);
+
+          // Unrelated revisions of fields, overrides and choices, as table
+          // owner.
+          yield* sql.unsafe(
+            `INSERT INTO core.definition_revision
+               (definition_id, revision, kind, effective)
+             SELECT uuidv7(), 1 + g % 5,
+               (ARRAY['field', 'override', 'choice'])[1 + g % 3],
+               jsonb_build_object('fieldId', gen_random_uuid()::text)
+             FROM generate_series(1, $1::int4) AS g`,
+            [String(UNRELATED_REVISIONS)]
+          );
+          yield* sql`ANALYZE core.definition_revision`;
+
+          const statement = definitionRevisionsStatement(
+            [shade.id, ACME.asset],
+            [shade.id],
+            yield* currentRevision
+          );
+
+          // The plan for these values, and the generic plan a prepared
+          // statement may switch to after five runs.
+          for (const plan of [
+            yield* customPlan(statement),
+            yield* genericPlan(statement),
+          ]) {
+            assert.isTrue(
+              plan.some((line) => line.includes("definition_revision_pkey")),
+              plan.join("\n")
+            );
+            assert.isTrue(
+              plan.some((line) => line.includes("definition_revision_field")),
+              plan.join("\n")
+            );
+            assert.isFalse(
+              plan.some((line) => line.includes("Seq Scan")),
+              plan.join("\n")
+            );
+          }
         })
     );
   });

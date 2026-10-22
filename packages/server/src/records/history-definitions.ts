@@ -30,6 +30,7 @@ import {
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
+import type { SqlFragment } from "@std/conditions/sql-fragment";
 import type { Definition } from "@std/definitions/definition";
 import { effectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -49,6 +50,42 @@ type Revisions = readonly {
 }[];
 
 /**
+ * The statement reading every definition revision up to the latest entry's
+ * revision of the given fields and classes, and of the fields' overrides
+ * and choices. Each `UNION ALL` branch has its own index: the primary key
+ * `(definition_id, revision)`, and `definition_revision_field` (migration
+ * 0010) on override and choice rows. The second branch leaves out rows the
+ * first one reads. The order names the bigint columns of `r`: a bare
+ * `"revision"` would be the text alias, and "10" sorts before "9".
+ *
+ * @param definitionIds - The fields and the lineage's classes.
+ * @param fieldIds - The fields whose overrides and choices are read too.
+ * @param latest - The highest revision any entry needs.
+ * @returns The statement; rows by definition, revision ascending.
+ */
+export const definitionRevisionsStatement = (
+  definitionIds: readonly DefinitionId[],
+  fieldIds: readonly DefinitionId[],
+  latest: number
+): SqlFragment =>
+  sql`SELECT "r"."definition_id"::text AS "id", "r"."revision"::text AS "revision",
+  "r"."effective"::text AS "effective"
+FROM (
+  SELECT "definition_id", "revision", "effective"
+  FROM "core"."definition_revision"
+  WHERE "definition_id" = ANY(${arrayParameter(definitionIds, "uuid")})
+    AND "revision" <= ${textParameter(String(latest), "int8")}
+  UNION ALL
+  SELECT "definition_id", "revision", "effective"
+  FROM "core"."definition_revision"
+  WHERE "kind" IN ('override', 'choice')
+    AND "effective" ->> 'fieldId' = ANY(${arrayParameter(fieldIds, "text")})
+    AND "revision" <= ${textParameter(String(latest), "int8")}
+    AND NOT ("definition_id" = ANY(${arrayParameter(definitionIds, "uuid")}))
+) AS "r"
+ORDER BY "r"."definition_id", "r"."revision"`;
+
+/**
  * Reads every definition revision up to the latest entry's revision of
  * the given fields, classes, and the fields' overrides and choices.
  *
@@ -63,17 +100,8 @@ const readRevisions = Effect.fn("History.readRevisions")(
     fieldIds: readonly DefinitionId[],
     latest: number
   ) {
-    // The order names the bigint columns: a bare "revision" would be the
-    // text alias, and "10" sorts before "9".
     const rows = yield* readRows(
-      sql`SELECT "definition_id"::text AS "id", "revision"::text AS "revision",
-  "effective"::text AS "effective"
-FROM "core"."definition_revision"
-WHERE "revision" <= ${textParameter(String(latest), "int8")}
-  AND ("definition_id" = ANY(${arrayParameter(definitionIds, "uuid")})
-    OR ("kind" = ANY('{override,choice}'::text[])
-      AND "effective" ->> 'fieldId' = ANY(${arrayParameter(fieldIds, "text")})))
-ORDER BY "definition_revision"."definition_id", "definition_revision"."revision"`
+      definitionRevisionsStatement(definitionIds, fieldIds, latest)
     );
 
     const byId = new Map<
