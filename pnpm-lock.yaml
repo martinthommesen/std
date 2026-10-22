@@ -287,6 +287,15 @@ importers:
       '@std/api':
         specifier: workspace:*
         version: link:../../packages/api
+      '@std/conditions':
+        specifier: workspace:*
+        version: link:../../packages/conditions
+      '@std/definitions':
+        specifier: workspace:*
+        version: link:../../packages/definitions
+      '@std/values':
+        specifier: workspace:*
+        version: link:../../packages/values
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -312,6 +321,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.2
       happy-dom:
         specifier: 20.14.6
         version: 20.14.6

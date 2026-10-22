@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   FocusMain,
   LoadCurrentUser,
+  LoadTables,
   LoadExternal,
   NavigateInternal,
   ReplaceUrl,
@@ -17,6 +18,7 @@ import { fakeStdApi } from "./fake-std-api.ts";
 import {
   ada,
   adaAtHome,
+  adaEnteringHome,
   signInOpenedDirectly,
   signInRedirectedFromHome,
   urlOf,
@@ -31,9 +33,18 @@ import {
 } from "./page/sign-in/sign-in.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
+import { REVISION_3, adaTables } from "./table-fixture.ts";
 import { update } from "./update.ts";
 
 const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
+
+const loadedTables = Command.resolve(
+  LoadTables,
+  Message.SucceededLoadTables({
+    revision: REVISION_3,
+    tables: adaTables.tables,
+  })
+);
 
 const signedOutAt = (route: SignedOutRoute) =>
   modifyFields(signInOpenedDirectly, { route: () => route });
@@ -72,6 +83,11 @@ describe("start-up", () => {
         Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
       ),
       model((app) => {
+        expect(app).toStrictEqual(adaEnteringHome);
+      }),
+      Command.expectExact(LoadTables({ maybeRevision: Option.none() })),
+      loadedTables,
+      model((app) => {
         expect(app).toStrictEqual(adaAtHome);
       }),
       Command.expectNone()
@@ -85,8 +101,12 @@ describe("start-up", () => {
       message(
         Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
       ),
-      Command.expectExact(ReplaceUrl({ url: homeRouter() })),
+      Command.expectExact(
+        ReplaceUrl({ url: homeRouter() }),
+        LoadTables({ maybeRevision: Option.none() })
+      ),
       Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      loadedTables,
       message(Message.ChangedUrl({ url: urlOf(homeRouter()) })),
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
@@ -147,11 +167,12 @@ describe("start-up", () => {
       ),
       model((app) => {
         expect(app).toStrictEqual(
-          modifyFields(adaAtHome, {
+          modifyFields(adaEnteringHome, {
             route: () => AppRoute.NotFound({ path: "/elsewhere" }),
           })
         );
-      })
+      }),
+      loadedTables
     );
   });
 
@@ -206,19 +227,27 @@ describe("signing in", () => {
       }),
       Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
       model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
+        expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "maybeRevision",
+          "maybeTableList",
           "route",
           "signOutRequest",
+          "tables",
           "user",
         ]);
       }),
-      Command.expectExact(ReplaceUrl({ url: homeRouter() }), FocusMain()),
+      Command.expectExact(
+        ReplaceUrl({ url: homeRouter() }),
+        LoadTables({ maybeRevision: Option.none() }),
+        FocusMain()
+      ),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
-      )
+      ),
+      loadedTables
     );
   });
 
@@ -229,12 +258,16 @@ describe("signing in", () => {
       ...typeAndSubmit("ada-password"),
       Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
       model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
+        expect(app).toStrictEqual(adaEnteringHome);
       }),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
-      )
+      ),
+      loadedTables,
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      })
     );
   });
 
@@ -299,7 +332,7 @@ describe("signing out", () => {
           })
         );
       }),
-      Command.expectExact(SignOut()),
+      Command.expectExact(SignOut({ maybeRevision: Option.some(REVISION_3) })),
       Command.resolve(SignOut, Message.SucceededSignOut()),
       model((app) => {
         expect(app).toStrictEqual(signInOpenedDirectly);
@@ -326,7 +359,7 @@ describe("signing out", () => {
         );
       }),
       message(Message.ClickedSignOut()),
-      Command.expectExact(SignOut()),
+      Command.expectExact(SignOut({ maybeRevision: Option.some(REVISION_3) })),
       Command.resolve(SignOut, Message.SucceededSignOut()),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
@@ -460,7 +493,11 @@ describe("the session requests", () => {
     const down = fakeStdApi({});
 
     const signOut = async (layer: typeof down.layer) =>
-      await Effect.runPromise(SignOut().effect.pipe(Effect.provide(layer)));
+      await Effect.runPromise(
+        SignOut({ maybeRevision: Option.some(REVISION_3) }).effect.pipe(
+          Effect.provide(layer)
+        )
+      );
 
     await expect(signOut(ended.layer)).resolves.toStrictEqual(
       Message.SucceededSignOut()
