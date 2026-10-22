@@ -188,6 +188,21 @@ describe("record-rules", () => {
     assert.strictEqual(offersHttpClient, "no");
   });
 
+  it("a before-write hook cannot save records", () => {
+    // Step 5 may read through SQL but has no record service: a hook that
+    // saves another record does not type check (4.1), and a before rule
+    // with a saving action is refused at definition validation.
+    type Requirements = Effect.Services<
+      ReturnType<SaveHooksApi["beforeWrite"]>
+    >;
+
+    const offersRecordService: [Transactions] extends [Requirements]
+      ? "yes"
+      : "no" = "no";
+
+    assert.strictEqual(offersRecordService, "no");
+  });
+
   layer(rulesTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect("sets up acme and the rule test tables", () =>
       Effect.gen(function* setUp() {
@@ -767,6 +782,56 @@ describe("record-rules", () => {
             parentChangeId: done.changeId,
             subscriptionId: carrier,
           });
+        })
+    );
+
+    dbTest.effect(
+      "a before rule's field change appears in the entry's after, and a no-op save calls no hook",
+      () =>
+        Effect.gen(function* entryAndNoOp() {
+          // The `ro-` derive rule of an earlier test set `score` to 5.
+          const created = yield* createParent({ name: "ro-entry" });
+
+          const fields = yield* values(
+            `SELECT fields::text AS value FROM core."change" WHERE id = $1::uuid`,
+            [created.changeId ?? ""]
+          );
+
+          const entry: unknown = JSON.parse(fields[0] ?? "{}");
+
+          assert.deepInclude(entry, {
+            [P.score.id]: { after: 5, before: null },
+          });
+
+          const hooks = yield* SaveHooks;
+          let calls = 0;
+
+          const counting = SaveHooks.of({
+            afterWrite: (input) => {
+              calls += 1;
+
+              return hooks.afterWrite(input);
+            },
+            beforeWrite: (input) => {
+              calls += 1;
+
+              return hooks.beforeWrite(input);
+            },
+            deliveries: (input) => {
+              calls += 1;
+
+              return hooks.deliveries(input);
+            },
+          });
+
+          const unchanged = yield* updateRecord({
+            body: { name: "ro-entry" },
+            endpointClassId: PARENT.id,
+            expectedVersion: created.version,
+            id: created.id,
+          }).pipe(Effect.provideService(SaveHooks, counting));
+
+          assert.deepStrictEqual([unchanged.outcome, calls], ["unchanged", 0]);
         })
     );
 
