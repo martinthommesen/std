@@ -30,7 +30,7 @@ export const SortKey = Schema.Struct({
 export type SortKey = typeof SortKey.Type;
 
 /** The page sizes the list offers. */
-export const PAGE_SIZES: readonly number[] = [10, 25, 50, 100];
+export const PAGE_SIZES: readonly number[] = [5, 10, 25, 50, 100];
 
 /** The page size of a list opened without one. [judgment] */
 export const DEFAULT_PAGE_SIZE = 25;
