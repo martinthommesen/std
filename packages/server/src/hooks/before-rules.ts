@@ -57,7 +57,8 @@ export interface DeriveInput {
   readonly context: RuleContext;
   /**
    * The fields the caller's body named, which `keepSupplied` actions
-   * leave alone; none while settling (4.9), where no caller supplies.
+   * leave alone. While settling (4.9), every field the operation's
+   * user-mode saves of the record named: `suppliedFieldsOf(recordId)`.
    */
   readonly supplied: ReadonlySet<DefinitionId>;
 }

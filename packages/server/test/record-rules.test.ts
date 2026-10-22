@@ -26,7 +26,7 @@ import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Exit, Layer } from "effect";
+import { Effect, Exit, Layer, Option } from "effect";
 import type { HttpClient } from "effect/http";
 
 import { Actor } from "../src/auth/actor.ts";
@@ -35,10 +35,13 @@ import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
 import { applyDeriveRules } from "../src/hooks/before-rules.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
+import { imageOf } from "../src/hooks/rule-condition.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import type { SaveResult } from "../src/records/save-pipeline.ts";
+import { loadRecord } from "../src/records/save-sql.ts";
+import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
@@ -192,6 +195,56 @@ const catchingAround = (
  */
 const toggle = (id: string, version: number, active: boolean) =>
   change([{ changes: { active }, id, op: "update", version }]);
+
+/**
+ * One operation that writes an owner's own fields with an explicit score,
+ * then a part of it, then settles the owner (4.9) as the aggregates
+ * workstream will: its derive rules on its in-memory image, with the
+ * supplied fields `supplied` gives. It rolls back and returns the settled
+ * score.
+ * @param owner - The owner, as created.
+ * @param supplied - The supplied fields settling uses.
+ * @returns The settled score.
+ */
+const settleOwner = Effect.fn("RecordRules.settleOwner")(function* settleOwner(
+  owner: SaveResult,
+  supplied: (id: string) => Effect.Effect<ReadonlySet<string>>
+) {
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    Effect.gen(function* operation() {
+      const saved = yield* updateRecord({
+        body: { name: "inc-owner-2", score: 9 },
+        endpointClassId: PARENT.id,
+        expectedVersion: owner.version,
+        id: owner.id,
+      });
+
+      yield* createRecord({
+        body: { name: "part", target: owner.id },
+        endpointClassId: LOG.id,
+      });
+
+      const snapshot = yield* (yield* Catalog).current;
+      const loaded = yield* loadRecord(snapshot, PARENT.id, saved.id);
+      const image = Option.isSome(loaded) ? imageOf(loaded.value) : {};
+
+      const derived = yield* applyDeriveRules({
+        classId: PARENT.id,
+        context: { me: USERS.alice, now: 0, timeZone: "UTC" },
+        image,
+        operation: "update",
+        previous: image,
+        snapshot,
+        supplied: yield* supplied(saved.id),
+      });
+
+      // Roll the operation back: the aggregates workstream persists.
+      return yield* Effect.fail(derived.image[P.score.id]);
+    })
+  ).pipe(Effect.flip);
+});
 
 const committedCounts = Effect.all({
   changes: count('SELECT count(*)::text AS value FROM core."change"'),
@@ -525,6 +578,23 @@ describe("record-rules", () => {
               ["invalidRecordRule"]
             );
           }
+        })
+    );
+
+    dbTest.effect(
+      "settling keeps the operation's supplied fields: keepSupplied protects a value a user wrote before a part write",
+      () =>
+        Effect.gen(function* settledSupplied() {
+          // The `inc-` rule increments `score` unless the write names it.
+          const owner = yield* createParent({ name: "inc-owner" });
+
+          assert.strictEqual(yield* settleOwner(owner, suppliedFieldsOf), 9);
+
+          // With no supplied fields, settling would re-derive the score.
+          assert.strictEqual(
+            yield* settleOwner(owner, () => Effect.succeed(new Set<string>())),
+            10
+          );
         })
     );
 

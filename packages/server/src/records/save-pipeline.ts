@@ -85,6 +85,7 @@ import {
 } from "./save-stack.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
+import { recordSupplied } from "./supplied-fields.ts";
 import { WriteAccess } from "./write-access.ts";
 import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
@@ -549,6 +550,10 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       writes
     ).pipe(mapConstraints(snapshot, "write"));
 
+    if ((input.mode ?? "user") === "user") {
+      yield* recordSupplied(id, resolved.entries.keys());
+    }
+
     const after = yield* reload(snapshot, classId, id);
 
     yield* access.checkProposed({
@@ -781,6 +786,11 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     const { classId } = record;
 
     yield* refusePlatformTable(snapshot, classId);
+
+    // For settling later in the operation (4.9): what this user supplied.
+    if ((input.mode ?? "user") === "user") {
+      yield* recordSupplied(record.id, resolved.entries.keys());
+    }
 
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields);
