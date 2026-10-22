@@ -32,6 +32,7 @@ Every profile sets `unstableApiUsage`, `experimentalApiUsage`, `outdatedApi`, `o
 | `@effect/platform-node` | server; all tests | `NodeHttpServer`, `NodeRuntime.runMain` and the Node implementations of platform services. |
 | `@effect/opentelemetry` | server; all tests | OpenTelemetry SDK integration, for deployments with an existing OpenTelemetry setup. |
 | `@effect/vitest` | all tests | `it.effect`, `it.layer` and the Effect-aware assertions. |
+| `@effect/platform-browser` | web | Foldkit's runtime is built on it (a peer of `foldkit` and `@foldkit/devtools`), and its browser services (`BrowserKeyValueStore`, `BrowserCrypto`) are what Foldkit's Commands and Flags use for storage and randomness. Allowed so the web app's Commands can use them; at 4.0.5 its only changes since 4.0.0 are `@stability` tags (decision 0018). |
 
 Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`) have an empty list. Test files (`test/**/*`) of every profile, plain included, get the server entries plus `@effect/vitest`, so any package's tests can use Postgres; overrides replace the base list, so the entries are repeated.
 

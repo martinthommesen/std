@@ -76,7 +76,7 @@ TypeScript's `extends` replaces the whole `plugins` array, so every package's `t
 | --- | --- | --- | --- |
 | `plain` | `values`, `conditions`, `definitions`, `access`, `codegen` | nothing | `tooling/tsconfig/plain.json` |
 | `api` | `api` | `effect/http-api`, `effect/http` | `tooling/tsconfig/api.json` |
-| `web` | `apps/web` | `effect/http-api`, `effect/http` | `tooling/tsconfig/web.json` |
+| `web` | `apps/web` | `effect/http-api`, `effect/http`, `@effect/platform-browser` | `tooling/tsconfig/web.json` |
 | `server` | `server`, `testing`, `examples`, `bench` | `effect/sql`, `effect/http`, `effect/http-api`, `effect/observability`, `@effect/sql-pg`, `@effect/platform-node`, `@effect/opentelemetry` | `tooling/tsconfig/server.json` |
 
 Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experimentalApiUsage`, `outdatedApi`, `obsoleteSchemaImport`, `duplicatePackage`, `floatingEffect`) to `error`, keeps `ignoreEffectWarningsInTscExitCode: false` and allows no experimental API. Its one override gives `test/**/*` the server entries plus `@effect/vitest`, in every profile, so any package's tests can use Postgres. The override glob resolves relative to the tsconfig that declares it, which is the second reason the entry cannot live in a shared file. `tooling/lib/profiles.ts` is the source of truth; `tooling/check-tsconfig.ts` fails any package (or template) whose entry is not exactly its profile's. Never edit an allow list in one package: change the profile, with a reason in `docs/decisions/0001-effect.md`.
@@ -87,7 +87,8 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | --- | --- |
 | `pnpm check` / `pnpm fix` | Ultracite (Oxlint type-aware, Oxfmt) |
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
-| `pnpm test` | Vitest, one project per workspace package |
+| `pnpm test` | Vitest, one project per workspace package (for `apps/web`, the Foldkit story and scene tests) |
+| `pnpm --filter @std/web test:browser` | The web app in Playwright's Chromium against a real `std serve` on a disposable database (decision 0018); needs `pnpm --filter @std/web exec playwright install chromium` once |
 | `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template) |
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
 | `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
@@ -127,7 +128,8 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 - **Acting user.** Every record-service operation requires the `Actor` service in its Effect environment; there is no default actor in the HTTP layer.
 - **HTTP shape.** Generic records live under `/api/v1/tables/{table}/records[/{id}[/history]]`, metadata under `/api/v1/meta/tables/{table}`, fixed endpoints under `/api/v1/...` from the `@std/api` definition. Every response carries `STD-Schema-Revision`.
 - **Text filter syntax.** The `filter` query parameter uses the condition text syntax defined in `@std/conditions` (names resolved against the visible schema); `parse(print(a)) = a`.
-- **Sessions.** `POST /api/v1/auth/sign-in` returns a session token, sent back as `Authorization: Bearer <token>` (the web app also uses an HTTP-only cookie). Only a hash of the token is stored.
+- **Sessions.** `POST /api/v1/auth/sign-in` returns a session token, sent back as `Authorization: Bearer <token>`. The web app signs in with `POST /api/v1/auth/cookie-sign-in` instead: the same kind of session, its token in an `HttpOnly`, `SameSite=Strict` cookie (`std_session`, path `/api/v1`, `Secure` unless the request's host is loopback, `STD_SESSION_COOKIE_SECURE`), never in a response body or anything a script can read. The server accepts the cookie wherever it accepts the bearer token (the bearer token first); a cookie-authenticated request that is not GET, HEAD or OPTIONS must carry `STD-Client: web` (CSRF), or it is `Unauthenticated`. Sign-out clears the cookie it ended. Only a hash of the token is stored (decision 0018).
+- **Web app.** `std serve` serves the built app (`apps/web/dist`, `STD_WEB_ROOT`) at `/`, with `index.html` for client routes and a strict Content-Security-Policy; the API stays under `/api/v1`, and only `/api/` responses carry `STD-Schema-Revision`. In development Vite proxies `/api` to a running `std serve`. Browser state never holds a session token, and the sign-in password only as `Redacted` (AGENTS.md, "Frontend: Foldkit").
 
 ## Workflow for each workstream
 
