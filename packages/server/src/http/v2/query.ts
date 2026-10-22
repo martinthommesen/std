@@ -634,15 +634,6 @@ const sortText = (text: string | undefined): string | undefined =>
     })
     .join(",");
 
-const prefixed = (
-  spans: ReadonlyMap<string, Span>,
-  index: number
-): [string, Span][] =>
-  [...spans].map(([key, span]) => [
-    key === "" ? `args/${index}` : `args/${index}/${key}`,
-    span,
-  ]);
-
 /** The cursors of a page: after one, before one, or both (a range). */
 export interface PageCursors {
   readonly after: CursorPosition | undefined;
@@ -660,7 +651,17 @@ export interface QueryScope {
 /** The parsed query of a list. */
 export interface ListQuery {
   /** The TMF filters and `condition`, ANDed; none when there are none. */
-  readonly filter: Option.Option<{
+  /**
+   * The TMF attribute filters, ANDed: text compares unmodified values
+   * (Martin, 2026-10-22, D4).
+   */
+  readonly tmf: Option.Option<Expr>;
+  /**
+   * STD's `condition`, ANDed with them: each field's configured case
+   * behavior, as in v1, so `condition=name = "alice"` is how a v2 caller
+   * matches case-insensitively.
+   */
+  readonly condition: Option.Option<{
     readonly expr: Expr;
     readonly spans: ReadonlyMap<string, Span>;
   }>;
@@ -728,15 +729,6 @@ export const parseListQuery = Effect.fn("V2Query.parseList")(
         ? undefined
         : yield* parseFilterText(scope, view, condition, "api");
 
-    const parts: Expr[] =
-      parsedCondition === undefined ? atoms : [...atoms, parsedCondition.expr];
-
-    const spans: ReadonlyMap<string, Span> = new Map(
-      parsedCondition === undefined
-        ? []
-        : prefixed(parsedCondition.spans, atoms.length)
-    );
-
     const sortKeys = yield* parseSort(view, sort, "api");
     const selection = yield* parseSelection(scope, view, fields);
     const limit = yield* parseLimit(yield* single(query, "limit"));
@@ -750,17 +742,24 @@ export const parseListQuery = Effect.fn("V2Query.parseList")(
     const offsetPage = offsetText !== undefined;
 
     return {
-      cursors,
-      filter:
-        parts.length === 0
+      condition:
+        parsedCondition === undefined
           ? Option.none()
-          : Option.some({ expr: { args: parts, op: "and" }, spans }),
+          : Option.some({
+              expr: parsedCondition.expr,
+              spans: parsedCondition.spans,
+            }),
+      cursors,
       limit,
       offset,
       offsetPage,
       scope: { fields, filter: condition, paths: paths.join(","), sort },
       selection,
       sortKeys,
+      tmf:
+        atoms.length === 0
+          ? Option.none()
+          : Option.some<Expr>({ args: atoms, op: "and" }),
       // Offset pages always carry both counts (TMF630 v5.0.0 Part 1
       // §4.5.1 p.77); `count=false` drops the total on cursor pages.
       withCount: count || offsetPage,

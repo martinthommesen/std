@@ -29,6 +29,7 @@ import { UnknownField } from "@std/api/errors/unknown-field";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import type { CompiledCondition } from "@std/conditions/sql";
 import {
+  arrayParameter,
   identSql,
   joinSql,
   rawSql,
@@ -995,6 +996,52 @@ WHERE ${ID} = ${textParameter(parsedId.value, "uuid")} AND ${view.visibility(BAS
   );
 
   return row === undefined ? yield* new NotFound() : projection.decode(row);
+});
+
+/**
+ * Reads several records through one view by ID (the same visibility and
+ * masks as `readOne`); IDs the caller cannot see are left out.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The view (a concrete class's, for v2's concrete
+ *   representations through a parent collection).
+ * @param ids - Record IDs (lowercase UUIDs).
+ * @param options - Selection, labels and targets.
+ * @returns The records by ID.
+ */
+export const readByIds = Effect.fn("Records.readByIds")(function* readByIds(
+  scope: ReadScope,
+  view: ReadView,
+  ids: readonly string[],
+  options: {
+    readonly selection: readonly SelectedValue[];
+    readonly withLabels: boolean;
+    readonly withTargets: boolean;
+  }
+) {
+  const projection = project(
+    scope,
+    view,
+    options.selection,
+    options.withLabels,
+    options.withTargets
+  );
+
+  const valid = ids.filter((id) => parseUuid(id).ok);
+
+  const rows = yield* readRows(
+    sql`SELECT ${joinSql(projection.columns, ", ")}
+FROM ${recordRelation(scope.snapshot, view.classId)} AS ${identSql(BASE_ALIAS)}${optionalJoins(projection.joins)}
+WHERE ${ID} = ANY(${arrayParameter(valid, "uuid")}) AND ${view.visibility(BASE_ALIAS)}`
+  );
+
+  return new Map(
+    rows.map((row) => {
+      const decoded = projection.decode(row);
+
+      return [decoded.id, decoded] as const;
+    })
+  );
 });
 
 /**

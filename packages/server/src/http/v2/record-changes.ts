@@ -25,19 +25,13 @@ import { ValidationFailed } from "@std/api/errors/validation-failed";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { ReadOnlyFieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
-import { apiAttributeNameOf, apiNameOf } from "@std/definitions/names";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { USER_CLASS_ID } from "@std/definitions/well-known";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result } from "effect";
 import { HttpServerResponse } from "effect/http";
 
-import { recordHistory } from "../../records/history-endpoint.ts";
 import {
   currentReadScope,
   readOne,
@@ -45,6 +39,7 @@ import {
 } from "../../records/read-records.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
 import { deleteRecord, updateRecord } from "../../records/save-pipeline.ts";
+import type { LockedImage } from "../../records/save-pipeline.ts";
 import { WriteAccess } from "../../records/write-access.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import { checkRequestRevision } from "../stale-request.ts";
@@ -57,15 +52,15 @@ import {
 } from "./patch.ts";
 import type { PatchOperation } from "./patch.ts";
 import {
-  jsonAnswer,
   refuseDefinitionWrites,
   savedAnswer,
   tableOf,
   writeFailures,
 } from "./records.ts";
 import type { RouteInput } from "./records.ts";
-import { jsonBodyOf, mediaTypeOf, queryOf } from "./request.ts";
-import { entityRef, typeAttributes } from "./resource.ts";
+import { jsonBodyOf, mediaTypeOf } from "./request.ts";
+import { recordHref, typeAttributes } from "./resource.ts";
+import { collectionNameOf } from "./table-names.ts";
 
 const MERGE_PATCH = "application/merge-patch+json";
 const JSON_PATCH = "application/json-patch+json";
@@ -78,15 +73,6 @@ const PATCH_MEDIA_TYPES: readonly string[] = [
   PLAIN_JSON,
 ];
 
-/** History filters (Contracts 3.7), as in v1. */
-const HISTORY_PARAMETERS: ReadonlySet<string> = new Set([
-  "since",
-  "until",
-  "actor",
-  "kind",
-  "field",
-]);
-
 const AUDIT_REFERENCES: ReadonlySet<string> = new Set([
   "created_by",
   "updated_by",
@@ -98,7 +84,7 @@ interface PatchPlan {
   readonly written: readonly FieldDefinition[];
   /** The patch, applied to the locked projection; the update body. */
   readonly evaluate: (
-    projection: JsonObject
+    locked: LockedImage
   ) => Effect.Effect<JsonObject, PatchTestFailed>;
 }
 
@@ -114,6 +100,31 @@ const projectedClass = (snapshot: ConfigSnapshot, projection: JsonObject) => {
   return name !== undefined && isJsonString(name)
     ? snapshot.classByName(name)?.id
     : undefined;
+};
+
+// The identity and system attributes of the locked record as v2 shows them
+// (id, href, @type, @baseType, @schemaLocation, revision), so a JSON Patch
+// can `test` or `copy` them; writing them stays ReadOnlyField.
+const envelopeOf = (
+  scope: ReadScope,
+  origin: string,
+  projection: JsonObject
+): JsonObject => {
+  const classId = projectedClass(scope.snapshot, projection) ?? "";
+
+  const id =
+    projection.id !== undefined && isJsonString(projection.id)
+      ? projection.id
+      : "";
+
+  const revision = projection.version ?? null;
+
+  return {
+    ...typeAttributes(scope, origin, classId),
+    href: recordHref(origin, collectionNameOf(scope.snapshot, classId), id),
+    id,
+    revision,
+  };
 };
 
 const isReferenceNamed = (
@@ -206,7 +217,7 @@ const resolveWritten = Effect.fn("V2.resolveWritten")(function* resolveWritten(
   names: ReadonlySet<string>
 ) {
   const byApiName = new Map(
-    nameable.map((field) => [apiNameOf(field.name), field])
+    nameable.map((field) => [apiAttributeNameOf(field.name), field])
   );
 
   const written: FieldDefinition[] = [];
@@ -234,13 +245,15 @@ const resolveWritten = Effect.fn("V2.resolveWritten")(function* resolveWritten(
  * @param view - The endpoint's view.
  * @param nameable - The fields the caller may name in an update.
  * @param operations - The operations.
+ * @param origin - The origin `href`s start with.
  * @returns The plan.
  */
 const planJsonPatch = Effect.fn("V2.planJsonPatch")(function* planJsonPatch(
   scope: ReadScope,
   view: ReadView,
   nameable: readonly FieldDefinition[],
-  operations: readonly PatchOperation[]
+  operations: readonly PatchOperation[],
+  origin: string
 ) {
   const names = namesOfPatch(operations);
   const readOnly = readOnlyErrors(names.written);
@@ -280,9 +293,12 @@ const planJsonPatch = Effect.fn("V2.planJsonPatch")(function* planJsonPatch(
     normalizedOperation(operation, references)
   );
 
-  const evaluate = (projection: JsonObject) => {
+  const evaluate = ({ projection }: LockedImage) => {
     const patched = applyJsonPatch(
-      imageOf(scope.snapshot, projection),
+      {
+        ...imageOf(scope.snapshot, projection),
+        ...envelopeOf(scope, origin, projection),
+      },
       normalized
     );
 
@@ -292,7 +308,10 @@ const planJsonPatch = Effect.fn("V2.planJsonPatch")(function* planJsonPatch(
           Object.fromEntries(
             written.map((field): [string, JsonValue] => [
               field.name,
-              bodyValueOf(patched.success[apiNameOf(field.name)], field),
+              bodyValueOf(
+                patched.success[apiAttributeNameOf(field.name)],
+                field
+              ),
             ])
           )
         );
@@ -324,8 +343,10 @@ const planMergePatch = Effect.fn("V2.planMergePatch")(function* planMergePatch(
     return field === undefined ? [] : [field];
   });
 
-  const evaluate = (projection: JsonObject) => {
-    const stored = projectedValues(projection);
+  // The merge starts from the stored value, which the caller may not be
+  // able to read; the response still withholds it.
+  const evaluate = ({ storedJson }: LockedImage) => {
+    const stored = Object.fromEntries(storedJson);
 
     return Effect.succeed(
       Object.fromEntries(
@@ -479,7 +500,7 @@ export const patchIn = Effect.fn("V2.patch")(function* patchIn(
   });
 
   const plan = isJsonPatch
-    ? yield* planJsonPatch(scope, view, nameable, operations)
+    ? yield* planJsonPatch(scope, view, nameable, operations, input.origin)
     : yield* planMergePatch(
         scope,
         nameable,
@@ -561,141 +582,4 @@ export const deleteIn = Effect.fn("V2.delete")(function* deleteIn(
   );
 
   return HttpServerResponse.empty({ status: 204 });
-});
-
-const ACTIONS: ReadonlyMap<string, string> = new Map([
-  ["create", "created"],
-  ["update", "updated"],
-  ["delete", "deleted"],
-]);
-
-const keyedByApiName = (value: JsonValue | undefined): JsonObject =>
-  value !== undefined && isJsonObject(value)
-    ? Object.fromEntries(
-        Object.entries(value).map(([name, change]) => [
-          apiAttributeNameOf(name),
-          change,
-        ])
-      )
-    : {};
-
-const textOf = (value: JsonValue | undefined): string =>
-  value !== undefined && isJsonString(value) ? value : "";
-
-/**
- * A v1 history entry as a `ChangeEntry` resource (Contracts 10.4, TMF630
- * v5.0.0 Part 1 §12): `@baseType` `History`, `revision`, `action`,
- * `creationDate` and `revisedBy` beside STD's own attributes.
- *
- * @param scope - The read scope.
- * @param origin - The request origin.
- * @param record - The record the entry belongs to.
- * @param entry - The v1 history entry.
- * @returns The `ChangeEntry` resource.
- */
-const changeEntryOf = (
-  scope: ReadScope,
-  origin: string,
-  record: JsonObject,
-  entry: JsonValue
-): JsonObject => {
-  const fields = isJsonObject(entry) ? entry : {};
-  const kind = textOf(fields.kind);
-
-  const actor = entityRef(scope, origin, {
-    declaredClassId: USER_CLASS_ID,
-    id: textOf(fields.actor),
-    label: null,
-    targetClassId: null,
-  });
-
-  return {
-    "@baseType": "History",
-    "@type": "ChangeEntry",
-    action: ACTIONS.get(kind) ?? kind,
-    actor,
-    cause: fields.cause ?? null,
-    changes: keyedByApiName(fields.changes),
-    creationDate: fields.occurredAt ?? null,
-    entity: record,
-    fields: keyedByApiName(fields.fields),
-    id: textOf(fields.changeId),
-    kind,
-    occurredAt: fields.occurredAt ?? null,
-    operationId: fields.operationId ?? null,
-    revisedBy: actor,
-    revision: fields.version ?? null,
-    schemaRevision: fields.schemaRevision ?? null,
-  };
-};
-
-const historyParameters = Effect.fn("V2.historyParameters")(
-  function* historyParameters(input: RouteInput) {
-    const query = queryOf(input.request);
-    const unknown = query.find(([key]) => !HISTORY_PARAMETERS.has(key));
-
-    if (unknown !== undefined) {
-      return yield* new InvalidRequest({
-        message: "History takes since, until, actor, kind and field.",
-        parameter: unknown[0],
-      });
-    }
-
-    return Object.fromEntries(query);
-  }
-);
-
-/**
- * `GET /api/v2/{table}/{id}/history`, inside the request transaction: the
- * entries the caller may see (3.7), as `ChangeEntry` resources.
- *
- * @param input - The route input.
- * @param id - The record ID.
- * @returns The 200 response.
- */
-export const historyIn = Effect.fn("V2.history")(function* historyIn(
-  input: RouteInput,
-  id: string
-) {
-  const parameters = yield* historyParameters(input);
-  const table = yield* tableOf(input.collection);
-
-  const scopeParameters =
-    parameters.field === undefined
-      ? { naming: "api" as const }
-      : { fieldIds: parameters.field, naming: "api" as const };
-
-  yield* checkRequestRevision(input.stated, table, scopeParameters);
-
-  const history = yield* recordHistory({ ...parameters, id, table });
-  const scope = yield* currentReadScope();
-  const concrete = scope.snapshot.qualifiedNameOf(history.classId);
-  const endpoint = scope.snapshot.classByName(table)?.id;
-
-  // Through any endpoint, history shows the concrete class's readable
-  // fields, so that class's selection is in scope too (as in v1).
-  if (concrete !== undefined && endpoint !== history.classId) {
-    yield* checkRequestRevision(input.stated, concrete, scopeParameters).pipe(
-      Effect.catchTag("UnknownTable", () => Effect.void)
-    );
-  }
-
-  const record = entityRef(scope, input.origin, {
-    declaredClassId: history.classId,
-    id: id.toLowerCase(),
-    label: null,
-    targetClassId: history.classId,
-  });
-
-  const { entries } = history.body;
-  const list = isJsonArray(entries) ? entries : [];
-
-  return jsonAnswer(
-    list.map((entry) => changeEntryOf(scope, input.origin, record, entry)),
-    200,
-    {
-      "x-result-count": String(list.length),
-      "x-total-count": String(list.length),
-    }
-  );
 });

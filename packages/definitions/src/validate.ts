@@ -49,6 +49,7 @@ import {
 import type { EffectiveField } from "./effective-schema.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
+  apiAttributeNameOf,
   apiNameOf,
   apiTableNameOf,
   FIXED_RESOURCE_NAMES,
@@ -1367,7 +1368,13 @@ export const apiNameProblems = (
   const rootOf = (field: FieldDefinition) => snapshot.root(field.classId)?.id;
 
   const clashOf = (field: FieldDefinition): DefinitionProblem | undefined => {
-    const apiName = apiNameOf(field.name);
+    // A core platform field keeps its definition name and takes its
+    // platform v2 name (`type` is `fieldType`); any other field's v2 name
+    // is checked as derived.
+    const apiName =
+      field.owner.layer === "core"
+        ? apiAttributeNameOf(field.name)
+        : apiNameOf(field.name);
 
     if (isReservedApiName(apiName)) {
       return problem(
@@ -1381,7 +1388,8 @@ export const apiNameProblems = (
 
     const other = live.find((candidate) => {
       const sameApiName =
-        candidate.name !== field.name && apiNameOf(candidate.name) === apiName;
+        candidate.name !== field.name &&
+        apiAttributeNameOf(candidate.name) === apiName;
 
       return (
         sameApiName && rootId !== undefined && rootOf(candidate) === rootId

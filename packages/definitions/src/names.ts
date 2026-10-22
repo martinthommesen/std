@@ -131,19 +131,28 @@ export const permissionNameProblem = (
   return name.length > IDENTIFIER_MAX_BYTES ? "tooLong" : undefined;
 };
 
-const SNAKE_STEP = /_(?<next>[\da-z])/gu;
+const UNDERSCORES = /_+/u;
 
 /**
- * The API name of a field in `/api/v2` (Contracts 10.2): its definition
- * name with each `_x` turned into `X`, so `short_description` becomes
- * `shortDescription`. Definition names stay snake case, so plain SQL stays
+ * The API name of a field in `/api/v2` (Contracts 10.2; TMF630 v5.0.0
+ * Part 1 §2.5 pp.22-23): its definition name split at runs of underscores,
+ * the parts after the first capitalized and joined, so `short_description`
+ * becomes `shortDescription`, `due__date` `dueDate` and `foo_` `foo`.
+ * Every valid identifier gets one lowerCamelCase name; clashes are checked
+ * on these names. Definition names stay snake case, so plain SQL stays
  * readable (1.1).
  *
  * @param name - A definition or system field name.
  * @returns The lowerCamelCase name.
  */
 export const apiNameOf = (name: string): string =>
-  name.replaceAll(SNAKE_STEP, (_match, next: string) => next.toUpperCase());
+  name
+    .split(UNDERSCORES)
+    .filter((part) => part !== "")
+    .map((part, index) =>
+      index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`
+    )
+    .join("");
 
 const upperFirst = (name: string): string =>
   `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
@@ -211,6 +220,17 @@ const SYSTEM_API_NAME_MAP: ReadonlyMap<string, string> = new Map(
 );
 
 /**
+ * v2 names of shipped platform fields whose definition names are reserved
+ * API names: `core.field`'s `type` is `fieldType`, because TMF630 v5.0.0
+ * Part 7 §2.1.3 p.18 reserves `type`. A local or app field can never take
+ * such a name (`apiNameClash`), so the rename applies to the core field
+ * only.
+ */
+const PLATFORM_API_NAMES: ReadonlyMap<string, string> = new Map([
+  ["type", "fieldType"],
+]);
+
+/**
  * The `/api/v2` name of a field or system field: `SYSTEM_API_NAMES` for
  * system fields, `apiNameOf` for every other (definition names never take
  * a system field's name, Contracts 1.1).
@@ -219,7 +239,9 @@ const SYSTEM_API_NAME_MAP: ReadonlyMap<string, string> = new Map(
  * @returns Its attribute name.
  */
 export const apiAttributeNameOf = (name: string): string =>
-  SYSTEM_API_NAME_MAP.get(name) ?? apiNameOf(name);
+  SYSTEM_API_NAME_MAP.get(name) ??
+  PLATFORM_API_NAMES.get(name) ??
+  apiNameOf(name);
 
 /**
  * Attribute names of a `/api/v2` resource that no field's API name may
@@ -230,6 +252,7 @@ export const apiAttributeNameOf = (name: string): string =>
 export const RESERVED_API_NAMES: ReadonlySet<string> = new Set([
   ...Object.values(SYSTEM_API_NAMES),
   "href",
+  "type",
   "version",
   "withheld",
 ]);

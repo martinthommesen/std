@@ -124,6 +124,11 @@ export interface ScopeParameters {
    */
   readonly paths?: string;
   /**
+   * Names left out of the default selection, comma-separated (v2's
+   * `fields=!name`); used only without `fields`.
+   */
+  readonly excluded?: string;
+  /**
    * How the names are spelled: definition names (v1, the default) or API
    * names (v2, Contracts 10.2), resolved at R either way.
    */
@@ -579,9 +584,19 @@ export const staleScope = (
 
   const labels = parameters.labels === "true";
 
+  // Exclusions (v2 `fields=!name`) leave names out of the default
+  // selection at R; each is still a name the request used.
+  const excluded = new Set(splitList(parameters.excluded ?? ""));
+
+  for (const name of excluded) {
+    named(collector, endpoint, name);
+  }
+
   const selection =
     parameters.fields === undefined
-      ? defaultSelectionAt(definitions, endpoint, collector.naming)
+      ? defaultSelectionAt(definitions, endpoint, collector.naming).filter(
+          (name) => !excluded.has(name)
+        )
       : splitList(parameters.fields);
 
   for (const item of selection) {

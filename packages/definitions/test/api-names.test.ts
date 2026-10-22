@@ -69,6 +69,10 @@ describe("api-name-clash", () => {
     assert.strictEqual(apiNameOf("assigned_to"), "assignedTo");
     assert.strictEqual(apiNameOf("name"), "name");
     assert.strictEqual(apiNameOf("size_1"), "size1");
+    assert.strictEqual(apiNameOf("foo_"), "foo");
+    assert.strictEqual(apiNameOf("bar__baz"), "barBaz");
+    assert.strictEqual(apiNameOf("due__date"), "dueDate");
+    assert.strictEqual(apiTableNameOf("foo__bar", "baz_"), "fooBarBaz");
     assert.strictEqual(apiNameOf("created_at"), "createdAt");
     assert.isTrue(isReservedApiName("href"));
     assert.isTrue(isReservedApiName("withheld"));
@@ -89,6 +93,15 @@ describe("api-name-clash", () => {
 
     assert.include(codesOf(camel), "apiNameClash");
 
+    // Repeated underscores normalize away: `due__date` is `dueDate` too.
+    const doubled = applyOperations(
+      w.snapshot,
+      [{ id: w.cost.id, name: "due__date", op: "rename", version: 1 }],
+      NEXT
+    );
+
+    assert.deepStrictEqual(codesOf(doubled), ["apiNameClash"]);
+
     // A sibling class shares the hierarchy, and so its API names.
     const digits = applyOperations(
       w.snapshot,
@@ -102,7 +115,7 @@ describe("api-name-clash", () => {
   it("refuses reserved API names: href, withheld and @ names", () => {
     const w = world();
 
-    for (const name of ["href", "withheld", "@x"]) {
+    for (const name of ["href", "withheld", "type", "@x"]) {
       const result = applyOperations(
         w.snapshot,
         [{ id: w.cost.id, name, op: "rename", version: 1 }],
@@ -147,6 +160,8 @@ describe("api-name-clash", () => {
     );
     assert.strictEqual(apiTypeNameOf("core", "user"), "CoreUser");
     assert.strictEqual(apiAttributeNameOf("version"), "revision");
+    assert.strictEqual(apiAttributeNameOf("type"), "fieldType");
+    assert.isTrue(isReservedApiName("type"));
     assert.strictEqual(apiAttributeNameOf("created_at"), "creationDate");
     assert.strictEqual(apiAttributeNameOf("updated_at"), "lastUpdate");
     assert.isTrue(isReservedApiName("revision"));

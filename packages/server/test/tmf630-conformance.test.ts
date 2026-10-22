@@ -222,8 +222,8 @@ describe("tmf630-conformance", () => {
             response.headers.get("content-location"),
             `${ORIGIN}${V2.laptop}/${records.L}`
           );
-          // Only the endpoint's lineage fields (Contracts 2.3).
-          assert.notProperty(laptop, "serial");
+          // The concrete representation, child fields included (Martin, D1).
+          assert.strictEqual(laptop.serial, "SN-L");
         })
     );
 
@@ -241,14 +241,14 @@ describe("tmf630-conformance", () => {
 
           assert.deepStrictEqual(asAlice.dockedTo, {
             "@referredType": "AcmeMonitor",
-            "@type": "EntityRef",
+            "@type": "AcmeAssetRef",
             href: `${ORIGIN}${V2.monitor}/${records.AM}`,
             id: records.AM,
             name: "Alice monitor",
           });
           assert.deepInclude(asObject(asAlice.owner), {
             "@referredType": "CoreUser",
-            "@type": "EntityRef",
+            "@type": "CoreUserRef",
             id: bob.id,
           });
 
@@ -260,7 +260,7 @@ describe("tmf630-conformance", () => {
 
           assert.deepStrictEqual(asBob.dockedTo, {
             "@referredType": "AcmeAsset",
-            "@type": "EntityRef",
+            "@type": "AcmeAssetRef",
             href: `${ORIGIN}${V2.asset}/${records.AM}`,
             id: records.AM,
           });
@@ -383,9 +383,18 @@ describe("tmf630-conformance", () => {
             assert.sameMembers(namesOf(listed), ["K", "L"]);
           }
 
-          // Text equality uses the field's key (case-insensitive text).
-          const folded = yield* http.get(
+          // TMF filters compare text unmodified (Martin, D4); the
+          // condition extension keeps the field's case behavior.
+          const exact = yield* http.get(
             withQuery(V2.asset, [["name", "k"]]),
+            callers.alice
+          );
+
+          assert.strictEqual(exact.status, 200);
+          assert.deepStrictEqual(namesOf(exact), []);
+
+          const folded = yield* http.get(
+            withQuery(V2.asset, [["condition", 'name = "k"']]),
             callers.alice
           );
 
@@ -661,7 +670,7 @@ describe("tmf630-conformance", () => {
         assert.strictEqual(entry?.action, "created");
         assert.strictEqual(entry?.revision, 1);
         assert.property(asObject(entry?.changes), "purchasedOn");
-        assert.strictEqual(asObject(entry?.revisedBy)["@type"], "EntityRef");
+        assert.strictEqual(asObject(entry?.revisedBy)["@type"], "CoreUserRef");
       })
     );
 

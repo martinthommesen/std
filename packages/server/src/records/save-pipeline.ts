@@ -53,7 +53,8 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
 import type { DecodedInput, StoredValue } from "@std/values/field-value";
-import type { JsonObject } from "@std/values/json-value";
+import { isJsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
@@ -135,8 +136,19 @@ export interface UpdateInput extends SaveInput {
    * so always sees the version the write applies to.
    */
   readonly evaluate?: (
-    locked: JsonObject
+    locked: LockedImage
   ) => Effect.Effect<JsonObject, PatchTestFailed>;
+}
+
+/**
+ * What a patch is evaluated against (Contracts 10.5): the caller's
+ * projection of the locked record, and the stored values of its json
+ * fields by name, which a JSON Merge Patch merges into whether or not the
+ * caller may read them (the response still withholds them).
+ */
+export interface LockedImage {
+  readonly projection: JsonObject;
+  readonly storedJson: ReadonlyMap<string, JsonValue>;
 }
 
 /** A delete, based on a version the caller read. */
@@ -163,6 +175,21 @@ export interface SaveResult {
 }
 
 const API_CAUSE: ChangeCause = { kind: "api" };
+
+// The stored values of a record's json fields, by name.
+const storedJsonOf = (
+  snapshot: ConfigSnapshot,
+  record: StoredRecord
+): ReadonlyMap<string, JsonValue> =>
+  new Map(
+    [...record.values].flatMap(([fieldId, value]): [string, JsonValue][] => {
+      const field = snapshot.getKind("field", fieldId);
+
+      return field?.type.kind === "json" && isJsonValue(value)
+        ? [[field.name, value]]
+        : [];
+    })
+  );
 
 const effectiveById = (
   snapshot: ConfigSnapshot,
@@ -791,9 +818,14 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
         : yield* resolveBody(
             snapshot,
             input,
-            yield* input.evaluate(
-              yield* project(snapshot, input.endpointClassId, record)
-            ),
+            yield* input.evaluate({
+              projection: yield* project(
+                snapshot,
+                input.endpointClassId,
+                record
+              ),
+              storedJson: storedJsonOf(snapshot, record),
+            }),
             "update"
           );
 

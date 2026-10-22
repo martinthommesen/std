@@ -11,7 +11,7 @@ import type { FilterIssue } from "@std/api/errors/schemas";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import type { Expr } from "@std/conditions/ast";
 import { checkCondition, checkConditionJson } from "@std/conditions/check";
-import type { ClassView } from "@std/conditions/class-view";
+import type { ClassView, FieldInfo } from "@std/conditions/class-view";
 import type { ConditionIssue, Span } from "@std/conditions/issue";
 import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
@@ -322,6 +322,33 @@ export const filterClassView = (
   };
 };
 
+// A field whose text compares unmodified (case-sensitive).
+const exactTextField = (info: FieldInfo): FieldInfo =>
+  info.type.kind === "text" || info.type.kind === "longText"
+    ? { ...info, type: { ...info.type, caseSensitive: true } }
+    : info;
+
+/**
+ * A class view whose text fields compare unmodified values (v2's TMF
+ * attribute filters, D4): the same fields, with `caseSensitive` set.
+ *
+ * @param view - The caller's filter view.
+ * @returns The view.
+ */
+export const exactTextView = (view: ClassView): ClassView => ({
+  canRead: (classId, fieldId) => view.field(classId, fieldId) !== undefined,
+  field: (classId, fieldId) => {
+    const found = view.field(classId, fieldId);
+
+    return found === undefined ? undefined : exactTextField(found);
+  },
+  fieldByName: (classId, name) => {
+    const found = view.fieldByName?.(classId, name);
+
+    return found === undefined ? undefined : exactTextField(found);
+  },
+});
+
 /**
  * Compiles a resolved condition in the caller's view (Contracts 3.5, 5.10,
  * the filter profile): every field compiles to its masked expression, so a
@@ -425,6 +452,11 @@ export const parseFilterText = Effect.fn("ReadQuery.parseFilterText")(
  * @param view - The endpoint's view.
  * @param expr - The condition.
  * @param spans - Where its nodes came from in filter text, if it did.
+ * @param options - `exactText`: text compares unmodified values, whatever
+ *   each field's configured case behavior (v2's TMF attribute filters,
+ *   Martin 2026-10-22, D4; v1 and `condition` keep the field's); and the
+ *   prefix of the condition's join aliases, distinct per compiled filter
+ *   of one statement.
  * @returns The joins and the predicate.
  */
 export const compileFilterExpr = Effect.fn("ReadQuery.compileFilterExpr")(
@@ -432,13 +464,16 @@ export const compileFilterExpr = Effect.fn("ReadQuery.compileFilterExpr")(
     scope: ReadScope,
     view: ReadView,
     expr: Expr,
-    spans: ReadonlyMap<string, Span> = new Map()
+    spans: ReadonlyMap<string, Span> = new Map(),
+    options?: { readonly exactText: boolean; readonly aliasPrefix: string }
   ) {
+    const classView = filterClassView(scope);
+
     const checked = checkCondition(expr, {
       classId: view.classId,
       profile: "filter",
       purpose: "evaluate",
-      view: filterClassView(scope),
+      view: options?.exactText === true ? exactTextView(classView) : classView,
     });
 
     if (!checked.ok) {
@@ -459,7 +494,12 @@ export const compileFilterExpr = Effect.fn("ReadQuery.compileFilterExpr")(
       });
     }
 
-    return compileInView(scope, resolved.value, BASE_ALIAS, "f");
+    return compileInView(
+      scope,
+      resolved.value,
+      BASE_ALIAS,
+      options?.aliasPrefix ?? "f"
+    );
   }
 );
 

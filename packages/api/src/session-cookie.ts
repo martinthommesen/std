@@ -27,6 +27,13 @@ export const SESSION_COOKIE = "std_session";
 export const SESSION_COOKIE_PATH = "/api";
 
 /**
+ * The path the cookie had before Step 3 (`/api/v1`). Every response that
+ * sets or clears the cookie also expires a cookie with this path, so a
+ * browser never keeps an older session beside the new one.
+ */
+export const LEGACY_SESSION_COOKIE_PATH = "/api/v1";
+
+/**
  * The request header that marks a request as sent by STD's own web app
  * (lower case, as Node delivers header names).
  */

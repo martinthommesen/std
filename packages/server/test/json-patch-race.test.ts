@@ -32,6 +32,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
+import type { LockedImage } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -96,12 +97,12 @@ const valuesOf = (projection: JsonObject): JsonObject => {
  * A patch as the TMF APIs evaluate it: `test` the status is `spare`, then
  * replace it, on the locked record's values.
  *
- * @param projection - The locked record.
+ * @param locked - The locked record.
  * @returns The update body, or `PatchTestFailed`.
  */
-export const testThenReplace = (
-  projection: JsonObject
-): Effect.Effect<JsonObject, PatchTestFailed> =>
+export const testThenReplace = ({
+  projection,
+}: LockedImage): Effect.Effect<JsonObject, PatchTestFailed> =>
   valuesOf(projection).status === "spare"
     ? Effect.succeed({ status: "in_use" })
     : Effect.fail(new PatchTestFailedError({ operation: 0 }));
@@ -109,18 +110,21 @@ export const testThenReplace = (
 /**
  * A patch that copies `name` into `status` on the locked record.
  *
- * @param projection - The locked record.
+ * @param locked - The locked record.
  * @returns The update body.
  */
-const copyName = (
-  projection: JsonObject
-): Effect.Effect<JsonObject, PatchTestFailed> =>
+const copyName = ({
+  projection,
+}: LockedImage): Effect.Effect<JsonObject, PatchTestFailed> =>
   Effect.succeed({ status: valuesOf(projection).name ?? null });
 
 describe("json-patch-race", () => {
   it("testThenReplace refuses a status that is not spare", () => {
     const outcome = Effect.runSyncExit(
-      testThenReplace({ values: { status: "in_use" } })
+      testThenReplace({
+        projection: { values: { status: "in_use" } },
+        storedJson: new Map(),
+      })
     );
 
     assert.isTrue(Exit.isFailure(outcome));

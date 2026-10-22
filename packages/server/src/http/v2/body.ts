@@ -18,7 +18,7 @@ import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { ReadOnlyFieldError } from "@std/definitions/field-errors";
-import { apiNameOf, RESERVED_API_NAMES } from "@std/definitions/names";
+import { apiAttributeNameOf, RESERVED_API_NAMES } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -104,7 +104,7 @@ export const translateBody = Effect.fn("V2Body.translate")(
     body: JsonObject
   ) {
     const byApiName = new Map(
-      nameable.map((field) => [apiNameOf(field.name), field])
+      nameable.map((field) => [apiAttributeNameOf(field.name), field])
     );
 
     const readOnly: ReadOnlyFieldError[] = [];

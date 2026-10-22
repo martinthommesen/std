@@ -89,6 +89,11 @@ export const setCookieValue = (
   name: string
 ): string | undefined => {
   for (const line of response.headers.getSetCookie()) {
+    // The legacy `/api/v1` expiry that rides along is not the session.
+    if (line.includes("; Path=/api/v1;")) {
+      continue;
+    }
+
     const [pair = ""] = line.split(";");
     const separator = pair.indexOf("=");
 

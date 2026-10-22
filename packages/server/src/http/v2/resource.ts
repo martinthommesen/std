@@ -15,7 +15,9 @@
  *   without a value is left out, never `null` (TMF630 v5.0.0 Part 1 §4.1
  *   p.39); `withheld` lists the selected attributes access rules withheld,
  *   so a restricted value never looks empty (6.6).
- * - A reference is an EntityRef: `id`; `@referredType` and `href` naming
+ * - A reference is a typed reference (`<DeclaredType>Ref`, `@baseType`-free,
+ *   TMF630 v5.0.0 Part 7 §1.4.3) when the caller knows the field's declared
+ *   target class, else a generic `EntityRef`: `id`; `@referredType` and `href` naming
  *   the target's concrete class when the caller can see the target, else
  *   the declared target class when the caller knows it, else neither (a
  *   class name the caller cannot know is never shown, 3.4); `name`, the
@@ -158,8 +160,14 @@ export const entityRef = (
   const known = knowsTable(snapshot, caller, declared) ? declared : null;
   const referredId = reference.targetClassId ?? known;
 
+  // A typed reference (`CoreUserRef`) when the caller knows the field's
+  // declared target class; the generic `EntityRef` otherwise (TMF630
+  // v5.0.0 Part 7 §1.4.3 p.15).
+  const refType =
+    known === null ? "EntityRef" : `${typeNameOf(snapshot, known)}Ref`;
+
   const ref = new Map<string, JsonValue>([
-    ["@type", "EntityRef"],
+    ["@type", refType],
     ["id", reference.id],
   ]);
 

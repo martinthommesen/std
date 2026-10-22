@@ -29,9 +29,13 @@ import { HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Catalog } from "../../catalog/catalog.ts";
-import { compileFilterExpr } from "../../records/read-query.ts";
+import {
+  compileFilterExpr,
+  defaultSelection,
+} from "../../records/read-query.ts";
 import {
   currentReadScope,
+  readByIds,
   readOne,
   readPage,
   resolveTable,
@@ -120,6 +124,21 @@ const scopeItem = (item: string): string[] => {
   return member === "id" || member === "name" ? [reference] : [name];
 };
 
+// What `fields` selects, for the stale scope: inclusions as `fields`,
+// exclusions alone as the default selection minus them (`excluded`),
+// `none` or identity attributes only as nothing.
+const selectionScope = (fields: string): [string, string][] => {
+  const items = fields.split(",").map((item) => item.trim());
+  const included = items.filter((item) => !item.startsWith("!"));
+  const excluded = items.filter((item) => item.startsWith("!"));
+
+  if (included.length === 0 && excluded.length > 0) {
+    return [["excluded", excluded.flatMap(scopeItem).join(",")]];
+  }
+
+  return [["fields", included.flatMap(scopeItem).join(",")]];
+};
+
 /**
  * The names a list or read uses, for the stale-request scope (Contracts
  * 6.4), read from the query before anything resolves.
@@ -127,6 +146,10 @@ const scopeItem = (item: string): string[] => {
  * @param query - The query parameters.
  * @returns The scope parameters, in API names.
  */
+// The `fields` parameter of a query, if any.
+const fieldsOf = (query: QueryParameters): string | undefined =>
+  query.find(([key]) => key === "fields")?.[1];
+
 const scopeOfQuery = (query: QueryParameters): ScopeParameters => {
   const first = (name: string) => query.find(([key]) => key === name)?.[1];
 
@@ -141,7 +164,7 @@ const scopeOfQuery = (query: QueryParameters): ScopeParameters => {
   const optional: [string, string][] = [];
 
   if (fields !== undefined) {
-    optional.push(["fields", fields.split(",").flatMap(scopeItem).join(",")]);
+    optional.push(...selectionScope(fields));
   }
 
   if (condition !== undefined) {
@@ -278,6 +301,58 @@ const linkHeader = (links: PageLinks): string => {
 };
 
 /**
+ * Records as their concrete classes show them (Martin, 2026-10-22, D1):
+ * read through a parent collection with the default selection, a record of
+ * a child class is read again through its own class, so it carries its
+ * own fields under the same access rules as on its concrete collection.
+ * An explicit `fields` selection names the collection's attributes and is
+ * kept as read.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The collection's view.
+ * @param records - The records as read through it.
+ * @param fields - The request's `fields`, if any.
+ * @returns The records, each in its concrete representation.
+ */
+const concreteRecords = Effect.fn("V2.concreteRecords")(
+  function* concreteRecords(
+    scope: ReadScope,
+    view: ReadView,
+    records: readonly DecodedRecord[],
+    fields: string | undefined
+  ) {
+    const children = new Map<DefinitionId, string[]>();
+
+    for (const record of records) {
+      if (fields === undefined && record.classId !== view.classId) {
+        children.set(record.classId, [
+          ...(children.get(record.classId) ?? []),
+          record.id,
+        ]);
+      }
+    }
+
+    const concrete = new Map<string, DecodedRecord>();
+
+    for (const [classId, ids] of children) {
+      const own = scope.view(classId, true);
+
+      const read = yield* readByIds(scope, own, ids, {
+        selection: defaultSelection(own),
+        withLabels: true,
+        withTargets: true,
+      });
+
+      for (const [id, record] of read) {
+        concrete.set(id, record);
+      }
+    }
+
+    return records.map((record) => concrete.get(record.id) ?? record);
+  }
+);
+
+/**
  * `GET /api/v2/{table}`, inside the request transaction as the `Actor`.
  *
  * @param input - The request, its stated revision, origin and collection.
@@ -293,16 +368,29 @@ export const listIn = Effect.fn("V2.list")(function* listIn(input: RouteInput) {
   const view = scope.view(yield* resolveTable(scope, table));
   const parsed = yield* parseListQuery(scope, view, query);
 
-  const filters = Option.isSome(parsed.filter)
+  // TMF filters compare text unmodified (D4); `condition` keeps each
+  // field's case behavior. Each compiles with its own join aliases.
+  const tmf = Option.isSome(parsed.tmf)
+    ? [
+        yield* compileFilterExpr(scope, view, parsed.tmf.value, new Map(), {
+          aliasPrefix: "t",
+          exactText: true,
+        }),
+      ]
+    : [];
+
+  const condition = Option.isSome(parsed.condition)
     ? [
         yield* compileFilterExpr(
           scope,
           view,
-          parsed.filter.value.expr,
-          parsed.filter.value.spans
+          parsed.condition.value.expr,
+          parsed.condition.value.spans
         ),
       ]
     : [];
+
+  const filters = [...tmf, ...condition];
 
   const page = yield* readPage(scope, view, {
     after: parsed.cursors.after,
@@ -324,7 +412,9 @@ export const listIn = Effect.fn("V2.list")(function* listIn(input: RouteInput) {
     page.count === undefined ? {} : { "x-total-count": String(page.count) };
 
   return jsonAnswer(
-    page.records.map((record) => resourceOf(scope, input.origin, record)),
+    (yield* concreteRecords(scope, view, page.records, fieldsOf(query))).map(
+      (record) => resourceOf(scope, input.origin, record)
+    ),
     200,
     {
       link: linkHeader({
@@ -371,6 +461,7 @@ export interface RouteInput {
  * @param record - The decoded record.
  * @param status - The response status.
  * @param endpointClassId - The class of the collection the request named.
+ * @param requestUrl - The URI the request used, for its `self` link.
  * @returns The response.
  */
 const resourceAnswer = (
@@ -378,7 +469,8 @@ const resourceAnswer = (
   origin: string,
   record: DecodedRecord,
   status: number,
-  endpointClassId: DefinitionId
+  endpointClassId: DefinitionId,
+  requestUrl?: string
 ): HttpServerResponse.HttpServerResponse => {
   const resource = resourceOf(scope, origin, record);
   const hrefValue = resource.href ?? null;
@@ -391,8 +483,15 @@ const resourceAnswer = (
 
   const created = status === 201 ? { location: href } : {};
 
+  // The canonical URI through the concrete class, and the request's own
+  // URI as `self` when the record was reached through another one (TMF630
+  // v4.0.0 Part 3 §2.5 p.14).
+  const self =
+    requestUrl === undefined || requestUrl === href ? href : requestUrl;
+
   return jsonAnswer(resource, status, {
     etag: etagOf(record.version),
+    link: `<${self}>; rel="self", <${href}>; rel="canonical"`,
     ...located,
     ...created,
   });
@@ -419,13 +518,22 @@ export const getIn = Effect.fn("V2.get")(function* getIn(
   const classId = yield* resolveTable(scope, table);
   const view = scope.view(classId);
 
-  const record = yield* readOne(scope, view, id, {
+  const read = yield* readOne(scope, view, id, {
     selection: yield* parseSelection(scope, view, fields),
     withLabels: true,
     withTargets: true,
   });
 
-  return resourceAnswer(scope, input.origin, record, 200, classId);
+  const [record = read] = yield* concreteRecords(scope, view, [read], fields);
+
+  return resourceAnswer(
+    scope,
+    input.origin,
+    record,
+    200,
+    classId,
+    `${input.origin}${input.request.url.split("?")[0] ?? ""}`
+  );
 });
 
 /**
@@ -459,13 +567,14 @@ export const savedAnswer = Effect.fn("V2.savedAnswer")(function* savedAnswer(
   );
 
   if (Option.isSome(reread)) {
-    return resourceAnswer(
+    const [record = reread.value] = yield* concreteRecords(
       scope,
-      input.origin,
-      reread.value,
-      status,
-      view.classId
+      view,
+      [reread.value],
+      fields
     );
+
+    return resourceAnswer(scope, input.origin, record, status, view.classId);
   }
 
   const collection = collectionNameOf(scope.snapshot, saved.classId);
@@ -612,24 +721,27 @@ export const createIn = Effect.fn("V2.create")(function* createIn(
   body: JsonObject
 ) {
   const table = yield* tableOf(input.collection);
-
-  yield* checkRequestRevision(
-    input.stated,
-    table,
-    { fields: bodyNames(body), naming: "api" },
-    { action: "create" }
-  );
-
   const scope = yield* currentReadScope();
   const endpointClassId = yield* resolveTable(scope, table);
 
   yield* refuseDefinitionWrites(table);
 
+  // The class the create makes is resolved first, so the stale check (6.4)
+  // covers its own fields at R, newly required ones included: a body
+  // naming a child field renamed since R is SchemaChanged however the
+  // child is reached.
   const classId = yield* createdClass(
     scope,
     input.origin,
     endpointClassId,
     body
+  );
+
+  yield* checkRequestRevision(
+    input.stated,
+    scope.snapshot.qualifiedNameOf(classId) ?? table,
+    { fields: bodyNames(body), naming: "api" },
+    { action: "create" }
   );
 
   const access = yield* WriteAccess;

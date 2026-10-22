@@ -59,6 +59,8 @@ export const presentedToken = (
     return Effect.succeed(Redacted.make(bearer));
   }
 
+  // Several `std_session` cookies are ambiguous: `cookieMayAuthenticate`
+  // refuses the cookie then.
   const cookie = request.cookies[SESSION_COOKIE];
 
   return cookie !== undefined && cookie !== "" && cookieMayAuthenticate(request)
