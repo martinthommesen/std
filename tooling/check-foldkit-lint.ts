@@ -5,7 +5,8 @@
  * otherwise leave the web app's Foldkit rules silently off.
  *
  * It lints `tooling/canaries/foldkit-lint/counter.ts` with the root config
- * (`--format json`) at `apps/web/src/`, as an `apps/web` test file, and at
+ * (`--format json`, in an allow-listed environment without AI agent markers)
+ * at `apps/web/src/`, as an `apps/web` test file, and at
  * `packages/server/src/`, and requires exactly the expected Foldkit rules on
  * each.
  *
@@ -37,7 +38,7 @@ await runCheck(checkName, async () => {
   });
 
   const config = path.resolve(values.config);
-  const probe = await probeFoldkitLint(config);
+  const probe = await probeFoldkitLint({ config });
   const label = path.relative(repoRoot, config);
 
   if (probe.rules === undefined) {

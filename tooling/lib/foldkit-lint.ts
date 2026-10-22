@@ -52,8 +52,9 @@ export const expectedFoldkitRules: FoldkitRulesByFile = {
 };
 
 // `--format json` output. Oxlint picks its default format from the
-// environment (the terse `agent` format under an AI agent, the graphical
-// one elsewhere, such as in CI), so the probe never parses that.
+// environment (the one-line `agent` format under an AI agent, GitHub's
+// `::error` annotations under GITHUB_ACTIONS, the graphical one in a
+// terminal), so the probe never parses that.
 const OxlintJson = Schema.fromJsonString(
   Schema.Struct({
     diagnostics: Schema.Array(
@@ -98,21 +99,89 @@ const rulesByFile = (
   };
 };
 
+// The only variables Oxlint gets from the caller. Oxlint detects AI agents
+// from many variables (AI_AGENT, CLAUDECODE, CODEX_THREAD_ID, EDITOR,
+// TERM_PROGRAM, ...; apps/oxlint/src/agent_detection.rs) and changes its
+// output for them, so the probe passes an allow-list instead of removing
+// a list of known markers.
+const passedVariables = ["HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"] as const;
+
+// The Pi agent is detected from a PATH segment.
+const agentPathSegment = /[/\\]\.pi[/\\]agent(?:[/\\]|$)/u;
+
+/**
+ * The controlled environment Oxlint runs in: the allow-listed variables of
+ * `base` (PATH without agent segments) and CI's own variables, so the probe
+ * behaves the same under an AI agent, in a terminal and in CI.
+ *
+ * @param base - The environment to take the allow-listed variables from.
+ * @returns The environment for Oxlint.
+ */
+export const lintEnvironment = (
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { CI: "true", GITHUB_ACTIONS: "true" };
+
+  for (const name of passedVariables) {
+    const value = base[name];
+
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+
+  if (env.PATH !== undefined) {
+    env.PATH = env.PATH.split(path.delimiter)
+      .filter((entry) => !agentPathSegment.test(entry))
+      .join(path.delimiter);
+  }
+
+  return env;
+};
+
+/**
+ * Runs the installed Oxlint with this process's Node, so the pinned Node
+ * loads the TypeScript config whatever `node` PATH finds.
+ *
+ * @param args - Oxlint's arguments.
+ * @param cwd - The working directory.
+ * @param env - The full environment; use {@link lintEnvironment}.
+ * @returns The exit code and the output.
+ */
+export const runOxlint = async (
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv
+) =>
+  await runCommand(
+    process.execPath,
+    [path.join(repoRoot, "node_modules", "oxlint", "bin", "oxlint"), ...args],
+    { cwd, env }
+  );
+
+/** Options for {@link probeFoldkitLint}. */
+export interface ProbeOptions {
+  /** The Oxlint config to probe; defaults to the root config. */
+  readonly config?: string;
+  /** Variables added on top of {@link lintEnvironment}, to simulate an agent. */
+  readonly extraEnv?: NodeJS.ProcessEnv;
+}
+
 /**
  * Lints the probe file at `apps/web/src`, at `apps/web/src` as a test file
  * and at `packages/server/src` of a temporary tree. Override globs and JS
  * plugin specifiers resolve from the config's directory, so the tree's
- * `oxlint.config.ts` re-exports `config` unchanged and the tree links the
+ * `oxlint.config.ts` re-exports the config unchanged and the tree links the
  * root `node_modules`.
  *
- * @param config - The Oxlint config to probe; defaults to the root config.
- * @param env - The environment for Oxlint; defaults to this process's.
+ * @param options - The config, and extra variables for tests.
  * @returns The Foldkit rules reported per probe file.
  */
 export const probeFoldkitLint = async (
-  config: string = rootOxlintConfig,
-  env: NodeJS.ProcessEnv = process.env
+  options: ProbeOptions = {}
 ): Promise<FoldkitLintProbe> => {
+  const config = options.config ?? rootOxlintConfig;
+  const env = { ...lintEnvironment(), ...options.extraEnv };
   const temporary = mkdtempSync(path.join(tmpdir(), "std-foldkit-lint-"));
 
   try {
@@ -130,8 +199,7 @@ export const probeFoldkitLint = async (
       `export { default } from ${JSON.stringify(path.resolve(config))};\n`
     );
 
-    const result = await runCommand(
-      path.join(repoRoot, "node_modules", ".bin", "oxlint"),
+    const result = await runOxlint(
       [
         "--format",
         "json",
@@ -139,7 +207,8 @@ export const probeFoldkitLint = async (
         path.join(temporary, configName),
         ...Object.values(probeFiles),
       ],
-      { cwd: temporary, env }
+      temporary,
+      env
     );
 
     const decoded = decodeOxlintJson(result.output);
