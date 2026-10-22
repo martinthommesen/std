@@ -38,7 +38,7 @@ describe("tmf-pins", () => {
     const names = readPins().specifications.map(matrixFileName);
 
     expect(new Set(names).size).toBe(names.length);
-    expect(names).toContain("TMF630@4.2.0.yaml");
+    expect(names).toContain("TMF630@5.0.0.yaml");
   });
 
   it("vendors exactly the pinned OpenAPI documents, with their SHA-256", () => {
