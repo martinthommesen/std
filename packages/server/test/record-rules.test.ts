@@ -959,6 +959,27 @@ describe("record-rules", () => {
             parentChangeId: done.changeId,
             subscriptionId: carrier,
           });
+
+          // A disabled carrier takes no delivery, so its rule does not run.
+          yield* change([
+            {
+              changes: { enabled: false },
+              id: carrier,
+              op: "update",
+              version: 1,
+            },
+          ]);
+
+          const other = yield* createParent({ name: "ac-2" });
+
+          yield* updateRecord({
+            body: { status: "done" },
+            endpointClassId: PARENT.id,
+            expectedVersion: other.version,
+            id: other.id,
+          });
+
+          assert.deepStrictEqual(yield* deliveries(), [done.changeId]);
         })
     );
 

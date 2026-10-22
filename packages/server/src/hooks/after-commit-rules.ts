@@ -56,6 +56,29 @@ import { ruleActor } from "./rule-identity.ts";
 import { selectRules } from "./rule-selection.ts";
 
 /**
+ * Whether a rule's carrier takes deliveries: a live, active, enabled
+ * subscription, like every subscription the producer matches (4.6). A
+ * disabled carrier gets no delivery, so its rule does not run.
+ *
+ * @param snapshot - The configuration.
+ * @param subscriptionId - The rule's carrier.
+ * @returns True when it takes deliveries.
+ */
+const carries = (
+  snapshot: ConfigSnapshot,
+  subscriptionId: DefinitionId | null
+): subscriptionId is DefinitionId => {
+  const subscription =
+    subscriptionId === null ? undefined : snapshot.get(subscriptionId);
+
+  return (
+    subscription?.kind === "subscription" &&
+    isActive(subscription) &&
+    subscription.enabled
+  );
+};
+
+/**
  * The carrier subscriptions of the `afterCommit` rules a change matches,
  * in rule order (step 9).
  *
@@ -89,7 +112,7 @@ export const afterCommitCarriers = Effect.fn("Rules.afterCommitCarriers")(
         context
       );
 
-      if (holds && rule.subscriptionId !== null) {
+      if (holds && carries(snapshot, rule.subscriptionId)) {
         carriers.push(rule.subscriptionId);
       }
     }
