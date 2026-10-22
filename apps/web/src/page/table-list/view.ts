@@ -408,7 +408,14 @@ const recordsView = (
   h: HtmlBuilder<Message>
 ): Html =>
   h.section(
-    [h.Class("panel"), h.AriaLabelledBy(RECORDS_HEADING_ID)],
+    [
+      h.Class("panel"),
+      h.AriaLabelledBy(RECORDS_HEADING_ID),
+      // NOTE: busy while any request for records is under way, so a reload
+      // of an empty list ("No records match." kept on screen) is told apart
+      // from its answer, as the table's own `aria-busy` does for rows.
+      h.AriaBusy(AsyncData.isPending(model.records)),
+    ],
     [
       h.h2([h.Id(RECORDS_HEADING_ID)], ["Records"]),
       ...AsyncData.match(model.records, {

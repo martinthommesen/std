@@ -247,6 +247,49 @@ describe("list page", () => {
     );
   });
 
+  it("marks the records busy while an empty list reloads, and settled once it is answered", () => {
+    const empty: RecordPage = {
+      maybeCount: Option.some(0),
+      maybeNextCursor: Option.none(),
+      records: [],
+    };
+
+    const showingEmpty = update(
+      loaded,
+      Message.SucceededLoadRecords({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_3),
+        page: empty,
+      })
+    ).model;
+
+    const records = role("region", { name: "Records" });
+
+    scene(
+      { update, view },
+      given(showingEmpty),
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
+      expect(records).toHaveAttr("aria-busy", "false"),
+      expect(text("No records match.")).toExist(),
+      change(label("Records per page"), "10"),
+      expect(records).toHaveAttr("aria-busy", "true"),
+      expect(text("No records match.")).toExist(),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 2,
+            maybeRevision: Option.some(REVISION_3),
+            page: empty,
+          }),
+        ]
+      ),
+      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
+      expect(records).toHaveAttr("aria-busy", "false")
+    );
+  });
+
   it("does not offer to sort by a field the server cannot sort", () => {
     scene(
       { update, view },
