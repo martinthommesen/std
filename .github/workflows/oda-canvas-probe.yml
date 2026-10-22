@@ -1,0 +1,47 @@
+# The Step 3 ODA Canvas probe (Contracts 13.6, docs/plan.md Step 3, 3K;
+# docs/decisions/0027-oda-canvas-probe.md). By hand only: it measures what
+# the Step 5 Canvas workflow will cost and how often it fails. It is not a
+# check, and nothing waits on it.
+#
+# deploy/oda/probe/probe.sh does the work: a kind cluster with Kubernetes
+# 1.30, Istio and the pinned canvas-oda chart as the Canvas's own CI installs
+# them, then the stub component (deploy/oda/probe-stub/) until `Complete`.
+# Every tool and chart is downloaded by pinned version and SHA-256 inside the
+# script, so a local run measures the same thing. Nothing retries. The job
+# fails when the probe fails, and uploads its result.json and logs either
+# way; `pnpm oda-probe:summary` summarizes the last runs' artifacts.
+#
+# Runs are independent (no concurrency group), so dispatching several at once
+# gives several runners.
+name: ODA Canvas probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    # The probe's own phase limits add up to about 85 minutes.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Probe (kind, Istio, the ODA Canvas, the stub component)
+        env:
+          PROBE_OUT_DIR: ${{ runner.temp }}/oda-canvas-probe
+          PROBE_TOOLS_DIR: ${{ runner.temp }}/oda-canvas-probe-tools
+        run: deploy/oda/probe/probe.sh
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oda-canvas-probe
+          path: |
+            ${{ runner.temp }}/oda-canvas-probe/result.json
+            ${{ runner.temp }}/oda-canvas-probe/logs/
+          if-no-files-found: error
+          retention-days: 90
