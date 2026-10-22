@@ -204,6 +204,8 @@ const freshToken = (prefix: string): string => {
 interface World {
   readonly baseId: string;
   readonly childId: string;
+  /** A retired child class whose records keep rows in the base. */
+  readonly retiredChildId: string;
   readonly fields: {
     readonly code: string;
     readonly title: string;
@@ -302,7 +304,10 @@ const outcomesOf = (response: TestResponse): string[] => {
     (error) => `ValidationFailed:${textOf(objectOf(error)._tag)}`
   );
 
-  return [head, ...problems, ...errors];
+  const reasons =
+    tag === "PurgeRefused" ? [`PurgeRefused:${textOf(body.reason)}`] : [];
+
+  return [head, ...problems, ...errors, ...reasons];
 };
 
 /**
@@ -527,6 +532,7 @@ type Target =
   | "oldField"
   | "coreUserName"
   | "baseClass"
+  | "retiredChildClass"
   | "coreUserClass"
   | "changeEntry";
 
@@ -621,6 +627,7 @@ const idOf = (world: World, target: Target): string =>
     missingRole: "0b0d6c3e-5a0e-4c33-9a43-6e7f6d1b2a99",
     oldField: world.fields.oldf,
     qtyField: world.fields.qty,
+    retiredChildClass: world.retiredChildId,
     ruledRole: world.ruledRole,
     titleField: world.fields.title,
     tombRole: world.tombRole,
@@ -1141,6 +1148,7 @@ const stepArb: Arbitrary<Step> = oneof(
         "oldField",
         "coreUserName",
         "baseClass",
+        "retiredChildClass",
         "coreUserClass",
         "changeEntry"
       ),
@@ -1337,6 +1345,17 @@ const TARGETED: ReadonlyMap<string, Step> = new Map<string, Step>([
     },
   ],
   [
+    "PurgeRefused:hasRecords",
+    {
+      action: "purge",
+      caller: "pam",
+      op: "lifecycle",
+      target: "retiredChildClass",
+      version: "current",
+      via: "changeSet",
+    },
+  ],
+  [
     "409 ExistingDataViolates",
     {
       caller: "ada",
@@ -1516,12 +1535,14 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
 
   const baseName = `fz_base_${worldTag}`;
   const childName = `fz_child_${worldTag}`;
+  const shedName = `fz_shed_${worldTag}`;
   const ruledName = `fzruled${worldTag}`;
   const freeName = `fzfree${worldTag}`;
   const hiddenName = `fzhiddenrole${worldTag}`;
   const tombName = `fztombrole${worldTag}`;
   const base = createClass(baseName);
   const child = createClass(childName, { parentId: base.id });
+  const shed = createClass(shedName, { parentId: base.id });
   const code = addField(base.id, "code", { kind: "text", maxLength: 40 });
   const title = addField(base.id, "title", { kind: "text" });
   const qty = addField(base.id, "qty", { kind: "integer" });
@@ -1536,6 +1557,7 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
   yield* change([
     base.op,
     child.op,
+    shed.op,
     code.op,
     title.op,
     qty.op,
@@ -1557,10 +1579,23 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
     title: `'${ROW_TOKENS.dupTitle}'`,
   });
 
+  // Records of a child class keep rows in the base: purging the retired
+  // child is refused while they exist (`PurgeRefused` `hasRecords`).
+  const shedRecords = yield* insertRecords(
+    [`"site"."${baseName}"`, `"site"."${shedName}"`],
+    shed.id,
+    2
+  );
+
   const snapshot = yield* catalog.refresh;
 
   yield* change([
     { id: oldf.id, op: "retire", version: snapshot.get(oldf.id)?.version ?? 1 },
+    {
+      id: shed.id,
+      op: "retire",
+      version: snapshot.get(shed.id)?.version ?? 1,
+    },
     { id: tomb.id, op: "delete", version: 1 },
   ]);
 
@@ -1590,7 +1625,11 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
     freeRole: free.id,
     hiddenRole: hidden.id,
     hiddenRoleName: hiddenName,
-    recordIds: new Set(decodeRecordIds(seeded)),
+    recordIds: new Set([
+      ...decodeRecordIds(seeded),
+      ...decodeRecordIds(shedRecords),
+    ]),
+    retiredChildId: shed.id,
     rowTokens: new Set([
       ROW_TOKENS.dupTitle,
       ROW_TOKENS.oldValue,
@@ -1602,6 +1641,8 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
     siteDefinitions: new Set([
       base.id,
       child.id,
+      shed.id,
+      shedName,
       code.id,
       title.id,
       qty.id,

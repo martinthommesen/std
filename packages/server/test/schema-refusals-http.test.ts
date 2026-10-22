@@ -449,6 +449,46 @@ describe("schema-refusals-http", () => {
                 tag: "ValidationFailed",
               },
             ]);
+
+            // A retired child class whose records still have rows in a
+            // root that stays: dropping the child's table cannot remove
+            // them, so the purge is refused (decision 0011, Purge).
+            const crate = createClass("crate");
+            const carton = createClass("carton", { parentId: crate.id });
+
+            yield* change([crate.op, carton.op]);
+            yield* insertRecords(
+              ['"site"."crate"', '"site"."carton"'],
+              carton.id,
+              2
+            );
+
+            yield* change([
+              {
+                id: carton.id,
+                op: "retire",
+                version: yield* definitionVersion(carton.id),
+              },
+            ]);
+
+            yield* expectRefusals([
+              {
+                detail: "hasRecords",
+                label:
+                  "purge of a retired child class with records in its root",
+                send: postChangeSet(purger, [yield* purgeAt(carton.id)]),
+                status: 409,
+                tag: "PurgeRefused",
+              },
+            ]);
+
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT (SELECT count(*) FROM "site"."crate")::text || '/' ||
+                        (SELECT count(*) FROM "site"."carton")::text AS value`
+              ),
+              ["2/2"]
+            );
           })
       );
 
