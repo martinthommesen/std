@@ -27,7 +27,7 @@ import { isSuccess } from "effect/Result";
 
 import { applyOperations } from "./apply.ts";
 import type { AppliedChangeSet, ApplyError } from "./apply.ts";
-import type { Definition, Owner } from "./definition.ts";
+import type { Definition, FieldDefinition, Owner } from "./definition.ts";
 import { dependenciesOf } from "./dependencies.ts";
 import { effectiveJson } from "./effective-json.ts";
 import type { DefinitionId } from "./ids.ts";
@@ -689,6 +689,28 @@ const deactivation = (current: Definition): Deactivation => {
   };
 };
 
+/**
+ * Whether a field's type names a table the set removes: a reference's
+ * target or a condition field's class. Such a field keeps that table from
+ * being retired while it is active (Contracts 1.7), its own table included.
+ *
+ * @param field - A field.
+ * @param removedIds - The definitions the set removes.
+ * @returns True when it names a removed table.
+ */
+const namesRemovedTable = (
+  field: FieldDefinition,
+  removedIds: ReadonlySet<DefinitionId>
+): boolean => {
+  const { type } = field;
+
+  if (type.kind === "reference") {
+    return removedIds.has(type.targetClassId);
+  }
+
+  return type.kind === "condition" && removedIds.has(type.classId);
+};
+
 const planRemoval = (
   planning: Planning,
   current: Definition,
@@ -732,10 +754,14 @@ const planRemoval = (
   // A field of a table the set removes too goes with its table: the
   // table's retirement leaves its fields unwritable and unselected
   // (decision 0011), while retiring the field alone is refused as long as
-  // the table names it as its display field (Contracts 1.7), so a removed
-  // table with a display field could never be removed.
+  // the table names it as its display field (Contracts 1.7). Fields that
+  // would keep a removed table from being retired (a reference or a
+  // condition field naming a removed table, its own included) are retired
+  // explicitly, before the tables (removal order: fields first).
   const goesWithItsTable =
-    current.kind === "field" && removedIds.has(current.classId);
+    current.kind === "field" &&
+    removedIds.has(current.classId) &&
+    !namesRemovedTable(current, removedIds);
 
   if (current.state !== "retired" && !goesWithItsTable) {
     const retire = planning.lifecycle.retire?.(current);

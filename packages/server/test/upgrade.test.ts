@@ -65,6 +65,12 @@ const UNIQUE_X = "d136ff65-5a71-4e1d-a886-4f6aaeabd746";
 /** A field a later fixture version adds. */
 const EXTRA_FIELD = "d7a38eb2-3d98-4e4f-97e6-0e15c87f2329";
 
+/** A reference from `fx.item` to itself, in a fixture variant. */
+const SELF_REFERENCE = "2f0c5e7a-6b1d-4c8e-9a3f-5d7e1b2c4a60";
+
+/** A condition field on `fx.item` naming `fx.item`, in a fixture variant. */
+const SELF_CONDITION = "7e4b1c2d-3a5f-4d6e-8b9c-0a1f2e3d4c51";
+
 /** Everything `--plan` must leave unchanged. */
 const databaseState = Effect.gen(function* databaseState() {
   return {
@@ -877,6 +883,72 @@ describe("upgrade-retire-refusals", () => {
                 [FX.item]
               ),
               ["retired"]
+            );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table with a self-reference and a condition field on itself is retired, those fields first",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* selfNamingTable() {
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withSelfFields = variantOf(v2, {
+              addFields: [
+                {
+                  id: SELF_REFERENCE,
+                  name: "parent",
+                  type: { kind: "reference", target: "fx.item" },
+                },
+                {
+                  id: SELF_CONDITION,
+                  name: "rule",
+                  type: {
+                    class: "fx.item",
+                    kind: "condition",
+                    profile: "filter",
+                  },
+                },
+              ],
+              version: 3,
+            });
+
+            yield* runUpgrade({
+              sets: [yield* writeSetDirectory(withSelfFields)],
+            });
+            yield* insertAdmin;
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 4,
+            });
+
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(plan.refusals, []);
+
+            yield* runUpgrade({ sets: [directory] });
+
+            // The fields naming the table are retired explicitly; the
+            // display field goes with the table.
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT id::text || ' ' || state AS value FROM core.class WHERE id = $1::uuid
+                 UNION ALL SELECT id::text || ' ' || state FROM core.field
+                  WHERE id = ANY($2::uuid[]) ORDER BY 1`,
+                [FX.item, [SELF_REFERENCE, SELF_CONDITION, FX.x]]
+              ),
+              [
+                `${FX.item} retired`,
+                `${SELF_REFERENCE} retired`,
+                `${SELF_CONDITION} retired`,
+                `${FX.x} active`,
+              ].toSorted()
             );
           })
         )
