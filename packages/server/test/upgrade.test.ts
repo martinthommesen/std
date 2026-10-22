@@ -80,6 +80,14 @@ const databaseState = Effect.gen(function* databaseState() {
   };
 });
 
+/** The states of `fx.item` and its shipped fields, sorted. */
+const itemStates = values(
+  `SELECT 'class ' || id::text || ' ' || state AS value FROM core.class WHERE id = $1::uuid
+   UNION ALL SELECT 'field ' || id::text || ' ' || state FROM core.field
+    WHERE id = ANY($2::uuid[]) ORDER BY 1`,
+  [FX.item, [FX.w, FX.x, FX.z]]
+);
+
 /**
  * A field's name and state.
  * @param id - The field.
@@ -856,7 +864,7 @@ describe("upgrade-retire-refusals", () => {
 
   layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "removed upstream: a whole table is retired, its display field with it",
+      "removed upstream: a whole table and every field are retired, the display field included; shipped again, all come back",
       () =>
         Effect.scoped(
           Effect.gen(function* wholeTable() {
@@ -878,12 +886,65 @@ describe("upgrade-retire-refusals", () => {
             yield* runUpgrade({ sets: [directory] });
 
             assert.deepStrictEqual(
-              yield* values(
-                "SELECT state AS value FROM core.class WHERE id = $1::uuid",
-                [FX.item]
-              ),
-              ["retired"]
+              yield* itemStates,
+              [
+                `class ${FX.item} retired`,
+                `field ${FX.w} retired`,
+                `field ${FX.x} retired`,
+                `field ${FX.z} retired`,
+              ].toSorted()
             );
+
+            // The set ships the table again: the upgrade reactivates it and
+            // every field it ships, the display field included.
+            const again = variantOf(v2, { version: 4 });
+
+            yield* runUpgrade({ sets: [yield* writeSetDirectory(again)] });
+
+            assert.deepStrictEqual(
+              yield* itemStates,
+              [
+                `class ${FX.item} active`,
+                `field ${FX.w} active`,
+                `field ${FX.x} active`,
+                `field ${FX.z} active`,
+              ].toSorted()
+            );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table with a local multi-field unique index on its fields refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* wholeTableUniqueIndex() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* change([addIndex(FX.item, [FX.x, FX.w], true).op]);
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [entry.code, entry.details]),
+              [["lifecycleRefused", { error: "DependencyConflict" }]]
+            );
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
           })
         )
     );
@@ -934,8 +995,7 @@ describe("upgrade-retire-refusals", () => {
 
             yield* runUpgrade({ sets: [directory] });
 
-            // The fields naming the table are retired explicitly; the
-            // display field goes with the table.
+            // Every field is retired explicitly, then the table.
             assert.deepStrictEqual(
               yield* values(
                 `SELECT id::text || ' ' || state AS value FROM core.class WHERE id = $1::uuid
@@ -947,7 +1007,7 @@ describe("upgrade-retire-refusals", () => {
                 `${FX.item} retired`,
                 `${SELF_REFERENCE} retired`,
                 `${SELF_CONDITION} retired`,
-                `${FX.x} active`,
+                `${FX.x} retired`,
               ].toSorted()
             );
           })

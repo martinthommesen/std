@@ -59,6 +59,12 @@ export interface Work {
   readonly key: SnapshotKey;
   readonly context: ApplyContext;
   readonly current: Map<DefinitionId, Definition>;
+  /**
+   * The definitions some `retire` of this change set targets: a table's
+   * display field may be retired when its table is one of them
+   * (Contracts 1.7).
+   */
+  readonly retiredInChangeSet: ReadonlySet<DefinitionId>;
   readonly order: DefinitionId[];
   readonly problems: DefinitionProblem[];
   readonly refusals: ChangeSetRefusal[];
@@ -75,12 +81,14 @@ export interface Work {
  * @param snapshot - The configuration the change set starts from.
  * @param key - The revision and change set ID of the result.
  * @param context - Requester and origin.
+ * @param operations - The change set's operations.
  * @returns Fresh bookkeeping.
  */
 export const startWork = (
   snapshot: ConfigSnapshot,
   key: SnapshotKey,
-  context: ApplyContext
+  context: ApplyContext,
+  operations: readonly Operation[] = []
 ): Work => ({
   applied: [],
   changeCount: 0,
@@ -91,6 +99,11 @@ export const startWork = (
   order: [],
   problems: [],
   refusals: [],
+  retiredInChangeSet: new Set(
+    operations.flatMap((operation) =>
+      operation.op === "retire" ? [operation.id] : []
+    )
+  ),
   snapshot,
   view: { changes: 0, snapshot },
 });

@@ -617,7 +617,7 @@ export const applyOperations = (
     return fail(taken);
   }
 
-  const work = startWork(snapshot, key, context);
+  const work = startWork(snapshot, key, context, operations);
 
   for (const operation of operations) {
     applyOne(work, operation);

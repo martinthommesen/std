@@ -338,7 +338,13 @@ const checkDisplayField = (
     .fields(definition.id)
     .find((candidate) => candidate.id === definition.displayFieldId);
 
-  if (field === undefined || !isActive(field)) {
+  // An active class shows an active field; a retired class may keep a
+  // retired one, which goes with it (Contracts 1.7) and comes back with it.
+  const shown =
+    field !== undefined &&
+    (isActive(field) || (!isActive(definition) && isLive(field)));
+
+  if (!shown) {
     problems.push(
       problem(
         "invalidDisplayField",
