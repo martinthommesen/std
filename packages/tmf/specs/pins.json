@@ -1,0 +1,255 @@
+{
+  "$comment": "The single source of STD's specification pins (Contracts 11.1, 15.1). Moving a pin is its own PR, with its kit. Each specification has a requirements-matrix file docs/conformance/<spec>@<version>.yaml; tooling/check-conformance-matrix.ts enforces it. awaitingMatrix names the workstream that writes a file not written yet. OpenAPI documents are vendored byte for byte from their upstream repositories (Apache-2.0); CTK zips are never committed.",
+  "specifications": [
+    {
+      "spec": "TMF630",
+      "version": "4.2.0",
+      "title": "REST API Design Guidelines (v4.2.0 baseline and its v5 changes)",
+      "kind": "guideline",
+      "step": 3,
+      "awaitingMatrix": "3G",
+      "note": "The v4.2.0 text is the baseline (Contracts 10). Its matrix file also holds the rows for the v5 changes seen in the pinned v5 documents (Contracts 15.2)."
+    },
+    {
+      "spec": "TMF621",
+      "version": "5.0.1",
+      "title": "Trouble Ticket",
+      "kind": "openApi",
+      "step": 3,
+      "basePath": "/tmf-api/troubleTicket/v5",
+      "resources": ["troubleTicket", "hub"],
+      "openApi": {
+        "file": "TMF621-Trouble_Ticket-v5.0.1.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "dd3d242c643d132833c9a883c562bb56401ad3ef9e79c942a1f987e950be5017",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF621_TroubleTicket/f5b8ffb5975f523b17d8d55c25537d5d3533ecdb/TMF621-Trouble_Ticket-v5.0.1.oas.yaml",
+        "upstreamCommit": "f5b8ffb5975f523b17d8d55c25537d5d3533ecdb",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF621_TroubleTicket"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf621-ri:8621/tmf-api/troubleTicket/v5",
+        "image": "tmforumorg/tmf621-v5.0.0-ctk:1.0.1",
+        "name": "tmf621-v5.0.0-ctk-1.0.1",
+        "zipSha256": "1cb94be01e416de781409a272bb5db80811ed6a3e7d461432da7018f4a28f274",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF621_Trouble_Ticket/5.0.0/ctk/tmf621-v5.0.0-ctk-1.0.1.zip"
+      },
+      "note": "The OpenAPI document is v5.0.1; the kit and the conformance profile's cover say v5.0.0."
+    },
+    {
+      "spec": "TMF688",
+      "version": "4.0.0",
+      "title": "Event Management (pre-production)",
+      "kind": "openApi",
+      "step": 3,
+      "basePath": "/tmf-api/event/v4",
+      "resources": ["topic", "topic/{id}/event", "topic/{id}/hub", "hub"],
+      "openApi": {
+        "file": "TMF688-Event-v4.0.0.swagger.json",
+        "licence": "Apache-2.0",
+        "sha256": "802dc890a003cc3fcb334b9ac8d43419c3346a17989544e4c600604053ab96a9",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF688-Event/a88d5266404d6b1f38504a9bdc149d636ccf4ab2/TMF688-Event-v4.0.0.swagger.json",
+        "upstreamCommit": "a88d5266404d6b1f38504a9bdc149d636ccf4ab2",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF688-Event"
+      },
+      "note": "No CTK exists; the gate is the OpenAPI contract tests (Contracts 12.3)."
+    },
+    {
+      "spec": "STD-ITIL",
+      "version": "14",
+      "title": "ITIL 4 practices as STD states them (Contracts 14)",
+      "kind": "std",
+      "step": 3,
+      "note": "Rows for Contracts 14.2 and 14.3 belong to Step 3; rows for 14.4 and 14.5 carry step 4."
+    },
+    {
+      "spec": "TMF632",
+      "version": "5.0.0",
+      "title": "Party Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4D",
+      "basePath": "/tmf-api/partyManagement/v5",
+      "resources": ["individual", "organization", "hub"],
+      "openApi": {
+        "file": "TMF632-Party_Management-v5.0.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "629e0236773c10ddade53598bd3d3c254f0e097e6e5c178aa51eeb8b297aecc2",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF632_PartyManagement/11c6a0ecf2b9a7007f43e86601b37e45d9f39b1e/TMF632-Party_Management-v5.0.0.oas.yaml",
+        "upstreamCommit": "11c6a0ecf2b9a7007f43e86601b37e45d9f39b1e",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF632_PartyManagement"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf632-ri:8632/tmf-api/partyManagement/v5",
+        "image": "tmforumorg/tmf632-v5.0.0-ctk:1.0.1",
+        "name": "tmf632-v5.0.0-ctk-1.0.1",
+        "zipSha256": "33a3d337d7cc3b79735e4374fc84a0bbf62202fb6855e04ba2ebe4d7ce1796c1",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF632_Party/5.0.0/ctk/tmf632-v5.0.0-ctk-1.0.1.zip"
+      }
+    },
+    {
+      "spec": "TMF669",
+      "version": "5.0.0",
+      "title": "Party Role Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4D",
+      "basePath": "/tmf-api/partyRoleManagement/v5",
+      "resources": ["partyRole", "partyRoleSpecification", "hub"],
+      "openApi": {
+        "file": "TMF669-Party_Role_Management-v5.0.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "bcd250ef6a3337ef063e572198da1d2c9e7aa1fdd2c0ab8eba87d9fb92dd8645",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF669_PartyRole/e09271e0ded05460d7b7806c2a4659dacb95bb5b/TMF669-Party_Role_Management-v5.0.0.oas.yaml",
+        "upstreamCommit": "e09271e0ded05460d7b7806c2a4659dacb95bb5b",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF669_PartyRole"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf669-ri:8669/tmf-api/partyRoleManagement/v5",
+        "image": "tmforumorg/tmf669-v5.0.0-ctk:1.0.1",
+        "name": "tmf669-v5.0.0-ctk-1.0.1",
+        "zipSha256": "2465d400d39709e26c0190f67c350249a61d2921e27e4ae3c72fc287ad30f40a",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF669_Party_Role/5.0.0/ctk/tmf669-v5.0.0-ctk-1.0.1.zip"
+      }
+    },
+    {
+      "spec": "TMF672",
+      "version": "5.1.0",
+      "title": "User Role Permission Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4D",
+      "basePath": "/tmf-api/rolesAndPermissionsManagement/v5",
+      "resources": [
+        "permissionSpecification",
+        "permissionSpecificationSet",
+        "permissionSet",
+        "checkPermission",
+        "hub"
+      ],
+      "openApi": {
+        "file": "TMF672-User_Role_Permission_Management_API-v5.1.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "7c414020293bc76d12ad8035ac2af8da7dae5766ec78de066e6c9854a21592dd",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF672_UserRolesPermissions/39518d7a14a91d3c7c62a4c37956bfde3a67ae4d/TMF672-User_Role_Permission_Management_API-v5.1.0.oas.yaml",
+        "upstreamCommit": "39518d7a14a91d3c7c62a4c37956bfde3a67ae4d",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF672_UserRolesPermissions"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf672-ri:8672/tmf-api/rolesAndPermissionsManagement/v5",
+        "image": "tmforumorg/tmf672-v5.1.0-ctk:1.0.1",
+        "name": "tmf672-v5.1.0-ctk-1.0.1",
+        "zipSha256": "fdec93c57a714e68b9bd090e77fd9d9bca0e6a1bc637757bbd40827b63a51210",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF672_User_Role_Permission/5.1.0/ctk/tmf672-v5.1.0-ctk-1.0.1.zip"
+      }
+    },
+    {
+      "spec": "TMF638",
+      "version": "5.0.0",
+      "title": "Service Inventory Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4C",
+      "basePath": "/tmf-api/serviceInventoryManagement/v5",
+      "resources": ["service", "hub"],
+      "openApi": {
+        "file": "TMF638-Service_Inventory_Management-v5.0.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "faec2d4b3e551db65cf4a4c1a803534e876f28649f2a2d92ed8297968070a551",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF638_ServiceInventory/801aff3b41c6efbafec6abdc3a5384c81a04063a/TMF638-Service_Inventory_Management-v5.0.0.oas.yaml",
+        "upstreamCommit": "801aff3b41c6efbafec6abdc3a5384c81a04063a",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF638_ServiceInventory"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf638-ri:8638/tmf-api/serviceInventoryManagement/v5",
+        "image": "tmforumorg/tmf638-v5.0.0-ctk:1.0.1",
+        "name": "tmf638-v5.0.0-ctk-1.0.1",
+        "zipSha256": "2ddea57dcafa6ec7881ff66046cfe93deb21546bdfc911ed52c37433336ae0d5",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF638_Service_Inventory/5.0.0/ctk/tmf638-v5.0.0-ctk-1.0.1.zip"
+      },
+      "note": "The base path follows the kit's default url (Contracts 11.1); decision 0026 corrected it from /tmf-api/serviceInventory/v5."
+    },
+    {
+      "spec": "TMF639",
+      "version": "5.0.0",
+      "title": "Resource Inventory Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4C",
+      "basePath": "/tmf-api/resourceInventory/v5",
+      "resources": ["resource", "hub"],
+      "openApi": {
+        "file": "TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "60f1bd928326d8cf50bbfe6f6fada952005588c2598f63d72ae8c07d2048b881",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF639_ResourceInventory/c9b14f1ddf32a838eec0796c2fa42c31bb69ee11/TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml",
+        "upstreamCommit": "c9b14f1ddf32a838eec0796c2fa42c31bb69ee11",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF639_ResourceInventory"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf639-ri:8639/tmf-api/resourceInventory/v5",
+        "image": "tmforumorg/tmf639-v5.0.0-ctk:1.0.1",
+        "name": "tmf639-v5.0.0-ctk-1.0.1",
+        "zipSha256": "7d094423ae3d99cbade19530827ffebf69c2934d5efea9d8930c53ee0bed5642",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF639_Resource_Inventory/5.0.0/ctk/tmf639-v5.0.0-ctk-1.0.1.zip"
+      }
+    },
+    {
+      "spec": "TMF641",
+      "version": "4.2.0",
+      "title": "Service Ordering Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4O",
+      "basePath": "/tmf-api/serviceOrdering/v4",
+      "resources": ["serviceOrder", "cancelServiceOrder", "hub"],
+      "openApi": {
+        "file": "TMF641-ServiceOrdering-v4.2.0.swagger.json",
+        "licence": "Apache-2.0",
+        "sha256": "a76fc1b8dcda2630f1a3f97d33b3c649a5506b4815cf3f8769d2be751b88696d",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF641_ServiceOrder/b366ee4ffcdcb57cda6b184a8a8d0eac18bd5704/TMF641-ServiceOrdering-v4.2.0.swagger.json",
+        "upstreamCommit": "b366ee4ffcdcb57cda6b184a8a8d0eac18bd5704",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF641_ServiceOrder"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf641-ri:8641/tmf-api/serviceOrdering/v4/",
+        "image": "tmforumorg/tmf641-v4.2.0-ctk:1.0.0",
+        "name": "tmf641-v4.2.0-ctk-1.0.0",
+        "zipSha256": "5c3704cfada57fc1092962b82007f76799cfbfac10be3f367367f7129574f63f",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF641_Service_Ordering/4.2.0/ctk/tmf641-v4.2.0-ctk-1.0.0.zip"
+      }
+    },
+    {
+      "spec": "TMF622",
+      "version": "5.0.0",
+      "title": "Product Ordering Management",
+      "kind": "openApi",
+      "step": 4,
+      "awaitingMatrix": "4O",
+      "basePath": "/tmf-api/productOrderingManagement/v5",
+      "resources": ["productOrder", "cancelProductOrder", "hub"],
+      "openApi": {
+        "file": "TMF622-ProductOrdering-v5.0.0.oas.yaml",
+        "licence": "Apache-2.0",
+        "sha256": "833d15f23c6e79c43594e68a236821669f1257426dedf51111e98fccdf30a3ba",
+        "sourceUrl": "https://raw.githubusercontent.com/tmforum-apis/TMF622_ProductOrder/1dda858d8b74613a2c8e5ec7448d44cf1e859d9a/TMF622-ProductOrdering-v5.0.0.oas.yaml",
+        "upstreamCommit": "1dda858d8b74613a2c8e5ec7448d44cf1e859d9a",
+        "upstreamRepository": "https://github.com/tmforum-apis/TMF622_ProductOrder"
+      },
+      "ctk": {
+        "defaultUrl": "http://tmf622-ri:8622/tmf-api/productOrderingManagement/v5",
+        "image": "tmforumorg/tmf622-v5.0.0-ctk:1.0.1",
+        "name": "tmf622-v5.0.0-ctk-1.0.1",
+        "zipSha256": "15862e007e0b0febf2dd4b15c0a0404d565ce0ebe4b909dea8e603a16075b26a",
+        "zipUrl": "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF622_Product_Ordering/5.0.0/ctk/tmf622-v5.0.0-ctk-1.0.1.zip"
+      }
+    },
+    {
+      "spec": "ODA-Component",
+      "version": "v1",
+      "title": "ODA Component (oda.tmforum.org/v1 Component CRD and the Canvas behaviors Contracts 13.3 relies on)",
+      "kind": "oda",
+      "step": 5,
+      "awaitingMatrix": "5O"
+    }
+  ]
+}
