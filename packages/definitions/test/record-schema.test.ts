@@ -109,7 +109,10 @@ describe(recordSchema, () => {
   });
 
   it("keeps an unchanged retired choice and ignores a no-op update", () => {
-    const stored = { code: "T0000001", status: "old", title: "a" };
+    const stored = {
+      class: "site.t",
+      values: { code: "T0000001", status: "old", title: "a" },
+    };
 
     assert.deepStrictEqual(
       validateRecord(table, "update", { status: "old", title: "a" }, stored)
@@ -125,9 +128,71 @@ describe(recordSchema, () => {
     );
     // A field withheld on the record counts as written.
     assert.deepStrictEqual(
-      codes(validateRecord(table, "update", { code: "T0000001" }, {}).errors),
+      codes(
+        validateRecord(
+          table,
+          "update",
+          { code: "T0000001" },
+          { class: "site.t", values: {} }
+        ).errors
+      ),
       ["code:ReadOnlyField"]
     );
+  });
+
+  it("validates an update with the concrete class's metadata only", () => {
+    // A child class narrows `title` to 2 code points and adds `extra`.
+    const child = {
+      ...table,
+      ancestors: [{ id: table.id, label: table.label, name: table.name }],
+      fields: [
+        ...table.fields.map((entry) =>
+          entry.name === "title"
+            ? { ...entry, type: { kind: "text" as const, maxLength: 2 } }
+            : entry
+        ),
+        field("extra", { kind: "integer" }),
+      ],
+      id: "00000000-0000-4000-8000-000000000002",
+      name: "site.t_child",
+    };
+
+    const stored = { class: "site.t_child", values: { title: "a" } };
+
+    // The parent's metadata would accept "abc"; the server validates the
+    // child's override, so the parent's metadata is refused loudly.
+    assert.throws(() => {
+      validateRecord(table, "update", { title: "abc" }, stored);
+    }, /metadata of site\.t_child/u);
+    assert.throws(() => {
+      validateRecord(table, "update", { title: "abc" });
+    });
+
+    // Through the parent endpoint: the child's rules, the parent's names.
+    const through = validateRecord(
+      child,
+      "update",
+      { extra: 1, title: "abc" },
+      stored,
+      { through: table }
+    );
+
+    assert.deepStrictEqual(through.unknownFields, ["extra"]);
+    assert.deepStrictEqual(
+      codes(
+        validateRecord(child, "update", { title: "abc" }, stored, {
+          through: table,
+        }).errors
+      ),
+      ["title:tooLong"]
+    );
+
+    // An endpoint outside the lineage is refused.
+    assert.throws(() => {
+      validateRecord(child, "update", { title: "a" }, stored, {
+        through: { ...table, name: "site.other" },
+      });
+    });
   });
 
   it("resolves names like the server", () => {

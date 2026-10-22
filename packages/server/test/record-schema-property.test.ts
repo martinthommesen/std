@@ -26,7 +26,7 @@ import { FieldErrorSchema } from "@std/definitions/field-errors";
 import type { FieldError } from "@std/definitions/field-errors";
 import type { Operation } from "@std/definitions/operation";
 import { validateRecord } from "@std/definitions/record-schema";
-import type { RecordMode } from "@std/definitions/record-schema";
+import type { RecordMode, StoredRecord } from "@std/definitions/record-schema";
 import { TableMetadataSchema } from "@std/definitions/table-metadata";
 import type { MetaTable } from "@std/definitions/table-metadata";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
@@ -687,9 +687,16 @@ const browserVerdict = (
   table: MetaTable,
   mode: RecordMode,
   body: JsonObject,
-  stored: JsonObject
+  stored?: StoredRecord,
+  through?: MetaTable
 ): Verdict => {
-  const verdict = validateRecord(table, mode, body, stored);
+  const verdict = validateRecord(
+    table,
+    mode,
+    body,
+    stored,
+    through === undefined ? {} : { through }
+  );
 
   return {
     fields: byField(verdict.errors),
@@ -836,7 +843,7 @@ const compareBody = Effect.fn("RecordSchemaProperty.compareBody")(
       context,
       {
         body: values,
-        browser: browserVerdict(meta, "create", values, {}),
+        browser: browserVerdict(meta, "create", values),
         mode: "create",
         server: yield* serverVerdict(created.status, created.json),
         table,
@@ -852,7 +859,7 @@ const compareBody = Effect.fn("RecordSchemaProperty.compareBody")(
       context,
       {
         body: values,
-        browser: browserVerdict(meta, "update", values, stored.values),
+        browser: browserVerdict(meta, "update", values, stored),
         mode: "update",
         server: yield* serverVerdict(updated.status, updated.json),
         table,
@@ -863,12 +870,78 @@ const compareBody = Effect.fn("RecordSchemaProperty.compareBody")(
   }
 );
 
+/** A child record updated through its parent's endpoint. */
+interface ThroughParent {
+  readonly spec: TableSpec;
+  readonly tables: BuiltTable;
+  readonly id: string;
+  readonly parent: MetaTable;
+  readonly child: MetaTable;
+}
+
+const compareThroughParent = Effect.fn(
+  "RecordSchemaProperty.compareThroughParent"
+)(function* compareThroughParent(
+  context: RunContext,
+  who: "admin" | "tester",
+  input: ThroughParent
+) {
+  const token = context.tokens[who];
+  const table = input.tables.root;
+
+  for (const body of input.spec.bodies) {
+    const values = bodyOf(
+      input.spec,
+      input.tables,
+      body,
+      input.parent,
+      context.adminId
+    );
+
+    const stored = yield* storedOf(
+      token,
+      input.tables.child,
+      input.id,
+      input.child
+    );
+
+    const updated = yield* patch(
+      token,
+      table,
+      input.id,
+      stored.version,
+      values
+    );
+
+    observe(
+      context,
+      {
+        body: values,
+        browser: browserVerdict(
+          input.child,
+          "update",
+          values,
+          stored,
+          input.parent
+        ),
+        mode: "update",
+        server: yield* serverVerdict(updated.status, updated.json),
+        table: `${table} (a ${input.tables.child} record)`,
+        who,
+      },
+      updated.status
+    );
+  }
+});
+
 const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
   spec: TableSpec,
   context: RunContext
 ) {
   const built = yield* buildTable(spec, context.testerRole);
   const { adminId, tokens } = context;
+
+  let childBaseId = "";
 
   for (const table of [built.root, built.child]) {
     const base = yield* create(
@@ -880,6 +953,8 @@ const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
     assert.strictEqual(base.status, 201, `base record: ${base.text}`);
 
     const baseId = (yield* recordOf(base)).id;
+
+    childBaseId = baseId;
 
     for (const who of ["admin", "tester"] as const) {
       const meta = yield* metadataOf(tokens[who], table);
@@ -893,6 +968,19 @@ const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
         );
       }
     }
+  }
+
+  // Updates of a child record through the parent endpoint: the server
+  // validates against the child's effective schema (its overrides), so the
+  // browser validates with the child's metadata and the parent's names.
+  for (const who of ["admin", "tester"] as const) {
+    yield* compareThroughParent(context, who, {
+      child: yield* metadataOf(tokens[who], built.child),
+      id: childBaseId,
+      parent: yield* metadataOf(tokens[who], built.root),
+      spec,
+      tables: built,
+    });
   }
 });
 

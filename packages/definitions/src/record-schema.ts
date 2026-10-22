@@ -83,6 +83,27 @@ export type RecordMode = "create" | "update" | "read";
  */
 export type StoredValues = Readonly<Record<string, JsonValue>>;
 
+/**
+ * The stored record an update starts from, as a read delivered it
+ * (Contracts 6.6): its concrete class (`class`, a qualified table name)
+ * and its `values`, holding at least every field the body names.
+ */
+export interface StoredRecord {
+  readonly class: string;
+  readonly values: StoredValues;
+}
+
+/** Options of an update's Schema. */
+export interface UpdateOptions {
+  /**
+   * The endpoint the update is sent through, when it is an ancestor of the
+   * record's concrete class: body names resolve against its fields (a
+   * child-only name is unknown there, as on the server), while the rules
+   * stay the concrete class's.
+   */
+  readonly through?: MetaTable;
+}
+
 /** The verdict of one body. */
 export interface RecordVerdict {
   /** Whether the body is not a JSON object (the server's `InvalidRequest`). */
@@ -218,6 +239,7 @@ interface ResolvedBody {
 
 const resolveBody = (
   byName: ReadonlyMap<string, RuledField>,
+  nameable: ReadonlySet<string>,
   body: JsonObject
 ): ResolvedBody => {
   const unknown: string[] = [];
@@ -227,10 +249,10 @@ const resolveBody = (
   for (const [name, json] of Object.entries(body)) {
     if (SYSTEM_MEMBER_NAMES.has(name)) {
       system.push(name);
+    } else if (!nameable.has(name)) {
+      unknown.push(name);
     } else if (byName.has(name)) {
       entries.set(name, json);
-    } else {
-      unknown.push(name);
     }
   }
 
@@ -450,13 +472,15 @@ const readErrors = (
  * @param mode - Create, update or read.
  * @param body - The body's values object.
  * @param stored - The stored record's delivered values (update).
+ * @param nameable - The names the endpoint resolves.
  * @returns Unknown names and field errors.
  */
 const verdictOf = (
   table: MetaTable,
   mode: RecordMode,
   body: JsonObject,
-  stored: StoredValues
+  stored: StoredValues,
+  nameable: ReadonlySet<string>
 ): Omit<RecordVerdict, "invalidBody"> => {
   const fields = table.fields.map((field) => ({
     rules: rulesOfMetaField(field),
@@ -477,7 +501,7 @@ const verdictOf = (
   }
 
   const byName = new Map(fields.map((field) => [field.rules.name, field]));
-  const resolved = resolveBody(byName, body);
+  const resolved = resolveBody(byName, nameable, body);
 
   if (resolved.unknown.length > 0) {
     return { errors: [], unknownFields: resolved.unknown };
@@ -540,28 +564,87 @@ const issuesOf = (
 
 const BodySchema = SchemaRecord(SchemaString, Json);
 
+const NO_VALUES: StoredValues = {};
+
+// An update is validated with the rules of the record's concrete class,
+// as the save pipeline does (Contracts 2.2 item 5): a child's overrides
+// apply through a parent endpoint too. Metadata of another class would
+// give another verdict, so it is refused loudly instead of guessed at.
+const updateValues = (
+  table: MetaTable,
+  stored: StoredRecord | undefined,
+  options: UpdateOptions
+): StoredValues => {
+  if (stored === undefined) {
+    throw new TypeError(
+      "recordSchema: an update needs the stored record (its class and values)."
+    );
+  }
+
+  if (stored.class !== table.name) {
+    throw new RangeError(
+      `recordSchema: an update of a ${stored.class} record is validated with the metadata of ${stored.class}, not ${table.name}.`
+    );
+  }
+
+  const { through } = options;
+
+  const reaches =
+    through === undefined ||
+    through.name === table.name ||
+    table.ancestors.some((ancestor) => ancestor.name === through.name);
+
+  if (!reaches) {
+    throw new RangeError(
+      `recordSchema: ${table.name} records cannot be updated through ${through.name}.`
+    );
+  }
+
+  return stored.values;
+};
+
 /**
  * The Schema of a record's values for one table and mode: it decodes a
  * body object and fails with one issue per failing field, at the field's
  * name.
  *
+ * - `create`: `table` is the endpoint's metadata (a create makes a record
+ *   of exactly the endpoint's class).
+ * - `update`: `table` must be the metadata of the record's concrete class
+ *   (`stored.class`, the `class` member of the record as read), whatever
+ *   endpoint the update goes through; `options.through` names that
+ *   endpoint when it is an ancestor. Other metadata is a defect (thrown):
+ *   the verdict would not be the server's.
+ * - `read`: `table` is the metadata of the endpoint the values were read
+ *   through.
+ *
  * @param table - The table's metadata (`TableMetadata.table`).
  * @param mode - `create`, `update` or `read`.
- * @param stored - For an update, the stored record's `values` as read.
+ * @param stored - For an update, the stored record (class and values).
+ * @param options - For an update, the endpoint it is sent through.
  * @returns The Schema.
  */
 export const recordSchema = (
   table: MetaTable,
   mode: RecordMode,
-  stored: StoredValues = {}
-) =>
-  BodySchema.check(
+  stored?: StoredRecord,
+  options: UpdateOptions = {}
+) => {
+  const values =
+    mode === "update" ? updateValues(table, stored, options) : NO_VALUES;
+
+  const nameable = new Set(
+    (options.through ?? table).fields.map((field) => field.name)
+  );
+
+  return BodySchema.check(
     makeFilter((body) => {
-      const issues = issuesOf(verdictOf(table, mode, body, stored));
+      const issues = issuesOf(verdictOf(table, mode, body, values, nameable));
 
       return issues.length === 0 ? undefined : issues;
     })
   );
+};
 
 const collect = (
   issue: Issue,
@@ -596,7 +679,8 @@ const collect = (
  * @param table - The table's metadata.
  * @param mode - `create`, `update` or `read`.
  * @param body - The body, as the form would send it.
- * @param stored - For an update, the stored record's `values` as read.
+ * @param stored - For an update, the stored record (class and values).
+ * @param options - For an update, the endpoint it is sent through.
  * @returns Whether the body is an object, unknown names and field errors.
  */
 export const validateRecord = (
@@ -604,9 +688,12 @@ export const validateRecord = (
   mode: RecordMode,
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a form body is validated from any input
   body: unknown,
-  stored: StoredValues = {}
+  stored?: StoredRecord,
+  options: UpdateOptions = {}
 ): RecordVerdict => {
-  const result = decodeUnknownResult(recordSchema(table, mode, stored))(body);
+  const result = decodeUnknownResult(
+    recordSchema(table, mode, stored, options)
+  )(body);
 
   if (!isFailure(result)) {
     return { errors: [], invalidBody: false, unknownFields: [] };
