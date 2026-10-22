@@ -20,7 +20,7 @@ Run everything through pnpm, so the pinned Node 26 is used. Every pull request m
 
 | Gate | Command |
 | --- | --- |
-| Lint and format (Ultracite: Oxlint type-aware and Oxfmt) | `pnpm check` (`pnpm fix` fixes most findings) |
+| Lint and format (Ultracite: Oxlint type-aware and Oxfmt), and a check that the Foldkit lint plugin runs on `apps/web` | `pnpm check` (`pnpm fix` fixes most findings) |
 | Tooling checks: tsconfig profiles, Schema-only imports in plain packages, one Effect version in the lockfile, vendored Effect and Foldkit tags (`repos/`) and `FOLDKIT.md` | `pnpm check:tooling` |
 | Type check with Effect diagnostics as errors | `pnpm typecheck` |
 | Tests against Postgres 18 (start it with `pnpm db:up`) | `pnpm test` |
