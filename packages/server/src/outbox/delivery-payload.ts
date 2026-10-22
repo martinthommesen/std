@@ -162,8 +162,8 @@ const EntryTextSchema = Schema.Struct({
   occurred_at: Schema.String,
   operation_id: Schema.String,
   record_class_id: Schema.String,
-  record_version: Schema.FiniteFromString,
   schema_revision: Schema.FiniteFromString,
+  version_text: Schema.FiniteFromString,
 });
 
 const decodeEntryText = Schema.decodeUnknownEffect(EntryTextSchema);
@@ -171,7 +171,7 @@ const decodeEntryText = Schema.decodeUnknownEffect(EntryTextSchema);
 const OriginTextSchema = Schema.Struct({
   effective: Schema.String,
   id: Schema.String,
-  revision: Schema.FiniteFromString,
+  revision_text: Schema.FiniteFromString,
 });
 
 const decodeOriginText = Schema.decodeUnknownEffect(OriginTextSchema);
@@ -198,7 +198,7 @@ const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
     occurredAt: occurredAt.value,
     operationId: text.operation_id,
     recordClassId: text.record_class_id,
-    recordVersion: text.record_version,
+    recordVersion: text.version_text,
     schemaRevision: text.schema_revision,
   };
 
@@ -218,7 +218,7 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
     const rows = yield* readRows(
       sql`SELECT "id"::text AS "id", "operation_id"::text AS "operation_id",
   "record_class_id"::text AS "record_class_id",
-  "record_version"::text AS "record_version", "kind",
+  "record_version"::text AS "version_text", "kind",
   "actor_id"::text AS "actor_id", "occurred_at"::text AS "occurred_at",
   "schema_revision"::text AS "schema_revision", "fields"::text AS "fields"
 FROM core."change" AS "c"
@@ -260,7 +260,7 @@ const originOf = Effect.fnUntraced(function* originOf(row: TextRow) {
       ? {
           default: definition.default,
           numbered: definition.numberPrefix !== null,
-          revision: text.revision,
+          revision: text.revision_text,
         }
       : null;
 
@@ -279,12 +279,14 @@ export const readFieldOrigins = Effect.fn("Outbox.readFieldOrigins")(
   function* readFieldOrigins(snapshot: ConfigSnapshot, classId: DefinitionId) {
     const fieldIds = payloadFields(snapshot, classId).map((field) => field.id);
 
+    // Ordered by the bigint column, qualified: the text rendering is
+    // aliased differently, so "10" can never sort before "9" (4.4).
     const rows = yield* readRows(
-      sql`SELECT DISTINCT ON ("definition_id") "definition_id"::text AS "id",
-  "revision"::text AS "revision", "effective"::text AS "effective"
-FROM core."definition_revision"
-WHERE "definition_id" = ANY(${arrayParameter(fieldIds, "uuid")})
-ORDER BY "definition_id", "revision"`
+      sql`SELECT DISTINCT ON ("dr"."definition_id") "dr"."definition_id"::text AS "id",
+  "dr"."revision"::text AS "revision_text", "dr"."effective"::text AS "effective"
+FROM core."definition_revision" AS "dr"
+WHERE "dr"."definition_id" = ANY(${arrayParameter(fieldIds, "uuid")})
+ORDER BY "dr"."definition_id", "dr"."revision"`
     );
 
     const origins = new Map<DefinitionId, FieldOrigin>();

@@ -134,10 +134,10 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
                change_id::text AS change_id, record_id::text AS record_id,
                record_version::text AS record_version, attempts, last_error,
                finished_at::text AS finished_at
-             FROM core.delivery
-             WHERE status = 'dead' AND id > $1::int8
-               AND ($2::uuid IS NULL OR subscription_id = $2::uuid)
-             ORDER BY id
+             FROM core.delivery AS d
+             WHERE d.status = 'dead' AND d.id > $1::int8
+               AND ($2::uuid IS NULL OR d.subscription_id = $2::uuid)
+             ORDER BY d.id
              LIMIT $3::int8`,
             [afterId, input.subscriptionId ?? null, String(limit)]
           )

@@ -109,8 +109,8 @@ const HOLDERS = `SELECT l.pid, a.application_name, host(a.client_addr) AS client
 
 const CHANGE_SETS = `SELECT id::text AS id, state, error, first_revision::text AS first_revision,
     coordinator_pid, committed_at::text AS committed_at
-  FROM core."schema_change" WHERE state IN ('applying', 'needs_attention')
-  ORDER BY first_revision`;
+  FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
+  ORDER BY sc.first_revision`;
 
 const STEPS = `SELECT s.ordinal, s.kind, s.target_id::text AS target_id, s.state, s.attempts, s.last_error,
     s.backend_pid, s.started_at::text AS started_at, p.phase,
