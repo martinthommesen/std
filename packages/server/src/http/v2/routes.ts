@@ -108,16 +108,20 @@ const inSession = <E, R>(
   });
 
 /**
- * The answer to a method a shape does not route: `OPTIONS` is `204` with
- * `Allow`, any other `405` with `Allow` (`methods.ts`). Both come after the
- * session, except on the public shapes, and before any table or record is
- * looked up, so they reveal nothing (3.4). `HEAD` gets no body.
+ * The answer to a method a resource route does not serve: `OPTIONS` is
+ * `204` with `Allow`, any other `405` with `Allow` (`methods.ts`). Except
+ * on the public routes, the session is authenticated first, in a request
+ * transaction as for every other route, so an invalid, expired or revoked
+ * session is `401 Unauthenticated` without `Allow`. No table or record is
+ * looked up, so the answer reveals nothing (3.4). `HEAD` gets no body.
  *
+ * @param transactions - The request transactions.
  * @param resource - The request path's resource route.
  * @param request - The request.
  * @returns The response.
  */
 const unroutedAnswer = (
+  transactions: TransactionsApi,
   resource: ResourceRoute,
   request: HttpServerRequest
 ) => {
@@ -131,41 +135,17 @@ const unroutedAnswer = (
       : Effect.fail(new MethodNotAllowed({ allow }));
 
   const response = answered(
-    resource.public ? answer : withSession(request, answer)
+    resource.public
+      ? answer
+      : withSession(
+          request,
+          inRequestTransaction(transactions, request, asActor(answer))
+        )
   );
 
   return request.method === "HEAD"
     ? response.pipe(Effect.map((sent) => withoutBody(sent)))
     : response;
-};
-
-// The routed methods a resource route does not serve.
-const notServedRoutes = (resource: ResourceRoute) =>
-  ROUTED_METHODS.flatMap((method) =>
-    serves(resource, method)
-      ? []
-      : [
-          HttpRouter.route(
-            method,
-            resource.path,
-            (request: HttpServerRequest) => unroutedAnswer(resource, request)
-          ),
-        ]
-  );
-
-/**
- * Every method no route serves: by the path's resource route, or
- * `NotFound` for a path of none.
- *
- * @param request - The request.
- * @returns The response.
- */
-const catchAll = (request: HttpServerRequest) => {
-  const resource = resourceRouteOf(request.url);
-
-  return resource === undefined
-    ? Effect.succeed(tmfErrorResponse(new NotFound()))
-    : unroutedAnswer(resource, request);
 };
 
 /**
@@ -192,6 +172,35 @@ const RecordRoutes = Layer.unwrap(
             );
           })
         ).pipe(Effect.provide(services));
+
+    const unrouted = (resource: ResourceRoute, request: HttpServerRequest) =>
+      unroutedAnswer(transactions, resource, request).pipe(
+        Effect.provide(services)
+      );
+
+    // The routed methods a resource route does not serve.
+    const notServedRoutes = (resource: ResourceRoute) =>
+      ROUTED_METHODS.flatMap((method) =>
+        serves(resource, method)
+          ? []
+          : [
+              HttpRouter.route(
+                method,
+                resource.path,
+                (request: HttpServerRequest) => unrouted(resource, request)
+              ),
+            ]
+      );
+
+    // Every method no route serves: by the path's resource route, or
+    // `NotFound` for a path of none.
+    const catchAll = (request: HttpServerRequest) => {
+      const resource = resourceRouteOf(request.url);
+
+      return resource === undefined
+        ? Effect.succeed(tmfErrorResponse(new NotFound()))
+        : unrouted(resource, request);
+    };
 
     return HttpRouter.addAll([
       ...getAndHead(

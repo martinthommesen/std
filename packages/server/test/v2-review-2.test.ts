@@ -4,12 +4,14 @@
  * collection is stale like the concrete collection (R2-1); resources match
  * their `@schemaLocation`, typed references included (R2-3); history
  * navigation links (R2-4); and `OPTIONS`, `HEAD` and every other method by
- * resource shape (R2-5).
+ * resource shape (R2-5). Round 3: those answers authenticate the session
+ * (R3-1), and `latest-version` ignores a history list's filters (R3-2).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Effect } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -472,6 +474,154 @@ describe("v2-review-2", () => {
             headOfSession.headers.get("allow"),
             "POST, OPTIONS"
           );
+        }),
+      { timeout: 120_000 }
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "R3-1: OPTIONS and unserved methods with an invalid, revoked or expired session are 401 without Allow",
+      () =>
+        Effect.gen(function* authenticated() {
+          const http = yield* TestHttpClient;
+          const callers = yield* v2Callers;
+          const { bob } = yield* AcmeFixture;
+          const sql = yield* SqlClient.SqlClient;
+
+          const probes = [
+            ["OPTIONS", V2.asset],
+            ["PUT", V2.asset],
+            ["OPTIONS", `${V2.asset}/${RANDOM_ID}`],
+            ["PROPFIND", `${V2.asset}/${RANDOM_ID}`],
+            ["POST", `${V2.asset}/${RANDOM_ID}`],
+            ["PATCH", "/api/v2/tableMetadata"],
+          ] as const;
+
+          const refusedFor = Effect.fn("V2Review2.refusedFor")(
+            function* refusedFor(kind: string, token: string) {
+              for (const [method, path] of probes) {
+                const response = yield* http.request(method, path, { token });
+                const where = `${kind} ${method} ${path}`;
+
+                assert.strictEqual(response.status, 401, where);
+                assert.strictEqual(codeOf(response), "Unauthenticated", where);
+                assert.isNull(response.headers.get("allow"), where);
+              }
+
+              // The public routes need no session.
+              const signIn = yield* http.request("OPTIONS", "/api/v2/session", {
+                token,
+              });
+
+              assert.strictEqual(signIn.status, 204, kind);
+            }
+          );
+
+          const valid = yield* http.request("OPTIONS", V2.asset, callers.bob);
+
+          assert.strictEqual(valid.status, 204);
+
+          yield* refusedFor("invalid", "not-a-session");
+
+          const revoked = yield* http.signIn("bob", "bob-password");
+
+          const signedOut = yield* http.request(
+            "DELETE",
+            "/api/v2/session/current",
+            { token: revoked }
+          );
+
+          assert.strictEqual(signedOut.status, 204, signedOut.text);
+
+          yield* refusedFor("revoked", revoked);
+
+          const expired = yield* http.signIn("bob", "bob-password");
+
+          yield* sql`UPDATE core."session" SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 minute' WHERE user_id = ${bob.id}`;
+
+          yield* refusedFor("expired", expired);
+        }),
+      { timeout: 120_000 }
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "R3-2: a history list's latest-version is the current revision whatever its filters and page",
+      () =>
+        Effect.gen(function* latestUnfiltered() {
+          const http = yield* TestHttpClient;
+          const callers = yield* v2Callers;
+
+          const created = yield* http.request("POST", V2.asset, {
+            ...callers.alice,
+            body: { name: "Latest", status: "spare" },
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const path = pathOf(textOf(asObject(created.json).href));
+
+          for (const [revision, status] of [
+            [1, "in_use"],
+            [2, "spare"],
+          ] as const) {
+            const patched = yield* http.request("PATCH", path, {
+              ...callers.alice,
+              headers: {
+                "content-type": MERGE_PATCH,
+                "if-match": `"${revision}"`,
+              },
+              rawBody: JSON.stringify({ status }),
+            });
+
+            assert.strictEqual(patched.status, 200, patched.text);
+          }
+
+          const full = yield* http.get(`${path}/history`, callers.alice);
+          const latest = textOf(asObject(asArray(full.json).at(-1)).href);
+
+          assert.strictEqual(asArray(full.json).length, 3);
+          assert.strictEqual(linksOf(full).get("latest-version"), latest);
+
+          const lists = [
+            ["kind=create", 1],
+            ["action=created", 1],
+            ["action=deleted", 0],
+            ["revision.gt=99", 0],
+            ["limit=1", 1],
+            ["offset=2&limit=1", 1],
+          ] as const;
+
+          for (const [query, count] of lists) {
+            const listed = yield* http.get(
+              `${path}/history?${query}`,
+              callers.alice
+            );
+
+            assert.strictEqual(listed.status, 200, `${query}: ${listed.text}`);
+            assert.strictEqual(asArray(listed.json).length, count, query);
+            assert.strictEqual(
+              linksOf(listed).get("latest-version"),
+              latest,
+              query
+            );
+          }
+
+          const byKind = yield* http.get(
+            `${path}/history?kind=create`,
+            callers.alice
+          );
+
+          const byAction = yield* http.get(
+            `${path}/history?action=created`,
+            callers.alice
+          );
+
+          assert.deepStrictEqual(byKind.json, byAction.json);
+          assert.strictEqual(byKind.headers.get("x-total-count"), "1");
+          assert.strictEqual(byAction.headers.get("x-total-count"), "1");
         }),
       { timeout: 120_000 }
     );

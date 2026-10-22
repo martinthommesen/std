@@ -518,6 +518,14 @@ export const historyIn = Effect.fn("V2.history")(function* historyIn(
   const query = yield* parseHistoryQuery(input, "list");
   const all = yield* visibleEntries(input, id, query.service);
   const kept = all.filter((entry) => matches(query.filter, entry));
+
+  // `latest-version` is the current revision (TMF630 v5.0.0 Part 1 §12.4
+  // p.238): the last entry the caller may see, whatever the filters select.
+  const unfiltered =
+    Object.keys(query.service).length === 0
+      ? all
+      : yield* visibleEntries(input, id, {});
+
   const page = kept.slice(query.offset, query.offset + query.limit);
 
   return jsonAnswer(
@@ -529,7 +537,7 @@ export const historyIn = Effect.fn("V2.history")(function* historyIn(
         query.offset,
         query.limit,
         kept.length,
-        all.at(-1)
+        unfiltered.at(-1)
       ),
       "x-result-count": String(page.length),
       "x-total-count": String(kept.length),

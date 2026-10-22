@@ -65,7 +65,7 @@ describe("v2-openapi", () => {
         const http = yield* TestHttpClient;
         const callers = yield* v2Callers;
 
-        const body = yield* Schema.decodeUnknownEffect(ResourceCreate)({
+        const body = yield* Schema.decodeEffect(ResourceCreate)({
           name: "Doc",
           status: "spare",
         });
@@ -81,7 +81,7 @@ describe("v2-openapi", () => {
           created.json
         );
 
-        const patchBody = yield* Schema.decodeUnknownEffect(ResourcePatch)({
+        const patchBody = yield* Schema.decodeEffect(ResourcePatch)({
           name: "Doc 2",
         });
 
