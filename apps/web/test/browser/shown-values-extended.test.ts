@@ -61,8 +61,8 @@ import {
   appendToLayout,
   assertRows,
   cellJsonText,
-  cellOfApi,
   createIncident,
+  expectedCell,
   decodeList,
   decodeRead,
   decodeMetadata,
@@ -78,14 +78,7 @@ import {
   visibleTextOf,
   visitorOf,
 } from "./shown.ts";
-import type {
-  ApiRecord,
-  Described,
-  Field,
-  LocalField,
-  Seen,
-  Shown,
-} from "./shown.ts";
+import type { Described, LocalField, Seen } from "./shown.ts";
 import { launchBrowser, stdServe } from "./support.ts";
 
 /** The `high` priority choice, relabeled after the history entries. */
@@ -167,6 +160,19 @@ const AGENT_DESCRIPTION = "  Rewritten by the agent\r\n  second line 🙂 \r\n";
 /** The rewrite as the server stores it. */
 const STORED_AGENT_DESCRIPTION = AGENT_DESCRIPTION.replaceAll("\r\n", "\n");
 
+/**
+ * The PIN child's long text as typed, for a non-empty long text in the
+ * related list: CRLF, spaces at both ends, a blank line, U+1D11E.
+ */
+const TYPED_CHILD_DESCRIPTION =
+  " Child note 𝄞 first line\r\n\r\n  after a blank line  ";
+
+/** The same long text as the server stores it. */
+const STORED_CHILD_DESCRIPTION = TYPED_CHILD_DESCRIPTION.replaceAll(
+  "\r\n",
+  "\n"
+);
+
 /** The incidents, by role in the test. */
 interface Seeded {
   /** Every value set, assigned to the agent; two children; a history. */
@@ -228,14 +234,27 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
     short_description: "Structured and write-only values",
   });
 
-  await createIncident(origin, token, {
+  const pinChild = await createIncident(origin, token, {
     assignee: fixture.agent2.id,
     big_count: "-42",
     customer_email: "child@extended.example",
+    description: TYPED_CHILD_DESCRIPTION,
     parent_incident: full,
     pin: "pin-plaintext-child",
     short_description: "Child with a PIN",
   });
+
+  // The related list shows this child's long text: stored with LF, its
+  // spaces kept.
+  assert.strictEqual(
+    decodeRead(
+      await adminCall(origin, token, {
+        method: "GET",
+        path: `/tables/${INCIDENTS}/records/${pinChild}`,
+      })
+    ).record.values.description,
+    STORED_CHILD_DESCRIPTION
+  );
 
   const child = await createIncident(origin, token, {
     parent_incident: full,
@@ -314,27 +333,6 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
 
 // RELATED LISTS
 
-/**
- * What a related list's cell must show: as a list page's, except that the
- * first column's link holds the record's ID when the cell is empty.
- *
- * @param field - The column's field.
- * @param record - The API's record.
- * @param isFirst - Whether it is the first column.
- * @returns The state and the visible text.
- */
-const expectedRelatedCell = (
-  field: Field,
-  record: ApiRecord,
-  isFirst: boolean
-): Shown => {
-  const shown = cellOfApi(field, record);
-
-  return isFirst && shown.state === "empty"
-    ? { state: shown.state, text: record.id }
-    : shown;
-};
-
 const isRelatedResponse = (response: Response): boolean =>
   isListResponse(response) &&
   (new URL(response.url()).searchParams.get("filter") ?? "").startsWith(
@@ -395,7 +393,7 @@ const relatedListShowsTheApiValues = async (
     await shownRows(section.locator("tbody tr")),
     answer.records,
     columns,
-    expectedRelatedCell,
+    expectedCell,
     seen
   );
 };
@@ -754,6 +752,8 @@ const COVERED = [
   // and the history, line breaks and spaces kept.
   "the list longText:value",
   "the related list longText:empty",
+  "the related list longText:value",
+  STORED_CHILD_DESCRIPTION,
   "form longText:control",
   STORED_AGENT_DESCRIPTION,
   `history description: Description: ${STORED_DESCRIPTION} → ${STORED_AGENT_DESCRIPTION}`,
