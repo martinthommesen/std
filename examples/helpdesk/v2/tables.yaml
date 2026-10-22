@@ -1,0 +1,261 @@
+# Tickets and incidents, version 2. An incident is a ticket (ServiceNow's
+# incident extends task): it inherits every ticket field, numbers with its
+# own prefix (INC instead of TKT) and allows a subset of the statuses.
+#
+# Saved filter conditions are condition ASTs (Contracts 5.2) whose paths
+# hold field IDs, like every condition in a set file:
+#   assignee      fc99eecb-5682-4a6c-8391-60d1055c4b2e
+#   status        4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+#   priority      222508c2-9257-41db-a243-151441078982
+#   internal_cost d26946db-e483-4f22-a4af-1ffcb0488ba9
+tables:
+  - id: be6a4618-76ea-4889-9f00-dd02c6099367
+    name: helpdesk.ticket
+    label: Ticket
+    displayField: short_description
+    fields:
+      - id: 6486c5d6-ff21-4f84-a454-b01c20048919
+        name: number
+        type: { kind: text, maxLength: 40 }
+        numberPrefix: TKT
+      - id: 45e8b4dc-7041-4556-af31-1c802d537b8a
+        name: short_description
+        type: { kind: text, maxLength: 160 }
+        required: true
+      - id: 88514acc-6b0d-4772-8604-43fe9a913446
+        name: description
+        type: longText
+      - id: 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+        name: status
+        type: choice
+        required: true
+        default: new
+        choices:
+          - { id: b351777d-dcbe-4f2c-a2df-a9423dcf82ce, key: new, label: New }
+          - {
+              id: 52dbb866-aeea-4ff4-a02d-48154ed67ccc,
+              key: in_progress,
+              label: Work in progress,
+            }
+          - {
+              id: 6a7b4c27-c87c-490a-a975-d03e3c945f0d,
+              key: on_hold,
+              label: Waiting on caller,
+            }
+          - {
+              id: 688fc5f2-f914-4d3f-9a78-5c4228ea0405,
+              key: awaiting_approval,
+              label: Awaiting approval,
+            }
+          - {
+              id: 9b72e0e2-6f39-4275-ada1-7184622cb55c,
+              key: resolved,
+              label: Resolved,
+            }
+          - {
+              id: f0ef1e74-8445-47bb-94fb-9e2a724268e3,
+              key: closed,
+              label: Closed,
+            }
+          - {
+              id: d8366c57-4c0f-4399-9600-6262c83b686c,
+              key: canceled,
+              label: Canceled,
+            }
+      - id: 222508c2-9257-41db-a243-151441078982
+        name: priority
+        type: choice
+        required: true
+        default: moderate
+        choices:
+          - {
+              id: 3c8ece62-0634-4e02-a2b6-b0432c4209da,
+              key: critical,
+              label: 1 - Critical,
+            }
+          - {
+              id: 2ab955c2-46a8-49c4-8b9b-b28292348287,
+              key: high,
+              label: 2 - High,
+            }
+          - {
+              id: a8c358ad-adcb-4cb0-afb3-b4fbee47e614,
+              key: moderate,
+              label: 3 - Moderate,
+            }
+          - {
+              id: b77c3a1e-e98d-4bb6-aab5-a01f86e622fc,
+              key: low,
+              label: 4 - Low,
+            }
+      - id: fc99eecb-5682-4a6c-8391-60d1055c4b2e
+        name: assignee
+        label: Assignee
+        type: { kind: reference, target: core.user }
+      - id: 5e93983b-cea1-41aa-b76c-8dba8a166ed1
+        name: customer_email
+        label: Customer email
+        type: { kind: text, maxLength: 254 }
+      - id: d26946db-e483-4f22-a4af-1ffcb0488ba9
+        name: internal_cost
+        label: Internal cost
+        type: { kind: decimal, precision: 10, scale: 2 }
+        helpText: What the ticket cost to work. Agents never see it.
+      - id: 2ca8a806-2830-4dad-8075-07f32257cca4
+        name: resolution_notes
+        label: Resolution notes
+        type: longText
+    layouts:
+      - id: 8ddfed22-2a48-4fa5-a4ca-5390343d869b
+        type: form
+        elements:
+          - { section: Ticket }
+          - { field: number }
+          - { field: short_description }
+          - { field: status }
+          - { field: priority }
+          - { field: assignee }
+          - { section: Details }
+          - { field: description }
+          - { field: customer_email }
+          - { field: internal_cost }
+      - id: 39603cbb-00a4-41e5-8bbb-db5cf9766606
+        type: list
+        elements:
+          - { field: number }
+          - { field: short_description }
+          - { field: status }
+          - { field: priority }
+          - { field: assignee }
+    savedFilters:
+      # Agents never see this one: it names a field they cannot read.
+      - id: 3524c6b1-fcf0-48de-8b11-388aef14ab6a
+        name: costly
+        label: Costly tickets
+        condition:
+          op: gt
+          left: { path: [d26946db-e483-4f22-a4af-1ffcb0488ba9] }
+          right: { value: "500.00" }
+
+  - id: 91446a86-8028-4d34-a501-b7cf0f59fdd5
+    name: helpdesk.incident
+    label: Incident
+    extends: helpdesk.ticket
+    fields:
+      - id: e72b19cc-c9a8-44fe-9535-93f5b66e6637
+        name: category
+        type: choice
+        choices:
+          - {
+              id: dc00f1cf-6878-4aaa-bd19-affb09540307,
+              key: hardware,
+              label: Hardware,
+            }
+          - {
+              id: ed64cabf-1d42-49eb-8cdc-50737bba3efc,
+              key: software,
+              label: Software,
+            }
+          - {
+              id: 9e11056f-eb1d-499f-a8f9-0bfb4c590133,
+              key: network,
+              label: Network,
+            }
+          - {
+              id: d4f0619a-a0b5-450e-94d1-23726ddeeafe,
+              key: access,
+              label: Access,
+            }
+      - id: 2ed6b817-7dc8-4170-a9bd-3b45c46dd3f3
+        name: impact
+        type: choice
+        default: medium
+        choices:
+          - {
+              id: ffcdb086-4273-4003-b1bb-586697a07a47,
+              key: high,
+              label: 1 - High,
+            }
+          - {
+              id: 34b6d1af-67df-4f5d-a633-53bbd980aa90,
+              key: medium,
+              label: 2 - Medium,
+            }
+          - {
+              id: 55e6a01c-514e-406b-98c8-0413aecba24c,
+              key: low,
+              label: 3 - Low,
+            }
+    overrides:
+      - id: 131e87a1-946d-49f4-b438-1bbbdf651716
+        field: number
+        numberPrefix: INC
+      # Incidents are never parked for approval.
+      - id: 8765fcbb-7b9b-4a37-b925-6b3f24997024
+        field: status
+        choices: [new, in_progress, on_hold, resolved, closed, canceled]
+    layouts:
+      - id: 6fc95feb-9d04-4485-9435-36ab2691cf82
+        type: form
+        elements:
+          - { section: Incident }
+          - { field: number }
+          - { field: short_description }
+          - { field: category }
+          - { field: impact }
+          - { field: priority }
+          - { field: status }
+          - { field: assignee }
+          - { section: Details }
+          - { field: description }
+          - { field: customer_email }
+          - { field: internal_cost }
+          - { section: Resolution }
+          - { field: resolution_notes }
+      - id: b0538214-492c-4970-a437-ca18fd68d942
+        type: list
+        elements:
+          - { field: number }
+          - { field: short_description }
+          - { field: category }
+          - { field: impact }
+          - { field: priority }
+          - { field: status }
+          - { field: assignee }
+    savedFilters:
+      - id: cc8af5be-f3a8-404a-be7c-d00b951c0d42
+        name: my_open
+        label: My open incidents
+        condition:
+          op: and
+          args:
+            - op: eq
+              left: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
+              right: { ctx: me }
+            - op: in
+              left: { path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
+              right:
+                [{ value: new }, { value: in_progress }, { value: on_hold }]
+      - id: ccf72b42-f1a6-477f-93a4-818aa78182f4
+        name: unassigned
+        label: Unassigned and open
+        condition:
+          op: and
+          args:
+            - op: empty
+              arg: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
+            - op: notIn
+              left: { path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
+              right: [{ value: resolved }, { value: closed }]
+      - id: 5f7a4a5a-5032-4888-9ba8-834cf4448d8c
+        name: critical_open
+        label: Critical and open
+        condition:
+          op: and
+          args:
+            - op: eq
+              left: { path: [222508c2-9257-41db-a243-151441078982] }
+              right: { value: critical }
+            - op: notIn
+              left: { path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
+              right: [{ value: resolved }, { value: closed }]
