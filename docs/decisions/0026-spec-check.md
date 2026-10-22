@@ -117,18 +117,29 @@ No licence problem was found. Fixed: titles count only for tests that run and ar
 
 ## Step 3 obligations from 8.8
 
-What Step 3 must already deliver so that Step 5's rolling upgrades need no retrofit (review round 3); the fence mechanics, the phase execution and RU11's refusal stay in Step 5:
+A summary of what Step 3 must already deliver so that Step 5's rolling upgrades need no retrofit (review rounds 3 and 4); Contracts 8.8's RU1 to RU12 are the rules. The fence mechanics, the phase execution and RU11's refusal stay in Step 5:
 
 - phase-tagged, additive (`expand`) platform migrations (RU1, RU2, RU5; 3A, 3B, 3P, checked by 3R's `migration-phases`);
 - tolerance of unknown kinds in the catalog loader, the change-set validator, the dependency index and `doctor` (RU12; 3A, 3B), shipped in `v0.0.3`;
 - set versions whose additive and behavior changes are separable (RU7; 3A, 3I);
 - 3P's resumable, repeatable backfill and its handling of users the backfill has not reached (RU6);
 - 3B's delivery-version compatibility: `min_worker_version` on every delivery, and workers that never claim above their version (RU9);
-- versioned application names, `std-server@<version>`, `std-worker@<version>`, `std-cli@<version>` (RU10).
+- versioned application names, `std-server@<version>`, `std-worker@<version>`, `std-cli@<version>` (RU10);
+- compatibility both ways (RU8): what release N+1 writes stays valid for release N, and what N writes stays valid for N+1;
+- RU3 and RU4 whenever a rename, a type change or a removal comes up: old storage authoritative until finalize, removal only by a later `contract` migration.
 
 ## Review round 3 (GPT-6.1-Sol)
 
 Fixed: control commands pass `core.admit` with the version floor only, so N+1's expand and `wait-upgraded` can run before N+1's expand exists (8.8); an interrupted finalize resumes in the same attempt or is taken over by a newer attempt for the same version from its recorded steps, and abort is refused after the fence (8.8; `upgrade-fence`); only JSON Patch operations that write `/priority` supply it (14.2); form-state returns the proposed record after `derive` rules, so the form's major-incident correction, the form-state verdict and the save agree (6.3, 14.2; `itil-incident`); row counts (TMF621 88, ITIL 50).
+
+## Review round 4 (GPT-6.1-Sol)
+
+Closed: control-command admission, JSON Patch supply, form-state's derived record, row counts. Contracts 8.8 is marked a draft owned by Step 5 (5B, 5O), with these two open issues, not solved here:
+
+- P1. A replacement Helm attempt cannot reach takeover: expand runs only from `idle` or its own `expanding`, and the replacement attempt's pods and finalize Job wait for its own expand row, so after attempt A dies in `finalizing`, attempt B can neither expand, finish its rollout, nor take over. Needed: B adopts A's completed expand and recorded steps, writes its own readiness record, no circular waits; a test of the real replacement Helm lifecycle.
+- P1. Concurrent takeover lacks an enforceable ownership rule: finalize spans several transactions, so A can check ownership, B take over and A run another step unless ownership is checked under the row lock inside each step's work and checkpoint transaction; "newer" has no order, because attempt IDs are UUIDv4 or caller-provided. Needed: database-assigned attempt ordering and per-step transactional fencing; a test of overlapping attempts, including a delayed older Job.
+
+Fixed: form-state runs the save's existing-state and proposed-state access checks first and answers a denied edit exactly as the save would, and returns only what the caller could read had the save succeeded (6.3; test "denied edit with a conditionally readable derived output reveals nothing"). The Step 3 obligations list is labelled a summary and adds RU8, RU3 and RU4.
 
 ## Review round 2 (GPT-6.1-Sol)
 
