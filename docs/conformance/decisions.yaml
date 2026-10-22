@@ -150,3 +150,33 @@ entries:
     decidedBy: Martin
     words: "tmforum always takes priority over ITIL. We can always lock down fields that tmforum wants writeable in the ui."
     date: 2026-10-22
+  - id: E27-tmf-if-match-optional
+    rows: []
+    requirement: "`If-Match` optional on TMF API writes, although TMF630 v5.0.0 Part 1 §1.5.3 p.14 recommends ETag preconditions"
+    reason: "The CTKs and TMF clients send no precondition; a stale `If-Match`, when sent, is `412` with the current ETag (Contracts 11.1; decision 0026, M2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "M2: 412 with the current ETag for a stale If-Match and 428 for a missing required one on /api/v2 and the TMF APIs; If-Match stays optional on the TMF APIs as an accepted exclusion (relayed by the coordinator)."
+    date: 2026-10-22
+  - id: E28-oda-component-identity
+    rows: []
+    requirement: "`componentMetadata.id` and `name` of the ODA Component name a published TM Forum component specification (the v1 Component CRD's field descriptions)"
+    reason: "STD is a custom component; no golden specification exposes TMF621 (Contracts 13.1; decision 0026, M13, FODA-01)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "M13: new exclusion, decided accepted (relayed by the coordinator)."
+    date: 2026-10-22
+  - id: E29-hub-registration-429
+    rows: []
+    requirement: "`429` on TMF hub registration, a status the pinned OpenAPI documents do not declare"
+    reason: "Hub registrations are config commits and are rate-limited per user (Contracts 12.2); TMF routes otherwise answer only declared statuses (Contracts 11.1; decision 0026, M18)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "M18: TMF routes answer only statuses the pinned document declares; 429 on hub registration is a recorded deviation (relayed by the coordinator)."
+    date: 2026-10-22
