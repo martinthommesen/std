@@ -39,10 +39,11 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
 | 6 | `ws/3g-tmf630-api` | 3G | `/api/v2` per Contracts 10, `/api/v1` frozen, web app, quickstart and typed client on v2 | planned |
 | 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
-| 6 | `ws/3t-tmf-framework` | 3T | `@std/tmf`, mapping rules, pinned specs, CTK runner and OpenAPI contract tests in CI (Contracts 11.1) | planned |
+| 6 | `ws/3t-tmf-framework` | 3T | `@std/tmf`, mapping rules, aggregate parts, pinned specs, CTK runner and OpenAPI contract tests in CI, the requirements matrix and its check (Contracts 11.1, 15) | planned |
+| 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3) | planned |
 | 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
 | 6 | `ws/3k-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6) | planned |
-| 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party model; TMF632, TMF669, TMF672 | planned |
+| 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party roles; config subscriptions; TMF632, TMF669, TMF672 | planned |
 | 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
 | 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |
 | 7 | `ws/4e-import` | 4E, 4F | import reconciliation, `saveBatch`, `v0.0.4` | planned |
