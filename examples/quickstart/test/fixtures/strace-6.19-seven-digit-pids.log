@@ -1,0 +1,25 @@
+1469021 execve("/usr/bin/bash", ["bash", "/tmp/qs-fix/strace68/probe.sh"], 0x7ffeb0d14e90 /* 39 vars */) = 0
+1469023 execve("/usr/bin/jq", ["jq", "-n", "--arg", "p", "a\"b\\c\nd", "."], 0x601461723920 /* 39 vars */) = 0
+1469025 execve("/usr/bin/seq", ["seq", "1", "300"], 0x601461729790 /* 39 vars */) = 0
+1469028 execve("/bin/true", ["/bin/true", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "tab\t\303\251"], 0x601461723920 /* 39 vars */) = 0
+1469029 execve("/bin/true", ["/bin/true", "one", "two"], 0x601461728d10 /* 39 vars */) = 0
+1469030 execve("/bin/echo", ["/bin/echo", "1"], 0x601461728e80 /* 39 vars */) = 0
+1469031 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */ <unfinished ...>
+1469032 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */ <unfinished ...>
+1469031 <... execve resumed>)           = 0
+1469033 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */ <unfinished ...>
+1469032 <... execve resumed>)           = 0
+1469033 <... execve resumed>)           = 0
+1469034 execve("/bin/echo", ["/bin/echo", "2"], 0x601461728e80 /* 39 vars */) = 0
+1469035 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */) = 0
+1469036 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */) = 0
+1469037 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */) = 0
+1469038 execve("/bin/echo", ["/bin/echo", "3"], 0x601461728e80 /* 39 vars */) = 0
+1469039 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */) = 0
+1469040 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */ <unfinished ...>
+1469041 execve("/usr/bin/cat", ["cat"], 0x601461728e80 /* 39 vars */ <unfinished ...>
+1469040 <... execve resumed>)           = 0
+1469041 <... execve resumed>)           = 0
+1469042 execve("/usr/bin/python3", ["python3", "-c", "import os; fd = os.open(\"/bin/true\", os.O_RDONLY); os.execve(fd, [\"true\", \"via-fd\"], {})"], 0x601461728e80 /* 39 vars */) = 0
+1469042 execveat(3, "", ["true", "via-fd"], 0x75189aafc250 /* 0 vars */, AT_EMPTY_PATH) = 0
+1469045 execve("/nonexistent/thing", ["/nonexistent/thing"], 0x601461728e80 /* 39 vars */) = -1 ENOENT (No such file or directory)

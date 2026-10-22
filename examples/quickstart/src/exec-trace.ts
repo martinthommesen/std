@@ -175,6 +175,51 @@ const redact = (text: string, needles: readonly string[]): string => {
 };
 
 /**
+ * How much of an unreadable line a problem shows, after masking and
+ * redaction: enough to see the line's form in a CI log.
+ */
+const EXCERPT_LENGTH = 80;
+
+/** What a masked string's contents become. */
+const MASKED = "\u2026";
+
+/**
+ * Replaces the contents of every double-quoted string in a trace line
+ * with an ellipsis, so `"abc"` becomes `"…"`. Inside a string a backslash
+ * escapes the next character, as in strace's output; an unterminated
+ * quote makes the rest of the line a string. What is left is the line's
+ * form (PID, call name, punctuation, numbers, flags) without the text of
+ * any argument, whatever escaping it went through.
+ * @param line - A trace line.
+ * @returns The line with every string's contents masked.
+ */
+export const maskStrings = (line: string): string => {
+  let masked = "";
+  let inString = false;
+  let index = 0;
+
+  while (index < line.length) {
+    const char = line[index] ?? "";
+
+    if (!inString) {
+      masked += char;
+      inString = char === '"';
+      index += 1;
+    } else if (char === "\\") {
+      index += 2;
+    } else if (char === '"') {
+      masked += `${MASKED}"`;
+      inString = false;
+      index += 1;
+    } else {
+      index += 1;
+    }
+  }
+
+  return inString ? `${masked}${MASKED}` : masked;
+};
+
+/**
  * The problems of one call.
  * @param call - The call.
  * @param number - Its position in the trace, from 1.
@@ -240,7 +285,18 @@ export const checkTrace = (
   );
 
   return [
-    ...trace.problems,
+    ...trace.problems.map((found) => {
+      // Structurally safe first, then the credential redaction as a
+      // second layer, then the cut.
+      const visible = redact(maskStrings(found.text), needles);
+
+      const excerpt =
+        visible.length > EXCERPT_LENGTH
+          ? `${visible.slice(0, EXCERPT_LENGTH)}...`
+          : visible;
+
+      return `trace line ${found.line}: ${found.problem}: ${JSON.stringify(excerpt)}`;
+    }),
     ...trace.calls.flatMap((call, index) =>
       callProblems(call, index + 1, needles)
     ),
