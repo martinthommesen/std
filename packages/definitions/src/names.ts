@@ -131,6 +131,45 @@ export const permissionNameProblem = (
   return name.length > IDENTIFIER_MAX_BYTES ? "tooLong" : undefined;
 };
 
+const SNAKE_STEP = /_(?<next>[\da-z])/gu;
+
+/**
+ * The API name of a field in `/api/v2` (Contracts 10.2): its definition
+ * name with each `_x` turned into `X`, so `short_description` becomes
+ * `shortDescription`. Definition names stay snake case, so plain SQL stays
+ * readable (1.1).
+ *
+ * @param name - A definition or system field name.
+ * @returns The lowerCamelCase name.
+ */
+export const apiNameOf = (name: string): string =>
+  name.replaceAll(SNAKE_STEP, (_match, next: string) => next.toUpperCase());
+
+/**
+ * Attribute names of a `/api/v2` resource that no field's API name may
+ * take (Contracts 10.2): the system attributes and STD's `withheld`.
+ * Anything starting with `@` is reserved as well ({@link isReservedApiName}).
+ */
+export const RESERVED_API_NAMES: ReadonlySet<string> = new Set([
+  "id",
+  "href",
+  "version",
+  "createdAt",
+  "createdBy",
+  "updatedAt",
+  "updatedBy",
+  "withheld",
+]);
+
+/**
+ * Whether an API name is reserved (Contracts 10.2).
+ *
+ * @param apiName - A field's API name.
+ * @returns True for a system attribute, `withheld` or an `@` name.
+ */
+export const isReservedApiName = (apiName: string): boolean =>
+  RESERVED_API_NAMES.has(apiName) || apiName.startsWith("@");
+
 /**
  * The qualified name of a table, as used in API paths and set files.
  *

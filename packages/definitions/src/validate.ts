@@ -49,8 +49,10 @@ import {
 import type { EffectiveField } from "./effective-schema.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
+  apiNameOf,
   fieldNameProblem,
   identifierProblem,
+  isReservedApiName,
   namespaceNameProblem,
   permissionNameProblem,
   tableNameProblem,
@@ -1273,6 +1275,67 @@ const checkUniqueness = (
     (filter) => `${filter.classId}/${filter.name}`,
     (filter) => `The saved filter name "${filter.name}" on its table`
   );
+};
+
+/**
+ * The `/api/v2` name rule (Contracts 10.2): a field's API name (its name in
+ * lowerCamelCase) must not be a reserved attribute name (`href`,
+ * `withheld`, ...) or equal the API name of another live field of its
+ * hierarchy. Fields whose definition names are equal are `duplicateName`
+ * already and are not reported again.
+ *
+ * Only the fields a change set creates or changes are checked, so a clash
+ * that predates the rule never blocks an unrelated change set; `/api/v2`
+ * resolves neither of two clashing names instead.
+ *
+ * @param snapshot - The configuration after the change.
+ * @param fieldIds - The fields to check; all live fields when omitted.
+ * @returns One `apiNameClash` problem per offending field.
+ */
+export const apiNameProblems = (
+  snapshot: ConfigSnapshot,
+  fieldIds?: ReadonlySet<DefinitionId>
+): readonly DefinitionProblem[] => {
+  const live = snapshot.all("field").filter(isLive);
+  const rootOf = (field: FieldDefinition) => snapshot.root(field.classId)?.id;
+
+  const clashOf = (field: FieldDefinition): DefinitionProblem | undefined => {
+    const apiName = apiNameOf(field.name);
+
+    if (isReservedApiName(apiName)) {
+      return problem(
+        "apiNameClash",
+        field.id,
+        `The field name "${field.name}" has the reserved API name "${apiName}".`
+      );
+    }
+
+    const rootId = rootOf(field);
+
+    const other = live.find((candidate) => {
+      const sameApiName =
+        candidate.name !== field.name && apiNameOf(candidate.name) === apiName;
+
+      return (
+        sameApiName && rootId !== undefined && rootOf(candidate) === rootId
+      );
+    });
+
+    return other === undefined
+      ? undefined
+      : problem(
+          "apiNameClash",
+          field.id,
+          `The field name "${field.name}" has the API name "${apiName}" of ${other.id} in its hierarchy.`
+        );
+  };
+
+  return live.flatMap((field) => {
+    const checked = fieldIds === undefined || fieldIds.has(field.id);
+    const found = checked ? clashOf(field) : undefined;
+
+    return found === undefined ? [] : [found];
+  });
 };
 
 const checkChoice = (

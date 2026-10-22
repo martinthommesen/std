@@ -58,7 +58,7 @@ import type { ChangeSetRefusal } from "./refusals.ts";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "./requester.ts";
 import { ConfigSnapshot } from "./snapshot.ts";
 import type { SnapshotKey } from "./snapshot.ts";
-import { validateSnapshot } from "./validate.ts";
+import { apiNameProblems, validateSnapshot } from "./validate.ts";
 
 export type { ApplyContext, OperationNote } from "./apply-work.ts";
 
@@ -572,6 +572,26 @@ const newConditions = (
     )
   );
 
+// The fields a change set gives a name: created, renamed or live again.
+// Only these are checked for API-name clashes (Contracts 10.2).
+const namedFields = (
+  changes: readonly DefinitionChange[]
+): ReadonlySet<DefinitionId> =>
+  new Set(
+    changes.flatMap(({ before, after }) => {
+      if (after.kind !== "field") {
+        return [];
+      }
+
+      const named =
+        before?.kind !== "field" ||
+        before.name !== after.name ||
+        before.state !== after.state;
+
+      return named ? [after.id] : [];
+    })
+  );
+
 const immutableProblems = (
   changes: readonly DefinitionChange[]
 ): readonly DefinitionProblem[] =>
@@ -665,7 +685,10 @@ export const applyOperations = (
     ...work.problems,
     ...immutableProblems(changes),
     ...(work.problems.length === 0
-      ? validateSnapshot(after, undefined, newConditions(changes))
+      ? [
+          ...validateSnapshot(after, undefined, newConditions(changes)),
+          ...apiNameProblems(after, namedFields(changes)),
+        ]
       : []),
   ];
 
@@ -695,7 +718,11 @@ export const validatedSnapshot = (
   definitions: Iterable<Definition>
 ): Result<ConfigSnapshot, DefinitionInvalid> => {
   const snapshot = ConfigSnapshot.make(key, definitions);
-  const problems = validateSnapshot(snapshot);
+
+  const problems = [
+    ...validateSnapshot(snapshot),
+    ...apiNameProblems(snapshot),
+  ];
 
   return problems.length > 0
     ? fail(new DefinitionInvalid({ problems }))
