@@ -91,7 +91,7 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
 | `pnpm test` | Vitest, one project per workspace package (for `apps/web`, the Foldkit story and scene tests) |
 | `pnpm --filter @std/web test:browser` | The web app in Playwright's Chromium against a real `std serve` on a disposable database (decision 0018); needs `pnpm --filter @std/web exec playwright install chromium` once |
-| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template) |
+| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template), `check-oda-component-schema` (the Canvas probe's stub Component validates against the pinned Component CRD's `v1` schema, decision 0027) |
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
 | `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
