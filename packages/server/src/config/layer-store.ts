@@ -155,8 +155,6 @@ export const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
 export const isDefinitionKind = (kind: string): kind is DefinitionKind =>
   DEFINITION_KIND_NAMES.has(kind);
 
-const reportedUnknownKinds = new Set<string>();
-
 /**
  * Whether the layer tables exist (platform migration 0005 applied).
  *
@@ -209,6 +207,7 @@ const readBase = Effect.gen(function* readBase() {
   ).pipe(Effect.flatMap(decodeBase));
 
   const base = new Map<DefinitionId, BaseRecord>();
+  const reportedUnknownKinds = new Set<string>();
 
   for (const row of rows) {
     if (!isDefinitionKind(row.kind)) {

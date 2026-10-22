@@ -615,12 +615,13 @@ export const checkDependencies = Effect.fn("Doctor.checkDependencies")(
     const actual = new Set<string>();
     const dangling: Finding[] = [];
     const extra: Finding[] = [];
+    const information: Finding[] = [];
 
     const kinds: ReadonlySet<string> = new Set(DEPENDENCY_KINDS);
 
     for (const row of rows) {
       if (!kinds.has(row.kind)) {
-        extra.push(
+        information.push(
           finding(
             9,
             "info",
@@ -677,7 +678,7 @@ export const checkDependencies = Effect.fn("Doctor.checkDependencies")(
           ]
     );
 
-    return [...dangling, ...extra, ...missing];
+    return [...dangling, ...extra, ...missing, ...information];
   }
 );
 

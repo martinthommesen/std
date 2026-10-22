@@ -7,25 +7,25 @@ import {
 import { Duration, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { readLayerState } from "../src/config/layer-store.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { claimDeliveries, markDone } from "../src/outbox/delivery-claims.ts";
+import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { readLedger } from "../src/platform/ledger.ts";
+import type { DataMigration } from "../src/platform/migration.ts";
 import { migrationChecksum } from "../src/platform/migration.ts";
+import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0017 } from "../src/platform/migrations/0017-rolling-groundwork.ts";
 import { checkUpgradePreconditions } from "../src/platform/runner.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import {
-  CLI_APPLICATION_NAME,
-  SERVER_APPLICATION_NAME,
-  WORKER_APPLICATION_NAME,
-} from "../src/sql/database-config.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { STD_VERSION } from "../src/version.ts";
+import { startServe, startWorker } from "./cli-support.ts";
 import { outboxTestLayer, subscribe } from "./outbox-support.ts";
 import { setUpAcme } from "./records-support.ts";
 import {
@@ -34,10 +34,15 @@ import {
   addField,
   addRole,
 } from "./schema-support.ts";
+import { waitUntil } from "./support.ts";
 
 const FUTURE_ID = "9b8da80b-93d0-4a29-877c-e9a1d8e2c303";
 const FUTURE_VERSION = "999.0.0";
 const decodeText = decodeRows(Schema.Struct({ value: Schema.String }));
+
+const workerConnected = (
+  rows: readonly { readonly value: string }[]
+): boolean => rows.some((row) => row.value === `std-worker@${STD_VERSION}`);
 
 const storedUnknown = Effect.gen(function* storedUnknown() {
   const sql = yield* SqlClient.SqlClient;
@@ -59,23 +64,61 @@ describe("rolling-groundwork", () => {
       migrationChecksum({ ...migration0017, phase: "contract" })
     );
   });
-  it.effect(
-    "names server, worker and CLI connections with the package version",
-    () =>
-      Effect.sync(() => {
-        assert.strictEqual(
-          SERVER_APPLICATION_NAME,
-          `std-server@${STD_VERSION}`
-        );
-        assert.strictEqual(
-          WORKER_APPLICATION_NAME,
-          `std-worker@${STD_VERSION}`
-        );
-        assert.strictEqual(CLI_APPLICATION_NAME, `std-cli@${STD_VERSION}`);
-      })
-  );
-
   layer(outboxTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "real server and worker connections expose the release version",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* applicationNames() {
+            yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
+            const database = yield* TestDatabase;
+            const server = yield* startServe(database.url);
+            const worker = yield* startWorker(database.url);
+            const sql = yield* SqlClient.SqlClient;
+
+            const names =
+              sql`SELECT DISTINCT application_name AS value FROM pg_stat_activity
+          WHERE datname = current_database() AND application_name LIKE 'std-%'`.pipe(
+                Effect.flatMap(decodeText)
+              );
+
+            yield* waitUntil(names.pipe(Effect.map(workerConnected)));
+            const actual = (yield* names).map((row) => row.value);
+            assert.include(actual, `std-server@${STD_VERSION}`, server.log());
+            assert.include(actual, `std-worker@${STD_VERSION}`, worker.log());
+
+            for (const name of actual.filter((value) =>
+              /std-(?:server|worker|coordinator|resumer)(?:@|$)/u.test(value)
+            )) {
+              assert.match(
+                name,
+                new RegExp(`@${STD_VERSION.replaceAll(".", "\\.")}$`, "u")
+              );
+            }
+          })
+        )
+    );
+
+    dbTest.effect(
+      "release version fits the delivery constraint and PostgreSQL numeric comparison",
+      () =>
+        Effect.gen(function* versionProtocol() {
+          const sql = yield* SqlClient.SqlClient;
+
+          const rows = yield* decodeRows(
+            Schema.Struct({ matches: Schema.Boolean, ordered: Schema.Boolean })
+          )(
+            yield* sql`SELECT ${STD_VERSION} ~ substring(pg_get_constraintdef(oid) FROM $$'([^']+)'$$) AS matches,
+            string_to_array(${STD_VERSION}, '.')::numeric[] > string_to_array('0.0.0', '.')::numeric[]
+            AND string_to_array('0.0.10', '.')::numeric[] > string_to_array('0.0.9', '.')::numeric[]
+            AS ordered
+            FROM pg_constraint WHERE conrelid = 'core.delivery'::regclass AND conname = 'delivery_min_worker_version'`
+          );
+
+          assert.deepStrictEqual(rows, [{ matches: true, ordered: true }]);
+        })
+    );
+
     dbTest.effect(
       "preserves newer config and dependency kinds across loading, change sets and doctor",
       () =>
@@ -292,6 +335,41 @@ describe("rolling-groundwork", () => {
             (yield* claimDeliveries(input)).map((row) => row.recordVersion),
             [2]
           );
+        })
+    );
+  });
+  layer(outboxTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "data migrations work on a ledger that predates phase metadata",
+      () =>
+        Effect.gen(function* prePhaseDataMigration() {
+          yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql.unsafe(
+            "ALTER TABLE core.platform_migration DROP COLUMN phase"
+          );
+
+          const migration: DataMigration = {
+            batch: () => Effect.succeed({ changed: 0, next: null }),
+            description: "No-op probe of a pre-phase data ledger",
+            id: 18,
+            kind: "data",
+            name: "pre-phase-probe",
+            phase: "expand",
+            remaining: Effect.succeed(0),
+          };
+
+          yield* runDataMigrations({
+            migrations: [...PLATFORM_MIGRATIONS, migration],
+          });
+          const ledger = yield* readLedger(sql);
+          assert.deepStrictEqual(ledger.at(-1), {
+            checksum: migrationChecksum(migration),
+            id: 18,
+            phase: "expand",
+            progress: '{"changed": 0}',
+            state: "applied",
+          });
         })
     );
   });

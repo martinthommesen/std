@@ -37,7 +37,10 @@ import type { RequestRevision } from "../sql/request-revision.ts";
 import type { Transactions } from "../sql/transactions.ts";
 
 /** The DDL compatibility phase (execution of phases arrives in Step 5). */
-export type MigrationPhase = "expand" | "contract";
+export const MigrationPhaseSchema = Schema.Literals(["expand", "contract"]);
+
+/** The compatibility phase recorded for a migration. */
+export type MigrationPhase = typeof MigrationPhaseSchema.Type;
 
 /** Last migration released before phase metadata existed. */
 export const LAST_UNPHASED_MIGRATION = 16;

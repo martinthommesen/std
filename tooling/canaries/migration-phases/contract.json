@@ -1,0 +1,52 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 17,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "contract",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN required text NOT NULL DEFAULT NULL",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DROP TABLE core.old; END $$",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''DROP TABLE core.old''; END'",
+        "CREATE UNIQUE INDEX CONCURRENTLY uq ON core.sample (id)",
+        "CREATE TABLE core.copy AS SELECT * FROM core.sample",
+        "DROP TABLE core.sample",
+        "ALTER TABLE core.sample RENAME COLUMN old TO new",
+        "ALTER TABLE core.sample ALTER COLUMN value TYPE bigint",
+        "ALTER TABLE core.sample ALTER value SET DATA TYPE bigint",
+        "ALTER TABLE core.sample ALTER COLUMN value SET NOT NULL",
+        "ALTER TABLE core.sample ADD COLUMN value text NOT NULL",
+        "ALTER TABLE core.sample ADD COLUMN value text NOT NULL, ADD COLUMN other text DEFAULT 'x'",
+        "ALTER TABLE core.sample ADD CONSTRAINT c CHECK (value > 0)",
+        "ALTER TABLE core.sample ADD CONSTRAINT c UNIQUE (value)",
+        "ALTER TABLE core.sample ADD FOREIGN KEY (id) REFERENCES core.parent (id)",
+        "ALTER TABLE core.sample ADD COLUMN value int CHECK (value > 0)",
+        "ALTER TABLE core.sample ADD COLUMN value uuid DEFAULT gen_random_uuid()",
+        "ALTER TABLE core.sample ADD COLUMN value timestamptz DEFAULT now()",
+        "ALTER TABLE core.sample ADD COLUMN value integer GENERATED ALWAYS AS IDENTITY",
+        "ALTER TABLE core.sample SET TABLESPACE other",
+        "ALTER TABLE core.sample SET UNLOGGED",
+        "CLUSTER core.sample",
+        "VACUUM FULL core.sample",
+        "CREATE OR REPLACE FUNCTION core.old_fn() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$",
+        "DO $$ BEGIN EXECUTE 'DROP TABLE core.sample'; END $$",
+        "CALL core.change_tables()",
+        "ALTER TABLE core.sample ADD COLUMN note text; DROP TABLE core.other",
+        "ALTER TABLE core.sample ADD COLUMN a$x$ text, DROP COLUMN old, ADD COLUMN b$x$ text",
+        "/* outer /* inner */ still outer */ ALTER TABLE core.sample DROP COLUMN old",
+        "ALTER TABLE core.sample ADD COLUMN a text DEFAULT '--'; DROP TABLE core.sample",
+        "-- comment\rDROP TABLE core.sample",
+        "CREATE TRIGGER t BEFORE INSERT ON core.delivery EXECUTE FUNCTION core.wipe()",
+        "CREATE INDEX ix ON core.sample (id)",
+        "CREATE TABLE core.child () INHERITS (core.sample)",
+        "CREATE TABLE core.child PARTITION OF core.sample FOR VALUES FROM (1) TO (2)",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DELETE FROM core.config_base; END $$",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE core.config_base SET removed = true; END $$",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO core.config_base DEFAULT VALUES; END $$",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN MERGE INTO core.config_base USING core.config_set ON false WHEN MATCHED THEN DO NOTHING; END $$",
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN COPY core.config_base TO STDOUT; END $$"
+      ]
+    }
+  ]
+}

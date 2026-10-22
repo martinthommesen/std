@@ -1,6 +1,7 @@
-import { readdirSync } from "node:fs";
-
 /** Checks RU1/RU2/RU5 against the evaluated platform migration list. */
+import { readFileSync, readdirSync } from "node:fs";
+import { parseArgs } from "node:util";
+
 import { Schema } from "effect";
 
 import { migrationPhaseProblems } from "./lib/migration-phases.ts";
@@ -20,12 +21,20 @@ const MigrationModule = Schema.Struct({
 });
 
 await runCheck("migration-phases", async () => {
+  const { values } = parseArgs({ options: { migrations: { type: "string" } } });
+  const fixture = values.migrations;
+
   // Runtime import keeps server-only Effect APIs out of the root tooling
   // compiler profile. Decode just the SQL metadata at this boundary.
-  const loaded: unknown = await import(
-    new URL("../packages/server/src/platform/migrations.ts", import.meta.url)
-      .href
-  );
+  const loaded: unknown =
+    fixture === undefined
+      ? await import(
+          new URL(
+            "../packages/server/src/platform/migrations.ts",
+            import.meta.url
+          ).href
+        )
+      : JSON.parse(readFileSync(fixture, "utf-8"));
 
   const { PLATFORM_MIGRATIONS } =
     Schema.decodeUnknownSync(MigrationModule)(loaded);
@@ -37,9 +46,15 @@ await runCheck("migration-phases", async () => {
     )
   );
 
-  const files = readdirSync(
-    new URL("../packages/server/src/platform/migrations/", import.meta.url)
-  );
+  const files =
+    fixture === undefined
+      ? readdirSync(
+          new URL(
+            "../packages/server/src/platform/migrations/",
+            import.meta.url
+          )
+        )
+      : [];
 
   const missing = files
     .filter((file) => !registeredFiles.has(file))

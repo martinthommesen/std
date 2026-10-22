@@ -530,13 +530,15 @@ export const checkOrphans = (
       return [];
     }
 
-    if (table === undefined || (table.platform && key.startsWith("core."))) {
+    const inCore = key.startsWith("core.");
+
+    if (table === undefined || (table.platform && inCore)) {
       return [
         finding(
           5,
-          key.startsWith("core.") ? "info" : "warning",
-          key.startsWith("core.") ? "newerPlatformTable" : "orphanTable",
-          key.startsWith("core.")
+          inCore ? "info" : "warning",
+          inCore ? "newerPlatformTable" : "orphanTable",
+          inCore
             ? `Platform table ${key} is newer than this release (reported, never dropped).`
             : `Table ${key} is not described by any class (reported, never dropped).`,
           key

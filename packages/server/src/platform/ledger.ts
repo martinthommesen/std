@@ -7,8 +7,16 @@ import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
 import { decodeRows } from "../sql/rows.ts";
-import { isDataMigration, migrationChecksum } from "./migration.ts";
-import type { DataMigration, PlatformMigration } from "./migration.ts";
+import {
+  isDataMigration,
+  migrationChecksum,
+  MigrationPhaseSchema,
+} from "./migration.ts";
+import type {
+  DataMigration,
+  MigrationPhase,
+  PlatformMigration,
+} from "./migration.ts";
 
 /**
  * The state of a ledger row (Contracts 1.9): `tx` and `concurrent_index`
@@ -24,7 +32,7 @@ export type LedgerState = typeof LedgerStateSchema.Type;
 export interface LedgerEntry {
   readonly id: number;
   readonly checksum: string;
-  readonly phase: string;
+  readonly phase: MigrationPhase;
   readonly state: LedgerState;
   /** A `data` migration's progress, as JSON text; null otherwise. */
   readonly progress: string | null;
@@ -99,7 +107,8 @@ export class MigrationStateRefused extends Schema.TaggedError<MigrationStateRefu
   }
 }
 
-const decodeColumns = decodeRows(
+/** Decodes the ledger column inventory, also used by doctor and runners. */
+export const decodeLedgerColumns = decodeRows(
   Schema.Struct({
     phased: Schema.Boolean,
     present: Schema.Boolean,
@@ -111,7 +120,7 @@ const decodeEntries = decodeRows(
   Schema.Struct({
     checksum: Schema.String,
     id: Schema.Int,
-    phase: Schema.String,
+    phase: MigrationPhaseSchema,
     progress: Schema.NullOr(Schema.String),
     state: LedgerStateSchema,
   })
@@ -136,7 +145,7 @@ export const LEDGER_COLUMNS = `SELECT to_regclass('core.platform_migration') IS 
  * @param phased - Whether the ledger has the phase column.
  * @returns The statement.
  */
-export const ledgerRows = (stateful: boolean, phased = false): string =>
+export const ledgerRows = (stateful: boolean, phased: boolean): string =>
   `SELECT id, checksum, ${phased ? "phase" : "'expand' AS phase"}, ${
     stateful
       ? "state, progress::text AS progress"
@@ -156,7 +165,7 @@ export const readLedger: (
 )(function* readLedgerRows(sql: SqlClient.SqlClient) {
   const [columns] = yield* sql
     .unsafe(LEDGER_COLUMNS)
-    .pipe(Effect.flatMap(decodeColumns));
+    .pipe(Effect.flatMap(decodeLedgerColumns));
 
   if (columns?.present !== true) {
     return [];
@@ -169,9 +178,6 @@ export const readLedger: (
 
 /** Decodes ledger rows (for `doctor`, which reads them read-only). */
 export const decodeLedgerRows = decodeEntries;
-
-/** Decodes the ledger's columns (for `doctor`). */
-export const decodeLedgerColumns = decodeColumns;
 
 /**
  * Compares the ledger with the known migrations.

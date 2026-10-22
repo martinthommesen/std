@@ -27,6 +27,7 @@ import { Duration, Effect, Layer, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import type { ConfigCommitOptions } from "../sql/config-commit.ts";
+import { versionedApplicationName } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
@@ -50,7 +51,7 @@ import type { StepRow } from "./step-spec.ts";
 import { STEP_SPECS } from "./steps.ts";
 
 /** `application_name` of the connection that tries to resume. */
-export const RESUMER_APPLICATION_NAME = "std-resumer";
+export const RESUMER_APPLICATION_NAME = versionedApplicationName("std-resumer");
 
 /** A change set that is not finished. */
 export interface OpenChangeSet {

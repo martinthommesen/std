@@ -1,7 +1,7 @@
+/** Conservative SQL surface check for rolling-upgrade expand migrations. */
 import { migrationSqlTokens, splitSqlTokens } from "./migration-sql.ts";
 import type { SqlToken } from "./migration-sql.ts";
 
-/** Conservative SQL surface check for rolling-upgrade expand migrations. */
 interface CheckMigration {
   readonly id: number;
   readonly name: string;
@@ -11,8 +11,32 @@ interface CheckMigration {
   readonly statement?: string;
 }
 
+const asciiUppercase = /[A-Z]/gu;
 const number = /^\d+(?:\.\d+)?$/u;
 const forbidden = new Set(["DROP", "RENAME", "TRUNCATE", "CLUSTER", "REINDEX"]);
+
+const functionForbidden = new Set([
+  ...forbidden,
+  "EXECUTE",
+  "CALL",
+  "DELETE",
+  "UPDATE",
+  "INSERT",
+  "MERGE",
+  "COPY",
+]);
+
+const constantKeywords = new Set(["NULL", "TRUE", "FALSE"]);
+
+const columnClauses = new Set([
+  "NOT",
+  "NULL",
+  "CONSTRAINT",
+  "CHECK",
+  "REFERENCES",
+  "UNIQUE",
+  "PRIMARY",
+]);
 
 const words = (tokens: readonly SqlToken[]): string =>
   tokens.map((token) => (token.literal ? "<literal>" : token.text)).join(" ");
@@ -26,7 +50,9 @@ const objectName = (tokens: readonly SqlToken[], start: number): string =>
     .map((token) =>
       token.text.startsWith('"')
         ? token.text.slice(1, -1).replaceAll('""', '"')
-        : token.text.toLowerCase()
+        : token.text.replaceAll(asciiUppercase, (letter) =>
+            letter.toLowerCase()
+          )
     )
     .join("");
 
@@ -62,7 +88,7 @@ const constantDefault = (tokens: readonly SqlToken[]): boolean => {
     !(
       value.literal ||
       number.test(value.text) ||
-      ["NULL", "TRUE", "FALSE"].includes(value.text)
+      constantKeywords.has(value.text)
     )
   ) {
     return false;
@@ -76,18 +102,7 @@ const constantDefault = (tokens: readonly SqlToken[]): boolean => {
 
   const next = tokens[position];
 
-  return (
-    next === undefined ||
-    [
-      "NOT",
-      "NULL",
-      "CONSTRAINT",
-      "CHECK",
-      "REFERENCES",
-      "UNIQUE",
-      "PRIMARY",
-    ].includes(next.text)
-  );
+  return next === undefined || columnClauses.has(next.text);
 };
 
 const addedColumnProblems = (
@@ -151,16 +166,22 @@ const alterTableProblems = (
 
 const CREATE_TABLE = "CREATE TABLE ";
 const CREATE_FUNCTION = "CREATE FUNCTION ";
+const CREATE_INDEX = "CREATE INDEX ";
+const CREATE_UNIQUE_INDEX = "CREATE UNIQUE INDEX ";
 
 const CREATE_FORMS = [
   "CREATE SCHEMA ",
   CREATE_TABLE,
-  "CREATE INDEX ",
-  "CREATE UNIQUE INDEX ",
+  CREATE_INDEX,
+  CREATE_UNIQUE_INDEX,
   "CREATE TYPE ",
   "CREATE TRIGGER ",
   "COMMENT ON ",
 ];
+
+const concurrentIndex = (text: string): boolean =>
+  text.startsWith("CREATE INDEX CONCURRENTLY ") ||
+  text.startsWith("CREATE UNIQUE INDEX CONCURRENTLY ");
 
 const tableAs = /\bAS (?:SELECT|TABLE|WITH|EXECUTE)\b/u;
 
@@ -174,6 +195,18 @@ const historicalStatement = (
     return (
       text ===
       "INSERT INTO CORE . CONFIG_STATE ( REVISION , CHANGE_SET_ID ) VALUES ( 0 , UUIDV7 ( ) )"
+    );
+  }
+
+  if (id === 3) {
+    const body = tokens.find((token) => token.body !== undefined)?.body;
+
+    return (
+      text ===
+        "CREATE FUNCTION CORE . END_USER_SESSIONS ( ) RETURNS TRIGGER LANGUAGE PLPGSQL AS <body>" &&
+      body !== undefined &&
+      words(migrationSqlTokens(body)) ===
+        "BEGIN DELETE FROM CORE . SESSION WHERE USER_ID = NEW . ID ; RETURN NULL ; END"
     );
   }
 
@@ -199,6 +232,22 @@ const allowedForm = (text: string): boolean => {
   return text.startsWith("ALTER TYPE ") && text.includes(" ADD VALUE ");
 };
 
+interface ParsedStatements {
+  readonly parts: readonly SqlToken[][];
+  readonly error?: string;
+}
+
+const parseStatements = (sql: string): ParsedStatements => {
+  try {
+    return { parts: splitSqlTokens(migrationSqlTokens(sql), ";") };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      parts: [],
+    };
+  }
+};
+
 const functionBodyProblems = (
   tokens: readonly SqlToken[]
 ): readonly string[] => {
@@ -211,20 +260,74 @@ const functionBodyProblems = (
   }
 
   const source = body.body ?? body.text.slice(1, -1).replaceAll("''", "'");
-  const bodyTokens = migrationSqlTokens(source);
+  const { parts, error } = parseStatements(source);
+
+  if (error !== undefined) {
+    return [error];
+  }
+
+  const bodyTokens = parts.flat();
   const text = words(bodyTokens);
 
   const unsafe = bodyTokens.some(
-    (token) =>
-      !token.literal &&
-      (forbidden.has(token.text) ||
-        token.text === "EXECUTE" ||
-        token.text === "CALL")
+    (token) => !token.literal && functionForbidden.has(token.text)
   );
 
   return unsafe || setNotNull.test(text) || typeChange.test(text)
     ? ["destructive or dynamic SQL in a function body"]
     : [];
+};
+
+const indexProblems = (
+  tokens: readonly SqlToken[],
+  fresh: ReadonlySet<string>
+): readonly string[] => {
+  const text = words(tokens);
+  const on = tokens.findIndex((token) => token.text === "ON");
+  const target = tokens[on + 1]?.text === "ONLY" ? on + 2 : on + 1;
+
+  if (!fresh.has(objectName(tokens, target))) {
+    if (text.startsWith(CREATE_UNIQUE_INDEX)) {
+      return ["unique index on an existing table constrains old writers"];
+    }
+
+    if (!concurrentIndex(text)) {
+      return [
+        "index on an existing table requires CONCURRENTLY and concurrent_index kind",
+      ];
+    }
+  }
+
+  return [];
+};
+
+const tableProblems = (
+  tokens: readonly SqlToken[],
+  fresh: ReadonlySet<string>
+): readonly string[] => {
+  for (const [index, token] of tokens.entries()) {
+    if (token.text === "INHERITS") {
+      const parents = splitSqlTokens(tokens.slice(index + 2, -1), ",");
+
+      if (parents.some((parent) => !fresh.has(objectName(parent, 0)))) {
+        return ["INHERITS requires parents created in this migration"];
+      }
+    }
+
+    if (
+      token.text === "PARTITION" &&
+      tokens[index + 1]?.text === "OF" &&
+      !fresh.has(objectName(tokens, index + 2))
+    ) {
+      return ["PARTITION OF requires a parent created in this migration"];
+    }
+  }
+
+  if (tableAs.test(words(tokens))) {
+    return ["CREATE TABLE AS requires a data migration"];
+  }
+
+  return [];
 };
 
 const creationProblems = (
@@ -248,16 +351,20 @@ const creationProblems = (
     return [...nameProblems, ...functionBodyProblems(tokens)];
   }
 
-  if (text.startsWith("CREATE UNIQUE INDEX ")) {
+  if (text.startsWith(CREATE_INDEX) || text.startsWith(CREATE_UNIQUE_INDEX)) {
+    return indexProblems(tokens, fresh);
+  }
+
+  if (text.startsWith("CREATE TRIGGER ")) {
     const on = tokens.findIndex((token) => token.text === "ON");
 
     if (!fresh.has(objectName(tokens, on + 1))) {
-      return ["unique index on an existing table constrains old writers"];
+      return ["trigger on an existing table changes old writers' behavior"];
     }
   }
 
-  if (text.startsWith(CREATE_TABLE) && tableAs.test(text)) {
-    return ["CREATE TABLE AS requires a data migration"];
+  if (text.startsWith(CREATE_TABLE)) {
+    return tableProblems(tokens, fresh);
   }
 
   return allowedForm(text)
@@ -280,6 +387,10 @@ const statementProblems = (
   const text = words(tokens);
   const problems: string[] = [];
 
+  if (concurrentIndex(text) && migration.kind !== "concurrent_index") {
+    problems.push("CONCURRENTLY requires concurrent_index kind");
+  }
+
   if (tokens.some((token) => !token.literal && forbidden.has(token.text))) {
     problems.push("DROP, RENAME or rewrite command");
   }
@@ -299,10 +410,16 @@ const statementProblems = (
   return [...problems, ...specific];
 };
 
+interface CheckedSql {
+  readonly problems: readonly string[];
+  readonly functions: ReadonlySet<string>;
+}
+
 const sqlProblems = (
   migration: CheckMigration,
-  functions: Set<string>
-): readonly string[] => {
+  functions: ReadonlySet<string>
+): CheckedSql => {
+  const knownFunctions = new Set(functions);
   const problems: string[] = [];
   const fresh = new Set<string>();
 
@@ -312,7 +429,12 @@ const sqlProblems = (
       : [migration.statement ?? ""];
 
   for (const [index, sql] of statements.entries()) {
-    const parts = splitSqlTokens(migrationSqlTokens(sql), ";");
+    const { parts, error } = parseStatements(sql);
+
+    if (error !== undefined) {
+      problems.push(`${migration.id} statement ${index + 1}: ${error}`);
+      continue;
+    }
 
     for (const tokens of parts) {
       const text = words(tokens);
@@ -325,22 +447,22 @@ const sqlProblems = (
         migration,
         tokens,
         fresh,
-        functions
+        knownFunctions
       )) {
         problems.push(`${migration.id} statement ${index + 1}: ${failure}`);
       }
 
       if (text.startsWith(CREATE_FUNCTION)) {
-        functions.add(objectName(tokens, 2));
+        knownFunctions.add(objectName(tokens, 2));
       }
 
       if (text.startsWith("CREATE OR REPLACE FUNCTION ")) {
-        functions.add(objectName(tokens, 4));
+        knownFunctions.add(objectName(tokens, 4));
       }
     }
   }
 
-  return problems;
+  return { functions: knownFunctions, problems };
 };
 
 /**
@@ -353,7 +475,7 @@ export const migrationPhaseProblems = (
   migrations: readonly CheckMigration[]
 ): readonly string[] => {
   const problems: string[] = [];
-  const functions = new Set<string>();
+  let functions: ReadonlySet<string> = new Set();
 
   for (const migration of migrations) {
     if (migration.phase !== "expand" && migration.phase !== "contract") {
@@ -361,7 +483,13 @@ export const migrationPhaseProblems = (
         `${migration.id}: missing or unknown phase ${String(migration.phase)}`
       );
     } else if (migration.kind !== "data") {
-      problems.push(...sqlProblems(migration, functions));
+      const { problems: failures, functions: nextFunctions } = sqlProblems(
+        migration,
+        functions
+      );
+
+      problems.push(...failures);
+      functions = nextFunctions;
     }
   }
 

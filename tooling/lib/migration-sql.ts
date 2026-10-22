@@ -5,9 +5,13 @@ export interface SqlToken {
   readonly body?: string;
 }
 
-const identifier = /[a-z_][a-z_\d]*/iuy;
+const identifier = /[a-z_\u0080-\uFFFF][a-z_\d$\u0080-\uFFFF]*/iuy;
+const identifierPart = /[a-z_\d$\u0080-\uFFFF]/iu;
+const asciiLowercase = /[a-z]/gu;
 const numeric = /\d+(?:\.\d+)?/uy;
-const dollarTag = /\$[a-z_\d]*\$/iuy;
+const dollarTag = /\$(?:[a-z_][a-z_\d]*)?\$/iuy;
+const lineEnd = /[\r\n]/u;
+const escapedQuote = /^(?:e'|u&['"])/iu;
 
 const quotedEnd = (sql: string, start: number, quote: string): number => {
   let position = start + 1;
@@ -65,13 +69,22 @@ const scan = (sql: string, start: number): Scan => {
   }
 
   if (sql.startsWith("--", start)) {
-    const newline = sql.indexOf("\n", start);
+    const offset = sql.slice(start).search(lineEnd);
+    const newline = offset === -1 ? -1 : start + offset;
 
     return { end: newline === -1 ? sql.length : newline + 1, token: null };
   }
 
   if (sql.startsWith("/*", start)) {
     return { end: commentEnd(sql, start), token: null };
+  }
+
+  // These encodings need PostgreSQL escape decoding, including inside function
+  // bodies. Refuse them rather than interpret them as ordinary SQL quotes.
+  if (escapedQuote.test(sql.slice(start))) {
+    throw new Error(
+      "Escape and Unicode SQL quotes are unsupported in checked migrations"
+    );
   }
 
   if (character === "'" || character === '"') {
@@ -86,7 +99,7 @@ const scan = (sql: string, start: number): Scan => {
   dollarTag.lastIndex = start;
   const tag = dollarTag.exec(sql)?.[0];
 
-  if (tag !== undefined) {
+  if (tag !== undefined && !identifierPart.test(sql.charAt(start - 1))) {
     const close = sql.indexOf(tag, start + tag.length);
 
     if (close === -1) {
@@ -110,7 +123,12 @@ const scan = (sql: string, start: number): Scan => {
     if (match !== undefined) {
       return {
         end: start + match.length,
-        token: { literal: false, text: match.toUpperCase() },
+        token: {
+          literal: false,
+          text: match.replaceAll(asciiLowercase, (letter) =>
+            letter.toUpperCase()
+          ),
+        },
       };
     }
   }

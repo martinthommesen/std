@@ -7165,6 +7165,19 @@
         "validated": true
       },
       {
+        "check": "CHECK ((phase = ANY (ARRAY['expand'::text, 'contract'::text])))",
+        "columns": ["phase"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "platform_migration_phase",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
         "check": null,
         "columns": ["phase"],
         "deferrable": false,

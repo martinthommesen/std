@@ -2,6 +2,10 @@
 
 Use cosign 2.6.1 or a compatible newer release and a GitHub CLI with `gh attestation verify`. Install these from their official distributions and verify their published checksums. STD's pinned Linux release tools and checksums are in `docker/release-tools.sh`.
 
+## Prepare the release version
+
+Before tagging, set `packages/server/package.json`'s version to the intended release (main currently uses `0.0.3`). It is the sole source for `STD_VERSION`, PostgreSQL application names and delivery worker-version floors. Use canonical numeric `major.minor.patch`, without leading zeros, prerelease or build suffixes. Publish from the matching tag, for example `v0.0.3`; the release gate rejects any other tag/version pair before building or publishing. Keep old tags unchanged: release compatibility runs `v0.0.2` with its original code.
+
 ## Verify the image, SBOM and provenance
 
 Set the version to the published tag and the digest to the immutable digest in the signed release workflow's `image-digest.txt`. Replace the example values; use the same digest when deploying. Do not verify one digest and run a tag.

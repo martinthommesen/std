@@ -1,0 +1,40 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 17,
+      "kind": "tx",
+      "name": "missing"
+    },
+    {
+      "id": 18,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "finalize",
+      "statements": []
+    },
+    {
+      "id": 19,
+      "kind": "data",
+      "name": "missing"
+    },
+    {
+      "id": 20,
+      "kind": "data",
+      "name": "fixture",
+      "phase": "finalize",
+      "statements": []
+    },
+    {
+      "id": 21,
+      "kind": "concurrent_index",
+      "name": "missing"
+    },
+    {
+      "id": 22,
+      "kind": "concurrent_index",
+      "name": "fixture",
+      "phase": "finalize",
+      "statements": []
+    }
+  ]
+}

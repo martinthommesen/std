@@ -1,0 +1,412 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 17,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN required text NOT NULL DEFAULT NULL"
+      ]
+    },
+    {
+      "id": 18,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DROP TABLE core.old; END $$"
+      ]
+    },
+    {
+      "id": 19,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''DROP TABLE core.old''; END'"
+      ]
+    },
+    {
+      "id": 20,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE UNIQUE INDEX CONCURRENTLY uq ON core.sample (id)"]
+    },
+    {
+      "id": 21,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.copy AS SELECT * FROM core.sample"]
+    },
+    {
+      "id": 22,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["DROP TABLE core.sample"]
+    },
+    {
+      "id": 23,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample RENAME COLUMN old TO new"]
+    },
+    {
+      "id": 24,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ALTER COLUMN value TYPE bigint"]
+    },
+    {
+      "id": 25,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ALTER value SET DATA TYPE bigint"]
+    },
+    {
+      "id": 26,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ALTER COLUMN value SET NOT NULL"]
+    },
+    {
+      "id": 27,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN value text NOT NULL"]
+    },
+    {
+      "id": 28,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN value text NOT NULL, ADD COLUMN other text DEFAULT 'x'"
+      ]
+    },
+    {
+      "id": 29,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT c CHECK (value > 0)"
+      ]
+    },
+    {
+      "id": 30,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD CONSTRAINT c UNIQUE (value)"]
+    },
+    {
+      "id": 31,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD FOREIGN KEY (id) REFERENCES core.parent (id)"
+      ]
+    },
+    {
+      "id": 32,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN value int CHECK (value > 0)"
+      ]
+    },
+    {
+      "id": 33,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN value uuid DEFAULT gen_random_uuid()"
+      ]
+    },
+    {
+      "id": 34,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN value timestamptz DEFAULT now()"
+      ]
+    },
+    {
+      "id": 35,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN value integer GENERATED ALWAYS AS IDENTITY"
+      ]
+    },
+    {
+      "id": 36,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample SET TABLESPACE other"]
+    },
+    {
+      "id": 37,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample SET UNLOGGED"]
+    },
+    {
+      "id": 38,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CLUSTER core.sample"]
+    },
+    {
+      "id": 39,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["VACUUM FULL core.sample"]
+    },
+    {
+      "id": 40,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION core.old_fn() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$"
+      ]
+    },
+    {
+      "id": 41,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["DO $$ BEGIN EXECUTE 'DROP TABLE core.sample'; END $$"]
+    },
+    {
+      "id": 42,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CALL core.change_tables()"]
+    },
+    {
+      "id": 43,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN note text; DROP TABLE core.other"
+      ]
+    },
+    {
+      "id": 44,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT c CHECK (a <> E'\\'') NOT VALID, ALTER COLUMN v TYPE bigint -- ') NOT VALID"
+      ]
+    },
+    {
+      "id": 45,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a$x$ text, DROP COLUMN old, ADD COLUMN b$x$ text"
+      ]
+    },
+    {
+      "id": 46,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a text DEFAULT U&'d\\0061t'"
+      ]
+    },
+    {
+      "id": 47,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN U&\"d\\0061t\" text"]
+    },
+    {
+      "id": 48,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "/* outer /* inner */ still outer */ ALTER TABLE core.sample DROP COLUMN old"
+      ]
+    },
+    {
+      "id": 49,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a text DEFAULT '--'; DROP TABLE core.sample"
+      ]
+    },
+    {
+      "id": 50,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["-- comment\rDROP TABLE core.sample"]
+    },
+    {
+      "id": 51,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TRIGGER t BEFORE INSERT ON core.delivery EXECUTE FUNCTION core.wipe()"
+      ]
+    },
+    {
+      "id": 52,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE INDEX ix ON core.sample (id)"]
+    },
+    {
+      "id": 53,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.child () INHERITS (core.sample)"]
+    },
+    {
+      "id": 54,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.child PARTITION OF core.sample FOR VALUES FROM (1) TO (2)"
+      ]
+    },
+    {
+      "id": 55,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DELETE FROM core.config_base; END $$"
+      ]
+    },
+    {
+      "id": 56,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE core.config_base SET removed = true; END $$"
+      ]
+    },
+    {
+      "id": 57,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO core.config_base DEFAULT VALUES; END $$"
+      ]
+    },
+    {
+      "id": 58,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN MERGE INTO core.config_base USING core.config_set ON false WHEN MATCHED THEN DO NOTHING; END $$"
+      ]
+    },
+    {
+      "id": 59,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN COPY core.config_base TO STDOUT; END $$"
+      ]
+    },
+    {
+      "id": 60,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": ["CREATE INDEX ix ON core.sample (concurrently)"]
+    },
+    {
+      "id": 61,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": [
+        "CREATE FUNCTION core.f() RETURNS text LANGUAGE sql AS $$ SELECT E'\\x41' $$"
+      ]
+    },
+    {
+      "id": 62,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a text DEFAULT 'unterminated"
+      ]
+    },
+    {
+      "id": 63,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": ["/* unterminated /* nested */"]
+    },
+    {
+      "id": 64,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a$x$ text, DROP COLUMN old, ADD COLUMN b$x$ text -- trailing comment"
+      ]
+    },
+    {
+      "id": 65,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": [
+        "CREATE FUNCTION core.end_user_sessions() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN DELETE FROM core.session WHERE user_id = NEW.id; RETURN NULL; END $$"
+      ]
+    },
+    {
+      "id": 66,
+      "kind": "tx",
+      "phase": "expand",
+      "name": "fixture",
+      "statements": [
+        "CREATE TABLE core.ss (id int); CREATE TRIGGER t BEFORE INSERT ON core.ß EXECUTE FUNCTION core.fn()"
+      ]
+    }
+  ]
+}

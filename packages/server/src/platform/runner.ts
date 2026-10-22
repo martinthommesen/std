@@ -320,15 +320,17 @@ const applyConcurrentIndex = (
       .execute(LEDGER_COLUMNS)
       .pipe(Effect.flatMap(decodeLedgerColumns));
 
+    const phased = columns?.phased === true;
+
     yield* connection.execute(
-      columns?.phased === true
+      phased
         ? "INSERT INTO core.platform_migration (id, checksum, std_version, phase) VALUES ($1, $2, $3, $4)"
         : "INSERT INTO core.platform_migration (id, checksum, std_version) VALUES ($1, $2, $3)",
       [
         migration.id,
         migrationChecksum(migration),
         STD_VERSION,
-        ...(columns?.phased === true ? [migration.phase] : []),
+        ...(phased ? [migration.phase] : []),
       ]
     );
 

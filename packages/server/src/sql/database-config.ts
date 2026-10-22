@@ -37,8 +37,18 @@ export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
  */
 export const SERVER_APPLICATION_PREFIX = "std-server";
 
+/**
+ * Adds the canonical release version to an STD connection role.
+ * @param role - The STD application prefix.
+ * @returns The name exposed in pg_stat_activity.
+ */
+export const versionedApplicationName = (role: string): string =>
+  `${role}@${STD_VERSION}`;
+
 /** The versioned server connection name. */
-export const SERVER_APPLICATION_NAME = `${SERVER_APPLICATION_PREFIX}@${STD_VERSION}`;
+export const SERVER_APPLICATION_NAME = versionedApplicationName(
+  SERVER_APPLICATION_PREFIX
+);
 
 /**
  * The `application_name` of the outbox worker process, `std worker`
@@ -48,7 +58,9 @@ export const SERVER_APPLICATION_NAME = `${SERVER_APPLICATION_PREFIX}@${STD_VERSI
 export const WORKER_APPLICATION_PREFIX = "std-worker";
 
 /** The versioned worker connection name. */
-export const WORKER_APPLICATION_NAME = `${WORKER_APPLICATION_PREFIX}@${STD_VERSION}`;
+export const WORKER_APPLICATION_NAME = versionedApplicationName(
+  WORKER_APPLICATION_PREFIX
+);
 
 /**
  * The sessions `std upgrade` waits for and refuses to run beside
@@ -64,7 +76,9 @@ export const UPGRADE_BLOCKING_APPLICATION_PREFIXES: readonly string[] = [
 export const CLI_APPLICATION_PREFIX = "std-cli";
 
 /** The versioned CLI connection name. */
-export const CLI_APPLICATION_NAME = `${CLI_APPLICATION_PREFIX}@${STD_VERSION}`;
+export const CLI_APPLICATION_NAME = versionedApplicationName(
+  CLI_APPLICATION_PREFIX
+);
 
 /** Default size of the connection pool of one process. */
 export const DEFAULT_MAX_CONNECTIONS = 10;
