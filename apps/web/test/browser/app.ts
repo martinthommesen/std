@@ -1586,20 +1586,19 @@ export const captureApiRequestBodies = (page: Page): (() => string[]) => {
 
 /**
  * Opens the form's history panel and waits until it shows what it loaded:
- * its entries, "No history." or an alert.
+ * the panel no longer `aria-busy`, with its entries, "No history." or an
+ * alert.
  *
- * @param page - A record's form page whose history panel was not opened
- *   since the page loaded.
+ * @param page - A record's form page whose history panel is closed.
  * @returns The text of each entry, newest first (none when the panel
  *   shows no entries).
  */
 export const historyEntryTexts = async (page: Page): Promise<string[]> => {
-  const panel = page.locator(".history .disclosure-panel");
+  const panel = page.locator('.history .disclosure-panel[aria-busy="false"]');
 
-  // NOTE: a panel never opened shows nothing, so whatever it shows after
-  // the click is the answer to this opening ("Loading…" is no outcome).
-  // Reopened, it would show the earlier entries while they reload, with
-  // no busy state to wait for.
+  // NOTE: the panel is `aria-busy` while its entries (re)load, also while
+  // earlier entries stay on screen, so what a settled panel shows is the
+  // answer.
   await page.getByRole("button", { exact: true, name: "History" }).click();
   await panel
     .locator(".history-entry")
@@ -1632,11 +1631,10 @@ export const relatedListNames = async (page: Page): Promise<string[]> =>
     );
 
 /**
- * Opens a related list of the form and waits until it shows its first
- * page: its table no longer `aria-busy`, "No records." or an alert.
+ * Opens a related list of the form and waits until it shows its page: the
+ * panel no longer `aria-busy`, with its table, "No records." or an alert.
  *
- * @param page - A record's form page whose list was not opened since the
- *   page loaded.
+ * @param page - A record's form page whose list is closed.
  * @param name - The list's name, such as `Ticket by Assignee`.
  * @returns The IDs of the records it shows.
  */
@@ -1646,14 +1644,15 @@ export const openRelatedList = async (
 ): Promise<string[]> => {
   const button = page.getByRole("button", { exact: true, name });
   const section = page.locator(".related-list").filter({ has: button });
+  const panel = section.locator('.disclosure-panel[aria-busy="false"]');
 
-  // NOTE: a list never opened shows nothing, so whatever it shows after
-  // the click is the answer to this opening ("Loading…" is no outcome).
+  // NOTE: the panel is `aria-busy` while the list's metadata or a page
+  // loads, also while an earlier page stays on screen.
   await button.click();
-  await section
-    .locator('table[aria-busy="false"]')
-    .or(section.getByText("No records.", { exact: true }))
-    .or(section.getByRole("alert"))
+  await panel
+    .locator("table")
+    .or(panel.getByText("No records.", { exact: true }))
+    .or(panel.getByRole("alert"))
     .first()
     .waitFor({ state: "attached" });
   await rendered(page);

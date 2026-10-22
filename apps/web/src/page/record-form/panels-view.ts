@@ -275,6 +275,18 @@ const relatedContentView = (
       }),
   });
 
+/**
+ * Whether a related list is loading (decision 0020): its table's metadata
+ * or a page, also while the page loaded before stays on screen. The
+ * panel says so with `aria-busy`, so a reload is never mistaken for its
+ * answer.
+ *
+ * @param list - The related list.
+ * @returns True while a request runs.
+ */
+const isRelatedLoading = (list: RelatedList): boolean =>
+  AsyncData.isPending(list.metadata) || AsyncData.isPending(list.records);
+
 const relatedListView = (
   list: RelatedList,
   index: number,
@@ -308,7 +320,11 @@ const relatedListView = (
                   ]
                 ),
                 h.div(
-                  [...attributes.panel, h.Class("disclosure-panel")],
+                  [
+                    ...attributes.panel,
+                    h.Class("disclosure-panel"),
+                    h.AriaBusy(isRelatedLoading(list)),
+                  ],
                   list.isOpen ? relatedContentView(key, list, h) : []
                 ),
               ]
@@ -546,7 +562,11 @@ export const historyView = (model: Model, h: HtmlBuilder<Message>): Html =>
                       ]
                     ),
                     h.div(
-                      [...attributes.panel, h.Class("disclosure-panel")],
+                      [
+                        ...attributes.panel,
+                        h.Class("disclosure-panel"),
+                        h.AriaBusy(AsyncData.isPending(model.history.entries)),
+                      ],
                       model.history.isOpen ? historyContentView(model, h) : []
                     ),
                   ]

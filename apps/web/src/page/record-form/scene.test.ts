@@ -30,7 +30,12 @@ import {
   ticketWithRelated,
 } from "../../form-fixture.ts";
 import { userTable } from "../../table-fixture.ts";
-import { FocusField, LoadRecord, UpdateRecord } from "./command.ts";
+import {
+  FocusField,
+  LoadRecord,
+  LoadRelatedRecords,
+  UpdateRecord,
+} from "./command.ts";
 import { Message, OutMessage } from "./message.ts";
 import { FormMode, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
@@ -357,6 +362,52 @@ describe("the history panel", () => {
     );
   });
 
+  it("is busy while it reloads, its earlier entries still shown, and not once the answer is in", () => {
+    const reloading = after(
+      withHistory,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Laptop boots",
+      }),
+      Message.ClickedSave(),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: { ...ticketRecord, version: 4 },
+      })
+    );
+
+    scene(
+      { update, view },
+      given(reloading),
+      acknowledgePicker,
+      expect(text("Updated · version 2")).toExist(),
+      expect(selector(".history .disclosure-panel")).toHaveAttr(
+        "aria-busy",
+        "true"
+      )
+    );
+
+    scene(
+      { update, view },
+      given(
+        after(
+          reloading,
+          Message.SucceededLoadHistory({
+            entries: [entry, hidden],
+            generation: 2,
+            maybeRevision: Option.none(),
+          })
+        )
+      ),
+      acknowledgePicker,
+      expect(selector(".history .disclosure-panel")).toHaveAttr(
+        "aria-busy",
+        "false"
+      )
+    );
+  });
+
   it("is closed until opened", () => {
     scene(
       { update, view },
@@ -587,6 +638,69 @@ describe("a related list without columns", () => {
       expect(role("link", { name: TASK_ID })).toHaveAttr(
         "href",
         `/tables/help.task/records/${TASK_ID}`
+      )
+    );
+  });
+});
+
+describe("a related list loading another page", () => {
+  const KEY = "help.task/parent";
+
+  const onEmptyPage = after(
+    ready,
+    Message.SucceededLoadFormMetadata({
+      revision: REVISION_5,
+      table: ticketWithRelated,
+    }),
+    Message.ToggledRelatedList({ isOpen: true, key: KEY }),
+    Message.SucceededLoadRelatedMetadata({
+      key: KEY,
+      revision: REVISION_5,
+      table: { ...ticketTable, label: "Task", name: "help.task" },
+    }),
+    Message.SucceededLoadRelatedRecords({
+      generation: 1,
+      key: KEY,
+      maybeRevision: Option.none(),
+      page: {
+        maybeCount: Option.some(0),
+        maybeNextCursor: Option.some("c2"),
+        records: [],
+      },
+    })
+  );
+
+  it("is busy while the page loads, also when the page shown has no rows", () => {
+    scene(
+      { update, view },
+      given(onEmptyPage),
+      acknowledgePicker,
+      expect(selector(".related-list .disclosure-panel")).toHaveAttr(
+        "aria-busy",
+        "false"
+      ),
+      click(role("button", { name: "Next page" })),
+      expect(text("No records.")).toExist(),
+      expect(selector(".related-list .disclosure-panel")).toHaveAttr(
+        "aria-busy",
+        "true"
+      ),
+      Command.resolve(
+        LoadRelatedRecords,
+        Message.SucceededLoadRelatedRecords({
+          generation: 2,
+          key: KEY,
+          maybeRevision: Option.none(),
+          page: {
+            maybeCount: Option.some(0),
+            maybeNextCursor: Option.none(),
+            records: [],
+          },
+        })
+      ),
+      expect(selector(".related-list .disclosure-panel")).toHaveAttr(
+        "aria-busy",
+        "false"
       )
     );
   });
