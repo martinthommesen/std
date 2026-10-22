@@ -905,12 +905,12 @@ describe("record forms", () => {
 
           const recorded = `${model}\n${history}`;
 
+          assert.notInclude(recorded, TYPED_TEXT);
           // The record is real: it holds the form and the redacted input.
           assert.include(model, "maybeRecordForm");
           assert.include(model, fixture.agent2.name);
           assert.include(history, "ChangedWriteOnly");
           assert.include(recorded, "<redacted:write-only value>");
-          assert.notInclude(recorded, TYPED_TEXT);
         }).pipe(Effect.scoped)
     );
   });

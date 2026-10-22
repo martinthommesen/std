@@ -860,6 +860,7 @@ export const referenceOptions = async (
   await rendered(page);
 
   return await page
+    .getByRole("listbox")
     .getByRole("option")
     .evaluateAll((options) =>
       options.map((option) => (option.textContent ?? "").trim())
@@ -883,7 +884,10 @@ export const pickReference = async (
   option: string
 ): Promise<void> => {
   await referenceOptions(page, label, search);
-  await page.getByRole("option", { exact: true, name: option }).click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { exact: true, name: option })
+    .click();
   await rendered(page);
 };
 
