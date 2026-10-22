@@ -213,3 +213,35 @@ describe("a field definition's form", () => {
     expect(limited).toStrictEqual(fieldTable.fields);
   });
 });
+
+describe("a definition's create form", () => {
+  it("does not hold a create back for required fields the server sets, but still for those the user supplies", () => {
+    const roleTable: MetaTable = {
+      ...fieldTable,
+      fields: [
+        { ...column(IDS.label, "label", { kind: "text" }), required: true },
+        {
+          ...column(IDS.type, "owner_layer", { kind: "text" }),
+          required: true,
+          write: { create: "no", update: "no" },
+        },
+      ],
+      name: "core.role",
+    };
+
+    const page = after(
+      init({
+        id: 1,
+        maybeAppRevision: Option.none(),
+        mode: FormMode.Create(),
+        table: "core.role",
+      }).model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: roleTable,
+      })
+    );
+
+    expect(Object.keys(checkForm(page).problems)).toStrictEqual([IDS.label]);
+  });
+});

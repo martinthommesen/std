@@ -30,6 +30,7 @@ import {
   captureApiBodies,
   clickSort,
   inOrder,
+  listColumnCells,
   listedPages,
   navigationTables,
   openTableList,
@@ -457,50 +458,6 @@ const sameListsAsApi = async (
   await context.close();
 };
 
-/** What one cell of the list shows. */
-interface CellState {
-  /** `data-cell`: `value`, `empty`, `restricted` or `not-delivered`. */
-  readonly state: string;
-  readonly text: string;
-}
-
-/**
- * The cells of a column, by record ID.
- *
- * @param page - A list page.
- * @param label - The column's label.
- * @returns `data-cell` and the text of each row's cell in that column.
- */
-const columnCells = async (
-  page: Page,
-  label: string
-): Promise<ReadonlyMap<string, CellState>> => {
-  const headers = await page
-    .locator("table.records thead th")
-    .allTextContents();
-
-  const column = headers.findIndex((header) => header.trim().startsWith(label));
-
-  const ids = await page
-    .locator("table.records tbody tr")
-    .evaluateAll<string[], HTMLElement>((rows) =>
-      rows.map((row) => row.dataset.recordId ?? "")
-    );
-
-  const cells = await page
-    .locator(`table.records tbody tr td:nth-child(${column + 1})`)
-    .evaluateAll<CellState[], HTMLElement>((elements) =>
-      elements.map((element) => ({
-        state: element.dataset.cell ?? "",
-        text: (element.textContent ?? "").trim(),
-      }))
-    );
-
-  return new Map(
-    ids.map((id, index) => [id, cells[index] ?? { state: "", text: "" }])
-  );
-};
-
 const decodeTableList = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -532,8 +489,8 @@ const restrictedStaysHidden = async (
   await openTableList(page, origin, ASSETS);
   await setPageSize(page, 25);
 
-  const purchased = await columnCells(page, "Purchased on");
-  const docked = await columnCells(page, "Docked to");
+  const purchased = await listColumnCells(page, "Purchased on");
+  const docked = await listColumnCells(page, "Docked to");
 
   // S is lost (rule 6) and costs more than 2000 (rule 10).
   assert.strictEqual(purchased.get(S)?.state, "restricted");

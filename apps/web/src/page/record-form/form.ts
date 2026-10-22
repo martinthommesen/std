@@ -309,6 +309,30 @@ export interface FormCheck {
   readonly unknownFields: readonly string[];
 }
 
+/**
+ * Whether a `Required` error names a field the user cannot supply on this
+ * form (`write` is `no` for the form's mode, such as a definition's owner
+ * layer and state, which the server sets): the server fills it or refuses,
+ * and the form does not hold the save back for it [judgment, decision
+ * 0020].
+ *
+ * @param model - The page.
+ * @param name - The field the error names.
+ * @param tag - The error's tag.
+ * @returns True for such a `Required` error.
+ */
+const isRequiredOfTheServer = (
+  model: Model,
+  name: string,
+  tag: string
+): boolean =>
+  tag === "Required" &&
+  fieldsOf(model).some(
+    (field) =>
+      field.name === name &&
+      (isCreating(model) ? field.write.create : field.write.update) === "no"
+  );
+
 const joinProblems = (
   left: readonly string[],
   right: readonly string[]
@@ -328,7 +352,12 @@ export const checkForm = (model: Model): FormCheck => {
     (): RecordVerdict => ({ errors: [], invalidBody: false, unknownFields: [] })
   );
 
-  const fieldErrors = errorsByFieldId(fieldsOf(model), verdict.errors);
+  const fieldErrors = errorsByFieldId(
+    fieldsOf(model),
+    verdict.errors.filter(
+      (error) => !isRequiredOfTheServer(model, error.field, error._tag)
+    )
+  );
 
   const engineProblems = Option.match(metaOf(model), {
     onNone: () => ({}),

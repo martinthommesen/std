@@ -9,7 +9,7 @@
  * Text is waited for as attached, not visible: without system fonts,
  * headless Chromium gives text no height (decision 0018).
  */
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import type { Locator, Page, Response } from "playwright";
 
 /** Who signs in. */
@@ -891,6 +891,9 @@ export const pickReference = async (
   await rendered(page);
 };
 
+/** The schema revision header, as Playwright names headers. */
+const REVISION_HEADER = "std-schema-revision";
+
 const isWriteResponse = (response: Response): boolean =>
   new URL(response.url()).pathname.startsWith("/api/v1/tables/") &&
   ["POST", "PATCH"].includes(response.request().method());
@@ -903,6 +906,10 @@ export interface SaveOutcome {
   readonly body: string;
   /** Its `If-Match` header, if any. */
   readonly ifMatch: string | undefined;
+  /** The schema revision the response stated (`STD-Schema-Revision`). */
+  readonly revision: string | undefined;
+  /** The revision the request stated, the form's (`STD-Schema-Revision`). */
+  readonly requestRevision: string | undefined;
 }
 
 /**
@@ -926,8 +933,105 @@ export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
   return {
     body: response.request().postData() ?? "",
     ifMatch: response.request().headers()["if-match"],
+    requestRevision: response.request().headers()[REVISION_HEADER],
+    revision: response.headers()[REVISION_HEADER],
     status: response.status(),
   };
+};
+
+/**
+ * The number of a schema revision as the header carries it.
+ *
+ * @param revision - `<n>.<change set ID>`.
+ * @returns `<n>`.
+ */
+export const revisionNumber = (revision: string | undefined): number =>
+  Number((revision ?? "").split(".")[0]);
+
+/**
+ * Counts the writes (record creates and updates) the page sends from now
+ * on, so a test can prove that nothing was sent by itself.
+ *
+ * @param page - The page.
+ * @returns The number sent so far.
+ */
+export const countRecordWrites = (page: Page): (() => number) => {
+  const sent: string[] = [];
+
+  page.on("request", (request) => {
+    const isWrite =
+      new URL(request.url()).pathname.startsWith("/api/v1/tables/") &&
+      ["POST", "PATCH"].includes(request.method());
+
+    if (isWrite) {
+      sent.push(request.url());
+    }
+  });
+
+  return () => sent.length;
+};
+
+/**
+ * Whether the page shows the not-found page.
+ *
+ * @param page - A page.
+ * @returns True when the heading says "Page not found".
+ */
+export const isNotFoundPage = async (page: Page): Promise<boolean> => {
+  const heading = page.getByRole("heading", { level: 1 }).first();
+
+  await heading.waitFor({ state: "attached" });
+  await rendered(page);
+
+  return (await heading.textContent()) === "Page not found";
+};
+
+/** What one cell of a list shows. */
+export interface CellState {
+  /** `data-cell`: `value`, `empty`, `restricted` or `not-delivered`. */
+  readonly state: string;
+  readonly text: string;
+}
+
+/**
+ * The cells of a list column, by record ID.
+ *
+ * @param page - A list page.
+ * @param label - The column's label.
+ * @returns `data-cell` and the text of each row's cell in that column.
+ */
+export const listColumnCells = async (
+  page: Page,
+  label: string
+): Promise<ReadonlyMap<string, CellState>> => {
+  const headers = await page
+    .locator("table.records thead th")
+    .allTextContents();
+
+  const column = headers.findIndex((header) => header.trim().startsWith(label));
+
+  if (column === -1) {
+    throw new Error(`The list has no column "${label}": ${headers.join(", ")}`);
+  }
+
+  const ids = await page
+    .locator("table.records tbody tr")
+    .evaluateAll<string[], HTMLElement>((rows) =>
+      rows.map((row) => row.dataset.recordId ?? "")
+    );
+
+  const cells = await page
+    .locator(`table.records tbody tr td:nth-child(${column + 1})`)
+    .evaluateAll<CellState[], HTMLElement>((elements) =>
+      elements.map((element) => ({
+        state: element.dataset.cell ?? "",
+        text: (element.textContent ?? "").trim(),
+      }))
+    );
+
+  return new Map(
+    ids.map((id, index) => [id, cells[index] ?? { state: "", text: "" }])
+  );
 };
 
 /**
@@ -1073,3 +1177,35 @@ export const historyEntryTexts = async (page: Page): Promise<string[]> => {
       entries.map((entry) => (entry.textContent ?? "").replaceAll(/\s+/gu, " "))
     );
 };
+
+const ReceivedRecordSchema = Schema.Struct({
+  id: Schema.String,
+  values: Schema.Record(Schema.String, Schema.Json),
+  withheld: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+/** A record as an API response carried it. */
+export type ReceivedRecord = typeof ReceivedRecordSchema.Type;
+
+const decodeReceived = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Union([
+      Schema.Struct({ records: Schema.Array(ReceivedRecordSchema) }),
+      Schema.Struct({ record: ReceivedRecordSchema }),
+    ])
+  )
+);
+
+/**
+ * The records an API response body holds: a list's or a single read's, so
+ * a test can check what reached the browser record by record.
+ *
+ * @param body - A response body (see `captureApiBodies`).
+ * @returns Its records; none for other responses.
+ */
+export const receivedRecords = (body: string): readonly ReceivedRecord[] =>
+  Option.match(decodeReceived(body), {
+    onNone: () => [],
+    onSome: (decoded) =>
+      "records" in decoded ? decoded.records : [decoded.record],
+  });
