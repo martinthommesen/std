@@ -28,6 +28,7 @@ pre-commit:
       # repos/ holds the vendored Effect and Foldkit source, with their own Oxlint configs and
       # plugins we do not install; FOLDKIT.md is Foldkit's template, kept byte-for-byte;
       # .agents/ and skills-lock.json are third-party agent skills pinned by hash;
+      # packages/tmf/specs/ holds TM Forum's OpenAPI documents, pinned by SHA-256;
       # deploy/oda/crds/ is the ODA Canvas's Component CRD, copied verbatim.
       exclude:
         - "repos/**"
@@ -35,5 +36,7 @@ pre-commit:
         - ".claude/**"
         - ".agents/**"
         - "skills-lock.json"
+        - "packages/tmf/specs/*.oas.yaml"
+        - "packages/tmf/specs/*.swagger.json"
         - "deploy/oda/crds/**"
       stage_fixed: true

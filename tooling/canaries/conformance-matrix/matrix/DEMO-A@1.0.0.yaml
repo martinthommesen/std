@@ -1,0 +1,30 @@
+spec: DEMO-A
+version: 1.0.0
+title: A step 3 specification
+sources:
+  - id: DOC
+    document: Demo document
+    version: 1.0.0
+    licence: Apache-2.0
+rows:
+  - id: DEMO-A@1.0.0/DOC/1/count
+    source: Demo document 1.0.0 §1 p.1
+    level: mandatory
+    requirement: Lists carry a row count.
+    status: tested
+    tests:
+      - sample-tests.ts#rows-count
+      - sample-tests.ts#counts rows
+  - id: DEMO-A@1.0.0/DOC/2/template
+    source: "Demo document 1.0.0 §2 p.1; #/components/schemas/Thing/required; #/paths/~1thing~1{id}/get"
+    level: optional
+    requirement: A title written as a template literal counts.
+    status: tested
+    tests:
+      - sample-tests.ts#counts rows in a template
+  - id: DEMO-A@1.0.0/DOC/3/excluded
+    source: Demo document 1.0.0 §3 p.2
+    level: mandatory
+    requirement: Something STD deliberately does not do.
+    status: excluded
+    decision: D1-accepted

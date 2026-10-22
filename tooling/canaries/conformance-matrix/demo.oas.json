@@ -1,0 +1,14 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "Demo", "version": "1.0.0" },
+  "paths": {
+    "/thing/{id}": {
+      "get": { "responses": { "200": { "description": "The thing" } } }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Thing": { "type": "object", "required": ["id", "@type"] }
+    }
+  }
+}

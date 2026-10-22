@@ -1,0 +1,24 @@
+spec: DEMO-B
+version: "2.0"
+title: A step 4 specification
+sources:
+  - id: DOC
+    document: Demo practice
+    version: "2.0"
+    licence: STD's own text
+rows:
+  - id: DEMO-B@2.0/DOC/1/effect
+    source: Demo practice §1
+    level: recommended
+    requirement: An it.effect title counts.
+    status: tested
+    tests:
+      - sample-tests.ts#reads rows
+  - id: DEMO-B@2.0/DOC/2/later
+    source: Demo practice §2
+    level: mandatory
+    requirement: A row for a later step.
+    status: tested
+    step: 5
+    tests:
+      - sample-tests.ts#effect-rows
