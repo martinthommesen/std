@@ -176,6 +176,12 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("type", "layout_type", "text"),
     column("elements", "elements", "json"),
   ]),
+  table("savedFilter", "saved_filter", [
+    column("classId", "table_id", "uuid"),
+    column("name", "name", "text"),
+    column("label", "label", "text"),
+    column("condition", "condition", "json"),
+  ]),
 ];
 
 /** The table of a definition kind. */

@@ -1,0 +1,84 @@
+# What helpdesk agents may do, version 2. Administrators hold the built-in
+# `admin` role, which allows everything; nothing here applies to them.
+#
+# - Agents read every ticket and incident and may open new ones.
+# - They may change a ticket only while it is assigned to them or to no
+#   one, and only so that it stays that way: the condition is checked on
+#   the stored and on the proposed record (Contracts 3.9), so an agent can
+#   take an unassigned ticket, but not hand one to someone else.
+# - They never see the internal cost: a field they cannot read is absent
+#   from records, metadata, filters and saved filters (Contracts 3.4).
+# - They see a ticket's customer email only while it is assigned to them
+#   (new in version 2): a conditionally readable field is withheld per
+#   record, never shown as empty.
+#
+# Conditions are condition ASTs whose paths hold field IDs:
+# assignee fc99eecb-5682-4a6c-8391-60d1055c4b2e.
+accessRules:
+  - id: 31dd1a44-7d43-4c96-8c72-a3040c2cbda5
+    description: Agents read every ticket.
+    effect: allow
+    roles: [agent]
+    table: helpdesk.ticket
+    target: records
+    actions: [read]
+  - id: 441ffbe0-9df6-45b8-9df7-524ab071a8af
+    description: Agents open tickets.
+    effect: allow
+    roles: [agent]
+    table: helpdesk.ticket
+    target: records
+    actions: [create]
+  - id: c39fada7-6881-4ee1-9597-5efbf1ce2d97
+    description: Agents change tickets assigned to them or to no one.
+    effect: allow
+    roles: [agent]
+    table: helpdesk.ticket
+    target: records
+    actions: [update]
+    condition:
+      op: or
+      args:
+        - op: eq
+          left: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
+          right: { ctx: me }
+        - op: empty
+          arg: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
+  - id: 996c0eb7-c1af-4f23-82d3-9ca8cb7820e6
+    description: Agents read and write every ticket field.
+    effect: allow
+    roles: [agent]
+    table: helpdesk.ticket
+    target: fields
+    fields: "*"
+    actions: [read, create, update]
+  - id: 6b53130b-9fd0-4805-96a0-7ff44f821811
+    description: Agents read and write every incident field.
+    effect: allow
+    roles: [agent]
+    table: helpdesk.incident
+    target: fields
+    fields: "*"
+    actions: [read, create, update]
+  - id: 7d53f68c-d490-49ea-abbb-1ea7aa859247
+    description: Agents never see or set the internal cost.
+    effect: deny
+    roles: [agent]
+    table: helpdesk.ticket
+    target: fields
+    fields: [internal_cost]
+    actions: [read, create, update]
+  - id: 82d2980a-5a81-48b1-9afa-e0ebf5b7445a
+    description: Agents see the customer email of their own tickets only.
+    effect: deny
+    roles: [agent]
+    table: helpdesk.ticket
+    target: fields
+    fields: [customer_email]
+    actions: [read]
+    condition:
+      op: not
+      arg:
+        op: eq
+        left: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
+        right: { ctx: me }

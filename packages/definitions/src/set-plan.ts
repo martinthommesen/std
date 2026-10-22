@@ -8,7 +8,7 @@
  * 2. reference fields (whose FKs may point at any table of phase 1);
  * 3. indexes and overrides;
  * 4. roles, permissions and grants;
- * 5. access rules, subscriptions, choices and layouts.
+ * 5. access rules, subscriptions, choices, layouts and saved filters.
  *
  * An unchanged set plans no operation. Removals and changes that need a
  * new set version's upgrade rules (renames, type changes, retire) belong to
@@ -42,6 +42,7 @@ const PHASES: Readonly<Record<Draft["kind"], number>> = {
   override: 3,
   permission: 4,
   role: 4,
+  savedFilter: 5,
   subscription: 5,
 };
 
@@ -107,6 +108,10 @@ export const draftDependencies = (draft: Draft): readonly DefinitionId[] => {
         element.kind === "field" ? [element.fieldId] : []
       ),
     ];
+  }
+
+  if (draft.kind === "savedFilter") {
+    return [draft.classId];
   }
 
   return draft.kind === "subscription" ? [draft.classId] : [];
@@ -230,6 +235,10 @@ export const createOperation = (draft: Draft): Operation => {
 
   if (draft.kind === "layout") {
     return { definition: draft, op: "createLayout" };
+  }
+
+  if (draft.kind === "savedFilter") {
+    return { definition: draft, op: "createSavedFilter" };
   }
 
   return draft.kind === "accessRule"

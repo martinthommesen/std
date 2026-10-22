@@ -113,18 +113,26 @@ const create = (
   );
 
 /**
- * Creates the administrator unless a user with its login exists.
+ * Creates an active user with a password and roles unless a user with its
+ * login exists, as the system user through the save pipeline, in one
+ * request transaction. An existing user is left as it is: password and
+ * roles included. `std bootstrap-admin` uses it for the first
+ * administrator; example sets use it for their demo users.
  *
  * @param account - Login, display name and password.
+ * @param roleIds - The roles a new user gets.
  * @returns Whether the user was created, and its ID.
  */
-export const bootstrapAdmin = Effect.fn("BootstrapAdmin.run")(
-  function* bootstrapAdmin(account: AdminAccount) {
+export const ensureUser = Effect.fn("BootstrapAdmin.ensureUser")(
+  function* ensureUser(
+    account: AdminAccount,
+    roleIds: readonly DefinitionId[]
+  ) {
     const { request } = yield* Transactions;
     const catalog = yield* Catalog;
 
     return yield* request(
-      Effect.gen(function* createAdmin() {
+      Effect.gen(function* createUser() {
         const snapshot = yield* catalog.current;
 
         if (snapshot.class(USER_CLASS_ID) === undefined) {
@@ -149,13 +157,21 @@ export const bootstrapAdmin = Effect.fn("BootstrapAdmin.run")(
           password: Redacted.value(account.password),
         });
 
-        yield* create(USER_ROLE_CLASS_ID, {
-          role: BUILT_IN_ROLE_IDS.admin,
-          user: userId,
-        });
+        for (const role of roleIds) {
+          yield* create(USER_ROLE_CLASS_ID, { role, user: userId });
+        }
 
         return { outcome: "created", userId } satisfies BootstrapOutcome;
       })
     ).pipe(Effect.provide(BootstrapSaveServices));
   }
 );
+
+/**
+ * Creates the administrator unless a user with its login exists.
+ *
+ * @param account - Login, display name and password.
+ * @returns Whether the user was created, and its ID.
+ */
+export const bootstrapAdmin = (account: AdminAccount) =>
+  ensureUser(account, [BUILT_IN_ROLE_IDS.admin]);

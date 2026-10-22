@@ -22,6 +22,8 @@
  * - Layouts: the nearest form and list layout along the lineage, with only
  *   active fields the metadata holds; sections left without a field are
  *   dropped.
+ * - Saved filters of E and its ancestors that the list API would accept
+ *   from the caller (`saved-filters.ts`, decision 0019).
  * - Nothing of an access rule appears: no condition, no field a condition
  *   reads, no rule ID; nor a reference's allowed-records condition.
  * - Related lists: the readable, active reference fields, on tables the
@@ -61,6 +63,7 @@ import type { FieldType } from "@std/values/field-type";
 import type { Decision } from "./decision.ts";
 import { fieldDecision, knowsTable, recordDecision } from "./rules.ts";
 import type { Caller, FieldAction } from "./rules.ts";
+import { savedFiltersFor } from "./saved-filters.ts";
 import { visibleSchema } from "./visible-schema.ts";
 import type { VisibleField, VisibleSchema } from "./visible-schema.ts";
 
@@ -529,5 +532,6 @@ export const tableMetadata = (
     },
     name: summary.name,
     relatedLists: relatedListsOf(snapshot, caller, classId),
+    savedFilters: savedFiltersFor(snapshot, caller, classId),
   };
 };

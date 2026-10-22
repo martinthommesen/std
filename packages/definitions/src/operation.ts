@@ -13,7 +13,7 @@
  * through it. Lifecycle operations (Contracts 1.1, 1.6, 1.7):
  *
  * - `rename`: a new name by ID (namespaces, tables, fields, roles,
- *   permissions, subscriptions); physical names follow, generated `std_*`
+ *   permissions, subscriptions, saved filters); physical names follow, generated `std_*`
  *   names never change;
  * - `retire` and `reactivate`: fields, tables and roles;
  * - `purge`: a field or table retired in an earlier committed revision,
@@ -21,7 +21,8 @@
  * - `delete`: what a generic `DELETE` asks for. Refused with
  *   `UseRetireOrPurge` for fields, tables and namespaces; drops an index
  *   (follow-up `DROP INDEX CONCURRENTLY`); removes a role, grant, access
- *   rule, subscription, permission, choice or layout, leaving a tombstone.
+ *   rule, subscription, permission, choice, layout or saved filter,
+ *   leaving a tombstone.
  *
  * - `adopt`: moves a definition its set removed into the `local` layer
  *   (Contracts 8.1); only the config service issues it.
@@ -51,6 +52,7 @@ import {
   GrantDraftSchema,
   IndexDraftSchema,
   LayoutDraftSchema,
+  SavedFilterDraftSchema,
   NamespaceDraftSchema,
   OverrideDraftSchema,
   PermissionDraftSchema,
@@ -85,6 +87,10 @@ export const OperationSchema = Union([
   }),
   Struct({ definition: ChoiceDraftSchema, op: Literal("createChoice") }),
   Struct({ definition: LayoutDraftSchema, op: Literal("createLayout") }),
+  Struct({
+    definition: SavedFilterDraftSchema,
+    op: Literal("createSavedFilter"),
+  }),
   /**
    * Adds an override (`version` null) or replaces the stored one
    * (`version` its current version). Loosening is refused.
@@ -206,6 +212,11 @@ export const OPERATION_FORMS = {
   createNamespace: { create: "always", creates: "namespace", target: false },
   createPermission: { create: "always", creates: "permission", target: false },
   createRole: { create: "always", creates: "role", target: false },
+  createSavedFilter: {
+    create: "always",
+    creates: "savedFilter",
+    target: false,
+  },
   createSubscription: {
     create: "always",
     creates: "subscription",
@@ -274,6 +285,7 @@ export const RENAMABLE: ReadonlySet<DefinitionKind> = new Set<DefinitionKind>([
   "permission",
   "accessRule",
   "subscription",
+  "savedFilter",
 ]);
 
 /** The kinds `retire` and `reactivate` apply to. */
@@ -298,8 +310,8 @@ export const NEVER_DELETED: ReadonlySet<DefinitionKind> =
  * become true (a tightening with a data preflight); `default` is a constant.
  * Field `type` may change only in a reference's `allowedRecords` (decision
  * 0020; any other type change is refused when the change set is applied).
- * Role and permission names may change: rules refer to them by ID, so a
- * rename needs no DDL (a new set version renames them, Contracts 8.4).
+ * Role, permission and saved-filter names may change: nothing refers to
+ * them by name in stored config, so a rename needs no DDL (a new set version renames them, Contracts 8.4).
  */
 export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   accessRule: [
@@ -330,6 +342,7 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   override: [],
   permission: ["helpText", "label", "name"],
   role: ["helpText", "label", "name"],
+  savedFilter: ["condition", "label", "name"],
   subscription: [
     "classId",
     "condition",

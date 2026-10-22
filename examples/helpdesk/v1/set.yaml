@@ -1,0 +1,24 @@
+# The helpdesk example app (plan Step 2; docs/servicenow-mapping.md),
+# version 1. Version 2 lives next to it (`../v2`), and is the current one:
+# `docker compose up` loads it. The helpdesk upgrade test loads version 1,
+# adds local overrides and upgrades to version 2.
+#
+# Load it with
+#   pnpm std upgrade --set examples/helpdesk/v1
+set:
+  id: 8405d65d-4573-43cb-931c-e59fee0557a0
+  name: helpdesk
+  layer: app
+  version: 1
+  requires: [core]
+
+namespaces:
+  - id: e1e5c743-5a04-482a-870c-32b348fbb0a8
+    name: helpdesk
+    label: Helpdesk
+
+roles:
+  - id: a07fb4d5-0d16-4837-80a4-60582b7210ff
+    name: agent
+    label: Agent
+    helpText: Works tickets and incidents; never sees internal costs.

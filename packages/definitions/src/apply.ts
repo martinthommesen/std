@@ -543,7 +543,8 @@ const applyOne = (work: Work, operation: Operation): void => {
 const conditionText = (definition: Definition | undefined): string => {
   if (
     definition?.kind === "accessRule" ||
-    definition?.kind === "subscription"
+    definition?.kind === "subscription" ||
+    definition?.kind === "savedFilter"
   ) {
     return JSON.stringify(definition.condition);
   }

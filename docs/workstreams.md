@@ -29,8 +29,8 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | merged; tagged `v0.0.1` |
 | 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, per-table OpenAPI, admin editing of roles, assignments and rules; release-compatibility CI step | merged |
 | 5 | `ws/2b-web-foundation` | 2B (foundation) | `apps/web` on Foldkit and Foldkit UI over Effect 4.0.5, cookie sessions with CSRF protection, app shell, serving from `std serve`, story, scene and browser test harness | merged |
-| 5 | `ws/2b-web-pages` | 2B, 2C | lists, forms, filter builder, picker, history panel, stale forms, browser tests | planned |
-| 5 | `ws/2d-helpdesk` | 2D | helpdesk set, upgrade test, rename test, `v0.0.2` | planned |
+| 5 | `ws/2b-web-pages` | 2B, 2C | table navigation, lists, forms, filter builder, picker, related lists, history panel, stale forms, admin pages, browser tests | in progress |
+| 5 | `ws/2d-helpdesk` | 2D | helpdesk set v1 and v2, upgrade test, rename test, saved filters, compose runnable result, browser-test fixture | merged |
 | 6 | `ws/3a-hooks` | 3A | hooks and record rules | planned |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker, leases, dead letters | planned |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |

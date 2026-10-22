@@ -18,6 +18,7 @@ import type {
   GrantDefinition,
   IndexDefinition,
   LayoutDefinition,
+  SavedFilterDefinition,
   NamespaceDefinition,
   OverrideDefinition,
   PermissionDefinition,
@@ -91,6 +92,10 @@ export class ConfigSnapshot implements SnapshotKey {
   readonly #indexesByClass = new Map<DefinitionId, IndexDefinition[]>();
   readonly #choicesByField = new Map<DefinitionId, ChoiceDefinition[]>();
   readonly #layoutsByClass = new Map<DefinitionId, LayoutDefinition[]>();
+  readonly #savedFiltersByClass = new Map<
+    DefinitionId,
+    SavedFilterDefinition[]
+  >();
   readonly #classesByNamespace = new Map<DefinitionId, ClassDefinition[]>();
 
   private constructor(
@@ -208,6 +213,10 @@ export class ConfigSnapshot implements SnapshotKey {
 
     for (const layout of this.all("layout").filter(isLive)) {
       appendTo(this.#layoutsByClass, layout.classId, layout);
+    }
+
+    for (const filter of this.all("savedFilter").filter(isLive)) {
+      appendTo(this.#savedFiltersByClass, filter.classId, filter);
     }
   }
 
@@ -549,6 +558,14 @@ export class ConfigSnapshot implements SnapshotKey {
    */
   layoutsOf(classId: DefinitionId): readonly LayoutDefinition[] {
     return this.#layoutsByClass.get(classId) ?? [];
+  }
+
+  /**
+   * @param classId - A class ID.
+   * @returns The live saved filters of the class itself, sorted by ID.
+   */
+  savedFiltersOf(classId: DefinitionId): readonly SavedFilterDefinition[] {
+    return this.#savedFiltersByClass.get(classId) ?? [];
   }
 
   /**

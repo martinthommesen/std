@@ -12,7 +12,7 @@
  * | incoming equals the local value | converged: override dropped, `converged` entry |
  * | local value differs | conflict: base updated, local value stays effective, conflict opened |
  * | renamed | applied by ID (roles and permissions now; tables and fields through the lifecycle operations) |
- * | removed upstream | access rules deactivated, subscriptions disabled, choices hidden, layouts deleted, everything else retired through the lifecycle operations; local dependents reported; a role an active access rule names refuses the set |
+ * | removed upstream | access rules deactivated, subscriptions disabled, choices hidden, layouts and saved filters deleted, everything else retired through the lifecycle operations; local dependents reported; a role an active access rule names refuses the set |
  * | type changed | refused |
  *
  * Planning is pure: it returns the operations of the set's change set, the
@@ -315,6 +315,12 @@ const localClash = (
 
   if (draft.kind === "permission") {
     return [installed.permissionByName(draft.name)].find(isLocal);
+  }
+
+  if (draft.kind === "savedFilter") {
+    return installed
+      .savedFiltersOf(draft.classId)
+      .find((entry) => entry.name === draft.name && isLocal(entry));
   }
 
   return draft.kind === "subscription"
@@ -684,8 +690,9 @@ const deactivation = (current: Definition): Deactivation => {
   }
 
   // A removed layout is deleted; the class falls back to its nearest
-  // ancestor's layout. [judgment, decision 0017]
-  if (current.kind === "layout") {
+  // ancestor's layout. [judgment, decision 0017] A removed saved filter
+  // is deleted too (decision 0019).
+  if (current.kind === "layout" || current.kind === "savedFilter") {
     return {
       action: "deleted",
       op: { id: current.id, op: "delete", version: current.version },
@@ -720,6 +727,14 @@ const deactivation = (current: Definition): Deactivation => {
   };
 };
 
+/**
+ * The kinds a removal switches off or deletes instead of retiring them
+ * through the lifecycle operations (`deactivation`).
+ */
+const SWITCHED_OFF: ReadonlySet<Definition["kind"]> = new Set<
+  Definition["kind"]
+>(["accessRule", "subscription", "choice", "layout", "savedFilter"]);
+
 const planRemoval = (
   planning: Planning,
   current: Definition,
@@ -728,12 +743,7 @@ const planRemoval = (
   const { installed } = planning.input;
   const name = displayName(installed, current);
 
-  if (
-    current.kind === "accessRule" ||
-    current.kind === "subscription" ||
-    current.kind === "choice" ||
-    current.kind === "layout"
-  ) {
+  if (SWITCHED_OFF.has(current.kind)) {
     const { action, op } = deactivation(current);
 
     if (op !== undefined) {

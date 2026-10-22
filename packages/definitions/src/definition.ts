@@ -524,6 +524,40 @@ export type LayoutDraft = typeof LayoutDraftSchema.Type;
 /** A layout definition. */
 export type LayoutDefinition = typeof LayoutDefinitionSchema.Type;
 
+/** Properties of a saved filter definition that its draft has too. */
+const savedFilterFields = {
+  classId: DefinitionIdSchema,
+  /** A `filter`-profile condition (Contracts 5.10) naming fields by ID. */
+  condition: ConditionSchema,
+  kind: Literal("savedFilter"),
+  label: SchemaString,
+  /** An identifier, unique among the table's live saved filters. */
+  name: SchemaString,
+} as const;
+
+/**
+ * A saved list filter of a table (decision 0019): a named `filter`-profile
+ * condition, a config record with a stable ID and an owner layer. Its
+ * condition names fields by stable ID, so renames never break it; metadata
+ * serves it only to callers who can read every field it names.
+ */
+export const SavedFilterDefinitionSchema = Struct({
+  ...common,
+  ...savedFilterFields,
+});
+
+/** What a create operation supplies for a saved filter definition. */
+export const SavedFilterDraftSchema = Struct({
+  ...draft,
+  ...savedFilterFields,
+});
+
+/** A saved filter draft. */
+export type SavedFilterDraft = typeof SavedFilterDraftSchema.Type;
+
+/** A saved filter definition. */
+export type SavedFilterDefinition = typeof SavedFilterDefinitionSchema.Type;
+
 /** Any definition. */
 export const DefinitionSchema = Union([
   NamespaceDefinitionSchema,
@@ -538,6 +572,7 @@ export const DefinitionSchema = Union([
   SubscriptionDefinitionSchema,
   ChoiceDefinitionSchema,
   LayoutDefinitionSchema,
+  SavedFilterDefinitionSchema,
 ]);
 
 /** Any definition. */
@@ -566,6 +601,7 @@ export const DEFINITION_KINDS: readonly DefinitionKind[] = [
   "subscription",
   "choice",
   "layout",
+  "savedFilter",
 ];
 
 /**

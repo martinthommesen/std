@@ -10,8 +10,8 @@
  * | retire field | protected; display field of a class; part of a multi-field unique index | other dependents | none (`required` becomes false) |
  * | retire table | protected; an active child class; an active reference field on an active table points at it | other dependents | none |
  * | retire role | protected; an active access rule names it | other dependents | none |
- * | purge field | not retired before this change set; any dependent that is not retired, except single-field indexes, overrides, choices and layout entries | none | its single-field indexes, overrides and choices (layouts keep the entry, skipped where served) |
- * | purge table | not retired before; a child class or incoming reference field not purged; an access rule or subscription on it | none | its fields with their choices, indexes, overrides and layouts |
+ * | purge field | not retired before this change set; any dependent that is not retired, except single-field indexes, overrides, choices and layout entries (a saved filter reading it blocks, decision 0019) | none | its single-field indexes, overrides and choices (layouts keep the entry, skipped where served) |
+ * | purge table | not retired before; a child class or incoming reference field not purged; an access rule or subscription on it | none | its fields with their choices, indexes, overrides, layouts and saved filters |
  * | delete role | protected; any access rule names it | its grants | its grants |
  * | delete permission | protected | its grants | its grants |
  * | delete field, table, namespace | always (`UseRetireOrPurge`) | | |
@@ -130,6 +130,10 @@ const namingScope = (
 
   if (target.kind === "index") {
     return snapshot.indexes(target.classId);
+  }
+
+  if (target.kind === "savedFilter") {
+    return snapshot.savedFiltersOf(target.classId);
   }
 
   return target.kind === "class"
@@ -542,7 +546,8 @@ const goesWithField = (edge: DependentEdge): boolean => {
     case "grant":
     case "accessRule":
     case "subscription":
-    case "layout": {
+    case "layout":
+    case "savedFilter": {
       return false;
     }
 
@@ -567,7 +572,8 @@ const fieldPurgeBlockers = (
 
 /**
  * The definitions a class's purge takes along: its own fields with their
- * choices, its indexes, and the overrides and layouts attached to it.
+ * choices, its indexes, and the overrides, layouts and saved filters
+ * attached to it.
  *
  * @param view - The configuration so far.
  * @param target - The class.
@@ -582,6 +588,7 @@ const ownParts = (
   ...view.indexes(target.id),
   ...view.ownOverrides(target.id),
   ...view.layoutsOf(target.id),
+  ...view.savedFiltersOf(target.id),
 ];
 
 /**

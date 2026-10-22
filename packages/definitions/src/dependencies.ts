@@ -8,7 +8,9 @@
  * `condition_reads`, `subscription_on` (a subscription to its class),
  * `grant_of` (a grant to its role and its permission), `choice_of` (a
  * choice to its field) and `layout_uses` (a layout to its class and to each
- * field it shows). Step 3 adds `rule_writes`.
+ * field it shows), and `saved_filter_on` (a saved filter to its class;
+ * the fields its condition reads are `condition_reads`, decision 0019).
+ * Step 3 adds `rule_writes`.
  */
 import type { FieldType } from "@std/values/field-type";
 
@@ -26,6 +28,7 @@ import type {
   GrantDraft,
   IndexDraft,
   LayoutDraft,
+  SavedFilterDraft,
   NamespaceDraft,
   OverrideDraft,
   PermissionDraft,
@@ -51,6 +54,7 @@ export const DEPENDENCY_KINDS = [
   "grant_of",
   "choice_of",
   "layout_uses",
+  "saved_filter_on",
 ] as const;
 
 /** A dependency kind. */
@@ -74,7 +78,8 @@ export type Referencing =
   | AccessRuleDraft
   | SubscriptionDraft
   | ChoiceDraft
-  | LayoutDraft;
+  | LayoutDraft
+  | SavedFilterDraft;
 
 /** One dependency: `from` refers to `to`. */
 export interface Dependency {
@@ -98,6 +103,7 @@ export const REFERENCING_KINDS: ReadonlySet<DefinitionKind> =
     "subscription",
     "choice",
     "layout",
+    "savedFilter",
   ]);
 
 const edge = (
@@ -224,6 +230,13 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
     ];
   }
 
+  if (definition.kind === "savedFilter") {
+    return [
+      edge(id, definition.classId, "saved_filter_on"),
+      ...conditionEdges(id, definition.condition),
+    ];
+  }
+
   return definition.kind === "subscription"
     ? [
         edge(id, definition.classId, "subscription_on"),
@@ -249,7 +262,9 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
  * - subscription: `subscription_on` its class, `condition_reads` each field
  *   its condition reads;
  * - choice: `choice_of` its field;
- * - layout: `layout_uses` its class and each field element.
+ * - layout: `layout_uses` its class and each field element;
+ * - saved filter: `saved_filter_on` its class, `condition_reads` each
+ *   field its condition reads (every hop).
  *
  * @param definition - Any definition.
  * @returns Its dependencies, sorted by kind and target.
