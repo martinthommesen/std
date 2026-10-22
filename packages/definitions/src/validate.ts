@@ -438,7 +438,10 @@ export const defaultProblem = (
 };
 
 /** An auto-number prefix: a letter, then up to 15 letters, digits, `_`, `-`. */
-const NUMBER_PREFIX = /^[A-Za-z][\w-]{0,15}$/u;
+// It ends with a character that is not a digit, so a prefix and the digits
+// after it never read as another prefix's number: past seven digits, "A"
+// with 10000001 would equal "A1" with 0000001 (decision 0017).
+const NUMBER_PREFIX = /^[A-Za-z](?:[\w-]{0,14}[A-Z_a-z-])?$/u;
 
 /** Digits an auto-number may need after its prefix: a bigint's 19. */
 const NUMBER_DIGITS = 19;
@@ -459,7 +462,7 @@ export const numberPrefixProblem = (
   }
 
   if (!NUMBER_PREFIX.test(prefix)) {
-    return "An auto-number prefix is 1 to 16 characters: a letter, then letters, digits, _ or -.";
+    return "An auto-number prefix is 1 to 16 characters: a letter, then letters, digits, _ or -, ending with a character that is not a digit.";
   }
 
   return maxLengthOf(type) < prefix.length + NUMBER_DIGITS

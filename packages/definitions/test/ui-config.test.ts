@@ -635,6 +635,19 @@ describe("auto-number prefixes", () => {
       replace({ ...w.number, numberPrefix: "1X" }),
       "invalidAutoNumber"
     );
+    // A prefix ending in a digit could read as another prefix's number.
+    assert.include(
+      replace({ ...w.number, numberPrefix: "A1" }),
+      "invalidAutoNumber"
+    );
+    assert.notInclude(
+      replace({ ...w.number, numberPrefix: "A1-" }),
+      "invalidAutoNumber"
+    );
+    assert.notInclude(
+      replace({ ...w.number, numberPrefix: "A" }),
+      "invalidAutoNumber"
+    );
     assert.include(
       replace({ ...w.number, required: true }),
       "invalidAutoNumber"

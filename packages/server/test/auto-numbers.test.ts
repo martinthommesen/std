@@ -7,9 +7,11 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
+import { DefinitionInvalid } from "@std/definitions/problems";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber, Ref, Schedule } from "effect";
 
+import { TestDatabase } from "../../testing/src/test-database.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { formatNumber } from "../src/records/auto-numbers.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
@@ -64,6 +66,23 @@ const createIn = (classId: string, body: Readonly<Record<string, JsonValue>>) =>
     body: { due: "2026-10-22", ...body },
     endpointClassId: classId,
   });
+
+// Waits until a session of this database waits for a lock while running a
+// statement like the pattern.
+const waitingOn = (pattern: string) =>
+  values(
+    `SELECT count(*)::text AS value FROM pg_stat_activity
+     WHERE datname = current_database() AND pid <> pg_backend_pid()
+       AND wait_event_type = 'Lock' AND query LIKE $1`,
+    [pattern]
+  ).pipe(
+    Effect.repeat({
+      schedule: Schedule.spaced("20 millis"),
+      until: ([count]) => count !== "0",
+    }),
+    Effect.timeout("20 seconds"),
+    Effect.orDie
+  );
 
 // The numbers of every row of a table, sorted.
 const numbersIn = (table: string, column: string) =>
@@ -392,6 +411,203 @@ describe("auto-numbers", () => {
           assert.strictEqual(ordered, "true");
           assert.strictEqual((yield* runDoctor()).exitCode, 0);
         })
+    );
+    dbTest.effect(
+      "a prefix ending in a digit is refused: past seven digits it could read as another prefix's number",
+      () =>
+        Effect.gen(function* digitPrefix() {
+          const ambiguous = addField(
+            ticket.id,
+            "code_a1",
+            { kind: "text", maxLength: 40 },
+            { numberPrefix: "A1" }
+          );
+
+          const refused = yield* Effect.flip(change([ambiguous.op]));
+
+          assert.instanceOf(refused, DefinitionInvalid);
+          assert.include(
+            refused instanceof DefinitionInvalid
+              ? refused.problems.map((entry) => entry.code)
+              : [],
+            "invalidAutoNumber"
+          );
+
+          // An override prefix follows the same rule.
+          const override = addOverride(problem.id, number.id, {
+            numberPrefix: "PRB2",
+          });
+
+          const overrideRefused = yield* Effect.flip(change([override.op]));
+
+          assert.strictEqual(overrideRefused._tag, "DefinitionInvalid");
+        })
+    );
+
+    dbTest.effect(
+      "numbers widen past 9,999,999 and two prefixes of one field never meet at the boundary",
+      () =>
+        Effect.gen(function* boundary() {
+          const wide = createClass("wide");
+
+          const serial = addField(
+            wide.id,
+            "serial",
+            { kind: "text", maxLength: 40 },
+            { numberPrefix: "A" }
+          );
+
+          const wideChild = createClass("wide_child", { parentId: wide.id });
+
+          // "A1-" is the nearest valid look-alike of "A1", which is refused.
+          const childPrefix = addOverride(wideChild.id, serial.id, {
+            numberPrefix: "A1-",
+          });
+
+          yield* change([wide.op, serial.op, wideChild.op, childPrefix.op]);
+
+          // The parent's counter just below the padding boundary.
+          yield* values(
+            `INSERT INTO core.number_counter (field_id, prefix, last_value)
+             VALUES ($1::uuid, 'A', 9999998) RETURNING prefix AS value`,
+            [serial.id]
+          );
+
+          const below = yield* createRecord({
+            body: {},
+            endpointClassId: wide.id,
+          });
+
+          const above = yield* createRecord({
+            body: {},
+            endpointClassId: wide.id,
+          });
+
+          const child = yield* createRecord({
+            body: {},
+            endpointClassId: wideChild.id,
+          });
+
+          const table = '"site"."wide"';
+
+          assert.strictEqual(
+            yield* numberOf(table, below.id, "serial"),
+            "A9999999"
+          );
+          assert.strictEqual(
+            yield* numberOf(table, above.id, "serial"),
+            "A10000000"
+          );
+          assert.strictEqual(
+            yield* numberOf(table, child.id, "serial"),
+            "A1-0000001"
+          );
+
+          const all = yield* numbersIn(table, "serial");
+
+          assert.strictEqual(new Set(all).size, all.length);
+        })
+    );
+
+    dbTest.effect(
+      "a backfill batch and a create referencing its rows never deadlock",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* lockOrder() {
+            const database = yield* TestDatabase;
+            const vault = createClass("vault");
+            const shelf = createClass("shelf", { parentId: vault.id });
+
+            const link = addField(shelf.id, "link", {
+              kind: "reference",
+              targetClassId: vault.id,
+            });
+
+            yield* change([vault.op, shelf.op, link.op]);
+            yield* insertRecords(['"site"."vault"'], vault.id, 2);
+
+            const [, second] = yield* values(
+              `SELECT id::text AS value FROM "site"."vault" ORDER BY id`
+            );
+
+            const tag = addField(
+              vault.id,
+              "tag",
+              { kind: "text", maxLength: 40 },
+              { numberPrefix: "V" }
+            );
+
+            const between = yield* Deferred.make<boolean>();
+            const createWaits = yield* Deferred.make<boolean>();
+            const fired = yield* Ref.make(false);
+            const blocker = yield* database.session("shelf-blocker");
+
+            // Between the first and the second batch: a create of a shelf
+            // takes the counter, inserts its vault row, and waits on the
+            // shelf table, which the blocker holds. Its next step is the
+            // reference check on the second vault row, the row the next
+            // batch locks before it waits for the counter.
+            const hook = Effect.fn("test.backfillHook")(function* backfillHook(
+              label: string
+            ) {
+              const first =
+                label.startsWith("backfill:") &&
+                !(yield* Ref.getAndSet(fired, true));
+
+              if (first) {
+                yield* Deferred.succeed(between, true);
+                yield* Deferred.await(createWaits);
+              }
+            });
+
+            const backfill = yield* Effect.forkChild(
+              change([tag.op]).pipe(
+                Effect.provideService(BackfillBatchSize, 1),
+                Effect.provideService(StepBoundary, hook)
+              )
+            );
+
+            yield* Deferred.await(between);
+            yield* blocker.query("BEGIN");
+            yield* blocker.query('LOCK TABLE "site"."shelf" IN SHARE MODE');
+
+            const create = yield* Effect.forkChild(
+              createRecord({
+                body: { link: second ?? "" },
+                endpointClassId: shelf.id,
+              })
+            );
+
+            yield* waitingOn('INSERT INTO "site"."shelf"%');
+            yield* Deferred.succeed(createWaits, true);
+            yield* waitingOn("%number_counter%");
+            yield* blocker.query("COMMIT");
+
+            const created = yield* Fiber.join(create);
+            const result = yield* Fiber.join(backfill);
+
+            assert.strictEqual(result.state, "completed");
+            assert.match(
+              yield* numberOf('"site"."vault"', created.id, "tag"),
+              /^V\d{7}$/u
+            );
+
+            // The step ran once, without a deadlock in between.
+            const [attempts] = yield* values(
+              `SELECT attempts::text || ':' || coalesce(last_error, '') AS value
+               FROM core."schema_change_step"
+               WHERE change_id = $1::uuid AND kind = 'backfill'`,
+              [result.changeSetId ?? ""]
+            );
+
+            assert.strictEqual(attempts, "1:");
+
+            const all = yield* numbersIn('"site"."vault"', "tag");
+
+            assert.strictEqual(all.length, 3);
+            assert.strictEqual(new Set(all).size, 3);
+          })
+        )
     );
   });
 });

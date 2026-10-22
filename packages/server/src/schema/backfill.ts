@@ -8,13 +8,23 @@ import { stringifyJson } from "@std/values/json";
  * record table while `CONFIG_KEY` is held exclusively, 1.4). It works in
  * batches: each batch is one autocommit statement that locks up to
  * `BackfillBatchSize` rows whose column is still empty, in `id` order after
- * the stored keyset cursor (`FOR UPDATE`), takes a range of numbers per
+ * the stored keyset cursor (`FOR NO KEY UPDATE`), takes a range of numbers per
  * prefix from `core.number_counter` (the counter saves use, so a backfilled
  * number never repeats one a save took), writes each row's number with the
  * effective prefix of its concrete class, and stores the new cursor in the
  * step's `details`, all in one transaction. A resumed step continues from
  * the cursor; a last sweep from the start numbers rows the cursor passed
  * (none, unless a table owner inserted rows behind it).
+ *
+ * Lock order: a batch locks its rows before the counter, while a create
+ * takes the counter before its foreign keys' `KEY SHARE` locks on the rows
+ * it references. `FOR NO KEY UPDATE` does not conflict with `KEY SHARE`
+ * (the batch writes no key column), so a create referencing a row of the
+ * batch never waits for it and the two cannot deadlock; `FOR UPDATE` would
+ * (`auto-numbers.test.ts`, "a backfill batch and a create referencing its
+ * rows"). If an index makes the number column a key column, the UPDATE
+ * upgrades the lock only after the batch holds the counter, when no create
+ * of this field can hold it.
  *
  * Backfilled rows keep their version and get no change entry [judgment]:
  * the number is assigned as if the field had always had it, and no client
@@ -77,7 +87,7 @@ const batchStatement = (
 ): string => `WITH batch AS (
   SELECT t.id, t.class_id FROM ${table} AS t
   WHERE t.${column} IS NULL AND ($2::uuid IS NULL OR t.id > $2::uuid)
-  ORDER BY t.id LIMIT $3::int4 FOR UPDATE
+  ORDER BY t.id LIMIT $3::int4 FOR NO KEY UPDATE
 ), prefixed AS (
   SELECT b.id, coalesce(p.prefix, $4::text) AS prefix
   FROM batch AS b LEFT JOIN jsonb_each_text($5::jsonb) AS p (class_id, prefix) ON p.class_id::uuid = b.class_id
