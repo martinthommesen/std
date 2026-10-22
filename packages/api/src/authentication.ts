@@ -20,6 +20,9 @@ import type { SessionToken } from "./session-token.ts";
  * Requires a bearer token or the session cookie and provides it as
  * {@link SessionToken}.
  */
+// Reading a header or a cookie needs the request, so the request services
+// are part of what an HTTP middleware requires.
+// @effect-diagnostics-next-line leakingRequirements:off
 export class Authentication extends HttpApiMiddleware.Service<
   Authentication,
   { provides: SessionToken }

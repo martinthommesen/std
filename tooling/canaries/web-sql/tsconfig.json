@@ -5,7 +5,11 @@
       {
         "name": "@effect/language-service",
         "allowedExperimentalApis": [],
-        "allowedUnstableApis": ["effect/http-api", "effect/http"],
+        "allowedUnstableApis": [
+          "effect/http-api",
+          "effect/http",
+          "@effect/platform-browser"
+        ],
         "diagnosticSeverity": {
           "unstableApiUsage": "error",
           "experimentalApiUsage": "error",

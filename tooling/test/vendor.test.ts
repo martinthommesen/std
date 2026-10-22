@@ -9,7 +9,8 @@ import { runTool } from "./run-tools.ts";
 
 // Contracts 9, "Acceptance tests": the vendored Effect source equals the tag
 // of the lockfile's version; docs/decisions/0010-foldkit-tooling.md: so does
-// the vendored Foldkit source once foldkit is installed, and FOLDKIT.md equals
+// the vendored Foldkit source (foldkit must be installed: decision 0018),
+// and FOLDKIT.md equals
 // its template. Each case is a throwaway git repository that vendors tiny
 // "upstream" trees under repos/, with the trailers tooling/vendor.ts writes.
 const effectCommit = "7f524e25cfb49a71ac39b0f44278d08d40dda5de";
@@ -128,7 +129,11 @@ const vendoredRepo = async (
 ): Promise<string> => {
   const root = path.join(temporary, name);
 
-  write(root, "pnpm-lock.yaml", lockfile(breakage.lockedFoldkit ?? []));
+  write(
+    root,
+    "pnpm-lock.yaml",
+    lockfile(breakage.lockedFoldkit ?? ["0.169.0"])
+  );
   write(root, "FOLDKIT.md", breakage.foldkitGuide ?? guideText);
   await git(root, ["init", "-q"]);
   await vendor(root, {
@@ -265,6 +270,17 @@ describe("vendored-foldkit-check", () => {
     );
     expect(result.output).toContain("matching the lockfile");
     expect(result.code).toBe(0);
+  });
+
+  it("fails when the lockfile does not install foldkit", async () => {
+    const result = await checkVendor(
+      await vendoredRepo("foldkit-missing", { lockedFoldkit: [] })
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      "pnpm-lock.yaml: foldkit is not resolved, but repos/foldkit needs it"
+    );
   });
 
   it("fails when the lockfile's foldkit is not the vendored tag", async () => {
