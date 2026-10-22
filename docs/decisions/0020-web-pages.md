@@ -163,7 +163,7 @@ Not done: moving focus to the first problem when "Apply" fails.
 ### Notes
 
 - The DevTools MCP tools were not available to this workstream's agent session; the Model and Messages were checked through story tests and the running app through Playwright screenshots.
-- On a host without fontconfig (no `/etc/fonts`), Playwright's headless Chromium aborts at start ("SkFontMgr_FontConfigInterface ... Not implemented"); every browser test fails, the foundation's too. Pointing `FONTCONFIG_FILE` at a configuration with any font directory fixes it; CI installs Chromium with its dependencies and is not affected.
+- On a host without fontconfig (no `/etc/fonts`), Playwright's headless Chromium aborts at start ("SkFontMgr_FontConfigInterface ... Not implemented"); every browser test fails, the foundation's too. Fixed in the launcher, not the host (commit 5e173004): `launchBrowser` (`test/browser/support.ts`), which every browser test (`pnpm --filter @std/web test:browser` directly or through `ci:local`) uses, gives Chromium a fontconfig file made per run: the system configuration where there is one, plus the DejaVu fonts of the pinned dev dependency `dejavu-fonts-ttf`. No `FONTCONFIG_FILE` or hand-made file is needed; CI keeps its system fonts.
 
 ### Open items
 
