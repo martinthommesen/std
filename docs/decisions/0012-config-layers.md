@@ -21,7 +21,7 @@ Status: accepted, 2026-10-21 (workstream 1B). Code: `packages/definitions/src/{l
 | `server/config/config-service` | `ConfigService` and its functions `editDefinition`, `removeOverride`, `resolveConflict`, `adopt` |
 | `server/config/lifecycle` | the 1A seam: `SCHEMA_LIFECYCLE` (retire, rename, reactivate), `openChangeSets`, `resumeInterrupted` |
 | `server/config/{set-refused,config-edit-refused,upgrade-plan-stale}`, `server/schema/config-state-changed` | the new errors |
-| `server/doctor/*` | `runDoctor` and the 16 checks |
+| `server/doctor/*` | `runDoctor` and the 17 checks |
 | `server/cli/{main,format}` | `std upgrade [--plan] [--json] [--expect <hash>] [--report <file>] [--set <dir>]...`, `std doctor [--json]` |
 
 ## Tables (migration 0005)
@@ -84,7 +84,7 @@ Every write is one change set whose main transaction writes the effective record
 
 ## `doctor` API
 
-`runDoctor(options?)` (`@std/server/doctor/doctor`) needs `Catalog` and `Transactions`. It runs every check in one `Transactions.diagnostic` transaction (decision 0002, "Diagnostic transactions"): REPEATABLE READ READ ONLY, so all checks see one snapshot and Postgres refuses any write; it reads `core.config_state` directly instead of calling `begin_request()` and loads the definitions from their tables in that transaction (never from the process's catalog cache, so a direct edit without a revision bump is seen), so it takes no advisory lock and never waits for a config commit or a coordinator holding `CONFIG_KEY` or `SCHEMA_KEY` (tested while another session holds both); every statement is marked `readOnly`; a table read waits at most 5 s for a lock; past that the transaction rolls back and the report holds one `diagnosticTimeout` error (check 0, `doctor` itself) naming the strongly locked relations and their PIDs, read in a second short diagnostic transaction (tested with ACCESS EXCLUSIVE held on `core.config_state`). It returns `{ findings, exitCode }`; each `Finding` has `check` (1 to 16), `code`, `severity` (`error`, `warning`, `info`), `message` and `subject`. `exitCodeOf` gives 0 clean, 1 on any error, 2 for warnings only. Tests call it directly (`(yield* runDoctor()).exitCode === 0`).
+`runDoctor(options?)` (`@std/server/doctor/doctor`) needs `Catalog` and `Transactions`. It runs every check in one `Transactions.diagnostic` transaction (decision 0002, "Diagnostic transactions"): REPEATABLE READ READ ONLY, so all checks see one snapshot and Postgres refuses any write; it reads `core.config_state` directly instead of calling `begin_request()` and loads the definitions from their tables in that transaction (never from the process's catalog cache, so a direct edit without a revision bump is seen), so it takes no advisory lock and never waits for a config commit or a coordinator holding `CONFIG_KEY` or `SCHEMA_KEY` (tested while another session holds both); every statement is marked `readOnly`; a table read waits at most 5 s for a lock; past that the transaction rolls back and the report holds one `diagnosticTimeout` error (check 0, `doctor` itself) naming the strongly locked relations and their PIDs, read in a second short diagnostic transaction (tested with ACCESS EXCLUSIVE held on `core.config_state`). It returns `{ findings, exitCode }`; each `Finding` has `check` (1 to 17), `code`, `severity` (`error`, `warning`, `info`), `message` and `subject`. `exitCodeOf` gives 0 clean, 1 on any error, 2 for warnings only. Tests call it directly (`(yield* runDoctor()).exitCode === 0`).
 
 | # | Codes (severity) |
 | --- | --- |
@@ -105,6 +105,7 @@ Every write is one change set whose main transaction writes the effective record
 | 14 | `unicodeVersion` (error: the fold table's version, `@std/values/fold-table`, against `unicode_version()`, compared without trailing `.0`) |
 | 15 | `encoding` (error), `clientConnectionCheckInterval` (warning) |
 | 16 | `definitionRevisionMissing`, `definitionRevisionStale` (error) |
+| 17 | `databaseTls` (informational): observed Postgres TLS protocol/cipher or plaintext; startup enforces the transport policy (decision 0028) |
 
 Open conflicts are informational, because open conflicts do not block the system (Contracts 8.4) and the Step 4 release test expects `doctor` to exit 0 with expected conflicts. Orphans are warnings: they are reported and never dropped.
 

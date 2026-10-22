@@ -95,6 +95,7 @@ export const makeDedicatedConnection: (
     applicationName: options?.applicationName ?? settings.applicationName,
     keepAlive: true,
     startupParameters: COORDINATOR_KEEPALIVE_PARAMETERS,
+    transport: settings.directTransport,
     url: settings.directUrl,
   });
 

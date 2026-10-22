@@ -116,7 +116,11 @@ const startChild = (
   Effect.acquireRelease(
     Effect.sync(() =>
       spawn(process.execPath, [CHILD_SCRIPT, set], {
-        env: { ...process.env, STD_DATABASE_URL: url },
+        env: {
+          ...process.env,
+          STD_DATABASE_DIRECT_URL: url,
+          STD_DATABASE_URL: url,
+        },
         stdio: "ignore",
       })
     ),

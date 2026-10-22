@@ -17,6 +17,7 @@
     "@std/api": "workspace:*",
     "@std/conditions": "workspace:*",
     "@std/definitions": "workspace:*",
+    "@std/postgres": "workspace:*",
     "@std/server": "workspace:*",
     "@std/values": "workspace:*",
     "effect": "catalog:"

@@ -23,6 +23,7 @@
  * | 14 | fold table Unicode version equals `unicode_version()` | `check-server` |
  * | 15 | UTF8 encoding, `client_connection_check_interval` 0 | `check-server` |
  * | 16 | latest definition revision equals the effective record | `check-config` |
+ * | 17 | observed Postgres TLS protocol and cipher (informational) | `check-server` |
  */
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import { Effect, Schema } from "effect";
@@ -60,6 +61,7 @@ import {
   stdSchemas,
 } from "./check-schema.ts";
 import {
+  checkDatabaseTls,
   checkExternalIdentities,
   checkLedger,
   checkServerSettings,
@@ -126,6 +128,7 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkLedger(options.migrations ?? PLATFORM_MIGRATIONS)),
     ...(yield* checkUnicodeVersion),
     ...(yield* checkServerSettings),
+    ...(yield* checkDatabaseTls),
   ];
 
   // The platform tables are compared with their migrations first and on

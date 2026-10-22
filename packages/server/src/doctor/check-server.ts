@@ -219,3 +219,32 @@ export const checkServerSettings = Effect.gen(function* checkServerSettings() {
 
   return findings;
 });
+
+const decodeTls = decodeRows(
+  Schema.Struct({
+    cipher: Schema.NullOr(Schema.String),
+    ssl: Schema.Boolean,
+    version: Schema.NullOr(Schema.String),
+  })
+);
+
+/** Reports the current backend's observed TLS state, without changing exit status. */
+export const checkDatabaseTls = Effect.gen(function* checkDatabaseTls() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const [row] = yield* readOnly(sql`
+    SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()
+  `).pipe(Effect.flatMap(decodeTls));
+
+  return [
+    finding(
+      17,
+      "info",
+      "databaseTls",
+      row?.ssl === true
+        ? `Postgres connection uses ${row.version ?? "TLS"}, cipher ${row.cipher ?? "unknown"}.`
+        : "Postgres connection is not encrypted (local socket/loopback or explicit dangerous opt-out).",
+      "pg_stat_ssl"
+    ),
+  ];
+});

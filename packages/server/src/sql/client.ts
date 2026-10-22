@@ -33,6 +33,7 @@ export const PgLive: Layer.Layer<
 
     const config = yield* connectionConfig({
       applicationName: settings.applicationName,
+      transport: settings.transport,
       url: settings.url,
     });
 

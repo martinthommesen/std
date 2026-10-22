@@ -257,6 +257,8 @@ Checks:
 15. The database encoding is UTF8 (5.5), and `client_connection_check_interval` is 0 (1.5).
 16. Each definition's latest `core.definition_revision` row equals its effective record (4.4). A row written before a release added a property is read with that property's documented default (absent `numberPrefix` and `choices` are null), so old rows are not drift and real differences still are [decision 0017].
 
+17. Observed Postgres connection TLS protocol and cipher from `pg_stat_ssl`, or plaintext (informational: `databaseTls`); startup enforces the transport policy.
+
 ### Acceptance tests
 
 - Rename of a local field used by an index and an access rule: the rule still works, the index name is unchanged, the old name gets `UnknownField`, older history reads under the new name.

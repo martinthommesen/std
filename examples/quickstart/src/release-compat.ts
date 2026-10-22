@@ -56,6 +56,7 @@ const databaseEnv = (url: string): NodeJS.ProcessEnv => ({
   QUICKSTART_BOB_PASSWORD: PASSWORDS.bob,
   STD_ADMIN_LOGIN: "administrator",
   STD_ADMIN_PASSWORD: PASSWORDS.admin,
+  STD_DATABASE_DIRECT_URL: url,
   STD_DATABASE_URL: url,
   STD_HTTP_HOST: "127.0.0.1",
   STD_HTTP_PORT: "0",

@@ -122,6 +122,7 @@ export const startServe = (url: string) =>
         const spawned = spawn(process.execPath, [CLI_SCRIPT, "serve"], {
           env: {
             ...process.env,
+            STD_DATABASE_DIRECT_URL: url,
             STD_DATABASE_URL: url,
             STD_HTTP_HOST: "127.0.0.1",
             STD_HTTP_PORT: "0",
@@ -159,7 +160,12 @@ export const runCli = (
 ) =>
   Effect.callback<CliResult>((resume) => {
     const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      env: { ...process.env, ...env, STD_DATABASE_URL: url },
+      env: {
+        ...process.env,
+        STD_DATABASE_DIRECT_URL: url,
+        ...env,
+        STD_DATABASE_URL: url,
+      },
     });
 
     const chunks: string[] = [];

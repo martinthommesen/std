@@ -9,41 +9,15 @@
  * `STD_DATABASE_URL` naming the database.
  */
 import { NodeRuntime } from "@effect/platform-node";
-import {
-  DatabaseConfig,
-  DEFAULT_DATABASE_URL,
-} from "@std/server/sql/database-config";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
 import { SqlLayer } from "@std/server/sql/layer";
 import { SCHEMA_KEY } from "@std/server/sql/locks";
-import { Config, Effect, Layer, Redacted } from "effect";
+import { Effect, Layer } from "effect";
 
+import { childDatabaseConfig } from "./index-build-config.ts";
 import { INDEX_BUILD_APPLICATION_NAME } from "./index-build-names.ts";
 
 const [statement] = process.argv.slice(2);
-
-/**
- * `STD_DATABASE_URL`, redacted, defaulting to the development database: the
- * same recipe as the SQL layer's `DatabaseConfig.fromEnv`.
- */
-const databaseUrlConfig = Config.Redacted("STD_DATABASE_URL").pipe(
-  Config.withDefault(Redacted.make(DEFAULT_DATABASE_URL))
-);
-
-/** One connection to the database the parent probe names. */
-const childDatabaseConfig = Layer.effect(
-  DatabaseConfig,
-  Effect.gen(function* readChildConfig() {
-    const url = yield* databaseUrlConfig;
-
-    return DatabaseConfig.of({
-      applicationName: INDEX_BUILD_APPLICATION_NAME,
-      directUrl: url,
-      maxConnections: 1,
-      url,
-    });
-  })
-);
 
 const services = SqlLayer.pipe(Layer.provideMerge(childDatabaseConfig));
 

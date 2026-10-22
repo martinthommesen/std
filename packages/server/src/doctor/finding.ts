@@ -10,7 +10,7 @@ export type Severity = "error" | "warning" | "info";
 /** One finding of one check. */
 export interface Finding {
   /**
-   * The check's number in Contracts 1.10 (1 to 16), or 0 for `doctor`
+   * The check's number in Contracts 1.10 (1 to 17), or 0 for `doctor`
    * itself (`diagnosticTimeout`: it could not finish its checks).
    */
   readonly check: number;

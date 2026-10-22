@@ -36,6 +36,8 @@ Every profile sets `unstableApiUsage`, `experimentalApiUsage`, `outdatedApi`, `o
 
 Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`, `tmf`) have an empty list. `tmf` (Step 3) is plain although it will hold the TMF Open API framework: its mappings (attribute and state maps, TMF630 query translation onto the condition AST, event rendering, payload shapes) are pure functions over definitions and records, and the routes, the record-service calls and every other effect live in `server/http/tmf/` (Contracts 11.1), so the package never needs more than Schema; its `specs/` directory holds the pins and the vendored OpenAPI documents, which its tests and the tooling read (decision 0026). Test files (`test/**/*`) of every profile, plain included, get the server entries plus `@effect/vitest`, so any package's tests can use Postgres; overrides replace the base list, so the entries are repeated.
 
+`@std/postgres` uses the `api` profile, the narrowest existing profile that permits its stable Effect config, error and redaction APIs and Node certificate-file I/O. The `plain` profile forbids both Effect effects and Node built-ins. Its source needs no unstable module; the wider `server` profile would grant unnecessary SQL and platform access. No profile allow list changes.
+
 Every Effect upgrade PR re-reads the API reference of the allowed modules and removes entries for modules promoted to stable.
 
 ## "Schema only" in plain packages

@@ -83,6 +83,7 @@ const startChild = (
         spawn(process.execPath, [CHILD_SCRIPT], {
           env: {
             ...process.env,
+            STD_DATABASE_DIRECT_URL: url,
             STD_DATABASE_URL: url,
             STD_TEST_EFFECT: kind,
             STD_TEST_SUBSCRIPTION: subscriptionId,

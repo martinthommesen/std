@@ -93,6 +93,7 @@ const envFor = (url: string, login = "administrator"): NodeJS.ProcessEnv => ({
   ...cleanEnv(),
   STD_ADMIN_LOGIN: login,
   STD_ADMIN_PASSWORD: ADMIN_PASSWORD,
+  STD_DATABASE_DIRECT_URL: url,
   STD_DATABASE_URL: url,
   STD_HTTP_HOST: "127.0.0.1",
   STD_HTTP_PORT: "0",
