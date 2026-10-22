@@ -11,7 +11,7 @@
  * only risk a stale description. The web app's files keep their own cache
  * headers (`web-app.ts`).
  */
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import {
   HttpEffect,
   HttpRouter,
@@ -25,35 +25,58 @@ const API_PATH_PREFIX = "/api/";
 
 /**
  * The server middleware `std serve` passes to `HttpRouter.serve`: the last
- * word on a failed request. A response hook (the revision header,
- * `schema-revision-header.ts`) can fail while the response is being
+ * word on a failed request under `/api/`. A response hook (the revision
+ * header, `schema-revision-header.ts`) can fail while the response is being
  * written; the hooks run as one chain, so the no-store hook below never
- * runs, and the server would write a 500 of its own without it. This
- * middleware wraps the whole server chain: it logs such a failure and
- * answers it itself, with `no-store` under `/api/`. A failure after a
- * response went out is already handled and changes nothing. The router puts
- * its request logger outside, so it logs that answer.
+ * runs, and the server boundary would write a 500 without it.
+ *
+ * The middleware does not answer or log anything itself. It fails again
+ * with the same cause plus, as a defect, the response the boundary would
+ * write, with `no-store` added: the boundary reports the cause to the
+ * registered `ErrorReporter`s once (they skip response objects) and writes
+ * the response it finds in the cause. Three causes pass through untouched:
+ * a pure interruption (the client went away or the server is shutting
+ * down), which stays a cancellation and gets the boundary's empty 499 or
+ * 503; a cause that already holds a response, which the server answered and
+ * reported through the hooks; and any failure outside `/api/`.
  *
  * @param httpApp - The server chain, response writing included.
- * @returns The chain, with failures answered.
+ * @returns The chain, with API failures answered with `no-store`.
  */
 export const answerApiFailures = <R>(
   httpApp: Effect.Effect<HttpServerResponse.HttpServerResponse, unknown, R>
 ): Effect.Effect<
   HttpServerResponse.HttpServerResponse,
-  never,
+  unknown,
   R | HttpServerRequest
 > =>
   Effect.catchCause(httpApp, (cause) =>
     Effect.gen(function* answerFailure() {
       const request = yield* HttpServerRequest;
+
+      const answered = cause.reasons.some(
+        (reason) =>
+          Cause.isDieReason(reason) &&
+          HttpServerResponse.isHttpServerResponse(reason.defect)
+      );
+
+      if (
+        Cause.hasInterruptsOnly(cause) ||
+        answered ||
+        !request.url.startsWith(API_PATH_PREFIX)
+      ) {
+        return yield* Effect.failCause(cause);
+      }
+
       const [response] = yield* HttpServerError.causeResponse(cause);
 
-      yield* Effect.logError("The response could not be written", cause);
+      const noStore = HttpServerResponse.setHeader(
+        response,
+        "cache-control",
+        "no-store"
+      );
 
-      return request.url.startsWith(API_PATH_PREFIX)
-        ? HttpServerResponse.setHeader(response, "cache-control", "no-store")
-        : response;
+      return yield* Effect.failCause(Cause.combine(cause, Cause.die(noStore)));
     })
   );
 

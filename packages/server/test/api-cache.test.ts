@@ -10,13 +10,27 @@ import { createServer } from "node:http";
 import { NodeHttpServer } from "@effect/platform-node";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { OPENAPI_PATH } from "@std/api/api";
-import { Effect, Layer } from "effect";
+import {
+  Cause,
+  Effect,
+  ErrorReporter,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Scope,
+} from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
+import { HttpServerRequest, fromWeb } from "effect/http/HttpServerRequest";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { ApiNoStoreLayer, answerApiFailures } from "../src/http/api-cache.ts";
-import { SchemaRevisionHeaderLayer } from "../src/http/schema-revision-header.ts";
+import {
+  SchemaRevisionHeaderLayer,
+  recordServedRevision,
+} from "../src/http/schema-revision-header.ts";
 import { WEB_APP_HEADERS } from "../src/http/web-app.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { listPath, readsTestLayer } from "./reads-support.ts";
@@ -54,12 +68,60 @@ const FailingTransactions = Layer.succeed(
 );
 
 /**
- * Serves `/api/ok` and `/page` with `std serve`'s options, its revision
- * header and no-store hooks, on a free port; the revision lookup fails.
+ * An API handler that has read its revision, as every real one does in its
+ * request transaction (`request-scope.ts`), and then never answers: only
+ * interruption ends it, and the revision hook does not need the database.
  */
-const failingServer = Effect.gen(function* serveWithFailingRevision() {
+const answerNever = Effect.gen(function* answerNever() {
+  recordServedRevision(yield* HttpServerRequest, {
+    changeSetId: "cs-1",
+    revision: 1,
+  });
+
+  return yield* Effect.never;
+});
+
+/** A test server and what it logged and reported. */
+interface ObservedServer {
+  readonly origin: string;
+  /** Messages logged at Error level or above. */
+  readonly errorLogs: string[];
+  /** Messages of the errors handed to the registered `ErrorReporter`. */
+  readonly reported: string[];
+  /** Shuts the server down. */
+  readonly close: Effect.Effect<void>;
+}
+
+const SEVERE = new Set(["Error", "Fatal"]);
+
+/** How long shutdown waits for in-flight requests before interrupting them. */
+const GRACE = "50 millis";
+
+/**
+ * Serves, on a free port, with `std serve`'s middleware, revision header
+ * and no-store hooks, and a revision lookup that fails: `/api/ok`, `/page`
+ * and `/api/slow`, which never answers (`answerNever`). It records severe logs and
+ * reported errors, and closes with `close` or the test's scope, interrupting
+ * requests still in flight after `GRACE`.
+ */
+const observedServer = Effect.gen(function* serveObserved() {
+  const errorLogs: string[] = [];
+  const reported: string[] = [];
+
+  const logger = Logger.make(({ logLevel, message }) => {
+    if (SEVERE.has(logLevel)) {
+      errorLogs.push(String(message));
+    }
+  });
+
+  // @effect-diagnostics-next-line unstableApiUsage:off
+  const reporter = ErrorReporter.make(({ error }) => {
+    reported.push(error.message);
+  });
+
   const app = Layer.mergeAll(
     HttpRouter.add("GET", "/api/ok", HttpServerResponse.text("ok")),
+    HttpRouter.add("GET", "/api/slow", answerNever),
     HttpRouter.add(
       "GET",
       "/page",
@@ -69,27 +131,58 @@ const failingServer = Effect.gen(function* serveWithFailingRevision() {
     ApiNoStoreLayer
   ).pipe(Layer.provide(FailingTransactions));
 
-  const server = yield* Layer.build(
+  const scope = yield* Scope.make();
+
+  yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+
+  const server = yield* Layer.buildWithScope(
     HttpRouter.serve(app, {
       middleware: (httpApp) => answerApiFailures(httpApp),
     }).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Logger.layer([logger]),
+          // @effect-diagnostics-next-line unstableApiUsage:off
+          ErrorReporter.layer([reporter])
+        )
+      ),
       Layer.provideMerge(
-        NodeHttpServer.layer(createServer, { host: "127.0.0.1", port: 0 })
+        NodeHttpServer.layer(createServer, {
+          gracefulShutdownTimeout: GRACE,
+          host: "127.0.0.1",
+          port: 0,
+        })
       )
-    )
+    ),
+    scope
   );
 
   const { address } = yield* HttpServer.HttpServer.pipe(Effect.provide(server));
+  const port = address._tag === "UnixPathAddress" ? 0 : address.port;
 
-  return `http://127.0.0.1:${address._tag === "UnixPathAddress" ? 0 : address.port}`;
+  return {
+    close: Scope.close(scope, Exit.void),
+    errorLogs,
+    origin: `http://127.0.0.1:${port}`,
+    reported,
+  } satisfies ObservedServer;
 });
 
+/** The empty status Effect's server answers a request it interrupts on shutdown. */
+const SERVER_ABORT = 503;
+
+/** How long a test waits for its request to reach the slow handler. */
+const IN_FLIGHT = "100 millis";
+
+/** Waits a moment for the server to finish with an abandoned request. */
+const settle = Effect.sleep("200 millis");
+
 describe("api-cache", () => {
-  it.effect(
+  it.live(
     "a 500 written after a response hook fails still says no-store; a page keeps its headers",
     () =>
       Effect.gen(function* failedHook() {
-        const origin = yield* failingServer;
+        const { origin } = yield* observedServer;
 
         const [api, page] = yield* Effect.promise(
           async () =>
@@ -111,6 +204,100 @@ describe("api-cache", () => {
           "nosniff"
         );
       }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "the hook's defect reaches the error reporters exactly once, and the 500 is empty and says no-store",
+    () =>
+      Effect.gen(function* reportedOnce() {
+        const server = yield* observedServer;
+
+        const answer = yield* Effect.promise(async () => {
+          const response = await fetch(`${server.origin}/api/ok`);
+
+          return {
+            body: await response.text(),
+            cacheControl: response.headers.get("cache-control"),
+            status: response.status,
+          };
+        });
+
+        yield* settle;
+
+        assert.deepStrictEqual(answer, {
+          body: "",
+          cacheControl: "no-store",
+          status: 500,
+        });
+        assert.deepStrictEqual(server.reported, ["the database is down"]);
+      }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "a client that disconnects mid-request is cancellation, not an error",
+    () =>
+      Effect.gen(function* clientDisconnect() {
+        const server = yield* observedServer;
+
+        const request = yield* Effect.forkChild(
+          Effect.tryPromise(
+            async (signal) =>
+              await fetch(`${server.origin}/api/slow`, { signal })
+          )
+        );
+
+        yield* Effect.sleep(IN_FLIGHT);
+        yield* Fiber.interrupt(request);
+
+        yield* settle;
+
+        assert.deepStrictEqual(server.errorLogs, []);
+        assert.deepStrictEqual(server.reported, []);
+      }).pipe(Effect.scoped)
+  );
+
+  it.live(
+    "shutting down with a request in flight is cancellation, not an error",
+    () =>
+      Effect.gen(function* shutdown() {
+        const server = yield* observedServer;
+
+        const pending = yield* Effect.forkChild(
+          Effect.tryPromise(
+            async () => await fetch(`${server.origin}/api/slow`)
+          ).pipe(
+            Effect.map(({ status }) => status),
+            Effect.option
+          )
+        );
+
+        yield* Effect.sleep(IN_FLIGHT);
+        yield* server.close;
+        const status = yield* Fiber.join(pending);
+        yield* settle;
+
+        assert.deepStrictEqual(status, Option.some(SERVER_ABORT));
+        assert.deepStrictEqual(server.errorLogs, []);
+        assert.deepStrictEqual(server.reported, []);
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "the middleware passes a pure interruption on as one, under /api/ too",
+    () =>
+      Effect.gen(function* interruption() {
+        const exit = yield* answerApiFailures(Effect.interrupt).pipe(
+          Effect.provideService(
+            HttpServerRequest,
+            fromWeb(new Request("http://std.test/api/v1/x"))
+          ),
+          Effect.exit
+        );
+
+        assert.isTrue(
+          Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+        );
+      })
   );
 
   it("sets no-store under /api/ only, leaving other responses' cache headers alone", async () => {
