@@ -43,6 +43,7 @@ import type { InvalidValue } from "@std/values/field-error";
 import type { FieldType } from "@std/values/field-type";
 import { isBoolean } from "@std/values/field-value";
 import type { DecodedInput } from "@std/values/field-value";
+import { parseJson, stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { LONG_TEXT_MAX_LENGTH, TEXT_MAX_LENGTH_LIMIT } from "@std/values/text";
@@ -460,6 +461,20 @@ const verdictOf = (
   const fields = table.fields.map((field) => ({
     rules: rulesOfMetaField(field),
   }));
+
+  // The server parses a body before anything else and refuses all of it
+  // (`InvalidRequest`) when a value breaks the json rules on the wire:
+  // U+0000, a number a double does not hold exactly. Such a value is
+  // refused on its own field here, first.
+  const unsendable = Object.entries(body).flatMap(([name, json]) => {
+    const sent = parseJson(stringifyJson(json));
+
+    return sent.ok ? [] : [invalidValue(name, sent.error)];
+  });
+
+  if (unsendable.length > 0) {
+    return { errors: unsendable, unknownFields: [] };
+  }
 
   const byName = new Map(fields.map((field) => [field.rules.name, field]));
   const resolved = resolveBody(byName, body);
