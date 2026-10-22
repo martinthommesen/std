@@ -85,7 +85,7 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 
 | Command | What it does |
 | --- | --- |
-| `pnpm check` / `pnpm fix` | Ultracite (Oxlint type-aware, Oxfmt) |
+| `pnpm check` / `pnpm fix` | Ultracite (Oxlint type-aware, Oxfmt); `check` then runs `check-foldkit-lint`, which fails unless the Foldkit plugin's rules fire on `apps/web` and not elsewhere |
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
 | `pnpm test` | Vitest, one project per workspace package (for `apps/web`, the Foldkit story and scene tests) |
 | `pnpm --filter @std/web test:browser` | The web app in Playwright's Chromium against a real `std serve` on a disposable database (decision 0018); needs `pnpm --filter @std/web exec playwright install chromium` once |

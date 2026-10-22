@@ -11,6 +11,62 @@ import { parseTrace } from "../src/trace-parse.ts";
 
 const ENV = "0x1 /* 3 vars */";
 
+/**
+ * A text as strace prints it inside a string: octal escapes for
+ * non-ASCII bytes, backslashes before quotes and backslashes.
+ * @param text - The text.
+ * @returns The escaped text.
+ */
+const cEscape = (text: string): string =>
+  [...Buffer.from(text, "utf-8")]
+    .map((byte) => {
+      if (byte === 0x22) {
+        return '\\"';
+      }
+
+      if (byte === 0x5c) {
+        return "\\\\";
+      }
+
+      return byte < 0x80 ? String.fromCodePoint(byte) : `\\${byte.toString(8)}`;
+    })
+    .join("");
+
+/**
+ * Every three-character piece of a value and of its escaped forms.
+ * @param value - A password or a token.
+ * @returns The pieces.
+ */
+const fragments = (value: string): readonly string[] =>
+  [
+    value,
+    JSON.stringify(value).slice(1, -1),
+    cEscape(value),
+    cEscape(JSON.stringify({ p: value })),
+  ].flatMap((form) =>
+    Array.from({ length: Math.max(form.length - 2, 0) }, (_, at) =>
+      form.slice(at, at + 3)
+    )
+  );
+
+/**
+ * The one problem a single unrecognized line gives.
+ * @param line - The line.
+ * @param secrets - The passwords.
+ * @returns The problem text.
+ */
+const snippetOf = (line: string, secrets: readonly string[]): string =>
+  checkTrace(parseTrace(line), secrets, [])[0] ?? "";
+
+/**
+ * The start of an unrecognized line, filled so the next text starts
+ * at about `column`.
+ * @param column - Where the next text should start.
+ * @returns The line so far.
+ */
+const padTo = (column: number): string =>
+  `90 zz(${"1, ".repeat(Math.max(Math.floor((column - 6) / 3), 0))}`;
+
 describe("trace-parse", () => {
   it("joins split calls and decodes escapes; failures are reported", () => {
     const trace = parseTrace(
@@ -88,6 +144,80 @@ describe("trace-parse", () => {
     assert.deepStrictEqual(trace.calls, []);
   });
 
+  describe("snippets show no argument text", () => {
+    // Passwords in the forms strace prints them: C escapes (octal for
+    // non-ASCII bytes, backslashes before quotes and backslashes), one
+    // escaping layer more for a password inside a JSON argument.
+    const unicode = "Qx-é-Vz9Wk";
+    const nested = 'Qp"Lm\\Rt8';
+
+    const token = newSessionToken();
+
+    const cases: readonly (readonly [string, string, string])[] = [
+      ["a Unicode password", unicode, `"${cEscape(unicode)}")`],
+      [
+        "a password in a JSON argument",
+        nested,
+        `"${cEscape(JSON.stringify({ p: nested }))}")`,
+      ],
+      ["a token", token, `"${token}")`],
+      ["an unterminated string", unicode, `"${cEscape(unicode)}`],
+    ];
+
+    it.each(cases)("%s, early in the line", (_name, secret, rest) => {
+      const snippet = snippetOf(`${padTo(9)}${rest}`, [unicode, nested]);
+
+      assert.include(snippet, "not a recognized line");
+      assert.include(snippet, '\\"…');
+
+      for (const piece of fragments(secret)) {
+        assert.notInclude(snippet, piece);
+      }
+    });
+
+    it.each(cases)("%s, across the 80-character cut", (_name, secret, rest) => {
+      for (let column = 60; column <= 84; column += 1) {
+        const snippet = snippetOf(`${padTo(column)}${rest}`, [unicode, nested]);
+
+        for (const piece of fragments(secret)) {
+          assert.notInclude(snippet, piece, `at column ${column}`);
+        }
+      }
+    });
+
+    it("an unterminated string masks the rest of the line", () => {
+      assert.strictEqual(
+        snippetOf('90 zz(1, "abc\\" def', []),
+        'trace line 1: not a recognized line: "90 zz(1, \\"…"'
+      );
+    });
+  });
+
+  it("shows an unreadable line's shape, redacted, then shortened", () => {
+    const password = `pw-${"x".repeat(70)}-shape-probe`;
+    const token = newSessionToken();
+
+    const trace = parseTrace(
+      [
+        `90 something(${JSON.stringify(token)}, ${JSON.stringify(password)}) = 0`,
+        `91 unknown(${"y".repeat(200)})`,
+      ].join("\n")
+    );
+
+    const problems = checkTrace(trace, [password], []);
+
+    assert.deepStrictEqual(problems, [
+      'trace line 1: not a recognized line: "90 something(\\"…\\", \\"…\\") = 0"',
+      `trace line 2: not a recognized line: "91 unknown(${"y".repeat(69)}..."`,
+    ]);
+    assert.isFalse(
+      problems.some(
+        (problem) =>
+          problem.includes(token) || problem.includes(password.slice(0, 20))
+      )
+    );
+  });
+
   it("refuses unknown lines, lines without a PID and other syscalls", () => {
     const trace = parseTrace(
       [
@@ -99,11 +229,11 @@ describe("trace-parse", () => {
       ].join("\n")
     );
 
-    assert.deepStrictEqual(trace.problems, [
-      "trace line 2: no PID prefix",
-      "trace line 3: not a recognized line",
-      "trace line 4: not a recognized line",
-      "trace line 5: no PID prefix",
+    assert.deepStrictEqual(checkTrace(trace, [], []), [
+      'trace line 2: no PID prefix: "execve(\\"…\\", [\\"…\\"], 0x1) = 0"',
+      'trace line 3: not a recognized line: "41 open(\\"…\\", O_RDONLY) = 3"',
+      'trace line 4: not a recognized line: "41 --- SIGCHLD {si_signo=SIGCHLD} ---"',
+      'trace line 5: no PID prefix: "strace: Process 42 attached"',
     ]);
     assert.lengthOf(trace.calls, 1);
   });
@@ -119,13 +249,16 @@ describe("trace-parse", () => {
       ].join("\n")
     );
 
-    assert.deepStrictEqual(trace.problems, [
-      "trace line 1: an execve that does not parse",
-      "trace line 2: an execve that does not parse",
-      "trace line 4: a resumed execve that never started",
-      "trace line 5: an execveat that does not parse",
-      "trace line 3: an execve that never finished",
-    ]);
+    assert.deepStrictEqual(
+      trace.problems.map((found) => [found.line, found.problem]),
+      [
+        [1, "an execve that does not parse"],
+        [2, "an execve that does not parse"],
+        [4, "a resumed execve that never started"],
+        [5, "an execveat that does not parse"],
+        [3, "an execve that never finished"],
+      ]
+    );
   });
 
   it("reports a string or a list strace shortened", () => {

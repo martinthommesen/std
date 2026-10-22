@@ -43,7 +43,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       # Installs the pnpm version pinned by "packageManager" (pnpm@12.14.0).
-      - uses: pnpm/action-setup@v4
+      # v6 runs on Node 24 (v4 ran on the deprecated Node 20) and supports
+      # pnpm 12 since 6.1.0; like v4 it needs no inputs here.
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
           node-version: 26.12.0
@@ -56,8 +58,10 @@ jobs:
       # with strace. A no-op outside GitHub Actions: `pnpm ci:local` runs
       # this step too and must not call sudo; locally, install strace yourself
       # (`pnpm quickstart:ci` fails with instructions when it is missing).
+      # Prints the version: the parser supports 6.8 (this runner) and 6.19,
+      # each tested with a recorded trace (decision 0016).
       - name: strace (for the quickstart's execve trace)
-        run: if [ -n "${GITHUB_ACTIONS:-}" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq strace; fi
+        run: if [ -n "${GITHUB_ACTIONS:-}" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq strace; fi; if command -v strace >/dev/null; then strace -V | head -n 1; fi
       - name: Postgres
         run: pnpm check:postgres
       - name: Lint and format

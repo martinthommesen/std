@@ -8,7 +8,11 @@
  * call that does
  * not parse, a call left unfinished, becomes a problem, and a string or
  * an argument list strace shortened is marked for `checkTrace` to refuse, so an unexpected trace cannot pass as clean.
- * Both PID prefixes strace writes, `123 ` and `[pid 123] `, are accepted.
+ * Both PID prefixes strace writes are accepted, `123 ` and `[pid 123] `,
+ * with any run of spaces after them: strace left-aligns the PID in a
+ * column five characters wide (`%-5d `), so PIDs under five digits are
+ * followed by two or more spaces. Every problem carries its line's text,
+ * which `checkTrace` redacts and shortens before it reports the problem.
  */
 import { Cursor } from "./trace-cursor.ts";
 
@@ -30,14 +34,24 @@ export interface Execve {
   readonly truncated: boolean;
 }
 
+/** A line or call the parser could not read. */
+export interface TraceProblem {
+  /** The 1-based line number. */
+  readonly line: number;
+  /** What is wrong, such as `not a recognized line`. */
+  readonly problem: string;
+  /** The line's full text, unredacted: report it only through `checkTrace`. */
+  readonly text: string;
+}
+
 /** A parsed trace. */
 export interface Trace {
   readonly calls: readonly Execve[];
-  /** Lines and calls that could not be read, by line number. */
-  readonly problems: readonly string[];
+  /** Lines and calls that could not be read. */
+  readonly problems: readonly TraceProblem[];
 }
 
-const PREFIX = /^(?:\[pid +(?<bracketed>\d+)\]|(?<plain>\d+)) (?<rest>.*)$/u;
+const PREFIX = /^(?:\[pid +(?<bracketed>\d+)\]|(?<plain>\d+)) +(?<rest>\S.*)$/u;
 
 const CALL = /^(?<kind>execve|execveat)\((?<call>[^\n]*)$/u;
 const RESUMED = /^<\.\.\. (?<kind>execve|execveat) resumed>(?<rest>[^\n]*)$/u;
@@ -56,6 +70,8 @@ interface RawCall {
   readonly pid: number;
   readonly line: number;
   readonly text: string;
+  /** The whole line, for problems. */
+  readonly source: string;
 }
 
 /**
@@ -133,7 +149,7 @@ const parseCall = (raw: RawCall): Execve | undefined => {
 /** The parser's running state. */
 interface ParseState {
   readonly calls: Execve[];
-  readonly problems: string[];
+  readonly problems: TraceProblem[];
   readonly pending: Map<string, RawCall>;
 }
 
@@ -141,9 +157,11 @@ const complete = (state: ParseState, raw: RawCall): void => {
   const parsed = parseCall(raw);
 
   if (parsed === undefined) {
-    state.problems.push(
-      `trace line ${raw.line}: an ${raw.kind} that does not parse`
-    );
+    state.problems.push({
+      line: raw.line,
+      problem: `an ${raw.kind} that does not parse`,
+      text: raw.source,
+    });
   } else {
     state.calls.push(parsed);
   }
@@ -155,12 +173,14 @@ const complete = (state: ParseState, raw: RawCall): void => {
  * @param pid - The PID.
  * @param rest - The rest of the line.
  * @param line - Its 1-based number.
+ * @param source - The whole line, for problems.
  */
 const readLine = (
   state: ParseState,
   pid: number,
   rest: string,
-  line: number
+  line: number,
+  source: string
 ): void => {
   const call = CALL.exec(rest)?.groups;
   const resumed = RESUMED.exec(rest)?.groups;
@@ -174,14 +194,19 @@ const readLine = (
         kind,
         line,
         pid,
+        source,
         text: text.slice(0, -UNFINISHED.length),
       });
     } else {
-      complete(state, { kind, line, pid, text });
+      complete(state, { kind, line, pid, source, text });
     }
   } else if (resumed === undefined) {
     if (!METADATA.some((pattern) => pattern.test(rest))) {
-      state.problems.push(`trace line ${line}: not a recognized line`);
+      state.problems.push({
+        line,
+        problem: "not a recognized line",
+        text: source,
+      });
     }
   } else {
     const kind = resumed.kind === "execveat" ? "execveat" : "execve";
@@ -191,9 +216,11 @@ const readLine = (
     state.pending.delete(key);
 
     if (started === undefined) {
-      state.problems.push(
-        `trace line ${line}: a resumed ${kind} that never started`
-      );
+      state.problems.push({
+        line,
+        problem: `a resumed ${kind} that never started`,
+        text: source,
+      });
     } else {
       complete(state, {
         ...started,
@@ -218,17 +245,23 @@ export const parseTrace = (log: string): Trace => {
       const pid = prefixed?.bracketed ?? prefixed?.plain;
 
       if (pid === undefined) {
-        state.problems.push(`trace line ${index + 1}: no PID prefix`);
+        state.problems.push({
+          line: index + 1,
+          problem: "no PID prefix",
+          text,
+        });
       } else {
-        readLine(state, Number(pid), prefixed?.rest ?? "", index + 1);
+        readLine(state, Number(pid), prefixed?.rest ?? "", index + 1, text);
       }
     }
   }
 
   for (const unfinished of state.pending.values()) {
-    state.problems.push(
-      `trace line ${unfinished.line}: an ${unfinished.kind} that never finished`
-    );
+    state.problems.push({
+      line: unfinished.line,
+      problem: `an ${unfinished.kind} that never finished`,
+      text: unfinished.source,
+    });
   }
 
   return { calls: state.calls, problems: state.problems };
