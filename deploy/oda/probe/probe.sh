@@ -74,6 +74,10 @@ readonly COMPONENT_LIMIT=1020
 readonly GATEWAY_LIMIT=180
 readonly DIAGNOSTICS_LIMIT=300
 readonly CLEANUP_LIMIT=300
+# Everything after the phases (results, diagnostics, cleanup) shares this.
+readonly FINISH_LIMIT=900
+# Any single Docker call outside a phase.
+readonly DOCKER_LIMIT=30
 # Waits inside the phases.
 readonly CLUSTER_WAIT=600
 readonly ISTIO_WAIT=600
@@ -127,6 +131,21 @@ export HELM_DATA_HOME="$state_dir/helm/data"
 
 iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 say() { printf '[probe %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+# Runs an external command under `timeout`, cut to what is left of the
+# finishing deadline once `finish` has set one; fails at once (124) when
+# nothing is left.
+finish_deadline=0
+bounded() {
+  local limit=$1
+  shift
+  if ((finish_deadline > 0)); then
+    local left=$((finish_deadline - $(date +%s)))
+    if ((left < limit)); then limit=$left; fi
+  fi
+  if ((limit < 1)); then return 124; fi
+  timeout --kill-after=5 "$limit" "$@"
+}
 
 # Prints `{"usedBytes":…,"availableBytes":…}` for the root file system.
 disk_json() {
@@ -320,8 +339,213 @@ phase_diagnostics() {
   helm list -A || true
 }
 
+# --- Result --------------------------------------------------------------------
+collect_images() {
+  bounded 30 kubectl get pods -A -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
+    jq -c '[.items[].status | (.containerStatuses // []) + (.initContainerStatuses // []) | .[]
+      | {image, imageID}] | unique' 2>/dev/null || echo '[]'
+}
+
+tool_versions() {
+  jq -cn \
+    --arg kind "$(bounded 10 kind version 2>/dev/null || true)" \
+    --arg kubectl "$(bounded 10 kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion || true)" \
+    --arg kubernetes "$(bounded 30 kubectl version -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
+      jq -r '.serverVersion.gitVersion // ""' || true)" \
+    --arg helm "$(bounded 10 helm version --short 2>/dev/null || true)" \
+    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
+    --arg docker "$(bounded "$DOCKER_LIMIT" docker version --format '{{.Server.Version}}' 2>/dev/null || true)" \
+    --arg jq "$(jq --version)" \
+    --arg curl "$(curl --version | head -n 1)" \
+    --arg bash "$BASH_VERSION" \
+    '$ARGS.named'
+}
+
+runner_json() {
+  local os=""
+  if [[ -r /etc/os-release ]]; then os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"'); fi
+  jq -cn \
+    --arg imageOS "${ImageOS:-}" \
+    --arg imageVersion "${ImageVersion:-}" \
+    --arg runnerName "${RUNNER_NAME:-}" \
+    --arg os "$os" \
+    --arg kernel "$(uname -r)" \
+    --argjson cpus "$(nproc)" \
+    --argjson memoryBytes "$(awk '/^MemTotal:/ { print $2 * 1024 }' /proc/meminfo)" \
+    '$ARGS.named'
+}
+
+pins_json() {
+  jq -cn \
+    --arg kind "$KIND_VERSION" --arg kindSha256 "$KIND_SHA256" --arg kindNodeImage "$KIND_NODE_IMAGE" \
+    --arg kubectl "$KUBECTL_VERSION" --arg kubectlSha256 "$KUBECTL_SHA256" \
+    --arg helm "$HELM_VERSION" --arg helmSha256 "$HELM_SHA256" \
+    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
+    --arg cloudProviderKindSha256 "$CLOUD_PROVIDER_KIND_SHA256" \
+    --arg istio "$ISTIO_VERSION" --arg istioBaseSha256 "$ISTIO_BASE_SHA256" \
+    --arg istioIstiodSha256 "$ISTIO_ISTIOD_SHA256" --arg istioGatewaySha256 "$ISTIO_GATEWAY_SHA256" \
+    --arg canvasOda "$CANVAS_VERSION" --arg canvasOdaSha256 "$CANVAS_SHA256" \
+    '$ARGS.named'
+}
+
+# What ran: the commit, the run and attempt, and hashes of the probe script
+# and the stub chart, so a summary can tell whether runs are comparable.
+provenance_json() {
+  local sha=${GITHUB_SHA:-}
+  if [[ -z $sha ]]; then sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true); fi
+  jq -cn \
+    --argjson githubActions "$([[ -n ${GITHUB_ACTIONS:-} ]] && echo true || echo false)" \
+    --arg repository "${GITHUB_REPOSITORY:-}" \
+    --arg runId "${GITHUB_RUN_ID:-}" --arg runAttempt "${GITHUB_RUN_ATTEMPT:-}" \
+    --arg sha "$sha" --arg ref "${GITHUB_REF:-}" \
+    --arg probeSha256 "$(sha256sum "$self" | cut -d ' ' -f 1)" \
+    --arg stubChartSha256 "$(cd "$stub_chart" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d ' ' -f 1)" \
+    '$ARGS.named'
+}
+
+# The kind node's own footprint, independent of whatever else uses the disk,
+# measured at the end, before the cluster is deleted: the node image, the
+# node container's writable layer, and its /var, a Docker volume in kind
+# that holds the pulled and unpacked images, etcd and the logs.
+kind_node_json() {
+  local node="$cluster-control-plane" writable image var
+  writable=$(bounded 60 docker inspect --size --format '{{.SizeRw}}' "$node" 2>/dev/null || true)
+  image=$(bounded "$DOCKER_LIMIT" docker image inspect --format '{{.Size}}' "$KIND_NODE_IMAGE" 2>/dev/null || true)
+  var=$(bounded 120 docker exec "$node" du -sxb /var 2>/dev/null | cut -f1 || true)
+  jq -cn --argjson writable "${writable:-null}" --argjson image "${image:-null}" \
+    --argjson var "${var:-null}" \
+    '{nodeWritableBytes: $writable, nodeImageBytes: $image, nodeVarBytes: $var}'
+}
+
+jsonl_array() {
+  if [[ -s $1 ]]; then jq -cs . "$1"; else echo '[]'; fi
+}
+
+disk_samples_json() {
+  if [[ -s $state_dir/disk-samples ]]; then
+    jq -Rcs '[split("\n")[] | select(length > 0) | split(" ") | map(tonumber)
+      | {at: .[0], usedBytes: .[1], availableBytes: .[2]}]' "$state_dir/disk-samples"
+  else
+    echo '[]'
+  fi
+}
+
+# Replaces `result` with `$1` after checking that it is the JSON the summary
+# expects; the old file stays when anything fails.
+publish_result() {
+  local candidate=$1
+  jq -e '.schemaVersion == 1 and (.outcome == "success" or .outcome == "failure")
+    and (.phases | type == "array") and (.run.sha | type == "string")' "$candidate" >/dev/null &&
+    mv -f "$candidate" "$result"
+}
+
+# Writes the result atomically (a temporary file, checked, then renamed).
+# `stage` is "partial" before diagnostics and "complete" after them.
+write_result() {
+  local stage=$1 outcome=success excerpt=""
+  if [[ -n $failed_phase ]]; then
+    outcome=failure
+    excerpt=$(tail -n 60 "$log_dir/$failed_phase.log" 2>/dev/null || true)
+  fi
+  local gateway='null'
+  if [[ -s $state_dir/gateway.json ]]; then gateway=$(cat "$state_dir/gateway.json"); fi
+  # Every part goes through a file: the disk samples alone outgrow the
+  # kernel's limit on one command-line argument (128 KiB) after about an
+  # hour at one sample every 2 s.
+  local parts="$state_dir/result-parts"
+  rm -rf "$parts"
+  mkdir -p "$parts"
+  {
+    provenance_json >"$parts/run.json" &&
+      runner_json >"$parts/runner.json" &&
+      pins_json >"$parts/pins.json" &&
+      tool_versions >"$parts/tools.json" &&
+      disk_json >"$parts/disk-after.json" &&
+      disk_samples_json >"$parts/samples.json" &&
+      jsonl_array "$state_dir/phases.jsonl" >"$parts/phases.json" &&
+      jsonl_array "$state_dir/transitions.jsonl" >"$parts/transitions.json" &&
+      printf '%s\n' "$gateway" >"$parts/gateway.json" &&
+      collect_images >"$parts/images.json" &&
+      printf '%s' "$excerpt" >"$parts/excerpt.txt"
+  } || return 1
+  if [[ $stage == complete ]]; then
+    kind_node_json >"$parts/kind-node.json" || return 1
+  else
+    echo null >"$parts/kind-node.json"
+  fi
+  local candidate="$result.tmp.$$"
+  jq -n \
+    --arg stage "$stage" \
+    --arg startedAt "$started_at" --arg finishedAt "$(iso_now)" \
+    --arg outcome "$outcome" --arg failedPhase "$failed_phase" \
+    --rawfile excerpt "$parts/excerpt.txt" \
+    --arg cluster "$cluster" \
+    --argjson budget "$budget" \
+    --argjson diskBefore "$disk_before" \
+    --argjson interval "$DISK_SAMPLE_INTERVAL" \
+    --slurpfile runs "$parts/run.json" \
+    --slurpfile runners "$parts/runner.json" \
+    --slurpfile pinss "$parts/pins.json" \
+    --slurpfile toolss "$parts/tools.json" \
+    --slurpfile diskAfters "$parts/disk-after.json" \
+    --slurpfile sampless "$parts/samples.json" \
+    --slurpfile kindNodes "$parts/kind-node.json" \
+    --slurpfile phasess "$parts/phases.json" \
+    --slurpfile transitionss "$parts/transitions.json" \
+    --slurpfile gateways "$parts/gateway.json" \
+    --slurpfile imagess "$parts/images.json" \
+    '$runs[0] as $run | $runners[0] as $runner | $pinss[0] as $pins
+    | $toolss[0] as $tools | $diskAfters[0] as $diskAfter | $sampless[0] as $samples
+    | $kindNodes[0] as $kindNode | $phasess[0] as $phases
+    | $transitionss[0] as $transitions | $gateways[0] as $gateway
+    | $imagess[0] as $images
+    | {
+      schemaVersion: 1,
+      probe: "oda-canvas-probe",
+      stage: $stage,
+      startedAt: $startedAt,
+      finishedAt: $finishedAt,
+      outcome: $outcome,
+      failedPhase: (if $failedPhase == "" then null else $failedPhase end),
+      failureExcerpt: (if $excerpt == "" then null else $excerpt end),
+      cluster: $cluster,
+      budgetSeconds: $budget,
+      run: $run,
+      runner: $runner,
+      pins: $pins,
+      tools: $tools,
+      disk: {
+        before: $diskBefore,
+        after: $diskAfter,
+        sampleIntervalSeconds: $interval,
+        sampleCount: ($samples | length),
+        peakUsedBytes: ([$diskBefore.usedBytes, $diskAfter.usedBytes] + [$samples[].usedBytes] | max),
+        minAvailableBytes: ([$diskBefore.availableBytes, $diskAfter.availableBytes] + [$samples[].availableBytes] | min),
+        kindNode: $kindNode
+      },
+      phases: [$phases[] | . as $phase
+        | if .startEpoch == null then . else
+            . + {peakUsedBytes: ([$samples[] | select(.at >= $phase.startEpoch and .at <= $phase.endEpoch)
+              | .usedBytes] | max)}
+          end],
+      component: {transitions: $transitions},
+      gateway: $gateway,
+      images: $images
+    }' >"$candidate" && publish_result "$candidate"
+}
+
 if [[ ${1:-} == --phase ]]; then
   "phase_$2"
+  exit 0
+fi
+
+# For tooling/test/oda-probe-publish.test.ts: publishes a complete result
+# from the state directory as it stands, without a cluster.
+if [[ ${1:-} == --publish-test ]]; then
+  started_at=$(iso_now)
+  disk_before=$(disk_json)
+  failed_phase=""
+  write_result complete
   exit 0
 fi
 
@@ -338,13 +562,16 @@ for tool in bash curl sha256sum tar timeout setsid jq docker df; do
   command -v "$tool" >/dev/null || refuse "$tool is not installed"
 done
 if ((BASH_VERSINFO[0] < 5)); then refuse "bash 5 or later is required"; fi
-docker info >/dev/null 2>&1 || refuse "Docker is not reachable"
-other_clusters=$(docker ps -a --filter label=io.x-k8s.kind.cluster \
-  --format '{{.Label "io.x-k8s.kind.cluster"}}' | sort -u | paste -sd ' ' -)
+timeout "$DOCKER_LIMIT" docker info >/dev/null 2>&1 || refuse "Docker did not answer within ${DOCKER_LIMIT}s"
+kind_labels=$(timeout "$DOCKER_LIMIT" docker ps -a --filter label=io.x-k8s.kind.cluster \
+  --format '{{.Label "io.x-k8s.kind.cluster"}}') || refuse "Docker did not list containers within ${DOCKER_LIMIT}s"
+other_clusters=$(sort -u <<<"$kind_labels" | paste -sd ' ' -)
 if [[ -n $other_clusters ]]; then
   refuse "kind clusters exist on this Docker host ($other_clusters); cloud-provider-kind would manage them and delete their load balancers. Run the probe on a host without kind clusters."
 fi
-if [[ -n $(docker ps -aq --filter label=io.x-k8s.cloud-provider-kind.cluster) ]]; then
+provider_containers=$(timeout "$DOCKER_LIMIT" docker ps -aq --filter label=io.x-k8s.cloud-provider-kind.cluster) ||
+  refuse "Docker did not list containers within ${DOCKER_LIMIT}s"
+if [[ -n $provider_containers ]]; then
   refuse "cloud-provider-kind containers exist on this Docker host; the probe's cloud-provider-kind would delete them when it stops."
 fi
 if pgrep -f '^([^ ]*/)?cloud-provider-kind( |$)' >/dev/null; then
@@ -365,8 +592,16 @@ readonly disk_before
 readonly deadline_epoch=$((preflight_epoch + budget))
 failed_phase=""
 result_failed=0
-kind_network_existed=0
-if docker network inspect kind >/dev/null 2>&1; then kind_network_existed=1; fi
+# 0: no `kind` network yet, so this run may remove the one kind creates.
+set +e
+timeout "$DOCKER_LIMIT" docker network inspect kind >/dev/null 2>&1
+network_status=$?
+set -e
+case $network_status in
+  0) kind_network_existed=1 ;;
+  1) kind_network_existed=0 ;;
+  *) refuse "Docker did not answer within ${DOCKER_LIMIT}s" ;;
+esac
 
 # Samples the root file system every DISK_SAMPLE_INTERVAL seconds until the
 # probe ends, so the peak is a real peak, not the largest phase-boundary value.
@@ -428,180 +663,15 @@ run_phase() {
   say "phase $name: $status (exit $rc)"
 }
 
-# --- Result --------------------------------------------------------------------
-collect_images() {
-  kubectl get pods -A -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
-    jq -c '[.items[].status | (.containerStatuses // []) + (.initContainerStatuses // []) | .[]
-      | {image, imageID}] | unique' 2>/dev/null || echo '[]'
-}
-
-tool_versions() {
-  jq -cn \
-    --arg kind "$(timeout 10 kind version 2>/dev/null || true)" \
-    --arg kubectl "$(timeout 10 kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion || true)" \
-    --arg kubernetes "$(kubectl version -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
-      jq -r '.serverVersion.gitVersion // ""' || true)" \
-    --arg helm "$(timeout 10 helm version --short 2>/dev/null || true)" \
-    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
-    --arg docker "$(timeout 30 docker version --format '{{.Server.Version}}' 2>/dev/null || true)" \
-    --arg jq "$(jq --version)" \
-    --arg curl "$(curl --version | head -n 1)" \
-    --arg bash "$BASH_VERSION" \
-    '$ARGS.named'
-}
-
-runner_json() {
-  local os=""
-  if [[ -r /etc/os-release ]]; then os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"'); fi
-  jq -cn \
-    --arg imageOS "${ImageOS:-}" \
-    --arg imageVersion "${ImageVersion:-}" \
-    --arg runnerName "${RUNNER_NAME:-}" \
-    --arg os "$os" \
-    --arg kernel "$(uname -r)" \
-    --argjson cpus "$(nproc)" \
-    --argjson memoryBytes "$(awk '/^MemTotal:/ { print $2 * 1024 }' /proc/meminfo)" \
-    '$ARGS.named'
-}
-
-pins_json() {
-  jq -cn \
-    --arg kind "$KIND_VERSION" --arg kindSha256 "$KIND_SHA256" --arg kindNodeImage "$KIND_NODE_IMAGE" \
-    --arg kubectl "$KUBECTL_VERSION" --arg kubectlSha256 "$KUBECTL_SHA256" \
-    --arg helm "$HELM_VERSION" --arg helmSha256 "$HELM_SHA256" \
-    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
-    --arg cloudProviderKindSha256 "$CLOUD_PROVIDER_KIND_SHA256" \
-    --arg istio "$ISTIO_VERSION" --arg istioBaseSha256 "$ISTIO_BASE_SHA256" \
-    --arg istioIstiodSha256 "$ISTIO_ISTIOD_SHA256" --arg istioGatewaySha256 "$ISTIO_GATEWAY_SHA256" \
-    --arg canvasOda "$CANVAS_VERSION" --arg canvasOdaSha256 "$CANVAS_SHA256" \
-    '$ARGS.named'
-}
-
-# What ran: the commit, the run and attempt, and hashes of the probe script
-# and the stub chart, so a summary can tell whether runs are comparable.
-provenance_json() {
-  local sha=${GITHUB_SHA:-}
-  if [[ -z $sha ]]; then sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true); fi
-  jq -cn \
-    --argjson githubActions "$([[ -n ${GITHUB_ACTIONS:-} ]] && echo true || echo false)" \
-    --arg repository "${GITHUB_REPOSITORY:-}" \
-    --arg runId "${GITHUB_RUN_ID:-}" --arg runAttempt "${GITHUB_RUN_ATTEMPT:-}" \
-    --arg sha "$sha" --arg ref "${GITHUB_REF:-}" \
-    --arg probeSha256 "$(sha256sum "$self" | cut -d ' ' -f 1)" \
-    --arg stubChartSha256 "$(cd "$stub_chart" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d ' ' -f 1)" \
-    '$ARGS.named'
-}
-
-# The kind node's own footprint, independent of whatever else uses the disk,
-# measured at the end, before the cluster is deleted: the node image, the
-# node container's writable layer, and its /var, a Docker volume in kind
-# that holds the pulled and unpacked images, etcd and the logs.
-kind_node_json() {
-  local node="$cluster-control-plane" writable image var
-  writable=$(timeout 60 docker inspect --size --format '{{.SizeRw}}' "$node" 2>/dev/null || true)
-  image=$(timeout 30 docker image inspect --format '{{.Size}}' "$KIND_NODE_IMAGE" 2>/dev/null || true)
-  var=$(timeout 120 docker exec "$node" du -sxb /var 2>/dev/null | cut -f1 || true)
-  jq -cn --argjson writable "${writable:-null}" --argjson image "${image:-null}" \
-    --argjson var "${var:-null}" \
-    '{nodeWritableBytes: $writable, nodeImageBytes: $image, nodeVarBytes: $var}'
-}
-
-jsonl_array() {
-  if [[ -s $1 ]]; then jq -cs . "$1"; else echo '[]'; fi
-}
-
-disk_samples_json() {
-  if [[ -s $state_dir/disk-samples ]]; then
-    jq -Rcs '[split("\n")[] | select(length > 0) | split(" ") | map(tonumber)
-      | {at: .[0], usedBytes: .[1], availableBytes: .[2]}]' "$state_dir/disk-samples"
-  else
-    echo '[]'
-  fi
-}
-
-# Replaces `result` with `$1` after checking that it is the JSON the summary
-# expects; the old file stays when anything fails.
-publish_result() {
-  local candidate=$1
-  jq -e '.schemaVersion == 1 and (.outcome == "success" or .outcome == "failure")
-    and (.phases | type == "array") and (.run.sha | type == "string")' "$candidate" >/dev/null &&
-    mv -f "$candidate" "$result"
-}
-
-# Writes the result atomically (a temporary file, checked, then renamed).
-# `stage` is "partial" before diagnostics and "complete" after them.
-write_result() {
-  local stage=$1 outcome=success excerpt=""
-  if [[ -n $failed_phase ]]; then
-    outcome=failure
-    excerpt=$(tail -n 60 "$log_dir/$failed_phase.log" 2>/dev/null || true)
-  fi
-  local gateway='null'
-  if [[ -s $state_dir/gateway.json ]]; then gateway=$(cat "$state_dir/gateway.json"); fi
-  local kind_node='null'
-  if [[ $stage == complete ]]; then kind_node=$(kind_node_json); fi
-  local candidate="$result.tmp.$$"
-  jq -n \
-    --arg stage "$stage" \
-    --arg startedAt "$started_at" --arg finishedAt "$(iso_now)" \
-    --arg outcome "$outcome" --arg failedPhase "$failed_phase" --arg excerpt "$excerpt" \
-    --arg cluster "$cluster" \
-    --argjson run "$(provenance_json)" \
-    --argjson runner "$(runner_json)" \
-    --argjson pins "$(pins_json)" \
-    --argjson tools "$(tool_versions)" \
-    --argjson budget "$budget" \
-    --argjson diskBefore "$disk_before" --argjson diskAfter "$(disk_json)" \
-    --argjson samples "$(disk_samples_json)" --argjson interval "$DISK_SAMPLE_INTERVAL" \
-    --argjson kindNode "$kind_node" \
-    --argjson phases "$(jsonl_array "$state_dir/phases.jsonl")" \
-    --argjson transitions "$(jsonl_array "$state_dir/transitions.jsonl")" \
-    --argjson gateway "$gateway" \
-    --argjson images "$(collect_images)" \
-    '{
-      schemaVersion: 1,
-      probe: "oda-canvas-probe",
-      stage: $stage,
-      startedAt: $startedAt,
-      finishedAt: $finishedAt,
-      outcome: $outcome,
-      failedPhase: (if $failedPhase == "" then null else $failedPhase end),
-      failureExcerpt: (if $excerpt == "" then null else $excerpt end),
-      cluster: $cluster,
-      budgetSeconds: $budget,
-      run: $run,
-      runner: $runner,
-      pins: $pins,
-      tools: $tools,
-      disk: {
-        before: $diskBefore,
-        after: $diskAfter,
-        sampleIntervalSeconds: $interval,
-        sampleCount: ($samples | length),
-        peakUsedBytes: ([$diskBefore.usedBytes, $diskAfter.usedBytes] + [$samples[].usedBytes] | max),
-        minAvailableBytes: ([$diskBefore.availableBytes, $diskAfter.availableBytes] + [$samples[].availableBytes] | min),
-        kindNode: $kindNode
-      },
-      phases: [$phases[] | . as $phase
-        | if .startEpoch == null then . else
-            . + {peakUsedBytes: ([$samples[] | select(.at >= $phase.startEpoch and .at <= $phase.endEpoch)
-              | .usedBytes] | max)}
-          end],
-      component: {transitions: $transitions},
-      gateway: $gateway,
-      images: $images
-    }' >"$candidate" && publish_result "$candidate"
-}
-
 # This run's cluster: node containers labelled with its name, all created
 # after the preflight (which found no kind cluster at all). Prints nothing,
 # and fails, when a node container is older, so cleanup never deletes a
 # cluster this run did not create.
 owned_cluster() {
   local ids id created
-  ids=$(timeout 30 docker ps -aq --filter "label=io.x-k8s.kind.cluster=$cluster") || return 1
+  ids=$(bounded "$DOCKER_LIMIT" docker ps -aq --filter "label=io.x-k8s.kind.cluster=$cluster") || return 1
   for id in $ids; do
-    created=$(timeout 30 docker inspect --format '{{.Created}}' "$id") || return 1
+    created=$(bounded "$DOCKER_LIMIT" docker inspect --format '{{.Created}}' "$id") || return 1
     if (($(date -d "$created" +%s) < preflight_epoch)); then
       say "not deleting kind cluster $cluster: node container $id predates this run"
       return 1
@@ -623,40 +693,45 @@ cleanup() {
     kill "$pid" 2>/dev/null || true
     for _ in $(seq 30); do
       kill -0 "$pid" 2>/dev/null || break
+      if ((finish_deadline > 0 && $(date +%s) >= finish_deadline)); then break; fi
       sleep 1
     done
     kill -9 "$pid" 2>/dev/null || true
   fi
   if owned_cluster; then
     say "deleting cluster $cluster"
-    timeout "$CLEANUP_LIMIT" kind delete cluster --name "$cluster" --kubeconfig "$KUBECONFIG" || true
+    bounded "$CLEANUP_LIMIT" kind delete cluster --name "$cluster" --kubeconfig "$KUBECONFIG" || true
   fi
   # Any load-balancer container left for this run's cluster.
   local containers
-  containers=$(timeout 30 docker ps -aq --filter "label=io.x-k8s.cloud-provider-kind.cluster=$cluster" || true)
+  containers=$(bounded "$DOCKER_LIMIT" docker ps -aq --filter "label=io.x-k8s.cloud-provider-kind.cluster=$cluster" || true)
   if [[ -n $containers ]]; then
     # shellcheck disable=SC2086 # one argument per container
-    timeout 60 docker rm -f $containers >/dev/null || true
+    bounded 60 docker rm -f $containers >/dev/null || true
   fi
   # The `kind` network, when this run created it and nothing else uses it.
   if [[ $kind_network_existed -eq 0 ]]; then
     for _ in $(seq 10); do
-      if [[ $(timeout 30 docker network inspect kind --format '{{len .Containers}}' 2>/dev/null || echo gone) != 0 ]]; then break; fi
-      timeout 30 docker network rm kind >/dev/null 2>&1 && break
+      if [[ $(bounded "$DOCKER_LIMIT" docker network inspect kind --format '{{len .Containers}}' 2>/dev/null || echo gone) != 0 ]]; then break; fi
+      bounded "$DOCKER_LIMIT" docker network rm kind >/dev/null 2>&1 && break
       sleep 1
     done
-    if docker network inspect kind >/dev/null 2>&1; then say "left the docker network kind in place (in use)"; fi
+    if bounded "$DOCKER_LIMIT" docker network inspect kind >/dev/null 2>&1; then
+      say "left the docker network kind in place (in use, or Docker did not answer)"
+    fi
   fi
 }
 
 finish() {
   local rc=$?
   trap - EXIT
+  # Results, diagnostics and cleanup share one deadline.
+  finish_deadline=$(($(date +%s) + FINISH_LIMIT))
   if [[ -z $failed_phase && $rc -ne 0 ]]; then failed_phase=script; fi
   # A partial result first, so a hang below still leaves one.
   write_result partial || say "could not write the partial result"
   if [[ -n $failed_phase && -s $KUBECONFIG ]]; then
-    timeout --kill-after=30 "$DIAGNOSTICS_LIMIT" "$self" --phase diagnostics >"$log_dir/diagnostics.log" 2>&1 || true
+    bounded "$DIAGNOSTICS_LIMIT" "$self" --phase diagnostics >"$log_dir/diagnostics.log" 2>&1 || true
   fi
   kill "$disk_sampler" 2>/dev/null || true
   if ! write_result complete; then
