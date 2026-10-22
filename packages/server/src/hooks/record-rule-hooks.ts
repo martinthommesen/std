@@ -139,6 +139,7 @@ export const RecordRuleSaveHooks: Layer.Layer<
             mode: input.mode,
             operation: input.kind,
             snapshot: input.snapshot,
+            supplied: input.supplied,
             values: input.values,
           });
         }),

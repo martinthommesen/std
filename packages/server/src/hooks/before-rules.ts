@@ -9,10 +9,13 @@
  * delete the stored record is both, so `changed` is false).
  *
  * - A `derive` rule whose condition holds applies its `set` actions to the
- *   proposed values; later rules see them. The values it sets count as
+ *   proposed values; later rules see them. A `set` action with
+ *   `keepSupplied` skips every field the caller's body named, whatever its
+ *   value (equal to the stored one included), so an explicit value wins;
+ *   without it the rule's value wins. The values it sets count as
  *   supplied fields (3.9): the access checks apply to them, and the
- *   pipeline validates them like body values (read-only fields excepted:
- *   rules compute them). `derive` rules never run on a delete.
+ *   pipeline validates them like body values, read-only and retired
+ *   fields included. `derive` rules never run on a delete.
  * - A `guard` or `invariant` rule whose condition holds fails the save
  *   with its first `refuse` action: `RuleRefused` or `InvalidTransition`
  *   (422) with the rule's fixed message.
@@ -52,6 +55,11 @@ export interface DeriveInput {
   readonly previous: RecordImage | null;
   /** `me`, `now` and the instance time zone. */
   readonly context: RuleContext;
+  /**
+   * The fields the caller's body named, which `keepSupplied` actions
+   * leave alone; none while settling (4.9), where no caller supplies.
+   */
+  readonly supplied: ReadonlySet<DefinitionId>;
 }
 
 /** What `derive` rules did. */
@@ -68,15 +76,20 @@ type WritableImage = {
 };
 
 const setValues = (
-  snapshot: ConfigSnapshot,
+  input: DeriveInput,
   rule: RecordRuleDefinition,
   image: WritableImage,
-  set: Map<DefinitionId, DecodedInput>,
-  context: RuleContext
+  set: Map<DefinitionId, DecodedInput>
 ): void => {
+  const { context, snapshot, supplied } = input;
+
   for (const action of rule.actions) {
     if (action.type === "set") {
-      for (const assignment of action.values) {
+      const kept = action.keepSupplied === true;
+
+      for (const assignment of action.values.filter(
+        (entry) => !(kept && supplied.has(entry.fieldId))
+      )) {
         const field = snapshot.field(assignment.fieldId);
 
         if (field === undefined) {
@@ -124,7 +137,7 @@ export const applyDeriveRules = Effect.fn("Rules.applyDerive")(
       );
 
       if (holds) {
-        setValues(input.snapshot, rule, image, set, input.context);
+        setValues(input, rule, image, set);
       }
     }
 
@@ -192,6 +205,8 @@ export interface BeforeRulesInput {
   readonly existing: StoredRecord | null;
   /** The proposed values (see `BeforeWriteInput.values`). */
   readonly values: ReadonlyMap<DefinitionId, DecodedInput>;
+  /** The fields the caller's body named. */
+  readonly supplied: ReadonlySet<DefinitionId>;
   readonly mode: SaveMode;
   readonly context: RuleContext;
 }

@@ -22,10 +22,12 @@
  */
 import {
   Array as SchemaArray,
+  Boolean as SchemaBoolean,
   Json,
   Literal,
   Literals,
   NullOr,
+  optionalKey,
   String as SchemaString,
   Struct,
   Union,
@@ -116,7 +118,16 @@ export type RuleTarget = typeof RuleTargetSchema.Type;
 
 /** Every action kind. */
 export const RuleActionSchema = Union([
-  Struct({ type: Literal("set"), values: Assignments }),
+  Struct({
+    /**
+     * `before` rules only: leave alone every field the caller's body
+     * names, whatever its value, so an explicit value wins (4.10). Absent:
+     * false, the rule's value wins.
+     */
+    keepSupplied: optionalKey(SchemaBoolean),
+    type: Literal("set"),
+    values: Assignments,
+  }),
   Struct({
     code: RefusalCodeSchema,
     message: SchemaString,

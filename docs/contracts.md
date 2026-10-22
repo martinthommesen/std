@@ -765,7 +765,7 @@ Values in actions are a literal; `{"ctx": "now" | "me"}`; `{"copy": <path>}` rea
 
 | Action | Phases | Effect |
 | --- | --- | --- |
-| `set` `{values}` | `before`, `aggregate` | Sets fields of the record: the proposed record before the write, or the owner's in-memory image while settling |
+| `set` `{values, keepSupplied?}` | `before`, `aggregate` | Sets fields of the record: the proposed record before the write, or the owner's in-memory image while settling. With `keepSupplied: true` (`before` only) it leaves alone every field the caller's write body names, whatever its value (equal to the stored one included), so an explicit value wins; without it the rule's value wins (decision 0022). 14.2's priority rule uses it: priority is derived from impact × urgency unless the write names priority |
 | `refuse` `{code, message}` | `before`, `aggregate` | Fails the save (`before`) or the transaction (`aggregate`) with `InvalidTransition` or `RuleRefused` (422) and a fixed message |
 | `setParts` `{class, where, values}` | `aggregate` | Sets fields on the in-memory images of the owner's parts of `class` that match `where` |
 | `createParts` `{class, forEach?, values}` | `aggregate` | Proposes new parts of the owner: one, or one per record of `forEach` (`{class, where}`, read as system), at most 100 |
@@ -774,7 +774,7 @@ Values in actions are a literal; `{"ctx": "now" | "me"}`; `{"copy": <path>}` rea
 
 Who acts:
 
-- `before` actions are part of the save, as the acting user; the values they set count as supplied fields (3.9).
+- `before` actions are part of the save, as the acting user; the values they set count as supplied fields (3.9) and are validated like body values, so a `derive` rule never sets a read-only or retired field (refused at definition validation, and `ReadOnlyField` or `DefinitionRetired` at save). An active rule never writes a retired field, however it became active.
 - `after` actions are nested saves through the pipeline as the acting user, or as `runAs`.
 - `afterCommit` actions run as the subscription's identity, in the delivery transaction (4.1).
 - On saves that a user, an API call, an import or an `after` action makes, every `before` rule runs: `derive`, then `guard`, then `invariant`, each kind in rule order. On the saves 4.9's persistence makes, only `invariant` rules run, because `derive` rules already ran inside settling and `guard` rules guard users' writes only.

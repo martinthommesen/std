@@ -62,6 +62,8 @@ const CHILD = createClass("rr_child", { parentId: PARENT.id });
 const LOG = createClass("rr_log");
 
 const P = {
+  legacy: addField(PARENT.id, "legacy", { kind: "text", maxLength: 20 }),
+  locked: addField(PARENT.id, "locked", { kind: "text" }, { readOnly: true }),
   name: addField(
     PARENT.id,
     "name",
@@ -71,7 +73,7 @@ const P = {
     }
   ),
   notes: addField(PARENT.id, "notes", { kind: "text", maxLength: 20 }),
-  score: addField(PARENT.id, "score", { kind: "integer" }, { readOnly: true }),
+  score: addField(PARENT.id, "score", { kind: "integer" }),
   status: addField(PARENT.id, "status", { kind: "text", maxLength: 32 }),
   trace: addField(PARENT.id, "trace", { kind: "text", maxLength: 200 }),
 } as const;
@@ -178,6 +180,16 @@ const catchingAround = (
     afterWrite: (input) =>
       hooks.afterWrite(input).pipe(Effect.catchTag(tag, () => Effect.void)),
   });
+
+/**
+ * Switches a rule on or off through a change set.
+ * @param id - The rule.
+ * @param version - Its current version.
+ * @param active - On or off.
+ * @returns The change set.
+ */
+const toggle = (id: string, version: number, active: boolean) =>
+  change([{ changes: { active }, id, op: "update", version }]);
 
 const committedCounts = Effect.all({
   changes: count('SELECT count(*)::text AS value FROM core."change"'),
@@ -344,9 +356,11 @@ describe("record-rules", () => {
     );
 
     dbTest.effect(
-      "derive values count as supplied: validated, read-only fields excepted",
+      "derive values count as supplied and are validated; keepSupplied leaves the caller's values alone",
       () =>
         Effect.gen(function* deriveValidation() {
+          const increment: RuleValue = { increment: P.score.id };
+
           yield* change([
             addRecordRule(PARENT.id, {
               actions: [set([P.score.id, literal(5)])],
@@ -360,22 +374,29 @@ describe("record-rules", () => {
               operations: ["create"],
               ruleKind: "derive",
             }).op,
+            addRecordRule(PARENT.id, {
+              actions: [
+                {
+                  keepSupplied: true,
+                  type: "set",
+                  values: [{ fieldId: P.score.id, value: increment }],
+                },
+              ],
+              condition: prefixed(P.name.id, "inc-"),
+              operations: ["create", "update"],
+              ruleKind: "derive",
+            }).op,
+            addRecordRule(PARENT.id, {
+              actions: [set([P.score.id, literal(5)])],
+              condition: prefixed(P.name.id, "force-"),
+              operations: ["create", "update"],
+              ruleKind: "derive",
+            }).op,
           ]);
 
           assert.strictEqual(
             valuesOf(yield* createParent({ name: "ro-1" })).score,
             5
-          );
-
-          const supplied = yield* createParent({ name: "ro-2", score: 7 }).pipe(
-            Effect.flip
-          );
-
-          assert.deepStrictEqual(
-            supplied._tag === "ValidationFailed"
-              ? supplied.errors.map((error) => `${error.field}:${error._tag}`)
-              : [supplied._tag],
-            ["score:ReadOnlyField"]
           );
 
           const tooLong = yield* createParent({
@@ -388,6 +409,113 @@ describe("record-rules", () => {
               : [tooLong._tag],
             ["notes:InvalidValue"]
           );
+
+          // keepSupplied, create: a supplied value wins, an absent one is
+          // derived.
+          assert.strictEqual(
+            valuesOf(yield* createParent({ name: "inc-1" })).score,
+            1
+          );
+
+          const supplied = yield* createParent({ name: "inc-2", score: 7 });
+
+          assert.strictEqual(valuesOf(supplied).score, 7);
+
+          // keepSupplied, update: a supplied value equal to the stored one
+          // still wins; without it the rule derives.
+          const same = yield* updateRecord({
+            body: { name: "inc-2b", score: 7 },
+            endpointClassId: PARENT.id,
+            expectedVersion: supplied.version,
+            id: supplied.id,
+          });
+
+          assert.strictEqual(valuesOf(same).score, 7);
+
+          const derived = yield* updateRecord({
+            body: { name: "inc-2c" },
+            endpointClassId: PARENT.id,
+            expectedVersion: same.version,
+            id: supplied.id,
+          });
+
+          assert.strictEqual(valuesOf(derived).score, 8);
+
+          // Without keepSupplied the rule's value wins, on create and update.
+          const forced = yield* createParent({ name: "force-1", score: 7 });
+
+          assert.strictEqual(valuesOf(forced).score, 5);
+
+          const forcedAgain = yield* updateRecord({
+            body: { score: 9 },
+            endpointClassId: PARENT.id,
+            expectedVersion: forced.version,
+            id: forced.id,
+          });
+
+          assert.deepStrictEqual(
+            [forcedAgain.outcome, valuesOf(forcedAgain).score],
+            ["unchanged", 5]
+          );
+
+          // A derive rule's values are the caller's write, so it cannot set
+          // a read-only field.
+          const readOnly = yield* change([
+            addRecordRule(PARENT.id, {
+              actions: [set([P.locked.id, literal("x")])],
+              ruleKind: "derive",
+            }).op,
+          ]).pipe(Effect.flip);
+
+          assert.deepStrictEqual(
+            readOnly._tag === "DefinitionInvalid"
+              ? readOnly.problems.map((problem) => problem.code)
+              : [readOnly._tag],
+            ["invalidRecordRule"]
+          );
+        })
+    );
+
+    dbTest.effect(
+      "an active rule never writes a retired field, reactivated or not; conditions may still read it",
+      () =>
+        Effect.gen(function* retiredTargets() {
+          const writer = addRecordRule(PARENT.id, {
+            actions: [set([P.legacy.id, literal("x")])],
+            condition: prefixed(P.name.id, "ret-"),
+            operations: ["create"],
+            ruleKind: "derive",
+          });
+
+          const reader = addRecordRule(PARENT.id, {
+            actions: [refuse("RuleRefused", "Legacy records are closed.")],
+            condition: all(prefixed(P.name.id, "ret-"), {
+              arg: path(P.legacy.id),
+              op: "notEmpty",
+            }),
+            operations: ["update"],
+            ruleKind: "invariant",
+          });
+
+          yield* change([writer.op, reader.op]);
+
+          yield* toggle(writer.id, 1, false);
+          yield* toggle(reader.id, 1, false);
+          yield* change([{ id: P.legacy.id, op: "retire", version: 1 }]);
+
+          const reactivated = yield* toggle(writer.id, 2, true).pipe(
+            Effect.flip
+          );
+
+          assert.deepStrictEqual(
+            reactivated._tag === "DefinitionInvalid"
+              ? reactivated.problems.map((problem) => problem.code)
+              : [reactivated._tag],
+            ["invalidRecordRule"]
+          );
+
+          // A stored condition keeps reading the retired field (5.2).
+          yield* toggle(reader.id, 2, true);
         })
     );
 
@@ -524,6 +652,7 @@ describe("record-rules", () => {
                 [P.status.id]: "closed",
               },
               snapshot,
+              supplied: new Set(),
             })
           );
 

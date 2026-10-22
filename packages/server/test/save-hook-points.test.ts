@@ -84,6 +84,7 @@ describe("save-hook-points", () => {
       kind: "create",
       mode: "user",
       snapshot: ConfigSnapshot.empty({ changeSetId: freshId(), revision: 0 }),
+      supplied: new Set(),
       values: new Map([[ACME.status, "s"]]),
     });
 

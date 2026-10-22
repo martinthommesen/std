@@ -73,6 +73,11 @@ interface ValueScope {
   readonly sourceClassId: DefinitionId | null;
   /** Whether the values are a nested save's body (`after`, `afterCommit`). */
   readonly nestedSave: boolean;
+  /**
+   * Whether the values count as the acting user's write: a nested save's
+   * body, or a `before` rule's `set` (its values count as supplied, 3.9).
+   */
+  readonly callerWrite: boolean;
   /** Where in the rule the action is, for messages. */
   readonly at: string;
 }
@@ -320,16 +325,19 @@ const checkAssignment = (
     return;
   }
 
-  if (checking.purpose === "store" && !isActive(field)) {
+  // An active rule never writes a retired field, whether the rule is new,
+  // changed, reactivated or overridden active (a retired field is
+  // read-only, 1.6); an inactive one may, so the field could be retired.
+  if (checking.rule.active && !isActive(field)) {
     invalid(checking, `${where} sets a retired field.`);
   }
 
   if (field.numberPrefix !== null) {
     invalid(checking, `${where} sets an auto-numbered field.`);
-  } else if (scope.nestedSave && field.readOnly) {
+  } else if (scope.callerWrite && field.readOnly) {
     invalid(
       checking,
-      `${where} sets a read-only field, which a nested save cannot write.`
+      `${where} sets a read-only field, which counts as the acting user's write.`
     );
   }
 
@@ -488,6 +496,7 @@ const checkCreateParts = (
       checking,
       {
         at,
+        callerWrite: false,
         nestedSave: false,
         sourceClassId: source,
         targetClassId: action.classId,
@@ -527,6 +536,7 @@ const checkNestedSave = (
       checking,
       {
         at,
+        callerWrite: true,
         nestedSave: true,
         sourceClassId: action.forEach.classId,
         targetClassId: target,
@@ -546,9 +556,22 @@ const checkAction = (
 
   switch (action.type) {
     case "set": {
+      if (action.keepSupplied === true && checking.rule.phase !== "before") {
+        invalid(
+          checking,
+          `${at} keeps supplied fields, which only before rules have: nothing else saves a caller's body.`
+        );
+      }
+
       checkValues(
         checking,
-        { at, nestedSave: false, sourceClassId: null, targetClassId: classId },
+        {
+          at,
+          callerWrite: checking.rule.phase === "before",
+          nestedSave: false,
+          sourceClassId: null,
+          targetClassId: classId,
+        },
         action.values
       );
       break;
@@ -574,6 +597,7 @@ const checkAction = (
           checking,
           {
             at,
+            callerWrite: false,
             nestedSave: false,
             sourceClassId: null,
             targetClassId: action.classId,

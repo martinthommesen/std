@@ -280,12 +280,6 @@ export interface ValidationInput {
   readonly proposal: Proposal;
   /** The fields the write changes (Contracts 3.9). */
   readonly written: ReadonlySet<DefinitionId>;
-  /**
-   * Written fields that only before-write hooks set (record rules,
-   * 4.10): system-written, so `ReadOnlyField` and `DefinitionRetired` do
-   * not apply to them; their values are still checked.
-   */
-  readonly hookOnly?: ReadonlySet<DefinitionId>;
   /** The stored record an update starts from; null for a create. */
   readonly existing: StoredRecord | null;
 }
@@ -312,10 +306,9 @@ export const validateProposal = (
         ? input.proposal.values.get(fieldId)
         : input.existing?.values.get(fieldId);
 
-      const written =
-        input.written.has(fieldId) && input.hookOnly?.has(fieldId) !== true;
-
-      errors.push(...fieldErrorsOf(field, candidate, written));
+      errors.push(
+        ...fieldErrorsOf(field, candidate, input.written.has(fieldId))
+      );
     } else {
       errors.push(invalidValue(field.name, refused));
     }

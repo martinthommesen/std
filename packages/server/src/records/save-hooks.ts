@@ -74,6 +74,12 @@ export interface BeforeWriteInput {
    * sets, on update the body's fields, empty for a delete.
    */
   readonly values: ReadonlyMap<DefinitionId, DecodedInput>;
+  /**
+   * The fields the caller's body named, whatever their values (equal to
+   * the stored ones included): a `set` action with `keepSupplied` leaves
+   * them alone (4.10).
+   */
+  readonly supplied: ReadonlySet<DefinitionId>;
   /** Which `before` rules run. */
   readonly mode: SaveMode;
 }

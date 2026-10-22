@@ -436,13 +436,6 @@ const project = Effect.fn("Records.project")(function* project(
   return yield* access.project({ endpointClassId, record, snapshot });
 });
 
-// Fields only hooks set: changed by them and not named by the body.
-const hookOnlyFields = (
-  hooked: readonly DefinitionId[],
-  body: WriteBody
-): ReadonlySet<DefinitionId> =>
-  new Set(hooked.filter((fieldId) => !body.entries.has(fieldId)));
-
 // The fields whose value the before-write hooks set or changed.
 const hookChanges = (
   fields: ReadonlyMap<DefinitionId, EffectiveField>,
@@ -503,6 +496,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       kind: "create",
       mode: input.mode ?? "user",
       snapshot,
+      supplied: new Set(resolved.entries.keys()),
       values: proposed.values,
     });
 
@@ -514,12 +508,11 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     // The fields the create sets: those the body supplied and those the
     // hooks changed (values rules set count as supplied, 3.9). Read-only
     // and retired ones count as written for validation when their value
-    // differs from what the create stores without them; fields only hooks
-    // set are system-written and exempt (4.10: rules compute read-only
-    // fields such as a priority).
-    const hooked = hookChanges(fields, proposed.values, proposal.values);
-
-    const supplied = new Set([...resolved.entries.keys(), ...hooked]);
+    // differs from what the create stores without them.
+    const supplied = new Set([
+      ...resolved.entries.keys(),
+      ...hookChanges(fields, proposed.values, proposal.values),
+    ]);
 
     const written = new Set(
       [...supplied].filter((fieldId) => {
@@ -537,7 +530,6 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: null,
-      hookOnly: hookOnlyFields(hooked, resolved),
       proposal,
       rules,
       supplied: new Set(resolved.entries.keys()),
@@ -744,7 +736,7 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
     snapshot: ConfigSnapshot,
     existing: StoredRecord,
     proposal: Proposal,
-    mode: SaveMode
+    context: { readonly mode: SaveMode; readonly body: WriteBody }
   ) {
     const hooks = yield* SaveHooks;
 
@@ -752,8 +744,9 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
       classId: existing.classId,
       existing,
       kind: "update",
-      mode,
+      mode: context.mode,
       snapshot,
+      supplied: new Set(context.body.entries.keys()),
       values: proposal.values,
     });
 
@@ -810,12 +803,10 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    const hooked = yield* hookedProposal(
-      snapshot,
-      record,
-      proposed,
-      input.mode ?? "user"
-    );
+    const hooked = yield* hookedProposal(snapshot, record, proposed, {
+      body: resolved,
+      mode: input.mode ?? "user",
+    });
 
     const proposal = finalizeUpdate(rules, hooked, record);
 
@@ -838,10 +829,6 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: record,
-      hookOnly: hookOnlyFields(
-        hookChanges(fields, proposed.values, hooked.values),
-        resolved
-      ),
       proposal,
       rules,
       supplied: new Set(resolved.entries.keys()),
@@ -937,6 +924,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
       kind: "delete",
       mode: input.mode ?? "user",
       snapshot,
+      supplied: new Set(),
       values: new Map(),
     });
 
