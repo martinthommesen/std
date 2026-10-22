@@ -162,7 +162,9 @@ const sessionInTheBrowser = async (
 
   // A reload keeps the session: the app asks the server, which reads the
   // cookie the script cannot.
-  await page.reload();
+  const reloaded = await page.reload();
+
+  assert.strictEqual(reloaded?.headers()["cache-control"], "no-cache");
   await page
     .getByRole("banner")
     .getByText(visitor.name, { exact: true })
@@ -178,6 +180,8 @@ const sessionInTheBrowser = async (
   });
 
   assert.strictEqual(replayed.status, 401);
+  // API responses are never stored; the app's own page is revalidated.
+  assert.strictEqual(replayed.headers.get("cache-control"), "no-store");
 
   await page.goto(`${origin}/`);
   await page.waitForURL(`${origin}/sign-in`);
