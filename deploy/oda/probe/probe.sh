@@ -357,7 +357,7 @@ tool_versions() {
 
 runner_json() {
   local os=""
-  if [[ -r /etc/os-release ]]; then os=$(. /etc/os-release && echo "${PRETTY_NAME:-}"); fi
+  if [[ -r /etc/os-release ]]; then os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"'); fi
   jq -cn \
     --arg imageOS "${ImageOS:-}" \
     --arg imageVersion "${ImageVersion:-}" \
@@ -376,6 +376,17 @@ pins_json() {
     --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" --arg istio "$ISTIO_VERSION" \
     --arg canvasOda "$CANVAS_VERSION" --arg canvasOdaSha256 "$CANVAS_SHA256" \
     '$ARGS.named'
+}
+
+# The kind node's own footprint, independent of whatever else uses the disk:
+# the node image and the node container's writable layer (pulled images,
+# etcd, logs), measured before the cluster is deleted.
+kind_node_json() {
+  local writable image
+  writable=$(docker inspect --size --format '{{.SizeRw}}' "$cluster-control-plane" 2>/dev/null || true)
+  image=$(docker image inspect --format '{{.Size}}' "$KIND_NODE_IMAGE" 2>/dev/null || true)
+  jq -cn --argjson writable "${writable:-null}" --argjson image "${image:-null}" \
+    '{nodeWritableBytes: $writable, nodeImageBytes: $image}'
 }
 
 jsonl_array() {
@@ -402,6 +413,7 @@ write_result() {
     --argjson pins "$(pins_json)" \
     --argjson tools "$(tool_versions)" \
     --argjson diskBefore "$disk_before" --argjson diskAfter "$(disk_json)" \
+    --argjson kindNode "$(kind_node_json)" \
     --argjson phases "$(jsonl_array "$state_dir/phases.jsonl")" \
     --argjson transitions "$(jsonl_array "$state_dir/transitions.jsonl")" \
     --argjson gateway "$gateway" \
@@ -422,7 +434,8 @@ write_result() {
       disk: {
         before: $diskBefore,
         after: $diskAfter,
-        peakUsedBytes: ([$diskBefore.usedBytes, $diskAfter.usedBytes] + [$phases[] | .diskAfter.usedBytes // empty] | max)
+        peakUsedBytes: ([$diskBefore.usedBytes, $diskAfter.usedBytes] + [$phases[] | .diskAfter.usedBytes // empty] | max),
+        kindNode: $kindNode
       },
       phases: $phases,
       component: {transitions: $transitions},
