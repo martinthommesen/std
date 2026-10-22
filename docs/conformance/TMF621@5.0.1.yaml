@@ -225,6 +225,11 @@ rows:
     level: mandatory
     requirement: "Every error response (400, 401, 403, 404, 405, 409, 500, 501, 503) has an Error body."
     status: pending
+  - id: TMF621@5.0.1/OAS/errors/version-conflict-409
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/responses/409; #/paths/~1troubleTicket~1{id}/delete/responses/409"
+    level: mandatory
+    requirement: "A PATCH or DELETE with a stale If-Match answers 409, the conflict status the document declares (it declares no 412), with an Error body and the current ETag (decision 0021, decision 55)."
+    status: pending
   - id: TMF621@5.0.1/OAS/query/fields-offset-limit
     source: "TMF621 OAS v5.0.1 #/components/parameters/Fields, Offset, Limit"
     level: mandatory

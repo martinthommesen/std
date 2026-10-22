@@ -157,7 +157,7 @@ entries:
   - id: E27-tmf-if-match-optional
     rows: []
     requirement: "`If-Match` optional on TMF API writes, although TMF630 v5.0.0 Part 1 §1.5.3 p.14 recommends ETag preconditions"
-    reason: "The CTKs and TMF clients send no precondition; a stale `If-Match`, when sent, is `412` with the current ETag (Contracts 11.1; decision 0026, M2)."
+    reason: "The CTKs and TMF clients send no precondition; a stale `If-Match`, when sent, answers the version-conflict status the pinned document declares (`409` for TMF621), with the current ETag (Contracts 11.1; decision 0026, M2; amended by decision 0021, decision 55)."
     recommendation: accept
     state: decided
     outcome: accepted
