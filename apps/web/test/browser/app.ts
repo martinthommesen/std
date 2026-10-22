@@ -53,6 +53,24 @@ export const signIn = async (page: Page, origin: string, visitor: Visitor) => {
     .waitFor({ state: "attached" });
 };
 
+// NOTE: a script string, run in the page: it waits for two animation
+// frames.
+const TWO_FRAMES =
+  "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
+
+/**
+ * Waits until the app has rendered everything it was asked to: two
+ * animation frames, after which Foldkit has applied the Messages of the
+ * last action and patched the page. Acting before that can hit a control
+ * the pending render is about to reset.
+ *
+ * @param page - The page.
+ * @returns Nothing, once rendered.
+ */
+export const rendered = async (page: Page): Promise<void> => {
+  await page.evaluate(TWO_FRAMES);
+};
+
 /**
  * The list's records table, or its empty-list text.
  *
@@ -79,6 +97,9 @@ export const waitForList = async (
     await answered;
   }
 
+  // NOTE: the answer may arrive before the page renders it; the table on
+  // screen until then is the previous one.
+  await rendered(page);
   await settledList(page).first().waitFor({ state: "attached" });
 };
 
@@ -200,8 +221,10 @@ export const listedPages = async (page: Page): Promise<string[][]> => {
 
 /** A list request to the API, in its own terms. */
 export interface ApiListQuery {
-  readonly filter: string | undefined;
-  readonly sort: string | undefined;
+  // oxlint-disable-next-line sonarjs/no-redundant-optional -- under exactOptionalPropertyTypes, `| undefined` lets callers pass a scenario's optional filter as it is
+  readonly filter?: string | undefined;
+  // oxlint-disable-next-line sonarjs/no-redundant-optional -- under exactOptionalPropertyTypes, `| undefined` lets callers pass a scenario's optional sort as it is
+  readonly sort?: string | undefined;
   readonly limit: number;
 }
 
@@ -438,24 +461,6 @@ const runStep = async (scope: Locator, step: ConditionStep) => {
   }
 };
 
-// NOTE: a script string, run in the page: it waits for two animation
-// frames.
-const TWO_FRAMES =
-  "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))";
-
-/**
- * Waits until the app has rendered everything it was asked to: two
- * animation frames, after which Foldkit has applied the Messages of the
- * last action and patched the page. Acting before that can hit a control
- * the pending render is about to reset.
- *
- * @param page - The page.
- * @returns Nothing, once rendered.
- */
-export const rendered = async (page: Page): Promise<void> => {
-  await page.evaluate(TWO_FRAMES);
-};
-
 /**
  * Runs the steps of one condition in order.
  *
@@ -591,4 +596,476 @@ export const navigationTables = async (page: Page): Promise<string[]> => {
   return await nav
     .getByRole("link")
     .evaluateAll((links) => links.map((link) => link.textContent ?? ""));
+};
+
+// A SECOND CLIENT
+
+const decodeToken = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ token: Schema.String }))
+);
+
+/**
+ * Signs in through the API with a bearer token, as a second client next
+ * to the browser (another user's session, a script).
+ *
+ * @param origin - The server's origin.
+ * @param visitor - Who signs in.
+ * @returns The session token.
+ */
+export const bearerToken = async (
+  origin: string,
+  visitor: Visitor
+): Promise<string> => {
+  const response = await fetch(`${origin}/api/v1/auth/sign-in`, {
+    body: JSON.stringify({ login: visitor.login, password: visitor.password }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`sign-in: ${response.status} ${text}`);
+  }
+
+  return decodeToken(text).token;
+};
+
+/** A request of the second client. */
+export interface ApiCall {
+  /** `GET`, `POST`, `PATCH` or `DELETE`. */
+  readonly method: string;
+  /** The path under `/api/v1`. */
+  readonly path: string;
+  readonly body?: unknown;
+  /** The version for `If-Match`. */
+  readonly version?: number;
+}
+
+/**
+ * Sends a request with a bearer token.
+ *
+ * @param origin - The server's origin.
+ * @param token - The session token.
+ * @param call - The method, path, body and version.
+ * @returns The status and the body's text.
+ */
+export const apiCall = async (
+  origin: string,
+  token: string,
+  call: ApiCall
+): Promise<{ readonly status: number; readonly text: string }> => {
+  const headers = new Headers({ authorization: `Bearer ${token}` });
+
+  if (call.body !== undefined) {
+    headers.set("content-type", "application/json");
+  }
+
+  if (call.version !== undefined) {
+    headers.set("if-match", `"${call.version}"`);
+  }
+
+  const init: RequestInit = { headers, method: call.method };
+
+  if (call.body !== undefined) {
+    init.body = JSON.stringify(call.body);
+  }
+
+  const response = await fetch(`${origin}/api/v1${call.path}`, init);
+
+  return { status: response.status, text: await response.text() };
+};
+
+// SAVED FILTERS
+
+/**
+ * The saved filters the list page offers, by label, in order (without
+ * "No filter" and "Your own filter").
+ *
+ * @param page - A list page.
+ * @returns The labels.
+ */
+export const savedFilterLabels = async (page: Page): Promise<string[]> => {
+  const select = page.getByLabel("Saved filter");
+
+  await select.waitFor({ state: "attached" });
+
+  const labels = await select
+    .locator("option")
+    .evaluateAll((options) =>
+      options.map((option) => option.textContent ?? "")
+    );
+
+  return labels.filter(
+    (label) => label !== "No filter" && label !== "Your own filter"
+  );
+};
+
+/**
+ * Applies a saved filter from the list page's select and waits for the
+ * list.
+ *
+ * @param page - A list page.
+ * @param label - The saved filter's label.
+ * @returns Nothing, once the list is settled.
+ */
+export const applySavedFilter = async (
+  page: Page,
+  label: string
+): Promise<void> => {
+  await reloadingList(page, async () => {
+    await page.getByLabel("Saved filter").selectOption({ label });
+  });
+};
+
+// RECORD FORMS
+
+/** The table and record of a form. */
+export interface RecordAddress {
+  readonly table: string;
+  readonly id: string;
+}
+
+/**
+ * The address of a record's form.
+ *
+ * @param record - The table and the record's ID.
+ * @returns The path.
+ */
+export const recordPath = (record: RecordAddress): string =>
+  `/tables/${record.table}/records/${record.id}`;
+
+/**
+ * Waits until a form page shows its form (the metadata and, when editing,
+ * the record arrived).
+ *
+ * @param page - A form page.
+ * @returns Nothing, once the form is there.
+ */
+export const waitForForm = async (page: Page): Promise<void> => {
+  await page.getByRole("form").waitFor({ state: "attached" });
+  await rendered(page);
+};
+
+/**
+ * Opens a record's form from the address.
+ *
+ * @param page - A signed-in page.
+ * @param origin - The app's origin.
+ * @param record - The table and the record's ID.
+ * @returns Nothing, once the form is there.
+ */
+export const openRecordForm = async (
+  page: Page,
+  origin: string,
+  record: RecordAddress
+): Promise<void> => {
+  await page.goto(`${origin}${recordPath(record)}`);
+  await waitForForm(page);
+};
+
+/**
+ * Opens the form that creates a record of a table, from the list page's
+ * "New" link.
+ *
+ * @param page - A signed-in page.
+ * @param origin - The app's origin.
+ * @param table - The table.
+ * @param label - The table's label.
+ * @returns Nothing, once the form is there.
+ */
+export const openNewRecordForm = async (
+  page: Page,
+  origin: string,
+  table: string,
+  label: string
+): Promise<void> => {
+  await openTableList(page, origin, table);
+  await page.getByRole("link", { name: `New ${label}` }).click();
+  await waitForForm(page);
+};
+
+const escapeRegExp = (text: string): string =>
+  text.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+
+/**
+ * A field's control by its label, with or without the "(required)" mark.
+ *
+ * @param page - A form page.
+ * @param label - The field's label.
+ * @returns The control.
+ */
+export const formControl = (page: Page, label: string): Locator =>
+  page.getByLabel(
+    new RegExp(`^${escapeRegExp(label)}( \\(required\\))?$`, "u")
+  );
+
+/**
+ * Types a field's value, replacing what it holds.
+ *
+ * @param page - A form page.
+ * @param label - The field's label.
+ * @param text - The text.
+ * @returns Nothing.
+ */
+export const fillField = async (
+  page: Page,
+  label: string,
+  text: string
+): Promise<void> => {
+  await formControl(page, label).fill(text);
+  await rendered(page);
+};
+
+/**
+ * Picks a choice by its label.
+ *
+ * @param page - A form page.
+ * @param label - The field's label.
+ * @param choice - The choice's label.
+ * @returns Nothing.
+ */
+export const chooseOption = async (
+  page: Page,
+  label: string,
+  choice: string
+): Promise<void> => {
+  await formControl(page, label).selectOption({ label: choice });
+  await rendered(page);
+};
+
+const isSearchResponse = (response: Response): boolean =>
+  isListResponse(response) &&
+  new URL(response.url()).searchParams.has("allowedFor");
+
+/**
+ * Types into a reference picker and returns the records it offers once
+ * its search answered.
+ *
+ * @param page - A form page.
+ * @param label - The reference field's label.
+ * @param search - The text to type.
+ * @returns The offered records' labels.
+ */
+export const referenceOptions = async (
+  page: Page,
+  label: string,
+  search: string
+): Promise<string[]> => {
+  const input = formControl(page, label);
+  const answered = page.waitForResponse(isSearchResponse);
+
+  await input.fill(search);
+  await answered;
+  await rendered(page);
+
+  return await page
+    .getByRole("option")
+    .evaluateAll((options) =>
+      options.map((option) => (option.textContent ?? "").trim())
+    );
+};
+
+/**
+ * Picks a record in a reference picker: types to search, then clicks the
+ * record's option.
+ *
+ * @param page - A form page.
+ * @param label - The reference field's label.
+ * @param search - The text to type.
+ * @param option - The label of the record to pick.
+ * @returns Nothing.
+ */
+export const pickReference = async (
+  page: Page,
+  label: string,
+  search: string,
+  option: string
+): Promise<void> => {
+  await referenceOptions(page, label, search);
+  await page.getByRole("option", { exact: true, name: option }).click();
+  await rendered(page);
+};
+
+const isWriteResponse = (response: Response): boolean =>
+  new URL(response.url()).pathname.startsWith("/api/v1/tables/") &&
+  ["POST", "PATCH"].includes(response.request().method());
+
+/** What a save sent and got. */
+export interface SaveOutcome {
+  /** The HTTP status of the create or update. */
+  readonly status: number;
+  /** The request body as sent. */
+  readonly body: string;
+  /** Its `If-Match` header, if any. */
+  readonly ifMatch: string | undefined;
+}
+
+/**
+ * Clicks the form's "Save" (or "Create") and waits for the answer and for
+ * the page to show it.
+ *
+ * @param page - A form page.
+ * @returns The request's body and the response's status.
+ */
+export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
+  const answered = page.waitForResponse(isWriteResponse);
+
+  await page
+    .getByRole("button", { exact: true, name: /^(?:Save|Create)$/u })
+    .click();
+
+  const response = await answered;
+
+  await rendered(page);
+
+  return {
+    body: response.request().postData() ?? "",
+    ifMatch: response.request().headers()["if-match"],
+    status: response.status(),
+  };
+};
+
+/**
+ * Waits for the form's status line ("Saved." and the like) or its alert,
+ * and returns its text.
+ *
+ * @param page - A form page.
+ * @returns The text.
+ */
+export const formOutcome = async (page: Page): Promise<string> => {
+  const outcome = page
+    .getByRole("form")
+    .getByRole("alert")
+    .or(page.getByRole("form").getByRole("status"))
+    .first();
+
+  await outcome.waitFor({ state: "attached" });
+
+  return (await outcome.textContent()) ?? "";
+};
+
+/**
+ * How a field shows on the form: `restricted`, `not-delivered`, `empty` or
+ * `value` for a field without a control, `control` for one with.
+ *
+ * @param page - A form page.
+ * @param name - The field's API name.
+ * @returns The state, or null when the form does not show the field.
+ */
+export const formFieldState = async (
+  page: Page,
+  name: string
+): Promise<string | null> => {
+  const row = page.locator(`[data-field="${name}"]`);
+
+  if ((await row.count()) === 0) {
+    return null;
+  }
+
+  const shown = row.locator("[data-field-state]");
+
+  return (await shown.count()) === 0
+    ? "control"
+    : await shown.first().getAttribute("data-field-state");
+};
+
+/**
+ * The text a field without a control shows.
+ *
+ * @param page - A form page.
+ * @param name - The field's API name.
+ * @returns The text.
+ */
+export const formFieldText = async (
+  page: Page,
+  name: string
+): Promise<string> =>
+  (
+    (await page.locator(`[data-field="${name}"] .form-value`).textContent()) ??
+    ""
+  ).trim();
+
+const decodeRecordResponse = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      record: Schema.Struct({
+        id: Schema.String,
+        values: Schema.Record(Schema.String, Schema.Json),
+        version: Schema.Number,
+      }),
+    })
+  )
+);
+
+/**
+ * Reads a record through the API with the browser context's own session
+ * cookie.
+ *
+ * @param page - A signed-in page.
+ * @param origin - The server's origin.
+ * @param record - The table and the record's ID.
+ * @returns The record JSON's `record` member.
+ */
+export const apiRecord = async (
+  page: Page,
+  origin: string,
+  record: RecordAddress
+): Promise<{
+  readonly id: string;
+  readonly version: number;
+  readonly values: Readonly<Record<string, Schema.Json>>;
+}> => {
+  const response = await page
+    .context()
+    .request.get(`${origin}/api/v1${recordPath(record)}`);
+
+  if (!response.ok()) {
+    throw new Error(
+      `GET ${recordPath(record)}: ${response.status()} ${await response.text()}`
+    );
+  }
+
+  return decodeRecordResponse(await response.text()).record;
+};
+
+/**
+ * Records the bodies of every API request the page sends from now on.
+ *
+ * @param page - The page.
+ * @returns The bodies sent so far, by call.
+ */
+export const captureApiRequestBodies = (page: Page): (() => string[]) => {
+  const bodies: string[] = [];
+
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/api/")) {
+      bodies.push(request.postData() ?? "");
+    }
+  });
+
+  return () => [...bodies];
+};
+
+/**
+ * Opens the form's history panel and waits for its entries.
+ *
+ * @param page - A record's form page.
+ * @returns The text of each entry, newest first.
+ */
+export const historyEntryTexts = async (page: Page): Promise<string[]> => {
+  const answered = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/history")
+  );
+
+  await page.getByRole("button", { exact: true, name: "History" }).click();
+  await answered;
+  await page.locator(".history-entry").first().waitFor({ state: "attached" });
+  await rendered(page);
+
+  return await page
+    .locator(".history-entry")
+    .evaluateAll((entries) =>
+      entries.map((entry) => (entry.textContent ?? "").replaceAll(/\s+/gu, " "))
+    );
 };

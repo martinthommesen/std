@@ -47,6 +47,15 @@ const ALERT_CLASS = "form-alert";
 /** One history entry (Contracts 4.2, 4.5). */
 type HistoryEntry = typeof HistoryEntrySchema.Type;
 
+// NOTE: the open or closed mark is hidden from assistive technology,
+// which reads `aria-expanded`; generated CSS content would join the
+// button's accessible name.
+const disclosureMark = (isOpen: boolean, h: HtmlBuilder<Message>): Html =>
+  h.span(
+    [h.AriaHidden(true), h.Class("disclosure-mark")],
+    [isOpen ? "▾" : "▸"]
+  );
+
 // RELATED LISTS
 
 const relatedCellView = (
@@ -256,7 +265,10 @@ const relatedListView = (
                   [
                     h.button(
                       [...attributes.button, h.Class("disclosure-button")],
-                      [`${list.entry.label} by ${list.entry.fieldLabel}`]
+                      [
+                        disclosureMark(list.isOpen, h),
+                        `${list.entry.label} by ${list.entry.fieldLabel}`,
+                      ]
                     ),
                   ]
                 ),
@@ -494,7 +506,7 @@ export const historyView = (model: Model, h: HtmlBuilder<Message>): Html =>
                       [
                         h.button(
                           [...attributes.button, h.Class("disclosure-button")],
-                          ["History"]
+                          [disclosureMark(model.history.isOpen, h), "History"]
                         ),
                       ]
                     ),

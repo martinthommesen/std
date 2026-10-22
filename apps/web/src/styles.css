@@ -682,6 +682,274 @@ code {
   opacity: 0.4;
 }
 
+/* The record form */
+
+.page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+a.button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.saved-filters {
+  max-width: 24rem;
+}
+
+.form-facts {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.record-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 48rem;
+}
+
+.form-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.form-legend {
+  padding: 0 var(--space-1);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.form-field.control-inline {
+  flex-flow: row wrap;
+}
+
+.form-value {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.form-field[data-field-state="empty"] .form-value,
+.form-field[data-field-state="not-delivered"] .form-value {
+  color: var(--color-text-muted);
+}
+
+.form-date,
+.form-date-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.control-time {
+  max-width: 9rem;
+}
+
+.form-write-only {
+  align-items: flex-start;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Reference pickers (Foldkit UI Combobox: `data-active`, `data-selected`,
+   `data-disabled`, `data-invalid`, `data-open`) */
+
+.combobox {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  max-width: 32rem;
+}
+
+.combobox input {
+  flex: 1;
+}
+
+.combobox-button {
+  min-width: 2.5rem;
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.combobox-options {
+  z-index: 10;
+  min-width: 16rem;
+  max-height: 18rem;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.combobox-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.combobox-option[data-active] {
+  color: var(--color-accent-text);
+  background: var(--color-accent);
+}
+
+.combobox-option [data-selected] {
+  font-weight: 600;
+}
+
+.combobox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+/* The delete confirmation (Foldkit UI Dialog) */
+
+.dialog {
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+}
+
+.dialog[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog-panel {
+  position: relative;
+  max-width: 28rem;
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.dialog-title {
+  margin-top: 0;
+}
+
+/* Related lists and history (Foldkit UI Disclosure: `data-open`) */
+
+.related-lists {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.panel-heading {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.disclosure-button {
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.disclosure-mark {
+  display: inline-block;
+  width: 1.25em;
+}
+
+.disclosure-panel[data-open] {
+  margin-top: var(--space-4);
+}
+
+.records-compact td,
+.records-compact th {
+  padding: var(--space-1) var(--space-2);
+}
+
+.history-entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-heading {
+  margin: 0;
+}
+
+.history-changes {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.history-change {
+  display: contents;
+}
+
+.history-change dt {
+  font-weight: 600;
+}
+
+.history-change dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-before {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .button,
   .nav-link,
