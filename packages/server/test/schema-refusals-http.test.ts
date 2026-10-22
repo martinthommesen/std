@@ -549,6 +549,140 @@ describe("schema-refusals-http", () => {
             assert.include(stored.text, '"active"');
           })
       );
+
+      dbTest.effect(
+        "a display field is retired only with its table, in one change set; reactivated together, everything comes back (gate 1.4)",
+        () =>
+          Effect.gen(function* displayField() {
+            const http = yield* TestHttpClient;
+            yield* siteDefinitions;
+
+            const token = yield* userWithRoles("drawer_admin", ["admin"]);
+            const drawer = createClass("drawer");
+            const caption = addField(drawer.id, "caption", { kind: "text" });
+            const size = addField(drawer.id, "size", { kind: "integer" });
+
+            yield* change([drawer.op, caption.op, size.op]);
+            yield* change([
+              {
+                changes: { displayFieldId: caption.id },
+                id: drawer.id,
+                op: "update",
+                version: yield* definitionVersion(drawer.id),
+              },
+            ]);
+            yield* insertRecords(['"site"."drawer"'], drawer.id, 2, {
+              caption: "'drawer ' || g",
+              size: "g",
+            });
+
+            const list = () =>
+              http.get("/api/v1/tables/site.drawer/records?sort=caption", {
+                token,
+              });
+
+            const listed = yield* list();
+
+            assert.strictEqual(listed.status, 200, listed.text);
+            assert.include(listed.text, '"drawer 1"');
+
+            // Alone, through both paths: refused, naming the table.
+            yield* expectRefusals([
+              {
+                detail: [drawer.id],
+                label: "generic retire of the display field alone",
+                send: patch(
+                  token,
+                  "core.field",
+                  caption.id,
+                  yield* definitionVersion(caption.id),
+                  { state: "retired" }
+                ),
+                status: 409,
+                tag: "DependencyConflict",
+              },
+              {
+                detail: [drawer.id],
+                label: "endpoint retire of the display field alone",
+                send: postChangeSet(token, [
+                  {
+                    id: caption.id,
+                    op: "retire",
+                    version: yield* definitionVersion(caption.id),
+                  },
+                ]),
+                status: 409,
+                tag: "DependencyConflict",
+              },
+            ]);
+
+            // With its table, in one change set: accepted.
+            const retired = yield* postChangeSet(token, [
+              {
+                id: caption.id,
+                op: "retire",
+                version: yield* definitionVersion(caption.id),
+              },
+              {
+                id: size.id,
+                op: "retire",
+                version: yield* definitionVersion(size.id),
+              },
+              {
+                id: drawer.id,
+                op: "retire",
+                version: yield* definitionVersion(drawer.id),
+              },
+            ]);
+
+            assert.strictEqual(retired.status, 201, retired.text);
+
+            // Contracts 1.6: a retired table accepts reads; its retired
+            // fields are in no default selection and are read only when
+            // selected explicitly.
+            const gone = yield* list();
+
+            assert.strictEqual(gone.status, 200, gone.text);
+            assert.notInclude(gone.text, "drawer 1");
+            assert.notInclude(gone.text, '"caption"');
+            assert.notInclude(gone.text, '"size"');
+
+            const selected = yield* http.get(
+              "/api/v1/tables/site.drawer/records?fields=caption&sort=caption",
+              { token }
+            );
+
+            assert.strictEqual(selected.status, 200, selected.text);
+            assert.include(selected.text, '"drawer 1"');
+
+            // Reactivated together: the table, its fields and their values.
+            const reactivated = yield* postChangeSet(token, [
+              {
+                id: drawer.id,
+                op: "reactivate",
+                version: yield* definitionVersion(drawer.id),
+              },
+              {
+                id: caption.id,
+                op: "reactivate",
+                version: yield* definitionVersion(caption.id),
+              },
+              {
+                id: size.id,
+                op: "reactivate",
+                version: yield* definitionVersion(size.id),
+              },
+            ]);
+
+            assert.strictEqual(reactivated.status, 201, reactivated.text);
+
+            const back = yield* list();
+
+            assert.strictEqual(back.status, 200, back.text);
+            assert.include(back.text, '"drawer 1"');
+            assert.include(back.text, '"size":2');
+          })
+      );
     }
   );
 });
