@@ -224,7 +224,10 @@ describe("opening a form", () => {
       Command.resolveAll(
         [
           LoadClassMetadata,
-          Message.SucceededLoadClassMetadata({ table: incidentTable }),
+          Message.SucceededLoadClassMetadata({
+            revision: REVISION_5,
+            table: incidentTable,
+          }),
         ],
         [LoadTarget, Message.SucceededLoadTarget({ table: userTable })]
       ),

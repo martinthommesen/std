@@ -38,10 +38,9 @@ import { recordRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
 import type { RecordPage } from "../table-list/model.ts";
 import { USER_TABLE } from "./command.ts";
-import { editedRecordOf, metaOf } from "./form.ts";
+import { editedRecordOf } from "./form.ts";
 import { Message } from "./message.ts";
 import type { Model, RelatedList } from "./model.ts";
-import { relatedKeyOf } from "./update.ts";
 
 const ALERT_CLASS = "form-alert";
 
@@ -288,13 +287,11 @@ const isRelatedLoading = (list: RelatedList): boolean =>
   AsyncData.isPending(list.metadata) || AsyncData.isPending(list.records);
 
 const relatedListView = (
-  list: RelatedList,
+  [key, list]: readonly [string, RelatedList],
   index: number,
   h: HtmlBuilder<Message>
-): Html => {
-  const key = relatedKeyOf(list.entry);
-
-  return h.keyed("section")(
+): Html =>
+  h.keyed("section")(
     key,
     [h.Class("panel related-list")],
     [
@@ -334,10 +331,10 @@ const relatedListView = (
       ),
     ]
   );
-};
 
 /**
- * The record's related lists, in metadata order.
+ * The record's related lists, in metadata order (the page keeps them so,
+ * each under the key it got when it was made).
  *
  * @param model - The page.
  * @param h - The builder.
@@ -347,13 +344,7 @@ export const relatedListsView = (
   model: Model,
   h: HtmlBuilder<Message>
 ): Html => {
-  const lists = Option.match(metaOf(model), {
-    onNone: () => [],
-    onSome: (meta) =>
-      meta.table.relatedLists.flatMap((entry) =>
-        Option.toArray(Record.get(model.relatedLists, relatedKeyOf(entry)))
-      ),
-  });
+  const lists = Record.toEntries(model.relatedLists);
 
   return lists.length === 0
     ? h.empty

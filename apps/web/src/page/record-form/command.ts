@@ -88,18 +88,22 @@ export const LoadClassMetadata = Command.define("LoadClassMetadata", {
   execute: ({ revision, table }) =>
     fetchTableMetadata(table, Option.some(revision)).pipe(
       Effect.map((loaded) =>
-        Message.SucceededLoadClassMetadata({ table: loaded.table })
+        Message.SucceededLoadClassMetadata({ revision, table: loaded.table })
       ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.catchTag("UnknownTable", () =>
         Effect.succeed(
-          Message.FailedLoadClassMetadata({ error: "UnknownTable", table })
+          Message.FailedLoadClassMetadata({
+            error: "UnknownTable",
+            revision,
+            table,
+          })
         )
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadClassMetadata({ error: UNAVAILABLE, table })
+        Message.FailedLoadClassMetadata({ error: UNAVAILABLE, revision, table })
       )
     ),
   messages: [

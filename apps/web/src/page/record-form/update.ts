@@ -395,7 +395,7 @@ const resetPickerInputs = (model: Model): Model =>
 // RELATED LISTS
 
 /**
- * The key of a related list: its table and reference field.
+ * The name of a related list's entry: its table and reference field.
  *
  * @param entry - The related list.
  * @returns `table/field`.
@@ -413,34 +413,41 @@ const closedRelatedList = (entry: MetaRelatedList): RelatedList => ({
   records: RelatedRecords.Idle(),
 });
 
+type KeyedList = readonly [string, RelatedList];
+
+const isListOf =
+  (entry: MetaRelatedList) =>
+  ([, list]: KeyedList): boolean =>
+    relatedKeyOf(list.entry) === relatedKeyOf(entry);
+
 /**
- * The list a new entry continues when its key is new: after the
+ * The list a new entry continues when no list has its name: after the
  * back-reference field was renamed, the one list of the same table whose
- * key went away, when that table has exactly one such list and one such
- * new entry (related lists carry no IDs, so anything less certain starts
- * afresh).
+ * name went away, when that table has exactly one such list and one such
+ * new entry (metadata gives related lists no ID, so anything less certain
+ * starts afresh).
  *
- * @param lists - The lists before.
+ * @param lists - The lists before, with their keys.
  * @param entries - The new metadata's entries.
  * @param entry - The new entry.
- * @returns The list it continues.
+ * @returns The list it continues, with its key.
  */
 const renamedListOf = (
-  lists: Readonly<Record<string, RelatedList>>,
+  lists: readonly KeyedList[],
   entries: readonly MetaRelatedList[],
   entry: MetaRelatedList
-): Option.Option<RelatedList> => {
-  const newKeys = new Set(entries.map(relatedKeyOf));
+): Option.Option<KeyedList> => {
+  const newNames = new Set(entries.map(relatedKeyOf));
 
-  const gone = Record.values(lists).filter(
-    (list) =>
-      list.entry.table === entry.table && !newKeys.has(relatedKeyOf(list.entry))
+  const gone = lists.filter(
+    ([, list]) =>
+      list.entry.table === entry.table &&
+      !newNames.has(relatedKeyOf(list.entry))
   );
 
   const added = entries.filter(
     (candidate) =>
-      candidate.table === entry.table &&
-      !Record.has(lists, relatedKeyOf(candidate))
+      candidate.table === entry.table && !lists.some(isListOf(candidate))
   );
 
   const [only] = gone;
@@ -450,41 +457,80 @@ const renamedListOf = (
     : Option.none();
 };
 
-const listOfEntry = (
-  lists: Readonly<Record<string, RelatedList>>,
-  entries: readonly MetaRelatedList[],
-  entry: MetaRelatedList
-): RelatedList =>
-  Option.match(
-    Option.orElse(Record.get(lists, relatedKeyOf(entry)), () =>
-      renamedListOf(lists, entries, entry)
-    ),
-    {
-      onNone: () => closedRelatedList(entry),
-      onSome: (list) => modifyFields(list, { entry: () => entry }),
-    }
-  );
+/**
+ * A key no other list has: the entry's name, else the name with a number.
+ *
+ * @param name - The entry's name.
+ * @param taken - The keys in use.
+ * @returns The key.
+ */
+const freeKeyOf = (name: string, taken: ReadonlySet<string>): string => {
+  const numbered = (index: number): string =>
+    taken.has(`${name}#${index}`) ? numbered(index + 1) : `${name}#${index}`;
+
+  return taken.has(name) ? numbered(2) : name;
+};
 
 /**
- * The related lists of new metadata: each entry keeps its list (with the
- * entry as the metadata now states it, so requests use the field's current
- * name), a renamed back-reference continues its list, and a new entry gets
- * a closed one.
+ * The related lists of new metadata (decision 0020). A list keeps the key
+ * it got when it was made (its entry's name then) for as long as it lives:
+ * every request and answer of the list names that key, so an answer still
+ * finds its list after the back-reference was renamed. Each entry keeps
+ * its list (with the entry as the metadata now states it, so requests use
+ * the field's current name), a renamed back-reference continues its list,
+ * and a new entry gets a closed one under a free key.
  *
  * @param model - The page.
  * @param table - The endpoint's new metadata.
  * @returns The page.
  */
-const syncRelatedLists = (model: Model, table: MetaTable): Model =>
-  isCreating(model)
-    ? model
-    : modifyFields(model, {
-        relatedLists: (lists) =>
-          Record.fromIterableWith(table.relatedLists, (entry) => [
-            relatedKeyOf(entry),
-            listOfEntry(lists, table.relatedLists, entry),
-          ]),
-      });
+const syncRelatedLists = (model: Model, table: MetaTable): Model => {
+  if (isCreating(model)) {
+    return model;
+  }
+
+  const before = Record.toEntries(model.relatedLists);
+
+  const kept = table.relatedLists.map((entry) =>
+    Option.map(
+      Option.orElse(Option.fromNullishOr(before.find(isListOf(entry))), () =>
+        renamedListOf(before, table.relatedLists, entry)
+      ),
+      ([key, list]): KeyedList => [
+        key,
+        modifyFields(list, { entry: () => entry }),
+      ]
+    )
+  );
+
+  const taken = new Set(
+    kept.flatMap((found) =>
+      pipe(
+        found,
+        Option.map(([key]) => key),
+        Option.toArray
+      )
+    )
+  );
+
+  const lists = table.relatedLists.map((entry, index): KeyedList => {
+    const found = kept[index] ?? Option.none();
+
+    if (Option.isSome(found)) {
+      return found.value;
+    }
+
+    const key = freeKeyOf(relatedKeyOf(entry), taken);
+
+    taken.add(key);
+
+    return [key, closedRelatedList(entry)];
+  });
+
+  return modifyFields(model, {
+    relatedLists: () => Object.fromEntries(lists),
+  });
+};
 
 const writeRelatedList = (
   model: Model,
@@ -659,10 +705,45 @@ const previousRelatedCursors = (
     : Option.none();
 
 /**
- * A related list's table metadata arrived: its first page is asked for,
- * unless the endpoint's own metadata is reloading (its `relatedLists` may
- * rename the back-reference); the page is then asked for when that
- * arrives (`requestWaitingRelated`).
+ * Whether a related list's page was refused because of its names: the
+ * definitions changed (`SchemaChanged`), or the back-reference field is
+ * unknown under its name (`UnknownField`, after a rename the form had not
+ * seen). Both need the endpoint's metadata reloaded before asking again.
+ *
+ * @param list - The related list.
+ * @returns True after such a refusal.
+ */
+const NAME_REFUSALS: ReadonlySet<RelatedError> = new Set([
+  "SchemaChanged",
+  "UnknownField",
+]);
+
+const isRefusedRelatedPage = (list: RelatedList): boolean =>
+  pipe(
+    AsyncData.getError(list.records),
+    Option.exists((reason) => NAME_REFUSALS.has(reason))
+  );
+
+/**
+ * Whether the endpoint's metadata lets a related list ask for a page:
+ * not while it reloads (its `relatedLists` may rename the back-reference),
+ * and, after a refusal for the list's names, only once it reloaded
+ * successfully (decision 0020): a failed reload leaves the old names.
+ *
+ * @param model - The page.
+ * @param list - The related list.
+ * @returns True when a request may be sent.
+ */
+const isParentReadyFor = (model: Model, list: RelatedList): boolean =>
+  isRefusedRelatedPage(list)
+    ? AsyncData.isSuccess(model.metadata)
+    : !AsyncData.isPending(model.metadata);
+
+/**
+ * A related list's table metadata arrived: its first page is asked for
+ * when the endpoint's metadata allows (`isParentReadyFor`); otherwise the
+ * page is asked for when that metadata arrives (`requestWaitingRelated`),
+ * and a refusal stays on screen until then.
  *
  * @param model - The page.
  * @param key - The related list.
@@ -680,9 +761,11 @@ const receiveRelatedMetadata = (
     })
   );
 
-  return AsyncData.isPending(model.metadata)
-    ? { model: known }
-    : firstRelatedPage(key)(known);
+  const canAsk = Option.exists(Record.get(known.relatedLists, key), (list) =>
+    isParentReadyFor(known, list)
+  );
+
+  return canAsk ? firstRelatedPage(key)(known) : { model: known };
 };
 
 const failRelatedMetadata = (
@@ -904,15 +987,13 @@ const sawRevision = (
 
 // RELATED LISTS AFTER A REFRESH
 
-const isRefusedRelatedPage = (list: RelatedList): boolean =>
-  Option.contains(AsyncData.getError(list.records), "SchemaChanged");
-
 /**
  * A related list's page that did not load; the cursor stays on the page
- * shown. Refused with `SchemaChanged` (decision 0020), the page reloads
- * the endpoint's metadata (its `relatedLists` name the back-reference
- * field as it is now) and the related table's, and asks for the first page
- * once both arrived (`receiveRelatedMetadata`, `requestWaitingRelated`).
+ * shown. Refused for its names (`SchemaChanged` or `UnknownField`,
+ * decision 0020), the page reloads the endpoint's metadata (its
+ * `relatedLists` name the back-reference field as it is now) and the
+ * related table's, and asks for the first page once both loaded
+ * (`receiveRelatedMetadata`, `requestWaitingRelated`).
  *
  * @param model - The page.
  * @param key - The related list.
@@ -932,21 +1013,24 @@ const failRelatedPage = (
 
   const failed = failRelatedRecords(model, key, generation, error);
 
-  return error === "SchemaChanged"
+  return NAME_REFUSALS.has(error)
     ? Update.combine(failed, [refreshMetadata, loadRelatedMetadata(key)])
     : { model: failed };
 };
 
+// NOTE: a page that failed for any reason is asked again once the
+// endpoint's metadata arrives: "Try again" after a failed reload of that
+// metadata leaves the page to it, and a read is safe to repeat.
 const isWaitingForPage = (list: RelatedList): boolean => {
   const isUnasked =
-    AsyncData.isIdle(list.records) || isRefusedRelatedPage(list);
+    AsyncData.isIdle(list.records) || AsyncData.hasError(list.records);
 
   return list.isOpen && AsyncData.isSuccess(list.metadata) && isUnasked;
 };
 
 /**
  * Asks for the first page of each open related list that waits for one
- * (never loaded, or refused with `SchemaChanged`) and whose table's
+ * (never loaded, or failed: refused for its names, or not answered) and whose table's
  * metadata is loaded, after the endpoint's metadata arrived.
  *
  * @param model - The page.
@@ -960,10 +1044,11 @@ const requestWaitingRelated: Step = (model) =>
   )(model);
 
 /**
- * "Try again" on a related list: after a `SchemaChanged` refusal, or when
- * its table's metadata did not load, both metadata are reloaded (the first
- * page follows); otherwise the page shown is asked for again, with the
- * back-reference's current name.
+ * "Try again" on a related list: after a refusal for its names, or when
+ * the endpoint's last metadata reload failed, both metadata are reloaded
+ * (the first page follows once both loaded); when its table's metadata
+ * did not load, that is reloaded; otherwise the page shown is asked for
+ * again, with the back-reference's current name.
  *
  * @param model - The page.
  * @param key - The related list.
@@ -973,7 +1058,7 @@ const retryRelatedList = (model: Model, key: string): UpdateReturn =>
   Option.match(Record.get(model.relatedLists, key), {
     onNone: () => ({ model }),
     onSome: (list) => {
-      if (isRefusedRelatedPage(list)) {
+      if (isRefusedRelatedPage(list) || AsyncData.isStale(model.metadata)) {
         return Update.combine(model, [
           refreshMetadata,
           loadRelatedMetadata(key),
@@ -1792,6 +1877,26 @@ const withReconciled = (model: Model, reconciled: Reconciled): Model =>
       });
 
 /**
+ * Whether an answer about the concrete class's metadata is the one the
+ * page waits for: for the record's class, asked at the metadata's current
+ * revision (review round 2). An answer to a request made before the
+ * metadata moved on (a rename) is ignored: the request at the new
+ * revision follows it, and the older answer must not replace it.
+ *
+ * @param model - The page.
+ * @param table - The class the answer is about.
+ * @param revision - The revision the request was made at.
+ * @returns True for the awaited answer.
+ */
+const isClassAnswerFor = (
+  model: Model,
+  table: string,
+  revision: SchemaRevision
+): boolean =>
+  Option.exists(recordOf(model), (record) => record.class === table) &&
+  Option.exists(metaOf(model), (meta) => meta.revision === revision);
+
+/**
  * The concrete class's metadata arrived (decision 0020): the form now
  * describes the fields by it, so the edits are reconciled again, with the
  * class's definitions and with the record as they show it. An edit the
@@ -2267,13 +2372,26 @@ const receiveSave = (
     );
   }
 
-  const withLabels = {
-    ...saved,
-    labels: labelsAfterSave(
-      modifyFields(model, { edits: () => submission.sentEdits }),
-      saved
-    ),
-  };
+  // NOTE: the saved record names its fields as the revision the save was
+  // sent at. When the metadata moved on meanwhile (a rename, review round
+  // 2), nothing is compared by name with it: the later edits stay as they
+  // are (by field ID), the record is read again under the current
+  // metadata, and that read reconciles them (`receiveRecord`); Save waits
+  // for it (`isRecordOutdated`).
+  const isAtFormRevision = Option.exists(
+    metaOf(model),
+    (meta) => meta.revision === submission.revision
+  );
+
+  const withLabels = isAtFormRevision
+    ? {
+        ...saved,
+        labels: labelsAfterSave(
+          modifyFields(model, { edits: () => submission.sentEdits }),
+          saved
+        ),
+      }
+    : saved;
 
   const stored = modifyFields(editing, {
     droppedEdits: () => [],
@@ -2302,12 +2420,14 @@ const receiveSave = (
 
   // NOTE: the later edits now apply to the saved record; one it withholds
   // or shows read-only is dropped with a note, as after any reread.
-  const rebased = withReconciled(
-    asUpdate,
-    reconcileWithRecord(asUpdate.edits, fieldsOf(asUpdate), (field) =>
-      fieldShowOf(field, Option.some(withLabels))
-    )
-  );
+  const rebased = isAtFormRevision
+    ? withReconciled(
+        asUpdate,
+        reconcileWithRecord(asUpdate.edits, fieldsOf(asUpdate), (field) =>
+          fieldShowOf(field, Option.some(withLabels))
+        )
+      )
+    : asUpdate;
 
   const shown = Option.match(metaOf(rebased), {
     onNone: () => rebased,
@@ -2318,6 +2438,9 @@ const receiveSave = (
   return sawRevision(
     Update.combine(resetPickerInputs(shown), [
       (stepModel) => ({ commands: navigation, model: stepModel }),
+      isAtFormRevision
+        ? (stepModel) => ({ model: stepModel })
+        : requestRecord("Refresh"),
       refreshHistory,
       requestClassMetadata,
       setUpControls,
@@ -2644,8 +2767,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadActorNames: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadClassMetadata: ({ error, table }) => ({
-      model: Option.exists(recordOf(model), (record) => record.class === table)
+    FailedLoadClassMetadata: ({ error, revision, table }) => ({
+      model: isClassAnswerFor(model, table, revision)
         ? modifyFields(model, {
             classMetadata: () => ClassMetadata.Failure({ error }),
           })
@@ -2704,8 +2827,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadClassMetadata: ({ table }) =>
-      receiveClassMetadata(model, table),
+    SucceededLoadClassMetadata: ({ revision, table }) =>
+      isClassAnswerFor(model, table.name, revision)
+        ? receiveClassMetadata(model, table)
+        : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadFormMetadata: ({ revision, table }) =>
       receiveMetadata(model, table, revision),

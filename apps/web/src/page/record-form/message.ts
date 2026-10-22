@@ -67,7 +67,11 @@ export const Message = defineMessageUnion({
   FailedAuthentication: {},
   FailedDeleteRecord: { error: WriteError },
   FailedLoadActorNames: {},
-  FailedLoadClassMetadata: { error: MetaError, table: Schema.String },
+  FailedLoadClassMetadata: {
+    error: MetaError,
+    revision: SchemaRevision,
+    table: Schema.String,
+  },
   FailedLoadFormMetadata: { error: MetaError },
   FailedLoadHistory: { error: HistoryError, generation: Schema.Int },
   FailedLoadRecord: {
@@ -105,7 +109,10 @@ export const Message = defineMessageUnion({
   SucceededLoadActorNames: {
     names: Schema.Record(Schema.String, Schema.String),
   },
-  SucceededLoadClassMetadata: { table: MetaTableSchema },
+  SucceededLoadClassMetadata: {
+    revision: SchemaRevision,
+    table: MetaTableSchema,
+  },
   SucceededLoadFormMetadata: {
     revision: SchemaRevision,
     table: MetaTableSchema,

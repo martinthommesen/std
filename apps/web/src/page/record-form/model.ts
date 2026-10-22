@@ -342,7 +342,9 @@ export type History = typeof History.Type;
  * - `deletion`, `deleteDialog`: the delete and its confirmation.
  * - `targets`: reference targets' metadata, by table name, for pickers.
  * - `pickers`, `datePickers`: the stateful controls, by field ID.
- * - `relatedLists`: by `table/field`.
+ * - `relatedLists`: in metadata order, each under the key it got when it
+ *   was made (its `table/field` then), kept across a rename of the
+ *   back-reference, so a pending answer always finds its list.
  * - `history`: the history panel.
  * - `maybeToday`: today in UTC, for the Date Pickers.
  */

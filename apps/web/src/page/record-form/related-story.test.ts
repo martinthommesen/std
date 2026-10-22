@@ -33,8 +33,6 @@ import { init, update } from "./update.ts";
 
 const KEY = "help.task/parent";
 
-const RENAMED_KEY = "help.task/parent_ticket";
-
 const COLUMNS =
   "short_description,number,status,assignee,internal_cost,customer_email";
 
@@ -226,6 +224,126 @@ describe("a related list's page refused with SchemaChanged", () => {
     key: KEY,
   });
 
+  it("the related table's metadata still finds its list when the renamed endpoint metadata arrived first (review round 2)", () => {
+    const parentFirst = after(
+      onFirstPage,
+      Message.ClickedNextRelatedPage({ key: KEY }),
+      refused,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: renamedParent,
+      })
+    );
+
+    const answered = update(
+      parentFirst,
+      Message.SucceededLoadRelatedMetadata({
+        key: KEY,
+        revision: REVISION_6,
+        table: TASKS,
+      })
+    );
+
+    expect(
+      (answered.commands ?? []).map((command) => [command.name, command.args])
+    ).toStrictEqual([
+      [
+        "LoadRelatedRecords",
+        pageRequest({
+          filter: `parent_ticket = "${TICKET_ID}"`,
+          generation: 3,
+          revision: REVISION_6,
+        }).args,
+      ],
+    ]);
+  });
+
+  it("asks for no page until the endpoint's metadata reloaded successfully, and Try again reloads it (review round 2)", () => {
+    const parentFailed = after(
+      onFirstPage,
+      Message.ClickedNextRelatedPage({ key: KEY }),
+      refused,
+      Message.FailedLoadFormMetadata({ error: "Unavailable" })
+    );
+
+    const relatedBack = update(
+      parentFailed,
+      Message.SucceededLoadRelatedMetadata({
+        key: KEY,
+        revision: REVISION_6,
+        table: TASKS,
+      })
+    );
+
+    // No request under the old name at the new revision; the refusal stays.
+    expect(relatedBack.commands ?? []).toStrictEqual([]);
+    expect(AsyncData.getError(listOf(relatedBack.model).records)).toStrictEqual(
+      Option.some("SchemaChanged")
+    );
+
+    story(
+      update,
+      given(relatedBack.model),
+      message(Message.ClickedRetryRelatedList({ key: KEY })),
+      Command.expectExact(
+        LoadFormMetadata({
+          maybeRevision: Option.some(REVISION_5),
+          table: TICKET,
+        }),
+        LoadRelatedMetadata({
+          key: KEY,
+          revision: REVISION_5,
+          table: "help.task",
+        })
+      ),
+      Command.resolve(
+        LoadRelatedMetadata,
+        Message.SucceededLoadRelatedMetadata({
+          key: KEY,
+          revision: REVISION_6,
+          table: TASKS,
+        })
+      ),
+      Command.resolve(
+        LoadFormMetadata,
+        Message.SucceededLoadFormMetadata({
+          revision: REVISION_6,
+          table: renamedParent,
+        })
+      ),
+      Command.expectHas(
+        pageRequest({
+          filter: `parent_ticket = "${TICKET_ID}"`,
+          generation: 3,
+          revision: REVISION_6,
+        })
+      ),
+      Command.resolveAll(
+        [
+          LoadRecord,
+          Message.SucceededLoadRecord({
+            generation: 2,
+            maybeRevision: Option.some(REVISION_6),
+            purpose: "Refresh",
+            record: ticketRecord,
+          }),
+        ],
+        [
+          LoadRelatedRecords,
+          Message.SucceededLoadRelatedRecords({
+            generation: 3,
+            key: KEY,
+            maybeRevision: Option.some(REVISION_6),
+            page: page(null),
+          }),
+        ]
+      ),
+      model((form) => {
+        expect(AsyncData.isSuccess(listOf(form).records)).toBeTruthy();
+      })
+    );
+  });
+
   it("after the reload failed, Try again reloads both metadata instead of asking under the old name", () => {
     const reloadFailed = after(
       onFirstPage,
@@ -310,14 +428,15 @@ describe("a related list's page refused with SchemaChanged", () => {
         pageRequest({
           filter: `parent_ticket = "${TICKET_ID}"`,
           generation: 3,
-          key: RENAMED_KEY,
+          key: KEY,
           revision: REVISION_6,
         })
       ),
       model((form) => {
         // The renamed back-reference continues the open list.
-        expect(Object.keys(form.relatedLists)).toStrictEqual([RENAMED_KEY]);
-        expect(listOf(form, RENAMED_KEY).isOpen).toBeTruthy();
+        expect(Object.keys(form.relatedLists)).toStrictEqual([KEY]);
+        expect(listOf(form).entry.field).toBe("parent_ticket");
+        expect(listOf(form, KEY).isOpen).toBeTruthy();
       }),
       Command.resolveAll(
         [
@@ -333,19 +452,15 @@ describe("a related list's page refused with SchemaChanged", () => {
           LoadRelatedRecords,
           Message.SucceededLoadRelatedRecords({
             generation: 3,
-            key: RENAMED_KEY,
+            key: KEY,
             maybeRevision: Option.some(REVISION_6),
             page: page(null),
           }),
         ]
       ),
       model((form) => {
-        expect(
-          AsyncData.isSuccess(listOf(form, RENAMED_KEY).records)
-        ).toBeTruthy();
-        expect(listOf(form, RENAMED_KEY).cursors).toStrictEqual([
-          Option.none(),
-        ]);
+        expect(AsyncData.isSuccess(listOf(form, KEY).records)).toBeTruthy();
+        expect(listOf(form, KEY).cursors).toStrictEqual([Option.none()]);
       })
     );
   });

@@ -447,7 +447,12 @@ const openForm = (
           record: read,
         }),
         ...(read.class === INCIDENT
-          ? [Message.SucceededLoadClassMetadata({ table: incidentTable })]
+          ? [
+              Message.SucceededLoadClassMetadata({
+                revision: REVISION_5,
+                table: incidentTable,
+              }),
+            ]
           : [])
       ),
   });
