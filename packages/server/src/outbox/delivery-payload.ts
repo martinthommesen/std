@@ -160,17 +160,14 @@ const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
 
 /**
  * The change entries of a record up to and including a version, in version
- * order. A delete's own entry is enough for its image, so only it is read.
+ * order.
  *
  * @param recordId - The record.
  * @param version - The delivery's version.
- * @param kind - The delivery's change kind.
  * @returns The entries, the delivery's own last.
  */
 export const readEntries = Effect.fn("Outbox.readEntries")(
-  function* readEntries(recordId: string, version: number, kind: ChangeKind) {
-    const from = kind === "update" ? 1 : version;
-
+  function* readEntries(recordId: string, version: number) {
     const rows = yield* readRows(
       sql`SELECT "id"::text AS "id", "operation_id"::text AS "operation_id",
   "record_class_id"::text AS "record_class_id",
@@ -179,8 +176,7 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
   "fields"::text AS "fields"
 FROM core."change"
 WHERE "record_id" = ${textParameter(recordId, "uuid")}
-  AND "record_version" BETWEEN ${textParameter(String(from), "int8")}
-    AND ${textParameter(String(version), "int8")}
+  AND "record_version" <= ${textParameter(String(version), "int8")}
 ORDER BY "record_version"`
     );
 
