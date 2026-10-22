@@ -98,4 +98,48 @@ describe("oda-component-schema", () => {
     expect(result.code).toBe(1);
     expect(result.output).toContain("has Helm directives");
   });
+
+  it("fails a string outside its format, as the API server does", async () => {
+    const file = variant(
+      "dated",
+      stub.replace(
+        "    version: 0.1.0\n",
+        "    version: 0.1.0\n    publicationDate: definitely-not-a-date\n"
+      )
+    );
+
+    const result = await runTool("check-oda-component-schema.ts", [
+      "--component",
+      file,
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      '.spec.componentMetadata.publicationDate: "definitely-not-a-date" is not a valid date-time'
+    );
+  });
+
+  it("refuses a schema keyword it does not implement", async () => {
+    const crd = readFileSync(
+      path.join(repoRoot, "deploy", "oda", "crds", "oda-component-crd.yaml"),
+      "utf-8"
+    );
+
+    // The v1 version is the CRD's last, so this lands in its schema.
+    const at = crd.lastIndexOf("example: TMFC001");
+    const indent = " ".repeat(at - crd.lastIndexOf("\n", at) - 1);
+
+    const file = variant(
+      "crd",
+      `${crd.slice(0, at)}maxLength: 5\n${indent}${crd.slice(at)}`
+    );
+
+    const result = await runTool("check-oda-component-schema.ts", [
+      "--crd",
+      file,
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("maxLength");
+  });
 });

@@ -5,9 +5,12 @@
  * a field the schema does not declare is a problem here, where the server
  * would silently prune it. Decoding a schema fails on a keyword it does not
  * know, and validating fails on a CEL rule it does not know, instead of
- * guessing.
+ * guessing. A string's `format` is checked as a Kubernetes 1.30 API server
+ * checks it (`kubernetes-formats.ts`).
  */
 import { Predicate, Schema } from "effect";
+
+import { matchesFormat } from "./kubernetes-formats.ts";
 
 /** One CEL rule of `x-kubernetes-validations`. */
 export const CelRuleSchema = Schema.Struct({
@@ -195,6 +198,30 @@ const checkRules = (
   }
 };
 
+// `enum`, and `format` on strings.
+const checkValue = (
+  schema: StructuralSchema,
+  value: Schema.Json,
+  at: string,
+  problems: string[]
+): void => {
+  if (schema.enum !== undefined && !schema.enum.includes(value)) {
+    problems.push(
+      `${at}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`
+    );
+  }
+
+  if (
+    schema.format !== undefined &&
+    Predicate.isString(value) &&
+    !matchesFormat(schema.format, value)
+  ) {
+    problems.push(
+      `${at}: ${JSON.stringify(value)} is not a valid ${schema.format}`
+    );
+  }
+};
+
 /**
  * Validates a JSON value and appends one message per problem.
  *
@@ -215,11 +242,7 @@ export const validate = (
     return;
   }
 
-  if (schema.enum !== undefined && !schema.enum.includes(value)) {
-    problems.push(
-      `${at}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`
-    );
-  }
+  checkValue(schema, value, at, problems);
 
   if (isJsonArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
