@@ -499,8 +499,94 @@ const spellingsOf = (value: string): readonly string[] => [
 ];
 
 /**
- * The hidden values a text holds, in any of their spellings (as is,
- * escaped in HTML or in a JSON string).
+ * Values shorter than this are looked for only where they stand whole as
+ * a record value: anywhere else a `7` or `low` would match unrelated text
+ * (a page number, a version, a choice key in metadata, the app's code).
+ */
+const SHORTEST_ANYWHERE = 4;
+
+const isShort = (value: string): boolean => value.length < SHORTEST_ANYWHERE;
+
+/**
+ * The JSON members that carry field values: a record's `values`, its
+ * reference `labels`, and a history entry's `changes`.
+ */
+const VALUE_MEMBERS: ReadonlySet<string> = new Set([
+  "changes",
+  "labels",
+  "values",
+]);
+
+/**
+ * The leaves (strings, and numbers as text) of a JSON value that sit inside
+ * a member carrying field values (`VALUE_MEMBERS`), at any depth.
+ *
+ * @param value - The JSON value.
+ * @param isInValues - Whether `value` is inside such a member.
+ * @returns The leaves.
+ */
+const fieldValueLeaves = (
+  value: Schema.Json,
+  isInValues: boolean
+): readonly string[] => {
+  if (Predicate.isString(value)) {
+    return isInValues ? [value] : [];
+  }
+
+  if (Predicate.isNumber(value)) {
+    return isInValues ? [String(value)] : [];
+  }
+
+  if (value === null || Predicate.isBoolean(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item: Schema.Json) =>
+      fieldValueLeaves(item, isInValues)
+    );
+  }
+
+  return Object.entries(value).flatMap(([key, member]) =>
+    fieldValueLeaves(member, isInValues || VALUE_MEMBERS.has(key))
+  );
+};
+
+const decodeJsonText = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Json)
+);
+
+/** Where a pretty-printed JSON document joined to the previous one starts. */
+const NEXT_DOCUMENT = /\n(?=[[{])/u;
+
+/**
+ * The JSON documents a text holds: one JSON body, or several pretty-printed
+ * documents joined by newlines (a DevTools snapshot); none for any other
+ * text (HTML, scripts, styles).
+ *
+ * @param text - The text.
+ * @returns The documents.
+ */
+const jsonDocumentsOf = (text: string): readonly Schema.Json[] => {
+  const whole = decodeJsonText(text);
+
+  if (Option.isSome(whole)) {
+    return [whole.value];
+  }
+
+  return Option.getOrElse(
+    Option.all(text.split(NEXT_DOCUMENT).map((part) => decodeJsonText(part))),
+    () => []
+  );
+};
+
+/**
+ * The hidden values a text holds. A value of four characters or more is
+ * found anywhere, in any of its spellings (as is, escaped in HTML or in a
+ * JSON string). A shorter value is found only as a whole field value of a
+ * JSON text: a string or number leaf inside a `values`, `labels` or
+ * `changes` member (records, reference labels, history changes), never in
+ * HTML, scripts or styles, or elsewhere in JSON (definitions, versions).
  *
  * @param text - The text, such as a body or a DevTools snapshot.
  * @param hidden - The values to look for.
@@ -509,10 +595,48 @@ const spellingsOf = (value: string): readonly string[] => [
 export const hiddenValuesIn = (
   text: string,
   hidden: readonly string[]
-): string[] =>
-  hidden.filter((value) =>
-    spellingsOf(value).some((spelling) => text.includes(spelling))
+): string[] => {
+  const fieldValues = hidden.some(isShort)
+    ? new Set(
+        jsonDocumentsOf(text).flatMap((document) =>
+          fieldValueLeaves(document, false)
+        )
+      )
+    : new Set<string>();
+
+  return hidden.filter((value) =>
+    isShort(value)
+      ? fieldValues.has(value)
+      : spellingsOf(value).some((spelling) => text.includes(spelling))
   );
+};
+
+// NOTE: a script string, run in the page: the texts that show record
+// values, each whole: every text node (trimmed) of a list or related-list
+// cell, a form's read-only value, a date picker's value and a history
+// entry, every form control's current value, and both web storages' keys
+// and values.
+const PAGE_VALUE_TEXTS = `(() => {
+  const texts = [];
+  const shown = document.querySelectorAll("td, [data-field] .form-value, [data-field] .date-picker-value, .history-entry");
+  for (const element of shown) {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      texts.push((node.textContent ?? "").trim());
+    }
+  }
+  for (const control of document.querySelectorAll("[data-field] input, [data-field] textarea, [data-field] select")) {
+    texts.push(control.value.trim());
+  }
+  for (const storage of [localStorage, sessionStorage]) {
+    for (const [key, value] of Object.entries(storage)) {
+      texts.push(key, value);
+    }
+  }
+  return texts;
+})()`;
+
+const decodeTexts = Schema.decodeUnknownSync(Schema.Array(Schema.String));
 
 /**
  * Fails when any hidden value reached the browser: when any response the
@@ -520,6 +644,17 @@ export const hiddenValuesIn = (
  * complete DOM, its form controls' values, its web storage) holds it.
  * Fixture-agnostic: the caller derives the values, such as with
  * `valuesHiddenFrom`.
+ *
+ * A value of four characters or more is looked for anywhere, in every
+ * spelling. A shorter one only where it stands whole as a record value
+ * (it would match unrelated text anywhere else): in a JSON body, a string
+ * or number inside a `values`, `labels` or `changes` member
+ * (`hiddenValuesIn`); in the page, a whole text node of a cell, a form's
+ * value, a date picker's value or a history entry, a form control's whole
+ * value, or a whole web storage key or value. HTML, script and style
+ * bodies, the rest of the DOM (navigation, pager, attributes) and the rest
+ * of JSON (definitions, versions, counts) are not searched for short
+ * values.
  *
  * @param page - The page.
  * @param responses - The responses so far (see `captureResponses`).
@@ -540,6 +675,7 @@ export const assertHiddenValuesAbsent = async (
   const received = await responses();
   const evaluated: unknown = await page.evaluate(PAGE_STATE);
   const state = String(evaluated);
+  const shown = new Set(decodeTexts(await page.evaluate(PAGE_VALUE_TEXTS)));
 
   const found = [
     ...received.flatMap((response) =>
@@ -547,9 +683,13 @@ export const assertHiddenValuesAbsent = async (
         (value) => `${value} in the response of ${response.url}`
       )
     ),
-    ...hiddenValuesIn(state, hidden).map(
-      (value) => `${value} in the page (DOM, controls, storage)`
-    ),
+    ...hidden.flatMap((value) => {
+      const isInPage = isShort(value)
+        ? shown.has(value)
+        : hiddenValuesIn(state, [value]).length > 0;
+
+      return isInPage ? [`${value} in the page (DOM, controls, storage)`] : [];
+    }),
   ];
 
   if (found.length > 0) {
@@ -974,12 +1114,6 @@ const leavesOf = (value: Schema.Json): readonly string[] => {
   return Object.values(value).flatMap(leavesOf);
 };
 
-/**
- * Shorter values would match unrelated text (a `1` in any page), so a
- * check for them proves nothing.
- */
-const SHORTEST_HIDDEN_VALUE = 4;
-
 /** The sessions `valuesHiddenFrom` compares. */
 export interface HiddenFrom {
   /** A session that reads everything, such as an administrator's. */
@@ -993,7 +1127,9 @@ export interface HiddenFrom {
  * API: every value the reader lists that the viewer's list leaves out
  * (a field withheld on a record or never readable, a record the viewer
  * cannot see), less any value the viewer does read somewhere in those
- * tables (a shared choice, a record ID) and values too short to look for.
+ * tables (a shared choice, a record ID). Short values are kept:
+ * `assertHiddenValuesAbsent` and `hiddenValuesIn` look for them only where
+ * they stand whole as a record value.
  *
  * @param origin - The server.
  * @param tables - The tables.
@@ -1036,9 +1172,7 @@ export const valuesHiddenFrom = async (
   );
 
   return [...new Set(unread)]
-    .filter(
-      (value) => value.length >= SHORTEST_HIDDEN_VALUE && !readable.has(value)
-    )
+    .filter((value) => !readable.has(value))
     .toSorted();
 };
 
@@ -1284,6 +1418,8 @@ export interface SaveOutcome {
   readonly revision: string | undefined;
   /** The revision the request stated, the form's (`STD-Schema-Revision`). */
   readonly requestRevision: string | undefined;
+  /** Reads the response's body, such as a refusal's error JSON. */
+  readonly responseBody: () => Promise<string>;
 }
 
 /**
@@ -1355,6 +1491,7 @@ export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
     body: response.request().postData() ?? "",
     ifMatch: response.request().headers()["if-match"],
     requestRevision: response.request().headers()[REVISION_HEADER],
+    responseBody: async () => await response.text(),
     revision: response.headers()[REVISION_HEADER],
     status: response.status(),
   };

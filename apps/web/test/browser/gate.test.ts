@@ -76,7 +76,7 @@ import {
   valuesHiddenFrom,
   waitForForm,
 } from "./app.ts";
-import type { ConditionStep, Visitor } from "./app.ts";
+import type { ConditionStep, SaveOutcome, Visitor } from "./app.ts";
 import {
   devToolsMcp,
   devToolsRecord,
@@ -981,6 +981,44 @@ const settled = async (page: Page): Promise<void> => {
   await rendered(page);
 };
 
+const decodeRefusal = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      _tag: Schema.String,
+      changes: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            field: Schema.NullOr(Schema.String),
+            fieldId: Schema.NullOr(Schema.String),
+            kind: Schema.String,
+            table: Schema.String,
+          })
+        )
+      ),
+    })
+  )
+);
+
+/**
+ * What a refused save's response body says: its error's `_tag`, and for
+ * `SchemaChanged` each change as `<kind> <field ID>`, sorted.
+ *
+ * @param outcome - The refused save.
+ * @returns The tag and the changes.
+ */
+const refusalOf = async (
+  outcome: SaveOutcome
+): Promise<{ readonly tag: string; readonly changes: readonly string[] }> => {
+  const refusal = decodeRefusal(await outcome.responseBody());
+
+  return {
+    changes: (refusal.changes ?? [])
+      .map((change) => `${change.kind} ${change.fieldId ?? "(none)"}`)
+      .toSorted(),
+    tag: refusal._tag,
+  };
+};
+
 const rowText = async (page: Page, name: string): Promise<string> =>
   (await page.locator(`[data-field="${name}"]`).textContent()) ?? "";
 
@@ -1036,6 +1074,15 @@ const staleSaveKeepsInput = async (
     category: "network",
     short_description: "Paper jam in tray 2",
     vendor_ref: "VR-1",
+  });
+  // The refusal is SchemaChanged, naming the retired field and the
+  // category whose choices changed, not another 409 (VersionConflict).
+  assert.deepStrictEqual(await refusalOf(refused), {
+    changes: [
+      `choicesChanged ${HELPDESK.fields.category}`,
+      `fieldRetired ${vendorRef}`,
+    ].toSorted(),
+    tag: "SchemaChanged",
   });
 
   await waitForOutdated(page);
@@ -1190,6 +1237,13 @@ const renameThenRecreate = async (
 
   assert.strictEqual(refused.status, 409);
   assert.deepStrictEqual(decodeBody(refused.body), { foo: "mine" });
+  // SchemaChanged: the field the save named was renamed, and a new field
+  // took its name (Contracts 6.4: an entry whose name equals a request's
+  // name is relevant).
+  assert.deepStrictEqual(await refusalOf(refused), {
+    changes: [`fieldAdded ${newFoo}`, `fieldRenamed ${foo}`].toSorted(),
+    tag: "SchemaChanged",
+  });
 
   const untouched = await apiRecord(page, origin, laptop);
 
