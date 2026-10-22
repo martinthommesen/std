@@ -5,14 +5,12 @@
  * `pg_terminate_backend`").
  *
  * Two real `std serve` processes, A and B, run on the acme test database,
- * each with its own pool, catalog cache and `std_config` listener. Config
- * changes are committed by the change-set engine in this test process, a
- * third OS process, because `main` has no HTTP route that commits config
- * yet (the change-set endpoint and generic definition writes arrive with
- * workstream 1A). The guarantee under test is the reader's: every request
- * runs `core.begin_request()` and a process whose cache differs reloads
- * before compiling, so B's next request uses the change, with or without
- * a listener. The listener only reloads early.
+ * each with its own pool, catalog cache and `std_config` listener. Every
+ * config change is committed through A: an administrator's
+ * `POST /api/v1/schema/change-sets` to A's HTTP server. The guarantee under
+ * test is B's: every request runs `core.begin_request()` and a process
+ * whose cache differs reloads before compiling, so B's next request uses
+ * the change, with or without a listener. The listener only reloads early.
  *
  * B's listener is told apart from A's by start order: B starts first and
  * its `LISTEN` backend is the only one, then A starts. The kill names that
@@ -39,13 +37,7 @@ import { startServe } from "./cli-support.ts";
 import type { ServeProcess } from "./cli-support.ts";
 import { listenGate } from "./listen-gate.ts";
 import { listPath } from "./reads-support.ts";
-import {
-  ACME,
-  addField,
-  change,
-  currentRevision,
-  values,
-} from "./schema-support.ts";
+import { ACME, addField, currentRevision, values } from "./schema-support.ts";
 
 /** Fetch without keep-alive, so killed servers leave no pooled sockets. */
 const Fetch = FetchHttpClient.layer.pipe(
@@ -200,24 +192,48 @@ const listenersWhen = (ready: (pids: readonly string[]) => boolean) =>
     Effect.timeout(LISTENER_TIMEOUT)
   );
 
+/** What A's change-set endpoint says it applied. */
+const AppliedBody = Schema.Struct({
+  changeSet: Schema.Struct({
+    completeRevision: Schema.NullOr(Schema.Int),
+    revision: Schema.NullOr(Schema.Int),
+    state: Schema.String,
+  }),
+});
+
 /**
- * One config change: a new text field on `acme.asset`. Adding a column
- * has a follow-up phase, so the change set ends with a `complete` step at
- * its own revision (Contracts 1.2).
+ * One config change committed through a server: a new text field on
+ * `acme.asset`, posted to its change-set endpoint. Adding a column has a
+ * follow-up phase, so the change set ends with a `complete` step at its
+ * own revision (Contracts 1.2).
+ * @param server - The server the change goes through (A).
+ * @param token - An administrator's session on it.
  * @param name - The field name.
  * @returns The revision after it, the one every request must now see.
  */
 const addAssetField = Effect.fn("CrossProcess.addAssetField")(
-  function* addAssetField(name: string) {
-    const result = yield* change([
-      addField(ACME.asset, name, { kind: "text" }).op,
-    ]);
+  function* addAssetField(server: ServeProcess, token: string, name: string) {
+    const request = yield* HttpClientRequest.bodyJson(
+      HttpClientRequest.post("/api/v1/schema/change-sets").pipe(
+        HttpClientRequest.bearerToken(token)
+      ),
+      { operations: [addField(ACME.asset, name, { kind: "text" }).op] }
+    );
 
-    const revision = yield* currentRevision;
+    const response = yield* send(server, request);
 
-    assert.isAtLeast(revision, result.revision ?? Number.POSITIVE_INFINITY);
+    assert.strictEqual(response.status, 201, JSON.stringify(response.json));
 
-    return revision;
+    const { changeSet } = yield* Schema.decodeUnknownEffect(AppliedBody)(
+      response.json
+    );
+
+    const revision = changeSet.completeRevision ?? changeSet.revision;
+
+    assert.strictEqual(changeSet.state, "completed");
+    assert.strictEqual(yield* currentRevision, revision);
+
+    return revision ?? 0;
   }
 );
 
@@ -228,7 +244,7 @@ describe("cross-process", () => {
 
   layer(acmeTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "a change committed in another process is used by B's next request, also after B's listener is killed",
+      "a change committed through A is used by B's next request, also after B's listener is killed",
       () =>
         Effect.scoped(
           Effect.gen(function* crossProcess() {
@@ -255,6 +271,9 @@ describe("cross-process", () => {
               [b, yield* signIn(b)],
             ]);
 
+            // Ada holds the built-in admin role: she may post change sets.
+            const adminOnA = tokens.get(a) ?? "";
+
             const list = (server: ServeProcess, field: string) =>
               listWith(server, tokens.get(server) ?? "", field);
 
@@ -269,8 +288,8 @@ describe("cross-process", () => {
             );
             assert.strictEqual((yield* list(a, "cross_first")).status, 400);
 
-            // 1. A change committed elsewhere: B's next request uses it.
-            const first = yield* addAssetField("cross_first");
+            // 1. A change committed through A: B's next request uses it.
+            const first = yield* addAssetField(a, adminOnA, "cross_first");
 
             assert.isAbove(first, before.revision);
             yield* assertServedWith(
@@ -304,7 +323,7 @@ describe("cross-process", () => {
             // B tried to listen again and is held.
             yield* gate.awaitHeld;
 
-            const second = yield* addAssetField("cross_second");
+            const second = yield* addAssetField(a, adminOnA, "cross_second");
 
             yield* assertServedWith(
               yield* list(b, "cross_second"),
@@ -330,7 +349,7 @@ describe("cross-process", () => {
 
             assert.include(reconnected, aListener);
 
-            const third = yield* addAssetField("cross_third");
+            const third = yield* addAssetField(a, adminOnA, "cross_third");
 
             yield* assertServedWith(
               yield* list(b, "cross_third"),

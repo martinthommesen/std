@@ -42,6 +42,7 @@ import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { fieldPredicate, recordPredicate } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
+import { filterClassView } from "./read-query.ts";
 import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
 import {
@@ -160,6 +161,7 @@ ${byId(check.snapshot, check.classId, check.id)}`
           written: input.written,
         }),
       checkProposed: (input) => allowed(proposedCheck(input)),
+      conditionView: (snapshot) => filterClassView(scopeOf(snapshot)),
       nameable: (input) => {
         const scope = scopeOf(input.snapshot);
 

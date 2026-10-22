@@ -81,6 +81,7 @@ import type { WriteBody } from "./write-body.ts";
 import { WriteOnlyValues } from "./write-only-values.ts";
 import {
   absentCreateValue,
+  conditionRefusals,
   finalizeCreate,
   finalizeUpdate,
   proposeCreate,
@@ -207,13 +208,26 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
     readonly supplied: ReadonlySet<DefinitionId>;
   }
 ) {
-  const errors = validateProposal(input);
+  const access = yield* WriteAccess;
+
+  const conditions = conditionRefusals(
+    input.fields,
+    input.proposal.values,
+    input.written,
+    access.conditionView(snapshot)
+  );
+
+  const errors = validateProposal({
+    ...input,
+    proposal: {
+      invalid: new Map([...input.proposal.invalid, ...conditions]),
+      values: input.proposal.values,
+    },
+  });
 
   if (errors.length === 0) {
     return yield* Effect.void;
   }
-
-  const access = yield* WriteAccess;
 
   const readable = yield* access.readableOnProposal({
     classId: input.classId,

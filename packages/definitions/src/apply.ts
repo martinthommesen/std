@@ -34,6 +34,7 @@ import type {
   Owner,
 } from "./definition.ts";
 import { isActive } from "./definition.ts";
+import { typeClassOf } from "./dependencies.ts";
 import { guardChange, guardCreate, guardNewOverride } from "./guards.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
@@ -106,7 +107,8 @@ interface DefinitionCandidate {
 
 /**
  * The definitions a new definition points at that must be active: its
- * parent class, its own class, a reference target, indexed fields.
+ * parent class, its own class, a reference target or a condition's class,
+ * indexed fields.
  *
  * @param operation - The create operation.
  * @returns The IDs.
@@ -121,12 +123,7 @@ const mustBeActive = (
   }
 
   if (definition.kind === "field") {
-    return [
-      definition.classId,
-      definition.type.kind === "reference"
-        ? definition.type.targetClassId
-        : null,
-    ];
+    return [definition.classId, typeClassOf(definition.type)];
   }
 
   return definition.kind === "index"

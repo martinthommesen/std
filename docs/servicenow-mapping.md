@@ -49,6 +49,7 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | `sysparm_limit`, `sysparm_offset` | `limit`, `cursor` (keyset) | No offsets: pages stay stable while records change. |
 | `X-Total-Count` header | `count=true` | Computed only on request, with the page's own `FROM` and `WHERE`. |
 | Dot-walking (`caller_id.name`) | Reference paths (`owner.name`) | One hop in filters and selection; the target's visibility and masks apply on the way. |
+| Conditions field type, with its dependent table | `condition` field type naming its class (`class: <table>`) and the `filter` profile | Saved values are condition ASTs holding field IDs, checked on every write against the class in the writer's view; the class cannot be retired while an active condition field names it. |
 | Table extension (`task` → `incident`) | Class inheritance with class-table storage | Through a parent table only its own and inherited fields are shown; child-only fields need the child's endpoint (2.3). |
 | GlideRecord (`addQuery`, `orderBy`, `setLimit`, `query`, `next`) | The list endpoint (generic), the SDK (Step 4, typed) | Server code calls the record service; there is no unrestricted GlideRecord equivalent that bypasses access rules. |
 | `GlideRecordSecure` | Every record-service read | Access rules always apply; the acting user is a required service. |
