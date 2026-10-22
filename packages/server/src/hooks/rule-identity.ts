@@ -19,7 +19,7 @@ import type { RecordRuleDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { PERMISSION_IDS } from "@std/definitions/well-known";
+import { RULES_RUN_AS_PERMISSION_ID } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { loadActor } from "../auth/actor.ts";
@@ -74,7 +74,7 @@ export const checkRunAsAuthor = Effect.fn("Rules.checkRunAsAuthor")(
         hasPermission(
           snapshot,
           yield* loadActor(snapshot, author),
-          PERMISSION_IDS["rules.run_as"]
+          RULES_RUN_AS_PERMISSION_ID
         ));
 
     return holds ? yield* Effect.void : yield* new NotAllowed();

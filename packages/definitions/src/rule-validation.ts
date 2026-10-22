@@ -53,7 +53,7 @@ import type {
   RuleValue,
 } from "./rule-definition.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { PERMISSION_IDS, USER_CLASS_ID } from "./well-known.ts";
+import { RULES_RUN_AS_PERMISSION_ID, USER_CLASS_ID } from "./well-known.ts";
 
 /** The longest fixed message a `refuse` action may carry. [judgment] */
 export const REFUSAL_MESSAGE_MAX = 500;
@@ -803,7 +803,8 @@ export const runAsRefusal = (input: {
     return touched && running && otherIdentity;
   });
 
-  const permissionId = PERMISSION_IDS["rules.run_as"];
+  // Checked by the permission's stable ID; its name only labels the error.
+  const permissionId = RULES_RUN_AS_PERMISSION_ID;
 
   if (!needs || hasPermission(input.before, input.requester, permissionId)) {
     return undefined;
@@ -813,7 +814,7 @@ export const runAsRefusal = (input: {
 
   return new PermissionRequired({
     permission:
-      permission?.kind === "permission" ? permission.name : "rules.run_as",
+      permission?.kind === "permission" ? permission.name : permissionId,
     permissionId,
   });
 };

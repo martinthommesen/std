@@ -192,7 +192,7 @@ Resume:
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `condition_on` (a condition field to the class its conditions apply to), `index_on`, `display_field`, `layout_uses`, `condition_reads` (a stored access-rule, subscription or allowed-records condition to each field it reads, 6.5), `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), `grant_of` (grant to its role and permission), each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `condition_on` (a condition field to the class its conditions apply to), `index_on`, `display_field`, `layout_uses`, `condition_reads` (a stored access-rule, subscription or allowed-records condition to each field it reads, 6.5), `rule_writes` (a record rule to each field it sets), `rule_on` (a record rule to its class, the classes its actions name and its carrier subscription, decision 0022), `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), `grant_of` (grant to its role and permission), each registered when its feature lands.
 - Step 2 registers `choice_of` (a choice to its field) and `layout_uses` (a layout to its table and to each field it names). Layout and choice rules, beyond the table below [judgment, decision 0017]: retiring a field a layout names is allowed and reports the layout; a layout never blocks a field purge, and keeps the purged field's ID, which metadata skips; a table purge takes its layouts along, and a field purge its choices, as they take overrides along; deleting a choice that an override's subset names is refused as `DefinitionInvalid` (the subset would name no choice); a layout naming a field outside its table's lineage, a field twice, a section in a list layout, or a second layout of one type is `DefinitionInvalid`.
 - Workstream 2D registers `saved_filter_on` (a saved filter to its table; the fields its condition reads, on every hop, are `condition_reads`). Saved filter rules [judgment, decision 0019]: retiring a field a saved filter reads is allowed and reports the filter, which metadata then no longer serves; a live saved filter blocks the purge of a field it reads, like any stored condition (a condition naming a tombstone cannot run); a table purge takes its saved filters along, like its layouts.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
@@ -523,6 +523,8 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `InvalidReference` | 422 | target does not exist or is not visible; identical |
 | `Referenced` | 409 | delete refused because other records reference it; no count or names |
 | `DefinitionInvalid` | 422 | a change set's definitions are invalid; lists problems by definition ID |
+| `RuleRefused`, `InvalidTransition` | 422 | a record rule's `refuse` action (4.10); carries the rule's fixed message |
+| `RecordInSave`, `HookDepthExceeded` | 422 | a nested save of hooks or record rules targets a record being saved, or nests more than 8 deep (4.1) [judgment, decision 0022] |
 | `DependencyConflict`, `UseRetireOrPurge`, `PurgeRefused`, `ExistingDataViolates`, `SchemaNeedsAttention` | 409 | change-set refusals (1.4 to 1.7) |
 | `DefinitionProtected`, `PermissionRequired` | 403 | 1.8, and a missing permission such as `schema.purge` |
 | `SchemaBusy`, `SchemaLockTimeout` | 503 with `Retry-After` | another schema change holds `SCHEMA_KEY`; locks not obtained in 5 attempts (names no session) |
@@ -614,7 +616,7 @@ Hooks and record rules are selected by the record's concrete class: those attach
 
 - In-transaction hook writes run as the acting user, so access rules apply to them, unless the rule names a run-as identity, which requires the `rules.run_as` permission [judgment].
 - In-transaction hooks get an Effect environment with no HTTP client, so an external call fails to type-check. [judgment]
-- Nesting depth is capped at 8 (`HookDepthExceeded`), also along after-commit `cause` chains. [judgment]
+- Nesting depth is capped at 8 (`HookDepthExceeded`), also along after-commit `cause` chains: the outermost save and at most 8 nested levels. [judgment, decision 0022]
 - **After-commit effects (decision):** when an effect only writes through the record service, its writes and the fenced `done` update commit in one transaction, so in-database effects happen exactly once. External calls stay at least once, run outside any transaction, and receive `change_id` as their idempotency key. Reason: admins configure after-commit rules without code, so they cannot make them idempotent.
 - Record rules (Step 3) are declared as in 4.10: a `before` rule is before-write, of kind `derive` (sets values), `guard` (refuses a user's transition) or `invariant` (refuses a state on every save, settled ones included); an `after` rule is after-write (synchronous, can fail the save); an `afterCommit` rule runs from a delivery (asynchronous, cannot); an `aggregate` rule runs when its class's records are settled as owners (4.9) and only proposes in-memory changes.
 - A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued. Inside an STD transaction, Effect's nested `withTransaction` dies before it sends anything, and the SQL layer refuses `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` statements [checked: 0A smoke test].
@@ -755,9 +757,11 @@ Record rules are config records (`core.record_rule`): stable ID, owner layer, co
 | `kind` | `before` only, required: `derive` (only `set` actions; runs on users' writes and inside settling, 4.9), `guard` (only `refuse` actions; runs on users' writes only: user-transition guards), or `invariant` (only `refuse` actions; runs on every save, settled saves included). Mixing kinds and actions is `DefinitionInvalid` |
 | `once` | `aggregate` only: the rule fires at most once per owner and transaction |
 | `runAs` | `after` only: an identity, which needs `rules.run_as` (4.1) |
+| `subscription` | `afterCommit` only, required: its carrier subscription, on the rule's class with the rule's operations and no condition, one per rule; it gives the identity, attempts and dead-letter policy, and receives a delivery for each change the rule matches [judgment, decision 0022] |
+| `name` | An identifier, unique among the class's live rules [judgment, decision 0022] |
 | `actions` | An ordered list of the kinds below |
 
-Values in actions are a literal; `{"ctx": "now" | "me"}`; `{"copy": <path>}` reading the rule's record (`record.<field>`), the owner (`owner.<field>`, aggregate rules only) or the current source record (`source.<field>`); or `{"increment": <integer field>}`.
+Values in actions are a literal; `{"ctx": "now" | "me"}`; `{"copy": <path>}` reading the rule's record (`record.<field>`), the owner (`owner.<field>`, aggregate rules only) or the current source record (`source.<field>`); or `{"increment": <integer field>}`. In `updateEach` and `createEach` bodies a copy may also name a record's own ID (`record.id`, `source.id`). A `forEach.where` reads the rule's record through `scope: "record"` paths (5.2), follows no reference, and uses neither `changed` nor `previous` [judgment, decision 0022].
 
 | Action | Phases | Effect |
 | --- | --- | --- |
@@ -854,7 +858,7 @@ type Expr =
     }
   | { op: "changed"; arg: Path }
   | { op: "anyPart" | "allParts"; class: ClassId; where: Expr }; // aggregate profile only (4.9, 5.10)
-type Path = { path: FieldId[]; image?: "previous"; scope?: "owner" }; // more than one ID follows references; scope only inside anyPart/allParts
+type Path = { path: FieldId[]; image?: "previous"; scope?: "owner" | "record" }; // more than one ID follows references; "owner" only inside anyPart/allParts; "record" (one field, or [] for the ID) only on the right of eq..ge in a record rule's forEach.where (4.10, decision 0022)
 type Value =
   | { value: Json } // canonical JSON of the left field's type (6.5)
   | { ctx: "me" | "now" }

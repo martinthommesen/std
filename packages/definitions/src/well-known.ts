@@ -68,9 +68,16 @@ export const BUILT_IN_ROLE_IDS = {
 export const SCHEMA_PURGE_PERMISSION_ID: DefinitionId =
   "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9";
 
+/**
+ * The ID of the built-in `rules.run_as` permission (Contracts 3.1, 4.1):
+ * a record rule may run as another identity only when its author holds it.
+ */
+export const RULES_RUN_AS_PERMISSION_ID: DefinitionId =
+  "6de89171-f738-4ade-aa1b-2817f848899c";
+
 /** Built-in permissions (Contracts 3.1), checked by ID. */
 export const PERMISSION_IDS = {
-  "rules.run_as": "6de89171-f738-4ade-aa1b-2817f848899c",
+  "rules.run_as": RULES_RUN_AS_PERMISSION_ID,
   "schema.purge": SCHEMA_PURGE_PERMISSION_ID,
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
