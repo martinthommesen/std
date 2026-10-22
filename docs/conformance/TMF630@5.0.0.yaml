@@ -220,7 +220,9 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: mandatory
     requirement: The server supports application/json as its default media type, returned when asked for or when no Accept header is sent.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: every representation is a JSON object or array"
   - id: TMF630@5.0.0/P1/1.5.2/server-echoes-content-type
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
@@ -250,13 +252,17 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended
     requirement: The server should send an ETag that changes whenever the representation changes; for a list response the ETag covers the whole response.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: 'C10.5: `ETag: "<version>"` on every single-resource response; gap: list responses (C10.4) carry no ETag'
   - id: TMF630@5.0.0/P1/1.5.2/location-on-create
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: mandatory
     requirement: The server gives the URI of a newly created resource in the Location header.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `POST /api/v2/{table}` returns `201` with `Location`"
   - id: TMF630@5.0.0/P1/1.5.2/server-may-state-locale
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
@@ -292,25 +298,34 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: recommended
     requirement: An implementation should prevent lost updates by optimistic locking with ETag and If-Match.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+      - packages/server/test/json-patch-race.test.ts#json-patch-race
     note: 'C10.5: version checks with `If-Match: "<version>"` and `ETag`'
   - id: TMF630@5.0.0/P1/1.5.3/etag-on-representation
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: Whenever the server returns a resource's state, it includes an entity tag in the ETag header.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: 'C10.5: every single-resource response carries `ETag: "<version>"`; gap: resources inside list responses have only `version` in the body'
   - id: TMF630@5.0.0/P1/1.5.3/etag-identifies-state
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: The ETag value uniquely identifies the resource's state at the time of the response.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: the ETag is the record `version`, incremented by every save (Contracts 6.7)"
   - id: TMF630@5.0.0/P1/1.5.3/etag-stable-until-modified
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: The ETag value does not change until the resource is modified.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: the version changes only on a save"
   - id: TMF630@5.0.0/P1/1.5.3/client-sends-if-match
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
@@ -322,20 +337,26 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: The server rejects a change request without If-Match with 428 Precondition Required.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `428 VersionRequired` on PATCH and DELETE of the generic API; gap: TMF Open APIs keep If-Match optional (Contracts 11.1), and POST needs none"
   - id: TMF630@5.0.0/P1/1.5.3/server-checks-if-match
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: The server compares the If-Match value with the resource's current entity tag.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: the save pipeline checks the version after locking the root row (Contracts 4.1 step 2)"
   - id: TMF630@5.0.0/P1/1.5.3/if-match-mismatch-412
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: When If-Match does not match the current entity tag, the server rejects the request with 412 Precondition Failed.
-    status: pending
-    note: "gap: STD answers `409 VersionConflict` (Contracts 3.8, C10.6) CONTRADICTION: TMF630 v5.0.0 P1 §1.5.3 p.14 says an If-Match mismatch is rejected with 412 Precondition Failed; Contracts 3.8 (status codes kept by Contracts 10.6) says a version mismatch is `409 VersionConflict`."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.5 (Martin 2026-10-22, M2): a stale If-Match on v2 is 412 with the current ETag; v1 keeps 409."
   - id: TMF630@5.0.0/P1/1.5.3/if-match-mismatch-returns-current-etag
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
@@ -346,13 +367,17 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: When If-Match matches, the server processes the request as if no precondition were used, updates the resource and gives it a new entity tag.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: a matching version proceeds through the save pipeline and increments `version`"
   - id: TMF630@5.0.0/P1/1.5.3/new-etag-returned
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
     requirement: After a successful conditional change, the server returns the new entity tag in the ETag header.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: 'C10.5: `PATCH` returns `200` with `ETag: "<version>"`; a `DELETE` (`204`) has no new state'
   - id: TMF630@5.0.0/P1/1.5.4/rate-limit-defined
     source: TMF630 v5.0.0 P1 §1.5.4 p.14
@@ -376,19 +401,25 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.5 p.15
     level: recommended
     requirement: The server should send X-Total-Count on responses to a GET of a collection.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `X-Total-Count` on every list unless the STD extension `count=false` drops it (exclusion E19-generic-api-extensions)"
   - id: TMF630@5.0.0/P1/1.5.5/x-total-count-is-total-matching
     source: TMF630 v5.0.0 P1 §1.5.5 p.15
     level: mandatory
     requirement: The X-Total-Count value is the total number of resources matching the GET, not the page size. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: computed with the page's `FROM` and `WHERE` (Contracts 3.5)"
   - id: TMF630@5.0.0/P1/1.6/apis-secured-least-privilege
     source: TMF630 v5.0.0 P1 §1.6 p.15
     level: recommended
     requirement: Every API should be secured against unauthorized access, following least privilege. (lowercase 'should' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/contracts3-v2.test.ts#contracts3-v2
     note: "C10.1: every v2 resource except session creation needs a session (`401 Unauthenticated`, Contracts 3.8); access rules decide rows and fields (Contracts 3)"
   - id: TMF630@5.0.0/P1/2.1/entity-schemas-in-spec
     source: TMF630 v5.0.0 P1 §2.1 p.20
@@ -400,7 +431,9 @@ rows:
     source: TMF630 v5.0.0 P1 §2.1 p.20
     level: mandatory
     requirement: Each individual managed resource has a unique identifier attribute named id.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id` always present (UUID)"
   - id: TMF630@5.0.0/P1/2.3/uri-syntax-for-identifiers
     source: TMF630 v5.0.0 P1 §2.3 p.20
@@ -430,7 +463,9 @@ rows:
     source: TMF630 v5.0.0 P1 §2.4 p.21
     level: mandatory
     requirement: Every resource carries id (unique within its collection), href (its URI, full or relative, as given in Location) and @type (its class name).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id`, `href` (absolute URL) and `@type` always present"
   - id: TMF630@5.0.0/P1/2.4/id-immutable-unique-never-reused
     source: TMF630 v5.0.0 P1 §2.4 p.22
@@ -460,8 +495,10 @@ rows:
     source: TMF630 v5.0.0 P1 §2.5 p.22
     level: mandatory
     requirement: Managed resource (type) names are UpperCamelCase, such as TroubleTicket.
-    status: pending
-    note: "gap: STD's `@type` is the class's qualified name (C10.2) CONTRADICTION: TMF630 v5.0.0 P1 §2.5 p.22 says managed resource names are UpperCamelCase (with @type naming the class, §2.4); Contracts 10.2 says `@type` and `@baseType` are the qualified class name, such as `helpdesk.incident`."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2 (Martin 2026-10-22, M3): @type is the table's type name in UpperCamelCase (HelpdeskIncident)."
   - id: TMF630@5.0.0/P1/2.5/task-names-lower-camel-case
     source: TMF630 v5.0.0 P1 §2.5 p.22
     level: mandatory
@@ -472,13 +509,17 @@ rows:
     source: TMF630 v5.0.0 P1 §2.5 p.22
     level: mandatory
     requirement: Every name in a URI (resources, collections, child resources, tasks) is lowerCamelCase.
-    status: pending
-    note: "gap: fixed resources comply, but table collections use the qualified name (C10.1) CONTRADICTION: TMF630 v5.0.0 P1 §2.5 p.22 says every name in a URI is lowerCamelCase; Contracts 10.1 says a table's collection is `/api/v2/{table}` with `{table}` the qualified name, which contains a dot and keeps snake_case definition names (`helpdesk.change_item`)."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.1 (Martin 2026-10-22, M3): a table's collection is its v2 name in lowerCamelCase (helpdeskIncident)."
   - id: TMF630@5.0.0/P1/2.5/property-names-lower-camel-case
     source: TMF630 v5.0.0 P1 §2.5 p.23
     level: mandatory
     requirement: Resource property names are lowerCamelCase.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: API names turn each `_x` into `X`; clashes refused with `apiNameClash`"
   - id: TMF630@5.0.0/P1/2.5/no-implementation-details-in-names
     source: TMF630 v5.0.0 P1 §2.5 p.23
@@ -574,31 +615,41 @@ rows:
     source: TMF630 v5.0.0 P1 §3.1 p.26
     level: mandatory
     requirement: Retrieving one managed resource is a GET on the resource URI ending in its id.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.1: `GET /api/v2/{table}/{id}`"
   - id: TMF630@5.0.0/P1/3.1/get-collection-queries
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
     requirement: Querying entities is a GET on the collection resource, with query parameters.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `GET /api/v2/{table}` with the 10.3 parameters"
   - id: TMF630@5.0.0/P1/3.1/post-collection-creates
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
     requirement: Creating a resource is a POST on its collection resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `POST /api/v2/{table}`"
   - id: TMF630@5.0.0/P1/3.1/patch-partial-update
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
     requirement: A partial update is a PATCH on the managed resource or on a collection resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PATCH /api/v2/{table}/{id}`; gap: no PATCH on a collection"
   - id: TMF630@5.0.0/P1/3.1/delete-removes
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
     requirement: Removing a resource is a DELETE on the managed resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `DELETE /api/v2/{table}/{id}`"
   - id: TMF630@5.0.0/P1/3.1/post-task-executes
     source: TMF630 v5.0.0 P1 §3.1 p.27
@@ -610,13 +661,17 @@ rows:
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: recommended
     requirement: PUT is not defined for TM Forum APIs and should not be used.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PUT` is `405`"
   - id: TMF630@5.0.0/P1/3.2/json-default-representation
     source: TMF630 v5.0.0 P1 §3.2 p.27
     level: mandatory
     requirement: Every API supports application/json and uses JSON as its default resource representation (stated three times in 3.2).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: every representation is JSON"
   - id: TMF630@5.0.0/P1/3.2/media-type-via-accept-content-type-only
     source: TMF630 v5.0.0 P1 §3.2 p.27
@@ -634,13 +689,17 @@ rows:
     source: TMF630 v5.0.0 P1 §3.2 p.28
     level: mandatory
     requirement: Partial updates in JSON Merge Patch form use the media type application/merge-patch+json (RFC 7396).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PATCH` takes `application/merge-patch+json`"
   - id: TMF630@5.0.0/P1/3.2/patch-json-patch
     source: TMF630 v5.0.0 P1 §3.2 p.28
     level: mandatory
     requirement: Partial updates in JSON Patch form use the media type application/json-patch+json (RFC 6902).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PATCH` takes `application/json-patch+json`"
   - id: TMF630@5.0.0/P1/3.2/patch-json-patch-query
     source: TMF630 v5.0.0 P1 §3.2 p.28
@@ -653,7 +712,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.2 p.28
     level: mandatory
     requirement: A PATCH sent as application/json is applied with JSON Merge Patch rules (RFC 7396); this use is deprecated in v5.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `application/json` is treated as merge-patch"
   - id: TMF630@5.0.0/P1/3.2/patch-application-json-dropped-in-v6
     source: TMF630 v5.0.0 P1 §3.2 p.28
@@ -683,13 +744,17 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.1 p.29
     level: mandatory
     requirement: 201 signals a successful creation and is used for every POST except a task that is not persisted; for a task it means the task was created, not that it ran. Never for GET, PATCH or DELETE.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `POST /api/v2/{table}` is `201`; gap: the status of `POST /api/v2/changeSet` (a persisted task) and `session` is not stated"
   - id: TMF630@5.0.0/P1/3.3.1/status-201-body-and-location
     source: TMF630 v5.0.0 P1 §3.3.1 p.29
     level: recommended
     requirement: A 201 response should carry the created resource's representation and a Location header with its URI.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `201` with the resource and `Location`"
   - id: TMF630@5.0.0/P1/3.3.1/status-202-accepted
     source: TMF630 v5.0.0 P1 §3.3.1 p.30
@@ -701,7 +766,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.1 p.30
     level: recommended
     requirement: "204 should be used when the body is intentionally empty: always for DELETE, never for GET, POST or PATCH."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `DELETE` is `204` with no body"
   - id: TMF630@5.0.0/P1/3.3.1/status-206-partial
     source: TMF630 v5.0.0 P1 §3.3.1 p.30
@@ -755,7 +822,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: mandatory
     requirement: 401 is used when the client's credentials are missing or wrong.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `Unauthenticated` and `InvalidCredentials` are 401 (Contracts 3.8)"
   - id: TMF630@5.0.0/P1/3.3.3/status-403-forbidden
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
@@ -773,13 +842,17 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: mandatory
     requirement: 404 is used when the requested URI maps to no resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `UnknownTable` and `NotFound` are 404 (Contracts 3.8)"
   - id: TMF630@5.0.0/P1/3.3.3/status-405-method
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: mandatory
     requirement: 405 is used when the HTTP method is not supported on the resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PUT` is `405`; gap: Contracts 10 does not say other unsupported methods (for example POST on `/{table}/{id}`) are 405"
   - id: TMF630@5.0.0/P1/3.3.3/status-406-not-acceptable
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
@@ -791,7 +864,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
     requirement: 409 should signal that the request conflicts with the resource's current state.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `VersionConflict`, `SchemaChanged`, `Referenced`, change-set refusals and `PatchTestFailed` are 409"
   - id: TMF630@5.0.0/P1/3.3.3/status-410-gone
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
@@ -809,14 +884,18 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: mandatory
     requirement: 412 is used when a precondition in the request headers evaluates to false on the server.
-    status: pending
-    note: "gap: a stale `If-Match` is `409 VersionConflict` (Contracts 3.8, C10.6) CONTRADICTION: TMF630 v5.0.0 P1 §3.3.3 p.32 says a false request-header precondition is 412; Contracts 3.8 and 6.7 (kept by Contracts 10.5, 10.6) say a stale `If-Match` version is `409 VersionConflict`."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match on v2."
   - id: TMF630@5.0.0/P1/3.3.3/status-412-if-match-mismatch
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
     requirement: In particular, 412 should be used when the If-Match entity tag no longer matches the resource's current one.
-    status: pending
-    note: "gap: STD answers `409 VersionConflict` with `currentVersion` (C10.6) CONTRADICTION: TMF630 v5.0.0 P1 §3.3.3 p.32 says an If-Match mismatch should be 412; Contracts 3.8 and 6.7 say it is `409 VersionConflict`."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match on v2."
   - id: TMF630@5.0.0/P1/3.3.3/status-413-too-large
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: mandatory
@@ -833,13 +912,17 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
     requirement: 415 should signal a request body in a media type the server or resource does not support.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: an unsupported media type is 415 (e.g. `application/json-patch-query+json`, C10.5)"
   - id: TMF630@5.0.0/P1/3.3.3/status-422-semantic-error
     source: TMF630 v5.0.0 P1 §3.3.3 p.33
     level: recommended
     requirement: 422 should signal a well-formed request that cannot be carried out because of semantic errors.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `ValidationFailed`, `InvalidReference`, `DefinitionInvalid` are 422 (Contracts 3.8)"
   - id: TMF630@5.0.0/P1/3.3.3/status-422-business-rule
     source: TMF630 v5.0.0 P1 §3.3.3 p.33
@@ -851,7 +934,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.33
     level: recommended
     requirement: 428 should signal that the client did not send the entity tag it received in If-Match.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `428 VersionRequired`"
   - id: TMF630@5.0.0/P1/3.3.3/status-429-too-many-requests
     source: TMF630 v5.0.0 P1 §3.3.3 p.33
@@ -881,7 +966,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.4 p.34
     level: recommended
     requirement: The response status line always carries a standard 4xx or 5xx code for an error. (lowercase 'should' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: status codes of Contracts 3.8"
   - id: TMF630@5.0.0/P1/3.4/application-error-codes-allowed
     source: TMF630 v5.0.0 P1 §3.4 p.34
@@ -893,7 +980,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.4 p.34
     level: mandatory
     requirement: User and application error codes are carried in the error body, not in the status line.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `code` in the TMF `Error` body"
   - id: TMF630@5.0.0/P1/3.4/sub-codes-in-body
     source: TMF630 v5.0.0 P1 §3.4 p.34
@@ -905,7 +994,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.4 p.34
     level: mandatory
     requirement: "An error body has the Error structure: code, reason and @type mandatory; message, status, referenceError and @schemaLocation optional."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `{@type: <_tag>, @baseType: Error, code, reason, status, message, …}`"
   - id: TMF630@5.0.0/P1/3.4/error-codes-in-spec
     source: TMF630 v5.0.0 P1 §3.4 p.35
@@ -917,7 +1008,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.4 p.35
     level: recommended
     requirement: "@type and @schemaLocation should be used to extend the Error at run time."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: each `_tag` is an Error subtype (`@type`, `@baseType: Error`) with extension attributes; gap: no `@schemaLocation` for the subtypes"
   - id: TMF630@5.0.0/P1/3.5/json-default
     source: TMF630 v5.0.0 P1 §3.5 p.35
@@ -941,7 +1034,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.5 p.35
     level: mandatory
     requirement: Every individual resource document has a unique identifier field named id.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id` always present"
   - id: TMF630@5.0.0/P1/3.5/documentation-links-schema
     source: TMF630 v5.0.0 P1 §3.5 p.35
@@ -953,7 +1048,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.5 p.35
     level: mandatory
     requirement: An API does not wrap payloads in its own envelope; it relies on the HTTP message as the envelope. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: a record is one flat JSON object and a list a JSON array (the v1 envelope is gone)"
   - id: TMF630@5.0.0/P1/3.6/sid-data-types
     source: TMF630 v5.0.0 P1 §3.6 p.35
@@ -989,7 +1086,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
     requirement: A single resource is retrieved with GET {apiRoot}/{resourceName}/{resourceID}.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.1: `GET /api/v2/{table}/{id}`"
   - id: TMF630@5.0.0/P1/4.1/get-single-complete
     source: TMF630 v5.0.0 P1 §4.1 p.39
@@ -1001,25 +1100,33 @@ rows:
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
     requirement: An attribute without a value is left out of the representation; returning null or an empty value for it is not allowed.
-    status: pending
-    note: 'gap: STD''s value shapes render an empty value as `null` (Contracts 6.5, kept by C10.2) CONTRADICTION: TMF630 v5.0.0 P1 §4.1 p.39 says an attribute without a value must be omitted, never null; Contracts 10.2 keeps 6.5''s value shapes unchanged, where an empty value is JSON `null` (and an empty password or secret is `{"set": false}`), so absence means ''not delivered''.'
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2 (spec check F630-08): an attribute without a value is left out; withheld tells restricted from empty."
   - id: TMF630@5.0.0/P1/4.1/single-has-id
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
     requirement: The returned representation contains an id field holding the resource identifier.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id` always present"
   - id: TMF630@5.0.0/P1/4.1/single-200
     source: TMF630 v5.0.0 P1 §4.1 p.40
     level: mandatory
     requirement: A successful GET of a single resource returns 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: reads return `200` with `ETag`"
   - id: TMF630@5.0.0/P1/4.1/single-404
     source: TMF630 v5.0.0 P1 §4.1 p.40
     level: mandatory
     requirement: A GET of a resource that does not exist returns 404 Not Found.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: `404 NotFound`, identical for missing and invisible records (Contracts 3.8)"
   - id: TMF630@5.0.0/P1/4.1/single-errors-iana
     source: TMF630 v5.0.0 P1 §4.1 p.40
@@ -1031,7 +1138,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.2 p.43
     level: mandatory
     requirement: All resources of a type are retrieved with GET {apiRoot}/{resourceName}. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.1: `GET /api/v2/{table}`"
   - id: TMF630@5.0.0/P1/4.2/collection-complete-representations
     source: TMF630 v5.0.0 P1 §4.2 p.43
@@ -1043,13 +1152,17 @@ rows:
     source: TMF630 v5.0.0 P1 §4.2 p.43
     level: mandatory
     requirement: Each resource in a collection response contains an id field. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id` always present"
   - id: TMF630@5.0.0/P1/4.2/collection-200
     source: TMF630 v5.0.0 P1 §4.2 p.43
     level: mandatory
     requirement: A successful collection GET returns 200 OK, also when the (filtered) result is empty.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `200` with a JSON array"
   - id: TMF630@5.0.0/P1/4.2/collection-error-codes
     source: TMF630 v5.0.0 P1 §4.2 p.43
@@ -1061,43 +1174,57 @@ rows:
     source: TMF630 v5.0.0 P1 §4.3 p.50
     level: mandatory
     requirement: Attribute selection is supported for every first-level attribute.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `fields` takes attribute names"
   - id: TMF630@5.0.0/P1/4.3/fields-nested
     source: TMF630 v5.0.0 P1 §4.3 p.50
     level: optional
     requirement: Attribute selection may also be supported on nested attributes, using dot notation.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: one-hop reference paths (`assignedTo.name`); gap: no paths into json fields"
   - id: TMF630@5.0.0/P1/4.3/fields-directive-name
     source: TMF630 v5.0.0 P1 §4.3 p.50
     level: mandatory
     requirement: The attribute selector query parameter is named fields.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `fields`"
   - id: TMF630@5.0.0/P1/4.3.1/fields-pattern
     source: TMF630 v5.0.0 P1 §4.3.1 p.50
     level: mandatory
     requirement: A partial representation is requested with ?fields= and a comma-separated list of attribute names, on a single resource or a collection.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `fields` on reads and lists"
   - id: TMF630@5.0.0/P1/4.3.1/no-fields-complete
     source: TMF630 v5.0.0 P1 §4.3.1 p.51
     level: mandatory
     requirement: Without a fields parameter, the complete representation is returned.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2, C10.3: all readable attributes of the endpoint's lineage (Contracts 2.3)"
   - id: TMF630@5.0.0/P1/4.3.1/fields-always-id-href
     source: TMF630 v5.0.0 P1 §4.3.1 p.51
     level: mandatory
     requirement: id and href (where available) are always in the returned body, whatever fields says, including fields=none (the directive for returning no other attribute).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `id`, `href` and `@type` always returned; gap: Contracts 10.3 does not define `fields=none`, which would resolve as an attribute name and give `UnknownField`"
   - id: TMF630@5.0.0/P1/4.3.1/fields-always-type
     source: TMF630 v5.0.0 P1 §4.3.1 p.51
     level: mandatory
     requirement: "@type is always in the returned body, whatever fields says."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `@type` always returned"
   - id: TMF630@5.0.0/P1/4.3.1/fields-on-other-operations
     source: TMF630 v5.0.0 P1 §4.3.1 p.51
@@ -1109,7 +1236,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.3.1 p.52
     level: mandatory
     requirement: A successful request with attribute selection returns 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4, C10.5: `200` on reads and lists"
   - id: TMF630@5.0.0/P1/4.3.1/fields-errors-iana
     source: TMF630 v5.0.0 P1 §4.3.1 p.52
@@ -1139,7 +1268,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.4 p.58
     level: optional
     requirement: Filters may use the operators eq, gt, gte, lt and lte, appended to the attribute name either as .op or URL-encoded (attr%3E=v), keeping the = sign.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `.gt`, `.gte`, `.lt`, `.lte`; gap: `.eq` and the URL-encoded forms (`%3E`, `%3E%3D`, `%3C`, `%3C%3D`) are not in Contracts 10.3"
   - id: TMF630@5.0.0/P1/4.4/regex-operator
     source: TMF630 v5.0.0 P1 §4.4 p.61
@@ -1173,25 +1304,33 @@ rows:
     source: TMF630 v5.0.0 P1 §4.4 p.62
     level: mandatory
     requirement: Each resource in a filtered result contains an id field holding its identifier. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id` always present"
   - id: TMF630@5.0.0/P1/4.4/filtered-items-have-type
     source: TMF630 v5.0.0 P1 §4.4 p.62
     level: mandatory
     requirement: Each resource in a filtered result contains @type holding its type. (lowercase 'must' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `@type` always present (the concrete class)"
   - id: TMF630@5.0.0/P1/4.4/filter-200
     source: TMF630 v5.0.0 P1 §4.4 p.62
     level: mandatory
     requirement: A successful filtered query returns 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `200`"
   - id: TMF630@5.0.0/P1/4.4/filter-empty-200
     source: TMF630 v5.0.0 P1 §4.4 p.62
     level: mandatory
     requirement: A filtered query that matches nothing returns 200 OK (with an empty list).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `200` with `[]`"
   - id: TMF630@5.0.0/P1/4.4/filter-errors-iana
     source: TMF630 v5.0.0 P1 §4.4 p.62
@@ -1203,7 +1342,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.4.1 p.67
     level: optional
     requirement: Attributes of complex values may be filtered with a dot-separated path (attr.subAttr=value). (lowercase 'may' in source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: one-hop reference paths (`<ref>.id=`, `<ref>.name=`, `<ref>.<attr>=`); paths into array and json attributes fall under exclusion E16-array-json-filters"
   - id: TMF630@5.0.0/P1/4.4.1/prefer-jsonpath
     source: TMF630 v5.0.0 P1 §4.4.1 p.68
@@ -1229,19 +1370,25 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5 p.73
     level: mandatory
     requirement: Every server implementation must page collection results by default, so an unbounded query cannot drain server or network resources.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` defaults to 100 and is capped at 1,000 on every list"
   - id: TMF630@5.0.0/P1/4.5/get-collection-supports-pagination
     source: TMF630 v5.0.0 P1 §4.5 p.73
     level: mandatory
     requirement: The server's GET on a collection must support pagination.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `offset`/`limit` and `after`/`before` on every list"
   - id: TMF630@5.0.0/P1/4.5/page-requests-stateless
     source: TMF630 v5.0.0 P1 §4.5 p.73
     level: mandatory
     requirement: "Page requests must be stateless: each page request stands alone, so any server instance can answer it without memory of earlier requests."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: offset pages and opaque keyset cursors (3.5) carry all state in the request"
   - id: TMF630@5.0.0/P1/4.5/client-sends-full-page-request
     source: TMF630 v5.0.0 P1 §4.5 p.73
@@ -1259,49 +1406,65 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5 p.74
     level: mandatory
     requirement: Each API implementation must support at least one of the pagination methods (query-based offset, Range-header offset, cursor).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: STD supports query-based offset and cursor paging"
   - id: TMF630@5.0.0/P1/4.5.1/offset-limit-params-supported
     source: TMF630 v5.0.0 P1 §4.5.1 p.74
     level: mandatory
     requirement: A server offering query-based offset pagination must support the integer query parameters `offset` (start index) and `limit` (page size).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `offset`, `limit`"
   - id: TMF630@5.0.0/P1/4.5.1/offset-defaults-to-zero
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: mandatory
     requirement: When the client omits `offset`, the server must treat it as zero.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: offset paging (the zero default is implied, not written; name it in the test)"
   - id: TMF630@5.0.0/P1/4.5.1/offset-non-negative-integer
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: mandatory
     requirement: A supplied `offset` must be a non-negative integer.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: a malformed query parameter is `InvalidRequest` (3.8)"
   - id: TMF630@5.0.0/P1/4.5.1/negative-offset-400
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: mandatory
     requirement: The server must answer a negative `offset` with 400 Bad Request.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `InvalidRequest` is 400 (3.8)"
   - id: TMF630@5.0.0/P1/4.5.1/offset-out-of-range-empty-200
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: recommended
     requirement: For a positive `offset` beyond the end of the collection, the server should return an empty collection with 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `200` with a JSON array (empty past the end; not written explicitly)"
   - id: TMF630@5.0.0/P1/4.5.1/limit-positive-integer
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: mandatory
     requirement: A supplied `limit` must be a positive integer.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` 1 to 1,000"
   - id: TMF630@5.0.0/P1/4.5.1/non-positive-limit-400
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: recommended
     requirement: The server should answer a zero or negative `limit` with 400 Bad Request.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` outside 1 to 1,000 is `InvalidRequest` 400 (3.8)"
   - id: TMF630@5.0.0/P1/4.5.1/no-default-limit-returns-all
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
@@ -1313,37 +1476,49 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.1 p.75
     level: optional
     requirement: When the client asks for a `limit` above the server's maximum, the server may either reply 400 Bad Request or apply its own maximum.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` above 1,000 is `InvalidRequest` (the 400 option)"
   - id: TMF630@5.0.0/P1/4.5.1/missing-offset-defaults-zero-restated
     source: TMF630 v5.0.0 P1 §4.5.1 p.76
     level: mandatory
     requirement: A missing `offset` must default to zero (restates the rule on page 75).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: offset paging (zero default implied)"
   - id: TMF630@5.0.0/P1/4.5.1/missing-limit-server-default
     source: TMF630 v5.0.0 P1 §4.5.1 p.76
     level: mandatory
     requirement: A missing `limit` must default to the server implementation's page size.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: default `limit` 100"
   - id: TMF630@5.0.0/P1/4.5.1/offset-x-result-count
     source: TMF630 v5.0.0 P1 §4.5.1 p.77
     level: mandatory
     requirement: With query-based paging the server must send the `X-Result-Count` header giving the number of resources in this response.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `X-Result-Count` on every list"
   - id: TMF630@5.0.0/P1/4.5.1/offset-x-total-count
     source: TMF630 v5.0.0 P1 §4.5.1 p.77
     level: mandatory
     requirement: With query-based paging the server must send the `X-Total-Count` header giving the total number of matching resources.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `X-Total-Count` on every list unless the client sends `count=false` (that extension is exclusion E19: E19-generic-api-extensions)"
   - id: TMF630@5.0.0/P1/4.5.1/offset-success-200
     source: TMF630 v5.0.0 P1 §4.5.1 p.77
     level: mandatory
     requirement: A successful query-based page must be answered with 200 OK (error cases use their own codes).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.4: `200` with a JSON array"
   - id: TMF630@5.0.0/P1/4.5.1/offset-navigation-link-header
     source: TMF630 v5.0.0 P1 §4.5.1 p.77
@@ -1367,25 +1542,33 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.3 p.88
     level: mandatory
     requirement: A server offering cursor pagination must support the query parameters `limit` (integer), `before` and `after` (opaque cursor strings).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit`, `after`, `before`"
   - id: TMF630@5.0.0/P1/4.5.3/cursor-limit-positive-integer
     source: TMF630 v5.0.0 P1 §4.5.3 p.88
     level: mandatory
     requirement: With cursor paging, a supplied `limit` must be a positive integer.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` 1 to 1,000"
   - id: TMF630@5.0.0/P1/4.5.3/cursor-non-positive-limit-400
     source: TMF630 v5.0.0 P1 §4.5.3 p.88
     level: mandatory
     requirement: With cursor paging, the server must answer a zero or negative `limit` with 400 Bad Request (offset paging only says should).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` outside 1 to 1,000 is `InvalidRequest` 400 (3.8)"
   - id: TMF630@5.0.0/P1/4.5.3/cursor-limit-above-max-reject-or-cap
     source: TMF630 v5.0.0 P1 §4.5.3 p.88
     level: optional
     requirement: With cursor paging, a `limit` above the server maximum may be refused with 400 Bad Request or capped to the maximum.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `limit` above 1,000 is `InvalidRequest` (the 400 option)"
   - id: TMF630@5.0.0/P1/4.5.3/unknown-cursor-400
     source: TMF630 v5.0.0 P1 §4.5.3 p.91
@@ -1403,7 +1586,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: With `after`, the first item returned must be the one immediately following the cursor in the ordered dataset.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `after` keyset cursor (3.5 null-aware cursor predicate)"
   - id: TMF630@5.0.0/P1/4.5.4/after-nothing-empty-array
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
@@ -1415,7 +1600,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
     level: mandatory
     requirement: With `before`, the last item returned must be the one immediately preceding the cursor.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `before` keyset cursor (3.5)"
   - id: TMF630@5.0.0/P1/4.5.4/before-nothing-empty-array
     source: TMF630 v5.0.0 P1 §4.5.4 p.92
@@ -1427,7 +1614,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.5.4 p.94
     level: mandatory
     requirement: When the client sends neither `after` nor `before`, the page the server returns must start with the first item of the result set.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: a list without a cursor or offset starts at the first row of the `ORDER BY`"
   - id: TMF630@5.0.0/P1/4.5.5/combine-after-and-before
     source: TMF630 v5.0.0 P1 §4.5.5 p.94
@@ -1499,7 +1688,9 @@ rows:
     source: TMF630 v5.0.0 P1 §4.8 p.99
     level: mandatory
     requirement: "A server that supports sorting must accept the `sort` query parameter: a comma-separated list of fields, each optionally prefixed `-` (descending) or `+` (ascending), ascending by default, precedence left to right."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: `sort=-cost,name`; 10.3 does not mention the `+` prefix, dotted nested fields or the `.sort` alias (an unknown parameter is `InvalidRequest`), so state them"
   - id: TMF630@5.0.0/P1/5.1/patch-only-for-modify
     source: TMF630 v5.0.0 P1 §5.1 p.101
@@ -1511,25 +1702,33 @@ rows:
     source: TMF630 v5.0.0 P1 §5.1 p.101
     level: mandatory
     requirement: An API must not use PUT.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `PUT` is `405` (10.5's reason, that TMF630 makes PUT optional, is outdated: v5 forbids it)"
   - id: TMF630@5.0.0/P1/5.2/patch-partial-update
     source: TMF630 v5.0.0 P1 §5.2 p.101
     level: mandatory
     requirement: PATCH must be used to update a subset of a resource's attributes as RFC 5789 defines it.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: PATCH changes only the attributes the body names (6.7)"
   - id: TMF630@5.0.0/P1/5.2/patch-syntax-alternatives
     source: TMF630 v5.0.0 P1 §5.2 p.101
     level: mandatory
     requirement: "A PATCH body uses one of the defined syntaxes: JSON Merge Patch (`application/merge-patch+json`), JSON Patch (`application/json-patch+json`) or JSON Patch Query (`application/json-patch-query+json`, TMF630 Part 5)."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: merge-patch (and `application/json` as merge-patch) and JSON Patch accepted; JSON Patch Query is 415 (exclusion E15: E15-json-patch-query)"
   - id: TMF630@5.0.0/P1/5.2/patch-success-200
     source: TMF630 v5.0.0 P1 §5.2 p.101
     level: mandatory
     requirement: A PATCH processed successfully must be answered with 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `200` with the resource and `ETag`"
   - id: TMF630@5.0.0/P1/5.2/patch-async-202
     source: TMF630 v5.0.0 P1 §5.2 p.101
@@ -1547,43 +1746,57 @@ rows:
     source: TMF630 v5.0.0 P1 §5.2 p.102
     level: mandatory
     requirement: A successful PATCH response must contain the full representation of the modified resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `200` with the resource (what the caller can read, 3.5)"
   - id: TMF630@5.0.0/P1/5.2/patch-failure-error-body
     source: TMF630 v5.0.0 P1 §5.2 p.102
     level: mandatory
     requirement: A failed PATCH must return an error status code with an error representation in the body.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.6: every error body is a TMF `Error`"
   - id: TMF630@5.0.0/P1/5.4/json-patch-content-type
     source: TMF630 v5.0.0 P1 §5.4 p.108
     level: mandatory
     requirement: "A JSON Patch request must declare `Content-Type: application/json-patch+json`, with a body that is an array of RFC 6902 operations."
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `application/json-patch+json` (RFC 6902) on `PATCH`"
   - id: TMF630@5.0.0/P1/6.1/post-creates-single-resource
     source: TMF630 v5.0.0 P1 §6.1 p.117
     level: mandatory
     requirement: An API must use POST to create a single resource.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `POST /api/v2/{table}`"
   - id: TMF630@5.0.0/P1/6.1/create-sync-201
     source: TMF630 v5.0.0 P1 §6.1 p.117
     level: mandatory
     requirement: The server must answer a successful synchronous creation with 201 Created.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `201`"
   - id: TMF630@5.0.0/P1/6.1/create-response-representation
     source: TMF630 v5.0.0 P1 §6.1 p.117
     level: mandatory
     requirement: A successful synchronous creation response must contain the created resource's representation, including the server-assigned `id` and `href`.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `201` with the resource; `id` and `href` always present (10.2)"
   - id: TMF630@5.0.0/P1/6.1/create-response-location
     source: TMF630 v5.0.0 P1 §6.1 p.117
     level: mandatory
     requirement: A successful synchronous creation response must carry a `Location` header with the new resource's URI.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `201` with `Location`"
   - id: TMF630@5.0.0/P1/6.1/create-async-202
     source: TMF630 v5.0.0 P1 §6.1 p.117
@@ -1595,7 +1808,9 @@ rows:
     source: TMF630 v5.0.0 P1 §6.1 p.121
     level: mandatory
     requirement: The creation response must contain `id`, `href` and `@type`.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: `id`, `href` and `@type` are always present"
   - id: TMF630@5.0.0/P1/6.1/create-no-empty-string-attributes
     source: TMF630 v5.0.0 P1 §6.1 p.121
@@ -1613,7 +1828,9 @@ rows:
     source: TMF630 v5.0.0 P1 §7 p.126
     level: mandatory
     requirement: A delete operation must use HTTP DELETE on the resource's URI.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `DELETE /api/v2/{table}/{id}`"
   - id: TMF630@5.0.0/P1/7/delete-no-request-payload
     source: TMF630 v5.0.0 P1 §7 p.126
@@ -1625,7 +1842,9 @@ rows:
     source: TMF630 v5.0.0 P1 §7 p.126
     level: recommended
     requirement: After a delete that has been carried out and needs no further information, the server should answer 204 No Content.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: `204` with no body"
   - id: TMF630@5.0.0/P1/7/delete-pending-202
     source: TMF630 v5.0.0 P1 §7 p.126
@@ -1703,7 +1922,9 @@ rows:
     source: TMF630 v5.0.0 P1 §8.5 p.129
     level: mandatory
     requirement: A successful PATCH must not be answered with 201 Created or 204 No Content (200 when synchronous, 202 when asynchronous).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: PATCH success is `200` with the resource"
   - id: TMF630@5.0.0/P1/8.5/patch-malformed-400
     source: TMF630 v5.0.0 P1 §8.5 p.129
@@ -2081,7 +2302,9 @@ rows:
     source: TMF630 v5.0.0 P1 §12.3 p.209
     level: mandatory
     requirement: A server that supports the (optional) history pattern exposes it at {resource}/{id}/history. (lowercase 'must' in the source)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.1: GET /api/v2/{table}/{id}/history; no GET .../history/{revisionId} for a single entry is listed (gap)"
   - id: TMF630@5.0.0/P1/12.3.1/history-same-pagination
     source: TMF630 v5.0.0 P1 §12.3.1 p.214
@@ -2147,7 +2370,9 @@ rows:
     source: TMF630 v5.0.0 P1 §13.1.4 p.240
     level: mandatory
     requirement: 'A server''s API URLs carry the API''s major version only (no minor or patch), prefixed with "v", right after the API name: {serverRoot}/{apiName}/v{major}.'
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.1: STD's generic API lives under /api/v2 (major only); TMF APIs under /tmf-api/<apiName>/v5 (C11.1)"
   - id: TMF630@5.0.0/P1/13.2.2/supported-languages-list
     source: TMF630 v5.0.0 P1 §13.2.2 p.241
@@ -2238,7 +2463,9 @@ rows:
     source: TMF630 v4.0.0 P2 §1 p.3
     level: recommended
     requirement: The server treats @type (like id) as a reserved resource attribute whose value is the name of the resource's type. (no keyword; stated as the pattern)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: @type is the concrete class's qualified name, always present; names starting with @ are reserved (apiNameClash)"
   - id: TMF630@5.0.0/v4.0.0-P2/1/collection-implies-type-scope
     source: TMF630 v4.0.0 P2 §1 p.3
@@ -2292,19 +2519,25 @@ rows:
     source: TMF630 v4.0.0 P2 §1.1 p.6
     level: optional
     requirement: A client may narrow a base-collection query to several concrete types by repeating @type, or to specific resources by repeating id.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.3: @type=<class> and repeated parameters are in (OR); id filters by the same repeated-parameter rule"
   - id: TMF630@5.0.0/v4.0.0-P2/1.2/create-through-base-collection
     source: TMF630 v4.0.0 P2 §1.2 p.9
     level: recommended
     requirement: The server lets a client create a concrete subtype by POSTing to the base collection with @type naming the subtype, answering 201 with the full representation (provided and default attributes). (no keyword; stated as the pattern)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5: @type optional, must name a class of subtree(table) the caller knows; 201 with resource and Location. gap: Contracts does not say whether the 201 body through a parent includes child-only attributes, and under C2.3 it would not"
   - id: TMF630@5.0.0/v4.0.0-P2/1.2/update-delete-through-base-collection
     source: TMF630 v4.0.0 P2 §1.2 p.9
     level: recommended
     requirement: The server lets a client PATCH (200 with the updated resource) and DELETE (204) a concrete resource through its base collection. (no keyword; stated as the pattern)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.5/C2.2 item 5: PATCH and DELETE work through any ancestor endpoint, 200 and 204"
   - id: TMF630@5.0.0/v4.0.0-P2/2/extension-conformance
     source: TMF630 v4.0.0 P2 §2 p.11
@@ -2341,7 +2574,9 @@ rows:
     source: TMF630 v4.0.0 P2 §2.1 p.11
     level: recommended
     requirement: The server treats @schemaLocation as a reserved attribute holding a link to the schema that describes the resource. (no keyword; stated as the pattern)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: @schemaLocation is /api/v2/tableMetadata/{class}/schema.json, the caller's JSON Schema of the concrete class"
   - id: TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base
     source: TMF630 v4.0.0 P2 §2.1 p.11
@@ -2515,7 +2750,9 @@ rows:
     source: TMF630 v4.0.0 P2 §5 p.32
     level: recommended
     requirement: Objects that already exist on the server are passed by reference with the EntityRef pattern. (no keyword; stated as the pattern)
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: every reference field is an EntityRef in reads and writes"
   - id: TMF630@5.0.0/v4.0.0-P2/5/entity-ref-id-and-href
     source: TMF630 v4.0.0 P2 §5 p.32
@@ -2527,7 +2764,9 @@ rows:
     source: TMF630 v4.0.0 P2 §5 p.32
     level: optional
     requirement: An EntityRef may also carry attributes of the plain entity such as name, @type, @schemaLocation, validFor or role.
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: name (3.6 label rule), @referredType and @type are carried"
   - id: TMF630@5.0.0/v4.0.0-P2/5/entity-ref-type-only-when-subclassed
     source: TMF630 v4.0.0 P2 §5 p.32
@@ -3110,7 +3349,7 @@ rows:
     level: recommended
     requirement: The `version` value is a JSON string that should follow Semantic Versioning (major.minor.patch, such as "4.2.1").
     status: pending
-    note: "gap: no entity versioning in STD; the attribute name `version` is taken by the revision counter, so adding this pattern later would need another name or a v3 CONTRADICTION: TMF630 v5.0.0 P4 §3.4 p.30 says a resource's `version` property is a JSON string naming an entity version, ideally semver; Contracts 10.2 says `version` is a number holding the record's revision (a History Pattern revision, which P4 §3 says must not be confused with a version). Applies only if STD's records are read as versioned entities; a TMF client would also read `?version=` as P4's version selector (§3.7.1) where C10.3 treats it as an equality filter on the counter."
+    note: "C10.2 (spec check F630-25): STD's counter is revision, so version keeps TMF's meaning and is a reserved name."
   - id: TMF630@5.0.0/P4/3.6/implementation-follows-pattern
     source: TMF630 v5.0.0 P4 §3.6 p.32
     level: mandatory
@@ -3244,8 +3483,10 @@ rows:
     source: TMF630 v5.0.0 P6 §4 p.40
     level: mandatory
     requirement: A server that does not support the JSONPath filter answers a request using it with 501 Not Implemented.
-    status: pending
-    note: "exclusion E14: E14-jsonpath-filter (refusal accepted, but E14 and C10.3 refuse with 400 InvalidFilter, not 501) CONTRADICTION: TMF630 v5.0.0 P6 §4 p.40 says an unsupported JSONPath filter gets 501 Not Implemented; Contracts 10.3 says `filter` is refused with `InvalidFilter` reason `jsonPathNotSupported`, which 3.8 maps to 400."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.3 (spec check F630-26): a JSONPath filter is 501 NotImplemented; exclusion E14 keeps JSONPath out."
   - id: TMF630@5.0.0/P6/4/filter-leading-root-optional
     source: TMF630 v5.0.0 P6 §4 p.40
     level: optional
@@ -3322,7 +3563,7 @@ rows:
     level: mandatory
     requirement: A server that does not support JSONPath answers a client using JSONPath in filter or fields with 501 Not Implemented.
     status: pending
-    note: "exclusion E14: E14-jsonpath-filter for `filter`; gap for JSONPath in `fields`, which C10.3 refuses with 400 CONTRADICTION: TMF630 v5.0.0 P6 §8 p.53 says JSONPath that the server does not support, in filter or fields, gets 501 Not Implemented; Contracts 10.3 refuses `filter` with `InvalidFilter` (400 per 3.8), and a `fields` entry that is not an attribute name or one-hop path is a 400 (InvalidRequest or UnknownField)."
+    note: "C10.3 (spec check F630-26): a JSONPath filter is 501 NotImplemented; JSONPath in fields is an unknown name (400)."
   - id: TMF630@5.0.0/P6/9/test-before-patch
     source: TMF630 v5.0.0 P6 §9 p.54
     level: recommended
@@ -3387,7 +3628,9 @@ rows:
     source: TMF630 v5.0.0 P7 §1.4.1 p.14
     level: mandatory
     requirement: Every schema that describes a reference to an entity is built on the common EntityRef schema, via allOf for [Entity]Ref schemas (restated in §1.4.3).
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: every reference attribute is an EntityRef (`@type`, `id`, `href`, `@referredType`, `name`)"
   - id: TMF630@5.0.0/P7/1.4.2/entityref-id-referredtype-required
     source: TMF630 v5.0.0 P7 §1.4.2 p.14
@@ -3435,8 +3678,10 @@ rows:
     source: TMF630 v5.0.0 P7 §2.1.3 p.18
     level: mandatory
     requirement: A resource's creation timestamp is the attribute creationDate, a string in date-time format.
-    status: pending
-    note: "gap: C10.2 names the system creation timestamp `createdAt` in the generic API; the TMF API mappings use `creationDate` (C11) CONTRADICTION: TMF630 v5.0.0 P7 §2.1.3 p.18 says a resource's creation timestamp is named `creationDate`; Contracts 10.2 names the generic API's system creation timestamp `createdAt`."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2 (spec check F630-29): the creation timestamp is creationDate, the last change lastUpdate."
   - id: TMF630@5.0.0/P7/2.1.3/valid-for-time-period
     source: TMF630 v5.0.0 P7 §2.1.3 p.18
     level: mandatory
@@ -3483,7 +3728,9 @@ rows:
     source: TMF630 v5.0.0 P7 §2.2.1 p.22
     level: mandatory
     requirement: The entity an [Entity]Ref points to can be retrieved with GET from an existing or planned TMF API. (lowercase 'must')
-    status: pending
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
     note: "C10.2: a reference's `href` is the target record's URL through its concrete class, readable with GET /api/v2/{table}/{id}"
   - id: TMF630@5.0.0/P7/2.2.1/ref-only-when-semantics-clear
     source: TMF630 v5.0.0 P7 §2.2.1 p.22
