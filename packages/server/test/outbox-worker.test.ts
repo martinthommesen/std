@@ -32,11 +32,13 @@ import { claimDeliveries } from "../src/outbox/delivery-claims.ts";
 import type { Delivery } from "../src/outbox/delivery-effects.ts";
 import { DeliveryFailed } from "../src/outbox/delivery-failed.ts";
 import { deadDeliveries } from "../src/outbox/metrics.ts";
+import type { IdleState } from "../src/outbox/worker.ts";
 import {
   DEFAULT_WORKER_SETTINGS,
   deleteOldDeliveries,
   leaseOf,
   runWorker,
+  WorkerProbes,
   workerPass,
   workerWakeups,
 } from "../src/outbox/worker.ts";
@@ -731,30 +733,49 @@ const wakeUp = Effect.gen(function* wakeUpTest() {
       Deferred.succeed(arrived, delivery.recordId).pipe(Effect.asVoid),
   });
 
-  // The wake-ups: one when LISTEN is established, then one per NOTIFY
-  // std_worker, which a save sends after it commits.
-  yield* workerWakeups.pipe(
-    Stream.runForEach((signal) => Queue.offer(signals, signal)),
+  const idle = yield* Queue.unbounded<IdleState>();
+
+  // The worker loop, polling once an hour, reports each time it waits.
+  yield* runWorker.pipe(
+    Effect.provideService(WorkerProbes, {
+      beforeAttempt: () => Effect.void,
+      idle: (state) => Queue.offer(idle, state).pipe(Effect.asVoid),
+      preparing: () => Effect.void,
+    }),
     Effect.forkScoped
   );
-  yield* Queue.take(signals);
+
+  // Wait until it is idle with LISTEN established (its first wake-up
+  // received) and no wake-up pending: its empty passes are over, and only
+  // a notification or the hour can start the next.
+  let state = yield* Queue.take(idle);
+
+  while (state.wakeSignals === 0 || state.pendingWakeups > 0) {
+    state = yield* Queue.take(idle);
+  }
 
   const id = yield* createAsset(fixture.admin.id, {
     name: "wake",
     status: "in_use",
   });
 
-  assert.isTrue(
-    yield* Queue.take(signals).pipe(Effect.timeout("10 seconds")),
-    "the save's NOTIFY arrived"
-  );
-
-  // The worker loop, polling once an hour, delivers at once.
-  yield* runWorker.pipe(Effect.forkScoped);
-
   assert.strictEqual(
     yield* Deferred.await(arrived).pipe(Effect.timeout("10 seconds")),
-    id
+    id,
+    "the save's NOTIFY woke the idle worker"
+  );
+
+  // The same notifications reach any listener.
+  yield* workerWakeups.pipe(
+    Stream.runForEach((signal) => Queue.offer(signals, signal)),
+    Effect.forkScoped
+  );
+  yield* Queue.take(signals);
+  yield* createAsset(fixture.admin.id, { name: "wake 2", status: "in_use" });
+
+  assert.isTrue(
+    yield* Queue.take(signals).pipe(Effect.timeout("10 seconds")),
+    "a save's NOTIFY arrives"
   );
 }).pipe(Effect.scoped);
 

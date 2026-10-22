@@ -216,6 +216,8 @@ export interface IdleState {
 export interface WorkerProbesApi {
   /** Before a claimed delivery acquires its transaction. */
   readonly beforeAttempt: (claimed: ClaimedDelivery) => Effect.Effect<void>;
+  /** At the start of preparation, inside its transaction. */
+  readonly preparing: (claimed: ClaimedDelivery) => Effect.Effect<void>;
   /** Before the loop waits for a wake-up or the poll interval. */
   readonly idle: (state: IdleState) => Effect.Effect<void>;
 }
@@ -227,6 +229,7 @@ export const WorkerProbes = Context.Reference<WorkerProbesApi>(
     defaultValue: () => ({
       beforeAttempt: () => Effect.void,
       idle: () => Effect.void,
+      preparing: () => Effect.void,
     }),
   }
 );
@@ -334,6 +337,7 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
   kind: DeliveryEffect["kind"],
   claimed: ClaimedDelivery
 ) {
+  yield* (yield* WorkerProbes).preparing(claimed);
   const snapshot = yield* (yield* Catalog).current;
   const handlers = yield* DeliveryHandlers;
   const served = resolveServed(snapshot, handlers, claimed.subscriptionId);
