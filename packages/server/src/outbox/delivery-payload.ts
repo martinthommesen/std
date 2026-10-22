@@ -174,10 +174,10 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
   "record_version"::text AS "record_version", "kind",
   "actor_id"::text AS "actor_id", "occurred_at"::text AS "occurred_at",
   "fields"::text AS "fields"
-FROM core."change"
+FROM core."change" AS "c"
 WHERE "record_id" = ${textParameter(recordId, "uuid")}
   AND "record_version" <= ${textParameter(String(version), "int8")}
-ORDER BY "record_version"`
+ORDER BY "c"."record_version"`
     );
 
     const entries: StoredEntry[] = [];

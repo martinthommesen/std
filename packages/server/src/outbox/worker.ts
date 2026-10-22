@@ -673,7 +673,9 @@ export const runWorker = Effect.gen(function* runOutboxWorker() {
   );
 
   const step = Effect.gen(function* workerStep() {
-    if ((yield* workerPass()) > 0) {
+    const n = yield* workerPass();
+
+    if (n > 0) {
       return;
     }
 
