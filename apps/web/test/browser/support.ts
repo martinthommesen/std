@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { Effect, Predicate, Schedule, Schema } from "effect";
 import { chromium } from "playwright";
-import type { Browser } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { createServer as createViteServer } from "vite";
 
 const APP_DIR = fileURLToPath(new URL("../..", import.meta.url));
@@ -190,16 +190,83 @@ const fontConfigFile = Effect.acquireRelease(
     })
 ).pipe(Effect.map(({ file }) => file));
 
-/** Chromium, headless, with its own fontconfig file, closed with the scope. */
+/**
+ * How much slower than the machine every page's CPU runs:
+ * `STD_BROWSER_CPU_THROTTLE` (such as `4`), for Chromium's
+ * `Emulation.setCPUThrottlingRate`. Slow pages bring out races between the
+ * tests and the page that a fast machine hides (decision 0020, "CI:
+ * deterministic response capture"). Unset, or 1 and below: full speed.
+ *
+ * @returns The rate.
+ */
+const cpuThrottleRate = (): number => {
+  const rate = Number(process.env.STD_BROWSER_CPU_THROTTLE ?? "1");
+
+  return Number.isFinite(rate) && rate > 1 ? rate : 1;
+};
+
+/**
+ * Slows a page's CPU.
+ *
+ * @param page - The page.
+ * @param rate - The slowdown factor.
+ * @returns Nothing, once the page is slowed (or closed meanwhile).
+ */
+const throttlePage = async (page: Page, rate: number): Promise<void> => {
+  try {
+    const session = await page.context().newCDPSession(page);
+
+    await session.send("Emulation.setCPUThrottlingRate", { rate });
+  } catch {
+    // The page closed before it could be slowed.
+  }
+};
+
+/**
+ * Makes every page of the browser's new contexts run slower, when
+ * `STD_BROWSER_CPU_THROTTLE` asks for it.
+ *
+ * @param browser - The browser.
+ * @returns The same browser.
+ */
+const withCpuThrottle = (browser: Browser): Browser => {
+  const rate = cpuThrottleRate();
+
+  if (rate === 1) {
+    return browser;
+  }
+
+  const newContext = browser.newContext.bind(browser);
+
+  browser.newContext = async (
+    ...options: Parameters<Browser["newContext"]>
+  ): Promise<BrowserContext> => {
+    const context = await newContext(...options);
+
+    context.on("page", (page) => {
+      void throttlePage(page, rate);
+    });
+
+    return context;
+  };
+
+  return browser;
+};
+
+/**
+ * Chromium, headless, with its own fontconfig file, closed with the scope;
+ * its pages slowed when `STD_BROWSER_CPU_THROTTLE` asks for it.
+ */
 export const launchBrowser = Effect.gen(function* browserWithFonts() {
   const file = yield* fontConfigFile;
 
   return yield* Effect.acquireRelease(
-    Effect.promise(
-      async () =>
+    Effect.promise(async () =>
+      withCpuThrottle(
         await chromium.launch({
           env: { ...process.env, FONTCONFIG_FILE: file },
         })
+      )
     ),
     (browser: Browser) =>
       Effect.promise(async () => {

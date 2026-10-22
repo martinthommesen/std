@@ -255,8 +255,8 @@ const restrictedFieldNeverReachesTheBrowser = async (
 
   const context = await browser.newContext();
   const page = await context.newPage();
-  const everything = captureResponses(page);
-  const responses = captureApiBodies(page);
+  const everything = await captureResponses(page);
+  const responses = await captureApiBodies(page);
   const requests = captureApiRequestBodies(page);
 
   const nothingHiddenAfter = async (step: string) => {
@@ -617,7 +617,7 @@ const passwordIsWriteOnly = async (
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  const responses = captureApiBodies(page);
+  const responses = await captureApiBodies(page);
 
   await signIn(page, origin, visitorOf(fixture.admin));
   await openRecordForm(page, origin, {

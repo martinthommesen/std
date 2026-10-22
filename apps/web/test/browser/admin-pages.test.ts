@@ -239,7 +239,7 @@ const reviewerSeesPriorityRestricted = async (
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  const bodies = captureApiBodies(page);
+  const bodies = await captureApiBodies(page);
 
   await signIn(page, origin, visitorOf(fixture.agent2));
   await openTableList(page, origin, INCIDENTS);
