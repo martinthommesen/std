@@ -1,0 +1,369 @@
+import { Combobox } from "@foldkit/ui";
+import { Option } from "effect";
+import {
+  Command,
+  Mount,
+  click,
+  expect,
+  expectOutMessage,
+  given,
+  inside,
+  label,
+  role,
+  scene,
+  selector,
+  text,
+  type,
+} from "foldkit/scene";
+import { describe, it } from "vitest";
+
+import {
+  REVISION_5,
+  TICKET,
+  TICKET_ID,
+  USERS,
+  restrictedTicketRecord,
+  ticketRecord,
+  ticketTable,
+} from "../../form-fixture.ts";
+import { userTable } from "../../table-fixture.ts";
+import { FocusField, LoadRecord, UpdateRecord } from "./command.ts";
+import { Message, OutMessage } from "./message.ts";
+import { FormMode, WriteError } from "./model.ts";
+import type { Model } from "./model.ts";
+import { init, update } from "./update.ts";
+import { view } from "./view.ts";
+
+const after = (start: Model, ...messages: readonly Message[]): Model => {
+  const [first, ...rest] = messages;
+
+  return first === undefined
+    ? start
+    : after(update(start, first).model, ...rest);
+};
+
+const openTicket = (record: typeof ticketRecord): Model =>
+  after(
+    init({
+      id: 1,
+      maybeAppRevision: Option.none(),
+      mode: FormMode.Edit({ recordId: TICKET_ID }),
+      table: TICKET,
+    }).model,
+    Message.SucceededLoadFormMetadata({
+      revision: REVISION_5,
+      table: ticketTable,
+    }),
+    Message.SucceededLoadRecord({
+      generation: 1,
+      maybeRevision: Option.none(),
+      purpose: "Open",
+      record,
+    }),
+    Message.SucceededLoadTarget({ table: userTable })
+  );
+
+const ready = openTicket(ticketRecord);
+
+const creating = after(
+  init({
+    id: 1,
+    maybeAppRevision: Option.none(),
+    mode: FormMode.Create(),
+    table: TICKET,
+  }).model,
+  Message.SucceededLoadFormMetadata({
+    revision: REVISION_5,
+    table: ticketTable,
+  })
+);
+
+/**
+ * A field's row.
+ *
+ * @param name - The field's API name.
+ * @returns Its locator.
+ */
+const fieldRow = (name: string) => selector(`[data-field="${name}"]`);
+
+/** The Combobox's Mount every form with a reference field renders. */
+const acknowledgePicker = Mount.resolve(
+  Combobox.AttachComboboxPreventBlur,
+  Combobox.Message.CompletedAttachComboboxPreventBlur()
+);
+
+describe("the record form", () => {
+  it("shows the layout's sections, labels with the required mark, help text and read-only values", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
+      expect(role("heading", { level: 1 })).toHaveText("Laptop will not boot"),
+      expect(role("group", { name: "Ticket" })).toExist(),
+      expect(role("group", { name: "Details" })).toExist(),
+      expect(label("Short description (required)")).toHaveValue(
+        "Laptop will not boot"
+      ),
+      expect(text("Who to answer.")).toExist(),
+      inside(fieldRow("number"), expect(text("TKT0000001")).toExist()),
+      inside(
+        fieldRow("legacy_code"),
+        expect(text("L-7")).toExist(),
+        expect(role("textbox")).toBeAbsent()
+      )
+    );
+  });
+
+  it("offers a hidden choice only because it is the stored value, labelled as retired", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      inside(
+        fieldRow("status"),
+        expect(role("option", { name: "On hold (retired)" })).toExist(),
+        expect(role("option", { name: "In progress" })).toExist()
+      ),
+      inside(
+        fieldRow("status"),
+        expect(role("option", { name: "Closed" })).toExist()
+      )
+    );
+  });
+
+  it("shows a withheld field as restricted, never as empty and without a control", () => {
+    scene(
+      { update, view },
+      given(openTicket(restrictedTicketRecord)),
+      acknowledgePicker,
+      inside(
+        fieldRow("customer_email"),
+        expect(text("Restricted")).toExist(),
+        expect(
+          text("Restricted: you are not allowed to read this value")
+        ).toExist(),
+        expect(role("textbox")).toBeAbsent()
+      )
+    );
+  });
+
+  it("shows password and secret fields as set or not set, never their value", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      inside(
+        fieldRow("pin"),
+        expect(text("Set. Type a new value to replace it.")).toExist(),
+        expect(label("PIN: new value")).toHaveValue("")
+      ),
+      click(role("button", { name: "Clear the stored Token" })),
+      inside(
+        fieldRow("token"),
+        expect(text("Set; it will be cleared when you save.")).toExist()
+      )
+    );
+  });
+
+  it("saves what the user typed and says so", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      type(label("Short description (required)"), "Black screen"),
+      click(role("button", { name: "Save" })),
+      Command.expectExact(
+        UpdateRecord({
+          generation: 2,
+          recordId: TICKET_ID,
+          revision: REVISION_5,
+          secrets: {},
+          table: TICKET,
+          values: { short_description: "Black screen" },
+          version: 3,
+        })
+      ),
+      expect(role("button", { name: "Saving…" })).toBeDisabled(),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_5),
+          saved: {
+            ...ticketRecord,
+            values: {
+              ...ticketRecord.values,
+              short_description: "Black screen",
+            },
+            version: 4,
+          },
+        })
+      ),
+      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
+      expect(text("Saved.")).toExist(),
+      expect(text("Ticket · version 4")).toExist()
+    );
+  });
+
+  it("shows the client's problems on their fields and sends nothing", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      type(label("Short description (required)"), ""),
+      type(label("Points"), "three"),
+      click(role("button", { name: "Save" })),
+      Command.resolve(FocusField, Message.CompletedFocusField()),
+      expect(label("Short description (required)")).toHaveAttr(
+        "aria-invalid",
+        "true"
+      ),
+      expect(text("This field is required.")).toExist(),
+      expect(text("Enter a whole number, such as 42.")).toExist()
+    );
+  });
+
+  it("after a version conflict, keeps the input, says what happened and offers to reload", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      type(label("Short description (required)"), "Mine"),
+      click(role("button", { name: "Save" })),
+      Command.resolve(
+        UpdateRecord,
+        Message.FailedSaveRecord({
+          error: WriteError.VersionConflict({ currentVersion: 4 }),
+          generation: 2,
+          maybeRevision: Option.none(),
+        })
+      ),
+      expect(role("alert")).toContainText(
+        "Someone else saved this record first"
+      ),
+      expect(label("Short description (required)")).toHaveValue("Mine"),
+      click(role("button", { name: "Reload the record, keeping my changes" })),
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.none(),
+          purpose: "ReloadAfterConflict",
+          record: {
+            ...ticketRecord,
+            values: { ...ticketRecord.values, short_description: "Theirs" },
+            version: 4,
+          },
+        })
+      ),
+      expect(label("Short description (required)")).toHaveValue("Mine"),
+      expect(
+        text("Someone else changed this to: Theirs. Your value is kept.")
+      ).toExist(),
+      expect(text("Ticket · version 4")).toExist()
+    );
+  });
+
+  it("creating: the auto-number is assigned on save, and the button says Create", () => {
+    scene(
+      { update, view },
+      given(creating),
+      acknowledgePicker,
+      expect(role("heading", { level: 1 })).toHaveText("New Ticket"),
+      inside(
+        fieldRow("number"),
+        expect(text("Assigned when the record is saved.")).toExist()
+      ),
+      expect(label("Status (required)")).toHaveValue("new"),
+      expect(role("button", { name: "Create" })).toExist(),
+      expect(role("button", { name: "Delete" })).toBeAbsent()
+    );
+  });
+});
+
+describe("the history panel", () => {
+  const entry = {
+    actor: USERS.alex,
+    cause: { kind: "api" },
+    changeId: "019a0000-0000-7000-8000-00000000c001",
+    changes: {
+      pin: { changed: true },
+      status: { after: "in_progress", before: "new" },
+    },
+    fields: {
+      pin: { choices: null, label: "PIN", type: { kind: "password" as const } },
+      status: {
+        choices: [
+          { key: "new", label: "New" },
+          { key: "in_progress", label: "Working" },
+        ],
+        label: "State",
+        type: { kind: "choice" as const },
+      },
+    },
+    kind: "update" as const,
+    occurredAt: "2026-10-21T10:00:00.000Z",
+    operationId: "019a0000-0000-7000-8000-00000000c101",
+    schemaRevision: 4,
+    version: 2,
+  };
+
+  const hidden = {
+    ...entry,
+    changeId: "019a0000-0000-7000-8000-00000000c002",
+    changes: {},
+    fields: {},
+    version: 3,
+  };
+
+  const withHistory = after(
+    ready,
+    Message.ToggledHistory({ isOpen: true }),
+    Message.SucceededLoadHistory({
+      entries: [entry, hidden],
+      generation: 1,
+      maybeRevision: Option.none(),
+    }),
+    Message.SucceededLoadActorNames({ names: { [USERS.alex]: "Alex Agent" } })
+  );
+
+  it("reads each change with the entry's own labels, and shows entries without visible changes", () => {
+    scene(
+      { update, view },
+      given(withHistory),
+      acknowledgePicker,
+      expect(role("button", { name: "History" })).toHaveAttr(
+        "aria-expanded",
+        "true"
+      ),
+      inside(
+        selector("[data-version='2']"),
+        expect(text("Updated · version 2")).toExist(),
+        expect(text("State")).toExist(),
+        expect(text("New")).toExist(),
+        expect(text("Working")).toExist(),
+        expect(text("Changed (the value is never shown)")).toExist()
+      ),
+      inside(
+        selector("[data-version='3']"),
+        expect(text("Updated · version 3")).toExist(),
+        expect(text("No changes you can see.")).toExist(),
+        expect(text(/by Alex Agent/u)).toExist()
+      )
+    );
+  });
+
+  it("is closed until opened", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgePicker,
+      expect(role("button", { name: "History" })).toHaveAttr(
+        "aria-expanded",
+        "false"
+      ),
+      expect(text("Updated · version 2")).toBeAbsent()
+    );
+  });
+});

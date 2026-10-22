@@ -338,4 +338,64 @@ describe("list page failures", () => {
       expect(role("button", { name: "Previous page" })).toBeDisabled()
     );
   });
+
+  it("links to the new-record form when the caller may create records", () => {
+    scene(
+      { update, view },
+      given(loaded),
+      expect(role("link", { name: "New Asset" })).toHaveAttr(
+        "href",
+        "/tables/acme.asset/new"
+      )
+    );
+  });
+
+  it("offers the saved filters and shows the one the list applies", () => {
+    const withSaved = update(
+      loaded,
+      Message.SucceededLoadTableMetadata({
+        revision: REVISION_3,
+        table: {
+          ...assetTable,
+          savedFilters: [
+            {
+              condition: {
+                left: { path: [ASSET_FIELDS.status] },
+                op: "eq",
+                right: { value: "lost" },
+              },
+              filter: 'status = "lost"',
+              id: "00000000-0000-4000-8000-0000000005f1",
+              label: "Lost assets",
+              name: "lost",
+              table: ASSETS,
+            },
+          ],
+        },
+      })
+    ).model;
+
+    scene(
+      { update, view },
+      given(withSaved),
+      expect(label("Saved filter")).toHaveValue(""),
+      expect(role("option", { name: "Lost assets" })).toExist(),
+      change(label("Saved filter"), "00000000-0000-4000-8000-0000000005f1"),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 2,
+            maybeRevision: Option.some(REVISION_3),
+            page,
+          }),
+        ]
+      ),
+      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
+      expect(label("Saved filter")).toHaveValue(
+        "00000000-0000-4000-8000-0000000005f1"
+      )
+    );
+  });
 });

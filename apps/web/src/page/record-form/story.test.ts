@@ -695,6 +695,10 @@ describe("editing and saving", () => {
           FieldInput.Text({ text: "Mine" })
         );
         expect(page.maybeEditsFrom).toStrictEqual(Option.none());
+        // The refusal gives way once the metadata moved on; the changed
+        // field stays marked.
+        expect(page.submission).toStrictEqual(Submission.Idle());
+        expect(page.staleChanges).toStrictEqual(changes);
       }),
       message(Message.ClickedSave()),
       Command.expectExact(
@@ -981,7 +985,105 @@ describe("creating", () => {
   });
 });
 
+describe("rereads", () => {
+  it("does not show a reread older than the record a save returned", () => {
+    const saved = after(
+      ready,
+      Message.ChangedText({ fieldId: TICKET_FIELDS.points, text: "5" }),
+      Message.ClickedSave(),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: {
+          ...ticketRecord,
+          values: { ...ticketRecord.values, points: 5 },
+          version: 4,
+        },
+      })
+    );
+
+    story(
+      update,
+      given(saved),
+      message(
+        Message.SucceededLoadRecord({
+          generation: 2,
+          maybeRevision: Option.none(),
+          purpose: "Refresh",
+          record: ticketRecord,
+        })
+      ),
+      Command.expectNone(),
+      model((page) => {
+        expect(
+          AsyncData.getData(page.record).pipe(
+            Option.map((record) => record.version)
+          )
+        ).toStrictEqual(Option.some(4));
+      })
+    );
+  });
+});
+
 describe("the reference picker", () => {
+  it("says it cannot search when the target's metadata does not load", () => {
+    const searching = after(
+      editing.model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: ticketTable,
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.none(),
+        purpose: "Open",
+        record: ticketRecord,
+      })
+    );
+
+    const typed = {
+      ...searching,
+      pickers: {
+        [TICKET_FIELDS.assignee]: {
+          ...present(searching.pickers[TICKET_FIELDS.assignee]),
+          combobox: {
+            ...present(searching.pickers[TICKET_FIELDS.assignee]).combobox,
+            isOpen: true,
+          },
+        },
+      },
+    };
+
+    story(
+      update,
+      given(typed),
+      message(
+        Message.GotPickerMessage({
+          fieldId: TICKET_FIELDS.assignee,
+          message: Combobox.Message.UpdatedInputValue({ value: "Al" }),
+        })
+      ),
+      Command.expectNone(),
+      model((page) => {
+        expect(
+          AsyncData.isLoading(
+            present(page.pickers[TICKET_FIELDS.assignee]).results
+          )
+        ).toBeTruthy();
+      }),
+      message(
+        Message.FailedLoadTarget({ error: "Unavailable", table: "core.user" })
+      ),
+      model((page) => {
+        expect(
+          AsyncData.isFailure(
+            present(page.pickers[TICKET_FIELDS.assignee]).results
+          )
+        ).toBeTruthy();
+      })
+    );
+  });
+
   it("searches the target with allowedFor and the typed text, selects a label, and clears to null", () => {
     const open = {
       ...ready,

@@ -858,6 +858,18 @@ const requestClassMetadata: Step = (model) =>
   });
 
 /**
+ * Whether the last save was refused with `SchemaChanged`: once the
+ * metadata moved on, the user can save again (the changed fields stay
+ * marked through `staleChanges`).
+ *
+ * @param submission - Where saving stands.
+ * @returns True after a `SchemaChanged` refusal.
+ */
+const isRefusedAsStale = (submission: Submission): boolean =>
+  Submission.guards.Failed(submission) &&
+  WriteError.guards.SchemaChanged(submission.error);
+
+/**
  * What new metadata asks of the record: the first read (or the one a
  * `SchemaChanged` refusal stopped); a reread when the metadata moved to
  * another revision, so the record's names are the metadata's (a rename
@@ -907,6 +919,10 @@ const receiveMetadata = (
       classMetadata: (classMetadata) =>
         isFirstLoad ? classMetadata : ClassMetadata.Idle(),
       metadata: () => Metadata.Success({ data: { revision, table } }),
+      submission: (submission) =>
+        isOtherRevision && isRefusedAsStale(submission)
+          ? Submission.Idle()
+          : submission,
     }),
     table
   );
@@ -939,7 +955,14 @@ const receiveRecord = (
   purpose: ReadPurpose,
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
-  if (generation !== model.generation) {
+  // NOTE: a reread that left before a save and arrives after it holds an
+  // older version than the saved record; it is not shown.
+  const isOlder = Option.exists(
+    recordOf(model),
+    (current) => current.id === record.id && current.version > record.version
+  );
+
+  if (generation !== model.generation || isOlder) {
     return { model };
   }
 
@@ -1361,6 +1384,40 @@ const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
 
   return inSequence(waiting)(known);
 };
+
+const targetOfField = (model: Model, fieldId: string): string | null =>
+  Option.match(fieldOf(model, fieldId), {
+    onNone: () => null,
+    onSome: (field) =>
+      field.type.kind === "reference" ? field.type.target : null,
+  });
+
+/**
+ * A target whose metadata did not load: its pickers cannot search, and say
+ * so instead of waiting.
+ *
+ * @param model - The page.
+ * @param table - The target table.
+ * @param reason - Why its metadata did not load.
+ * @returns The page.
+ */
+const failTarget = (
+  model: Model,
+  table: string,
+  reason: MetaError
+): UpdateReturn => ({
+  model: modifyFields(model, {
+    pickers: Record.map((picker, fieldId) =>
+      targetOfField(model, fieldId) === table &&
+      AsyncData.isPending(picker.results)
+        ? modifyFields(picker, {
+            results: () => PickerResults.Failure({ error: "Unavailable" }),
+          })
+        : picker
+    ),
+    targets: Record.set(table, TargetMetadata.Failure({ error: reason })),
+  }),
+});
 
 const receiveSearch = (
   model: Model,
@@ -1897,11 +1954,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedLoadRelatedRecords: ({ error, generation, key }) =>
       failRelatedRecords(model, key, generation, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadTarget: ({ error, table }) => ({
-      model: modifyFields(model, {
-        targets: Record.set(table, TargetMetadata.Failure({ error })),
-      }),
-    }),
+    FailedLoadTarget: ({ error, table }) => failTarget(model, table, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedSaveRecord: ({ error, generation, maybeRevision }) =>
       failSave(model, generation, error, maybeRevision),

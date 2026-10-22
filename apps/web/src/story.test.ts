@@ -29,6 +29,8 @@ import { init } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model, SignOutRequest } from "./model.ts";
 import type { SignedInModel } from "./model.ts";
+import { Message as RecordFormMessage } from "./page/record-form/message.ts";
+import { FormMode } from "./page/record-form/model.ts";
 import {
   Message as SignInMessage,
   SignIn,
@@ -866,5 +868,97 @@ describe("review fixes: pages and revisions", () => {
       "LoadTables",
       { maybeRevision: Option.some(restored) },
     ]);
+  });
+});
+
+const formOf = (app: Model) => signedIn(app).maybeRecordForm;
+
+describe("the form pages", () => {
+  const RECORD_A = "019a0000-0000-7000-8000-00000000000a";
+
+  const RECORD_B = "019a0000-0000-7000-8000-00000000000b";
+
+  const atRecordA = update(
+    adaAtHome,
+    Message.ChangedUrl({ url: urlOf(`/tables/acme.asset/records/${RECORD_A}`) })
+  );
+
+  const atRecordB = update(
+    atRecordA.model,
+    Message.ChangedUrl({ url: urlOf(`/tables/acme.asset/records/${RECORD_B}`) })
+  );
+
+  it("a record's route opens its form with the app's revision; the new-record route a create form", () => {
+    const creating = update(
+      adaAtHome,
+      Message.ChangedUrl({ url: urlOf("/tables/acme.asset/new") })
+    );
+
+    expect(namesAndArgs(atRecordA.commands)).toContainEqual([
+      "LoadFormMetadata",
+      { maybeRevision: Option.some(REVISION_3), table: ASSETS },
+    ]);
+    expect(
+      [atRecordA.model, creating.model].map((app) =>
+        formOf(app).pipe(Option.map((page) => page.mode))
+      )
+    ).toStrictEqual([
+      Option.some(FormMode.Edit({ recordId: RECORD_A })),
+      Option.some(FormMode.Create()),
+    ]);
+  });
+
+  it("another record opens another page, focused, and an answer meant for the first reaches no page", () => {
+    const late = update(
+      atRecordB.model,
+      Message.GotRecordFormMessage({
+        message: RecordFormMessage.FailedLoadFormMetadata({
+          error: "UnknownTable",
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(
+      formOf(atRecordB.model).pipe(Option.map((page) => page.id))
+    ).toStrictEqual(Option.some(2));
+    expect((atRecordB.commands ?? []).map((command) => command.name)).toContain(
+      "FocusMain"
+    );
+    expect(late.model).toStrictEqual(atRecordB.model);
+  });
+
+  it("leaving for a list closes the form; the same record's address keeps it", () => {
+    const again = update(
+      atRecordA.model,
+      Message.ChangedUrl({
+        url: urlOf(`/tables/acme.asset/records/${RECORD_A}`),
+      })
+    );
+
+    const toList = update(
+      atRecordA.model,
+      Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })
+    );
+
+    expect(again.model).toStrictEqual(atRecordA.model);
+    expect(formOf(toList.model)).toStrictEqual(Option.none());
+  });
+
+  it("a form page's ended session sends the user to sign in, and back afterwards", () => {
+    const ended = update(
+      atRecordA.model,
+      Message.GotRecordFormMessage({
+        message: RecordFormMessage.FailedAuthentication(),
+        pageId: 1,
+      })
+    );
+
+    expect(Model.guards.SignedOut(ended.model)).toBeTruthy();
+    expect(
+      Model.guards.SignedOut(ended.model) ? ended.model.maybeReturnRoute : null
+    ).toStrictEqual(
+      Option.some(AppRoute.Record({ id: RECORD_A, table: ASSETS }))
+    );
   });
 });
