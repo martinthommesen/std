@@ -19,7 +19,9 @@ import type {
   MetaTable,
 } from "@std/definitions/table-metadata";
 import { encodeOut } from "@std/values/codec";
+import { isString } from "@std/values/field-value";
 import type { DecodedInput } from "@std/values/field-value";
+import { stringifyJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { isPlaintext, secretState } from "@std/values/write-only";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -172,7 +174,8 @@ const dateTimeArb = tuple(
   constantFrom("", ".1", ".123", ".1230", ".1234", ".000000"),
   oneof(
     constantFrom("Z", "z"),
-    tuple(constantFrom("+", "-"), two(14), two(59)).map(
+    // The codec accepts offsets up to ±23:59 (`date-time.ts`).
+    tuple(constantFrom("+", "-"), two(23), two(59)).map(
       ([sign, hours, minutes]) => `${sign}${hours}:${minutes}`
     )
   )
@@ -182,6 +185,49 @@ const dateTimeArb = tuple(
   return `${iso.slice(0, 10)}${t}${iso.slice(11)}${fraction}${zone}`;
 });
 
+/**
+ * Text the codec treats specially (Contracts 5.5): NFD input it normalizes
+ * to NFC, lone combining marks, the whitespace `trim()` removes (tab, NBSP,
+ * U+1680, U+2000 to U+200A, U+202F, U+205F, ideographic space, BOM) and
+ * characters it keeps (zero-width space), line and paragraph separators
+ * (refused in single-line text, kept in long text), astral characters and
+ * emoji ZWJ sequences.
+ */
+const UNICODE_CASES = [
+  "e\u0301",
+  "Cafe\u0301 noir",
+  "\u00E9",
+  "\u0301\u0302",
+  "A\u030A",
+  "\u00A0a\u00A0",
+  "\u3000x\u3000",
+  "\u1680y\u2000\u200A",
+  "\u202Fz\u205F",
+  "\uFEFFw\uFEFF",
+  "\tt\t",
+  "\u200Bq",
+  "\u00A0\u3000",
+  "a\u2028b",
+  "a\u2029b",
+  "\u{1D518}",
+  "\u{1F469}\u200D\u{1F469}\u200D\u{1F467}",
+  "\u{20000}\u{1F600}",
+  "\uD800",
+] as const;
+
+// Full Unicode text: graphemes (combining sequences, astral characters,
+// emoji) and arbitrary code points, mixed with the special cases.
+const unicodeTextArb: Arbitrary<string> = oneof(
+  string({ maxLength: 10, unit: "grapheme" }),
+  string({ maxLength: 10, unit: "binary" }),
+  constantFrom(...UNICODE_CASES),
+  tuple(
+    constantFrom(...UNICODE_CASES),
+    string({ maxLength: 4, unit: "grapheme" }),
+    constantFrom(...UNICODE_CASES)
+  ).map(([left, middle, right]) => `${left}${middle}${right}`)
+);
+
 // Candidate payload values: broad on purpose; the field rules decide
 // which ones the server accepts.
 const candidateArb: Arbitrary<JsonValue> = oneof(
@@ -190,6 +236,8 @@ const candidateArb: Arbitrary<JsonValue> = oneof(
   integer({ max: 60, min: -60 }),
   double({ noDefaultInfinity: true, noNaN: true }),
   string({ maxLength: 14 }),
+  unicodeTextArb,
+  unicodeTextArb,
   stringMatching(/^-?\d{1,22}$/u),
   // Leading zeros and signed zeros, which big integers and decimals accept.
   stringMatching(/^-?0{1,3}\d{0,6}$/u),
@@ -202,8 +250,25 @@ const candidateArb: Arbitrary<JsonValue> = oneof(
   uuid(),
   constantFrom(...KEYS, "delta"),
   constant<JsonValue>({ op: "true" }),
-  jsonValue({ maxDepth: 2 }).map((value) => decodeJson(value))
+  jsonValue({ maxDepth: 2 }).map((value) => decodeJson(value)),
+  jsonValue({ maxDepth: 2, stringUnit: "grapheme" }).map((value) =>
+    decodeJson(value)
+  ),
+  jsonValue({ maxDepth: 2, stringUnit: "binary" }).map((value) =>
+    decodeJson(value)
+  )
 );
+
+// JSON text escapes control characters, so outside printable ASCII it
+// holds only the non-ASCII characters of its strings.
+const NON_ASCII = /[^ -~]/u;
+
+// Whether a payload holds a character outside ASCII anywhere.
+const hasNonAscii = (json: JsonValue): boolean =>
+  NON_ASCII.test(stringifyJson(json));
+
+// A date-time with an offset beyond ±14:00, which the codec accepts.
+const FAR_OFFSET = /[+-](?:1[5-9]|2[0-3]):\d{2}$/u;
 
 /**
  * A one-field table, as the metadata endpoint would describe it.
@@ -268,11 +333,134 @@ const outputOf = (field: MetaField, value: DecodedInput): JsonValue => {
   return encodeOut(type, isPlaintext(value) ? secretState(true) : value);
 };
 
+/** What the property reached, so it cannot pass by generating nothing. */
+interface Observed {
+  /** Kinds with an accepted non-null value. */
+  readonly covered: Set<string>;
+  /** Kinds with an accepted value holding a non-ASCII character. */
+  readonly nonAscii: Set<string>;
+  /** Accepted date-times with an offset past ±14:00. */
+  farOffset: number;
+  /** Hidden choice keys sent back unchanged and accepted. */
+  hiddenUnchanged: number;
+}
+
+/**
+ * One candidate payload value: if the server's field rules accept it on a
+ * create, the create body and the read schema of its canonical output must
+ * accept it; if they accept it on an update (replacing an empty value, or
+ * sending the created value back), the update body must.
+ *
+ * @param field - The field.
+ * @param schemas - The field's compiled document.
+ * @param json - The candidate value.
+ * @param observed - What the property reached.
+ */
+const checkCandidate = (
+  field: MetaField,
+  schemas: Schemas,
+  json: JsonValue,
+  observed: Observed
+): void => {
+  const rules = rulesOfMetaField(field);
+  const created = convertCreate(rules, json);
+  const type = JSON.stringify(field.type);
+
+  if (created.ok) {
+    if (json !== null) {
+      observed.covered.add(field.type.kind);
+    }
+
+    if (hasNonAscii(json)) {
+      observed.nonAscii.add(field.type.kind);
+    }
+
+    if (isString(json) && FAR_OFFSET.test(json)) {
+      observed.farOffset += 1;
+    }
+
+    assert.isTrue(
+      schemas.create({ [FIELD]: json }),
+      `create ${JSON.stringify(json)} for ${type}`
+    );
+
+    const output = outputOf(field, created.value);
+
+    assert.isTrue(
+      schemas.read({ [FIELD]: output }),
+      `read ${JSON.stringify(output)} for ${type}`
+    );
+  }
+
+  const decoded = convertUpdate(rules, json, null);
+
+  const unchanged = created.ok
+    ? convertUpdate(rules, json, created.value)
+    : decoded;
+
+  if (decoded.ok || unchanged.ok) {
+    assert.isTrue(
+      schemas.update({ [FIELD]: json }),
+      `update ${JSON.stringify(json)} for ${type}`
+    );
+  }
+};
+
+/**
+ * Stored choice keys sent back unchanged, generated from the field's
+ * choices rather than from accepted creates: a hidden key is refused on
+ * create but kept on an update that does not change it, and the update
+ * body must accept it. A key outside the list is refused even then.
+ *
+ * @param field - The field.
+ * @param schemas - The field's compiled document.
+ * @param observed - What the property reached.
+ */
+const checkStoredKeys = (
+  field: MetaField,
+  schemas: Schemas,
+  observed: Observed
+): void => {
+  if (field.type.kind !== "choice") {
+    return;
+  }
+
+  const rules = rulesOfMetaField(field);
+  const choices = field.choices ?? [];
+
+  for (const key of [...choices.map((choice) => choice.key), "delta"]) {
+    const kept = convertUpdate(rules, key, key);
+    const listed = JSON.stringify(choices);
+
+    assert.strictEqual(
+      kept.ok,
+      key !== "delta",
+      `unchanged ${key} for ${listed}`
+    );
+
+    if (kept.ok) {
+      if (choices.some((choice) => choice.key === key && choice.retired)) {
+        observed.hiddenUnchanged += 1;
+      }
+
+      assert.isTrue(
+        schemas.update({ [FIELD]: key }),
+        `unchanged update ${key} for ${listed}`
+      );
+    }
+  }
+};
+
 describe("per-table OpenAPI document against the codecs", () => {
   it("write schemas accept every accepted input, read schemas every canonical output", () => {
     // Kinds for which some non-null value was accepted: the gate below
     // keeps the property from losing a type unnoticed.
-    const covered = new Set<string>();
+    const observed: Observed = {
+      covered: new Set(),
+      farOffset: 0,
+      hiddenUnchanged: 0,
+      nonAscii: new Set(),
+    };
 
     // One property per type, so every type is generated whatever the seed.
     for (const kind of KINDS) {
@@ -282,7 +470,6 @@ describe("per-table OpenAPI document against the codecs", () => {
           array(candidateArb, { maxLength: 40, minLength: 20 }),
           (field, candidates) => {
             const schemas = compile(field);
-            const rules = rulesOfMetaField(field);
 
             // A field the caller may write but not read is accepted unnamed.
             assert.isTrue(
@@ -296,41 +483,10 @@ describe("per-table OpenAPI document against the codecs", () => {
             assert.notInclude(schemas.text, WRITE_ONLY);
 
             for (const json of candidates) {
-              const created = convertCreate(rules, json);
-
-              if (created.ok) {
-                if (json !== null) {
-                  covered.add(field.type.kind);
-                }
-
-                assert.isTrue(
-                  schemas.create({ [FIELD]: json }),
-                  `create ${JSON.stringify(json)} for ${JSON.stringify(field.type)}`
-                );
-
-                const output = outputOf(field, created.value);
-
-                assert.isTrue(
-                  schemas.read({ [FIELD]: output }),
-                  `read ${JSON.stringify(output)} for ${JSON.stringify(field.type)}`
-                );
-              }
-
-              // An update sending the stored value back (hidden choice keys
-              // are accepted then), and one replacing an empty value.
-              const decoded = convertUpdate(rules, json, null);
-
-              const unchanged = created.ok
-                ? convertUpdate(rules, json, created.value)
-                : decoded;
-
-              if (decoded.ok || unchanged.ok) {
-                assert.isTrue(
-                  schemas.update({ [FIELD]: json }),
-                  `update ${JSON.stringify(json)} for ${JSON.stringify(field.type)}`
-                );
-              }
+              checkCandidate(field, schemas, json, observed);
             }
+
+            checkStoredKeys(field, schemas, observed);
 
             // A stored choice key outlives its choice: reads accept any key.
             if (field.type.kind === "choice") {
@@ -344,8 +500,21 @@ describe("per-table OpenAPI document against the codecs", () => {
         { numRuns: 40 }
       );
 
-      assert.isTrue(covered.has(kind), `no ${kind} value was accepted`);
+      assert.isTrue(
+        observed.covered.has(kind),
+        `no ${kind} value was accepted`
+      );
     }
+
+    for (const kind of ["text", "longText", "password", "secret", "json"]) {
+      assert.isTrue(
+        observed.nonAscii.has(kind),
+        `no non-ASCII ${kind} value accepted`
+      );
+    }
+
+    assert.isAbove(observed.farOffset, 0, "no offset past ±14:00 accepted");
+    assert.isAbove(observed.hiddenUnchanged, 0, "no hidden key sent unchanged");
   });
 
   it("a choice field with no writable key accepts only null", () => {
