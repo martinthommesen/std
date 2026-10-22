@@ -1,0 +1,15 @@
+# The stub ODA Component of the Step 3 Canvas probe (Contracts 13.6,
+# docs/decisions/0027-oda-canvas-probe.md): one exposed API, a static OpenAPI
+# document served by busybox httpd, and static roles. It is not STD; the real
+# chart is deploy/oda/std/ (Step 5).
+#
+# Every template is plain YAML without Helm directives, so the files are
+# exactly what `helm template` renders and `pnpm check:tooling`
+# (tooling/check-oda-component-schema.ts) can validate the Component without
+# Helm. Names are fixed: install one stub per namespace, in `components`.
+apiVersion: v2
+name: std-oda-probe-stub
+description: Stub ODA Component for STD's ODA Canvas probe
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
