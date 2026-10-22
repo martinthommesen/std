@@ -32,7 +32,7 @@ entries:
       - TMF621@5.0.1/CP/get/filter-sub-resources
       - TMF688@4.0.0/CP/get/filter-sub-resources
     requirement: "Filters on array and json attributes of TMF resources"
-    reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1)."
+    reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1). TMF630 v5.0.0 Part 1 §4.4.1 p.68 defines dotted filters on arrays as testing every element; filtering on sub-resources is optional in the TMF621, TMF688, TMF632, TMF669 and TMF672 conformance profiles (decision 0026)."
     recommendation: accept
     state: decided
     outcome: accepted
@@ -85,7 +85,7 @@ entries:
       - TMF621@5.0.1/OAS/operations/patchTroubleTicketSpecification
       - TMF621@5.0.1/OAS/operations/deleteTroubleTicketSpecification
     requirement: "`troubleTicketSpecification` (TMF621) and `serviceOrderSpecification` (TMF641)"
-    reason: "Not served in v0.1 (Contracts 11.1)."
+    reason: "Not served in v0.1 (Contracts 11.1). Both are optional: TMF621 CP v5.0.0 p.2 and TMF641 CP v4.2.0 §2.1 p.6 make TroubleTicket and ServiceOrder the only mandatory resources. Decision 0026 M4 asks whether the TMF621 kit tests troubleTicketSpecification anyway."
     recommendation: accept
     state: decided
     outcome: accepted
@@ -132,7 +132,7 @@ entries:
     rows:
       - TMF688@4.0.0/CP/operations/event-post-resource-topic
     requirement: "POST of events on TMF688 resource topics"
-    reason: "Those events come only from saves; `405` (Contracts 12.3)."
+    reason: "Those events come only from saves; `405`, a status the TMF688 swagger declares for createEvent (Contracts 12.3). Event POST, mandatory in TMF688 CP v4.0.0 p.8, is served on client topics."
     recommendation: accept
     state: decided
     outcome: accepted
@@ -150,3 +150,13 @@ entries:
     decidedBy: Martin
     words: "All 33 open decisions of decision 0021 are accepted as recommended."
     date: 2026-10-22
+  - id: E26-tmf621-read-only-attributes
+    rows:
+      - TMF621@5.0.1/UG/patchable/priority
+      - TMF621@5.0.1/UG/patchable/statusChangeHistory
+      - TMF621@5.0.1/UG/patchable/resolutionDate
+      - TMF621@5.0.1/UG/patchable/ticketType
+    requirement: "TMF621 attributes the user guide lists as patchable that STD keeps read-only: priority, statusChangeHistory, resolutionDate, and ticketType after create"
+    reason: "STD derives the first three (Contracts 14.2, 3.7), and the guide's own field descriptions call priority system-set and statusChangeHistory server-populated; ticketType selects the concrete class (Contracts 11.2). An unchanged value is not a write (3.9), so a PATCH repeating it passes. Found by the spec check (decision 0026, F621-05, F621-06)."
+    recommendation: accept
+    state: proposed

@@ -33,7 +33,7 @@ Page numbers are the documents' printed page numbers unless a finding says other
 
 ## Summary
 
-145 findings: TMF630 33 (F630), TMF621 22 (F621), TMF688 10 (F688), the party APIs 21 (F632, F669, F672), the inventory and order APIs 24 (F638, F639, F641, F622), ODA 21 (FODA), and 14 from the matrix work itself (FMX). 18 need Martin; the Contracts 10 changes go to 3G; the corrections to Contracts 11 to 15, decision 0021 and the decision log are applied in this branch; a few design choices are left to the owning workstreams; the rest confirm the contracts as written.
+145 findings: TMF630 33 (F630), TMF621 22 (F621), TMF688 10 (F688), the party APIs 21 (F632, F669, F672), the inventory and order APIs 24 (F638, F639, F641, F622), ODA 21 (FODA), and 14 from the matrix work itself (FMX). 19 need Martin; the Contracts 10 changes go to 3G; the corrections to Contracts 11 to 15, decision 0021 and the decision log are applied in this branch; a few design choices are left to the owning workstreams; the rest confirm the contracts as written.
 
 The most important:
 
@@ -72,6 +72,7 @@ Each item changes scope, a pin, an exclusion or a decision he made. Nothing here
 | M16 | FODA-11 | GB1008 §5.2.2 pp.20 to 22 and §5.2.9 p.26 expect data protected in transit (also inside the component) and signed deliverables; nothing in the plan covers TLS to Postgres or image signing. | TLS to Postgres (`verify-full` for an external database) now; sign the release image and chart before `v0.1.0`. |
 | M17 | FODA-16 | IG1329 §4.3.1 p.24 lists rolling updates and rollbacks among the bootstrap scenarios (informative). 13.1's offline upgrades and restore-based rollback differ. | Record it as an accepted deviation in the ODA matrix. |
 | M18 | F621-09 | Statuses on TMF routes (see the summary, item 2). Not a scope question, but it changes Contracts 3.8's statuses on TMF routes, which Martin approved. | Answer only statuses the pinned document declares: `ValidationFailed` and `InvalidReference` become `400` on TMF routes with the `_tag` kept in `code`, an unsupported PATCH media type `400`; `429` for hub registrations becomes a recorded deviation. |
+| M19 | F621-05, F621-06 | Contracts 11.2 keeps `priority`, `statusChangeHistory`, `resolutionDate` and (after create) `ticketType` read-only, although the TMF621 guide lists them as patchable (UG pp.73-74). The new proposed exclusion E26 in the decision log covers the four matrix rows; until Martin decides it, the Step 3 gate fails on them. | Accept E26; the guide itself calls `priority` system-set and `statusChangeHistory` server-populated (p.8), and an unchanged value is not a write. If M6 lets `ticketType` change within a class, drop that row from E26. |
 
 ## Proposed changes to Contracts 10 (route to 3G)
 
@@ -136,7 +137,7 @@ Each item cites its source in the contract text. Commits: 11.1 and pins, 11.2, 1
 - **13 ODA** (FODA-03, 04, 05, 06, 08, 09, 12, 13, 14, 15, 19, 20, 21): markers; the security API entry; BDD feature IDs and how they run against STD; token claims; published-event entries; API names.
 - **15** (FODA-02, FMX-02 to FMX-08): what the ODA rows cover; what `pins.json` holds; `awaitingMatrix`; the row and decision consistency checks; gate mode on missing files and empty steps; `--summary`.
 - **0021** (F630-05, F630-10, F630-32 facts only, F621-01, F621-10, F621-21, F688-01, F688-10, F639-04, F622-04, F641-07, F672-11, FODA-17, FODA-18): research findings and the nine-API table corrected; decision 20's "as far as checked" is now checked for both resources.
-- **Decision log**: E16's reason cites TMF630 v5 Part 1 §4.4.1 p.68 and the profiles (F630-16, F621-17), E24's the TMF688 profile and swagger (F688-08), E20's the TMF621 and TMF641 profiles (F621-01, F641-07); rows filled (FMX-09).
+- **Decision log**: the proposed exclusion E26 (M19) with its four TMF621 rows; E16's reason cites TMF630 v5 Part 1 §4.4.1 p.68 and the profiles (F630-16, F621-17), E24's the TMF688 profile and swagger (F688-08), E20's the TMF621 and TMF641 profiles (F621-01, F641-07); rows filled (FMX-09).
 
 ## Proposed, not applied
 
@@ -172,8 +173,8 @@ The eight kit zips hold only `README.md`, `run.sh`, `run.bat`, `config.json`, `.
 - **Empty specifications** [judgment] (FMX-06): a gate fails a specification of its step whose file is missing or has no rows for the step, so a skeleton cannot pass a gate.
 - **Test titles** (FMX-07): only `describe`, `it` and `it.effect` calls whose first argument is a string literal or a template without expressions count; `it.skip`, `it.only`, `describe.skip`, `it.each` and `test` do not [judgment: conservative reading of 15.4].
 - **Levels** (FMX-08): rows use the three levels of 15.1. A profile's conditional item (mandatory when its parent is present) is `mandatory`, with the condition in the requirement.
-- **Rows** (FMX-09): `TMF621@5.0.1.yaml` 83 rows (CP 29, OAS 53, KIT 1), `TMF688@4.0.0.yaml` 48 (CP 22, OAS 26), `STD-ITIL@14.yaml` 46 (Step 3: 14.1, 14.2, 14.3 and the Step 3 rule kinds of 14.4). All are `pending` except 16 excluded by accepted decisions (E14 1, E15 1, E16 2, E20 9, E22 2, E24 1). The TMF rows cover the profiles' mandatory and optional items and the OpenAPI documents' operations, status codes, media types, required properties and enumerations; the ITIL rows cite the ITIL 4 practice concept each implements, in STD's words.
-- **`--gate step3` fails today** only because rows are `pending` (161) and `TMF630@4.2.0.yaml` is not written yet (3G). It passes when 3G's file lands, every Step 3 row names a passing test, and the Needs Martin items that add exclusions are decided.
+- **Rows** (FMX-09): `TMF621@5.0.1.yaml` 87 rows (CP 29, OAS 53, UG 4, KIT 1), `TMF688@4.0.0.yaml` 48 (CP 22, OAS 26), `STD-ITIL@14.yaml` 46 (Step 3: 14.1, 14.2, 14.3 and the Step 3 rule kinds of 14.4). All are `pending` except 20 excluded: 16 by accepted decisions (E14 1, E15 1, E16 2, E20 9, E22 2, E24 1) and 4 by the proposed E26 (M19). The TMF rows cover the profiles' mandatory and optional items and the OpenAPI documents' operations, status codes, media types, required properties and enumerations; the ITIL rows cite the ITIL 4 practice concept each implements, in STD's words.
+- **`--gate step3` fails today** because 161 rows are `pending`, `TMF630@4.2.0.yaml` is not written yet (3G), and 4 rows are excluded by E26, which is `proposed` (M19). It passes when 3G's file lands, every Step 3 row names a passing test, and Martin has decided E26 and the other Needs Martin items that add exclusions.
 - FMX-10: the matrix treats TMF621's listener paths as what STD delivers to callbacks (an event body valid against the event schema), not as endpoints STD serves (12.2: STD subscribes to nothing).
 - FMX-11: TMF688's profile requires `id` and `href` on events, which its swagger's Event lacks; the matrix follows the profile for responses (F688-03).
 - FMX-12: E14 and E15 are TMF630 decisions that also cover TMF621's `filter` parameter and its `json-patch-query` media type; their `rows` now hold those TMF621 rows. 3G adds its TMF630 rows to the same lists, so the two branches touch the same `rows` lines of `decisions.yaml`; the merge keeps both lists.

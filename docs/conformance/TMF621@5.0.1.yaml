@@ -16,6 +16,10 @@ sources:
     version: 5.0.1
     licence: Apache-2.0
     location: packages/tmf/specs/TMF621-Trouble_Ticket-v5.0.1.oas.yaml (tmforum-apis/TMF621_TroubleTicket at f5b8ffb5975f523b17d8d55c25537d5d3533ecdb, SHA-256 in pins.json)
+  - id: UG
+    document: TMF621 Trouble Ticket API User Guide
+    version: 5.0.1
+    licence: TM Forum member material (RAND); cited, never copied
   - id: KIT
     document: TMF621 Conformance Test Kit tmf621-v5.0.0-ctk-1.0.1
     version: 5.0.0 ctk 1.0.1
@@ -449,6 +453,30 @@ rows:
     requirement: "An attachment may carry its content inline; STD keeps attachments as references and URLs only."
     status: excluded
     decision: E22-tmf621-notes-attachments
+  - id: TMF621@5.0.1/UG/patchable/priority
+    source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
+    level: optional
+    requirement: "A PATCH may change priority; STD refuses a changed value with ReadOnlyField because STD computes it from impact and urgency (Contracts 14.2); the guide itself calls it set by the system (p.8)."
+    status: excluded
+    decision: E26-tmf621-read-only-attributes
+  - id: TMF621@5.0.1/UG/patchable/statusChangeHistory
+    source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
+    level: optional
+    requirement: "A PATCH may change statusChangeHistory; STD refuses a changed value with ReadOnlyField because STD derives it from the record's history; the guide itself calls it populated by the server (p.8)."
+    status: excluded
+    decision: E26-tmf621-read-only-attributes
+  - id: TMF621@5.0.1/UG/patchable/resolutionDate
+    source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
+    level: optional
+    requirement: "A PATCH may change resolutionDate; STD refuses a changed value with ReadOnlyField because STD sets it on entering resolved (Contracts 14.2)."
+    status: excluded
+    decision: E26-tmf621-read-only-attributes
+  - id: TMF621@5.0.1/UG/patchable/ticketType
+    source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
+    level: optional
+    requirement: "A PATCH may change ticketType; STD refuses a changed value with ReadOnlyField because it selects the concrete class, so STD makes it read-only after create (Contracts 11.2; decision 0026 M6)."
+    status: excluded
+    decision: E26-tmf621-read-only-attributes
   - id: TMF621@5.0.1/KIT/mandatory-cases
     source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1)"
     level: mandatory
