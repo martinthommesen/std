@@ -226,6 +226,27 @@ describe("platform-migrations", () => {
             })
           )
       );
+
+      dbTest.effect(
+        "upgrade-refuses-worker: std upgrade refuses while only a std-worker session is connected",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* upgradeRefusesWorker() {
+              const database = yield* TestDatabase;
+              const worker = yield* database.session("std-worker");
+
+              const connected = errorOf(
+                yield* Effect.exit(runPlatformMigrations([migration0001]))
+              );
+
+              assert.instanceOf(connected, UpgradeRefused);
+              assert.strictEqual(connected?.reason, "servers-connected");
+              assert.deepStrictEqual(connected?.sessions, [worker.processId]);
+              assert.include(connected?.message ?? "", "std-worker");
+              assert.deepStrictEqual(yield* ledgerIds, [1], "nothing applied");
+            })
+          )
+      );
     }
   );
 
