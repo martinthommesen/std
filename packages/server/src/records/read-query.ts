@@ -9,9 +9,10 @@ import { InvalidFilter } from "@std/api/errors/invalid-filter";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import type { FilterIssue } from "@std/api/errors/schemas";
 import { UnknownField } from "@std/api/errors/unknown-field";
+import type { Expr } from "@std/conditions/ast";
 import { checkCondition, checkConditionJson } from "@std/conditions/check";
 import type { ClassView } from "@std/conditions/class-view";
-import type { ConditionIssue } from "@std/conditions/issue";
+import type { ConditionIssue, Span } from "@std/conditions/issue";
 import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
 import type { CompiledCondition } from "@std/conditions/sql";
@@ -29,6 +30,27 @@ import { AUDIT_FIELDS, fieldInfoOf } from "./read-field.ts";
 import type { ReadField } from "./read-field.ts";
 import type { ReadScope, ReadView } from "./read-view.ts";
 import { recordRelation } from "./relation.ts";
+
+/**
+ * How a read's names are spelled: definition names (`/api/v1`) or API
+ * names (`/api/v2`, Contracts 10.2: lowerCamelCase, no `class`).
+ */
+export type Naming = "definition" | "api";
+
+/**
+ * A field of a view by a name spelled the request's way.
+ *
+ * @param view - The view.
+ * @param name - The name.
+ * @param naming - How names are spelled.
+ * @returns The readable field, if any.
+ */
+export const fieldByNaming = (
+  view: ReadView,
+  name: string,
+  naming: Naming
+): ReadField | undefined =>
+  naming === "api" ? view.byApiName(name) : view.byName(name);
 
 /** The alias of the endpoint's relation in every read statement. */
 export const BASE_ALIAS = "r";
@@ -113,11 +135,13 @@ export interface SortKey {
  *
  * @param view - The endpoint's view.
  * @param text - The parameter, if given.
+ * @param naming - How names are spelled.
  * @returns The keys.
  */
 export const parseSort = Effect.fn("ReadQuery.parseSort")(function* parseSort(
   view: ReadView,
-  text: string | undefined
+  text: string | undefined,
+  naming: Naming = "definition"
 ) {
   if (text === undefined || text.trim() === "") {
     return [];
@@ -136,7 +160,7 @@ export const parseSort = Effect.fn("ReadQuery.parseSort")(function* parseSort(
       });
     }
 
-    const field = view.byName(name);
+    const field = fieldByNaming(view, name, naming);
 
     if (field === undefined) {
       return yield* new UnknownField({ field: name });
@@ -192,13 +216,15 @@ export const defaultSelection = (view: ReadView): readonly SelectedValue[] =>
  * @param scope - The caller's scope (for reference targets).
  * @param view - The endpoint's view.
  * @param text - The parameter, if given.
+ * @param naming - How names are spelled.
  * @returns The selection, or none for the default.
  */
 export const parseFields = Effect.fn("ReadQuery.parseFields")(
   function* parseFields(
     scope: ReadScope,
     view: ReadView,
-    text: string | undefined
+    text: string | undefined,
+    naming: Naming = "definition"
   ) {
     if (text === undefined) {
       return Option.none<readonly SelectedValue[]>();
@@ -217,7 +243,7 @@ export const parseFields = Effect.fn("ReadQuery.parseFields")(
         });
       }
 
-      const field = view.byName(name);
+      const field = fieldByNaming(view, name, naming);
 
       if (field === undefined) {
         return yield* new UnknownField({ field: name });
@@ -239,7 +265,7 @@ export const parseFields = Effect.fn("ReadQuery.parseFields")(
       }
 
       const target = scope.view(field.type.targetClassId);
-      const targetField = target.byName(targetName);
+      const targetField = fieldByNaming(target, targetName, naming);
 
       if (targetField === undefined) {
         return yield* new UnknownField({ field: targetName });
@@ -268,9 +294,13 @@ const filterIssue = (found: ConditionIssue): FilterIssue =>
  * (filter profile: the caller's readable fields on every hop).
  *
  * @param scope - The caller's scope.
+ * @param naming - How names are spelled.
  * @returns The class view.
  */
-export const filterClassView = (scope: ReadScope): ClassView => {
+export const filterClassView = (
+  scope: ReadScope,
+  naming: Naming = "definition"
+): ClassView => {
   const fieldOf = (classId: DefinitionId, fieldId: DefinitionId) => {
     const field = scope.view(classId).byId(fieldId);
 
@@ -283,7 +313,7 @@ export const filterClassView = (scope: ReadScope): ClassView => {
     canRead: (classId, fieldId) => fieldOf(classId, fieldId) !== undefined,
     field: fieldOf,
     fieldByName: (classId, name) => {
-      const field = scope.view(classId).byName(name);
+      const field = fieldByNaming(scope.view(classId), name, naming);
 
       return field === undefined
         ? undefined
@@ -333,29 +363,25 @@ const compileInView = (
   });
 
 /**
- * Compiles the `filter` parameter (Contracts 3.5, 3.6, 5.9): parsed in the
- * condition text syntax with names resolved against the visible schema,
- * checked under the filter profile, resolved with the caller's context and
- * compiled over masked expressions. A reference hop joins the target's
- * relation with its visibility as the guard.
+ * Parses filter text in the condition syntax, names resolved against the
+ * caller's visible schema (3.4): an unresolved name is `UnknownField`
+ * naming what the request said; any other problem is `InvalidFilter`.
  *
  * @param scope - The caller's scope.
  * @param view - The endpoint's view.
- * @param text - The filter text, if given.
- * @returns The joins and the predicate, or none without a filter.
+ * @param text - The filter text.
+ * @param naming - How names are spelled.
+ * @returns The AST and the spans of its nodes.
  */
-export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
-  function* compileFilter(
+export const parseFilterText = Effect.fn("ReadQuery.parseFilterText")(
+  function* parseFilterText(
     scope: ReadScope,
     view: ReadView,
-    text: string | undefined
+    text: string,
+    naming: Naming
   ) {
-    if (text === undefined || text.trim() === "") {
-      return Option.none<CompiledCondition>();
-    }
-
     const unresolved: string[] = [];
-    const classView = filterClassView(scope);
+    const classView = filterClassView(scope, naming);
 
     const parsed = parseCondition(text, {
       classId: view.classId,
@@ -383,18 +409,41 @@ export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
       });
     }
 
-    const checked = checkCondition(parsed.value.expr, {
+    return parsed.value;
+  }
+);
+
+/**
+ * Compiles a filter AST in the caller's view (Contracts 3.5, 3.6, 5.9):
+ * checked under the filter profile against the caller's readable fields,
+ * resolved with the caller's context and compiled over masked
+ * expressions. A reference hop joins the target's relation with its
+ * visibility as the guard. The AST names fields by ID, so it is the same
+ * whichever syntax it came from (condition text, TMF query parameters).
+ *
+ * @param scope - The caller's scope.
+ * @param view - The endpoint's view.
+ * @param expr - The condition.
+ * @param spans - Where its nodes came from in filter text, if it did.
+ * @returns The joins and the predicate.
+ */
+export const compileFilterExpr = Effect.fn("ReadQuery.compileFilterExpr")(
+  function* compileFilterExpr(
+    scope: ReadScope,
+    view: ReadView,
+    expr: Expr,
+    spans: ReadonlyMap<string, Span> = new Map()
+  ) {
+    const checked = checkCondition(expr, {
       classId: view.classId,
       profile: "filter",
       purpose: "evaluate",
-      view: classView,
+      view: filterClassView(scope),
     });
 
     if (!checked.ok) {
       return yield* new InvalidFilter({
-        issues: locateIssues(checked.error.issues, parsed.value.spans).map(
-          filterIssue
-        ),
+        issues: locateIssues(checked.error.issues, spans).map(filterIssue),
       });
     }
 
@@ -410,7 +459,39 @@ export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
       });
     }
 
-    return Option.some(compileInView(scope, resolved.value, BASE_ALIAS, "f"));
+    return compileInView(scope, resolved.value, BASE_ALIAS, "f");
+  }
+);
+
+/**
+ * Compiles the `filter` parameter (Contracts 3.5, 3.6, 5.9): parsed in the
+ * condition text syntax with names resolved against the visible schema,
+ * checked under the filter profile, resolved with the caller's context and
+ * compiled over masked expressions. A reference hop joins the target's
+ * relation with its visibility as the guard.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The endpoint's view.
+ * @param text - The filter text, if given.
+ * @param naming - How names are spelled.
+ * @returns The joins and the predicate, or none without a filter.
+ */
+export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
+  function* compileFilter(
+    scope: ReadScope,
+    view: ReadView,
+    text: string | undefined,
+    naming: Naming = "definition"
+  ) {
+    if (text === undefined || text.trim() === "") {
+      return Option.none<CompiledCondition>();
+    }
+
+    const parsed = yield* parseFilterText(scope, view, text, naming);
+
+    return Option.some(
+      yield* compileFilterExpr(scope, view, parsed.expr, parsed.spans)
+    );
   }
 );
 
