@@ -45,8 +45,10 @@ export const probeDatabaseLayer = (
       Effect.map((database) =>
         DatabaseConfig.of({
           applicationName: PROBE_APPLICATION_NAME,
+          directTransport: database.transport,
           directUrl: Redacted.make(database.url),
           maxConnections: options.maxConnections ?? DEFAULT_POOL,
+          transport: database.transport,
           url: Redacted.make(database.url),
         })
       )

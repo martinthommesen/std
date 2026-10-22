@@ -550,6 +550,7 @@ const onFreshInstall = <A, E>(
 const doctorOnFreshPool = (url: string) =>
   Effect.scoped(
     Effect.gen(function* freshPool() {
+      const settings = yield* DatabaseConfig;
       const memoMap = yield* Layer.makeMemoMap;
       const scope = yield* Effect.scope;
 
@@ -561,8 +562,10 @@ const doctorOnFreshPool = (url: string) =>
               DatabaseConfig,
               DatabaseConfig.of({
                 applicationName: "doctor-fresh",
+                directTransport: settings.transport,
                 directUrl: Redacted.make(url),
                 maxConnections: 2,
+                transport: settings.transport,
                 url: Redacted.make(url),
               })
             )

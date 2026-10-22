@@ -29,6 +29,7 @@
     "@effect/vitest": "catalog:",
     "@foldkit/oxlint-plugin": "0.15.3",
     "@shadcn/lint": "^0.2.3",
+    "@std/postgres": "workspace:*",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "eslint-plugin-github": "6.1.2",

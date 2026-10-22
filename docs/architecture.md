@@ -21,7 +21,8 @@ This is the working brief for everyone writing STD code, human or agent. The pro
   - Template work is serialized by one advisory lock per template, taken in the server's `postgres` database. Advisory locks belong to the database they are taken in, so the harness does all admin work there, whatever database the URL names. Cloning holds the template's lock shared from the readiness check through `CREATE DATABASE ... TEMPLATE`. Building and dropping hold it exclusive. A template is therefore never dropped while another run is cloning or building it.
   - The janitor runs on its own connection and handles each database separately. It re-reads a template under its lock before dropping it, and skips a template that another run has already dropped. It never sends `ALTER DATABASE` to an invalid database (one whose `DROP DATABASE` is in progress or was interrupted). Postgres answers that with FATAL and closes the connection, which used to break the build of the next test database (`docs/decisions/0015-test-isolation.md`).
   - The harness needs a role that can create databases and connect to `postgres`. Its own tests also mark a database invalid through `pg_database`, which needs a superuser, as the compose and CI role `std` is.
-- Connection settings come from `STD_DATABASE_URL` (default `postgres://std:std@127.0.0.1:54329/std`).
+- Connection settings come from `STD_DATABASE_URL` (default `postgres://std:std@127.0.0.1:54329/std`). Postgres TLS settings are `STD_DATABASE_SSL_MODE` (`disable`, `require`, `verify-ca`, `verify-full`), `STD_DATABASE_SSL_CA_FILE` (PEM CA), `STD_DATABASE_SSL_SYSTEM_ROOTS` (explicit public-root opt-in for `verify-full`), and optional paired `STD_DATABASE_SSL_CERT_FILE` / `STD_DATABASE_SSL_KEY_FILE`. Remote hosts default to `verify-full` and require a CA or explicit system roots; `verify-ca` requires a CA. `require` with a CA verifies the chain; without a CA it can be intercepted by anyone on the path. Unix sockets ignore TLS modes; loopback defaults to plaintext. Remote `disable` requires the warned `STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE=true` opt-out. Environment mode wins over URL `sslmode`; URL certificate and `ssl` parameters are refused. Settings and files are loaded once when configuration layers start.
+
 - Benchmarks use their own container and port (see `bench/README.md`) so they never compete with test databases for buffers.
 
 ## Repository layout
@@ -35,6 +36,7 @@ packages/
   api/           @std/api          HttpApi definition shared by server, web app and SDK
   server/        @std/server       Effect server: SQL layer, migrations, schema engine, config layers,
                                    record service, history, outbox, auth, HTTP, CLI (`std`), hooks, import
+  postgres/      @std/postgres     shared Effect Postgres transport policy (no server dependency)
   testing/       @std/testing      test harness: databases, fixtures, HTTP helpers
   codegen/       @std/codegen      plain: SDK code generation from schema snapshots (Step 5)
   tmf/           @std/tmf          plain: TMF Open API mappings, TMF630 query translation, event rendering; pinned TM Forum OpenAPI documents in specs/ (Steps 3 and 4)
@@ -58,7 +60,7 @@ FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from r
 - Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`, and `tmf` from Step 3) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), their own `src/` files, other plain packages, and npm libraries listed with a reason in `tooling/plain-allowed-deps.json` whose dependency graph has no Effect. No I/O: no Node built-ins and no host globals. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
 - `api` may import `effect` stable modules, `effect/http-api` and `effect/http`.
 - `server` may use the server allow list (Contracts 9).
-- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `tmf` depends on `values`, `conditions` and `definitions`, and `server` on it; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`.
+- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `tmf` depends on `values`, `conditions` and `definitions`, and `server` on it; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`. The independent `postgres` package uses the server profile and depends only on Effect; values tests, server, testing, benchmarks and tooling share its transport policy.
 
 ### Package conventions
 

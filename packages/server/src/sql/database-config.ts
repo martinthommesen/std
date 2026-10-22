@@ -6,9 +6,17 @@
  * set, is used for dedicated connections (the schema-change coordinator),
  * which must reach Postgres directly rather than through a pooler.
  */
+import {
+  databaseTransport,
+  databaseTlsConfig,
+  loadDatabaseTls,
+  warnInsecureTransport,
+} from "@std/postgres/transport";
+import type {
+  DatabaseTlsSettings,
+  DatabaseTransport,
+} from "@std/postgres/transport";
 import { Config, Context, Effect, Layer, Redacted } from "effect";
-
-import { databaseTransport } from "./tls.ts";
 
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
 export const DEFAULT_DATABASE_URL = "postgres://std:std@127.0.0.1:54329/std";
@@ -33,6 +41,10 @@ export const DEFAULT_MAX_CONNECTIONS = 10;
 
 /** Connection settings for one process. */
 export interface DatabaseSettings {
+  /** Resolved pooled transport, including loaded TLS material. */
+  readonly transport: DatabaseTransport;
+  /** Resolved dedicated transport. */
+  readonly directTransport: DatabaseTransport;
   /** Pooled connections. */
   readonly url: Redacted.Redacted;
   /** Dedicated connections; the same as `url` unless configured. */
@@ -50,7 +62,8 @@ export class DatabaseConfig extends Context.Service<
 >()("@std/server/sql/database-config/DatabaseConfig") {
   /**
    * Reads `STD_DATABASE_URL`, `STD_DATABASE_DIRECT_URL` and
-   * `STD_DATABASE_MAX_CONNECTIONS`.
+   * `STD_DATABASE_MAX_CONNECTIONS` and STD_DATABASE_SSL_* TLS settings,
+   * including the dangerous remote plaintext opt-out. Files are read once.
    * @param applicationName - `std-server` for servers, `std-cli` for the CLI, anything else for tests.
    * @returns A layer providing the settings.
    */
@@ -66,9 +79,18 @@ export class DatabaseConfig extends Context.Service<
           "STD_DATABASE_DIRECT_URL"
         ).pipe(Config.withDefault(url));
 
-        // Validate both endpoints before any lazy pool is exposed.
-        yield* databaseTransport(url).pipe(Effect.orDie);
-        yield* databaseTransport(directUrl).pipe(Effect.orDie);
+        const tls = yield* loadDatabaseTls(yield* databaseTlsConfig).pipe(
+          Effect.orDie
+        );
+
+        const transport = yield* databaseTransport(url, tls).pipe(Effect.orDie);
+
+        const directTransport =
+          Redacted.value(url) === Redacted.value(directUrl)
+            ? transport
+            : yield* databaseTransport(directUrl, tls).pipe(Effect.orDie);
+
+        yield* warnInsecureTransport([transport, directTransport]);
 
         const maxConnections = yield* Config.Int(
           "STD_DATABASE_MAX_CONNECTIONS"
@@ -76,8 +98,10 @@ export class DatabaseConfig extends Context.Service<
 
         return DatabaseConfig.of({
           applicationName,
+          directTransport,
           directUrl,
           maxConnections,
+          transport,
           url,
         });
       })
@@ -92,14 +116,27 @@ export class DatabaseConfig extends Context.Service<
     readonly url: string;
     readonly applicationName: string;
     readonly maxConnections?: number;
+    readonly tls?: DatabaseTlsSettings;
   }): Layer.Layer<DatabaseConfig> =>
-    Layer.succeed(
+    Layer.effect(
       DatabaseConfig,
-      DatabaseConfig.of({
-        applicationName: settings.applicationName,
-        directUrl: Redacted.make(settings.url),
-        maxConnections: settings.maxConnections ?? DEFAULT_MAX_CONNECTIONS,
-        url: Redacted.make(settings.url),
+      Effect.gen(function* fromUrl() {
+        const url = Redacted.make(settings.url);
+
+        const transport = yield* databaseTransport(url, settings.tls).pipe(
+          Effect.orDie
+        );
+
+        yield* warnInsecureTransport([transport]);
+
+        return DatabaseConfig.of({
+          applicationName: settings.applicationName,
+          directTransport: transport,
+          directUrl: url,
+          maxConnections: settings.maxConnections ?? DEFAULT_MAX_CONNECTIONS,
+          transport,
+          url,
+        });
       })
     );
 }

@@ -6,13 +6,16 @@ private=/var/lib/postgresql/std-tls
 public=/std-ca
 mkdir -p "$private" "$public"
 chmod 700 "$private"
-if [ ! -s "$private/server.key" ] || [ ! -s "$private/server.crt" ]; then
+# Renew the whole demo identity when either certificate has under 30 days left.
+if [ ! -s "$private/server.key" ] ||
+   ! openssl x509 -in "$private/server.crt" -noout -checkend 2592000 >/dev/null 2>&1 ||
+   ! openssl x509 -in "$private/ca.crt" -noout -checkend 2592000 >/dev/null 2>&1; then
   umask 077
   openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
     -subj /CN=std-quickstart-ca -keyout "$private/ca.key" -out "$private/ca.crt"
   openssl req -newkey rsa:3072 -nodes -subj /CN=postgres \
     -keyout "$private/server.key" -out "$private/server.csr"
-  printf 'subjectAltName=DNS:postgres,DNS:localhost,IP:127.0.0.1,IP:::1\nextendedKeyUsage=serverAuth\n' > "$private/extensions"
+  printf 'subjectAltName=DNS:quickstart-postgres,DNS:postgres,DNS:localhost,IP:127.0.0.1,IP:::1\nextendedKeyUsage=serverAuth\n' > "$private/extensions"
   openssl x509 -req -in "$private/server.csr" -CA "$private/ca.crt" \
     -CAkey "$private/ca.key" -CAcreateserial -days 365 \
     -extfile "$private/extensions" -out "$private/server.crt"

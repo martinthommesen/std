@@ -1,10 +1,13 @@
 import { PgClient, PgConnection } from "@effect/sql-pg";
 import { assert, describe, it } from "@effect/vitest";
+import type { SslMode } from "@std/postgres/transport";
+import { databaseTransport, loadDatabaseTls } from "@std/postgres/transport";
 import {
   Config,
   ConfigProvider,
   Effect,
   Layer,
+  Option,
   Redacted,
   Result,
   Schema,
@@ -18,7 +21,6 @@ import { checkDatabaseTls } from "../src/doctor/check-server.ts";
 import { PgLive } from "../src/sql/client.ts";
 import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
-import { databaseTransport } from "../src/sql/tls.ts";
 
 const fixture = Effect.gen(function* fixture() {
   return {
@@ -30,18 +32,19 @@ const fixture = Effect.gen(function* fixture() {
 
 const connect = Effect.fn("TlsTest.connect")(function* connect(
   url: string,
-  mode: string,
-  ca: string
+  mode: SslMode,
+  ca?: string
 ) {
-  const transport = yield* databaseTransport(Redacted.make(url)).pipe(
-    Effect.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          STD_DATABASE_SSL_CA_FILE: ca,
-          STD_DATABASE_SSL_MODE: mode,
-        })
-      )
-    ),
+  const tls = yield* loadDatabaseTls({
+    allowInsecureRemote: false,
+    caFile: Option.fromUndefinedOr(ca),
+    certFile: Option.none(),
+    keyFile: Option.none(),
+    mode: Option.some(mode),
+    systemRoots: false,
+  }).pipe(Effect.orDie);
+
+  const transport = yield* databaseTransport(Redacted.make(url), tls).pipe(
     Effect.orDie
   );
 
@@ -131,7 +134,12 @@ describe("postgres-tls", () => {
   it.effect("require encrypts without requiring a trusted CA", () =>
     Effect.gen(function* tlsCase5() {
       const { url, wrongCa } = yield* fixture;
-      const client = yield* connect(url, "require", wrongCa);
+      const client = yield* connect(url, "require");
+      assert.isTrue(
+        Result.isFailure(
+          yield* connect(url, "require", wrongCa).pipe(Effect.result)
+        )
+      );
       assert.strictEqual((yield* encrypted(client)).rows[0]?.ssl, true);
     }).pipe(Effect.scoped)
   );
@@ -140,20 +148,27 @@ describe("postgres-tls", () => {
     Effect.gen(function* clientCertificate() {
       const { url, ca } = yield* fixture;
       const cert = yield* Config.String("STD_TLS_TEST_CLIENT_CERT_FILE");
-      const key = yield* Config.Redacted("STD_TLS_TEST_CLIENT_KEY_FILE");
+      const key = yield* Config.String("STD_TLS_TEST_CLIENT_KEY_FILE");
 
-      const transport = yield* databaseTransport(Redacted.make(url)).pipe(
+      const settings = yield* DatabaseConfig.pipe(
         Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              STD_DATABASE_SSL_CA_FILE: ca,
-              STD_DATABASE_SSL_CERT_FILE: cert,
-              STD_DATABASE_SSL_KEY_FILE: Redacted.value(key),
-              STD_DATABASE_SSL_MODE: VERIFY_FULL,
-            })
+          DatabaseConfig.fromEnv("std-client-tls").pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({
+                  STD_DATABASE_SSL_CA_FILE: ca,
+                  STD_DATABASE_SSL_CERT_FILE: cert,
+                  STD_DATABASE_SSL_KEY_FILE: key,
+                  STD_DATABASE_SSL_MODE: VERIFY_FULL,
+                  STD_DATABASE_URL: url,
+                })
+              )
+            )
           )
         )
       );
+
+      const { transport } = settings;
 
       const client = yield* PgConnection.make({
         ssl: transport.ssl,
@@ -213,6 +228,7 @@ describe("postgres-tls", () => {
         ConfigProvider.fromUnknown({
           STD_DATABASE_SSL_CA_FILE: ca,
           STD_DATABASE_SSL_MODE: VERIFY_FULL,
+          STD_DATABASE_URL: url,
         })
       );
 
@@ -239,18 +255,30 @@ describe("postgres-tls", () => {
         assert.strictEqual(dedicatedRows[0]?.ssl, true);
         const findings = yield* checkDatabaseTls;
         assert.include(findings[0]?.message ?? "", "TLSv1.");
-      }).pipe(
+      });
+
+      // Change ambient config after acquiring the layer; connections must retain TLS.
+      const changedConfigWork = work.pipe(
         Effect.scoped,
         Effect.provide(
-          PgLive.pipe(
-            Layer.provideMerge(
-              DatabaseConfig.fromUrl({ applicationName: "std-tls-test", url })
-            )
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              STD_DATABASE_SSL_CA_FILE: "/missing-after-startup",
+              STD_DATABASE_SSL_MODE: "disable",
+            })
           )
         )
       );
 
-      yield* work.pipe(Effect.provide(config));
+      const connected = changedConfigWork.pipe(
+        Effect.provide(
+          PgLive.pipe(
+            Layer.provideMerge(DatabaseConfig.fromEnv("std-tls-test"))
+          )
+        )
+      );
+
+      yield* connected.pipe(Effect.provide(config));
     }).pipe(Effect.scoped)
   );
 });

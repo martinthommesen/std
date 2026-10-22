@@ -229,7 +229,7 @@ export const checkDatabaseTls = Effect.gen(function* checkDatabaseTls() {
 
   return [
     finding(
-      15,
+      17,
       "info",
       "databaseTls",
       row?.ssl === true

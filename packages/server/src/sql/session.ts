@@ -6,6 +6,7 @@ import { connect } from "node:net";
 import { Duplex } from "node:stream";
 
 import type { PgConnection } from "@effect/sql-pg";
+import type { DatabaseTransport } from "@std/postgres/transport";
 import { Duration, Effect, Redacted } from "effect";
 import type { Types } from "effect";
 
@@ -16,7 +17,6 @@ import {
 } from "./statement-log.ts";
 import type { StatementObserverFn } from "./statement-log.ts";
 import { makeTextRegistry } from "./text-codecs.ts";
-import { databaseTransport } from "./tls.ts";
 
 /**
  * Session parameters sent in the startup packet of every connection
@@ -115,7 +115,7 @@ const openTappedStream = (
 
 /**
  * A socket factory for the driver that taps every connection it opens.
- * @param url - The connection URL; only plaintext TCP is supported.
+ * @param url - The connection URL; the driver negotiates TLS before sending statements.
  * @param host - The effective host, including any libpq query override.
  * @param observer - Receives each executed statement.
  * @param keepAlive - Whether to enable client-side TCP keepalive.
@@ -142,6 +142,7 @@ const tappedStreamFactory = (
 
 /** Options for one connection or pool. */
 export interface ConnectionSetup {
+  readonly transport: DatabaseTransport;
   readonly url: Redacted.Redacted;
   readonly applicationName: string;
   /** Extra startup parameters, added to `SESSION_PARAMETERS`. */
@@ -162,7 +163,7 @@ export const connectionConfig = (
 ): Effect.Effect<PgConnection.Config> =>
   Effect.gen(function* configureConnection() {
     const observer = yield* StatementObserver;
-    const transport = yield* databaseTransport(setup.url).pipe(Effect.orDie);
+    const { transport } = setup;
     const keepAlive = setup.keepAlive === true;
 
     const config: Types.Mutable<PgConnection.Config> = {

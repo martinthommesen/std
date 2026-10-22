@@ -1,6 +1,3 @@
-import { randomBytes } from "node:crypto";
-
-import { PgConnection } from "@effect/sql-pg";
 /**
  * The test database harness: fresh migrated databases cloned from a
  * template, concurrent creation, teardown, the janitor and the statement log.
@@ -8,6 +5,9 @@ import { PgConnection } from "@effect/sql-pg";
  * Several suites may share the Postgres server, so database creation can be
  * slow: no test bounds it by wall time; they check what happened instead.
  */
+import { randomBytes } from "node:crypto";
+
+import { PgConnection } from "@effect/sql-pg";
 import { assert, describe, it, layer } from "@effect/vitest";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { migration0001 } from "@std/server/platform/migrations/0001-core";
@@ -21,6 +21,7 @@ import { migration0008 } from "@std/server/platform/migrations/0008-ui-config";
 import { migration0009 } from "@std/server/platform/migrations/0009-saved-filters";
 import { migration0010 } from "@std/server/platform/migrations/0010-definition-revision-field";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
+import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
 import { connectionConfig } from "@std/server/sql/session";
 import { StatementLog } from "@std/server/sql/statement-log";
@@ -77,10 +78,17 @@ const decodeTemplateId = decodeRows(
 const admin = maintenanceUrl.pipe(
   Effect.orDie,
   Effect.flatMap((url) =>
-    connectionConfig({
-      applicationName: "std-testing-test",
-      url: Redacted.make(url),
-    }).pipe(Effect.flatMap(PgConnection.make))
+    DatabaseConfig.pipe(
+      Effect.flatMap((settings) =>
+        connectionConfig({
+          applicationName: "std-testing-test",
+          transport: settings.transport,
+          url: Redacted.make(url),
+        })
+      ),
+      Effect.provide(DatabaseConfig.fromEnv("std-testing-test")),
+      Effect.flatMap(PgConnection.make)
+    )
   )
 );
 

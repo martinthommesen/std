@@ -10,9 +10,18 @@ import type { Socket } from "node:net";
 import { connect, isIP } from "node:net";
 import { connect as connectTls } from "node:tls";
 
-import { Effect, Redacted } from "effect";
+import {
+  databaseTransport,
+  databaseTlsConfig,
+  loadDatabaseTls,
+  warnInsecureTransport,
+} from "@std/postgres/transport";
+import type { DatabaseTransport } from "@std/postgres/transport";
+import { Context, Effect, Layer, Redacted } from "effect";
 
-import { databaseTransport } from "../../packages/server/src/sql/tls.ts";
+const ToolTransport = Context.Service<DatabaseTransport>(
+  "std/tooling/ToolTransport"
+);
 
 /** Connection settings, as in a `postgres://` URL. */
 export interface PgSettings {
@@ -29,6 +38,10 @@ interface Message {
   readonly body: Buffer;
   readonly type: string;
 }
+
+const SSL_REQUEST_LENGTH = 8;
+const SSL_REQUEST_CODE = 80_877_103;
+const SSL_ACCEPTED = 0x53;
 
 const protocolVersion = 196_608;
 const headerLength = 5;
@@ -334,7 +347,27 @@ export const queryOnce = async (
   sql: string
 ): Promise<(string | null)[][]> => {
   const transport = await Effect.runPromise(
-    databaseTransport(Redacted.make(settings.url))
+    Effect.scoped(
+      Effect.gen(function* transportConfig() {
+        const context = yield* Layer.build(
+          Layer.effect(
+            ToolTransport,
+            Effect.gen(function* resolveTransport() {
+              const resolved = yield* databaseTransport(
+                Redacted.make(settings.url),
+                yield* loadDatabaseTls(yield* databaseTlsConfig)
+              );
+
+              yield* warnInsecureTransport([resolved]);
+
+              return resolved;
+            })
+          )
+        );
+
+        return Context.get(context, ToolTransport);
+      })
+    )
   );
 
   let socket = connect(
@@ -354,9 +387,9 @@ export const queryOnce = async (
 
     if (transport.ssl !== false) {
       const response = once(socket, "data");
-      const request = Buffer.alloc(8);
-      request.writeInt32BE(8, 0);
-      request.writeInt32BE(80_877_103, 4);
+      const request = Buffer.alloc(SSL_REQUEST_LENGTH);
+      request.writeInt32BE(SSL_REQUEST_LENGTH, 0);
+      request.writeInt32BE(SSL_REQUEST_CODE, int32);
       socket.write(request);
       const answers: readonly unknown[] = await response;
       const [answer] = answers;
@@ -364,7 +397,7 @@ export const queryOnce = async (
       if (
         !Buffer.isBuffer(answer) ||
         answer.length !== 1 ||
-        answer[0] !== 0x53
+        answer[0] !== SSL_ACCEPTED
       ) {
         throw new Error(
           "Postgres refused TLS; plaintext fallback is forbidden"

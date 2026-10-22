@@ -45,6 +45,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { PgConnection } from "@effect/sql-pg";
+import type { DatabaseTransport } from "@std/postgres/transport";
 import { migrationChecksum } from "@std/server/platform/migration";
 import type { PlatformMigration } from "@std/server/platform/migration";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
@@ -117,6 +118,8 @@ export const TEMPLATE_NAME = /^std_tpl_[\da-f]{24}$/u;
 
 /** The test database of the current layer. */
 export interface TestDatabaseApi {
+  /** Transport retained from the harness configuration layer. */
+  readonly transport: DatabaseTransport;
   /** The database name. */
   readonly name: string;
   /** A URL for it. */
@@ -210,22 +213,22 @@ export const testDatabaseName = (): string =>
  * tapped by the statement log.
  * @param url - The test database URL.
  * @param applicationName - Its `application_name`.
+ * @param transport - Transport resolved by the harness configuration layer.
  * @returns The session; it closes with the scope.
  */
 const openSession = (
   url: string,
-  applicationName: string
+  applicationName: string,
+  transport: DatabaseTransport
 ): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
-  connectionConfig({ applicationName, url: Redacted.make(url) }).pipe(
+  connectionConfig({
+    applicationName,
+    transport,
+    url: Redacted.make(url),
+  }).pipe(
     Effect.provideService(StatementObserver, ignoreStatements),
     Effect.flatMap((config) => hygienic(PgConnection.make(config)))
   );
-
-const connect = (
-  url: string,
-  applicationName: string
-): Effect.Effect<PgConnection.PgConnection, DatabaseError, Scope.Scope> =>
-  openSession(url, applicationName);
 
 const query = (
   connection: PgConnection.PgConnection,
@@ -608,17 +611,24 @@ const templateReady = (
 
 const migrateDatabase = (
   url: string,
-  migrations: readonly PlatformMigration[]
+  migrations: readonly PlatformMigration[],
+  transport: DatabaseTransport
 ): Effect.Effect<void, UpgradeError> =>
   Effect.scoped(
     Layer.build(
       SqlLayer.pipe(
         Layer.provideMerge(
-          DatabaseConfig.fromUrl({
-            applicationName: HARNESS_APPLICATION_NAME,
-            maxConnections: TEMPLATE_MIGRATION_POOL_SIZE,
-            url,
-          })
+          Layer.succeed(
+            DatabaseConfig,
+            DatabaseConfig.of({
+              applicationName: HARNESS_APPLICATION_NAME,
+              directTransport: transport,
+              directUrl: Redacted.make(url),
+              maxConnections: TEMPLATE_MIGRATION_POOL_SIZE,
+              transport,
+              url: Redacted.make(url),
+            })
+          )
         )
       )
     ).pipe(
@@ -635,13 +645,15 @@ const migrateDatabase = (
  * @param adminUrl - The maintenance database URL, for connecting to the template.
  * @param name - The template name.
  * @param migrations - The template's migrations.
+ * @param transport - Transport resolved by the harness configuration layer.
  * @returns An effect that leaves a ready template.
  */
 const buildTemplate = (
   admin: PgConnection.PgConnection,
   adminUrl: string,
   name: string,
-  migrations: readonly PlatformMigration[]
+  migrations: readonly PlatformMigration[],
+  transport: DatabaseTransport
 ): Effect.Effect<void, SqlError | UpgradeError> =>
   Effect.gen(function* buildTemplateDatabase() {
     if (yield* templateReady(admin, name)) {
@@ -652,7 +664,7 @@ const buildTemplate = (
     // From template0, which nobody connects to: CREATE DATABASE fails while
     // any session is connected to its template, as one may be to template1.
     yield* query(admin, `CREATE DATABASE ${quote(name)} TEMPLATE template0`);
-    yield* migrateDatabase(withDatabase(adminUrl, name), migrations);
+    yield* migrateDatabase(withDatabase(adminUrl, name), migrations, transport);
     yield* query(
       admin,
       `COMMENT ON DATABASE ${quote(name)} IS '${TEMPLATE_COMMENT_PREFIX}${new Date().toISOString()}'`
@@ -670,12 +682,14 @@ const buildTemplate = (
  * @param admin - A connection to the maintenance database.
  * @param adminUrl - The maintenance database URL.
  * @param migrations - The template's migrations.
+ * @param transport - Transport resolved by the harness configuration layer.
  * @returns The template name.
  */
 export const ensureTemplate = (
   admin: PgConnection.PgConnection,
   adminUrl: string,
-  migrations: readonly PlatformMigration[]
+  migrations: readonly PlatformMigration[],
+  transport: DatabaseTransport
 ): Effect.Effect<string, DatabaseError | UpgradeError> => {
   const name = templateName(migrations);
 
@@ -684,7 +698,7 @@ export const ensureTemplate = (
       admin,
       name,
       "exclusive",
-      buildTemplate(admin, adminUrl, name, migrations)
+      buildTemplate(admin, adminUrl, name, migrations, transport)
     ).pipe(Effect.as(name))
   );
 };
@@ -697,13 +711,15 @@ export const ensureTemplate = (
  * @param adminUrl - The maintenance database URL.
  * @param database - The new database's name.
  * @param migrations - The template's migrations.
+ * @param transport - Transport resolved by the harness configuration layer.
  * @returns The template name.
  */
 const cloneTemplate = (
   admin: PgConnection.PgConnection,
   adminUrl: string,
   database: string,
-  migrations: readonly PlatformMigration[]
+  migrations: readonly PlatformMigration[],
+  transport: DatabaseTransport
 ): Effect.Effect<string, DatabaseError | UpgradeError> => {
   const template = templateName(migrations);
 
@@ -730,7 +746,7 @@ const cloneTemplate = (
           return template;
         }
 
-        yield* ensureTemplate(admin, adminUrl, migrations);
+        yield* ensureTemplate(admin, adminUrl, migrations, transport);
       }
 
       return yield* Effect.die(
@@ -747,11 +763,16 @@ let janitorRan = false;
  * meets (a lost connection included) can break the database build.
  * @param adminUrl - The maintenance database URL.
  * @param keep - The template in use.
+ * @param transport - Transport resolved by the harness configuration layer.
  * @returns An effect that never fails.
  */
-const janitorPass = (adminUrl: string, keep: string): Effect.Effect<void> =>
+const janitorPass = (
+  adminUrl: string,
+  keep: string,
+  transport: DatabaseTransport
+): Effect.Effect<void> =>
   Effect.scoped(
-    connect(adminUrl, HARNESS_APPLICATION_NAME).pipe(
+    openSession(adminUrl, HARNESS_APPLICATION_NAME, transport).pipe(
       Effect.flatMap((admin) => runJanitor(admin, keep, Date.now()))
     )
   ).pipe(
@@ -764,17 +785,23 @@ const janitorPass = (adminUrl: string, keep: string): Effect.Effect<void> =>
 const createTestDatabase = (
   adminUrl: string,
   name: string,
-  options: TestDatabaseOptions
+  options: TestDatabaseOptions,
+  transport: DatabaseTransport
 ): Effect.Effect<string, DatabaseError | UpgradeError> =>
   Effect.scoped(
     Effect.gen(function* createDatabase() {
-      const admin = yield* connect(adminUrl, HARNESS_APPLICATION_NAME);
+      const admin = yield* openSession(
+        adminUrl,
+        HARNESS_APPLICATION_NAME,
+        transport
+      );
+
       const migrations = options.migrations ?? PLATFORM_MIGRATIONS;
       const empty = options.empty === true || options.encoding !== undefined;
 
       if (!janitorRan) {
         janitorRan = true;
-        yield* janitorPass(adminUrl, templateName(migrations));
+        yield* janitorPass(adminUrl, templateName(migrations), transport);
       }
 
       let source = "template0";
@@ -792,7 +819,13 @@ const createTestDatabase = (
           )
         );
       } else {
-        source = yield* cloneTemplate(admin, adminUrl, name, migrations);
+        source = yield* cloneTemplate(
+          admin,
+          adminUrl,
+          name,
+          migrations,
+          transport
+        );
       }
 
       yield* hygienic(
@@ -808,10 +841,11 @@ const createTestDatabase = (
 
 const removeTestDatabase = (
   adminUrl: string,
-  name: string
+  name: string,
+  transport: DatabaseTransport
 ): Effect.Effect<void> =>
   Effect.scoped(
-    connect(adminUrl, HARNESS_APPLICATION_NAME).pipe(
+    openSession(adminUrl, HARNESS_APPLICATION_NAME, transport).pipe(
       Effect.flatMap((admin) => dropDatabase(admin, name))
     )
   ).pipe(
@@ -837,24 +871,32 @@ export const testDatabaseService = (
   Layer.effect(
     TestDatabase,
     Effect.gen(function* provideTestDatabase() {
-      const adminUrl = yield* maintenanceUrl;
+      const settings = yield* DatabaseConfig;
+      const { transport } = settings;
+
+      const adminUrl = withDatabase(
+        Redacted.value(settings.url),
+        MAINTENANCE_DATABASE
+      );
+
       const name = testDatabaseName();
       const url = withDatabase(adminUrl, name);
 
       const source = yield* Effect.acquireRelease(
-        createTestDatabase(adminUrl, name, options),
-        () => removeTestDatabase(adminUrl, name)
+        createTestDatabase(adminUrl, name, options, transport),
+        () => removeTestDatabase(adminUrl, name, transport)
       );
 
       return TestDatabase.of({
         name,
         session: (applicationName = `${TEST_APPLICATION_NAME}-session`) =>
-          openSession(url, applicationName),
+          openSession(url, applicationName, transport),
         template: source,
+        transport,
         url,
       });
     })
-  );
+  ).pipe(Layer.provide(DatabaseConfig.fromEnv(HARNESS_APPLICATION_NAME)));
 
 /** Everything a test database layer provides. */
 export type TestDatabaseServices =
@@ -881,8 +923,10 @@ export const testDatabaseLayer = (
       Effect.map((database) =>
         DatabaseConfig.of({
           applicationName: options.applicationName ?? TEST_APPLICATION_NAME,
+          directTransport: database.transport,
           directUrl: Redacted.make(database.url),
           maxConnections: options.maxConnections ?? DEFAULT_MAX_CONNECTIONS,
+          transport: database.transport,
           url: Redacted.make(database.url),
         })
       )

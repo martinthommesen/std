@@ -12,6 +12,24 @@ services:
       # STD_POSTGRES_PORT moves the host port, for a second stack beside the
       # shared one (`docker compose -p <name>`); the default is unchanged.
       - "127.0.0.1:${STD_POSTGRES_PORT:-54329}:5432"
+    command:
+      ["postgres", "-c", "max_connections=400", "-c", "shared_buffers=1GB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U std -d std"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - std-pg:/var/lib/postgresql
+
+  # Isolated from the shared development/test service above.
+  quickstart-postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: std
+      POSTGRES_PASSWORD: std
+      POSTGRES_DB: std
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
     entrypoint: ["sh", "/usr/local/bin/std-postgres-tls.sh"]
     command:
       ["postgres", "-c", "max_connections=400", "-c", "shared_buffers=1GB"]
@@ -21,7 +39,7 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - std-pg:/var/lib/postgresql
+      - std-quickstart-pg:/var/lib/postgresql
       - std-ca:/std-ca
       - ./docker/postgres-tls.sh:/usr/local/bin/std-postgres-tls.sh:ro
 
@@ -42,6 +60,7 @@ services:
       context: .
       dockerfile: docker/quickstart.Dockerfile
     init: true
+    entrypoint: ["sh", "docker/quickstart-entrypoint.sh"]
     command:
       [
         "sh",
@@ -49,9 +68,14 @@ services:
         'if [ "$$STD_HELPDESK" = 0 ]; then pnpm --silent std upgrade && pnpm --silent std bootstrap-admin; else pnpm --silent std upgrade --set examples/helpdesk/v2 && pnpm --silent std bootstrap-admin && pnpm --silent helpdesk:seed; fi',
       ]
     environment:
-      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
-      STD_DATABASE_SSL_MODE: verify-full
-      STD_DATABASE_SSL_CA_FILE: /std-ca/ca.crt
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@quickstart-postgres:5432/std}
+      STD_COMPOSE_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-}
+      STD_DATABASE_SSL_MODE: ${STD_DATABASE_SSL_MODE:-}
+      STD_DATABASE_SSL_CA_FILE: ${STD_DATABASE_SSL_CA_FILE:-}
+      STD_DATABASE_SSL_SYSTEM_ROOTS: ${STD_DATABASE_SSL_SYSTEM_ROOTS:-}
+      STD_DATABASE_SSL_CERT_FILE: ${STD_DATABASE_SSL_CERT_FILE:-}
+      STD_DATABASE_SSL_KEY_FILE: ${STD_DATABASE_SSL_KEY_FILE:-}
+      STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE: ${STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE:-}
       STD_ADMIN_LOGIN: ${STD_ADMIN_LOGIN:-administrator}
       # A disposable demo credential; set your own for anything but a demo.
       STD_ADMIN_PASSWORD: ${STD_ADMIN_PASSWORD:-quickstart-admin-password}
@@ -66,7 +90,7 @@ services:
     volumes:
       - std-ca:/std-ca:ro
     depends_on:
-      postgres:
+      quickstart-postgres:
         condition: service_healthy
     restart: "no"
 
@@ -79,11 +103,17 @@ services:
       context: .
       dockerfile: docker/quickstart.Dockerfile
     init: true
+    entrypoint: ["sh", "docker/quickstart-entrypoint.sh"]
     command: ["pnpm", "--silent", "std", "serve"]
     environment:
-      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
-      STD_DATABASE_SSL_MODE: verify-full
-      STD_DATABASE_SSL_CA_FILE: /std-ca/ca.crt
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@quickstart-postgres:5432/std}
+      STD_COMPOSE_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-}
+      STD_DATABASE_SSL_MODE: ${STD_DATABASE_SSL_MODE:-}
+      STD_DATABASE_SSL_CA_FILE: ${STD_DATABASE_SSL_CA_FILE:-}
+      STD_DATABASE_SSL_SYSTEM_ROOTS: ${STD_DATABASE_SSL_SYSTEM_ROOTS:-}
+      STD_DATABASE_SSL_CERT_FILE: ${STD_DATABASE_SSL_CERT_FILE:-}
+      STD_DATABASE_SSL_KEY_FILE: ${STD_DATABASE_SSL_KEY_FILE:-}
+      STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE: ${STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE:-}
       STD_HTTP_HOST: 0.0.0.0
       STD_HTTP_PORT: "8080"
       STD_TIME_ZONE: ${STD_TIME_ZONE:-UTC}
@@ -108,3 +138,4 @@ services:
 volumes:
   std-pg:
   std-ca:
+  std-quickstart-pg:

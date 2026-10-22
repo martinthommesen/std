@@ -11,8 +11,13 @@ import {
   layer as pgLayer,
   PgClient as PgClientService,
 } from "@effect/sql-pg/PgClient";
-import type { Layer } from "effect";
-import { Config, Effect, Redacted, Schema } from "effect";
+import {
+  databaseTransport,
+  databaseTlsConfig,
+  loadDatabaseTls,
+  warnInsecureTransport,
+} from "@std/postgres/transport";
+import { Config, Effect, Layer, Redacted, Schema } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -21,6 +26,7 @@ import { query } from "./execute.ts";
 
 /** Where the bench server is. */
 export interface ServerConfig {
+  readonly url: string;
   readonly host: string;
   readonly port: number;
   readonly user: string;
@@ -52,6 +58,7 @@ export const parseServerUrl = (url: string): ServerConfig => {
     host: parsed.hostname,
     password: decodeURIComponent(parsed.password),
     port: parsed.port === "" ? defaultPort : Number(parsed.port),
+    url,
     user: decodeURIComponent(parsed.username),
   };
 };
@@ -81,17 +88,30 @@ export const clientLayer = (
   database: string,
   options: ClientOptions
 ): Layer.Layer<PgClient | SqlClient, SqlError> =>
-  pgLayer({
-    applicationName: "std-bench",
-    database,
-    host: server.host,
-    maxConnections: options.maxConnections,
-    minConnections: 1,
-    password: Redacted.make(server.password),
-    port: server.port,
-    startupParameters: { TimeZone: "UTC", ...options.settings },
-    username: server.user,
-  });
+  Layer.unwrap(
+    Effect.gen(function* benchClientLayer() {
+      const parsed = new URL(server.url);
+      parsed.pathname = `/${encodeURIComponent(database)}`;
+      parsed.searchParams.delete("dbname");
+      const url = Redacted.make(parsed.href);
+
+      const transport = yield* databaseTransport(
+        url,
+        yield* loadDatabaseTls(yield* databaseTlsConfig)
+      ).pipe(Effect.orDie);
+
+      yield* warnInsecureTransport([transport]);
+
+      return pgLayer({
+        applicationName: "std-bench",
+        maxConnections: options.maxConnections,
+        minConnections: 1,
+        ssl: transport.ssl,
+        startupParameters: { TimeZone: "UTC", ...options.settings },
+        url,
+      });
+    }).pipe(Effect.orDie)
+  );
 
 /**
  * Runs a command (no shell) and returns its standard output.

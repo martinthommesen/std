@@ -10,12 +10,15 @@
  * casts. These tests create no tables, so they use the `std` database as is.
  */
 import { PgClient, PgTypes } from "@effect/sql-pg";
-import { Effect, Layer, Result } from "effect";
+import {
+  databaseTransport,
+  databaseTlsConfig,
+  loadDatabaseTls,
+} from "@std/postgres/transport";
+import { Config, Effect, Layer, Redacted, Result } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { databaseUrlConfig } from "../../../server/src/sql/database-config.ts";
-import { databaseTransport } from "../../../server/src/sql/tls.ts";
 import { civilFromDays, padDigits } from "../../src/calendar.ts";
 
 const OID = {
@@ -234,8 +237,16 @@ export const PostgresTest: Layer.Layer<
   SqlError
 > = Layer.unwrap(
   Effect.gen(function* PostgresTest() {
-    const url = yield* databaseUrlConfig;
-    const { ssl } = yield* databaseTransport(url);
+    const url = yield* Config.Redacted("STD_DATABASE_URL").pipe(
+      Config.withDefault(
+        Redacted.make("postgres://std:std@127.0.0.1:54329/std")
+      )
+    );
+
+    const { ssl } = yield* databaseTransport(
+      url,
+      yield* loadDatabaseTls(yield* databaseTlsConfig)
+    );
 
     return PgClient.layer({
       applicationName: "std-values-tests",
