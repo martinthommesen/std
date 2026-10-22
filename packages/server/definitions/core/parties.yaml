@@ -13,7 +13,7 @@ tables:
     fields:
       - id: 7292e739-5395-415e-a5b6-138c247bad45
         name: name
-        type: { kind: text, maxLength: 400 }
+        type: text
         helpText: The name references show. An individual's is filled from its given and family names when a save leaves it empty.
       - id: de47137e-585c-4312-bf76-e96f3b2bcde6
         name: status
@@ -60,11 +60,11 @@ tables:
     fields:
       - id: f41d3f02-c469-428e-85cb-c6f55a2902de
         name: given_name
-        type: { kind: text, maxLength: 200 }
+        type: text
         required: true
       - id: bd493796-8b5e-4907-9e12-6a047dac62e7
         name: family_name
-        type: { kind: text, maxLength: 200 }
+        type: text
         required: true
       - id: 6d6be5f1-2734-467a-b90c-de51fc1694e2
         name: birth_date
@@ -86,7 +86,7 @@ tables:
     fields:
       - id: 0773cefc-558a-4846-86b3-29b188410a1c
         name: trading_name
-        type: { kind: text, maxLength: 400 }
+        type: text
       - id: 1d91aec4-e2a1-4dd5-bf69-156a17223d03
         name: is_legal_entity
         type: boolean

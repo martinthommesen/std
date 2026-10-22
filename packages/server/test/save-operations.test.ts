@@ -45,7 +45,9 @@ const setOperation = (value: string) =>
     )
   );
 
-// Runs an effect with a before-write hook that sets one field.
+// Runs an effect with a before-write hook that sets one field of users
+// (hooks follow the concrete class, Contracts 4.1; a user's create also
+// creates its individual).
 const withHookValue =
   (fieldId: DefinitionId, value: DecodedInput) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -55,7 +57,11 @@ const withHookValue =
       return yield* Effect.provideService(effect, SaveHooks, {
         ...hooks,
         beforeWrite: (input) =>
-          Effect.succeed(new Map([...input.values, [fieldId, value]])),
+          Effect.succeed(
+            input.classId === USER_CLASS_ID
+              ? new Map([...input.values, [fieldId, value]])
+              : input.values
+          ),
       });
     });
 
