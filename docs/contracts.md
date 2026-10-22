@@ -590,7 +590,7 @@ Every save (create, update, delete; single or batch) runs in one transaction:
 2. Lock the root row alone (2.2 item 3). In the next statement check visibility (`NotFound`), load all level rows, check the expected version (`VersionConflict`).
 3. Existing-state access checks (3.9) (`NotAllowed`).
 4. Normalize proposed values to canonical form (6.5). If the save is a no-op (3.9), return the current record; no hooks, no writes. An aggregate save (4.9) is never a no-op and skips this check and the one in step 6.
-5. Before-write hooks.
+5. Before-write hooks. From Step 3, record rules of kind `derive` and `guard` run here only on saves that are not persisted by settling (4.9); kind `invariant` runs on every save (4.10).
 6. No-op check again. Validate against the concrete class's effective schema (`ValidationFailed`).
 7. Write level rows; bump the root version.
 8. Proposed-state access checks (`NotAllowed`, rollback).
@@ -616,7 +616,7 @@ Hooks and record rules are selected by the record's concrete class: those attach
 - In-transaction hooks get an Effect environment with no HTTP client, so an external call fails to type-check. [judgment]
 - Nesting depth is capped at 8 (`HookDepthExceeded`), also along after-commit `cause` chains. [judgment]
 - **After-commit effects (decision):** when an effect only writes through the record service, its writes and the fenced `done` update commit in one transaction, so in-database effects happen exactly once. External calls stay at least once, run outside any transaction, and receive `change_id` as their idempotency key. Reason: admins configure after-commit rules without code, so they cannot make them idempotent.
-- Record rules (Step 3) are declared as in 4.10: a `before` rule is before-write; an `after` rule is after-write (synchronous, can fail the save); an `afterCommit` rule runs from a delivery (asynchronous, cannot); an `aggregate` rule runs when its class's records are settled as owners (4.9) and only proposes in-memory changes.
+- Record rules (Step 3) are declared as in 4.10: a `before` rule is before-write, of kind `derive` (sets values), `guard` (refuses a user's transition) or `invariant` (refuses a state on every save, settled ones included); an `after` rule is after-write (synchronous, can fail the save); an `afterCommit` rule runs from a delivery (asynchronous, cannot); an `aggregate` rule runs when its class's records are settled as owners (4.9) and only proposes in-memory changes.
 - A nested Effect `withTransaction` issues `SAVEPOINT` [checked: Effect 4 `SqlClient` `makeWithTransaction`], so STD's SQL layer joins the outer transaction itself, and a test asserts no `SAVEPOINT` is issued. Inside an STD transaction, Effect's nested `withTransaction` dies before it sends anything, and the SQL layer refuses `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` statements [checked: 0A smoke test].
 
 ### 4.2 Change entries
@@ -728,8 +728,8 @@ Some records are parts of another record: a ticket's notes, an order's items, an
 
 **Finalization: settle in memory, then persist once.** When the outermost save of the operation has finished its after-write phase (4.1 step 10), the save stack is empty. Before commit the record service finalizes the touched set:
 
-1. **Settle.** The settling set starts as the touched set. Each pass runs the aggregate rules (4.10) of every owner in the settling set, innermost first, and each owner's rules in rule order, on in-memory images that every proposal updates at once. The rules see the following, through the aggregate-rule profile (5.10): the owner's current image; its image at the start of the transaction, as `previous`; its parts as locked plus all proposals; `partsChanged.C`; and the quantifiers `anyPart` and `allParts`. They may propose new values for the owner's fields and its parts' fields, and new parts of that owner (14.4 creates approvals this way). They cannot delete records or touch another aggregate. A proposal that changes or creates a record which is itself an owner of parts (a request item, which owns its approvals) enrolls that record and its owner chain in the settling set, so its rules run in the next pass of the same bounded process. A rule declared `once` fires at most once per owner and transaction; the owner's settle state records that it fired, so a condition that stays true (`previous` and `partsChanged` never change within a transaction) cannot fire it again. The fixed point is a pass that proposes nothing. If pass 3 still proposes something, the transaction fails with `AggregateNotSettled` and rolls back [judgment].
-2. **Persist.** Then, innermost first, the service writes each changed or created part with an ordinary save as the system effect `aggregate` (4.10), followed by exactly one **aggregate save** of each owner in the settling set whose parts or derived state changed. These saves run the pipeline without before-write rules: the aggregate rules already produced every value they write, and system transitions (14.4) belong to aggregate rules alone, so a before-write rule could only apply an effect twice or refuse a transition the system is allowed to make [judgment]. Validation, the visibility check, history, deliveries and after-write rules run as usual. A write into an owner already persisted in this transaction is `AggregateNotSettled`.
+1. **Settle.** The settling set starts as the touched set. Each pass runs the aggregate rules (4.10) of every owner in the settling set, innermost first, and each owner's rules in rule order, on in-memory images that every proposal updates at once. The rules see the following, through the aggregate-rule profile (5.10): the owner's current image; its image at the start of the transaction, as `previous`; its parts as locked plus all proposals; `partsChanged.C`; and the quantifiers `anyPart` and `allParts`. They may propose new values for the owner's fields and its parts' fields, and new parts of that owner (14.4 creates approvals this way). They cannot delete records or touch another aggregate. A proposal that changes or creates a record which is itself an owner of parts (a request item, which owns its approvals) enrolls that record and its owner chain in the settling set, so its rules run in the next pass of the same bounded process. In the same pass, after the aggregate rules, every record whose in-memory image changed (owner or part) also runs its `before` rules of kind `derive` on that image, so their values are part of the settled state and count toward the fixed point. Guards and invariants do not run while settling. A rule declared `once` fires at most once per owner and transaction; the owner's settle state records that it fired, so a condition that stays true (`previous` and `partsChanged` never change within a transaction) cannot fire it again. The fixed point is a pass that proposes nothing. If pass 3 still proposes something, the transaction fails with `AggregateNotSettled` and rolls back [judgment].
+2. **Persist.** Then, innermost first, the service writes each changed or created part with an ordinary save as the system effect `aggregate` (4.10), followed by exactly one **aggregate save** of each owner in the settling set whose parts or derived state changed. On these saves, `derive` rules are not applied again, since settling already applied them to the settled image, and `guard` rules are skipped, since system transitions (14.4) belong to aggregate rules alone. `invariant` rules run against the settled image, and so do schema validation, the visibility check, history, deliveries and after-write rules. An invariant that refuses fails the whole transaction with its own error (`RuleRefused` or `InvalidTransition`, with the rule's fixed message), and everything rolls back, the user's triggering write included [judgment]. A write into an owner already persisted in this transaction is `AggregateNotSettled`.
 3. **Cascades.** After-write rules of aggregate saves may write other aggregates, for example a completed change updating services. The owners those writes touch are finalized in turn, settle then persist. An owner is persisted at most once per transaction, and a write into an owner that was already persisted is `AggregateNotSettled`.
 
 **The aggregate save** is a named kind of save in the pipeline (4.1):
@@ -752,6 +752,7 @@ Record rules are config records (`core.record_rule`): stable ID, owner layer, co
 | `order` | Order number; ties by stable ID |
 | `operations` | `create`, `update`, `delete`; not for `aggregate` |
 | `condition` | A condition AST in the phase's profile (5.10) |
+| `kind` | `before` only, required: `derive` (only `set` actions; runs on users' writes and inside settling, 4.9), `guard` (only `refuse` actions; runs on users' writes only: user-transition guards), or `invariant` (only `refuse` actions; runs on every save, settled saves included). Mixing kinds and actions is `DefinitionInvalid` |
 | `once` | `aggregate` only: the rule fires at most once per owner and transaction |
 | `runAs` | `after` only: an identity, which needs `rules.run_as` (4.1) |
 | `actions` | An ordered list of the kinds below |
@@ -772,7 +773,7 @@ Who acts:
 - `before` actions are part of the save, as the acting user; the values they set count as supplied fields (3.9).
 - `after` actions are nested saves through the pipeline as the acting user, or as `runAs`.
 - `afterCommit` actions run as the subscription's identity, in the delivery transaction (4.1).
-- `before` rules run only on saves that a user, an API call, an import or an `after` action makes, never on the saves 4.9's persistence makes.
+- On saves that a user, an API call, an import or an `after` action makes, every `before` rule runs: `derive`, then `guard`, then `invariant`, each kind in rule order. On the saves 4.9's persistence makes, only `invariant` rules run, because `derive` rules already ran inside settling and `guard` rules guard users' writes only.
 - `aggregate` actions save nothing when they run: they propose in-memory changes, which 4.9 persists as the system effect `aggregate`. Those writes are not checked against the acting user's write rights, but they are validated as usual. Their change entries carry `actor_id` = the acting user of the operation and `cause` `{"aggregate": {"rules": [<IDs of the rules that proposed the change>], "reason", "parts"}}`, so the audit names both the user and the rules.
 
 ### Acceptance tests
@@ -805,7 +806,8 @@ Who acts:
   - submitting a request never fails with `RecordInSave`, and gives the request one version for the submit and one aggregate version;
   - an owner-only edit of `planned_start` on a scheduled normal change queues the change, cancels its approvals and moves it to `assess`;
   - the same edit on an emergency change in `authorize`, and on one in `scheduled`, reaches the fixed point in two passes. Each persists the cancelled old-round approvals, the new round's approvals and the change once each, advances `approval_round` by exactly 1, and raises no `AggregateNotSettled`;
-  - no `before` rule of 14.4 runs on a persisted save: a spy rule on each class records no call during persistence, while the guards still refuse the same transitions written by a user;
+  - no `guard` or `derive` rule runs on a persisted save: a spy `guard` and a spy `derive` rule on each class record no call during persistence, while the guards still refuse the same transitions written by a user and the derive rules' values appear in the settled image;
+  - an `invariant` rule breaks on a settled image: with a local invariant "`planned_start` and `planned_end` are set when `status` is `scheduled`" and a normal change in `authorize` without `planned_end`, the last approval's settling proposes `scheduled`, the invariant refuses at persistence, and the whole transaction rolls back, the approver's own write included. The approver gets `RuleRefused` with that rule's message;
   - submitting a request with an approval-required item creates that item's approvals during settling, before anything is persisted (asserted with a statement-log check: no write before the last settle pass), then persists the approvals, the items and the request once each;
   - a part-only change with no derived change still gives one aggregate version, its change entry and its deliveries;
   - a TMF `DELETE` of a ticket with notes leaves the notes' and the ticket's delete entries and no aggregate save;
@@ -1815,7 +1817,7 @@ TMF641 never shows `held` (an ITIL change has no hold state), and never `assessi
 
 Aggregates (4.9): `helpdesk.change_item`, `helpdesk.change_cancellation` and `helpdesk.change_approval` are parts of their change; `helpdesk.request_item` and `helpdesk.request_cancellation` of their request; `helpdesk.request_item_approval` of its request item, which makes the request a three-level aggregate. Every write to any of them, or to the change or request itself, locks the aggregate root first, which serializes the concurrent outcomes below, and queues the owners. Every transition below that depends on parts (approval rounds and outcomes, invalidation, item and request state, cancellations) is an **aggregate rule**: it is settled in memory when the owners are finalized and persisted once per transaction (4.9), never by a nested save of an owner that is still on the save stack. Aggregate rules may also create parts of the owner they settle, here only approvals [judgment: the one creation 4.9 allows].
 
-**Change types and states.** `change_type` is `standard` (needs a `standard_change_template` reference), `normal` or `emergency`, and is read-only after `new`. Allowed `status` transitions; anything else is `InvalidTransition` (422) and writes nothing. "System" transitions are made only by the aggregate rules below; a user's write of them is `InvalidTransition`. The transition guards are `before` rules, which never run on the saves that settling persists (4.9), so they guard users' writes only:
+**Change types and states.** `change_type` is `standard` (needs a `standard_change_template` reference), `normal` or `emergency`, and is read-only after `new`. Allowed `status` transitions; anything else is `InvalidTransition` (422) and writes nothing. "System" transitions are made only by the aggregate rules below; a user's write of them is `InvalidTransition`. The transition guards are `before` rules of kind `guard`, which never run on the saves that settling persists (4.9), so they guard users' writes only:
 
 | From | `standard` | `normal` | `emergency` |
 | --- | --- | --- | --- |
@@ -1896,9 +1898,27 @@ Entering `implement` sets `actual_start`; entering `closed` needs `close_code` (
 | `request_item` | `approve` | `aggregate` | `state = "awaiting_approval" and anyPart(request_item_approval, current) and allParts(request_item_approval, not current or state = "approved")` | `set` `state` `new` |
 | `request_item` | `close-approvals` | `aggregate` | `state in ("canceled", "rejected") and anyPart(request_item_approval, current and open)` | `setParts` current open approvals → `cancelled` |
 
+Every shipped `before` rule (4.10) has an explicit kind:
+
+| Set and class | Rule | Kind |
+| --- | --- | --- |
+| helpdesk `ticket` (11.2) | fill `short_description` from `description`; set `status_changed_at` on a status change; set and clear `resolved_at` | `derive` |
+| helpdesk `incident` (14.2) | the nine priority-matrix cells | `derive` |
+| helpdesk `incident` (14.2) | one transition guard per source state | `guard` |
+| helpdesk `incident` (14.2) | `resolved` needs `resolution_code` and `resolution_notes`; `hold_reason` exactly while `on_hold`; `major_incident` only at priority 1 | `invariant` |
+| helpdesk `problem` (14.3) | one transition guard per source state | `guard` |
+| helpdesk `problem` (14.3) | `known_error` needs `workaround`; `root_cause` needed in `fix_in_progress` and `resolved` | `invariant` |
+| helpdesk `change` (14.4) | the transition table's guards, users' writes of system transitions, and `change_type` read-only after `new` | `guard` |
+| helpdesk `change` (14.4) | `closed` needs `close_code`; `standard` needs `standard_change_template` | `invariant` |
+| helpdesk `change` (14.4) | set `actual_start` on entering `implement` and `actual_end` on entering `closed` | `derive` |
+| helpdesk `request` and `request_item` (14.4) | users' request transitions (`draft` → `submitted` or `canceled` only); item transitions; items added or removed only while `draft` | `guard` |
+| helpdesk `request` (14.4) | a non-draft request has at least one item | `invariant` |
+| helpdesk `approval` classes (14.4) | users' approval writes (only `requested` → `approved` or `rejected`, by the approver) | `guard` |
+| cmdb `ci_relationship` (14.5) | no `contains` cycle within 3 hops | `invariant` |
+
 How settling reaches its fixed point (4.9). Two examples:
 
-- **Emergency invalidation**, from `authorize` or from `scheduled`. Pass 1 runs `invalidate-emergency` once: it cancels the current open approvals and sets `authorize`; then `create-round` finds no live approval of the current round, advances the round once and creates its approvals. In pass 2, `once` keeps the invalidation from firing again, and `create-round` sees live current approvals, so nothing is proposed. Persistence writes the cancelled approvals, the new ones and the change once each, without before-write rules, so no other rule advances the round.
+- **Emergency invalidation**, from `authorize` or from `scheduled`. Pass 1 runs `invalidate-emergency` once: it cancels the current open approvals and sets `authorize`; then `create-round` finds no live approval of the current round, advances the round once and creates its approvals. In pass 2, `once` keeps the invalidation from firing again, and `create-round` sees live current approvals, so nothing is proposed. Persistence writes the cancelled approvals, the new ones and the change once each, running only invariants, so no other rule advances the round.
 - **Submitting a request.** Pass 1 runs `submit-items`, which moves the items and so enrolls them (4.9). In pass 2, each item's `create-round` creates its approvals, then `derive` sets the request's state. Pass 3 proposes nothing. Only then is anything persisted: the approvals, the items and the request, each once.
 
 ### 14.5 Service configuration management (cmdb, Step 4)
@@ -1981,5 +2001,5 @@ Completeness against the sources cannot be checked mechanically: the gate review
 24. **`data` migrations.** Default: a ledger `state` (`running`, `applied`) that startup and `doctor` check, run by `std upgrade` after set loads as the system user (1.9, 1.10, 3.1, 8.5; decision 0021, open decision 29).
 25. **Events stricter than reads.** Default: an event whose trigger is a derived field fires only for identities that can read all its sources, although the same identity can read the derived field itself through the API and history (12.1; decision 0021, open decision 30).
 26. **Helm lifecycle.** Default: a hook-free chart with a per-attempt upgrade Job, `Recreate` Deployments and init containers waiting for that attempt's completion, which works with and without `--wait` and with a bundled or external database (13.1; decision 0021, open decision 31).
-27. **Aggregate rule language.** Default: record rules as declared in 4.10, with the aggregate-only quantifiers `anyPart` and `allParts` and owner paths in the condition AST, evaluated in TypeScript only (5.2, 5.10; decision 0021, open decision 33).
+27. **Aggregate rule language.** Default: record rules as declared in 4.10, with `before` rule kinds `derive`, `guard` and `invariant`, with the aggregate-only quantifiers `anyPart` and `allParts` and owner paths in the condition AST, evaluated in TypeScript only (5.2, 5.10; decision 0021, open decision 33).
 28. **Attempt IDs and GitOps.** Default: the chart accepts an externally supplied `upgradeAttempt` and generates one per render only when it is absent; GitOps users set a new value for every rollout (13.1; decision 0021, open decision 32).
