@@ -13,7 +13,7 @@ Plan Step 2, guarantee 2D: "Layered UI config survives an app upgrade and rename
 | `helpdesk.ticket` | `number` (auto-numbered, prefix `TKT`), `short_description` (display field, required), `description`, `status` (choice, required, default `new`), `priority` (choice, required, default `moderate`), `assigned_to` (reference to `core.user`), `customer_email`, `internal_cost` (decimal 10,2) | `assigned_to` renamed to `assignee`; new field `resolution_notes`; status `canceled` added; `in_progress` relabelled "Work in progress", `on_hold` "Waiting on caller" |
 | `helpdesk.incident` extends ticket | `category` and `impact` (choices); overrides: prefix `INC`, status subset without `awaiting_approval` | `canceled` added to the subset |
 | Layouts | form and list on both tables | the incident form gains a "Resolution" section, the incident list `impact` |
-| Saved filters | incident: `my_open`, `unassigned`, `critical_open`; ticket: `costly` (reads `internal_cost`) | unchanged |
+| Saved filters | incident: `my_open`, `unassigned`, `critical_open`; ticket: `costly` (reads `internal_cost`) | `unassigned` and `critical_open` also exclude `canceled` (`my_open` lists the open statuses, so a new closed status never reaches it); the upgrade applies the changed conditions, which no local override touches |
 | Role `agent` | label "Agent" | label "Helpdesk agent" |
 | Access rules for `agent` | read every ticket; create; update while assigned to the caller or to no one (both states, 3.9); every ticket and incident field; deny `internal_cost` for read, create and update | new: deny reading `customer_email` unless the ticket is assigned to the caller |
 
@@ -59,7 +59,7 @@ Both kinds of rename, observed as a caller sees them through the metadata endpoi
 | --- | --- | --- |
 | `helpdesk-upgrade` | the 2D upgrade test above | on a conflict, merging the local layout with v2's new fields (instead of keeping it whole): the form layout has 11 entries instead of 6; letting the shipped value win on a conflict: `in_progress` reads "Work in progress", not "Working" |
 | `helpdesk-rename` | the 2D rename test above | printing the served filter text with the names the filter was written with (`assigned_to`, `site`) instead of the current ones: both cases fail |
-| `helpdesk-agent` | the agent's restrictions over the API; served saved filters select what their text selects | serving filters through the full class view instead of the caller's: the agent's metadata contains `internal_cost` (the `costly` filter) |
+| `helpdesk-agent` | the agent's restrictions over the API; served saved filters select what their text selects; a canceled incident is in none of the "open" filters (review round 1: v2 first left `canceled` out of two exclusions) | serving filters through the full class view instead of the caller's: the agent's metadata contains `internal_cost` (the `costly` filter) |
 | `saved-filters` | serving per caller, refusals through both write paths with nothing committed, retire reported, purge refused then allowed, table purge cascade |  |
 | `helpdesk-seed` (example) | the seed reruns without adding or changing anything |  |
 | `schema-http`, `platform-migrations`, `doctor-platform` | the new kind in the hidden-versus-missing matrices, migration 0009, the regenerated platform catalog |  |

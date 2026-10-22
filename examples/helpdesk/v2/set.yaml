@@ -3,7 +3,9 @@
 # version 1 (`../v1`) it
 # - renames the field `assigned_to` to `assignee` (by ID: layouts, saved
 #   filters and access rules name it by ID and keep working),
-# - adds the status `canceled`, also to the incident's status subset,
+# - adds the status `canceled`, also to the incident's status subset, and
+#   excludes it from the "open" saved filters `unassigned` and
+#   `critical_open` (`my_open` lists the open statuses, so it already does),
 # - relabels the statuses `in_progress` ("Work in progress") and `on_hold`
 #   ("Waiting on caller"),
 # - adds the field `resolution_notes` and shows it on the incident form,

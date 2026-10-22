@@ -183,6 +183,22 @@ describe("helpdesk-upgrade", () => {
           // override simply stays (checked below), with nothing to report.
           assert.deepStrictEqual(helpdesk?.kept, []);
 
+          // The "open" filters that now exclude `canceled` are ordinary
+          // updates of their condition: no override, so no conflict.
+          assert.deepStrictEqual(
+            helpdesk?.changes
+              .filter((entry) => entry.kind === "savedFilter")
+              .map(
+                (entry) =>
+                  `${entry.action} ${entry.id} ${entry.properties.join(",")}`
+              )
+              .toSorted(),
+            [
+              `updated ${HELPDESK.savedFilters.criticalOpen} condition`,
+              `updated ${HELPDESK.savedFilters.unassigned} condition`,
+            ].toSorted()
+          );
+
           // Security changes: the new access rule and the relabelled role,
           // nothing else (the rename, choices and layouts are not security).
           assert.deepStrictEqual(

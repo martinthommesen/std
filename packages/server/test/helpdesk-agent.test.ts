@@ -340,5 +340,86 @@ describe("helpdesk-agent", () => {
           assert.match(JSON.stringify(ticket.values.number), /^"TKT\d{7}"$/u);
         })
     );
+
+    dbTest.effect(
+      "a canceled incident is in none of the open saved filters",
+      () =>
+        Effect.gen(function* canceled() {
+          const { admin, agent, fixture } = yield* signInBoth;
+          const http = yield* TestHttpClient;
+          const asAdmin = { admin, caller: admin };
+
+          // One canceled incident for each open filter to catch: assigned
+          // to the agent, unassigned, and critical.
+          const ids: string[] = [];
+
+          for (const body of [
+            { assignee: fixture.agent.id, priority: "high" },
+            { priority: "low" },
+            { assignee: fixture.agent2.id, priority: "critical" },
+          ]) {
+            const created = yield* http.request("POST", listPath(INCIDENT), {
+              body: { ...body, short_description: "Canceled by the caller" },
+              token: admin,
+            });
+
+            assert.strictEqual(created.status, 201, created.text);
+
+            const { id } = yield* recordOf(created);
+
+            const open = yield* allPages(admin, INCIDENT, {
+              filter: `id = "${id}"`,
+            });
+
+            assert.lengthOf(open.records, 1);
+
+            const cancel = yield* patchRecord(asAdmin, id, {
+              status: "canceled",
+            });
+
+            assert.strictEqual(cancel.status, 200, cancel.text);
+            ids.push(id);
+          }
+
+          for (const token of [admin, agent]) {
+            const meta = yield* metadataOf(token, INCIDENT);
+
+            const open = (meta.table.savedFilters ?? []).filter((filter) =>
+              ["my_open", "unassigned", "critical_open"].includes(filter.name)
+            );
+
+            assert.lengthOf(open, 3);
+
+            for (const filter of open) {
+              const { records } = yield* allPages(token, INCIDENT, {
+                filter: filter.filter,
+              });
+
+              for (const id of ids) {
+                assert.notInclude(idsOf(records), id, filter.name);
+              }
+            }
+          }
+
+          // Without the exclusion the same incidents would match: the
+          // filters' other conditions select them while they are new.
+          const reopened = yield* patchRecord(asAdmin, ids[1] ?? "", {
+            status: "new",
+          });
+
+          assert.strictEqual(reopened.status, 200, reopened.text);
+
+          const unassigned = (yield* metadataOf(
+            admin,
+            INCIDENT
+          )).table.savedFilters?.find((filter) => filter.name === "unassigned");
+
+          const { records } = yield* allPages(admin, INCIDENT, {
+            filter: unassigned?.filter ?? "",
+          });
+
+          assert.include(idsOf(records), ids[1]);
+        })
+    );
   });
 });

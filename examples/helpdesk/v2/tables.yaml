@@ -246,7 +246,8 @@ tables:
               arg: { path: [fc99eecb-5682-4a6c-8391-60d1055c4b2e] }
             - op: notIn
               left: { path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
-              right: [{ value: resolved }, { value: closed }]
+              right:
+                [{ value: resolved }, { value: closed }, { value: canceled }]
       - id: 5f7a4a5a-5032-4888-9ba8-834cf4448d8c
         name: critical_open
         label: Critical and open
@@ -258,4 +259,5 @@ tables:
               right: { value: critical }
             - op: notIn
               left: { path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
-              right: [{ value: resolved }, { value: closed }]
+              right:
+                [{ value: resolved }, { value: closed }, { value: canceled }]
