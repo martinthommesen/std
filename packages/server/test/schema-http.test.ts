@@ -1690,6 +1690,13 @@ describe("schema-http", () => {
             const admin = yield* adminToken;
             const fingerprint = yield* catalogFingerprint;
             const userVersion = yield* versionOf(USER_CLASS_ID);
+            // The built-in rules name `admin`, so its version moved past 1
+            // (Contracts 4.6: an access-rule change bumps the roles it names).
+            const adminRoleVersion = yield* versionOf(BUILT_IN_ROLE_IDS.admin);
+
+            const purgerVersion = yield* versionOf(
+              BUILT_IN_ROLE_IDS.schema_purger
+            );
 
             const nameField = (yield* (yield* Catalog).refresh).fieldByName(
               USER_CLASS_ID,
@@ -1721,9 +1728,15 @@ describe("schema-http", () => {
                 "UseRetireOrPurge",
               ],
               [
-                patch(admin, "core.role", BUILT_IN_ROLE_IDS.admin, 1, {
-                  state: "retired",
-                }),
+                patch(
+                  admin,
+                  "core.role",
+                  BUILT_IN_ROLE_IDS.admin,
+                  adminRoleVersion,
+                  {
+                    state: "retired",
+                  }
+                ),
                 403,
                 "DefinitionProtected",
               ],
@@ -1749,7 +1762,7 @@ describe("schema-http", () => {
                   {
                     id: BUILT_IN_ROLE_IDS.schema_purger,
                     op: "delete",
-                    version: 1,
+                    version: purgerVersion,
                   },
                 ]),
                 403,
