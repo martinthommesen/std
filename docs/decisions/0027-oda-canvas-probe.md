@@ -16,7 +16,7 @@ The plan's Step 3 gate: "a stub component is deployed on the pinned ODA Canvas o
 
 After a successful run it also requests the exposed API's `openapi.json` through the Canvas gateway at the URL the Canvas published (`status.coreAPIs[0].url`). That observation is recorded but does not decide the outcome: the gate's measure is `Complete`, and the gateway is the Step 5 workflow's first assertion.
 
-`result.json` (schema version 1) holds: the outcome and the failed phase with the last 60 lines of its log; each phase's start, duration, exit code and the disk after it; the component's status transitions; disk before, after, at its peak and after cleanup (the root file system, `df`), plus the kind node's own footprint (its image and its container's writable layer, which do not depend on what else uses the disk); the runner (`ImageOS`, `ImageVersion`, OS, kernel, CPUs, memory); the version of every tool, the Kubernetes server included; the pins; and every container image the cluster ran, with the image ID it resolved to. On failure `logs/diagnostics.log` adds every resource, recent events, the pods that are not ready and the logs of the component, API and identity operators. The cluster is always deleted at the end, with cloud-provider-kind and its load-balancer containers for that cluster only.
+`result.json` (schema version 1) holds: the outcome and the failed phase with the last 60 lines of its log; each phase's start, duration, exit code and the disk after it; the component's status transitions; disk before, after, at its peak and after cleanup (the root file system, `df`), plus the kind node's own footprint, which does not depend on what else uses the disk (its image, its container's writable layer, and its `/var`, a Docker volume in kind that holds the pulled images, etcd and the logs); the runner (`ImageOS`, `ImageVersion`, OS, kernel, CPUs, memory); the version of every tool, the Kubernetes server included; the pins; and every container image the cluster ran, with the image ID it resolved to. On failure `logs/diagnostics.log` adds every resource, recent events, the pods that are not ready and the logs of the component, API and identity operators. The cluster is always deleted at the end, with cloud-provider-kind and its load-balancer containers for that cluster only.
 
 The workflow `oda-canvas-probe` runs the script on `ubuntu-latest`, `workflow_dispatch` only (Contracts 13.6: the Canvas runs nightly and on release candidates only from Step 5), `timeout-minutes: 120` against the phases' own limits of about 85 minutes, `permissions: contents: read`, no concurrency group (dispatching 10 at once gives 10 runners). It uploads `result.json` and the logs as the artifact `oda-canvas-probe` whatever the outcome, and the job fails when the probe fails. `pnpm oda-probe:summary [--runs 10]` downloads the artifacts of the last completed runs with `gh` and prints the Markdown for the results section; a run that left no result (cancelled, or killed by the job timeout) counts as a failure.
 
@@ -72,21 +72,42 @@ Differences from upstream, each a [judgment]:
 
 ## Local run on this machine
 
-Three runs of the same script on the development machine (16 CPUs, 62 GiB, Ubuntu 26.04.1, Docker 29.9.1), with unique cluster names, tools downloaded into `/tmp`, nothing else touched; each cluster and its load-balancer containers were deleted at the end, and the `kind` network the first run created was removed again. The first run pulled the kind node image; the later runs found it in Docker's cache, but every run pulls the Canvas's images afresh inside a new node. The machine is shared with other agents' builds and tests, so the root file system numbers include their activity; the kind node's own footprint does not.
+Four runs of the same script on the development machine (16 CPUs, 62 GiB, Ubuntu 26.04.1, Docker 29.9.1, kernel 7.0), 2026-10-22 between 16:00 and 16:25 UTC, with unique cluster names (`std-oda-probe-local-1` to `-4`), tools downloaded into `/tmp` and checked, nothing else touched. Each cluster and its load-balancer containers were deleted at the end. The second run's cleanup left the `kind` network it had created behind (removed by hand; the cleanup now waits for cloud-provider-kind to exit and retries, and the fourth run removed it itself). The first run pulled the kind node image; the later runs found it in Docker's cache, but every run pulls the Canvas's images afresh into a new node. The machine is shared with other agents' builds and tests, so the root file system numbers include their activity; the kind node's `/var` (measured from the fourth run on) does not. This machine has four times a public runner's CPUs and memory and a fast network, so these are lower bounds for GitHub.
 
-LOCAL_RESULTS
+From `pnpm oda-probe:summary --from …` over the four results:
+
+| Phase                            | Runs | Median | p90   | Max   | Failed |
+| -------------------------------- | ---- | ------ | ----- | ----- | ------ |
+| tools (download and verify)      | 4    | 3 s    | 4 s   | 4 s   | 0      |
+| cluster                          | 4    | 25 s   | 34 s  | 34 s  | 0      |
+| istio                            | 4    | 14 s   | 14 s  | 14 s  | 0      |
+| canvas                           | 4    | 279 s  | 281 s | 281 s | 0      |
+| component (to `Complete`)        | 4    | 11 s   | 11 s  | 11 s  | 0      |
+| bring-up (cluster to `Complete`) | 4    | 328 s  | 330 s | 330 s |        |
+
+| Disk | Runs | Value |
+| --- | --- | --- |
+| peak root file system use above the start | 4 | median 10.8 GB, max 13.0 GB |
+| kind node's `/var` (pulled and unpacked images, etcd, logs) | 1 | 10.1 GB |
+| kind node image | 3 | 1.4 GB |
+| kind node container's writable layer | 3 | 3 MB |
+| left after cleanup (node image, envoy image, tools) | 4 | about 0.1 to 1.7 GB |
+
+Outcome: 4 of 4 succeeded, failure rate 0%. In every run the component went from `In-Progress-CompCon` (5 s after `helm install`) to `Complete` (10 to 11 s), and its API answered 200 through the gateway.
 
 Findings from the local runs:
 
 - The Canvas came up and the stub reached `Complete` in every run, with its API answering 200 through the Canvas gateway at the published `https://<ingress address>/std-probe/probe/v1` URL.
 - `canvas-smanop` is in `CreateContainerConfigError` with Vault disabled, as expected.
+- The `canvas` phase is nearly all of the bring-up, and it varied from 167 s (first run) to 281 s. In the second run its last wait was the PDB management operator: its pods cannot mount their webhook certificate until a post-install hook has created it, and the kubelet retries the mount with growing back-off, so the pods started only about 4 minutes after creation. Helm's hooks themselves (cert-manager, Keycloak's configuration job) take most of the rest.
+- **Disk is the tight resource.** The node's `/var` alone held 10.1 GB with the Canvas and the stub, before STD's image, its database and the CTK containers. Decision 0021 notes about 14 GB free on a public runner's root file system; the GitHub runs will show the real free space and peak.
 - The Canvas's workloads come from 18 Docker Hub images (TM Forum's `tmforumodacanvas/*`, Bitnami's frozen `bitnamilegacy/*` Keycloak, PostgreSQL and `kubectl:latest`, `mongo:6.0`, `busybox:1.35`, Istio), three from quay.io (cert-manager 1.11.0) and the Kubernetes images from registry.k8s.io. The chart pins them by tag, not digest, and two are moving tags (`kubectl:latest`, `mongo:6.0`); the result records the image ID each run resolved, so drift between runs is visible.
 
 ## Results on GitHub (10 runs)
 
 To be filled after the 10 dispatched runs: the output of `pnpm oda-probe:summary --runs 10` (run IDs, runner image versions, failure rate and failing phases, median, p90 and max per phase and for the bring-up, disk before and peak, kind node footprint), and the conclusions for Step 5 below.
 
-RESULTS PENDING
+(empty)
 
 ## What this means for Step 5 (to confirm with the GitHub results)
 
