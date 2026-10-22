@@ -9,16 +9,20 @@ import { InvalidFilter } from "@std/api/errors/invalid-filter";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import type { FilterIssue } from "@std/api/errors/schemas";
 import { UnknownField } from "@std/api/errors/unknown-field";
-import { checkCondition } from "@std/conditions/check";
+import { checkCondition, checkConditionJson } from "@std/conditions/check";
 import type { ClassView } from "@std/conditions/class-view";
 import type { ConditionIssue } from "@std/conditions/issue";
 import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
 import type { CompiledCondition } from "@std/conditions/sql";
+import { rawSql } from "@std/conditions/sql-fragment";
 import { locateIssues, parseCondition } from "@std/conditions/syntax-parse";
-import { withChoices } from "@std/definitions/condition-view";
+import type { ResolvedCondition } from "@std/conditions/typed";
+import type { Condition } from "@std/definitions/condition";
+import { classViewOf, withChoices } from "@std/definitions/condition-view";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { FieldKind } from "@std/values/field-type";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 
 import { AUDIT_FIELDS, fieldInfoOf } from "./read-field.ts";
@@ -289,6 +293,46 @@ export const filterClassView = (scope: ReadScope): ClassView => {
 };
 
 /**
+ * Compiles a resolved condition in the caller's view (Contracts 3.5, 5.10,
+ * the filter profile): every field compiles to its masked expression, so a
+ * value the caller cannot read on a record behaves exactly like empty, and
+ * a field the caller can never read is NULL; a reference hop joins the
+ * target's relation with the target's visibility as the guard.
+ *
+ * @param scope - The caller's scope.
+ * @param resolved - The resolved condition.
+ * @param alias - The alias of the record's relation.
+ * @param joinAliasPrefix - The prefix of the hops' aliases.
+ * @returns The joins and the predicate.
+ */
+const compileInView = (
+  scope: ReadScope,
+  resolved: ResolvedCondition,
+  alias: string,
+  joinAliasPrefix: string
+): CompiledCondition =>
+  compileCondition(resolved, {
+    alias,
+    hooks: {
+      column: (source, field) => {
+        const sourceView = scope.view(source.classId);
+        const readField = sourceView.byId(field.id);
+
+        return readField === undefined
+          ? { parameters: [], parts: ["NULL"] }
+          : sourceView.value(source.alias, readField);
+      },
+      join: (target) => ({
+        guard: scope
+          .view(target.source.classId)
+          .visibility(target.source.alias),
+        relation: recordRelation(scope.snapshot, target.source.classId),
+      }),
+    },
+    joinAliasPrefix,
+  });
+
+/**
  * Compiles the `filter` parameter (Contracts 3.5, 3.6, 5.9): parsed in the
  * condition text syntax with names resolved against the visible schema,
  * checked under the filter profile, resolved with the caller's context and
@@ -366,27 +410,62 @@ export const compileFilter = Effect.fn("ReadQuery.compileFilter")(
       });
     }
 
-    const compiled: CompiledCondition = compileCondition(resolved.value, {
-      alias: BASE_ALIAS,
-      hooks: {
-        column: (source, field) => {
-          const sourceView = scope.view(source.classId);
-          const readField = sourceView.byId(field.id);
-
-          return readField === undefined
-            ? { parameters: [], parts: ["NULL"] }
-            : sourceView.value(source.alias, readField);
-        },
-        join: (target) => ({
-          guard: scope
-            .view(target.source.classId)
-            .visibility(target.source.alias),
-          relation: recordRelation(scope.snapshot, target.source.classId),
-        }),
-      },
-      joinAliasPrefix: "f",
-    });
-
-    return Option.some(compiled);
+    return Option.some(compileInView(scope, resolved.value, BASE_ALIAS, "f"));
   }
 );
+
+const NOTHING_ALLOWED: CompiledCondition = {
+  joins: rawSql(""),
+  predicate: rawSql("FALSE"),
+};
+
+/**
+ * Compiles a reference field's allowed-records condition (decision 0020)
+ * over records of `classId` (the target class, or a descendant a picker
+ * lists), in the caller's view: checked under the filter profile against
+ * every field of the class (not only the caller's), as a stored condition
+ * (retired fields keep working), resolved with the caller's `me` and
+ * `now`, and compiled over masked expressions, so fields the caller cannot
+ * read count as empty and the outcome reveals nothing about hidden values.
+ * A condition that no longer checks (or does not decode) allows nothing:
+ * it fails closed, like a stored access-rule condition.
+ *
+ * @param scope - The caller's scope.
+ * @param classId - The class whose records are tested.
+ * @param condition - The condition, or undefined when it does not decode.
+ * @param alias - The alias of that class's relation.
+ * @returns The joins (aliases `a<n>`) and the predicate.
+ */
+export const compileAllowedRecords = (
+  scope: ReadScope,
+  classId: DefinitionId,
+  condition: Condition | undefined,
+  alias: string
+): CompiledCondition => {
+  if (condition === undefined) {
+    return NOTHING_ALLOWED;
+  }
+
+  const json: JsonValue = condition;
+
+  const checked = checkConditionJson(json, {
+    classId,
+    profile: "filter",
+    purpose: "evaluate",
+    view: classViewOf(scope.snapshot),
+  });
+
+  if (!checked.ok) {
+    return NOTHING_ALLOWED;
+  }
+
+  const resolved = resolveCondition(checked.value, {
+    me: scope.context.me,
+    now: scope.context.now,
+    timeZone: timeZoneFor("filter", { instance: scope.context.timeZone }),
+  });
+
+  return resolved.ok
+    ? compileInView(scope, resolved.value, alias, "a")
+    : NOTHING_ALLOWED;
+};

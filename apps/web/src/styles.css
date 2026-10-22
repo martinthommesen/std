@@ -307,6 +307,649 @@ code {
   border-radius: var(--radius);
 }
 
+/* Signed-in layout: the tables' navigation beside the page */
+
+.app-body {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+}
+
+.tables-nav {
+  order: -1;
+  flex: 0 0 14rem;
+  padding: var(--space-8) var(--space-4);
+}
+
+.tables-nav-heading {
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.nav-list-vertical {
+  flex-direction: column;
+}
+
+.table-index {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.table-index > li + li {
+  margin-top: var(--space-2);
+}
+
+.table-name {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+@media (width < 48rem) {
+  .app-body {
+    flex-direction: column;
+  }
+
+  .tables-nav {
+    flex-basis: auto;
+    padding-bottom: 0;
+  }
+}
+
+/* Labelled controls (Foldkit UI Select, Input, Textarea, Checkbox) */
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.control-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.control-label {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.control-input {
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius);
+}
+
+.control-input[data-invalid] {
+  border-color: var(--color-danger);
+  box-shadow: inset 0 0 0 1px var(--color-danger);
+}
+
+.control-input[data-disabled] {
+  opacity: 0.7;
+}
+
+.control-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  font: inherit;
+  line-height: 1;
+  color: var(--color-accent-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.checkbox[data-checked] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* Filter builder */
+
+.filter-group,
+.filter-condition,
+.choice-set {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.filter-legend {
+  padding: 0 var(--space-1);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.filter-children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-negation {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--color-border-control);
+}
+
+.filter-node-actions,
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.choice-set {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+/* Records */
+
+.notice {
+  margin: 0;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius);
+}
+
+.list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.list-count {
+  margin: 0 auto 0 0;
+  font-weight: 600;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pager-position {
+  color: var(--color-text-muted);
+}
+
+.records {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.records th,
+.records td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.records th .button {
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-2);
+  border-color: transparent;
+}
+
+.records[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.cell-restricted {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border-control);
+  border-radius: var(--radius);
+}
+
+.cell-missing {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Date Picker and its calendar (Foldkit UI: `data-selected`, `data-today`,
+   `data-focused`, `data-outside-month`, `data-disabled`) */
+
+.date-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.date-picker-trigger {
+  min-width: 10rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.date-picker-panel {
+  z-index: 10;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.date-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 17rem;
+}
+
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.calendar-heading,
+.calendar-nav,
+.calendar-day {
+  font: inherit;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.calendar-heading {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.calendar-nav {
+  width: 2rem;
+  height: 2rem;
+}
+
+.calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.calendar-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--space-1);
+}
+
+.calendar-picks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-1);
+}
+
+.calendar-column-header {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.calendar-cell {
+  display: flex;
+  justify-content: center;
+}
+
+.calendar-day {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+}
+
+.calendar-day:hover {
+  background: var(--color-canvas);
+}
+
+.calendar-cell[data-today] .calendar-day {
+  box-shadow: inset 0 0 0 1px var(--color-border-control);
+}
+
+.calendar-cell[data-selected] .calendar-day {
+  color: var(--color-accent-text);
+  background: var(--color-accent);
+}
+
+.calendar-cell[data-focused] .calendar-day {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+.calendar-cell[data-outside-month] .calendar-day {
+  color: var(--color-text-muted);
+}
+
+.calendar-cell[data-disabled] .calendar-day {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* The record form */
+
+.page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+a.button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.saved-filters {
+  max-width: 24rem;
+}
+
+.form-facts {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.record-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 48rem;
+}
+
+.form-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.form-legend {
+  padding: 0 var(--space-1);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.form-field.control-inline {
+  flex-flow: row wrap;
+}
+
+.form-value {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.form-field[data-field-state="empty"] .form-value,
+.form-field[data-field-state="not-delivered"] .form-value {
+  color: var(--color-text-muted);
+}
+
+.form-date,
+.form-date-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.control-time {
+  max-width: 9rem;
+}
+
+.form-write-only {
+  align-items: flex-start;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Reference pickers (Foldkit UI Combobox: `data-active`, `data-selected`,
+   `data-disabled`, `data-invalid`, `data-open`) */
+
+.combobox {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  max-width: 32rem;
+}
+
+.combobox input {
+  flex: 1;
+}
+
+.combobox-button {
+  min-width: 2.5rem;
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.combobox-options {
+  z-index: 10;
+  min-width: 16rem;
+  max-height: 18rem;
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.combobox-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.combobox-option[data-active] {
+  color: var(--color-accent-text);
+  background: var(--color-accent);
+}
+
+.combobox-option [data-selected] {
+  font-weight: 600;
+}
+
+.combobox-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+/* The delete confirmation (Foldkit UI Dialog) */
+
+.dialog {
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+}
+
+.dialog[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog-panel {
+  position: relative;
+  max-width: 28rem;
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.dialog-title {
+  margin-top: 0;
+}
+
+/* Related lists and history (Foldkit UI Disclosure: `data-open`) */
+
+.related-lists {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.panel-heading {
+  margin: 0;
+  font-size: 1.0625rem;
+}
+
+.disclosure-button {
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.disclosure-mark {
+  display: inline-block;
+  width: 1.25em;
+}
+
+.disclosure-panel[data-open] {
+  margin-top: var(--space-4);
+}
+
+.records-compact td,
+.records-compact th {
+  padding: var(--space-1) var(--space-2);
+}
+
+.history-entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-heading {
+  margin: 0;
+}
+
+.history-changes {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.history-change {
+  display: contents;
+}
+
+.history-change dt {
+  font-weight: 600;
+}
+
+.history-change dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-before {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .button,
   .nav-link,
@@ -325,7 +968,15 @@ code {
     text-decoration: underline;
   }
 
-  .field-input[data-invalid] {
+  .field-input[data-invalid],
+  .control-input[data-invalid] {
     border-width: 2px;
+  }
+
+  .checkbox[data-checked],
+  .calendar-cell[data-selected] .calendar-day {
+    forced-color-adjust: none;
+    color: HighlightText;
+    background: Highlight;
   }
 }

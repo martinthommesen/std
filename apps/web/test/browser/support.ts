@@ -6,8 +6,11 @@
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -144,14 +147,66 @@ export const stdServe = Effect.fn("BrowserSupport.stdServe")(function* stdServe(
   return { log, origin } satisfies StdServer;
 });
 
-/** Chromium, headless, closed with the scope. */
-export const launchBrowser = Effect.acquireRelease(
-  Effect.promise(async () => await chromium.launch()),
-  (browser: Browser) =>
-    Effect.promise(async () => {
-      await browser.close();
-    })
+/** The DejaVu fonts of the `dejavu-fonts-ttf` dev dependency. */
+const TEST_FONTS = fileURLToPath(
+  new URL("../../node_modules/dejavu-fonts-ttf/ttf", import.meta.url)
 );
+
+/**
+ * A fontconfig file of its own for the browser: the system's configuration
+ * where there is one, plus the DejaVu fonts of a pinned dev dependency.
+ * Without any font (no `/etc/fonts` and no font files, as on minimal
+ * machines) Chromium's headless shell aborts (Skia's
+ * `SkFontMgr_FontConfigInterface` "Not implemented") as soon as a layout
+ * measures text, such as a flex row sized to its content. The file and the
+ * font cache live in a directory made for the run and removed with the
+ * scope, so nothing is set up by hand and nothing outlives the run.
+ *
+ * @param cacheDirectory - Where fontconfig may write its cache.
+ * @returns The file's text.
+ */
+const fontConfig = (cacheDirectory: string): string => `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>${TEST_FONTS}</dir>
+  <cachedir>${cacheDirectory}</cachedir>
+</fontconfig>
+`;
+
+/** The browser's fontconfig file, in a directory removed with the scope. */
+const fontConfigFile = Effect.acquireRelease(
+  Effect.sync(() => {
+    const directory = mkdtempSync(path.join(tmpdir(), "std-browser-fonts-"));
+    const file = path.join(directory, "fonts.conf");
+
+    writeFileSync(file, fontConfig(path.join(directory, "cache")));
+
+    return { directory, file };
+  }),
+  ({ directory }) =>
+    Effect.sync(() => {
+      rmSync(directory, { force: true, recursive: true });
+    })
+).pipe(Effect.map(({ file }) => file));
+
+/** Chromium, headless, with its own fontconfig file, closed with the scope. */
+export const launchBrowser = Effect.gen(function* browserWithFonts() {
+  const file = yield* fontConfigFile;
+
+  return yield* Effect.acquireRelease(
+    Effect.promise(
+      async () =>
+        await chromium.launch({
+          env: { ...process.env, FONTCONFIG_FILE: file },
+        })
+    ),
+    (browser: Browser) =>
+      Effect.promise(async () => {
+        await browser.close();
+      })
+  );
+});
 
 /**
  * The loopback origin a listening server answers at.
@@ -380,3 +435,100 @@ export const callWhenConnected = (
     Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 40 }),
     Effect.orDie
   );
+
+const decodeRuntimeState = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({ currentIndex: Schema.Int, startIndex: Schema.Int })
+  )
+);
+
+/** The largest page of Message history the MCP server lists. */
+const LARGEST_HISTORY_PAGE = 500;
+
+// NOTE: the MCP server writes the runtime's response as JSON, an Option
+// as Effect's own JSON (`{ "_tag": "Some", "value": 7 }`).
+const decodeMessagesPage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      maybeNextIndex: Schema.Union([
+        Schema.Struct({ _tag: Schema.Literal("None") }),
+        Schema.Struct({ _tag: Schema.Literal("Some"), value: Schema.Int }),
+      ]),
+    })
+  )
+);
+
+/**
+ * Every Message history entry from an index on, page by page.
+ *
+ * @param mcp - The client.
+ * @param fromIndex - The first absolute history index.
+ * @returns The text of each page.
+ */
+const historyFrom = (
+  mcp: DevToolsMcp,
+  fromIndex: number
+): Effect.Effect<readonly string[]> =>
+  callWhenConnected(mcp, "foldkit_list_messages", {
+    limit: LARGEST_HISTORY_PAGE,
+    since_index: fromIndex,
+  }).pipe(
+    Effect.flatMap((text) => {
+      const next = decodeMessagesPage(text).maybeNextIndex;
+
+      return next._tag === "Some" && next.value > fromIndex
+        ? historyFrom(mcp, next.value).pipe(
+            Effect.map((rest) => [text, ...rest])
+          )
+        : Effect.succeed([text]);
+    })
+  );
+
+/** What the DevTools of the connected runtime recorded. */
+export interface DevToolsRecord {
+  /** The Model now, the initial Model and the Messages, as JSON text. */
+  readonly text: string;
+  /** The history index after the last Message read. */
+  readonly nextIndex: number;
+}
+
+/**
+ * Reads what DevTools holds for the connected runtime: the current Model
+ * in full, the initial Model with its Commands, and every Message history
+ * entry (payloads, Commands and their arguments) from an index on. Fails
+ * when the rolling history already dropped an entry from that index on,
+ * which would then go unread.
+ *
+ * @param mcp - The client.
+ * @param fromIndex - The first history index not read before (0 at first).
+ * @returns The text and where the next read starts.
+ */
+export const devToolsRecord = Effect.fn("BrowserSupport.devToolsRecord")(
+  function* devToolsRecord(mcp: DevToolsMcp, fromIndex: number) {
+    const state = decodeRuntimeState(
+      yield* callWhenConnected(mcp, "foldkit_get_runtime_state", {})
+    );
+
+    if (state.startIndex > fromIndex) {
+      return yield* Effect.die(
+        new Error(
+          `DevTools dropped history entries ${fromIndex} to ${state.startIndex - 1} before they were read`
+        )
+      );
+    }
+
+    const model = yield* callWhenConnected(mcp, "foldkit_get_model", {
+      expand: true,
+    });
+
+    const init = yield* callWhenConnected(mcp, "foldkit_get_init", {});
+
+    const history =
+      fromIndex > state.currentIndex ? [] : yield* historyFrom(mcp, fromIndex);
+
+    return {
+      nextIndex: state.currentIndex + 1,
+      text: [model, init, ...history].join("\n"),
+    } satisfies DevToolsRecord;
+  }
+);

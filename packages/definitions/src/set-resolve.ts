@@ -374,9 +374,17 @@ const resolveType = (
   if (isReferenceEntry(type)) {
     const targetClassId = tableId(resolution, field.id, type.target);
 
-    return targetClassId === undefined
-      ? undefined
-      : { kind: "reference", targetClassId };
+    if (targetClassId === undefined) {
+      return undefined;
+    }
+
+    return type.allowedRecords === undefined
+      ? { kind: "reference", targetClassId }
+      : {
+          allowedRecords: type.allowedRecords,
+          kind: "reference",
+          targetClassId,
+        };
   }
 
   if (isConditionEntry(type)) {

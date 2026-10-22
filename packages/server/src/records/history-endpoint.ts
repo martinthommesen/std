@@ -17,6 +17,9 @@
  * - Filters: `since` and `until` (RFC 3339), `actor` (user IDs), `kind`
  *   (`create`, `update`, `delete`) and `field` (readable field IDs),
  *   comma-separated; never values.
+ * - Each entry's `fields` describes the fields of its `changes`, keyed the
+ *   same way, with their label, type and choice labels at the entry's
+ *   schema revision (Contracts 4.4, `history-definitions.ts`).
  */
 import { fieldDecision, recordDecision } from "@std/access/rules";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
@@ -42,6 +45,7 @@ import { RequestRevision } from "../sql/request-revision.ts";
 import { FALSE_SQL, TRUE_SQL } from "./access-sql.ts";
 import { ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeKind } from "./change-entry.ts";
+import { entryDefinitions } from "./history-definitions.ts";
 import { EntryRowSchema, entryOfRow, readHistory } from "./history-query.ts";
 import type { HistoryEntry, HistoryFilter } from "./history-query.ts";
 import { currentReadScope, resolveTable } from "./read-records.ts";
@@ -450,7 +454,8 @@ const deletedHistory = Effect.fn("History.deleted")(function* deletedHistory(
 
 const entryJson = (
   snapshot: ConfigSnapshot,
-  entry: HistoryEntry
+  entry: HistoryEntry,
+  fields: JsonObject
 ): JsonObject => {
   const changes: Record<string, JsonValue> = {};
 
@@ -463,6 +468,7 @@ const entryJson = (
     cause: entry.cause,
     changeId: entry.changeId,
     changes,
+    fields,
     kind: entry.kind,
     occurredAt: formatDateTime(entry.occurredAt),
     operationId: entry.operationId,
@@ -543,8 +549,12 @@ export const recordHistory = Effect.fn("Records.history")(
           );
     }
 
+    const definitions = yield* entryDefinitions(scope, concrete, entries);
+
     const body = {
-      entries: entries.map((entry) => entryJson(scope.snapshot, entry)),
+      entries: entries.map((entry, index) =>
+        entryJson(scope.snapshot, entry, definitions[index] ?? {})
+      ),
       schemaRevision: revision,
     } satisfies JsonObject;
 

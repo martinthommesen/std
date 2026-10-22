@@ -287,6 +287,7 @@ const tableOf = (field: MetaField): MetaTable => ({
   label: "T",
   layouts: { form: null, list: null },
   name: "acme.t",
+  relatedLists: [],
 });
 
 /** The schemas of one document, compiled. */

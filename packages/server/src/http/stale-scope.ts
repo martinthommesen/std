@@ -106,6 +106,12 @@ export interface ScopeParameters {
    * filter): each is in scope on its own class as it was at R.
    */
   readonly fieldIds?: string;
+  /**
+   * A list's `<table>/<field>` (decision 0020): the picker's reference
+   * field is in scope on its own table, so a change of its allowed-records
+   * condition after R (`settingsChanged`) is relevant.
+   */
+  readonly allowedFor?: string;
 }
 
 const decodeType = Schema.decodeUnknownOption(FieldTypeSchema);
@@ -409,17 +415,52 @@ const splitList = (text: string): string[] =>
     .filter((item) => item !== "");
 
 /**
+ * Puts a picker's reference field in scope, on its own table (the table
+ * named by its current name; the field by its name at R).
+ *
+ * @param collector - The scope being built.
+ * @param allowedFor - `<table>/<field>`.
+ * @param classByName - The class of a table name, if any.
+ */
+const addAllowedFor = (
+  collector: Collector,
+  allowedFor: string,
+  classByName: (name: string) => DefinitionId | undefined
+): void => {
+  const slash = allowedFor.indexOf("/");
+
+  const source =
+    slash <= 0 ? undefined : classByName(allowedFor.slice(0, slash));
+
+  if (source === undefined) {
+    return;
+  }
+
+  const name = allowedFor.slice(slash + 1);
+  named(collector, source, name);
+
+  const field = fieldByNameAt(collector.definitions, source, name);
+
+  if (field !== undefined) {
+    add(collector, field.id, source);
+  }
+};
+
+/**
  * The scope of a read at R.
  *
  * @param definitions - The definitions at R.
  * @param endpoint - The endpoint's class.
  * @param parameters - The request's filter, sort, fields and labels.
+ * @param classByName - Resolves `allowedFor`'s table (current names);
+ *   without it, `allowedFor` adds nothing.
  * @returns Field IDs with the class they are read on, names and classes.
  */
 export const staleScope = (
   definitions: DefinitionsAtR,
   endpoint: DefinitionId,
-  parameters: ScopeParameters
+  parameters: ScopeParameters,
+  classByName?: (name: string) => DefinitionId | undefined
 ): StaleScope => {
   const collector: Collector = {
     classes: new Set([endpoint]),
@@ -431,6 +472,10 @@ export const staleScope = (
 
   if (parameters.filter !== undefined) {
     addFilter(collector, parameters.filter);
+  }
+
+  if (parameters.allowedFor !== undefined && classByName !== undefined) {
+    addAllowedFor(collector, parameters.allowedFor, classByName);
   }
 
   for (const item of splitList(parameters.sort ?? "")) {

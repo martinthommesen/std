@@ -12,6 +12,7 @@ import {
   Int,
   isBetween,
   isPattern,
+  Json,
   Literal,
   Literals,
   makeFilter,
@@ -123,7 +124,15 @@ const DecimalTypeSchema = Struct({
   scale: Int.check(isBetween({ maximum: DECIMAL_MAX_PRECISION, minimum: 0 })),
 });
 
+/**
+ * A reference names its target class and, optionally, an allowed-records
+ * condition over that class (decision 0020): a condition AST (Contracts
+ * 5.2, field IDs) that a target must satisfy, under the filter profile in
+ * the writer's view. Here it is any JSON; `@std/definitions` checks it as
+ * a condition when the field is stored. Absent (or null): no condition.
+ */
 const ReferenceTypeSchema = Struct({
+  allowedRecords: optionalKey(Json),
   kind: Literal("reference"),
   targetClassId: SchemaString.check(isPattern(UUID_TEXT)),
 });

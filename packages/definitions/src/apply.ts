@@ -17,6 +17,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { fail, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
 
+import { sameTypeApartFromAllowedRecords } from "./allowed-records.ts";
 import {
   checkVersion,
   currentOf,
@@ -539,12 +540,19 @@ const applyOne = (work: Work, operation: Operation): void => {
   }
 };
 
-const conditionText = (definition: Definition | undefined): string =>
-  definition?.kind === "accessRule" ||
-  definition?.kind === "subscription" ||
-  definition?.kind === "savedFilter"
-    ? JSON.stringify(definition.condition)
+const conditionText = (definition: Definition | undefined): string => {
+  if (
+    definition?.kind === "accessRule" ||
+    definition?.kind === "subscription" ||
+    definition?.kind === "savedFilter"
+  ) {
+    return JSON.stringify(definition.condition);
+  }
+
+  return definition?.kind === "field" && definition.type.kind === "reference"
+    ? JSON.stringify(definition.type.allowedRecords ?? null)
     : "";
+};
 
 /**
  * The definitions whose condition this change set stores: new ones and
@@ -568,16 +576,18 @@ const immutableProblems = (
   changes: readonly DefinitionChange[]
 ): readonly DefinitionProblem[] =>
   changes.flatMap(({ before, after }) => {
+    // Only a reference's allowed-records condition may change (decision
+    // 0020); the kind, the target and every other setting may not.
     if (
       before?.kind === "field" &&
       after.kind === "field" &&
-      JSON.stringify(before.type) !== JSON.stringify(after.type)
+      !sameTypeApartFromAllowedRecords(before.type, after.type)
     ) {
       return [
         problem(
           "unsupportedChange",
           after.id,
-          "A field's type cannot change in v0.1; add a new field and retire this one."
+          "A field's type cannot change in v0.1 (only a reference's allowedRecords can); add a new field and retire this one."
         ),
       ];
     }

@@ -1,4 +1,7 @@
+import type { CurrentUser } from "@std/api/session";
 import { Effect, Option } from "effect";
+import { AsyncData } from "foldkit";
+import { make as makeDate } from "foldkit/calendar";
 import { Valid } from "foldkit/fieldValidation";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
@@ -8,32 +11,62 @@ import { describe, expect, it } from "vitest";
 import {
   FocusMain,
   LoadCurrentUser,
+  LoadTables,
   LoadExternal,
   NavigateInternal,
   ReplaceUrl,
   SignOut,
 } from "./command.ts";
+import { FieldInput } from "./domain/form-input.ts";
 import { fakeStdApi } from "./fake-std-api.ts";
 import {
   ada,
   adaAtHome,
+  adaEnteringHome,
   signInOpenedDirectly,
   signInRedirectedFromHome,
   urlOf,
 } from "./fixture.ts";
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
-import { Model, SignOutRequest } from "./model.ts";
+import { Model, SignOutRequest, Tables } from "./model.ts";
+import type { SignedInModel } from "./model.ts";
+import { Message as RecordFormMessage } from "./page/record-form/message.ts";
+import { FormMode } from "./page/record-form/model.ts";
 import {
   Message as SignInMessage,
   SignIn,
   toMaybePassword,
 } from "./page/sign-in/sign-in.ts";
+import {
+  LoadRecords,
+  LoadTableMetadata,
+  ReadToday,
+  ReplaceListUrl,
+} from "./page/table-list/command.ts";
+import { Message as TableListMessage } from "./page/table-list/message.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
+import {
+  ASSET_FIELDS,
+  REVISION_3,
+  REVISION_4,
+  revision,
+  adaTables,
+  assetTable,
+} from "./table-fixture.ts";
 import { update } from "./update.ts";
 
 const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
+
+const loadedTables = Command.resolve(
+  LoadTables,
+  Message.SucceededLoadTables({
+    revision: REVISION_3,
+    sessionId: 1,
+    tables: adaTables.tables,
+  })
+);
 
 const signedOutAt = (route: SignedOutRoute) =>
   modifyFields(signInOpenedDirectly, { route: () => route });
@@ -54,6 +87,30 @@ const typeAndSubmit = (password: string) => [
   message(Message.GotSignInMessage({ message: SignInMessage.SubmittedForm() })),
 ];
 
+/**
+ * The signed-in state, or a failure naming the state found instead.
+ *
+ * @param app - The app's state.
+ * @returns It, signed in.
+ */
+const signedIn = (app: Model): SignedInModel => {
+  if (!Model.guards.SignedIn(app)) {
+    throw new Error(`expected a signed-in state, found ${app._tag}`);
+  }
+
+  return app;
+};
+
+/**
+ * Commands as their names and arguments, to compare.
+ *
+ * @param commands - The Commands.
+ * @returns Name and arguments of each.
+ */
+const namesAndArgs = (
+  commands: readonly { readonly name: string; readonly args?: unknown }[] = []
+) => commands.map((command) => [command.name, command.args]);
+
 describe("start-up", () => {
   it("asks the server for the session", () => {
     const initial = init(urlOf("/"));
@@ -69,8 +126,18 @@ describe("start-up", () => {
       update,
       given(checkingAt("/")),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
+      model((app) => {
+        expect(app).toStrictEqual(adaEnteringHome);
+      }),
+      Command.expectExact(
+        LoadTables({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
+      loadedTables,
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
       }),
@@ -83,10 +150,17 @@ describe("start-up", () => {
       update,
       given(checkingAt("/sign-in")),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
-      Command.expectExact(ReplaceUrl({ url: homeRouter() })),
+      Command.expectExact(
+        ReplaceUrl({ url: homeRouter() }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
       Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      loadedTables,
       message(Message.ChangedUrl({ url: urlOf(homeRouter()) })),
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
@@ -99,7 +173,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       Command.expectExact(ReplaceUrl({ url: signInRouter() })),
       Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
       message(Message.ChangedUrl({ url: urlOf(signInRouter()) })),
@@ -114,7 +193,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/sign-in")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(signInOpenedDirectly);
       }),
@@ -126,7 +210,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/no/such/page")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(
           signedOutAt(AppRoute.NotFound({ path: "/no/such/page" }))
@@ -143,15 +232,19 @@ describe("start-up", () => {
       message(Message.ChangedUrl({ url: urlOf("/elsewhere") })),
       Command.expectNone(),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
       model((app) => {
         expect(app).toStrictEqual(
-          modifyFields(adaAtHome, {
+          modifyFields(adaEnteringHome, {
             route: () => AppRoute.NotFound({ path: "/elsewhere" }),
           })
         );
-      })
+      }),
+      loadedTables
     );
   });
 
@@ -183,7 +276,12 @@ describe("start-up", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       message(Message.FailedLoadCurrentUser()),
       message(Message.ClickedRetrySessionCheck()),
       model((app) => {
@@ -204,21 +302,38 @@ describe("signing in", () => {
         expect(JSON.stringify(app)).not.toContain("ada-password");
         expect(JSON.stringify(app)).toContain("<redacted:password>");
       }),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
       model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
+        expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "maybeRecordForm",
+          "maybeRevision",
+          "maybeTableList",
+          "nextPageId",
           "route",
+          "sessionId",
           "signOutRequest",
+          "tables",
           "user",
         ]);
       }),
-      Command.expectExact(ReplaceUrl({ url: homeRouter() }), FocusMain()),
+      Command.expectExact(
+        ReplaceUrl({ url: homeRouter() }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3), sessionId: 1 }),
+        FocusMain()
+      ),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
-      )
+      ),
+      loadedTables
     );
   });
 
@@ -227,14 +342,24 @@ describe("signing in", () => {
       update,
       given(signInOpenedDirectly),
       ...typeAndSubmit("ada-password"),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
       model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
+        expect(app).toStrictEqual(adaEnteringHome);
       }),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
-      )
+      ),
+      loadedTables,
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      })
     );
   });
 
@@ -244,7 +369,10 @@ describe("signing in", () => {
       given(adaAtHome),
       message(
         Message.GotSignInMessage({
-          message: SignInMessage.SucceededSignIn({ user: ada }),
+          message: SignInMessage.SucceededSignIn({
+            maybeRevision: Option.some(REVISION_3),
+            user: ada,
+          }),
         })
       ),
       model((app) => {
@@ -286,7 +414,46 @@ describe("signing in", () => {
   });
 });
 
+/** The sign-in page after the app's first session ended. */
+const signedOutAfterFirstSession = modifyFields(signInOpenedDirectly, {
+  nextSessionId: () => 2,
+});
+
 describe("signing out", () => {
+  it("page numbers go on across sign-out and sign-in, so an earlier session's answer reaches no page", () => {
+    const pagesOpened = modifyFields(adaAtHome, { nextPageId: () => 7 });
+
+    story(
+      update,
+      given(pagesOpened),
+      message(Message.ClickedSignOut()),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      ),
+      model((app) => {
+        expect(Model.guards.SignedOut(app) ? app.nextPageId : 0).toBe(7);
+      }),
+      message(
+        Message.GotSignInMessage({
+          message: SignInMessage.SucceededSignIn({
+            maybeRevision: Option.some(REVISION_3),
+            user: ada,
+          }),
+        })
+      ),
+      model((app) => {
+        expect(Model.guards.SignedIn(app) ? app.nextPageId : 0).toBe(7);
+      }),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()],
+        [LoadTables, Message.FailedLoadTables({ sessionId: 1 })]
+      )
+    );
+  });
+
   it("ends on the sign-in page, with focus moved to it", () => {
     story(
       update,
@@ -299,10 +466,12 @@ describe("signing out", () => {
           })
         );
       }),
-      Command.expectExact(SignOut()),
-      Command.resolve(SignOut, Message.SucceededSignOut()),
+      Command.expectExact(
+        SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       model((app) => {
-        expect(app).toStrictEqual(signInOpenedDirectly);
+        expect(app).toStrictEqual(signedOutAfterFirstSession);
       }),
       Command.expectExact(ReplaceUrl({ url: signInRouter() }), FocusMain()),
       Command.resolveAll(
@@ -317,7 +486,7 @@ describe("signing out", () => {
       update,
       given(adaAtHome),
       message(Message.ClickedSignOut()),
-      Command.resolve(SignOut, Message.FailedSignOut()),
+      Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       model((app) => {
         expect(app).toStrictEqual(
           modifyFields(adaAtHome, {
@@ -326,14 +495,16 @@ describe("signing out", () => {
         );
       }),
       message(Message.ClickedSignOut()),
-      Command.expectExact(SignOut()),
-      Command.resolve(SignOut, Message.SucceededSignOut()),
+      Command.expectExact(
+        SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
       ),
       model((app) => {
-        expect(app).toStrictEqual(signInOpenedDirectly);
+        expect(app).toStrictEqual(signedOutAfterFirstSession);
       })
     );
   });
@@ -359,12 +530,153 @@ describe("signing out", () => {
       update,
       given(signInOpenedDirectly),
       message(Message.ClickedSignOut()),
-      message(Message.SucceededSignOut()),
-      message(Message.FailedSignOut()),
+      message(Message.SucceededSignOut({ sessionId: 1 })),
+      message(Message.FailedSignOut({ sessionId: 1 })),
       Command.expectNone(),
       model((app) => {
         expect(app).toStrictEqual(signInOpenedDirectly);
       })
+    );
+  });
+});
+
+describe("answers of an earlier session", () => {
+  const bob: CurrentUser = {
+    ...ada,
+    name: "Bob Builder",
+    userId: "019a0000-0000-7000-8000-000000000002",
+  };
+
+  const bobTables = [{ creatable: false, label: "Ticket", name: "hd.ticket" }];
+
+  /** Bob, signed in after Ada's session ended, his tables still loading. */
+  const bobEntering = Model.SignedIn({
+    maybeRecordForm: Option.none(),
+    maybeRevision: Option.some(REVISION_4),
+    maybeTableList: Option.none(),
+    nextPageId: 1,
+    route: AppRoute.Home(),
+    sessionId: 2,
+    signOutRequest: SignOutRequest.Idle(),
+    tables: Tables.Loading(),
+    user: bob,
+  });
+
+  it("each session's requests carry its number, and the next session gets the next one", () => {
+    const adaEntered = update(
+      checkingAt("/"),
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.some(REVISION_3),
+        maybeUser: Option.some(ada),
+      })
+    );
+
+    const adaSigningOut = update(adaEntered.model, Message.ClickedSignOut());
+
+    // Ada's session ends before her table list or sign-out is answered.
+    const adaEnded = update(
+      adaSigningOut.model,
+      Message.FailedAuthentication({ sessionId: 1 })
+    );
+
+    const bobEntered = update(
+      adaEnded.model,
+      Message.GotSignInMessage({
+        message: SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_4),
+          user: bob,
+        }),
+      })
+    );
+
+    expect(namesAndArgs(adaEntered.commands)).toStrictEqual([
+      ["LoadTables", { maybeRevision: Option.some(REVISION_3), sessionId: 1 }],
+    ]);
+    expect(namesAndArgs(adaSigningOut.commands)).toStrictEqual([
+      ["SignOut", { maybeRevision: Option.some(REVISION_3), sessionId: 1 }],
+    ]);
+    expect(adaEnded.model).toStrictEqual(
+      modifyFields(signInRedirectedFromHome, { nextSessionId: () => 2 })
+    );
+    expect(bobEntered.model).toStrictEqual(bobEntering);
+    expect(namesAndArgs(bobEntered.commands)).toContainEqual([
+      "LoadTables",
+      { maybeRevision: Option.some(REVISION_4), sessionId: 2 },
+    ]);
+  });
+
+  it("a late table list never shows the previous user's tables to the next one", () => {
+    story(
+      update,
+      given(bobEntering),
+      message(
+        Message.SucceededLoadTables({
+          revision: REVISION_3,
+          sessionId: 1,
+          tables: adaTables.tables,
+        })
+      ),
+      model((app) => {
+        expect(app).toStrictEqual(bobEntering);
+      }),
+      message(
+        Message.SucceededLoadTables({
+          revision: REVISION_4,
+          sessionId: 2,
+          tables: bobTables,
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).tables).toStrictEqual(
+          Tables.Success({ data: { revision: REVISION_4, tables: bobTables } })
+        );
+      })
+    );
+  });
+
+  it("a late ended session or failed table list leaves the next session alone", () => {
+    story(
+      update,
+      given(bobEntering),
+      message(Message.FailedAuthentication({ sessionId: 1 })),
+      model((app) => {
+        expect(app).toStrictEqual(bobEntering);
+      }),
+      message(Message.FailedLoadTables({ sessionId: 1 })),
+      model((app) => {
+        expect(app).toStrictEqual(bobEntering);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("a late sign-out answer leaves the next session alone", () => {
+    const bobSigningOut = modifyFields(bobEntering, {
+      signOutRequest: () => SignOutRequest.Pending(),
+    });
+
+    story(
+      update,
+      given(bobSigningOut),
+      message(Message.SucceededSignOut({ sessionId: 1 })),
+      model((app) => {
+        expect(app).toStrictEqual(bobSigningOut);
+      }),
+      message(Message.FailedSignOut({ sessionId: 1 })),
+      model((app) => {
+        expect(app).toStrictEqual(bobSigningOut);
+      }),
+      Command.expectNone(),
+      message(Message.SucceededSignOut({ sessionId: 2 })),
+      model((app) => {
+        expect(app).toStrictEqual(
+          modifyFields(signInOpenedDirectly, { nextSessionId: () => 3 })
+        );
+      }),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
     );
   });
 });
@@ -425,7 +737,13 @@ describe("the session requests", () => {
   const SIGN_OUT = "/api/v1/auth/sign-out";
 
   it("auth/me: a user, no session, or an unreachable server", async () => {
-    const withUser = fakeStdApi({ [ME]: { body: ada, status: 200 } });
+    const withUser = fakeStdApi({
+      [ME]: {
+        body: ada,
+        headers: { "std-schema-revision": REVISION_3 },
+        status: 200,
+      },
+    });
 
     const withoutSession = fakeStdApi({
       [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
@@ -439,10 +757,16 @@ describe("the session requests", () => {
       );
 
     await expect(load(withUser.layer)).resolves.toStrictEqual(
-      Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.some(REVISION_3),
+        maybeUser: Option.some(ada),
+      })
     );
     await expect(load(withoutSession.layer)).resolves.toStrictEqual(
-      Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.none(),
+        maybeUser: Option.none(),
+      })
     );
     await expect(load(down.layer)).resolves.toStrictEqual(
       Message.FailedLoadCurrentUser()
@@ -460,18 +784,465 @@ describe("the session requests", () => {
     const down = fakeStdApi({});
 
     const signOut = async (layer: typeof down.layer) =>
-      await Effect.runPromise(SignOut().effect.pipe(Effect.provide(layer)));
+      await Effect.runPromise(
+        SignOut({
+          maybeRevision: Option.some(REVISION_3),
+          sessionId: 1,
+        }).effect.pipe(Effect.provide(layer))
+      );
 
     await expect(signOut(ended.layer)).resolves.toStrictEqual(
-      Message.SucceededSignOut()
+      Message.SucceededSignOut({ sessionId: 1 })
     );
     await expect(signOut(alreadyEnded.layer)).resolves.toStrictEqual(
-      Message.SucceededSignOut()
+      Message.SucceededSignOut({ sessionId: 1 })
     );
     await expect(signOut(down.layer)).resolves.toStrictEqual(
-      Message.FailedSignOut()
+      Message.FailedSignOut({ sessionId: 1 })
     );
     expect(ended.seen[0]?.headers["std-client"]).toBe("web");
     expect(ended.seen[0]?.method).toBe("POST");
+  });
+});
+
+const ASSETS = "acme.asset";
+
+const assetsRoute = AppRoute.TableList({
+  filter: Option.none(),
+  limit: Option.none(),
+  sort: Option.none(),
+  table: ASSETS,
+});
+
+/** Ada opens the asset list from the home page. */
+const openAssets = [
+  message(Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })),
+  Command.expectExact(
+    LoadTableMetadata({
+      maybeRevision: Option.some(REVISION_3),
+      table: ASSETS,
+    }),
+    ReadToday(),
+    FocusMain()
+  ),
+  Command.resolveAll(
+    [FocusMain, Message.CompletedFocusMain()],
+    [
+      ReadToday,
+      TableListMessage.CompletedReadToday({
+        today: makeDate(2026, 10, 22),
+      }),
+    ]
+  ),
+] as const;
+
+describe("tables and revisions", () => {
+  it("a list route opens the table's list page with the app's revision", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      model((app) => {
+        expect(Option.isSome(signedIn(app).maybeTableList)).toBeTruthy();
+      }),
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.FailedLoadTableMetadata({ error: "Unavailable" })
+      )
+    );
+  });
+
+  it("a newer revision a page saw reloads the table list in the background", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: assetTable,
+        })
+      ),
+      Command.expectHas(
+        LoadTables({ maybeRevision: Option.some(REVISION_4), sessionId: 1 })
+      ),
+      model((app) => {
+        expect(AsyncData.isRefreshing(signedIn(app).tables)).toBeTruthy();
+        expect(signedIn(app).maybeRevision).toStrictEqual(
+          Option.some(REVISION_4)
+        );
+      }),
+      Command.resolveAll(
+        [
+          LoadTables,
+          Message.SucceededLoadTables({
+            revision: REVISION_4,
+            sessionId: 1,
+            tables: adaTables.tables,
+          }),
+        ],
+        [ReplaceListUrl, TableListMessage.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          TableListMessage.FailedLoadRecords({
+            error: "Unavailable",
+            generation: 1,
+            maybeRevision: Option.none(),
+          }),
+        ]
+      ),
+      model((app) => {
+        expect(AsyncData.isSuccess(signedIn(app).tables)).toBeTruthy();
+      })
+    );
+  });
+
+  it("a page whose session ended sends the user to sign in, and back afterwards", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.FailedAuthentication()
+      ),
+      model((app) => {
+        expect(Model.guards.SignedOut(app)).toBeTruthy();
+        expect(
+          Model.guards.SignedOut(app) ? app.maybeReturnRoute : Option.none()
+        ).toStrictEqual(Option.some(assetsRoute));
+      }),
+      Command.expectExact(ReplaceUrl({ url: signInRouter() }), FocusMain()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
+    );
+  });
+
+  it("the table list comes with the revision its response states, and a revision the database never had is dropped", async () => {
+    const PATH = "/api/v1/meta/tables";
+
+    const listed = fakeStdApi({
+      [PATH]: {
+        body: adaTables,
+        headers: { "std-schema-revision": REVISION_3 },
+        status: 200,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        LoadTables({
+          maybeRevision: Option.some(REVISION_4),
+          sessionId: 1,
+        }).effect.pipe(Effect.provide(listed.layer))
+      )
+    ).resolves.toStrictEqual(
+      Message.SucceededLoadTables({
+        revision: REVISION_3,
+        sessionId: 1,
+        tables: adaTables.tables,
+      })
+    );
+    expect(listed.seen[0]?.headers["std-schema-revision"]).toBe(REVISION_4);
+
+    const unknownRevision = fakeStdApi({
+      [PATH]: {
+        body: {
+          _tag: "SchemaChanged",
+          changes: [],
+          currentRevision: REVISION_3,
+          requestRevision: REVISION_4,
+        },
+        status: 409,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        LoadTables({
+          maybeRevision: Option.some(REVISION_4),
+          sessionId: 1,
+        }).effect.pipe(Effect.provide(unknownRevision.layer))
+      )
+    ).resolves.toStrictEqual(Message.FailedLoadTables({ sessionId: 1 }));
+    expect(
+      unknownRevision.seen.map((seen) => seen.headers["std-schema-revision"])
+    ).toStrictEqual([REVISION_4, undefined]);
+  });
+});
+
+describe("review fixes: pages and revisions", () => {
+  const atAssets = update(
+    adaAtHome,
+    Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })
+  ).model;
+
+  const toUsers = update(
+    atAssets,
+    Message.ChangedUrl({ url: urlOf("/tables/core.user") })
+  );
+
+  it("an answer meant for a page the user has left reaches no page", () => {
+    expect(
+      signedIn(toUsers.model).maybeTableList.pipe(Option.map((page) => page.id))
+    ).toStrictEqual(Option.some(2));
+
+    const late = update(
+      toUsers.model,
+      Message.GotTableListMessage({
+        message: TableListMessage.SucceededLoadTableMetadata({
+          revision: REVISION_3,
+          table: assetTable,
+        }),
+        pageId: 1,
+      })
+    );
+
+    const refusedLate = update(
+      toUsers.model,
+      Message.GotTableListMessage({
+        message: TableListMessage.FailedLoadTableMetadata({
+          error: "UnknownTable",
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(late.model).toStrictEqual(toUsers.model);
+    expect(late.commands ?? []).toStrictEqual([]);
+    expect(refusedLate.model).toStrictEqual(toUsers.model);
+  });
+
+  it("going from one table's list to another's moves focus to the new page", () => {
+    expect((toUsers.commands ?? []).map((command) => command.name)).toContain(
+      "FocusMain"
+    );
+  });
+
+  it("a deep link's first requests carry the revision auth/me stated", () => {
+    const entered = update(
+      init(urlOf("/tables/acme.asset")).model,
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.some(REVISION_3),
+        maybeUser: Option.some(ada),
+      })
+    );
+
+    expect(namesAndArgs(entered.commands)).toStrictEqual(
+      expect.arrayContaining([
+        [
+          "LoadTables",
+          { maybeRevision: Option.some(REVISION_3), sessionId: 1 },
+        ],
+        [
+          "LoadTableMetadata",
+          { maybeRevision: Option.some(REVISION_3), table: ASSETS },
+        ],
+      ])
+    );
+  });
+
+  it("a SchemaChanged refusal's current revision replaces the app's, even a lower one", () => {
+    const restored = revision("2.00000000-0000-4000-8000-000000000c02");
+
+    const refused = update(
+      atAssets,
+      Message.GotTableListMessage({
+        message: TableListMessage.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 0,
+          maybeRevision: Option.some(restored),
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(signedIn(refused.model).maybeRevision).toStrictEqual(
+      Option.some(restored)
+    );
+    expect(namesAndArgs(refused.commands)).toContainEqual([
+      "LoadTables",
+      { maybeRevision: Option.some(restored), sessionId: 1 },
+    ]);
+  });
+});
+
+const formOf = (app: Model) => signedIn(app).maybeRecordForm;
+
+/**
+ * A Message of the form page with number 1.
+ *
+ * @param formMessage - The form's Message.
+ * @returns The app's Message.
+ */
+const toForm = (formMessage: RecordFormMessage): Message =>
+  Message.GotRecordFormMessage({ message: formMessage, pageId: 1 });
+
+/**
+ * Applies Messages one after the other, keeping only the Model.
+ *
+ * @param start - The first Model.
+ * @param messages - The Messages.
+ * @returns The last Model.
+ */
+const afterAll = (start: Model, ...messages: readonly Message[]): Model => {
+  const [first, ...rest] = messages;
+
+  return first === undefined
+    ? start
+    : afterAll(update(start, first).model, ...rest);
+};
+
+describe("the form pages", () => {
+  const RECORD_A = "019a0000-0000-7000-8000-00000000000a";
+
+  const RECORD_B = "019a0000-0000-7000-8000-00000000000b";
+
+  const atRecordA = update(
+    adaAtHome,
+    Message.ChangedUrl({ url: urlOf(`/tables/acme.asset/records/${RECORD_A}`) })
+  );
+
+  const atRecordB = update(
+    atRecordA.model,
+    Message.ChangedUrl({ url: urlOf(`/tables/acme.asset/records/${RECORD_B}`) })
+  );
+
+  it("a record's route opens its form with the app's revision; the new-record route a create form", () => {
+    const creating = update(
+      adaAtHome,
+      Message.ChangedUrl({ url: urlOf("/tables/acme.asset/new") })
+    );
+
+    expect(namesAndArgs(atRecordA.commands)).toContainEqual([
+      "LoadFormMetadata",
+      { maybeRevision: Option.some(REVISION_3), table: ASSETS },
+    ]);
+    expect(
+      [atRecordA.model, creating.model].map((app) =>
+        formOf(app).pipe(Option.map((page) => page.mode))
+      )
+    ).toStrictEqual([
+      Option.some(FormMode.Edit({ recordId: RECORD_A })),
+      Option.some(FormMode.Create()),
+    ]);
+  });
+
+  it("another record opens another page, focused, and an answer meant for the first reaches no page", () => {
+    const late = update(
+      atRecordB.model,
+      Message.GotRecordFormMessage({
+        message: RecordFormMessage.FailedLoadFormMetadata({
+          error: "UnknownTable",
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(
+      formOf(atRecordB.model).pipe(Option.map((page) => page.id))
+    ).toStrictEqual(Option.some(2));
+    expect((atRecordB.commands ?? []).map((command) => command.name)).toContain(
+      "FocusMain"
+    );
+    expect(late.model).toStrictEqual(atRecordB.model);
+  });
+
+  it("leaving for a list closes the form; the same record's address keeps it", () => {
+    const again = update(
+      atRecordA.model,
+      Message.ChangedUrl({
+        url: urlOf(`/tables/acme.asset/records/${RECORD_A}`),
+      })
+    );
+
+    const toList = update(
+      atRecordA.model,
+      Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })
+    );
+
+    expect(again.model).toStrictEqual(atRecordA.model);
+    expect(formOf(toList.model)).toStrictEqual(Option.none());
+  });
+
+  it("a create's success keeps its page as the new record's form, with the edits typed while it was in flight", () => {
+    const created = afterAll(
+      update(
+        adaAtHome,
+        Message.ChangedUrl({ url: urlOf("/tables/acme.asset/new") })
+      ).model,
+      toForm(
+        RecordFormMessage.SucceededLoadFormMetadata({
+          revision: REVISION_3,
+          table: assetTable,
+        })
+      ),
+      toForm(
+        RecordFormMessage.UpdatedText({ fieldId: ASSET_FIELDS.name, text: "A" })
+      ),
+      toForm(RecordFormMessage.ClickedSave()),
+      // Typed before the answer.
+      toForm(
+        RecordFormMessage.UpdatedText({
+          fieldId: ASSET_FIELDS.name,
+          text: "AB",
+        })
+      ),
+      toForm(
+        RecordFormMessage.SucceededSaveRecord({
+          generation: 1,
+          maybeRevision: Option.none(),
+          saved: {
+            class: ASSETS,
+            id: RECORD_A,
+            values: { name: "A" },
+            version: 1,
+          },
+        })
+      )
+    );
+
+    // The page's NavigateAway comes back as the new address.
+    const arrived = update(
+      created,
+      Message.ChangedUrl({
+        url: urlOf(`/tables/acme.asset/records/${RECORD_A}`),
+      })
+    );
+
+    expect(
+      formOf(arrived.model).pipe(
+        Option.map((page) => [page.id, page.mode, page.edits])
+      )
+    ).toStrictEqual(
+      Option.some([
+        1,
+        FormMode.Edit({ recordId: RECORD_A }),
+        { [ASSET_FIELDS.name]: FieldInput.Text({ text: "AB" }) },
+      ])
+    );
+    expect(
+      (arrived.commands ?? []).map((command) => command.name)
+    ).not.toContain("LoadFormMetadata");
+  });
+
+  it("a form page's ended session sends the user to sign in, and back afterwards", () => {
+    const ended = update(
+      atRecordA.model,
+      Message.GotRecordFormMessage({
+        message: RecordFormMessage.FailedAuthentication(),
+        pageId: 1,
+      })
+    );
+
+    expect(Model.guards.SignedOut(ended.model)).toBeTruthy();
+    expect(
+      Model.guards.SignedOut(ended.model) ? ended.model.maybeReturnRoute : null
+    ).toStrictEqual(
+      Option.some(AppRoute.Record({ id: RECORD_A, table: ASSETS }))
+    );
   });
 });

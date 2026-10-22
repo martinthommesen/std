@@ -370,6 +370,9 @@ describe("api-cache", () => {
               token,
             }),
             "bearer auth/me": yield* http.get("/api/v1/auth/me", { token }),
+            "bearer meta tables": yield* http.get("/api/v1/meta/tables", {
+              token,
+            }),
             "bearer metadata": yield* http.get(
               "/api/v1/meta/tables/acme.asset",
               { token }
@@ -383,6 +386,9 @@ describe("api-cache", () => {
               cookie,
             }),
             "cookie auth/me": yield* http.get("/api/v1/auth/me", { cookie }),
+            "cookie meta tables": yield* http.get("/api/v1/meta/tables", {
+              cookie,
+            }),
             "cookie metadata": yield* http.get(
               "/api/v1/meta/tables/acme.asset",
               { cookie }
@@ -431,10 +437,12 @@ describe("api-cache", () => {
           assert.deepStrictEqual(seen, {
             "bearer GET records": { cacheControl: "no-store", status: 200 },
             "bearer auth/me": { cacheControl: "no-store", status: 200 },
+            "bearer meta tables": { cacheControl: "no-store", status: 200 },
             "bearer metadata": { cacheControl: "no-store", status: 200 },
             "bearer sign-out": { cacheControl: "no-store", status: 204 },
             "cookie GET records": { cacheControl: "no-store", status: 200 },
             "cookie auth/me": { cacheControl: "no-store", status: 200 },
+            "cookie meta tables": { cacheControl: "no-store", status: 200 },
             "cookie metadata": { cacheControl: "no-store", status: 200 },
             "cookie metadata openapi": {
               cacheControl: "no-store",

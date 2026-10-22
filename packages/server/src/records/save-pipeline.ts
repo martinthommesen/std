@@ -3,6 +3,7 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
+import { allowedRecordsOf } from "@std/definitions/allowed-records";
 /**
  * The save pipeline (Contracts 2.2, 3.9, 4.1, 4.2): create, update and
  * delete of one logical record, each in one request transaction (joined
@@ -267,7 +268,9 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
 
 /**
  * Checks that every reference value the write sets names a target the
- * caller can see (3.6): one check per written reference field, in field
+ * caller can see (3.6) and that satisfies the field's allowed-records
+ * condition in the caller's view (decision 0020): one check per written
+ * reference field, in field
  * order; the first failure is reported.
  */
 const checkReferences = Effect.fn("Records.checkReferences")(
@@ -290,6 +293,7 @@ const checkReferences = Effect.fn("Records.checkReferences")(
         written.has(fieldId)
       ) {
         const visible = yield* access.visibleTargets({
+          allowedRecords: allowedRecordsOf(field.field.type),
           ids: [value],
           snapshot,
           targetClassId: type.targetClassId,
