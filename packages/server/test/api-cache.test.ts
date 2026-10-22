@@ -12,6 +12,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { OPENAPI_PATH } from "@std/api/api";
 import {
   Cause,
+  Deferred,
   Effect,
   ErrorReporter,
   Exit,
@@ -67,19 +68,38 @@ const FailingTransactions = Layer.succeed(
   })
 );
 
+/** The fiber Effect's server runs a request in, from the handler on. */
+type RequestFiber = Fiber.Fiber<unknown, unknown>;
+
+/**
+ * Hands the current request fiber to the test: proof that the handler was
+ * entered, and, with `Fiber.await`, a signal that the server has finished
+ * the request (answered, aborted or interrupted, reported and logged).
+ *
+ * @param entered - Completed with the first request fiber to get here.
+ * @returns An effect that completes `entered`.
+ */
+const enter = (entered: Deferred.Deferred<RequestFiber>) =>
+  Effect.withFiber((fiber) => Deferred.succeed(entered, fiber));
+
 /**
  * An API handler that has read its revision, as every real one does in its
  * request transaction (`request-scope.ts`), and then never answers: only
  * interruption ends it, and the revision hook does not need the database.
+ *
+ * @param entered - Completed with the request fiber once the handler runs.
+ * @returns The handler.
  */
-const answerNever = Effect.gen(function* answerNever() {
-  recordServedRevision(yield* HttpServerRequest, {
-    changeSetId: "cs-1",
-    revision: 1,
-  });
+const answerNever = (entered: Deferred.Deferred<RequestFiber>) =>
+  Effect.gen(function* hangAfterRevision() {
+    recordServedRevision(yield* HttpServerRequest, {
+      changeSetId: "cs-1",
+      revision: 1,
+    });
+    yield* enter(entered);
 
-  return yield* Effect.never;
-});
+    return yield* Effect.never;
+  });
 
 /** A test server and what it logged and reported. */
 interface ObservedServer {
@@ -90,6 +110,10 @@ interface ObservedServer {
   readonly reported: string[];
   /** Shuts the server down. */
   readonly close: Effect.Effect<void>;
+  /** The first `/api/ok` request's fiber, once its handler has run. */
+  readonly okEntered: Effect.Effect<RequestFiber>;
+  /** The first `/api/slow` request's fiber, once its handler has run. */
+  readonly slowEntered: Effect.Effect<RequestFiber>;
 }
 
 const SEVERE = new Set(["Error", "Fatal"]);
@@ -100,13 +124,16 @@ const GRACE = "50 millis";
 /**
  * Serves, on a free port, with `std serve`'s middleware, revision header
  * and no-store hooks, and a revision lookup that fails: `/api/ok`, `/page`
- * and `/api/slow`, which never answers (`answerNever`). It records severe logs and
+ * and `/api/slow`, which never answers (`answerNever`); the two API handlers
+ * hand the test their request fiber. It records severe logs and
  * reported errors, and closes with `close` or the test's scope, interrupting
  * requests still in flight after `GRACE`.
  */
 const observedServer = Effect.gen(function* serveObserved() {
   const errorLogs: string[] = [];
   const reported: string[] = [];
+  const okEntered = yield* Deferred.make<RequestFiber>();
+  const slowEntered = yield* Deferred.make<RequestFiber>();
 
   const logger = Logger.make(({ logLevel, message }) => {
     if (SEVERE.has(logLevel)) {
@@ -120,8 +147,12 @@ const observedServer = Effect.gen(function* serveObserved() {
   });
 
   const app = Layer.mergeAll(
-    HttpRouter.add("GET", "/api/ok", HttpServerResponse.text("ok")),
-    HttpRouter.add("GET", "/api/slow", answerNever),
+    HttpRouter.add(
+      "GET",
+      "/api/ok",
+      Effect.as(enter(okEntered), HttpServerResponse.text("ok"))
+    ),
+    HttpRouter.add("GET", "/api/slow", answerNever(slowEntered)),
     HttpRouter.add(
       "GET",
       "/page",
@@ -163,19 +194,15 @@ const observedServer = Effect.gen(function* serveObserved() {
   return {
     close: Scope.close(scope, Exit.void),
     errorLogs,
+    okEntered: Deferred.await(okEntered),
     origin: `http://127.0.0.1:${port}`,
     reported,
+    slowEntered: Deferred.await(slowEntered),
   } satisfies ObservedServer;
 });
 
 /** The empty status Effect's server answers a request it interrupts on shutdown. */
 const SERVER_ABORT = 503;
-
-/** How long a test waits for its request to reach the slow handler. */
-const IN_FLIGHT = "100 millis";
-
-/** Waits a moment for the server to finish with an abandoned request. */
-const settle = Effect.sleep("200 millis");
 
 describe("api-cache", () => {
   it.live(
@@ -222,7 +249,7 @@ describe("api-cache", () => {
           };
         });
 
-        yield* settle;
+        yield* Fiber.await(yield* server.okEntered);
 
         assert.deepStrictEqual(answer, {
           body: "",
@@ -246,10 +273,10 @@ describe("api-cache", () => {
           )
         );
 
-        yield* Effect.sleep(IN_FLIGHT);
-        yield* Fiber.interrupt(request);
+        const handled = yield* server.slowEntered;
 
-        yield* settle;
+        yield* Fiber.interrupt(request);
+        yield* Fiber.await(handled);
 
         assert.deepStrictEqual(server.errorLogs, []);
         assert.deepStrictEqual(server.reported, []);
@@ -271,10 +298,11 @@ describe("api-cache", () => {
           )
         );
 
-        yield* Effect.sleep(IN_FLIGHT);
+        const handled = yield* server.slowEntered;
+
         yield* server.close;
         const status = yield* Fiber.join(pending);
-        yield* settle;
+        yield* Fiber.await(handled);
 
         assert.deepStrictEqual(status, Option.some(SERVER_ABORT));
         assert.deepStrictEqual(server.errorLogs, []);
