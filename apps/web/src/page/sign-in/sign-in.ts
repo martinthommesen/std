@@ -489,7 +489,6 @@ export const view = Submodel.defineView<Model, Message>((model, h) => {
         [
           h.Class("sign-in-form"),
           h.AriaLabelledBy(HEADING_ID),
-          h.AriaBusy(isPending),
           h.Novalidate(true),
           h.OnSubmit(Message.SubmittedForm()),
         ],

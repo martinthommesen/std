@@ -167,6 +167,11 @@ export interface DatePickerFieldConfig<Message> {
   readonly model: DatePicker.Model;
   readonly maybeSelectedDate: Option.Option<CalendarDate>;
   readonly toParentMessage: (message: DatePicker.Message) => Message;
+  /**
+   * More attributes of the trigger, such as `aria-describedby` naming a
+   * field's problems and `aria-invalid`.
+   */
+  readonly triggerAttributes?: readonly ChildAttribute[];
 }
 
 /**
@@ -208,6 +213,7 @@ export const datePickerField = <Message>(
               Match.tag("Years", (years) => yearsView(years, h)),
               Match.exhaustive
             ),
+          triggerAttributes: config.triggerAttributes ?? [],
           triggerClassName: "control-input date-picker-trigger",
           triggerContent: (maybeDate) =>
             h.span(

@@ -98,7 +98,6 @@ describe("sign-in", () => {
       submit(form),
       expect(signingInButton).toBeDisabled(),
       expect(signingInButton).toHaveAttr("aria-live", "polite"),
-      expect(form).toHaveAttr("aria-busy", "true"),
       Command.expectExact(
         SignIn({
           login: "ada",

@@ -241,9 +241,16 @@ const schemaChangedView = (
   model: Model,
   error: WriteError,
   h: HtmlBuilder<Message>
-): Html =>
-  AsyncData.isPending(model.metadata)
-    ? h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [RELOADING_TEXT])
+): Html => {
+  // NOTE: while the reload runs, a status (the refusal's alert follows
+  // once it is settled, as Outdated); a failed reload is said once, by
+  // `staleMetadataView`, with its own "Reload the definition".
+  if (AsyncData.isPending(model.metadata)) {
+    return h.p([h.Role("status"), h.Class(ALERT_CLASS)], [RELOADING_TEXT]);
+  }
+
+  return AsyncData.isStale(model.metadata)
+    ? h.empty
     : h.div(
         [h.Class(FAILURE_CLASS)],
         [
@@ -258,6 +265,7 @@ const schemaChangedView = (
           ),
         ]
       );
+};
 
 /**
  * The edits the form dropped (decision 0020), with what the user had
@@ -268,12 +276,14 @@ const schemaChangedView = (
  * @returns The notes, or nothing.
  */
 const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  model.droppedEdits.length === 0
-    ? h.empty
-    : h.div(
-        [h.Class("form-dropped"), h.Role("status")],
-        [
-          notesListView(
+  // NOTE: the live region stays mounted, so notes that appear in it are
+  // announced.
+  h.div(
+    [h.Class("form-dropped"), h.Role("status")],
+    [
+      model.droppedEdits.length === 0
+        ? h.empty
+        : notesListView(
             "Some of your changes could not be kept:",
             model.droppedEdits.map((note) => ({
               key: note.fieldId,
@@ -281,8 +291,8 @@ const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
             })),
             h
           ),
-        ]
-      );
+    ]
+  );
 
 const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Match.value(model.submission).pipe(
@@ -324,17 +334,43 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Match.exhaustive
   );
 
+const deleteErrorText = (error: WriteError): string =>
+  Match.value(error).pipe(
+    Match.tag(
+      "VersionConflict",
+      () =>
+        "Someone else changed this record. Nothing was deleted. Reload the record before deleting it."
+    ),
+    Match.tag(
+      "SchemaChanged",
+      () =>
+        "Nothing was deleted: the table's definition changed since this form was opened. The new definition is loading; delete again if you still want to."
+    ),
+    Match.orElse(writeErrorText)
+  );
+
 const deletionView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Match.value(model.deletion).pipe(
     Match.tag("Idle", () => h.empty),
     Match.tag("Deleting", () => h.p([h.Role("status")], ["Deleting…"])),
     Match.tag("Failed", ({ error }) =>
-      h.p(
-        [h.Role("alert"), h.Class(ALERT_CLASS)],
+      h.div(
+        [h.Class(FAILURE_CLASS)],
         [
+          h.p(
+            [h.Role("alert"), h.Class(ALERT_CLASS)],
+            [deleteErrorText(error)]
+          ),
           WriteError.guards.VersionConflict(error)
-            ? "Someone else changed this record. Reload the record before deleting it."
-            : writeErrorText(error),
+            ? buttonView(
+                {
+                  onClick: Message.ClickedReloadRecord(),
+                  text: "Reload the record",
+                  variant: "quiet",
+                },
+                h
+              )
+            : h.empty,
         ]
       )
     ),
@@ -530,13 +566,13 @@ const formBodyView = (
     editedRecordOf(model)
   );
 
+  // NOTE: a `div` with the form role, not a native form: Enter in a field
+  // must not save (a JSON or long-text editor, a picker's search), and the
+  // pickers' and Date Pickers' own buttons stay outside any submission.
+  // Saving is the "Save" button. No `aria-busy`: it would hold back the
+  // "Saving…" status inside it; the button says a save is running.
   return h.div(
-    [
-      h.Role("form"),
-      h.AriaLabelledBy(HEADING_ID),
-      h.AriaBusy(isSaving(model)),
-      h.Class("record-form"),
-    ],
+    [h.Role("form"), h.AriaLabelledBy(HEADING_ID), h.Class("record-form")],
     [
       ...sections.map((section, index) =>
         sectionView(model, section, index, problems, h)

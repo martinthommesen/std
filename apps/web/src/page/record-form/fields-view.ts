@@ -128,8 +128,9 @@ const shownValueView = (
     [h.Class("form-field"), h.DataAttribute("field-state", state)],
     [
       h.span([h.Id(labelIdOf(field)), h.Class(LABEL_CLASS)], [field.label]),
-      h.p(
+      h.div(
         [
+          h.Role("group"),
           h.Class("form-value"),
           h.AriaLabelledBy(labelIdOf(field)),
           ...(hasNotes(notes)
@@ -392,6 +393,26 @@ const selectControl = (
     h
   );
 
+/**
+ * What ties a control that is not the field's main input (a Date
+ * Picker's trigger, a date-time's time) to the field's notes: its
+ * description, `aria-invalid` with a problem, and `aria-required`.
+ *
+ * @param config - The field's control.
+ * @param h - The builder.
+ * @returns The attributes.
+ */
+const describedControlAttributes = (
+  config: ControlConfig,
+  h: HtmlBuilder<Message>
+): readonly Attribute<Message>[] => [
+  ...(hasNotes(config.notes)
+    ? [h.AriaDescribedBy(descriptionIdOf(config.controlId))]
+    : []),
+  ...(config.isInvalid ? [h.AriaInvalid(true)] : []),
+  ...requiredAttributes(config.field, h),
+];
+
 const dateControl = (
   model: Model,
   config: ControlConfig,
@@ -417,6 +438,9 @@ const dateControl = (
                   fieldId: config.field.id,
                   message,
                 }),
+              triggerAttributes: childAttributes(
+                describedControlAttributes(config, h)
+              ),
             },
             h
           ),
@@ -478,6 +502,7 @@ const dateTimeControl = (
                 ),
                 h.input([
                   ...attributes.input,
+                  ...describedControlAttributes(config, h),
                   h.Spellcheck(false),
                   h.Class("control-input control-time"),
                 ]),
@@ -689,7 +714,9 @@ const writeOnlyControl = (
       field.type.kind === "secret" && isSet && !isClearing
         ? buttonView(
             {
-              maybeAriaLabel: Option.some(`Clear the stored ${field.label}`),
+              maybeAriaLabel: Option.some(
+                `Clear the stored value of ${field.label}`
+              ),
               onClick: Message.ClickedClearSecret({ fieldId: field.id }),
               text: "Clear the stored value",
               variant: "quiet",
@@ -700,7 +727,9 @@ const writeOnlyControl = (
       isClearing
         ? buttonView(
             {
-              maybeAriaLabel: Option.some(`Keep the stored ${field.label}`),
+              maybeAriaLabel: Option.some(
+                `Keep the stored value of ${field.label}`
+              ),
               onClick: Message.ClickedKeepSecret({ fieldId: field.id }),
               text: "Keep the stored value",
               variant: "quiet",

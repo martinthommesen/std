@@ -959,7 +959,37 @@ describe("the reference picker", () => {
             present(page.pickers[TICKET_FIELDS.assignee]).results
           )
         ).toBeTruthy();
-      })
+      }),
+      // Typing again asks for the target's metadata again, then searches.
+      message(
+        Message.GotPickerMessage({
+          fieldId: TICKET_FIELDS.assignee,
+          message: Combobox.Message.UpdatedInputValue({ value: "Ale" }),
+        })
+      ),
+      Command.expectExact(
+        LoadTarget({ revision: REVISION_5, table: "core.user" })
+      ),
+      Command.resolve(
+        LoadTarget,
+        Message.SucceededLoadTarget({ table: userTable })
+      ),
+      model((page) => {
+        expect(
+          AsyncData.isPending(
+            present(page.pickers[TICKET_FIELDS.assignee]).results
+          )
+        ).toBeTruthy();
+      }),
+      Command.resolve(
+        SearchTargets,
+        Message.SucceededSearchTargets({
+          fieldId: TICKET_FIELDS.assignee,
+          generation: 2,
+          items: [],
+          maybeRevision: Option.none(),
+        })
+      )
     );
   });
 

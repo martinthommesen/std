@@ -27,7 +27,10 @@ import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { listColumns } from "../../domain/list-columns.ts";
 import { filterParameter } from "../../domain/list-query.ts";
-import { isNewerRevision } from "../../domain/schema-revision.ts";
+import {
+  isNewerRevision,
+  parseSchemaRevision,
+} from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import {
   mergeChanges,
@@ -588,7 +591,7 @@ const failRelatedMetadata = (
   model: Model,
   key: string,
   error: MetaError
-): UpdateReturn => ({
+): PlainReturn => ({
   model: writeRelatedList(model, key, (list) =>
     modifyFields(list, {
       metadata: () => RelatedMetadata.Failure({ error }),
@@ -616,7 +619,7 @@ const failRelatedRecords = (
   key: string,
   generation: number,
   error: RelatedError
-): UpdateReturn => ({
+): PlainReturn => ({
   model: writeRelatedList(model, key, (list) =>
     list.generation === generation
       ? modifyFields(list, {
@@ -730,20 +733,6 @@ const receiveHistory = (
   });
 };
 
-const failHistory = (
-  model: Model,
-  generation: number,
-  error: HistoryError
-): UpdateReturn =>
-  generation === model.history.generation
-    ? {
-        model: modifyFields(model, {
-          history: (history) =>
-            modifyFields(history, { entries: failedHistory(error) }),
-        }),
-      }
-    : { model };
-
 // REVISIONS
 
 /**
@@ -797,6 +786,49 @@ const sawRevision = (
       )
     )
   );
+
+// HISTORY AFTER A REFRESH
+
+/**
+ * A history that did not load. Refused with `SchemaChanged`, the page
+ * reloads its metadata, and the history is asked again once it arrives
+ * (`receiveMetadata`), since repeating a read is safe (Contracts 6.4).
+ *
+ * @param model - The page.
+ * @param generation - The answered request's number.
+ * @param error - Why it did not load.
+ * @returns The page.
+ */
+const failHistory = (
+  model: Model,
+  generation: number,
+  error: HistoryError
+): PlainReturn => {
+  if (generation !== model.history.generation) {
+    return { model };
+  }
+
+  const failed = modifyFields(model, {
+    history: (history) =>
+      modifyFields(history, { entries: failedHistory(error) }),
+  });
+
+  return error === "SchemaChanged"
+    ? refreshMetadata(failed)
+    : { model: failed };
+};
+
+/**
+ * Asks for the history again after the metadata moved on, when its last
+ * request was refused with `SchemaChanged`.
+ *
+ * @param model - The page.
+ * @returns The page, reloading the history if it was refused.
+ */
+const retryRefusedHistory: Step = (model) =>
+  Option.contains(AsyncData.getError(model.history.entries), "SchemaChanged")
+    ? requestHistory(model)
+    : { model };
 
 // THE RECORD
 
@@ -974,6 +1006,9 @@ const receiveMetadata = (
   const next = Update.combine(loaded, [
     nextRecordStep(isFirstLoad || hadRecordRefused, isOtherRevision),
     setUpControls,
+    isOtherRevision
+      ? retryRefusedHistory
+      : (stepModel) => ({ model: stepModel }),
   ]);
 
   return sawRevision(next, Option.some(revision));
@@ -1021,6 +1056,7 @@ const receiveRecord = (
     );
 
   const read = modifyFields(model, {
+    deletion: (deletion) => (afterConflict ? Deletion.Idle() : deletion),
     maybeEditsFrom: (editsFrom) =>
       isChangedUnderEdits
         ? Option.orElse(editsFrom, () => recordOf(model))
@@ -1301,6 +1337,70 @@ const searchingPicker =
         }),
     });
 
+const targetOfField = (model: Model, fieldId: string): string | null =>
+  Option.match(fieldOf(model, fieldId), {
+    onNone: () => null,
+    onSome: (field) =>
+      field.type.kind === "reference" ? field.type.target : null,
+  });
+
+/**
+ * The pickers waiting on a target whose metadata did not load: they cannot
+ * search, and say so instead of waiting.
+ *
+ * @param model - The page.
+ * @param table - The target table.
+ * @returns The page.
+ */
+const failTargetPickers = (model: Model, table: string): PlainReturn => ({
+  model: modifyFields(model, {
+    pickers: Record.map((picker, fieldId) =>
+      targetOfField(model, fieldId) === table &&
+      AsyncData.isPending(picker.results)
+        ? modifyFields(picker, {
+            results: () => PickerResults.Failure({ error: "Unavailable" }),
+          })
+        : picker
+    ),
+  }),
+});
+
+/**
+ * A picker that waits for its target's metadata: when that metadata did
+ * not load because the server did not answer, it is asked for again (the
+ * waiting search runs once it arrives, `receiveTarget`); a target the
+ * caller cannot open stays failed, and its pickers say they cannot search.
+ *
+ * @param model - The page, its picker waiting.
+ * @param target - The target table, if the caller knows it.
+ * @param revision - The form's revision.
+ * @returns The page, and the reload if one is needed.
+ */
+const reloadFailedTarget = (
+  model: Model,
+  target: string | null,
+  revision: SchemaRevision
+): PlainReturn => {
+  const maybeError = pipe(
+    Option.fromNullishOr(target),
+    Option.flatMap((name) => Record.get(model.targets, name)),
+    Option.flatMap(AsyncData.getError)
+  );
+
+  if (target === null || !Option.contains(maybeError, "Unavailable")) {
+    return Option.isSome(maybeError) && target !== null
+      ? failTargetPickers(model, target)
+      : { model };
+  }
+
+  return {
+    commands: [LoadTarget({ revision, table: target })],
+    model: modifyFields(model, {
+      targets: Record.set(target, TargetMetadata.Loading()),
+    }),
+  };
+};
+
 /**
  * Asks for a picker's targets: those the caller can see that the field's
  * allowed-records condition admits (`allowedFor`), whose display field
@@ -1337,7 +1437,7 @@ const searchTargets =
         );
 
         return Option.match(maybeTargetMeta, {
-          onNone: () => ({ model: waiting }),
+          onNone: () => reloadFailedTarget(waiting, target, meta.revision),
           onSome: (targetMeta) => ({
             commands: [
               SearchTargets({
@@ -1439,13 +1539,6 @@ const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
   return inSequence(waiting)(known);
 };
 
-const targetOfField = (model: Model, fieldId: string): string | null =>
-  Option.match(fieldOf(model, fieldId), {
-    onNone: () => null,
-    onSome: (field) =>
-      field.type.kind === "reference" ? field.type.target : null,
-  });
-
 /**
  * A target whose metadata did not load: its pickers cannot search, and say
  * so instead of waiting.
@@ -1459,19 +1552,13 @@ const failTarget = (
   model: Model,
   table: string,
   reason: MetaError
-): UpdateReturn => ({
-  model: modifyFields(model, {
-    pickers: Record.map((picker, fieldId) =>
-      targetOfField(model, fieldId) === table &&
-      AsyncData.isPending(picker.results)
-        ? modifyFields(picker, {
-            results: () => PickerResults.Failure({ error: "Unavailable" }),
-          })
-        : picker
-    ),
-    targets: Record.set(table, TargetMetadata.Failure({ error: reason })),
-  }),
-});
+): PlainReturn =>
+  failTargetPickers(
+    modifyFields(model, {
+      targets: Record.set(table, TargetMetadata.Failure({ error: reason })),
+    }),
+    table
+  );
 
 const receiveSearch = (
   model: Model,
@@ -1492,7 +1579,7 @@ const failSearch = (
   model: Model,
   fieldId: string,
   generation: number
-): UpdateReturn => ({
+): PlainReturn => ({
   model: writePicker(model, fieldId, (picker) =>
     picker.generation === generation
       ? modifyFields(picker, {
@@ -1897,6 +1984,36 @@ const confirmDelete = (model: Model): UpdateReturn => {
   });
 };
 
+/**
+ * A refused delete. `NotAllowed` and `SchemaChanged` refresh the metadata
+ * in the background, as for a save (Contracts 6.4); the delete is never
+ * sent again by itself.
+ *
+ * @param model - The page.
+ * @param error - Why it was refused.
+ * @returns The page, and what the app should know.
+ */
+const failDelete = (model: Model, error: WriteError): UpdateReturn => {
+  const refused = modifyFields(model, {
+    deletion: () => Deletion.Failed({ error }),
+  });
+
+  if (WriteError.guards.NotAllowed(error)) {
+    return refreshMetadata(refused);
+  }
+
+  return WriteError.guards.SchemaChanged(error)
+    ? Update.withOutMessage(
+        refreshMetadata(refused),
+        Option.getOrUndefined(
+          Option.map(parseSchemaRevision(error.currentRevision), (revision) =>
+            OutMessage.SawCurrentRevision({ revision })
+          )
+        )
+      )
+    : { model: refused };
+};
+
 const listUrlOf = (table: string): string =>
   tableListRouter({
     filter: Option.none(),
@@ -2008,11 +2125,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       outMessage: OutMessage.SessionEnded(),
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedDeleteRecord: ({ error }) => ({
-      model: modifyFields(model, {
-        deletion: () => Deletion.Failed({ error }),
-      }),
-    }),
+    FailedDeleteRecord: ({ error }) => failDelete(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadActorNames: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

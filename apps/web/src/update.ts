@@ -106,19 +106,36 @@ const landSignedOut = (
     }))
   );
 
+/** The first page number of the app's run. */
+const FIRST_PAGE_ID = 1;
+
+// NOTE: page numbers go on across sign-out and sign-in (`nextPageId` is
+// carried through the signed-out state), so an answer to a page of an
+// earlier session never reaches a page of the next one.
 const initSignedOut = (
   route: SignedOutRoute,
-  maybeReturnRoute: Option.Option<SignedInRoute>
-): Model => Model.SignedOut({ maybeReturnRoute, route, signIn: signInInit() });
+  maybeReturnRoute: Option.Option<SignedInRoute>,
+  nextPageId: number = FIRST_PAGE_ID
+): Model =>
+  Model.SignedOut({
+    maybeReturnRoute,
+    nextPageId,
+    route,
+    signIn: signInInit(),
+  });
 
 const initSignedIn =
-  (user: CurrentUser, maybeRevision: Option.Option<SchemaRevision>) =>
+  (
+    user: CurrentUser,
+    maybeRevision: Option.Option<SchemaRevision>,
+    nextPageId: number = FIRST_PAGE_ID
+  ) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
       maybeRecordForm: Option.none(),
       maybeRevision,
       maybeTableList: Option.none(),
-      nextPageId: 1,
+      nextPageId,
       route,
       signOutRequest: SignOutRequest.Idle(),
       tables: Tables.Idle(),
@@ -273,7 +290,11 @@ const endSession: Step = (model) =>
   Model.guards.SignedIn(model)
     ? focusingMain({
         commands: [ReplaceUrl({ url: signInRouter() })],
-        model: initSignedOut(AppRoute.SignIn(), Option.some(model.route)),
+        model: initSignedOut(
+          AppRoute.SignIn(),
+          Option.some(model.route),
+          model.nextPageId
+        ),
       })
     : { model };
 
@@ -642,13 +663,16 @@ const enterAfterSignIn =
     );
 
     return focusingMain(
-      Update.combine(initSignedIn(user, maybeRevision)(route), [
-        (stepModel) => ({
-          commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
-          model: stepModel,
-        }),
-        enterSignedIn,
-      ])
+      Update.combine(
+        initSignedIn(user, maybeRevision, model.nextPageId)(route),
+        [
+          (stepModel) => ({
+            commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
+            model: stepModel,
+          }),
+          enterSignedIn,
+        ]
+      )
     );
   };
 
@@ -769,10 +793,14 @@ export const update = (model: Model, message: Message) =>
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededSignOut: () =>
-      inSignedIn(model, () =>
+      inSignedIn(model, (signedIn) =>
         focusingMain({
           commands: [ReplaceUrl({ url: signInRouter() })],
-          model: initSignedOut(AppRoute.SignIn(), Option.none()),
+          model: initSignedOut(
+            AppRoute.SignIn(),
+            Option.none(),
+            signedIn.nextPageId
+          ),
         })
       ),
   });

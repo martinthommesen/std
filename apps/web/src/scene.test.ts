@@ -147,7 +147,14 @@ describe("app", () => {
       expect(within(tablesNav, role("link", { name: "Asset" }))).toHaveAttr(
         "href",
         "/tables/acme.asset"
-      )
+      ),
+      // Tables of several namespaces are grouped, one heading each.
+      expect(
+        within(tablesNav, role("heading", { level: 3, name: "acme" }))
+      ).toExist(),
+      expect(
+        within(tablesNav, role("heading", { level: 3, name: "core" }))
+      ).toExist()
     );
   });
 

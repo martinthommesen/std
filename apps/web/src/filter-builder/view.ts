@@ -298,6 +298,28 @@ const unitSelect = (
     h
   );
 
+const maybeProblemOf = (
+  context: NodeContext,
+  node: FilterNode
+): Option.Option<string> =>
+  context.model.isShowingProblems
+    ? Option.fromNullishOr(context.problems.get(node.id))
+    : Option.none();
+
+/**
+ * Whether a condition's typed value shows a problem: its value control
+ * then carries `aria-invalid`, so focus moved to it after "Apply" says so
+ * (the problem itself describes the condition's fieldset).
+ *
+ * @param context - The view's context.
+ * @param condition - The condition.
+ * @returns True when its problem shows.
+ */
+const isConditionInvalid = (
+  context: NodeContext,
+  condition: Condition
+): boolean => Option.isSome(maybeProblemOf(context, condition));
+
 const offsetInput = (
   context: NodeContext,
   condition: Condition,
@@ -308,6 +330,7 @@ const offsetInput = (
   inputField(
     {
       id: elementId(context.model, condition.id, "offset"),
+      isInvalid: isConditionInvalid(context, condition),
       label: "Offset",
       maybeDescription: Option.some(hint),
       onInput: (value) =>
@@ -342,6 +365,7 @@ const typedValue = (
   inputField(
     {
       id: elementId(context.model, condition.id, "value"),
+      isInvalid: isConditionInvalid(context, condition),
       label: "Value",
       maybeDescription: Option.fromNullishOr(VALUE_HINTS[field.type.kind]),
       onInput: (value) =>
@@ -465,6 +489,7 @@ const operandView = (
       inputField(
         {
           id: elementId(context.model, condition.id, "time"),
+          isInvalid: isConditionInvalid(context, condition),
           label: "Time (UTC)",
           maybeDescription: Option.some("HH:MM, in UTC."),
           onInput: (time) =>
@@ -478,6 +503,7 @@ const operandView = (
       textareaField(
         {
           id: elementId(context.model, condition.id, "value"),
+          isInvalid: isConditionInvalid(context, condition),
           label: "Values",
           maybeDescription: Option.some("One value per line."),
           onInput: (value) =>
@@ -516,21 +542,13 @@ const operandView = (
     Match.exhaustive
   );
 
-const maybeProblemOf = (
-  context: NodeContext,
-  node: FilterNode
-): Option.Option<string> =>
-  context.model.isShowingProblems
-    ? Option.fromNullishOr(context.problems.get(node.id))
-    : Option.none();
-
 /**
  * The attributes that tie a node's fieldset to its problem, when shown.
  *
  * @param context - The view's context.
  * @param node - The condition or group.
  * @param h - The builder.
- * @returns `aria-describedby` and `aria-invalid`, or nothing.
+ * @returns `aria-describedby`, or nothing.
  */
 const problemAttributes = (
   context: NodeContext,
@@ -541,7 +559,6 @@ const problemAttributes = (
     onNone: () => [],
     onSome: () => [
       h.AriaDescribedBy(elementId(context.model, node.id, "problem")),
-      h.AriaInvalid(true),
     ],
   });
 

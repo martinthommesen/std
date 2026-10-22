@@ -386,6 +386,40 @@ describe("signing in", () => {
 });
 
 describe("signing out", () => {
+  it("page numbers go on across sign-out and sign-in, so an earlier session's answer reaches no page", () => {
+    const pagesOpened = modifyFields(adaAtHome, { nextPageId: () => 7 });
+
+    story(
+      update,
+      given(pagesOpened),
+      message(Message.ClickedSignOut()),
+      Command.resolve(SignOut, Message.SucceededSignOut()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      ),
+      model((app) => {
+        expect(Model.guards.SignedOut(app) ? app.nextPageId : 0).toBe(7);
+      }),
+      message(
+        Message.GotSignInMessage({
+          message: SignInMessage.SucceededSignIn({
+            maybeRevision: Option.some(REVISION_3),
+            user: ada,
+          }),
+        })
+      ),
+      model((app) => {
+        expect(Model.guards.SignedIn(app) ? app.nextPageId : 0).toBe(7);
+      }),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()],
+        [LoadTables, Message.FailedLoadTables()]
+      )
+    );
+  });
+
   it("ends on the sign-in page, with focus moved to it", () => {
     story(
       update,

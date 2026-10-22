@@ -78,6 +78,7 @@ export const Model = defineTaggedUnion({
   },
   SignedOut: {
     maybeReturnRoute: Schema.Option(SignedInRoute),
+    nextPageId: Schema.Int,
     route: SignedOutRoute,
     signIn: SignInModel,
   },

@@ -160,7 +160,7 @@ describe("the record form", () => {
         expect(text("Set. Type a new value to replace it.")).toExist(),
         expect(label("PIN: new value")).toHaveValue("")
       ),
-      click(role("button", { name: "Clear the stored Token" })),
+      click(role("button", { name: "Clear the stored value of Token" })),
       inside(
         fieldRow("token"),
         expect(text("Set; it will be cleared when you save.")).toExist()
@@ -429,7 +429,8 @@ describe("a stale form", () => {
       { update, view },
       given(reloaded),
       acknowledgePicker,
-      expect(role("alert")).toHaveText(/Loading the new definition/u),
+      expect(text(/Loading the new definition/u)).toExist(),
+      expect(role("alert")).not.toExist(),
       expect(label("Short description (required)")).toHaveValue("Mine"),
       expect(role("button", { name: "Save" })).toBeDisabled()
     );

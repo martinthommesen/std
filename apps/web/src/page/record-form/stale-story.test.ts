@@ -764,3 +764,84 @@ describe("a newer revision on any answer", () => {
     );
   });
 });
+
+describe("reads and deletes refused as stale", () => {
+  it("a history refused with SchemaChanged reloads the metadata, then asks again", () => {
+    story(
+      update,
+      given(ready),
+      message(Message.ToggledHistory({ isOpen: true })),
+      Command.resolve(
+        LoadHistory,
+        Message.FailedLoadHistory({ error: "SchemaChanged", generation: 1 })
+      ),
+      Command.expectExact(reloadMetadata),
+      Command.resolve(
+        LoadFormMetadata,
+        Message.SucceededLoadFormMetadata({
+          revision: REVISION_6,
+          table: ticketTable,
+        })
+      ),
+      Command.expectHas(
+        LoadHistory({
+          generation: 2,
+          recordId: TICKET_ID,
+          revision: REVISION_6,
+          table: TICKET,
+        })
+      ),
+      Command.resolveAll(
+        [
+          LoadHistory,
+          Message.SucceededLoadHistory({
+            entries: [],
+            generation: 2,
+            maybeRevision: Option.some(REVISION_6),
+          }),
+        ],
+        [
+          LoadRecord,
+          Message.SucceededLoadRecord({
+            generation: 2,
+            maybeRevision: Option.some(REVISION_6),
+            purpose: "Refresh",
+            record: ticketRecord,
+          }),
+        ]
+      ),
+      model((page) => {
+        expect(page.history.entries._tag).toBe("Success");
+      })
+    );
+  });
+
+  it("a delete refused with SchemaChanged or NotAllowed reloads the metadata and is not sent again", () => {
+    const stale = update(
+      ready,
+      Message.FailedDeleteRecord({
+        error: WriteError.SchemaChanged({
+          changes: [],
+          currentRevision: REVISION_6,
+        }),
+      })
+    );
+
+    expect(stale.commands?.map((command) => command.name)).toStrictEqual([
+      "LoadFormMetadata",
+    ]);
+    expect(stale.outMessage).toStrictEqual(
+      OutMessage.SawCurrentRevision({ revision: REVISION_6 })
+    );
+
+    const refused = update(
+      ready,
+      Message.FailedDeleteRecord({ error: WriteError.NotAllowed() })
+    );
+
+    expect(refused.commands?.map((command) => command.name)).toStrictEqual([
+      "LoadFormMetadata",
+    ]);
+    expect(refused.model.deletion._tag).toBe("Failed");
+  });
+});

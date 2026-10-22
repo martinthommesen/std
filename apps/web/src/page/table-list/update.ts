@@ -586,6 +586,33 @@ const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   }),
 });
 
+/**
+ * A target table's metadata after a failed (re)load: a reload that did not
+ * answer keeps the definition the page had (`Stale`), so the applied
+ * filter still prints; a table the caller can no longer open, or one never
+ * loaded, fails.
+ *
+ * @param model - The page.
+ * @param table - The target table.
+ * @param error - Why it did not load.
+ * @returns The target's metadata.
+ */
+const failedTarget = (
+  model: Model,
+  table: string,
+  error: MetaError
+): TargetMetadata =>
+  Option.match(
+    pipe(Record.get(model.targets, table), Option.flatMap(AsyncData.getData)),
+    {
+      onNone: () => TargetMetadata.Failure({ error }),
+      onSome: (data) =>
+        error === "UnknownTable"
+          ? TargetMetadata.Failure({ error })
+          : TargetMetadata.Stale({ data, error }),
+    }
+  );
+
 const receiveTarget = (model: Model, table: string, target: TargetMetadata) =>
   Update.combine(modifyFields(model, { targets: Record.set(table, target) }), [
     continueWaitingFilter,
@@ -882,7 +909,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedLoadTableMetadata: ({ error }) => failMetadata(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadTargetTable: ({ error, table }) =>
-      receiveTarget(model, table, TargetMetadata.Failure({ error })),
+      receiveTarget(model, table, failedTarget(model, table, error)),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotFilterBuilderMessage: ({ message: builderMessage }) =>
       Option.match(scopeOf(model), {

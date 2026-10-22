@@ -50,6 +50,7 @@ export const adaEnteringHome = Model.SignedIn({
 /** The sign-in page after a redirect from the home page. */
 export const signInRedirectedFromHome = Model.SignedOut({
   maybeReturnRoute: Option.some(AppRoute.Home()),
+  nextPageId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
@@ -57,6 +58,7 @@ export const signInRedirectedFromHome = Model.SignedOut({
 /** The sign-in page, opened directly. */
 export const signInOpenedDirectly = Model.SignedOut({
   maybeReturnRoute: Option.none(),
+  nextPageId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });

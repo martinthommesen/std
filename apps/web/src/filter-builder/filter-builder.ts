@@ -233,9 +233,13 @@ const PROBLEM_PARTS = ["value", "offset", "time", "field", "junction"];
 export const FocusProblem = Command.define("FocusProblem", {
   args: { elementIds: Schema.Array(Schema.String) },
   execute: ({ elementIds }) =>
-    Effect.firstSuccessOf(
-      elementIds.map((elementId) => Dom.focus(`#${elementId}`))
-    ).pipe(Effect.ignore, Effect.as(Message.CompletedFocusProblem())),
+    // NOTE: `Effect.void` closes the list, so it is never empty (an empty
+    // `firstSuccessOf` dies) and a page without any of the controls
+    // completes all the same.
+    Effect.firstSuccessOf([
+      ...elementIds.map((elementId) => Dom.focus(`#${elementId}`)),
+      Effect.void,
+    ]).pipe(Effect.ignore, Effect.as(Message.CompletedFocusProblem())),
   messages: [Message.CompletedFocusProblem],
 });
 

@@ -859,6 +859,64 @@ describe("review fixes", () => {
     );
   });
 
+  it("keeps the applied filter when a target table's reload does not answer", () => {
+    const filtered = (() => {
+      const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
+
+      return update(
+        stored.model,
+        Message.SucceededLoadTargetTable({ table: userTable })
+      ).model;
+    })();
+
+    story(
+      update,
+      given(filtered),
+      message(
+        Message.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 3,
+          maybeRevision: Option.some(REVISION_4),
+        })
+      ),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: assetTable,
+        })
+      ),
+      Command.resolve(
+        LoadTargetTable,
+        Message.FailedLoadTargetTable({
+          error: "Unavailable",
+          table: "core.user",
+        })
+      ),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(
+          Option.some(ownerIsBob)
+        );
+        expect(page.maybeNotice).toStrictEqual(Option.none());
+      }),
+      Command.expectExact(
+        listRequest({
+          filter: Option.some('owner.name = "Bob"'),
+          generation: 4,
+          revision: REVISION_4,
+        })
+      ),
+      Command.resolve(
+        LoadRecords,
+        Message.SucceededLoadRecords({
+          generation: 4,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        })
+      )
+    );
+  });
+
   it("when the refresh after SchemaChanged fails, offers to try again instead of waiting forever", () => {
     story(
       update,
