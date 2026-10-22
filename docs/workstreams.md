@@ -34,12 +34,12 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 5 | `ws/2b-web-pages` | 2B, 2C | table navigation, lists, forms, filter builder, picker, related lists, history panel, stale forms, admin pages, browser tests, compose browser smoke test | merged |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set v1 and v2, upgrade test, rename test, saved filters, compose runnable result, browser-test fixture | merged |
 | 5 | `ws/plan-tmf-oda-itil` | re-plan | Martin's hard requirement (2026-10-22): strict TM Forum (TMF630 on the generic API, TMF621/632/669/672/688/638/639/641/622 with conformance kits), ODA Components on the ODA Canvas, ITIL practices; rework of the plan, contracts and Steps 3–4 | in review |
-| 6 | `ws/3a-hooks` | 3A | hooks and record rules, with the four rule action kinds of Contracts 14.1 | planned |
+| 6 | `ws/3a-hooks` | 3A | hooks and record rules as Contracts 4.10 declares them (all four phases, `aggregate` included), and aggregates (Contracts 4.9) | planned |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker, leases, dead letters | planned |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
 | 6 | `ws/3g-tmf630-api` | 3G | `/api/v2` per Contracts 10, `/api/v1` frozen, web app, quickstart and typed client on v2 | planned |
 | 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
-| 6 | `ws/3t-tmf-framework` | 3T | `@std/tmf`, mapping rules, aggregate parts, pinned specs, CTK runner and OpenAPI contract tests in CI, the requirements matrix and its check (Contracts 11.1, 15) | planned |
+| 6 | `ws/3t-tmf-framework` | 3T | `@std/tmf`, mapping rules over the 3A aggregates, pinned specs, CTK runner and OpenAPI contract tests in CI, the requirements matrix and its check (Contracts 11.1, 15) | planned |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3) | planned |
 | 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
 | 6 | `ws/3k-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6) | planned |
