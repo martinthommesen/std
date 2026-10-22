@@ -8,11 +8,14 @@
 # them, then the stub component (deploy/oda/probe-stub/) until `Complete`.
 # Every tool and chart is downloaded by pinned version and SHA-256 inside the
 # script, so a local run measures the same thing. Nothing retries. The job
-# fails when the probe fails, and uploads its result.json and logs either
-# way; `pnpm oda-probe:summary` summarizes the last runs' artifacts.
+# fails when the probe fails or cannot write its result, and uploads
+# result.json and the logs either way, as one artifact per run attempt
+# (`oda-canvas-probe-<run id>-<attempt>`), so a rerun never replaces an
+# earlier attempt's result. `pnpm oda-probe:summary` summarizes them.
 #
 # Runs are independent (no concurrency group), so dispatching several at once
-# gives several runners.
+# gives several runners. Dispatch them from main: the summary selects main's
+# runs by default.
 name: ODA Canvas probe
 
 on:
@@ -24,7 +27,9 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    # The probe's own phase limits add up to about 85 minutes.
+    # The probe's phases share a budget of 85 minutes (PROBE_BUDGET_SECONDS);
+    # diagnostics, the result and cleanup are bounded too, so the probe ends
+    # by about 103 minutes and the upload has the rest.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -34,12 +39,13 @@ jobs:
         env:
           PROBE_OUT_DIR: ${{ runner.temp }}/oda-canvas-probe
           PROBE_TOOLS_DIR: ${{ runner.temp }}/oda-canvas-probe-tools
+          PROBE_BUDGET_SECONDS: "5100"
         run: deploy/oda/probe/probe.sh
       - name: Upload the result
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oda-canvas-probe
+          name: oda-canvas-probe-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/oda-canvas-probe/result.json
             ${{ runner.temp }}/oda-canvas-probe/logs/
