@@ -18,6 +18,10 @@ sources:
     version: 4.0.0
     licence: Apache-2.0
     location: packages/tmf/specs/TMF688-Event-v4.0.0.swagger.json (tmforum-apis/TMF688-Event at a88d5266404d6b1f38504a9bdc149d636ccf4ab2, SHA-256 in pins.json)
+  - id: SPEC
+    document: TMF688 Event Management API REST Specification
+    version: 4.0.0 (pre-production)
+    licence: TM Forum member material; cited, never copied
 rows:
   - id: TMF688@4.0.0/CP/resources/Hub
     source: "TMF688 CP v4.0.0 API Mandatory Resources p.5"
@@ -250,15 +254,20 @@ rows:
   - id: TMF688@4.0.0/OAS/events/TopicCreateEvent
     source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicCreateEvent/post; #/definitions/TopicCreateEvent"
     level: optional
-    requirement: "A TopicCreateEvent that STD delivers to a hub's callback is a valid TopicCreateEvent body."
+    requirement: "STD offers TopicCreateEvent (client topics created, changed or deleted; resource topics appearing or disappearing), and each one it delivers to a hub's callback is a valid TopicCreateEvent body (decision 0021, decision 42)."
     status: pending
   - id: TMF688@4.0.0/OAS/events/TopicChangeEvent
     source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicChangeEvent/post; #/definitions/TopicChangeEvent"
     level: optional
-    requirement: "A TopicChangeEvent that STD delivers to a hub's callback is a valid TopicChangeEvent body."
+    requirement: "STD offers TopicChangeEvent (client topics created, changed or deleted; resource topics appearing or disappearing), and each one it delivers to a hub's callback is a valid TopicChangeEvent body (decision 0021, decision 42)."
     status: pending
   - id: TMF688@4.0.0/OAS/events/TopicDeleteEvent
     source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicDeleteEvent/post; #/definitions/TopicDeleteEvent"
     level: optional
-    requirement: "A TopicDeleteEvent that STD delivers to a hub's callback is a valid TopicDeleteEvent body."
+    requirement: "STD offers TopicDeleteEvent (client topics created, changed or deleted; resource topics appearing or disappearing), and each one it delivers to a hub's callback is a valid TopicDeleteEvent body (decision 0021, decision 42)."
+    status: pending
+  - id: TMF688@4.0.0/SPEC/notifications/EventCreateEvent
+    source: "TMF688 spec v4.0.0 Notification Resource Models p.17"
+    level: optional
+    requirement: "When a client posts an event to a client topic, hubs registered on TMF688 get an EventCreateEvent (no listener path in the swagger; offered from Step 3, decision 0021, decision 42)."
     status: pending

@@ -182,7 +182,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - The outbox worker (Contracts 4.6): claim, leases with fencing, backoff, dead letters, an admin view.
 - Form rules (conditional required, read-only, hidden) with browser evaluation that can return Unknown, and the form-state endpoint (Contracts 5.8, 6.3).
 - The generic API v2 under `/api/v2` per TMF630 (Contracts 10): flat resources with `id`, `href`, `@type`, `@baseType` and `@schemaLocation`, EntityRef references, `fields`, TMF filtering mapped onto the condition AST, `offset`/`limit` and `after` cursors, `X-Total-Count` and `X-Result-Count`, merge-patch and JSON Patch, the TMF Error shape, hubs. `/api/v1` is frozen and deprecated until `v0.1.0`. The web app, the quickstart and the per-table OpenAPI move to v2.
-- Hub/listener on every API and TMF688 topics and events, as an outbox consumer that calls registered callbacks (Contracts 12).
+- Hub/listener on every API and TMF688 topics and events, with TMF688's own notifications (`EventCreateEvent`, `TopicCreateEvent`, `TopicChangeEvent`, `TopicDeleteEvent`), as an outbox consumer that calls registered callbacks (Contracts 12).
 - The TMF Open API framework (Contracts 11.1): mapping a TMF resource onto a class subtree, attribute and state maps, embedded arrays as child records, polymorphic `@type`, the CTK runner and OpenAPI contract tests in CI.
 - The party foundation in `core` (`core.party`, `core.individual`, `core.organization`, `core.user.individual`) with a `data` migration that gives every existing user an individual (Contracts 1.9, 11.3).
 - Aggregate parts (Contracts 6.5, 11.1) and the requirements matrix with its CI check (Contracts 15).
