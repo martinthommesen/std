@@ -51,7 +51,7 @@ import { readRows } from "../records/sql-run.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { revisionHeaderValue } from "./schema-revision-header.ts";
-import { definitionsAt, staleScope } from "./stale-scope.ts";
+import { definitionsAt, spelled, staleScope } from "./stale-scope.ts";
 import type { ScopeEntry, ScopeParameters, StaleScope } from "./stale-scope.ts";
 
 const HEADER =
@@ -534,7 +534,12 @@ const nameMatches = (
   fieldClass: DefinitionId,
   names: readonly (string | undefined | null)[]
 ): DefinitionId[] => {
-  const wanted = new Set(names);
+  // Old and new names as the request spells names (Contracts 10.2).
+  const wanted = new Set(
+    names.flatMap((name) =>
+      name === undefined || name === null ? [] : [spelled(name, scope.naming)]
+    )
+  );
 
   return [
     ...new Set(

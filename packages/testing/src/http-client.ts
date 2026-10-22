@@ -26,6 +26,8 @@ import type { Scope } from "effect";
 import { HttpEffect, HttpRouter, HttpServer } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { checkV2Exchange } from "./v2-contract.ts";
+
 /** A response as the client received it. */
 export interface TestResponse {
   readonly status: number;
@@ -89,6 +91,11 @@ export const setCookieValue = (
   name: string
 ): string | undefined => {
   for (const line of response.headers.getSetCookie()) {
+    // The legacy `/api/v1` expiry that rides along is not the session.
+    if (line.includes("; Path=/api/v1;")) {
+      continue;
+    }
+
     const [pair = ""] = line.split(";");
     const separator = pair.indexOf("=");
 
@@ -121,7 +128,10 @@ const requestInit = (
     options.body === undefined ? options.rawBody : JSON.stringify(options.body);
 
   if (text !== undefined) {
-    headers.set("content-type", "application/json");
+    if (!headers.has("content-type")) {
+      headers.set("content-type", "application/json");
+    }
+
     init.body = text;
   }
 
@@ -174,10 +184,24 @@ export class TestHttpClient extends Context.Service<
         );
 
         const text = yield* Effect.promise(async () => await response.text());
+        const json = bodyJson(text);
+
+        // Every `/api/v2` answer must be what the shared definition (and so
+        // `/api/v2/openapi.json`) documents for it.
+        yield* checkV2Exchange({
+          json,
+          method,
+          path,
+          status: response.status,
+          text,
+        }).pipe(
+          Effect.mapError((problem) => new Error(problem)),
+          Effect.orDie
+        );
 
         return {
           headers: response.headers,
-          json: bodyJson(text),
+          json,
           status: response.status,
           text,
         } satisfies TestResponse;

@@ -7,7 +7,6 @@
       "title": "REST API Design Guidelines (v5.0.0 parts 1 and 4 to 8; v4.0.0 parts 2 and 3)",
       "kind": "guideline",
       "step": 3,
-      "awaitingMatrix": "3G",
       "note": "The baseline is v5.0.0 parts 1 and 4 to 8, with v4.0.0 parts 2 and 3 because v5 has not published them (Martin, 2026-10-22; decision 0021, decision 35). The member documents are not vendored: they are licensed and cited only."
     },
     {

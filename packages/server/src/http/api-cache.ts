@@ -20,6 +20,8 @@ import {
 } from "effect/http";
 import { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { isV1Path, withV1Deprecation } from "./v1-frozen.ts";
+
 /** Where the API's routes start. */
 const API_PATH_PREFIX = "/api/";
 
@@ -70,11 +72,16 @@ export const answerApiFailures = <R>(
 
       const [response] = yield* HttpServerError.causeResponse(cause);
 
-      const noStore = HttpServerResponse.setHeader(
+      const cacheable = HttpServerResponse.setHeader(
         response,
         "cache-control",
         "no-store"
       );
+
+      // Every `/api/v1` response is marked deprecated, these too.
+      const noStore = isV1Path(request.url)
+        ? withV1Deprecation(cacheable)
+        : cacheable;
 
       return yield* Effect.failCause(Cause.combine(cause, Cause.die(noStore)));
     })

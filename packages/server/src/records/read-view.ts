@@ -32,7 +32,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
 import { branchesSql, classIn, groupsSql, TRUE_SQL } from "./access-sql.ts";
 import type { AccessContext } from "./access-sql.ts";
-import { SYSTEM_FIELDS, systemField } from "./read-field.ts";
+import { apiNameIndex, SYSTEM_FIELDS, systemField } from "./read-field.ts";
 import type { ReadField } from "./read-field.ts";
 
 /** What one caller can read of one class, as SQL over any alias. */
@@ -46,6 +46,12 @@ export interface ReadView {
   readonly fields: readonly ReadField[];
   /** A readable field by name (system fields included). */
   readonly byName: (name: string) => ReadField | undefined;
+  /**
+   * A readable field by its `/api/v2` name (`apiNameOfField`); a name two
+   * fields share (a clash older than the rule, Contracts 10.2) and `class`
+   * (`@type` in v2) resolve to nothing.
+   */
+  readonly byApiName: (apiName: string) => ReadField | undefined;
   /** A readable field by ID (system fields by their synthetic IDs). */
   readonly byId: (fieldId: DefinitionId) => ReadField | undefined;
   /** Whether the caller can see any record of this view at all. */
@@ -126,6 +132,7 @@ const makeView = (
   ];
 
   const byName = new Map(fields.map((field) => [field.name, field]));
+  const byApiName = apiNameIndex(fields);
   const byId = new Map(fields.map((field) => [field.id, field]));
 
   const knownClasses = schema.classIds.filter((id) =>
@@ -165,6 +172,7 @@ const makeView = (
 
   return {
     anyVisible: schema.rows.groups.length > 0,
+    byApiName: (apiName) => byApiName.get(apiName),
     byId: (fieldId) => byId.get(fieldId),
     byName: (name) => byName.get(name),
     classId,

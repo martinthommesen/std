@@ -9,6 +9,7 @@
 import type { SystemFieldName } from "@std/access/visible-schema";
 import type { FieldInfo } from "@std/conditions/class-view";
 import type { DefinitionId } from "@std/definitions/ids";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 
@@ -99,3 +100,47 @@ export const fieldInfoOf = (field: ReadField): FieldInfo => ({
   retired: field.retired,
   type: field.type,
 });
+
+/**
+ * The `/api/v2` name of a read field (Contracts 10.2): its name in
+ * lowerCamelCase, and for system fields `revision`, `creationDate`,
+ * `createdBy`, `lastUpdate`, `updatedBy`. `class` has none: v2 shows the
+ * concrete class as `@type`.
+ *
+ * @param field - A read field.
+ * @returns The API name, or undefined for `class`.
+ */
+export const apiNameOfField = (field: ReadField): string | undefined =>
+  field.system === "class" ? undefined : apiAttributeNameOf(field.name);
+
+/**
+ * The fields by API name. A name two fields share resolves to neither, so
+ * a clash that predates the rule is never resolved by chance.
+ *
+ * @param fields - The fields of a view.
+ * @returns The index.
+ */
+export const apiNameIndex = (
+  fields: readonly ReadField[]
+): ReadonlyMap<string, ReadField> => {
+  const index = new Map<string, ReadField>();
+  const shared = new Set<string>();
+
+  for (const field of fields) {
+    const apiName = apiNameOfField(field);
+
+    if (apiName !== undefined) {
+      if (index.has(apiName)) {
+        shared.add(apiName);
+      }
+
+      index.set(apiName, field);
+    }
+  }
+
+  for (const apiName of shared) {
+    index.delete(apiName);
+  }
+
+  return index;
+};

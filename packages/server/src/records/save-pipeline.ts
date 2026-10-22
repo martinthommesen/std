@@ -1,6 +1,7 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import type { PatchTestFailed } from "@std/api/errors/patch-test-failed";
 import { RecordInSave } from "@std/api/errors/record-in-save";
 import type { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
@@ -60,7 +61,8 @@ import {
 import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
 import type { DecodedInput, StoredValue } from "@std/values/field-value";
-import type { JsonObject } from "@std/values/json-value";
+import { isJsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
@@ -143,11 +145,39 @@ export interface CreateInput extends SaveInput {
   readonly body: unknown;
 }
 
-/** An update, based on a version the caller read. */
+/**
+ * An update, based on a version the caller read. A TMF Open API may leave
+ * the version out (Contracts 11.1); the generic API never does (6.7, 10.5).
+ */
 export interface UpdateInput extends SaveInput {
   readonly id: string;
-  readonly expectedVersion: number;
+  readonly expectedVersion: number | null;
+  /**
+   * The body's values object. With `evaluate`, its keys name every field
+   * the patch may write, so names resolve and locks are planned before the
+   * record is locked (4.1 steps 1 and 2).
+   */
   readonly body: unknown;
+  /**
+   * A patch evaluated against the record as locked (Contracts 10.5): given
+   * the caller's projection of the locked record, it returns the update
+   * body, whose keys are among `body`'s. A JSON Patch `test` or `copy`
+   * so always sees the version the write applies to.
+   */
+  readonly evaluate?: (
+    locked: LockedImage
+  ) => Effect.Effect<JsonObject, PatchTestFailed>;
+}
+
+/**
+ * What a patch is evaluated against (Contracts 10.5): the caller's
+ * projection of the locked record, and the stored values of its json
+ * fields by name, which a JSON Merge Patch merges into whether or not the
+ * caller may read them (the response still withholds them).
+ */
+export interface LockedImage {
+  readonly projection: JsonObject;
+  readonly storedJson: ReadonlyMap<string, JsonValue>;
 }
 
 /** A delete, based on a version the caller read. */
@@ -174,6 +204,21 @@ export interface SaveResult {
 }
 
 const API_CAUSE: ChangeCause = { kind: "api" };
+
+// The stored values of a record's json fields, by name.
+const storedJsonOf = (
+  snapshot: ConfigSnapshot,
+  record: StoredRecord
+): ReadonlyMap<string, JsonValue> =>
+  new Map(
+    [...record.values].flatMap(([fieldId, value]): [string, JsonValue][] => {
+      const field = snapshot.getKind("field", fieldId);
+
+      return field?.type.kind === "json" && isJsonValue(value)
+        ? [[field.name, value]]
+        : [];
+    })
+  );
 
 const effectiveById = (
   snapshot: ConfigSnapshot,
@@ -773,7 +818,7 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   snapshot: ConfigSnapshot,
   input: SaveInput & {
     readonly id: string;
-    readonly expectedVersion: number;
+    readonly expectedVersion: number | null;
   },
   lock: RootLock
 ) {
@@ -825,7 +870,10 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   // After visibility, so a hidden record stays an identical NotFound.
   yield* refuseRetiredClass(snapshot, record.classId);
 
-  if (record.version !== input.expectedVersion) {
+  if (
+    input.expectedVersion !== null &&
+    record.version !== input.expectedVersion
+  ) {
     return yield* new VersionConflict({ currentVersion: record.version });
   }
 
@@ -961,14 +1009,34 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       ...assigned.keys(),
     ]);
 
-    const { readable, record } = yield* lockExisting(snapshot, input, lock);
+    const locked = yield* lockExisting(snapshot, input, lock);
+    const { readable, record } = locked;
     const { classId } = record;
 
     yield* refusePlatformTable(snapshot, classId);
 
+    // A patch is applied to the record as locked, then resolved like any
+    // body; its keys are among the ones resolved above (Contracts 10.5).
+    const evaluated =
+      input.evaluate === undefined
+        ? resolved
+        : yield* resolveBody(
+            snapshot,
+            input,
+            yield* input.evaluate({
+              projection: yield* project(
+                snapshot,
+                input.endpointClassId,
+                record
+              ),
+              storedJson: storedJsonOf(snapshot, record),
+            }),
+            "update"
+          );
+
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields);
-    const proposed = proposeUpdate(rules, resolved, record);
+    const proposed = proposeUpdate(rules, evaluated, record);
 
     const existingCheck = {
       endpointClassId: input.endpointClassId,
@@ -992,7 +1060,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     }
 
     const hooked = yield* hookedProposal(snapshot, record, proposed, {
-      body: resolved,
+      body: evaluated,
       mode: input.mode ?? "user",
     });
 
@@ -1021,7 +1089,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       existing: record,
       proposal,
       rules,
-      supplied: new Set(resolved.entries.keys()),
+      supplied: new Set(evaluated.entries.keys()),
       written,
     });
     yield* checkReferences(snapshot, fields, proposal.values, written);

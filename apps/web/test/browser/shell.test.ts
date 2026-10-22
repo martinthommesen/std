@@ -158,7 +158,7 @@ const sessionInTheBrowser = async (
   assert.match(cookie?.value ?? "", TOKEN_FORMAT);
   assert.deepInclude(cookie, {
     httpOnly: true,
-    path: "/api/v1",
+    path: "/api",
     sameSite: "Strict",
     // Plain HTTP on a loopback address: the server leaves out Secure.
     secure: false,
