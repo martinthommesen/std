@@ -7,7 +7,7 @@
  * 1. **Role bumps.** Every role that an access rule created, changed,
  *    retired or deleted (purged) by this change set names, before or after,
  *    gets its definition version bumped once, with a change entry of kind
- *    `update`, empty `fields` and cause `{"accessRules": [<change IDs>]}`,
+ *    `update`, empty `fields` and cause `{"kind": "system", "accessRules": [<change IDs>]}`,
  *    but no definition revision: its effective record did not change. So
  *    every event about a role, its rules' included, follows the role's own
  *    version order.
@@ -141,7 +141,7 @@ const bumpRoles = Effect.fn("Schema.bumpRolesOfAccessRules")(
       const entry = yield* writeChangeEntry(
         {
           actorId: requesterId,
-          cause: { accessRules: causes.get(row.id) ?? [] },
+          cause: { accessRules: causes.get(row.id) ?? [], kind: "system" },
           fields: {},
           kind: "update",
           recordClassId: PLATFORM_CLASS_IDS.role,

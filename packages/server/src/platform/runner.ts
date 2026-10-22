@@ -16,10 +16,7 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
-import {
-  SERVER_APPLICATION_NAME,
-  WORKER_APPLICATION_NAME,
-} from "../sql/database-config.ts";
+import { UPGRADE_BLOCKING_APPLICATION_NAMES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
@@ -198,7 +195,7 @@ export const checkUpgradePreconditions: (
       const servers = yield* sql`
         SELECT pid FROM pg_stat_activity
         WHERE datname = current_database()
-          AND application_name IN (${SERVER_APPLICATION_NAME}, ${WORKER_APPLICATION_NAME})
+          AND application_name IN ${sql.in(UPGRADE_BLOCKING_APPLICATION_NAMES)}
           AND pid <> pg_backend_pid()
         ORDER BY pid`.pipe(Effect.flatMap(decodePids));
 

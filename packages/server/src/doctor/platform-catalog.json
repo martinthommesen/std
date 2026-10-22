@@ -4070,19 +4070,6 @@
         "validated": true
       },
       {
-        "check": "CHECK (((status = ANY (ARRAY['done'::text, 'dead'::text])) = (finished_at IS NOT NULL)))",
-        "columns": ["status", "finished_at"],
-        "deferrable": false,
-        "deferred": false,
-        "deleteAction": " ",
-        "name": "delivery_finished",
-        "referencedColumns": [],
-        "references": null,
-        "type": "c",
-        "updateAction": " ",
-        "validated": true
-      },
-      {
         "check": null,
         "columns": ["id"],
         "deferrable": false,

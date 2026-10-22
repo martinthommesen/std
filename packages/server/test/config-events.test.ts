@@ -247,12 +247,12 @@ const configEvents = Effect.gen(function* configEventsTest() {
     [r.id]
   );
 
+  // jsonb orders keys by length, then bytes.
   assert.match(
     cause ?? "",
-    /^\{"accessRules": \["/u,
-    "an update caused by the rules"
+    /^\{"kind": "system", "accessRules": \["[\da-f-]{36}"\]\}$/u,
+    "an update caused by the rules, readable as system by an older release"
   );
-  assert.isFalse((cause ?? "").includes("kind"));
 
   // The payload carries the role's image, filtered for the identity.
   const created = (yield* Ref.get(delivered)).find(
