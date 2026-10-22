@@ -21,6 +21,7 @@ import {
   deleteRecord,
 } from "../src/records/save-pipeline.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
+import { Transactions } from "../src/sql/transactions.ts";
 import {
   aggregatesTestLayer,
   C,
@@ -787,6 +788,119 @@ describe("aggregate-finalize", () => {
           assert.deepStrictEqual(
             aggregateOf(yield* lastEntry(request.id))?.rules,
             [REQUEST_RULES.deriveApproved.id]
+          );
+        })
+    );
+
+    dbTest.effect(
+      "cascades: an after-write rule of an aggregate save writes another aggregate, which is finalized in turn",
+      () =>
+        Effect.gen(function* cascade() {
+          const target = yield* create(C.ticket.id, { name: "cascade-target" });
+
+          const request = yield* create(C.request.id, {
+            name: "cascade-1",
+            status: "draft",
+          });
+
+          yield* create(C.item.id, {
+            name: "pen",
+            request: request.id,
+            state: "draft",
+          });
+
+          yield* update(C.request.id, TABLE.request, request.id, {
+            status: "submitted",
+          });
+
+          assert.strictEqual(
+            yield* columnOf(TABLE.request, "status", request.id),
+            "approved"
+          );
+
+          const [note] = yield* values(
+            `SELECT id::text AS value FROM ${TABLE.note} WHERE ticket = $1::uuid`,
+            [target.id]
+          );
+
+          // The ticket got its aggregate version in the same operation.
+          const entries = yield* entriesOf(target.id);
+
+          assert.deepStrictEqual(
+            entries.map((entry) => entry.version),
+            [1, 2]
+          );
+          assert.deepStrictEqual(aggregateOf(entries[1])?.parts, [
+            (yield* lastEntry(note ?? ""))?.changeId ?? "",
+          ]);
+          assert.strictEqual(
+            entries[1]?.operation,
+            (yield* lastEntry(request.id))?.operation
+          );
+        })
+    );
+
+    dbTest.effect(
+      "a write into an owner this transaction already persisted is AggregateNotSettled, and nothing commits",
+      () =>
+        Effect.gen(function* persistedTwice() {
+          const request = yield* create(C.request.id, {
+            name: "bad-1",
+            status: "draft",
+          });
+
+          const item = yield* create(C.item.id, {
+            name: "pen",
+            request: request.id,
+            state: "draft",
+          });
+
+          const refused = yield* update(
+            C.request.id,
+            TABLE.request,
+            request.id,
+            {
+              status: "submitted",
+            }
+          ).pipe(Effect.flip);
+
+          assert.instanceOf(refused, AggregateNotSettled);
+          assert.deepStrictEqual(
+            [
+              yield* columnOf(TABLE.request, "status", request.id),
+              yield* columnOf(TABLE.item, "name", item.id),
+              yield* columnOf(TABLE.item, "state", item.id),
+            ],
+            ["draft", "pen", "draft"]
+          );
+
+          // Two outermost saves of one transaction: the second part write
+          // reaches a ticket the first one's finalization persisted.
+          const ticket = yield* create(C.ticket.id, { name: "t-twice" });
+          const { request: inTransaction } = yield* Transactions;
+
+          const twice = yield* inTransaction(
+            Effect.gen(function* twoSaves() {
+              yield* create(C.note.id, { body: "1", ticket: ticket.id });
+              yield* create(C.note.id, { body: "2", ticket: ticket.id });
+            })
+          ).pipe(Effect.flip);
+
+          assert.instanceOf(twice, AggregateNotSettled);
+          assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 1);
+
+          // As one aggregate operation the same writes give one version.
+          yield* aggregateOperation(
+            Effect.gen(function* twoNotes() {
+              yield* create(C.note.id, { body: "1", ticket: ticket.id });
+              yield* create(C.note.id, { body: "2", ticket: ticket.id });
+            })
+          );
+
+          assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 2);
+          assert.lengthOf(
+            aggregateOf(yield* lastEntry(ticket.id))?.parts ?? [],
+            2
           );
         })
     );

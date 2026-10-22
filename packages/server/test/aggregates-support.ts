@@ -635,6 +635,69 @@ export const LOOP_RULE = aggregateRule(
   ]
 );
 
+const approvedNow = (prefix: string): Condition =>
+  all(
+    { arg: at(F.requestStatus), op: "changed" },
+    eq(F.requestStatus, "approved"),
+    { left: at(F.requestName), op: "startsWith", right: prefix }
+  );
+
+/**
+ * `after` rules on the request's aggregate save (4.9 step 3, cascades):
+ * a request named `cascade-…` that becomes approved adds a note to the
+ * ticket named `cascade-target`, another aggregate, which is finalized
+ * in turn; one named `bad-…` rewrites its own items, which this
+ * transaction already persisted.
+ */
+export const CASCADE_RULES = {
+  bad: addRecordRule(C.request.id, {
+    actions: [
+      {
+        forEach: {
+          classId: C.item.id,
+          where: {
+            left: at(F.itemRequest),
+            op: "eq",
+            right: { path: [], scope: "record" },
+          },
+        },
+        target: "self",
+        type: "updateEach",
+        values: [{ fieldId: F.itemName.id, value: literal("rewritten") }],
+      },
+    ],
+    condition: approvedNow("bad-"),
+    name: "bad_rewrite",
+    operations: ["update"],
+    phase: "after",
+    ruleKind: null,
+  }),
+  note: addRecordRule(C.request.id, {
+    actions: [
+      {
+        classId: C.note.id,
+        forEach: {
+          classId: C.ticket.id,
+          where: eq(F.ticketName, "cascade-target"),
+        },
+        type: "createEach",
+        values: [
+          {
+            fieldId: F.noteTicket.id,
+            value: { copy: { fieldId: null, from: "source" } },
+          },
+          { fieldId: F.noteBody.id, value: literal("from a request") },
+        ],
+      },
+    ],
+    condition: approvedNow("cascade-"),
+    name: "cascade_note",
+    operations: ["update"],
+    phase: "after",
+    ruleKind: null,
+  }),
+} as const;
+
 /**
  * The record-service layer of the aggregate tests.
  * @returns The layer.
@@ -669,6 +732,7 @@ export const setUpAggregates = Effect.gen(function* setUpAggregates() {
     ...Object.values(SPY_RULES).map((rule) => rule.op),
     PLAN_INVARIANT.op,
     LOOP_RULE.op,
+    ...Object.values(CASCADE_RULES).map((rule) => rule.op),
     {
       definition: {
         classId: C.ticket.id,
