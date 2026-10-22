@@ -277,6 +277,82 @@ describe("admin config editing", () => {
     );
 
     dbTest.effect(
+      "a create body may leave out what defaults, and a malformed one names its fields",
+      () =>
+        Effect.gen(function* createBodies() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+
+          const roles = yield* listOf(
+            yield* http.get(
+              `/api/v1/tables/core.role/records?filter=${encodeURIComponent('name = "admin"')}`,
+              { token: tokens.admin }
+            )
+          );
+
+          const roleId = roles.records[0]?.id ?? "";
+
+          // As the web form sends it (Contracts 6.7): no `name`, no
+          // `condition`, no `active`.
+          const withoutName = Object.fromEntries(
+            Object.entries(ruleBody(roleId, { target: "records" })).filter(
+              ([column]) => column !== "name"
+            )
+          );
+
+          const created = yield* measured(
+            tokens.admin,
+            { body: withoutName, method: "POST", path: RULES },
+            201
+          );
+
+          assert.deepStrictEqual(created.deltas.slice(0, 2), CONFIG);
+          assert.isNull(
+            objectOf(objectOf(objectOf(created.response.json).record).values)
+              .name
+          );
+
+          // Actions as a word, no role IDs, fields that are no list.
+          const before = yield* committedState;
+
+          const refused = yield* http.request("POST", RULES, {
+            body: {
+              actions: "read",
+              effect: "deny",
+              fields: "name",
+              table_id: ACME.asset,
+              target: "fields",
+            },
+            token: tokens.admin,
+          });
+
+          assert.strictEqual(refused.status, 422, refused.text);
+          assert.deepStrictEqual(objectOf(refused.json), {
+            _tag: "ValidationFailed",
+            errors: [
+              {
+                _tag: "InvalidValue",
+                field: "actions",
+                message:
+                  'A list of actions, such as ["read"] or ["read", "update"]: read, create, update, delete.',
+                reason: "invalidFormat",
+              },
+              { _tag: "Required", field: "role_ids" },
+              {
+                _tag: "InvalidValue",
+                field: "fields",
+                message:
+                  'With target "fields": "*" for every field, or a list of field IDs.',
+                reason: "invalidFormat",
+              },
+            ],
+          });
+          assert.notInclude(refused.text, '"read"],');
+          assert.deepStrictEqual(yield* committedState, before);
+        })
+    );
+
+    dbTest.effect(
       "Alice and Bob cannot name these tables and change nothing",
       () =>
         Effect.gen(function* nonAdmins() {

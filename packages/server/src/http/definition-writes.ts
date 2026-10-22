@@ -24,13 +24,30 @@ import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { SessionToken } from "@std/api/session-token";
+import {
+  AccessRuleDraftSchema,
+  ChoiceDraftSchema,
+  ClassDraftSchema,
+  FieldDraftSchema,
+  GrantDraftSchema,
+  IndexDraftSchema,
+  LayoutDraftSchema,
+  NamespaceDraftSchema,
+  OverrideDraftSchema,
+  PermissionDraftSchema,
+  RoleDraftSchema,
+  SavedFilterDraftSchema,
+  SubscriptionDraftSchema,
+} from "@std/definitions/definition";
 import type { Definition, DefinitionKind } from "@std/definitions/definition";
+import type { FieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
 import { OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { stringifyJson } from "@std/values/json";
+import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Result, Schema } from "effect";
+import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { SqlClient } from "effect/sql";
 
@@ -102,7 +119,12 @@ const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
   subscription: "createSubscription",
 };
 
-/** Defaults of draft properties a create body may leave out. */
+/**
+ * Defaults of draft properties a create body may leave out (Contracts
+ * 6.7: an absent key is the default, otherwise null). `name` is null only
+ * where a definition's name is optional (an access rule's); a kind whose
+ * name is required still refuses a body without one.
+ */
 const DEFAULTS = {
   active: true,
   condition: null,
@@ -115,6 +137,7 @@ const DEFAULTS = {
   max: null,
   maxLength: null,
   min: null,
+  name: null,
   numberPrefix: null,
   parentId: null,
   readOnly: false,
@@ -209,16 +232,162 @@ const propertiesOf = (
 const invalidBody = (message: string) =>
   new InvalidRequest({ message, parameter: "body" });
 
+const DRAFT_SCHEMAS = {
+  accessRule: AccessRuleDraftSchema,
+  choice: ChoiceDraftSchema,
+  class: ClassDraftSchema,
+  field: FieldDraftSchema,
+  grant: GrantDraftSchema,
+  index: IndexDraftSchema,
+  layout: LayoutDraftSchema,
+  namespace: NamespaceDraftSchema,
+  override: OverrideDraftSchema,
+  permission: PermissionDraftSchema,
+  role: RoleDraftSchema,
+  savedFilter: SavedFilterDraftSchema,
+  subscription: SubscriptionDraftSchema,
+} as const satisfies Readonly<Record<DefinitionKind, Schema.Top>>;
+
+const issuePaths = SchemaIssue.makeFormatterStandardSchemaV1();
+
+/**
+ * What each refused column of an access rule takes, for the field error
+ * (decision 0020). The error never carries the refused value.
+ */
+const COLUMN_HINTS = new Map<string, string>([
+  [
+    "accessRule.actions",
+    'A list of actions, such as ["read"] or ["read", "update"]: read, create, update, delete.',
+  ],
+  [
+    "accessRule.condition",
+    "A condition as a JSON AST naming fields by ID (Contracts 5.2), or empty.",
+  ],
+  ["accessRule.effect", 'Either "allow" or "deny".'],
+  [
+    "accessRule.fields",
+    'With target "fields": "*" for every field, or a list of field IDs.',
+  ],
+  ["accessRule.role_ids", 'A list of role IDs, such as ["<role ID>"].'],
+  ["accessRule.target", 'Either "records" or "fields".'],
+]);
+
+const INVALID_PROPERTY =
+  "This value does not have the form this definition property takes.";
+
+/**
+ * The column an issue at a draft property blames.
+ *
+ * @param kind - The definition kind.
+ * @param property - The draft property.
+ * @param definition - The draft (an access rule's target names the column).
+ * @returns The column, if the body names one.
+ */
+const columnOfProperty = (
+  kind: DefinitionKind,
+  property: string,
+  definition: JsonObject
+): string | undefined => {
+  if (kind === "accessRule" && property === "target") {
+    const { target } = definition;
+
+    return target !== undefined &&
+      isJsonObject(target) &&
+      target.kind === "fields"
+      ? "fields"
+      : "target";
+  }
+
+  const entry = TABLE_OF.get(kind);
+
+  return [...(entry?.columns ?? []), ...(entry?.special ?? [])].find(
+    (spec) => spec.property === property
+  )?.column;
+};
+
+/**
+ * The columns of a create body whose values the kind's draft refuses, as
+ * field errors (`Required` for a missing required property, otherwise
+ * `InvalidValue` with what the column takes): an administrator's form
+ * then shows each problem on its field (decision 0020).
+ *
+ * @param kind - The definition kind.
+ * @param definition - The draft built from the body.
+ * @returns The field errors; none when no property is to blame.
+ */
+const draftFieldErrors = (
+  kind: DefinitionKind,
+  definition: JsonObject
+): readonly FieldError[] => {
+  const result = Schema.decodeUnknownResult(DRAFT_SCHEMAS[kind])(definition, {
+    errors: "all",
+  });
+
+  if (Result.isSuccess(result)) {
+    return [];
+  }
+
+  const errors = issuePaths(result.failure.issue).issues.flatMap(
+    (issue): FieldError[] => {
+      const property = issue.path?.[0];
+
+      if (!Predicate.isString(property)) {
+        return [];
+      }
+
+      const column = columnOfProperty(kind, property, definition);
+
+      if (column === undefined) {
+        return [];
+      }
+
+      if (definition[property] === undefined) {
+        return [{ _tag: "Required", field: column }];
+      }
+
+      return [
+        {
+          _tag: "InvalidValue",
+          field: column,
+          message: COLUMN_HINTS.get(`${kind}.${column}`) ?? INVALID_PROPERTY,
+          reason: "invalidFormat",
+        },
+      ];
+    }
+  );
+
+  return errors.filter(
+    (error, index) =>
+      errors.findIndex(
+        (other) => other.field === error.field && other._tag === error._tag
+      ) === index
+  );
+};
+
+/** A create's draft, for field errors when its operation does not decode. */
+interface DraftOf {
+  readonly kind: DefinitionKind;
+  readonly definition: JsonObject;
+}
+
 const decoded = (
-  candidate: JsonObject
-): Effect.Effect<Operation, InvalidRequest> => {
+  candidate: JsonObject,
+  maybeDraft?: DraftOf
+): Effect.Effect<Operation, InvalidRequest | ValidationFailed> => {
   const result = decodeOperation(candidate);
 
-  return Result.isSuccess(result)
-    ? Effect.succeed(result.success)
-    : Effect.fail(
-        invalidBody("The body does not describe a valid definition.")
-      );
+  if (Result.isSuccess(result)) {
+    return Effect.succeed(result.success);
+  }
+
+  const errors =
+    maybeDraft === undefined
+      ? []
+      : draftFieldErrors(maybeDraft.kind, maybeDraft.definition);
+
+  return errors.length === 0
+    ? Effect.fail(invalidBody("The body does not describe a valid definition."))
+    : Effect.fail(new ValidationFailed({ errors: [...errors] }));
 };
 
 const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
@@ -284,7 +453,8 @@ export const createOperation = Effect.fn("Http.definitionCreate")(
     return yield* decoded(
       kind === "override"
         ? { definition, op: "setOverride", version: null }
-        : { definition, op: CREATE_OP[kind] }
+        : { definition, op: CREATE_OP[kind] },
+      { definition, kind }
     );
   }
 );
