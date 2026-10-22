@@ -66,6 +66,7 @@ No platform migration. `aggregate` on a reference type and the new condition ope
 | request submit, statement log | `aggregate-finalize.test.ts#submitting a request creates the item's approvals while settling, before anything is persisted, then persists approvals, items and request once each` |
 | item approval settles item then request | `aggregate-finalize.test.ts#an approval of a request item settles the item and then the request, each persisted once` |
 | cascades | `aggregate-finalize.test.ts#cascades: an after-write rule of an aggregate save writes another aggregate, which is finalized in turn` |
+| after-commit effects | `aggregate-finalize.test.ts#an after-commit effect's writes into an aggregate are finalized in its delivery transaction` |
 | persisted at most once | `aggregate-finalize.test.ts#a write into an owner this transaction already persisted is AggregateNotSettled, and nothing commits` |
 | no fixed point | `aggregate-finalize.test.ts#an aggregate rule that keeps changing a part ends in AggregateNotSettled with nothing committed` |
 | aggregate actions and audit | `packages/server/test/record-rule-actions.test.ts#aggregate actions write nothing until persistence, and their change entries name the acting user and the proposing rules` |
