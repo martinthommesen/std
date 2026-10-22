@@ -212,12 +212,24 @@ const isMultiFieldUnique = (edge: DependentEdge): boolean =>
   edge.definition.unique &&
   edge.definition.fieldIds.length > 1;
 
+/**
+ * What keeps a field from being retired: a live table naming it as its
+ * display field, unless the same change set retires that table too, and a
+ * multi-field unique index on it (Contracts 1.7).
+ *
+ * @param edges - The field's dependents.
+ * @param retiredInChangeSet - What some retire of the change set targets.
+ * @returns The blocking ones.
+ */
 const retireFieldBlockers = (
-  edges: readonly DependentEdge[]
+  edges: readonly DependentEdge[],
+  retiredInChangeSet: ReadonlySet<DefinitionId>
 ): readonly DependentEdge[] =>
   edges.filter(
     (edge) =>
-      (edge.kind === "display_field" && isLive(edge.definition)) ||
+      (edge.kind === "display_field" &&
+        isLive(edge.definition) &&
+        !retiredInChangeSet.has(edge.definition.id)) ||
       isMultiFieldUnique(edge)
   );
 
@@ -284,10 +296,11 @@ const roleRuleBlockers = (
 
 const blockersForRetire = (
   current: Definition,
-  edges: readonly DependentEdge[]
+  edges: readonly DependentEdge[],
+  retiredInChangeSet: ReadonlySet<DefinitionId>
 ): readonly DependentEdge[] => {
   if (current.kind === "field") {
-    return retireFieldBlockers(edges);
+    return retireFieldBlockers(edges, retiredInChangeSet);
   }
 
   if (current.kind === "class") {
@@ -354,7 +367,7 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
 
   const view = viewOf(work);
   const edges = dependentsOf(view, current.id);
-  const blocking = blockersForRetire(current, edges);
+  const blocking = blockersForRetire(current, edges, work.retiredInChangeSet);
   const blockingSet = new Set(blocking);
 
   if (conflict(work, current, "retire", blocking)) {

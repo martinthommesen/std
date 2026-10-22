@@ -57,14 +57,14 @@ export const userOf = (fixture: AcmeData, who: Who): DefinitionId =>
  *
  * @param owner - The owner (and creator).
  * @param classId - The class.
- * @param values - Field values besides `owner`.
+ * @param fieldValues - Field values besides `owner`.
  * @returns The record ID.
  */
 export const freshAsset = (
   owner: DefinitionId,
   classId: DefinitionId,
-  values: Readonly<Record<string, JsonValue>>
-) => seedRecord(owner, classId, { owner, ...values });
+  fieldValues: Readonly<Record<string, JsonValue>>
+) => seedRecord(owner, classId, { owner, ...fieldValues });
 
 /**
  * A subscription to every create, update and delete of a class and its

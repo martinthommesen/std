@@ -40,6 +40,9 @@ import {
 } from "./config-support.ts";
 import {
   addField,
+  addIndex,
+  createClass,
+  ensureSite,
   change,
   createRole,
   currentRevision,
@@ -62,6 +65,12 @@ const UNIQUE_X = "d136ff65-5a71-4e1d-a886-4f6aaeabd746";
 /** A field a later fixture version adds. */
 const EXTRA_FIELD = "d7a38eb2-3d98-4e4f-97e6-0e15c87f2329";
 
+/** A reference from `fx.item` to itself, in a fixture variant. */
+const SELF_REFERENCE = "2f0c5e7a-6b1d-4c8e-9a3f-5d7e1b2c4a60";
+
+/** A condition field on `fx.item` naming `fx.item`, in a fixture variant. */
+const SELF_CONDITION = "7e4b1c2d-3a5f-4d6e-8b9c-0a1f2e3d4c51";
+
 /** Everything `--plan` must leave unchanged. */
 const databaseState = Effect.gen(function* databaseState() {
   return {
@@ -70,6 +79,14 @@ const databaseState = Effect.gen(function* databaseState() {
     revision: yield* currentRevision,
   };
 });
+
+/** The states of `fx.item` and its shipped fields, sorted. */
+const itemStates = values(
+  `SELECT 'class ' || id::text || ' ' || state AS value FROM core.class WHERE id = $1::uuid
+   UNION ALL SELECT 'field ' || id::text || ' ' || state FROM core.field
+    WHERE id = ANY($2::uuid[]) ORDER BY 1`,
+  [FX.item, [FX.w, FX.x, FX.z]]
+);
 
 /**
  * A field's name and state.
@@ -744,6 +761,257 @@ describe("upgrade", () => {
         assert.strictEqual(refused?._tag, "UpgradeRefused");
         assert.include(refused?.message ?? "", "SQL_ASCII");
       })
+    );
+  });
+});
+
+describe("upgrade-retire-refusals", () => {
+  it("names the fixture's fields", () => {
+    assert.notStrictEqual(FX.x, FX.w);
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a field a local multi-field unique index holds refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* fieldInUniqueIndex() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* change([addIndex(FX.item, [FX.x, FX.w], true).op]);
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+            const withoutW = variantOf(v2, { dropFields: ["w"], version: 3 });
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutW);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            const index = yield* values(
+              `SELECT id::text AS value FROM core."index" WHERE table_id = $1::uuid AND is_unique`,
+              [FX.item]
+            );
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [
+                entry.code,
+                entry.definitionId,
+                entry.details,
+              ]),
+              [["lifecycleRefused", FX.w, { error: "DependencyConflict" }]]
+            );
+            assert.include(plan.refusals[0]?.message ?? "", index[0] ?? "-");
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a table a local reference field points at refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* referencedTable() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* ensureSite;
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const shelf = createClass("fx_shelf");
+
+            const onItem = addField(shelf.id, "item", {
+              kind: "reference",
+              targetClassId: FX.item,
+            });
+
+            yield* change([shelf.op, onItem.op]);
+
+            // The local reference is the only thing keeping the table: the
+            // set's own rules on it go in the same version.
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [
+                entry.code,
+                entry.definitionId,
+                entry.details,
+              ]),
+              [["lifecycleRefused", FX.item, { error: "DependencyConflict" }]]
+            );
+            assert.include(plan.refusals[0]?.message ?? "", onItem.id);
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table and every field are retired, the display field included; shipped again, all come back",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* wholeTable() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(plan.refusals, []);
+
+            yield* runUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              yield* itemStates,
+              [
+                `class ${FX.item} retired`,
+                `field ${FX.w} retired`,
+                `field ${FX.x} retired`,
+                `field ${FX.z} retired`,
+              ].toSorted()
+            );
+
+            // The set ships the table again: the upgrade reactivates it and
+            // every field it ships, the display field included.
+            const again = variantOf(v2, { version: 4 });
+
+            yield* runUpgrade({ sets: [yield* writeSetDirectory(again)] });
+
+            assert.deepStrictEqual(
+              yield* itemStates,
+              [
+                `class ${FX.item} active`,
+                `field ${FX.w} active`,
+                `field ${FX.x} active`,
+                `field ${FX.z} active`,
+              ].toSorted()
+            );
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table with a local multi-field unique index on its fields refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* wholeTableUniqueIndex() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* change([addIndex(FX.item, [FX.x, FX.w], true).op]);
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [entry.code, entry.details]),
+              [["lifecycleRefused", { error: "DependencyConflict" }]]
+            );
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table with a self-reference and a condition field on itself is retired, those fields first",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* selfNamingTable() {
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withSelfFields = variantOf(v2, {
+              addFields: [
+                {
+                  id: SELF_REFERENCE,
+                  name: "parent",
+                  type: { kind: "reference", target: "fx.item" },
+                },
+                {
+                  id: SELF_CONDITION,
+                  name: "rule",
+                  type: {
+                    class: "fx.item",
+                    kind: "condition",
+                    profile: "filter",
+                  },
+                },
+              ],
+              version: 3,
+            });
+
+            yield* runUpgrade({
+              sets: [yield* writeSetDirectory(withSelfFields)],
+            });
+            yield* insertAdmin;
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 4,
+            });
+
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(plan.refusals, []);
+
+            yield* runUpgrade({ sets: [directory] });
+
+            // Every field is retired explicitly, then the table.
+            assert.deepStrictEqual(
+              yield* values(
+                `SELECT id::text || ' ' || state AS value FROM core.class WHERE id = $1::uuid
+                 UNION ALL SELECT id::text || ' ' || state FROM core.field
+                  WHERE id = ANY($2::uuid[]) ORDER BY 1`,
+                [FX.item, [SELF_REFERENCE, SELF_CONDITION, FX.x]]
+              ),
+              [
+                `${FX.item} retired`,
+                `${SELF_REFERENCE} retired`,
+                `${SELF_CONDITION} retired`,
+                `${FX.x} retired`,
+              ].toSorted()
+            );
+          })
+        )
     );
   });
 });

@@ -196,7 +196,7 @@ Resume:
 | Operation | Refused when | Reported but allowed |
 | --- | --- | --- |
 | Rename | target is protected, or owned by core or an app and the caller is not its set | nothing |
-| Retire field | protected; display field; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
+| Retire field | protected; display field of a live table, unless the same change set retires that table; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
 | Retire table | protected; has a child class not retired; a non-retired reference field points at it, or a non-retired condition field names it (whatever its own table's state, self-references included) | other dependents |
 | Reactivate field or table | a reference or condition field that would be active names a retired table | nothing |
 | Purge field | not retired; any non-retired dependent except layout entries and single-field indexes | count of non-null values (counted under `SCHEMA_KEY`) |
@@ -951,7 +951,7 @@ Request revision R (number and change set ID), current revision C:
 - Any relevant change returns `409 SchemaChanged` with `requestRevision`, `currentRevision` and `changes` (`table`, `field`, `fieldId`, `kind`, `revision`). `changes` lists only fields the caller can name at C; a request name that resolves to no such field gets `UnknownField`, as in 3.4. It is checked before validation, access and version checks.
 - The UI reloads metadata, keeps valid values, marks changed fields and asks the user to resubmit; it never resubmits automatically [judgment]. A newer revision on any response, or `NotAllowed`, triggers a background metadata refresh.
 - If the journal no longer reaches R, every field in scope counts as changed with kind `unknown`.
-- Scopes by path [decision 0014]: a delete names no field, so only changes to its table are relevant. History shows the record's fields by current name, so its scope is the endpoint's default selection plus the field IDs of its `field` filter; once the record proved visible, also the default selection of its concrete class, whose child-only fields it shows through any endpoint (2.3). The OpenAPI document (`GET /api/v1/openapi.json`) is checked like sign-in. Sign-in and `auth/me` name no table or field: a malformed header is `InvalidSchemaRevision` and a revision the database never had is `SchemaChanged` with no changes, but no change since an older R is relevant. Sign-out checks only the header's format, so a stale client can always end its session [judgment].
+- Scopes by path [decision 0014]: a delete names no field, so only changes to its table are relevant. History shows the record's fields by current name, so its scope is the endpoint's default selection plus the field IDs of its `field` filter; once the record proved visible, also the default selection of its concrete class, whose child-only fields it shows through any endpoint (2.3). The OpenAPI document (`GET /api/v1/openapi.json`) and a change set's journal (`GET /api/v1/schema/change-sets/{id}`) are checked like sign-in, the journal before its entry is looked up. Sign-in and `auth/me` name no table or field: a malformed header is `InvalidSchemaRevision` and a revision the database never had is `SchemaChanged` with no changes, but no change since an older R is relevant. Sign-out checks only the header's format, so a stale client can always end its session [judgment].
 
 ### 6.5 Field types
 
@@ -1201,7 +1201,7 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 | Changed, incoming equals the local value | converged: override dropped, `converged` entry recorded |
 | Changed, local value differs | conflict: base updated, local value stays effective, conflict opened with old shipped, new shipped and local values |
 | Renamed (any kind, roles included) | applied by ID; everything that refers to it by ID keeps working |
-| Removed upstream | tables and fields retired (never purged), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
+| Removed upstream | tables and fields retired (never purged; a removed table's fields are retired explicitly, then the table), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
 | Type changed | refused in v0.1; author adds a field and retires the old one |
 | Tightened constraint violated by data | refused at plan time with counts |
 

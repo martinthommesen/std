@@ -35,7 +35,10 @@ import {
 } from "./change-sets.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
 import { recordServedRevision } from "./schema-revision-header.ts";
-import { parseRequestRevision } from "./stale-request.ts";
+import {
+  checkUnscopedRevision,
+  parseRequestRevision,
+} from "./stale-request.ts";
 
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/u;
 
@@ -231,11 +234,22 @@ export const SchemaChangeHandlers = HttpApiBuilder.group(
           )
         )
         .handle("getChangeSet", ({ params, request }) =>
-          inRequestTransaction(
-            transactions,
-            request,
-            asActor(readJournal(params.id))
-          ).pipe(Effect.provide(services))
+          Effect.gen(function* getChangeSetHandler() {
+            // The journal names no table or field: a stated revision is
+            // checked like sign-in's (Contracts 6.4), before the journal
+            // entry is looked up, so it says nothing about the entry.
+            const stated = yield* parseRequestRevision(request);
+
+            return yield* inRequestTransaction(
+              transactions,
+              request,
+              asActor(
+                checkUnscopedRevision(stated).pipe(
+                  Effect.andThen(readJournal(params.id))
+                )
+              )
+            );
+          }).pipe(Effect.provide(services))
         );
     }
   )

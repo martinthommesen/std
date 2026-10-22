@@ -729,6 +729,10 @@ const planRemoval = (
     }
   }
 
+  // A removed table's fields are retired explicitly, before the table
+  // (removal order runs fields first), so every 1.7 blocker of a field
+  // applies. The display field may be retired because the same change set
+  // retires its table (the engine's rule, Contracts 1.7).
   if (current.state !== "retired") {
     const retire = planning.lifecycle.retire?.(current);
 

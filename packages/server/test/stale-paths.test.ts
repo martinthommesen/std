@@ -17,6 +17,11 @@ import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import { OPENAPI_PATH } from "@std/api/api";
+import type { Operation } from "@std/definitions/operation";
+import { setOrigin } from "@std/definitions/requester";
+import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
+import { parseJson } from "@std/values/json";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 import type { Layer } from "effect";
 
@@ -28,7 +33,14 @@ import type {
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { staleScope } from "../src/http/stale-scope.ts";
-import { freshAsset, observe, signInAll } from "./authz-support.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
+import {
+  freshAsset,
+  objectOf,
+  observe,
+  signInAll,
+  textOf,
+} from "./authz-support.ts";
 import type { Callers, Observation } from "./authz-support.ts";
 import {
   listPath,
@@ -36,7 +48,7 @@ import {
   recordPath,
   tagOf,
 } from "./reads-support.ts";
-import { ACME, change, values } from "./schema-support.ts";
+import { ACME, change, createRole, values } from "./schema-support.ts";
 
 /** The paths, in the order of every expectation below. */
 const PATHS = [
@@ -51,6 +63,11 @@ const PATHS = [
   "me",
   "sign-out",
   "openapi",
+  "change-set apply",
+  "change-set read",
+  "definition create",
+  "definition update",
+  "definition delete",
 ] as const;
 
 type PathName = (typeof PATHS)[number];
@@ -60,6 +77,90 @@ const HEADER = "std-schema-revision";
 /** The services of the test layer. */
 type Services = Layer.Success<ReturnType<typeof readsTestLayer>>;
 
+const CHANGE_SETS = "/api/v1/schema/change-sets";
+
+/**
+ * Definitions the definition paths work on, made before the test states
+ * its revision: local roles to delete one per call (`roles`, used up), one
+ * to relabel, and a committed change set to read.
+ */
+interface DefinitionPool {
+  readonly roles: string[];
+  readonly relabel: string;
+  readonly changeSetId: string;
+}
+
+/**
+ * A change-set request body.
+ *
+ * @param operations - The operations.
+ * @returns The body.
+ */
+const changeSetBody = (operations: readonly Operation[]): JsonValue => {
+  const parsed = parseJson(JSON.stringify({ operations }));
+
+  return parsed.ok ? parsed.value : null;
+};
+
+/**
+ * A local role, created by the administrator through the change-set
+ * endpoint without a stated revision.
+ *
+ * @param callers - The fixture's callers.
+ * @returns The role's ID and the change set's ID.
+ */
+const roleByAdmin = (callers: Callers) =>
+  Effect.gen(function* createRoleByAdmin() {
+    const http = yield* TestHttpClient;
+    const role = createRole(`stale_${randomUUID().slice(0, 8)}`);
+
+    const response = yield* http.request("POST", CHANGE_SETS, {
+      body: changeSetBody([role]),
+      token: callers.tokens.admin,
+    });
+
+    assert.strictEqual(response.status, 201, response.text);
+
+    return {
+      changeSetId: textOf(objectOf(objectOf(response.json).changeSet).id),
+      id: role.op === "createRole" ? role.definition.id : "",
+    };
+  });
+
+/**
+ * The pool for the definition paths.
+ *
+ * @param callers - The fixture's callers.
+ * @param calls - How many times every path is taken.
+ * @returns The pool.
+ */
+const definitionPool = (callers: Callers, calls: number) =>
+  Effect.gen(function* makeDefinitionPool() {
+    const roles: string[] = [];
+    const relabel = yield* roleByAdmin(callers);
+
+    for (let made = 0; made < calls; made += 1) {
+      roles.push((yield* roleByAdmin(callers)).id);
+    }
+
+    return {
+      changeSetId: relabel.changeSetId,
+      relabel: relabel.id,
+      roles,
+    } satisfies DefinitionPool;
+  });
+
+/**
+ * A role's stored version, as table owner.
+ *
+ * @param id - The role.
+ * @returns The version as text.
+ */
+const roleVersion = (id: string) =>
+  values(`SELECT version::text AS value FROM core."role" WHERE id = $1::uuid`, [
+    id,
+  ]).pipe(Effect.map(([version]) => version ?? "1"));
+
 /** A fresh monitor's values. */
 const FRESH = { name: "fresh", status: "in_use" } as const;
 
@@ -67,11 +168,17 @@ const FRESH = { name: "fresh", status: "in_use" } as const;
  * Takes one path as Alice with a stated revision.
  *
  * @param callers - The fixture's callers.
+ * @param pool - The definitions the definition paths work on.
  * @param name - The path.
  * @param revision - The header value.
  * @returns The response.
  */
-const take = (callers: Callers, name: PathName, revision: string) =>
+const take = (
+  callers: Callers,
+  pool: DefinitionPool,
+  name: PathName,
+  revision: string
+) =>
   Effect.gen(function* takePath() {
     const http = yield* TestHttpClient;
     const { fixture } = callers;
@@ -99,15 +206,56 @@ const take = (callers: Callers, name: PathName, revision: string) =>
         );
       });
 
+    // Definition paths act as the administrator.
+    const { admin } = callers.tokens;
+
     const routes: Readonly<
       Record<PathName, () => Effect.Effect<TestResponse, unknown, Services>>
     > = {
+      "change-set apply": () =>
+        http.request("POST", CHANGE_SETS, {
+          body: changeSetBody([
+            createRole(`stale_${randomUUID().slice(0, 8)}`),
+          ]),
+          headers,
+          token: admin,
+        }),
+      "change-set read": () =>
+        http.get(`${CHANGE_SETS}/${pool.changeSetId}`, {
+          headers,
+          token: admin,
+        }),
       create: () =>
         http.request("POST", listPath("acme.monitor"), {
           body: { name: "made stale", owner: alice },
           headers,
           token,
         }),
+      "definition create": () =>
+        http.request("POST", listPath("core.role"), {
+          body: { label: "Stale", name: `stale_${randomUUID().slice(0, 8)}` },
+          headers,
+          token: admin,
+        }),
+      "definition delete": () =>
+        http.request(
+          "DELETE",
+          recordPath("core.role", pool.roles.pop() ?? ""),
+          {
+            headers: { ...headers, "if-match": '"1"' },
+            token: admin,
+          }
+        ),
+      "definition update": () =>
+        roleVersion(pool.relabel).pipe(
+          Effect.flatMap((version) =>
+            http.request("PATCH", recordPath("core.role", pool.relabel), {
+              body: { label: `Relabelled ${randomUUID().slice(0, 4)}` },
+              headers: { ...headers, "if-match": `"${version}"` },
+              token: admin,
+            })
+          )
+        ),
       delete: () => freshThen("DELETE"),
       get: () =>
         http.get(
@@ -149,15 +297,16 @@ const take = (callers: Callers, name: PathName, revision: string) =>
  * Every path's outcome with a stated revision.
  *
  * @param callers - The fixture's callers.
+ * @param pool - The definitions the definition paths work on.
  * @param revision - The header value.
  * @returns Per path, its observation.
  */
-const allPaths = (callers: Callers, revision: string) =>
+const allPaths = (callers: Callers, pool: DefinitionPool, revision: string) =>
   Effect.gen(function* everyPath() {
     const outcomes: (readonly [PathName, number, string])[] = [];
 
     for (const name of PATHS) {
-      const seen = observe(yield* take(callers, name, revision));
+      const seen = observe(yield* take(callers, pool, name, revision));
 
       outcomes.push([name, seen.status, seen.tag ?? ""]);
     }
@@ -166,7 +315,12 @@ const allPaths = (callers: Callers, revision: string) =>
   });
 
 const success: Readonly<Record<PathName, number>> = {
+  "change-set apply": 201,
+  "change-set read": 200,
   create: 201,
+  "definition create": 201,
+  "definition delete": 200,
+  "definition update": 200,
   delete: 200,
   get: 200,
   history: 200,
@@ -263,13 +417,14 @@ describe("stale-paths", () => {
     dbTest.effect("every path checks the revision it was built at", () =>
       Effect.gen(function* stalePaths() {
         const callers = yield* signInAll;
+        const pool = yield* definitionPool(callers, 8);
         const catalog = yield* Catalog;
         const built = yield* catalog.refresh;
         const stated = revisionHeaderValue(built);
 
         // Malformed: 400 on every path, sign-out included.
         assert.deepStrictEqual(
-          yield* allPaths(callers, "12.not-a-uuid"),
+          yield* allPaths(callers, pool, "12.not-a-uuid"),
           expected(
             everyPathBut({ status: 400, tag: "InvalidSchemaRevision" }, [])
           )
@@ -288,14 +443,17 @@ describe("stale-paths", () => {
           }),
         ]) {
           assert.deepStrictEqual(
-            yield* allPaths(callers, never),
+            yield* allPaths(callers, pool, never),
             expected(everyPathBut(CHANGED, ["sign-out"])),
             never
           );
         }
 
         // The current revision.
-        assert.deepStrictEqual(yield* allPaths(callers, stated), expected({}));
+        assert.deepStrictEqual(
+          yield* allPaths(callers, pool, stated),
+          expected({})
+        );
 
         // Only a label changed since: nothing is relevant.
         const status = built.field(ACME.status);
@@ -309,7 +467,10 @@ describe("stale-paths", () => {
           },
         ]);
 
-        assert.deepStrictEqual(yield* allPaths(callers, stated), expected({}));
+        assert.deepStrictEqual(
+          yield* allPaths(callers, pool, stated),
+          expected({})
+        );
 
         // Backfill, as table owner, so `status` can become required.
         yield* values(
@@ -331,7 +492,7 @@ describe("stale-paths", () => {
         ]);
 
         assert.deepStrictEqual(
-          yield* allPaths(callers, stated),
+          yield* allPaths(callers, pool, stated),
           expected({
             create: CHANGED,
             history: CHANGED,
@@ -394,6 +555,72 @@ describe("stale-paths", () => {
 
           assert.strictEqual(invisible.status, 404);
           assert.strictEqual(invisible.text, random.text);
+        })
+    );
+
+    dbTest.effect(
+      "a definition write built before its column became read-only is SchemaChanged on both paths",
+      () =>
+        Effect.gen(function* definitionColumnChanged() {
+          const http = yield* TestHttpClient;
+          const callers = yield* signInAll;
+          const catalog = yield* Catalog;
+          const { id } = yield* roleByAdmin(callers);
+          const built = yield* catalog.refresh;
+          const stated = revisionHeaderValue(built);
+
+          const label = built.fieldByName(PLATFORM_CLASS_IDS.role, "label");
+
+          assert.isDefined(label);
+
+          // The core set makes core.role's label read-only: a change to a
+          // column of a definition table, which only the core set can make.
+          yield* applyChangeSet({
+            operations: [
+              {
+                changes: { readOnly: true },
+                id: label?.id ?? "",
+                op: "update",
+                version: label?.version ?? 1,
+              },
+            ],
+            origin: setOrigin({ layer: "core" }),
+          });
+
+          const version = yield* roleVersion(id);
+          const headers = { [HEADER]: stated };
+          const token = callers.tokens.admin;
+
+          const generic = yield* http.request(
+            "PATCH",
+            recordPath("core.role", id),
+            {
+              body: { label: "Too late" },
+              headers: { ...headers, "if-match": `"${version}"` },
+              token,
+            }
+          );
+
+          const endpoint = yield* http.request("POST", CHANGE_SETS, {
+            body: changeSetBody([
+              {
+                changes: { label: "Too late" },
+                id,
+                op: "update",
+                version: Number(version),
+              },
+            ]),
+            headers,
+            token,
+          });
+
+          for (const response of [generic, endpoint]) {
+            assert.deepStrictEqual(observe(response), CHANGED, response.text);
+            assert.include(response.text, "readOnlyChanged");
+            assert.include(response.text, '"label"');
+          }
+
+          assert.strictEqual(yield* roleVersion(id), version);
         })
     );
   });

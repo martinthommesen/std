@@ -24,6 +24,7 @@ import path from "node:path";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
+import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -31,8 +32,15 @@ import { ACME, createFixtureUser } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { freshAsset, objectOf, observe, signInAll } from "./authz-support.ts";
+import {
+  freshAsset,
+  objectOf,
+  observe,
+  signInAll,
+  textOf,
+} from "./authz-support.ts";
 import type { Observation } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
 import {
   NAME_LOOKUP_SITES,
   nameChecksIn,
@@ -85,6 +93,23 @@ const adminPaths = (records: {
     ],
     ["DELETE", recordPath("core.user", records.user), { headers: version }],
   ];
+};
+
+const CHANGE_SETS = "/api/v1/schema/change-sets";
+
+/** `acme.asset.cost`. */
+const COST_FIELD_ID = "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717";
+
+/**
+ * A change-set request body.
+ *
+ * @param operations - The operations.
+ * @returns The body.
+ */
+const changeSetBody = (operations: readonly Operation[]): JsonValue => {
+  const parsed = parseJson(JSON.stringify({ operations }));
+
+  return parsed.ok ? parsed.value : null;
 };
 
 /** What an admin gets on every path after the allow-all rules are gone. */
@@ -531,6 +556,24 @@ describe("no-bypass", () => {
 
           assert.strictEqual(before.status, 200, before.text);
 
+          // A change set the admin commits and reads while the rules hold.
+          const applied = yield* asAdmin("POST", CHANGE_SETS, {
+            body: changeSetBody([
+              createRole(`before_${freshId().slice(0, 8)}`),
+            ]),
+          });
+
+          assert.strictEqual(applied.status, 201, applied.text);
+
+          const firstChangeSet = textOf(
+            objectOf(objectOf(applied.json).changeSet).id
+          );
+
+          assert.strictEqual(
+            (yield* asAdmin("GET", `${CHANGE_SETS}/${firstChangeSet}`)).status,
+            200
+          );
+
           // Remove the protected rules in this test database, as table
           // owner, then commit any change set so the catalog reloads.
           yield* values(
@@ -567,6 +610,84 @@ describe("no-bypass", () => {
               table
             );
           }
+
+          // Definitions: the change-set endpoint (apply and read) and
+          // generic writes on definition tables are refused too, and commit
+          // nothing.
+          const committedBefore = yield* committedState;
+          const role = createRole(`no_bypass_${freshId().slice(0, 8)}`);
+
+          const [costVersion] = yield* values(
+            `SELECT version::text AS value FROM core."field" WHERE id = $1::uuid`,
+            [COST_FIELD_ID]
+          );
+
+          const definitionPaths: readonly (readonly [
+            string,
+            string,
+            TestRequestOptions,
+            Observation,
+          ])[] = [
+            [
+              "POST",
+              CHANGE_SETS,
+              { body: changeSetBody([role]) },
+              { status: 403, tag: "NotAllowed" },
+            ],
+            [
+              "POST",
+              CHANGE_SETS,
+              {
+                body: changeSetBody([
+                  {
+                    id: COST_FIELD_ID,
+                    name: "price",
+                    op: "rename",
+                    version: Number(costVersion ?? "1"),
+                  },
+                ]),
+              },
+              // A target the caller cannot see is a missing one (0011).
+              { status: 422, tag: "DefinitionInvalid" },
+            ],
+            [
+              "GET",
+              `${CHANGE_SETS}/${firstChangeSet}`,
+              {},
+              { status: 404, tag: "NotFound" },
+            ],
+            [
+              "POST",
+              listPath("core.role"),
+              { body: { label: "Mine", name: "mine" } },
+              { status: 404, tag: "UnknownTable" },
+            ],
+            [
+              "PATCH",
+              recordPath("core.field", COST_FIELD_ID),
+              {
+                body: { label: "Price" },
+                headers: { "if-match": `"${costVersion ?? "1"}"` },
+              },
+              { status: 404, tag: "UnknownTable" },
+            ],
+            [
+              "DELETE",
+              recordPath("core.field", COST_FIELD_ID),
+              { headers: { "if-match": `"${costVersion ?? "1"}"` } },
+              { status: 404, tag: "UnknownTable" },
+            ],
+          ];
+
+          for (const [method, url, options, expected] of definitionPaths) {
+            assert.deepStrictEqual(
+              observe(yield* asAdmin(method, url, options)),
+              expected,
+              `${method} ${url}`
+            );
+          }
+
+          assert.deepStrictEqual(yield* committedState, committedBefore);
 
           assert.strictEqual(
             (yield* values(
