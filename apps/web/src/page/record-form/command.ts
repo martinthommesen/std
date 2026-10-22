@@ -487,7 +487,7 @@ export const SearchTargets = Command.define("SearchTargets", {
     Effect.gen(function* searchTargets() {
       const client = yield* StdApi;
 
-      const listed = yield* client.records
+      const [listed, response] = yield* client.records
         .list({
           params: { table: target },
           query: {
@@ -502,6 +502,7 @@ export const SearchTargets = Command.define("SearchTargets", {
               onSome: (text) => ({ filter: text }),
             }),
           },
+          responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
 
@@ -515,6 +516,7 @@ export const SearchTargets = Command.define("SearchTargets", {
             onSome: (name) => displayOf(record, name),
           }),
         })),
+        maybeRevision: responseRevision(response),
       });
     }).pipe(
       Effect.catchTag("Unauthenticated", () =>
@@ -585,7 +587,7 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
     Effect.gen(function* loadRelatedRecords() {
       const client = yield* StdApi;
 
-      const listed = yield* client.records
+      const [listed, response] = yield* client.records
         .list({
           params: { table },
           query: {
@@ -599,6 +601,7 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
               onSome: (text) => ({ cursor: text }),
             }),
           },
+          responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
 
@@ -608,7 +611,12 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
         records: listed.records,
       };
 
-      return Message.SucceededLoadRelatedRecords({ generation, key, page });
+      return Message.SucceededLoadRelatedRecords({
+        generation,
+        key,
+        maybeRevision: responseRevision(response),
+        page,
+      });
     }).pipe(
       Effect.catchTag("SchemaChanged", () =>
         Effect.succeed(failedRelated(key, generation)("SchemaChanged"))

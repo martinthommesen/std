@@ -122,6 +122,7 @@ export const Message = defineMessageUnion({
   SucceededLoadRelatedRecords: {
     generation: Schema.Int,
     key: Schema.String,
+    maybeRevision: Schema.Option(SchemaRevision),
     page: RecordPage,
   },
   SucceededLoadTarget: { table: MetaTableSchema },
@@ -134,6 +135,7 @@ export const Message = defineMessageUnion({
     fieldId: Schema.String,
     generation: Schema.Int,
     items: Schema.Array(PickerItem),
+    maybeRevision: Schema.Option(SchemaRevision),
   },
   ToggledFlag: { fieldId: Schema.String, isChecked: Schema.Boolean },
   ToggledHistory: { isOpen: Schema.Boolean },

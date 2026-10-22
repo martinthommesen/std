@@ -19,7 +19,9 @@ import { describe, it } from "vitest";
 
 import {
   REVISION_5,
+  REVISION_6,
   TICKET,
+  TICKET_FIELDS,
   TICKET_ID,
   USERS,
   restrictedTicketRecord,
@@ -364,6 +366,121 @@ describe("the history panel", () => {
         "false"
       ),
       expect(text("Updated · version 2")).toBeAbsent()
+    );
+  });
+});
+
+describe("a stale form", () => {
+  const renamedAndRetired = {
+    ...ticketTable,
+    fields: ticketTable.fields.map((field) => {
+      if (field.id === TICKET_FIELDS.shortDescription) {
+        return { ...field, label: "Summary", name: "summary" };
+      }
+
+      return field.id === TICKET_FIELDS.description
+        ? {
+            ...field,
+            state: "retired" as const,
+            write: { create: "no" as const, update: "no" as const },
+          }
+        : field;
+    }),
+  };
+
+  const reloaded = after(
+    ready,
+    Message.UpdatedText({
+      fieldId: TICKET_FIELDS.shortDescription,
+      text: "Mine",
+    }),
+    Message.UpdatedText({
+      fieldId: TICKET_FIELDS.description,
+      text: "My details",
+    }),
+    Message.ClickedSave(),
+    Message.FailedSaveRecord({
+      error: WriteError.SchemaChanged({
+        changes: [
+          {
+            field: "summary",
+            fieldId: TICKET_FIELDS.shortDescription,
+            kind: "fieldRenamed",
+            revision: 6,
+            table: TICKET,
+          },
+          {
+            field: "description",
+            fieldId: TICKET_FIELDS.description,
+            kind: "fieldRetired",
+            revision: 6,
+            table: TICKET,
+          },
+        ],
+        currentRevision: REVISION_6,
+      }),
+      generation: 2,
+      maybeRevision: Option.some(REVISION_6),
+    })
+  );
+
+  it("says the definition is reloading while it is, keeping the input", () => {
+    scene(
+      { update, view },
+      given(reloaded),
+      acknowledgePicker,
+      expect(role("alert")).toHaveText(/Loading the new definition/u),
+      expect(label("Short description (required)")).toHaveValue("Mine"),
+      expect(role("button", { name: "Save" })).toBeDisabled()
+    );
+  });
+
+  it("then shows the new definition with the input that applies, what changed, and what was not kept", () => {
+    const outdated = after(
+      reloaded,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: renamedAndRetired,
+      }),
+      Message.SucceededLoadRecord({
+        generation: 3,
+        maybeRevision: Option.some(REVISION_6),
+        purpose: "Refresh",
+        record: {
+          ...ticketRecord,
+          values: Object.fromEntries(
+            Object.entries(ticketRecord.values).map(([name, value]) => [
+              name === "short_description" ? "summary" : name,
+              value,
+            ])
+          ),
+        },
+      })
+    );
+
+    scene(
+      { update, view },
+      given(outdated),
+      acknowledgePicker,
+      expect(role("alert")).toHaveText(
+        /Nothing was saved: the table's definition changed/u
+      ),
+      expect(text("Summary: renamed")).toExist(),
+      expect(text("Description: retired")).toExist(),
+      expect(label("Summary (required)")).toHaveValue("Mine"),
+      inside(
+        fieldRow("summary"),
+        expect(text("Changed since you opened this form: renamed.")).toExist()
+      ),
+      inside(
+        selector(".form-dropped"),
+        expect(
+          text(
+            "Your change to Description was not kept: the field was retired. You had entered: My details"
+          )
+        ).toExist()
+      ),
+      expect(role("button", { name: "Save" })).toBeEnabled()
     );
   });
 });

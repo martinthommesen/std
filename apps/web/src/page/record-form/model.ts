@@ -30,6 +30,7 @@ import { defineTaggedUnion } from "foldkit/schema";
 
 import { FieldInput } from "../../domain/form-input.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
+import { DroppedEdit } from "../../domain/stale-edits.ts";
 import {
   MetaError,
   Metadata,
@@ -128,12 +129,18 @@ export type WriteError = typeof WriteError.Type;
  *   is no longer visible to the caller (Contracts 3.9).
  * - `Unchanged`: the user saved without changing anything; nothing was
  *   sent.
- * - `Failed`: the last save was refused; the edits are kept.
+ * - `Failed`: the last save was refused; the edits are kept. After a
+ *   `SchemaChanged` refusal the page reloads the definitions by itself.
+ * - `Outdated`: the last save was refused with `SchemaChanged`, and the
+ *   form now shows the new definitions with the input that still applies;
+ *   it waits for the user to save again and never resubmits by itself
+ *   (Contracts 6.4).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Submission = defineTaggedUnion({
   Failed: { error: WriteError },
   Idle: {},
+  Outdated: {},
   Saved: { isVisible: Schema.Boolean },
   Saving: { generation: Schema.Int },
   Unchanged: {},
@@ -298,9 +305,12 @@ export type History = typeof History.Type;
  *   stored value and is never sent.
  * - `maybeEditsFrom`: after a version conflict and a reload, the record
  *   the edits were made on, so the view marks fields someone else changed.
- * - `staleChanges`: the changes a `SchemaChanged` refusal of a save named
- *   (Contracts 6.4), kept until a save succeeds, so the view can mark
- *   those fields (workstream 2C builds on this).
+ * - `staleChanges`: the changes `SchemaChanged` refusals of saves named
+ *   (Contracts 6.4), kept until a save succeeds, so the view marks those
+ *   fields.
+ * - `droppedEdits`: edits the form dropped because new definitions or a
+ *   reread record no longer let it send them, with what the user had
+ *   entered (decision 0020), kept until a save succeeds.
  * - `serverErrors`: the field errors of the last refused save, by field ID,
  *   until the field is edited.
  * - `isShowingProblems`: whether the client's problems show (after the
@@ -319,6 +329,7 @@ export const Model = Schema.Struct({
   datePickers: Schema.Record(Schema.String, DatePicker.Model),
   deleteDialog: Dialog.Model,
   deletion: Deletion,
+  droppedEdits: Schema.Array(DroppedEdit),
   edits: Schema.Record(Schema.String, FieldInput),
   generation: Schema.Int,
   history: History,

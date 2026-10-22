@@ -26,6 +26,7 @@ import {
   sameJson,
   toWriteOnlyValue,
 } from "../../domain/form-input.ts";
+import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { valueText } from "../../domain/value-text.ts";
 import { calendarDateOf } from "../../filter-builder/condition.ts";
 import { buttonView } from "../../view/controls.ts";
@@ -296,34 +297,42 @@ const checkboxControl = (
 /**
  * The options of a choice field: empty, then the active choices in order;
  * a hidden (retired) choice, or a key no longer offered, only when it is
- * the stored value (an unchanged hidden key is kept, Contracts 6.5).
+ * the stored value (an unchanged hidden key is kept, Contracts 6.5) or the
+ * user's own choice that the definitions took away after it was made (the
+ * client's verdict then flags it, decision 0020).
  *
  * @param field - The choice field.
  * @param storedKey - The stored key, `""` for none.
+ * @param chosenKey - The key the input holds, `""` for none.
  * @returns The options.
  */
 export const choiceOptionsOf = (
   field: MetaField,
-  storedKey: string
+  storedKey: string,
+  chosenKey = storedKey
 ): readonly { readonly value: string; readonly label: string }[] => {
   const choices: readonly MetaChoice[] = field.choices ?? [];
+  const kept = new Set([storedKey, chosenKey]);
 
   const active = choices
-    .filter((choice) => !choice.retired || choice.key === storedKey)
+    .filter((choice) => !choice.retired || kept.has(choice.key))
     .toSorted((left, right) => left.order - right.order)
     .map((choice) => ({
       label: choice.retired ? `${choice.label} (retired)` : choice.label,
       value: choice.key,
     }));
 
-  const isKnown = choices.some((choice) => choice.key === storedKey);
+  const unknown = [...kept].filter(
+    (key) => key !== "" && !choices.some((choice) => choice.key === key)
+  );
 
   return [
     { label: "None", value: "" },
     ...active,
-    ...(storedKey === "" || isKnown
-      ? []
-      : [{ label: `${storedKey} (no longer offered)`, value: storedKey }]),
+    ...unknown.map((key) => ({
+      label: `${key} (no longer offered)`,
+      value: key,
+    })),
   ];
 };
 
@@ -366,7 +375,8 @@ const selectControl = (
               ],
               choiceOptionsOf(
                 config.field,
-                storedKeyOf(model, config.field)
+                storedKeyOf(model, config.field),
+                key
               ).map((option) =>
                 h.option(
                   [h.Value(option.value), h.Selected(option.value === key)],
@@ -732,8 +742,37 @@ const editableView = (
 
 // NOTES
 
-const CHANGED_DEFINITION_HINT =
-  "This field's definition changed since the form was opened.";
+/**
+ * What changed in a field's definition since the form was opened, as the
+ * `SchemaChanged` refusals named it (Contracts 6.4).
+ *
+ * @param model - The page.
+ * @param field - The field, as the form describes it now.
+ * @returns The hint, if the field changed.
+ */
+const changedDefinitionHintOf = (
+  model: Model,
+  field: MetaField
+): readonly string[] => {
+  const texts = [
+    ...new Set(
+      model.staleChanges.flatMap((change) =>
+        change.fieldId === field.id
+          ? [changeText(change, Option.some(field))]
+          : []
+      )
+    ),
+  ];
+
+  return texts.length === 0
+    ? []
+    : [`Changed since you opened this form: ${texts.join(", ")}.`];
+};
+
+const droppedHintOf = (model: Model, field: MetaField): readonly string[] =>
+  model.droppedEdits.flatMap((note) =>
+    note.fieldId === field.id ? [droppedText(note)] : []
+  );
 
 /**
  * After a version conflict and a reload: what someone else saved in a
@@ -766,9 +805,8 @@ const notesOf = (
 ): FieldNotes => ({
   hints: [
     ...(field.helpText === null ? [] : [field.helpText]),
-    ...(model.staleChanges.some((change) => change.fieldId === field.id)
-      ? [CHANGED_DEFINITION_HINT]
-      : []),
+    ...changedDefinitionHintOf(model, field),
+    ...droppedHintOf(model, field),
     ...conflictHintOf(model, field),
   ],
   problems,

@@ -14,6 +14,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { formSections } from "../../domain/form-fields.ts";
 import type { FormSection } from "../../domain/form-fields.ts";
+import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
 import { view as notFoundView } from "../not-found.ts";
@@ -22,6 +23,7 @@ import { fieldView, shownProblemsOf } from "./fields-view.ts";
 import {
   classMetaOf,
   editedRecordOf,
+  fieldOf,
   fieldsOf,
   isCreating,
   metaOf,
@@ -30,12 +32,17 @@ import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { historyView, relatedListsView } from "./panels-view.ts";
+import { isReloading } from "./update.ts";
 
 const HEADING_ID = "record-form-heading";
 
 const ALERT_CLASS = "form-alert";
 
+const FAILURE_CLASS = "list-failure";
+
 const TRY_AGAIN = "Try again";
+
+const RELOAD_DEFINITION = "Reload the definition";
 
 const listUrlOf = (table: string): string =>
   tableListRouter({
@@ -123,12 +130,8 @@ const writeErrorText = (error: WriteError): string =>
     ),
     Match.tag(
       "SchemaChanged",
-      ({ changes }) =>
-        `The table's definition changed since this form was opened${
-          changes.length === 0
-            ? ""
-            : ` (${[...new Set(changes.map((change) => change.field ?? change.table))].join(", ")})`
-        }. Your input is kept and was not saved. Reload the definition, check the marked fields, and save again.`
+      () =>
+        "Nothing was saved: the table's definition changed since this form was opened. Your input is kept. Reload the definition, check the marked fields, and save again."
     ),
     Match.tag(
       "InvalidReference",
@@ -161,9 +164,130 @@ const writeErrorText = (error: WriteError): string =>
     Match.exhaustive
   );
 
+/**
+ * The changes `SchemaChanged` refusals named, as the form lists them: each
+ * field by its label in the form's metadata (else the name the server
+ * gave), with what changed.
+ *
+ * @param model - The page.
+ * @returns One line per field or table.
+ */
+export const staleChangeLines = (model: Model): readonly string[] => {
+  const described = model.staleChanges.map((change) => {
+    const maybeField =
+      change.fieldId === null ? Option.none() : fieldOf(model, change.fieldId);
+
+    return {
+      target: Option.match(maybeField, {
+        onNone: () => change.field ?? change.table,
+        onSome: (field) => field.label,
+      }),
+      text: changeText(change, maybeField),
+    };
+  });
+
+  const targets = [...new Set(described.map((entry) => entry.target))];
+
+  return targets.map((target) => {
+    const texts = described.flatMap((entry) =>
+      entry.target === target ? [entry.text] : []
+    );
+
+    return `${target}: ${[...new Set(texts)].join(", ")}`;
+  });
+};
+
+const OUTDATED_TEXT =
+  "Nothing was saved: the table's definition changed since this form was opened. The form now shows the new definition and keeps your input wherever it still applies. Check the marked fields, then save again.";
+
+const RELOADING_TEXT =
+  "Nothing was saved: the table's definition changed since this form was opened. Loading the new definition; your input is kept.";
+
+const notesListView = (
+  heading: string,
+  lines: readonly { readonly key: string; readonly text: string }[],
+  h: HtmlBuilder<Message>
+): Html =>
+  h.div(
+    [],
+    [
+      h.p([h.Class("form-notes-heading")], [heading]),
+      h.ul(
+        [h.Class("form-notes")],
+        lines.map((line) => h.keyed("li")(line.key, [], [line.text]))
+      ),
+    ]
+  );
+
+const outdatedView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const lines = staleChangeLines(model);
+
+  return h.div(
+    [h.Class(`${FAILURE_CLASS} form-outdated`)],
+    [
+      h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [OUTDATED_TEXT]),
+      lines.length === 0
+        ? h.empty
+        : notesListView(
+            "What changed:",
+            lines.map((line) => ({ key: line, text: line })),
+            h
+          ),
+    ]
+  );
+};
+
+const schemaChangedView = (
+  model: Model,
+  error: WriteError,
+  h: HtmlBuilder<Message>
+): Html =>
+  AsyncData.isPending(model.metadata)
+    ? h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [RELOADING_TEXT])
+    : h.div(
+        [h.Class(FAILURE_CLASS)],
+        [
+          h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [writeErrorText(error)]),
+          buttonView(
+            {
+              onClick: Message.ClickedReloadDefinition(),
+              text: RELOAD_DEFINITION,
+              variant: "quiet",
+            },
+            h
+          ),
+        ]
+      );
+
+/**
+ * The edits the form dropped (decision 0020), with what the user had
+ * entered, until a save succeeds.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The notes, or nothing.
+ */
+const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  model.droppedEdits.length === 0
+    ? h.empty
+    : h.div(
+        [h.Class("form-dropped"), h.Role("status")],
+        [
+          notesListView(
+            "Some of your changes could not be kept:",
+            model.droppedEdits.map((note) => ({
+              key: note.fieldId,
+              text: droppedText(note),
+            })),
+            h
+          ),
+        ]
+      );
+
 const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Match.value(model.submission).pipe(
     Match.tag("Idle", () => h.empty),
+    Match.tag("Outdated", () => outdatedView(model, h)),
     Match.tag("Saving", () => h.p([h.Role("status")], ["Saving…"])),
     Match.tag("Saved", () =>
       h.p([h.Role("status"), h.Class("notice")], ["Saved."])
@@ -175,32 +299,27 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
       )
     ),
     Match.tag("Failed", ({ error }) =>
-      h.div(
-        [h.Class("list-failure")],
-        [
-          h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [writeErrorText(error)]),
-          WriteError.guards.VersionConflict(error)
-            ? buttonView(
-                {
-                  onClick: Message.ClickedReloadRecord(),
-                  text: "Reload the record, keeping my changes",
-                  variant: "quiet",
-                },
-                h
-              )
-            : h.empty,
-          WriteError.guards.SchemaChanged(error)
-            ? buttonView(
-                {
-                  onClick: Message.ClickedReloadDefinition(),
-                  text: "Reload the definition",
-                  variant: "quiet",
-                },
-                h
-              )
-            : h.empty,
-        ]
-      )
+      WriteError.guards.SchemaChanged(error)
+        ? schemaChangedView(model, error, h)
+        : h.div(
+            [h.Class(FAILURE_CLASS)],
+            [
+              h.p(
+                [h.Role("alert"), h.Class(ALERT_CLASS)],
+                [writeErrorText(error)]
+              ),
+              WriteError.guards.VersionConflict(error)
+                ? buttonView(
+                    {
+                      onClick: Message.ClickedReloadRecord(),
+                      text: "Reload the record, keeping my changes",
+                      variant: "quiet",
+                    },
+                    h
+                  )
+                : h.empty,
+            ]
+          )
     ),
     Match.exhaustive
   );
@@ -225,7 +344,7 @@ const deletionView = (model: Model, h: HtmlBuilder<Message>): Html =>
 const staleMetadataView = (model: Model, h: HtmlBuilder<Message>): Html =>
   AsyncData.isStale(model.metadata)
     ? h.div(
-        [h.Class("list-failure")],
+        [h.Class(FAILURE_CLASS)],
         [
           h.p(
             [h.Role("alert"), h.Class(ALERT_CLASS)],
@@ -236,7 +355,7 @@ const staleMetadataView = (model: Model, h: HtmlBuilder<Message>): Html =>
           buttonView(
             {
               onClick: Message.ClickedReloadDefinition(),
-              text: "Reload the definition",
+              text: RELOAD_DEFINITION,
               variant: "quiet",
             },
             h
@@ -296,6 +415,9 @@ const sectionView = (
 const isSaving = (model: Model): boolean =>
   Submission.guards.Saving(model.submission);
 
+const isSaveBlocked = (model: Model): boolean =>
+  isSaving(model) || isReloading(model);
+
 const saveText = (model: Model): string => {
   if (isSaving(model)) {
     return "Saving…";
@@ -310,7 +432,7 @@ const actionsView = (model: Model, h: HtmlBuilder<Message>): Html =>
     [
       buttonView(
         {
-          isDisabled: isSaving(model),
+          isDisabled: isSaveBlocked(model),
           onClick: Message.ClickedSave(),
           text: saveText(model),
           variant: "primary",
@@ -420,6 +542,7 @@ const formBodyView = (
         sectionView(model, section, index, problems, h)
       ),
       submissionView(model, h),
+      droppedEditsView(model, h),
       deletionView(model, h),
       actionsView(model, h),
     ]

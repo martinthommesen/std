@@ -23,12 +23,19 @@ import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { modifyFields } from "foldkit/struct";
 
-import { fieldShowOf } from "../../domain/form-fields.ts";
+import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { listColumns } from "../../domain/list-columns.ts";
 import { filterParameter } from "../../domain/list-query.ts";
 import { isNewerRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
+import {
+  mergeChanges,
+  mergeDropped,
+  reconcileWithMetadata,
+  reconcileWithRecord,
+} from "../../domain/stale-edits.ts";
+import type { Reconciled } from "../../domain/stale-edits.ts";
 import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
 import { recordRouter, tableListRouter } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
@@ -166,6 +173,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     datePickers: {},
     deleteDialog: Dialog.init({ id: DELETE_DIALOG_ID }),
     deletion: Deletion.Idle(),
+    droppedEdits: [],
     edits: {},
     generation: 0,
     history: {
@@ -593,7 +601,7 @@ const receiveRelatedRecords = (
   key: string,
   generation: number,
   page: RecordPage
-): UpdateReturn => ({
+): PlainReturn => ({
   model: writeRelatedList(model, key, (list) =>
     list.generation === generation
       ? modifyFields(list, {
@@ -870,6 +878,27 @@ const isRefusedAsStale = (submission: Submission): boolean =>
   WriteError.guards.SchemaChanged(submission.error);
 
 /**
+ * Applies a reconciliation of the edits (decision 0020): keeps the edits
+ * that still apply, notes the dropped ones, and forgets the server's
+ * errors of dropped fields.
+ *
+ * @param model - The page.
+ * @param reconciled - What reconciling found.
+ * @returns The page.
+ */
+const withReconciled = (model: Model, reconciled: Reconciled): Model =>
+  reconciled.dropped.length === 0
+    ? model
+    : modifyFields(model, {
+        droppedEdits: (notes) => mergeDropped(notes, reconciled.dropped),
+        edits: () => reconciled.edits,
+        serverErrors: Record.filter(
+          (_texts, fieldId) =>
+            !reconciled.dropped.some((note) => note.fieldId === fieldId)
+        ),
+      });
+
+/**
  * What new metadata asks of the record: the first read (or the one a
  * `SchemaChanged` refusal stopped); a reread when the metadata moved to
  * another revision, so the record's names are the metadata's (a rename
@@ -914,16 +943,31 @@ const receiveMetadata = (
     (reason) => reason === "SchemaChanged"
   );
 
+  // NOTE: edits are reconciled with the endpoint's new fields only; the
+  // concrete class's metadata and the record follow, and the record's
+  // reread reconciles again (`receiveRecord`).
+  const reconciled = isOtherRevision
+    ? reconcileWithMetadata(
+        model.edits,
+        fieldsOf(model),
+        formFieldsOf(table, Option.none()),
+        isCreating(model)
+      )
+    : { dropped: [], edits: model.edits };
+
   const loaded = syncRelatedLists(
-    modifyFields(model, {
-      classMetadata: (classMetadata) =>
-        isFirstLoad ? classMetadata : ClassMetadata.Idle(),
-      metadata: () => Metadata.Success({ data: { revision, table } }),
-      submission: (submission) =>
-        isOtherRevision && isRefusedAsStale(submission)
-          ? Submission.Idle()
-          : submission,
-    }),
+    withReconciled(
+      modifyFields(model, {
+        classMetadata: (classMetadata) =>
+          isFirstLoad ? classMetadata : ClassMetadata.Idle(),
+        metadata: () => Metadata.Success({ data: { revision, table } }),
+        submission: (submission) =>
+          isOtherRevision && isRefusedAsStale(submission)
+            ? Submission.Outdated()
+            : submission,
+      }),
+      reconciled
+    ),
     table
   );
 
@@ -976,7 +1020,7 @@ const receiveRecord = (
       (before) => before.version !== record.version
     );
 
-  const shown = modifyFields(model, {
+  const read = modifyFields(model, {
     maybeEditsFrom: (editsFrom) =>
       isChangedUnderEdits
         ? Option.orElse(editsFrom, () => recordOf(model))
@@ -985,6 +1029,16 @@ const receiveRecord = (
     submission: (submission) =>
       afterConflict ? Submission.Idle() : submission,
   });
+
+  const shown =
+    purpose === "Open"
+      ? read
+      : withReconciled(
+          read,
+          reconcileWithRecord(read.edits, fieldsOf(read), (field) =>
+            fieldShowOf(field, Option.some(record))
+          )
+        );
 
   return sawRevision(
     Update.combine(resetPickerInputs(shown), [
@@ -1424,7 +1478,7 @@ const receiveSearch = (
   fieldId: string,
   generation: number,
   items: readonly PickerItem[]
-): UpdateReturn => ({
+): PlainReturn => ({
   model: writePicker(model, fieldId, (picker) =>
     picker.generation === generation
       ? modifyFields(picker, {
@@ -1449,6 +1503,18 @@ const failSearch = (
 });
 
 // SAVE
+
+/**
+ * Whether the page is rereading its definitions or the record: a save
+ * waits, so it is never built from new metadata and an old record (whose
+ * value names may be the old ones) or the other way round.
+ *
+ * @param model - The page.
+ * @returns True while the metadata or the record is reloading.
+ */
+export const isReloading = (model: Model): boolean =>
+  AsyncData.isRefreshing(model.metadata) ||
+  (!isCreating(model) && AsyncData.isRefreshing(model.record));
 
 const firstProblemField = (
   model: Model,
@@ -1478,7 +1544,11 @@ const focusFirst = (
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (Submission.guards.Saving(model.submission) || !isReady(model)) {
+  if (
+    Submission.guards.Saving(model.submission) ||
+    !isReady(model) ||
+    isReloading(model)
+  ) {
     return { model };
   }
 
@@ -1629,6 +1699,7 @@ const receiveSave = (
   };
 
   const stored = modifyFields(model, {
+    droppedEdits: () => [],
     edits: () => ({}),
     maybeEditsFrom: () => Option.none(),
     record: () => StoredRecord.Success({ data: withLabels }),
@@ -1680,6 +1751,35 @@ const serverErrorsOf = (
     : {};
 };
 
+/**
+ * After a save refused with `SchemaChanged` (Contracts 6.4): reloads the
+ * metadata by itself (the record follows, `receiveMetadata`), keeping the
+ * input; the save is never sent again by itself. When a background
+ * refresh already brought the form to the refusal's current revision, the
+ * form is outdated at once.
+ *
+ * @param model - The page, refused.
+ * @param maybeCurrent - The refusal's current revision.
+ * @returns The page, reloading or waiting for the user.
+ */
+const reloadAfterSchemaChanged = (
+  model: Model,
+  maybeCurrent: Option.Option<SchemaRevision>
+): PlainReturn => {
+  const isAlreadyCurrent =
+    !AsyncData.isPending(model.metadata) &&
+    Option.exists(
+      Option.all([maybeCurrent, metaOf(model)]),
+      ([current, meta]) => !isNewerRevision(current, meta.revision)
+    );
+
+  return isAlreadyCurrent
+    ? {
+        model: modifyFields(model, { submission: () => Submission.Outdated() }),
+      }
+    : refreshMetadata(model);
+};
+
 const failSave = (
   model: Model,
   generation: number,
@@ -1700,7 +1800,9 @@ const failSave = (
     isShowingProblems: () => true,
     serverErrors: () => serverErrors,
     staleChanges: (changes) =>
-      WriteError.guards.SchemaChanged(error) ? error.changes : changes,
+      WriteError.guards.SchemaChanged(error)
+        ? mergeChanges(changes, error.changes)
+        : changes,
     submission: () => Submission.Failed({ error }),
   });
 
@@ -1713,14 +1815,20 @@ const failSave = (
     return Update.combine(refused, [() => focused, refreshMetadata]);
   }
 
-  return Update.withOutMessage(
-    focused,
-    Option.getOrUndefined(
-      pipe(
-        maybeRevision,
-        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
-      )
+  const sawCurrent = Option.getOrUndefined(
+    pipe(
+      maybeRevision,
+      Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
     )
+  );
+
+  if (!WriteError.guards.SchemaChanged(error)) {
+    return Update.withOutMessage(focused, sawCurrent);
+  }
+
+  return Update.withOutMessage(
+    reloadAfterSchemaChanged(refused, maybeRevision),
+    sawCurrent
   );
 };
 
@@ -1983,7 +2091,13 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       receiveMetadata(model, table, revision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadHistory: ({ entries, generation, maybeRevision }) =>
-      sawRevision(receiveHistory(model, generation, entries), maybeRevision),
+      sawRevision(
+        Update.combine(model, [
+          (stepModel) => receiveHistory(stepModel, generation, entries),
+          refreshIfNewer(maybeRevision),
+        ]),
+        maybeRevision
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadRecord: ({ generation, maybeRevision, purpose, record }) =>
       receiveRecord(model, generation, record, purpose, maybeRevision),
@@ -1991,16 +2105,29 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededLoadRelatedMetadata: ({ key, revision, table }) =>
       receiveRelatedMetadata(model, key, { revision, table }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadRelatedRecords: ({ generation, key, page }) =>
-      receiveRelatedRecords(model, key, generation, page),
+    SucceededLoadRelatedRecords: ({ generation, key, maybeRevision, page }) =>
+      sawRevision(
+        Update.combine(model, [
+          (stepModel) =>
+            receiveRelatedRecords(stepModel, key, generation, page),
+          refreshIfNewer(maybeRevision),
+        ]),
+        maybeRevision
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadTarget: ({ table }) => receiveTarget(model, table),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededSaveRecord: ({ generation, maybeRevision, saved }) =>
       receiveSave(model, generation, saved, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededSearchTargets: ({ fieldId, generation, items }) =>
-      receiveSearch(model, fieldId, generation, items),
+    SucceededSearchTargets: ({ fieldId, generation, items, maybeRevision }) =>
+      sawRevision(
+        Update.combine(model, [
+          (stepModel) => receiveSearch(stepModel, fieldId, generation, items),
+          refreshIfNewer(maybeRevision),
+        ]),
+        maybeRevision
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ToggledFlag: ({ fieldId, isChecked }) =>
       editField(model, fieldId, () => FieldInput.Flag({ isChecked })),

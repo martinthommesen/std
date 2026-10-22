@@ -601,127 +601,6 @@ describe("editing and saving", () => {
     );
   });
 
-  it("after SchemaChanged on save keeps the input, never resends by itself, and saves with the reloaded names", () => {
-    const renamed = {
-      ...ticketTable,
-      fields: ticketTable.fields.map((field) =>
-        field.id === TICKET_FIELDS.shortDescription
-          ? { ...field, name: "summary" }
-          : field
-      ),
-    };
-
-    const changes = [
-      {
-        field: "summary",
-        fieldId: TICKET_FIELDS.shortDescription,
-        kind: "fieldRenamed" as const,
-        revision: 6,
-        table: TICKET,
-      },
-    ];
-
-    story(
-      update,
-      given(ready),
-      message(
-        Message.UpdatedText({
-          fieldId: TICKET_FIELDS.shortDescription,
-          text: "Mine",
-        })
-      ),
-      message(Message.ClickedSave()),
-      Command.resolve(
-        UpdateRecord,
-        Message.FailedSaveRecord({
-          error: WriteError.SchemaChanged({
-            changes,
-            currentRevision: REVISION_6,
-          }),
-          generation: 2,
-          maybeRevision: Option.some(REVISION_6),
-        })
-      ),
-      expectOutMessage(OutMessage.SawCurrentRevision({ revision: REVISION_6 })),
-      Command.expectNone(),
-      model((page) => {
-        expect(page.staleChanges).toStrictEqual(changes);
-        expect(page.edits[TICKET_FIELDS.shortDescription]).toStrictEqual(
-          FieldInput.Text({ text: "Mine" })
-        );
-      }),
-      message(Message.ClickedReloadDefinition()),
-      Command.expectExact(
-        LoadFormMetadata({
-          maybeRevision: Option.some(REVISION_5),
-          table: TICKET,
-        })
-      ),
-      Command.resolve(
-        LoadFormMetadata,
-        Message.SucceededLoadFormMetadata({
-          revision: REVISION_6,
-          table: renamed,
-        })
-      ),
-      Command.expectExact(
-        LoadRecord({
-          generation: 3,
-          purpose: "Refresh",
-          recordId: TICKET_ID,
-          revision: REVISION_6,
-          table: TICKET,
-        })
-      ),
-      Command.resolve(
-        LoadRecord,
-        Message.SucceededLoadRecord({
-          generation: 3,
-          maybeRevision: Option.some(REVISION_6),
-          purpose: "Refresh",
-          record: {
-            ...ticketRecord,
-            values: Object.fromEntries(
-              Object.entries(ticketRecord.values).map(([name, value]) => [
-                name === "short_description" ? "summary" : name,
-                value,
-              ])
-            ),
-          },
-        })
-      ),
-      model((page) => {
-        expect(page.edits[TICKET_FIELDS.shortDescription]).toStrictEqual(
-          FieldInput.Text({ text: "Mine" })
-        );
-        expect(page.maybeEditsFrom).toStrictEqual(Option.none());
-        // The refusal gives way once the metadata moved on; the changed
-        // field stays marked.
-        expect(page.submission).toStrictEqual(Submission.Idle());
-        expect(page.staleChanges).toStrictEqual(changes);
-      }),
-      message(Message.ClickedSave()),
-      Command.expectExact(
-        updateRequest({
-          generation: 4,
-          revision: REVISION_6,
-          values: { summary: "Mine" },
-        })
-      ),
-      Command.resolve(
-        UpdateRecord,
-        Message.SucceededSaveRecord({
-          generation: 4,
-          maybeRevision: Option.some(REVISION_6),
-          saved: ticketRecord,
-        })
-      ),
-      model((page) => {
-        expect(page.staleChanges).toStrictEqual([]);
-      })
-    );
-  });
-
   it("refreshes the metadata in the background after NotAllowed, keeping the input", () => {
     story(
       update,
@@ -1124,6 +1003,7 @@ describe("the reference picker", () => {
           fieldId: TICKET_FIELDS.assignee,
           generation: 1,
           items: [{ id: USERS.sam, label: "Sam Agent" }],
+          maybeRevision: Option.none(),
         })
       ),
       message(
@@ -1131,6 +1011,7 @@ describe("the reference picker", () => {
           fieldId: TICKET_FIELDS.assignee,
           generation: 0,
           items: [{ id: USERS.alex, label: "Alex Agent" }],
+          maybeRevision: Option.none(),
         })
       ),
       model((page) => {
@@ -1174,6 +1055,7 @@ describe("the reference picker", () => {
           fieldId: TICKET_FIELDS.assignee,
           generation: 2,
           items: [],
+          maybeRevision: Option.none(),
         })
       ),
       message(
@@ -1321,6 +1203,7 @@ describe("related lists and history", () => {
         Message.SucceededLoadRelatedRecords({
           generation: 1,
           key: KEY,
+          maybeRevision: Option.none(),
           page: {
             maybeCount: Option.some(12),
             maybeNextCursor: Option.some("c2"),
@@ -1353,6 +1236,7 @@ describe("related lists and history", () => {
         Message.SucceededLoadRelatedRecords({
           generation: 2,
           key: KEY,
+          maybeRevision: Option.none(),
           page: {
             maybeCount: Option.some(12),
             maybeNextCursor: Option.none(),

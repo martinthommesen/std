@@ -311,6 +311,7 @@ describe("form Commands against the server", () => {
           { id: "u1", label: "Alex Agent" },
           { id: "u2", label: "u2" },
         ],
+        maybeRevision: Option.none(),
       })
     );
     expect(api.seen[0]?.query).toStrictEqual({
