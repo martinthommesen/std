@@ -28,6 +28,7 @@
     "@effect/vitest": "catalog:",
     "@foldkit/oxlint-plugin": "0.15.3",
     "@shadcn/lint": "^0.2.3",
+    "@std/tmf": "workspace:*",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "eslint-plugin-github": "6.1.2",
@@ -43,7 +44,8 @@
     "oxlint-tsgolint": "^7.0.2004",
     "typescript": "catalog:",
     "ultracite": "8.0.1",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "2.9.1"
   },
   "devEngines": {
     "runtime": {
