@@ -50,6 +50,8 @@ import type { EffectiveField } from "./effective-schema.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
   apiNameOf,
+  apiTableNameOf,
+  FIXED_RESOURCE_NAMES,
   fieldNameProblem,
   identifierProblem,
   isReservedApiName,
@@ -1275,6 +1277,71 @@ const checkUniqueness = (
     (filter) => `${filter.classId}/${filter.name}`,
     (filter) => `The saved filter name "${filter.name}" on its table`
   );
+};
+
+/**
+ * The `/api/v2` table name rule (Contracts 10.1, Martin 2026-10-22): a
+ * table's collection name (`apiTableNameOf`, `helpdesk.ticket_note` is
+ * `helpdeskTicketNote`) must not equal a fixed resource's
+ * (`FIXED_RESOURCE_NAMES`) or another live table's (`foo_bar.baz` and
+ * `foo.bar_baz` both give `fooBarBaz`).
+ *
+ * Only the tables a change set creates, renames, moves to a renamed
+ * namespace or makes live again are checked, like `apiNameProblems`.
+ *
+ * @param snapshot - The configuration after the change.
+ * @param classIds - The tables to check; all live tables when omitted.
+ * @returns One `apiNameClash` problem per offending table.
+ */
+export const apiTableNameProblems = (
+  snapshot: ConfigSnapshot,
+  classIds?: ReadonlySet<DefinitionId>
+): readonly DefinitionProblem[] => {
+  const live = snapshot.all("class").filter(isLive);
+
+  const derived = (definition: ClassDefinition): string | undefined => {
+    const namespace = snapshot.get(definition.namespaceId);
+
+    return namespace?.kind === "namespace"
+      ? apiTableNameOf(namespace.name, definition.name)
+      : undefined;
+  };
+
+  return live.flatMap((definition) => {
+    const name =
+      classIds === undefined || classIds.has(definition.id)
+        ? derived(definition)
+        : undefined;
+
+    if (name === undefined) {
+      return [];
+    }
+
+    if (FIXED_RESOURCE_NAMES.has(name)) {
+      return [
+        problem(
+          "apiNameClash",
+          definition.id,
+          `The table "${definition.name}" has the API name "${name}" of a fixed resource.`
+        ),
+      ];
+    }
+
+    const other = live.find(
+      (candidate) =>
+        candidate.id !== definition.id && derived(candidate) === name
+    );
+
+    return other === undefined
+      ? []
+      : [
+          problem(
+            "apiNameClash",
+            definition.id,
+            `The table "${definition.name}" has the API name "${name}" of ${other.id}.`
+          ),
+        ];
+  });
 };
 
 /**

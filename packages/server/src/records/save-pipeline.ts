@@ -1,6 +1,7 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import type { PatchTestFailed } from "@std/api/errors/patch-test-failed";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { allowedRecordsOf } from "@std/definitions/allowed-records";
@@ -114,11 +115,28 @@ export interface CreateInput extends SaveInput {
   readonly body: unknown;
 }
 
-/** An update, based on a version the caller read. */
+/**
+ * An update, based on a version the caller read. A TMF Open API may leave
+ * the version out (Contracts 11.1); the generic API never does (6.7, 10.5).
+ */
 export interface UpdateInput extends SaveInput {
   readonly id: string;
-  readonly expectedVersion: number;
+  readonly expectedVersion: number | null;
+  /**
+   * The body's values object. With `evaluate`, its keys name every field
+   * the patch may write, so names resolve and locks are planned before the
+   * record is locked (4.1 steps 1 and 2).
+   */
   readonly body: unknown;
+  /**
+   * A patch evaluated against the record as locked (Contracts 10.5): given
+   * the caller's projection of the locked record, it returns the update
+   * body, whose keys are among `body`'s. A JSON Patch `test` or `copy`
+   * so always sees the version the write applies to.
+   */
+  readonly evaluate?: (
+    locked: JsonObject
+  ) => Effect.Effect<JsonObject, PatchTestFailed>;
 }
 
 /** A delete, based on a version the caller read. */
@@ -591,7 +609,7 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   snapshot: ConfigSnapshot,
   input: SaveInput & {
     readonly id: string;
-    readonly expectedVersion: number;
+    readonly expectedVersion: number | null;
   },
   lock: RootLock
 ) {
@@ -643,7 +661,10 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   // After visibility, so a hidden record stays an identical NotFound.
   yield* refuseRetiredClass(snapshot, record.classId);
 
-  if (record.version !== input.expectedVersion) {
+  if (
+    input.expectedVersion !== null &&
+    record.version !== input.expectedVersion
+  ) {
     return yield* new VersionConflict({ currentVersion: record.version });
   }
 
@@ -756,14 +777,29 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       resolved.entries.keys()
     );
 
-    const { readable, record } = yield* lockExisting(snapshot, input, lock);
+    const locked = yield* lockExisting(snapshot, input, lock);
+    const { readable, record } = locked;
     const { classId } = record;
 
     yield* refusePlatformTable(snapshot, classId);
 
+    // A patch is applied to the record as locked, then resolved like any
+    // body; its keys are among the ones resolved above (Contracts 10.5).
+    const evaluated =
+      input.evaluate === undefined
+        ? resolved
+        : yield* resolveBody(
+            snapshot,
+            input,
+            yield* input.evaluate(
+              yield* project(snapshot, input.endpointClassId, record)
+            ),
+            "update"
+          );
+
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields);
-    const proposed = proposeUpdate(rules, resolved, record);
+    const proposed = proposeUpdate(rules, evaluated, record);
 
     const existingCheck = {
       endpointClassId: input.endpointClassId,
@@ -810,7 +846,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       existing: record,
       proposal,
       rules,
-      supplied: new Set(resolved.entries.keys()),
+      supplied: new Set(evaluated.entries.keys()),
       written,
     });
     yield* checkReferences(snapshot, fields, proposal.values, written);

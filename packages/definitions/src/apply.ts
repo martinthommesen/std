@@ -58,7 +58,11 @@ import type { ChangeSetRefusal } from "./refusals.ts";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "./requester.ts";
 import { ConfigSnapshot } from "./snapshot.ts";
 import type { SnapshotKey } from "./snapshot.ts";
-import { apiNameProblems, validateSnapshot } from "./validate.ts";
+import {
+  apiNameProblems,
+  apiTableNameProblems,
+  validateSnapshot,
+} from "./validate.ts";
 
 export type { ApplyContext, OperationNote } from "./apply-work.ts";
 
@@ -592,6 +596,44 @@ const namedFields = (
     })
   );
 
+// The tables a change set gives a v2 name: created, renamed, live again,
+// or in a namespace it renamed (Contracts 10.1).
+const namedTables = (
+  after: ConfigSnapshot,
+  changes: readonly DefinitionChange[]
+): ReadonlySet<DefinitionId> => {
+  const renamedNamespaces = new Set(
+    changes.flatMap(({ before, after: changed }) =>
+      changed.kind === "namespace" &&
+      before?.kind === "namespace" &&
+      before.name !== changed.name
+        ? [changed.id]
+        : []
+    )
+  );
+
+  const tables = changes.flatMap(({ before, after: changed }) => {
+    if (changed.kind !== "class") {
+      return [];
+    }
+
+    const named =
+      before?.kind !== "class" ||
+      before.name !== changed.name ||
+      before.state !== changed.state;
+
+    return named ? [changed.id] : [];
+  });
+
+  const moved = after
+    .all("class")
+    .flatMap((table) =>
+      renamedNamespaces.has(table.namespaceId) ? [table.id] : []
+    );
+
+  return new Set([...tables, ...moved]);
+};
+
 const immutableProblems = (
   changes: readonly DefinitionChange[]
 ): readonly DefinitionProblem[] =>
@@ -688,6 +730,7 @@ export const applyOperations = (
       ? [
           ...validateSnapshot(after, undefined, newConditions(changes)),
           ...apiNameProblems(after, namedFields(changes)),
+          ...apiTableNameProblems(after, namedTables(after, changes)),
         ]
       : []),
   ];
@@ -722,6 +765,7 @@ export const validatedSnapshot = (
   const problems = [
     ...validateSnapshot(snapshot),
     ...apiNameProblems(snapshot),
+    ...apiTableNameProblems(snapshot),
   ];
 
   return problems.length > 0

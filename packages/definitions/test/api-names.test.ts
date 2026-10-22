@@ -10,7 +10,13 @@ import type { Result } from "effect/Result";
 
 import { applyOperations, validatedSnapshot } from "../src/apply.ts";
 import type { AppliedChangeSet, ApplyError } from "../src/apply.ts";
-import { apiNameOf, isReservedApiName } from "../src/names.ts";
+import {
+  apiAttributeNameOf,
+  apiNameOf,
+  apiTableNameOf,
+  apiTypeNameOf,
+  isReservedApiName,
+} from "../src/names.ts";
 import { field, KEY, namespace, snapshotOf, table } from "./fixtures.ts";
 
 const NEXT = { changeSetId: KEY.changeSetId, revision: 2 };
@@ -124,6 +130,55 @@ describe("api-name-clash", () => {
     ]);
 
     assert.isTrue(isFailure(clashing));
+  });
+
+  it("derives v2 collection and type names from qualified table names", () => {
+    assert.strictEqual(
+      apiTableNameOf("helpdesk", "incident"),
+      "helpdeskIncident"
+    );
+    assert.strictEqual(
+      apiTableNameOf("helpdesk", "ticket_note"),
+      "helpdeskTicketNote"
+    );
+    assert.strictEqual(
+      apiTypeNameOf("helpdesk", "incident"),
+      "HelpdeskIncident"
+    );
+    assert.strictEqual(apiTypeNameOf("core", "user"), "CoreUser");
+    assert.strictEqual(apiAttributeNameOf("version"), "revision");
+    assert.strictEqual(apiAttributeNameOf("created_at"), "creationDate");
+    assert.strictEqual(apiAttributeNameOf("updated_at"), "lastUpdate");
+    assert.isTrue(isReservedApiName("revision"));
+    assert.isTrue(isReservedApiName("creationDate"));
+  });
+
+  it("refuses tables whose v2 names clash with each other or a fixed resource", () => {
+    const w = world();
+    const fooBar = namespace("foo_bar");
+    const foo = namespace("foo");
+    const baz = table(fooBar, "baz");
+    const snapshot = w.snapshot.with(KEY, [fooBar, foo, baz]);
+
+    const moved = snapshot.with(KEY, [{ ...w.laptop, namespaceId: foo.id }]);
+
+    const intoClash = applyOperations(
+      moved,
+      [{ id: w.laptop.id, name: "bar_baz", op: "rename", version: 1 }],
+      NEXT
+    );
+
+    assert.include(codesOf(intoClash), "apiNameClash");
+
+    const tableNs = namespace("table");
+
+    const fixed = applyOperations(
+      w.snapshot.with(KEY, [tableNs, { ...w.laptop, namespaceId: tableNs.id }]),
+      [{ id: w.laptop.id, name: "metadata", op: "rename", version: 1 }],
+      NEXT
+    );
+
+    assert.include(codesOf(fixed), "apiNameClash");
   });
 
   it("does not block a change set over a clash that predates the rule", () => {

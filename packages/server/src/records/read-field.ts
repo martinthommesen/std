@@ -9,7 +9,7 @@
 import type { SystemFieldName } from "@std/access/visible-schema";
 import type { FieldInfo } from "@std/conditions/class-view";
 import type { DefinitionId } from "@std/definitions/ids";
-import { apiNameOf } from "@std/definitions/names";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 
@@ -103,14 +103,15 @@ export const fieldInfoOf = (field: ReadField): FieldInfo => ({
 
 /**
  * The `/api/v2` name of a read field (Contracts 10.2): its name in
- * lowerCamelCase (`created_at` is `createdAt`). `class` has none: v2 shows
- * the concrete class as `@type`.
+ * lowerCamelCase, and for system fields `revision`, `creationDate`,
+ * `createdBy`, `lastUpdate`, `updatedBy`. `class` has none: v2 shows the
+ * concrete class as `@type`.
  *
  * @param field - A read field.
  * @returns The API name, or undefined for `class`.
  */
 export const apiNameOfField = (field: ReadField): string | undefined =>
-  field.system === "class" ? undefined : apiNameOf(field.name);
+  field.system === "class" ? undefined : apiAttributeNameOf(field.name);
 
 /**
  * The fields by API name. A name two fields share resolves to neither, so

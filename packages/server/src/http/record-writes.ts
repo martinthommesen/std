@@ -126,6 +126,8 @@ const writeOnlyFailures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.catchTags({
       InvalidBody: notAnObject,
+      // Only a v2 patch evaluates its body after the lock.
+      PatchTestFailed: Effect.die,
       RecordInSave: Effect.die,
       Referenced: Effect.die,
     })

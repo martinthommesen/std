@@ -30,7 +30,7 @@ import type { FieldInfo } from "@std/conditions/class-view";
 import { sql, textParameter } from "@std/conditions/sql-fragment";
 import { parseCondition } from "@std/conditions/syntax-parse";
 import type { DefinitionId } from "@std/definitions/ids";
-import { apiNameOf } from "@std/definitions/names";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { FieldTypeSchema } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
@@ -117,6 +117,12 @@ export interface ScopeParameters {
    * condition after R (`settingsChanged`) is relevant.
    */
   readonly allowedFor?: string;
+  /**
+   * Names and one-hop paths a request filters on outside `filter` text,
+   * comma-separated (v2's attribute filters, Contracts 10.3), resolved like
+   * `fields` but never replacing the selection.
+   */
+  readonly paths?: string;
   /**
    * How the names are spelled: definition names (v1, the default) or API
    * names (v2, Contracts 10.2), resolved at R either way.
@@ -232,7 +238,7 @@ const lineageAt = (
  * @returns The name, or its API name.
  */
 export const spelled = (name: string, naming: Naming): string =>
-  naming === "api" ? apiNameOf(name) : name;
+  naming === "api" ? apiAttributeNameOf(name) : name;
 
 const fieldByNameAt = (
   definitions: DefinitionsAtR,
@@ -553,6 +559,10 @@ export const staleScope = (
 
   if (parameters.allowedFor !== undefined && classByName !== undefined) {
     addAllowedFor(collector, parameters.allowedFor, classByName);
+  }
+
+  for (const item of splitList(parameters.paths ?? "")) {
+    resolvePath(collector, item.split("."));
   }
 
   for (const item of splitList(parameters.sort ?? "")) {
