@@ -317,6 +317,12 @@ export const finalizeAggregates = <E, R>(ops: PersistOps<E, R>) =>
     }
 
     const state = aggregateStateOf(transaction.value);
+
+    // Most transactions touch no aggregate: nothing more to read.
+    if (state.owners.size === 0) {
+      return;
+    }
+
     const hooks = yield* SaveHooks;
     const snapshot = yield* (yield* Catalog).current;
 
