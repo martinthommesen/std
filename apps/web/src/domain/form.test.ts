@@ -490,25 +490,25 @@ const editOf = (field: MetaField): Arbitrary<Message> => {
   return Match.value(field.type.kind).pipe(
     Match.withReturnType<Arbitrary<Message>>(),
     Match.when("boolean", () =>
-      boolean().map((isChecked) => Message.ChangedFlag({ fieldId, isChecked }))
+      boolean().map((isChecked) => Message.ToggledFlag({ fieldId, isChecked }))
     ),
     Match.when("choice", () =>
       constantFrom(...CHOICE_KEYS).map((key) =>
-        Message.ChangedChoice({ fieldId, key })
+        Message.SelectedChoice({ fieldId, key })
       )
     ),
     Match.whenOr("date", "dateTime", () =>
       oneof(
         constant(Message.ClickedClearDate({ fieldId })),
         constantFrom(...TIMES).map((time) =>
-          Message.ChangedTime({ fieldId, time })
+          Message.UpdatedTime({ fieldId, time })
         )
       )
     ),
     Match.whenOr("password", "secret", () =>
       oneof(
         stringOf({ maxLength: 6, minLength: 1 }).map((typed) =>
-          Message.ChangedWriteOnly({
+          Message.UpdatedWriteOnly({
             fieldId,
             maybeValue: Option.some(toWriteOnlyValue(typed)),
           })
@@ -517,7 +517,7 @@ const editOf = (field: MetaField): Arbitrary<Message> => {
       )
     ),
     Match.orElse(() =>
-      texts.map((text) => Message.ChangedText({ fieldId, text }))
+      texts.map((text) => Message.UpdatedText({ fieldId, text }))
     )
   );
 };
@@ -603,11 +603,11 @@ describe("the client verdict", () => {
         FormMode.Edit({ recordId: ticketRecord.id }),
         Option.some(ticketRecord)
       ),
-      Message.ChangedText({
+      Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
         text: "",
       }),
-      Message.ChangedText({ fieldId: TICKET_FIELDS.points, text: "2147483648" })
+      Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "2147483648" })
     );
 
     expect(Object.keys(checkForm(edited).problems).toSorted()).toStrictEqual(

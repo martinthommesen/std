@@ -909,7 +909,7 @@ describe("record forms", () => {
           // The record is real: it holds the form and the redacted input.
           assert.include(model, "maybeRecordForm");
           assert.include(model, fixture.agent2.name);
-          assert.include(history, "ChangedWriteOnly");
+          assert.include(history, "UpdatedWriteOnly");
           assert.include(recorded, "<redacted:write-only value>");
         }).pipe(Effect.scoped)
     );

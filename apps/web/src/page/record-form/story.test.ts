@@ -229,14 +229,14 @@ describe("opening a form", () => {
         [LoadTarget, Message.SucceededLoadTarget({ table: userTable })]
       ),
       message(
-        Message.ChangedChoice({ fieldId: TICKET_FIELDS.status, key: "closed" })
+        Message.SelectedChoice({ fieldId: TICKET_FIELDS.status, key: "closed" })
       ),
       model((page) => {
         // `closed` is a ticket status, outside the incident's subset.
         expect(checkForm(page).problems[TICKET_FIELDS.status]).toHaveLength(1);
       }),
       message(
-        Message.ChangedChoice({
+        Message.SelectedChoice({
           fieldId: TICKET_FIELDS.status,
           key: "in_progress",
         })
@@ -351,16 +351,16 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "Laptop boots to a black screen",
         })
       ),
       message(
-        Message.ChangedText({ fieldId: TICKET_FIELDS.description, text: "" })
+        Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "" })
       ),
       message(
-        Message.ChangedText({ fieldId: TICKET_FIELDS.cost, text: "120.00" })
+        Message.UpdatedText({ fieldId: TICKET_FIELDS.cost, text: "120.00" })
       ),
       message(Message.ClickedSave()),
       Command.expectExact(
@@ -419,7 +419,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({ fieldId: TICKET_FIELDS.points, text: "3" })
+        Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "3" })
       ),
       message(Message.ClickedSave()),
       Command.expectNone(),
@@ -434,13 +434,13 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "",
         })
       ),
       message(
-        Message.ChangedText({ fieldId: TICKET_FIELDS.points, text: "three" })
+        Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "three" })
       ),
       message(Message.ClickedSave()),
       Command.expectExact(
@@ -470,7 +470,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.email,
           text: "x@example.com",
         })
@@ -503,7 +503,7 @@ describe("editing and saving", () => {
         );
       }),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.email,
           text: "y@example.com",
         })
@@ -519,7 +519,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "Mine",
         })
@@ -625,7 +625,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "Mine",
         })
@@ -727,7 +727,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "Mine",
         })
@@ -809,7 +809,7 @@ describe("editing and saving", () => {
       update,
       given(restricted),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.email,
           text: "leak@example.com",
         })
@@ -829,7 +829,7 @@ describe("editing and saving", () => {
       update,
       given(ready),
       message(
-        Message.ChangedWriteOnly({
+        Message.UpdatedWriteOnly({
           fieldId: TICKET_FIELDS.pin,
           maybeValue: Option.some(typed),
         })
@@ -886,7 +886,7 @@ describe("editing and saving", () => {
       }),
       Command.resolveAll(),
       message(
-        Message.ChangedTime({
+        Message.UpdatedTime({
           fieldId: TICKET_FIELDS.openedAt,
           time: "09:30:15",
         })
@@ -916,16 +916,16 @@ describe("creating", () => {
       update,
       given(readyToCreate),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "Printer jams",
         })
       ),
       message(
-        Message.ChangedChoice({ fieldId: TICKET_FIELDS.status, key: "new" })
+        Message.SelectedChoice({ fieldId: TICKET_FIELDS.status, key: "new" })
       ),
       message(
-        Message.ChangedFlag({
+        Message.ToggledFlag({
           fieldId: TICKET_FIELDS.escalated,
           isChecked: true,
         })
@@ -972,7 +972,7 @@ describe("creating", () => {
       update,
       given(readyToCreate),
       message(
-        Message.ChangedChoice({ fieldId: TICKET_FIELDS.status, key: "" })
+        Message.SelectedChoice({ fieldId: TICKET_FIELDS.status, key: "" })
       ),
       message(Message.ClickedSave()),
       Command.resolve(FocusField, Message.CompletedFocusField()),
@@ -989,7 +989,7 @@ describe("rereads", () => {
   it("does not show a reread older than the record a save returned", () => {
     const saved = after(
       ready,
-      Message.ChangedText({ fieldId: TICKET_FIELDS.points, text: "5" }),
+      Message.UpdatedText({ fieldId: TICKET_FIELDS.points, text: "5" }),
       Message.ClickedSave(),
       Message.SucceededSaveRecord({
         generation: 2,
@@ -1423,7 +1423,7 @@ describe("related lists and history", () => {
         })
       ),
       message(
-        Message.ChangedText({
+        Message.UpdatedText({
           fieldId: TICKET_FIELDS.shortDescription,
           text: "New text",
         })

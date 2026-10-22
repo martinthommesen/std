@@ -48,14 +48,6 @@ export type SavedRecord = typeof SavedRecord.Type;
 /** What happens on a record's form page. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Message = defineMessageUnion({
-  ChangedChoice: { fieldId: Schema.String, key: Schema.String },
-  ChangedFlag: { fieldId: Schema.String, isChecked: Schema.Boolean },
-  ChangedText: { fieldId: Schema.String, text: Schema.String },
-  ChangedTime: { fieldId: Schema.String, time: Schema.String },
-  ChangedWriteOnly: {
-    fieldId: Schema.String,
-    maybeValue: Schema.Option(WriteOnlyValue),
-  },
   ClickedClearDate: { fieldId: Schema.String },
   ClickedClearSecret: { fieldId: Schema.String },
   ClickedConfirmDelete: {},
@@ -101,6 +93,7 @@ export const Message = defineMessageUnion({
   },
   GotDeleteDialogMessage: { message: Dialog.Message },
   GotPickerMessage: { fieldId: Schema.String, message: Combobox.Message },
+  SelectedChoice: { fieldId: Schema.String, key: Schema.String },
   SucceededDeleteRecord: { maybeRevision: Schema.Option(SchemaRevision) },
   SucceededLoadActorNames: {
     names: Schema.Record(Schema.String, Schema.String),
@@ -142,8 +135,15 @@ export const Message = defineMessageUnion({
     generation: Schema.Int,
     items: Schema.Array(PickerItem),
   },
+  ToggledFlag: { fieldId: Schema.String, isChecked: Schema.Boolean },
   ToggledHistory: { isOpen: Schema.Boolean },
   ToggledRelatedList: { isOpen: Schema.Boolean, key: Schema.String },
+  UpdatedText: { fieldId: Schema.String, text: Schema.String },
+  UpdatedTime: { fieldId: Schema.String, time: Schema.String },
+  UpdatedWriteOnly: {
+    fieldId: Schema.String,
+    maybeValue: Schema.Option(WriteOnlyValue),
+  },
 });
 
 /** What happens on a record's form page. */

@@ -23,7 +23,6 @@ import { fieldShowOf } from "../../domain/form-fields.ts";
 import type { FieldShow } from "../../domain/form-fields.ts";
 import {
   FieldInput,
-  inputJson,
   sameJson,
   toWriteOnlyValue,
 } from "../../domain/form-input.ts";
@@ -195,7 +194,7 @@ const textControl = (
       id: config.controlId,
       isInvalid: config.isInvalid,
       onInput: (typed) =>
-        Message.ChangedText({ fieldId: config.field.id, text: typed }),
+        Message.UpdatedText({ fieldId: config.field.id, text: typed }),
       toView: (attributes) =>
         h.div(
           [h.Class(CONTROL_CLASS)],
@@ -235,7 +234,7 @@ const textareaControl = (
       id: config.controlId,
       isInvalid: config.isInvalid,
       onInput: (typed) =>
-        Message.ChangedText({ fieldId: config.field.id, text: typed }),
+        Message.UpdatedText({ fieldId: config.field.id, text: typed }),
       rows: LONG_TEXT_ROWS,
       toView: (attributes) =>
         h.div(
@@ -270,7 +269,7 @@ const checkboxControl = (
       id: config.controlId,
       isChecked,
       onToggle: (checked) =>
-        Message.ChangedFlag({ fieldId: config.field.id, isChecked: checked }),
+        Message.ToggledFlag({ fieldId: config.field.id, isChecked: checked }),
       toView: (attributes) =>
         h.div(
           [h.Class("control control-inline form-field")],
@@ -350,7 +349,7 @@ const selectControl = (
       id: config.controlId,
       isInvalid: config.isInvalid,
       onChange: (chosen) =>
-        Message.ChangedChoice({ fieldId: config.field.id, key: chosen }),
+        Message.SelectedChoice({ fieldId: config.field.id, key: chosen }),
       toView: (attributes) =>
         h.div(
           [h.Class(CONTROL_CLASS)],
@@ -458,7 +457,7 @@ const dateTimeControl = (
           id: timeInputIdOf(config.field),
           isInvalid: config.isInvalid,
           onInput: (typed) =>
-            Message.ChangedTime({ fieldId: config.field.id, time: typed }),
+            Message.UpdatedTime({ fieldId: config.field.id, time: typed }),
           toView: (attributes) =>
             h.div(
               [h.Class("control")],
@@ -637,7 +636,7 @@ const writeOnlyControl = (
           id: config.controlId,
           isInvalid: config.isInvalid,
           onInput: (typed) =>
-            Message.ChangedWriteOnly({
+            Message.UpdatedWriteOnly({
               fieldId: field.id,
               maybeValue:
                 typed === ""
@@ -864,26 +863,3 @@ export const fieldView = (
       ),
     ]
   );
-
-/**
- * Whether a field's input differs from its base value: the form marks it
- * as changed.
- *
- * @param model - The page.
- * @param field - The field.
- * @param base - Its base value.
- * @returns True when changed.
- */
-export const isChanged = (
-  model: Model,
-  field: MetaField,
-  base: JsonValue
-): boolean =>
-  Option.match(Record.get(model.edits, field.id), {
-    onNone: () => false,
-    onSome: (input) => {
-      const json = inputJson(field, input);
-
-      return json._tag === "Failure" || !sameJson(json.success, base);
-    },
-  });

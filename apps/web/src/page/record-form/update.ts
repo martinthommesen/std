@@ -1849,30 +1849,6 @@ const retryRelatedList = (model: Model, key: string): UpdateReturn =>
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ChangedChoice: ({ fieldId, key }) =>
-      editField(model, fieldId, () => FieldInput.Choice({ key })),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ChangedFlag: ({ fieldId, isChecked }) =>
-      editField(model, fieldId, () => FieldInput.Flag({ isChecked })),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ChangedText: ({ fieldId, text }) =>
-      editField(model, fieldId, () => FieldInput.Text({ text })),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ChangedTime: ({ fieldId, time }) =>
-      editField(model, fieldId, (_field, current) =>
-        FieldInput.Instant({
-          maybeDate: FieldInput.guards.Instant(current)
-            ? current.maybeDate
-            : Option.none(),
-          time,
-        })
-      ),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ChangedWriteOnly: ({ fieldId, maybeValue }) =>
-      Option.isNone(maybeValue)
-        ? forgetEdit(model, fieldId)
-        : editField(model, fieldId, () => FieldInput.WriteOnly({ maybeValue })),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedClearDate: ({ fieldId }) =>
       editField(model, fieldId, withDate(Option.none())),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -1971,6 +1947,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotPickerMessage: ({ fieldId, message: pickerMessage }) =>
       updatePicker(model, fieldId, pickerMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    SelectedChoice: ({ fieldId, key }) =>
+      editField(model, fieldId, () => FieldInput.Choice({ key })),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededDeleteRecord: ({ maybeRevision }) =>
       sawRevision(
         {
@@ -2023,8 +2002,29 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededSearchTargets: ({ fieldId, generation, items }) =>
       receiveSearch(model, fieldId, generation, items),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ToggledFlag: ({ fieldId, isChecked }) =>
+      editField(model, fieldId, () => FieldInput.Flag({ isChecked })),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ToggledHistory: ({ isOpen }) => toggleHistory(model, isOpen),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ToggledRelatedList: ({ isOpen, key }) =>
       toggleRelatedList(model, key, isOpen),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    UpdatedText: ({ fieldId, text }) =>
+      editField(model, fieldId, () => FieldInput.Text({ text })),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    UpdatedTime: ({ fieldId, time }) =>
+      editField(model, fieldId, (_field, current) =>
+        FieldInput.Instant({
+          maybeDate: FieldInput.guards.Instant(current)
+            ? current.maybeDate
+            : Option.none(),
+          time,
+        })
+      ),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    UpdatedWriteOnly: ({ fieldId, maybeValue }) =>
+      Option.isNone(maybeValue)
+        ? forgetEdit(model, fieldId)
+        : editField(model, fieldId, () => FieldInput.WriteOnly({ maybeValue })),
   });
