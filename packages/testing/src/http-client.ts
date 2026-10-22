@@ -8,9 +8,16 @@
  * const http = yield* TestHttpClient;
  * const token = yield* http.signIn("bob", "bob-password");
  * const response = yield* http.get("/api/v1/tables/acme.asset/records", { token });
+ * const cookie = yield* http.cookieSignIn("bob", "bob-password");
+ * const viaCookie = yield* http.get("/api/v1/auth/me", { cookie });
  * ```
  */
 import { SignInResponseSchema } from "@std/api/auth";
+import {
+  SESSION_COOKIE,
+  WEB_CLIENT,
+  WEB_CLIENT_HEADER,
+} from "@std/api/session-cookie";
 import { HttpAppLayer } from "@std/server/http/app";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
@@ -33,6 +40,13 @@ export interface TestResponse {
 export interface TestRequestOptions {
   /** A session token, sent as `Authorization: Bearer <token>`. */
   readonly token?: string;
+  /**
+   * A session token, sent as the web app's session cookie; also sends
+   * `STD-Client: web` unless `webClient` is `false` (decision 0018).
+   */
+  readonly cookie?: string;
+  /** Whether a request with `cookie` sends `STD-Client: web` (default true). */
+  readonly webClient?: boolean;
   readonly headers?: Readonly<Record<string, string>>;
   /** A JSON body. */
   readonly body?: JsonValue;
@@ -53,7 +67,38 @@ export interface TestHttpClientApi {
   ) => Effect.Effect<TestResponse>;
   /** Signs in and returns the session token; dies when sign-in fails. */
   readonly signIn: (login: string, password: string) => Effect.Effect<string>;
+  /**
+   * Signs in as the web app does (`POST /auth/cookie-sign-in`) and returns
+   * the token from the session cookie it sets; dies when sign-in fails.
+   */
+  readonly cookieSignIn: (
+    login: string,
+    password: string
+  ) => Effect.Effect<string>;
 }
+
+/**
+ * The value of a cookie that a response sets.
+ *
+ * @param response - The response.
+ * @param name - The cookie's name.
+ * @returns The value, or undefined when the response does not set it.
+ */
+export const setCookieValue = (
+  response: TestResponse,
+  name: string
+): string | undefined => {
+  for (const line of response.headers.getSetCookie()) {
+    const [pair = ""] = line.split(";");
+    const separator = pair.indexOf("=");
+
+    if (separator > 0 && pair.slice(0, separator).trim() === name) {
+      return pair.slice(separator + 1).trim();
+    }
+  }
+
+  return undefined;
+};
 
 const BASE = "http://std.test";
 
@@ -114,6 +159,14 @@ export class TestHttpClient extends Context.Service<
           headers.set("authorization", `Bearer ${options.token}`);
         }
 
+        if (options.cookie !== undefined) {
+          headers.append("cookie", `${SESSION_COOKIE}=${options.cookie}`);
+
+          if (options.webClient !== false) {
+            headers.set(WEB_CLIENT_HEADER, WEB_CLIENT);
+          }
+        }
+
         const init = requestInit(method, headers, options);
 
         const response = yield* Effect.promise(
@@ -149,7 +202,33 @@ export class TestHttpClient extends Context.Service<
         return session.token;
       });
 
+      const cookieSignIn = Effect.fn("TestHttpClient.cookieSignIn")(
+        function* cookieSignIn(login: string, password: string) {
+          const response = yield* request(
+            "POST",
+            "/api/v1/auth/cookie-sign-in",
+            {
+              body: { login, password },
+              headers: { [WEB_CLIENT_HEADER]: WEB_CLIENT },
+            }
+          );
+
+          const token = setCookieValue(response, SESSION_COOKIE);
+
+          if (response.status !== 200 || token === undefined) {
+            return yield* Effect.die(
+              new Error(
+                `cookie sign-in as ${login} failed with ${response.status}`
+              )
+            );
+          }
+
+          return token;
+        }
+      );
+
       return TestHttpClient.of({
+        cookieSignIn,
         get: (path, options) => request("GET", path, options),
         request,
         signIn,

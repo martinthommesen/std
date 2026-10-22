@@ -25,6 +25,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Option, Ref } from "effect";
 import type { Layer } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
@@ -43,6 +44,7 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   arrayOf,
+  asBearer,
   deliveries,
   freshAsset,
   listNames,
@@ -50,10 +52,12 @@ import {
   objectOf,
   textOf,
   observe,
+  presenting,
   recordIn,
   refused,
-  signInAll,
+  signInAllBy,
   subscribeToEverySave,
+  TRANSPORTS,
   userOf,
 } from "./authz-support.ts";
 import type { Callers, Observation, Who } from "./authz-support.ts";
@@ -116,7 +120,7 @@ const send = (
 
     return yield* http.request(method, path, {
       ...options,
-      token: callers.tokens[who],
+      ...presenting(callers.transport, callers.tokens[who]),
     });
   });
 
@@ -244,16 +248,24 @@ const me = (callers: Callers, who: Who) =>
     )
   );
 
-// Sign in again, use the session, sign out, then use it again.
-const sessionLifecycle = (_callers: Callers, who: Who) =>
+// Sign in again (the callers' way), use the session, sign out, then use it
+// again.
+const sessionLifecycle = (callers: Callers, who: Who) =>
   Effect.gen(function* signInUseSignOut() {
     const http = yield* TestHttpClient;
     const login = who === "admin" ? "ada" : who;
-    const token = yield* http.signIn(login, `${login}-password`);
-    const used = yield* http.get(listPath(ASSET), { token });
-    const out = yield* http.request("POST", "/api/v1/auth/sign-out", { token });
-    const after = yield* http.get(listPath(ASSET), { token });
-    const meAfter = yield* http.get("/api/v1/auth/me", { token });
+
+    const session = presenting(
+      callers.transport,
+      callers.transport === "bearer"
+        ? yield* http.signIn(login, `${login}-password`)
+        : yield* http.cookieSignIn(login, `${login}-password`)
+    );
+
+    const used = yield* http.get(listPath(ASSET), session);
+    const out = yield* http.request("POST", "/api/v1/auth/sign-out", session);
+    const after = yield* http.get(listPath(ASSET), session);
+    const meAfter = yield* http.get("/api/v1/auth/me", session);
 
     return {
       detail: [used.status, out.status, after.status, meAfter.status],
@@ -866,7 +878,7 @@ const freshRole = (callers: Callers) =>
   Effect.gen(function* createFreshRole() {
     const role = createRole(`role_${randomUUID().slice(0, 8)}`);
     const id = role.op === "createRole" ? role.definition.id : "";
-    const response = yield* postChangeSet(callers, "admin", [role]);
+    const response = yield* postChangeSet(asBearer(callers), "admin", [role]);
 
     assert.strictEqual(response.status, 201, response.text);
 
@@ -1053,58 +1065,122 @@ describe("authz-paths", () => {
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect("every read path, for Alice and Bob", () =>
-      Effect.gen(function* readPaths() {
-        const callers = yield* signInAll;
+    dbTest.effect(
+      "every read path, for Alice and Bob, by bearer token and by session cookie",
+      () =>
+        Effect.gen(function* readPaths() {
+          for (const transport of TRANSPORTS) {
+            const callers = yield* signInAllBy(transport);
 
-        for (const row of READ_ROWS) {
-          for (const who of ["alice", "bob"] as const) {
-            const seen = yield* row.run(callers, who);
+            for (const row of READ_ROWS) {
+              for (const who of ["alice", "bob"] as const) {
+                const seen = yield* row.run(callers, who);
 
-            assert.deepStrictEqual(seen, row[who], `${who}: ${row.path}`);
-          }
-        }
-      })
-    );
-
-    dbTest.effect("every write path, for Alice and Bob", () =>
-      Effect.gen(function* writePaths() {
-        const callers = yield* signInAll;
-
-        // Every committed save of an asset writes a delivery row in its
-        // transaction (Contracts 4.6); a refused one must leave none.
-        yield* subscribeToEverySave(ACME.asset, callers.fixture.alice.id);
-
-        for (const row of WRITE_ROWS) {
-          for (const who of ["alice", "bob"] as const) {
-            const before = yield* deliveries();
-            const seen = yield* row.run(callers, who);
-            const written = (yield* deliveries()) - before;
-            const where = `${who}: ${row.path}`;
-
-            assert.deepStrictEqual(seen, row[who], where);
-
-            if (seen.status >= 400) {
-              assert.strictEqual(written, 0, `deliveries after ${where}`);
-            } else if (row.path.includes("acme.")) {
-              assert.strictEqual(written, 1, `deliveries after ${where}`);
+                assert.deepStrictEqual(
+                  seen,
+                  row[who],
+                  `${transport} ${who}: ${row.path}`
+                );
+              }
             }
           }
-        }
-      })
+        })
     );
 
     dbTest.effect(
-      "every definition and change-set path, for Alice, Bob and the admin",
+      "every write path, for Alice and Bob, by bearer token and by session cookie",
+      () =>
+        Effect.gen(function* writePaths() {
+          // Every committed save of an asset writes a delivery row in its
+          // transaction (Contracts 4.6); a refused one must leave none.
+          const { alice } = yield* AcmeFixture;
+
+          yield* subscribeToEverySave(ACME.asset, alice.id);
+
+          for (const transport of TRANSPORTS) {
+            const callers = yield* signInAllBy(transport);
+
+            for (const row of WRITE_ROWS) {
+              for (const who of ["alice", "bob"] as const) {
+                const before = yield* deliveries();
+                const seen = yield* row.run(callers, who);
+                const written = (yield* deliveries()) - before;
+                const where = `${transport} ${who}: ${row.path}`;
+
+                assert.deepStrictEqual(seen, row[who], where);
+
+                if (seen.status >= 400) {
+                  assert.strictEqual(written, 0, `deliveries after ${where}`);
+                } else if (row.path.includes("acme.")) {
+                  assert.strictEqual(written, 1, `deliveries after ${where}`);
+                }
+              }
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "every definition and change-set path, for Alice, Bob and the admin, by bearer token and by session cookie",
       () =>
         Effect.gen(function* definitionPaths() {
-          const callers = yield* signInAll;
+          for (const transport of TRANSPORTS) {
+            const callers = yield* signInAllBy(transport);
 
+            for (const row of DEFINITION_ROWS) {
+              for (const who of ["alice", "bob", "admin"] as const) {
+                const seen = yield* row.run(callers, who);
+
+                assert.deepStrictEqual(
+                  seen,
+                  row[who],
+                  `${transport} ${who}: ${row.path}`
+                );
+              }
+            }
+          }
+        })
+    );
+
+    dbTest.effect(
+      "every write and definition path refuses the session cookie without STD-Client: web, committing nothing",
+      () =>
+        Effect.gen(function* forgedWrites() {
+          const callers = {
+            ...(yield* signInAllBy("cookie")),
+            transport: "cookieWithoutHeader" as const,
+          };
+
+          const unauthenticated = refused(401, "Unauthenticated");
+
+          // The write test's subscription to every asset save is in place,
+          // so a committed save would write a delivery row; the definition
+          // rows measure every committed table themselves.
+          for (const row of WRITE_ROWS) {
+            for (const who of ["alice", "bob"] as const) {
+              const before = yield* deliveries();
+              const seen = yield* row.run(callers, who);
+              const where = `${who}: ${row.path}`;
+
+              assert.deepStrictEqual(seen, unauthenticated, where);
+              assert.strictEqual(
+                yield* deliveries(),
+                before,
+                `deliveries after ${where}`
+              );
+            }
+          }
+
+          // A read needs no header: the cookie alone authenticates it.
           for (const row of DEFINITION_ROWS) {
             for (const who of ["alice", "bob", "admin"] as const) {
               const seen = yield* row.run(callers, who);
 
-              assert.deepStrictEqual(seen, row[who], `${who}: ${row.path}`);
+              assert.deepStrictEqual(
+                seen,
+                row.path.startsWith("GET ") ? row[who] : unauthenticated,
+                `${who}: ${row.path}`
+              );
             }
           }
         })
@@ -1114,7 +1190,7 @@ describe("authz-paths", () => {
       "a nested save from an after-write hook acts as the acting user",
       () =>
         Effect.gen(function* nestedSaves() {
-          const callers = yield* signInAll;
+          const callers = yield* signInAllBy("bearer");
           const { records } = callers.fixture;
           const bob = userOf(callers.fixture, "bob");
           const alice = userOf(callers.fixture, "alice");

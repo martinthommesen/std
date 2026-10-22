@@ -5,6 +5,7 @@
  * handlers to the `records` group.
  */
 import { StdApi } from "@std/api/api";
+import type { SignInRequest } from "@std/api/auth";
 import type { HeldRole } from "@std/api/session";
 import { SessionToken } from "@std/api/session-token";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -14,9 +15,10 @@ import { Plaintext } from "@std/values/write-only";
 import { Effect, Redacted } from "effect";
 import { HttpServerResponse } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
+import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Actor } from "../auth/actor.ts";
-import { signIn, signOut } from "../auth/sessions.ts";
+import { displayName, signIn, signOut } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
@@ -40,6 +42,7 @@ import {
   inRequestTransaction,
   jsonResponse,
 } from "./request-scope.ts";
+import { clearSessionCookie, setSessionCookie } from "./session-cookie.ts";
 import {
   checkRequestRevision,
   checkUnscopedRevision,
@@ -65,7 +68,11 @@ const heldRoles = (
       : [{ id: role.id, label: role.label, name: role.name }];
   });
 
-/** `POST /api/v1/auth/sign-in`. */
+/**
+ * `POST /api/v1/auth/sign-in` and `POST /api/v1/auth/cookie-sign-in`: the
+ * same session, with the token in the body or in the web app's HTTP-only
+ * cookie.
+ */
 export const SignInHandlers = HttpApiBuilder.group(
   StdApi,
   "signIn",
@@ -73,8 +80,9 @@ export const SignInHandlers = HttpApiBuilder.group(
     const transactions = yield* Transactions;
     const catalog = yield* Catalog;
 
-    return handlers.handle("signIn", ({ payload, request }) =>
-      Effect.gen(function* signInHandler() {
+    // Checks the stated revision, then signs in, in one request transaction.
+    const newSession = (request: HttpServerRequest, payload: SignInRequest) =>
+      Effect.gen(function* newSessionInRequest() {
         const stated = yield* parseRequestRevision(request);
 
         return yield* inRequestTransaction(
@@ -85,21 +93,37 @@ export const SignInHandlers = HttpApiBuilder.group(
 
             const snapshot = yield* catalog.current;
 
-            const session = yield* signIn(
+            return yield* signIn(
               snapshot,
               payload.login,
               new Plaintext(payload.password)
             );
-
-            return {
-              expiresAt: formatDateTime(session.expiresAt),
-              token: Redacted.value(session.token),
-              userId: session.userId,
-            };
           })
         );
-      })
-    );
+      });
+
+    return handlers
+      .handle("signIn", ({ payload, request }) =>
+        newSession(request, payload).pipe(
+          Effect.map((session) => ({
+            expiresAt: formatDateTime(session.expiresAt),
+            token: Redacted.value(session.token),
+            userId: session.userId,
+          }))
+        )
+      )
+      .handle("cookieSignIn", ({ payload, request }) =>
+        Effect.gen(function* cookieSignInHandler() {
+          const session = yield* newSession(request, payload);
+
+          yield* setSessionCookie(session.token, session.expiresAt);
+
+          return {
+            expiresAt: formatDateTime(session.expiresAt),
+            userId: session.userId,
+          };
+        })
+      );
   })
 );
 
@@ -128,6 +152,7 @@ export const SessionHandlers = HttpApiBuilder.group(
                 const { revision } = yield* RequestRevision;
 
                 return {
+                  name: yield* displayName(snapshot, actor.userId),
                   roles: heldRoles(snapshot, actor.roleIds),
                   schemaRevision: revision,
                   userId: actor.userId,
@@ -147,7 +172,10 @@ export const SessionHandlers = HttpApiBuilder.group(
             request,
             asActor(
               Effect.gen(function* signOutRequest() {
-                yield* signOut(yield* SessionToken);
+                const token = yield* SessionToken;
+
+                yield* signOut(token);
+                yield* clearSessionCookie(token);
 
                 return HttpServerResponse.empty({ status: 204 });
               })

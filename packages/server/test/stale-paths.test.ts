@@ -38,7 +38,9 @@ import {
   freshAsset,
   objectOf,
   observe,
+  presenting,
   signInAll,
+  signInAllBy,
   textOf,
 } from "./authz-support.ts";
 import type { Callers, Observation } from "./authz-support.ts";
@@ -73,6 +75,9 @@ const PATHS = [
 type PathName = (typeof PATHS)[number];
 
 const HEADER = "std-schema-revision";
+
+/** What the web app sends on every request with its session cookie. */
+const WEB_CLIENT_HEADERS = { "std-client": "web" } as const;
 
 /** The services of the test layer. */
 type Services = Layer.Success<ReturnType<typeof readsTestLayer>>;
@@ -185,6 +190,8 @@ const take = (
     const alice = fixture.alice.id;
     const headers = { [HEADER]: revision };
     const token = callers.tokens.alice;
+    const as = (session: string) => presenting(callers.transport, session);
+    const cookies = callers.transport !== "bearer";
     const history = `${recordPath("acme.asset", fixture.records.L)}/history`;
 
     // A fresh monitor, then the update or delete of it.
@@ -194,7 +201,7 @@ const take = (
 
         const options: TestRequestOptions = {
           headers: { ...headers, "if-match": '"1"' },
-          token,
+          ...as(token),
         };
 
         return yield* http.request(
@@ -218,24 +225,24 @@ const take = (
             createRole(`stale_${randomUUID().slice(0, 8)}`),
           ]),
           headers,
-          token: admin,
+          ...as(admin),
         }),
       "change-set read": () =>
         http.get(`${CHANGE_SETS}/${pool.changeSetId}`, {
           headers,
-          token: admin,
+          ...as(admin),
         }),
       create: () =>
         http.request("POST", listPath("acme.monitor"), {
           body: { name: "made stale", owner: alice },
           headers,
-          token,
+          ...as(token),
         }),
       "definition create": () =>
         http.request("POST", listPath("core.role"), {
           body: { label: "Stale", name: `stale_${randomUUID().slice(0, 8)}` },
           headers,
-          token: admin,
+          ...as(admin),
         }),
       "definition delete": () =>
         http.request(
@@ -243,7 +250,7 @@ const take = (
           recordPath("core.role", pool.roles.pop() ?? ""),
           {
             headers: { ...headers, "if-match": '"1"' },
-            token: admin,
+            ...as(admin),
           }
         ),
       "definition update": () =>
@@ -252,7 +259,7 @@ const take = (
             http.request("PATCH", recordPath("core.role", pool.relabel), {
               body: { label: `Relabelled ${randomUUID().slice(0, 4)}` },
               headers: { ...headers, "if-match": `"${version}"` },
-              token: admin,
+              ...as(admin),
             })
           )
         ),
@@ -260,30 +267,38 @@ const take = (
       get: () =>
         http.get(
           recordPath("acme.asset", fixture.records.L, { fields: "name" }),
-          { headers, token }
+          { headers, ...as(token) }
         ),
-      history: () => http.get(history, { headers, token }),
+      history: () => http.get(history, { headers, ...as(token) }),
       "history?field": () =>
-        http.get(`${history}?field=${ACME.status}`, { headers, token }),
+        http.get(`${history}?field=${ACME.status}`, { headers, ...as(token) }),
       list: () =>
         http.get(listPath("acme.asset", { fields: "name" }), {
           headers,
-          token,
+          ...as(token),
         }),
-      me: () => http.get("/api/v1/auth/me", { headers, token }),
+      me: () => http.get("/api/v1/auth/me", { headers, ...as(token) }),
       openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
+      // The web app signs in with the cookie form.
       "sign-in": () =>
-        http.request("POST", "/api/v1/auth/sign-in", {
-          body: { login: "alice", password: "alice-password" },
-          headers,
-        }),
+        http.request(
+          "POST",
+          cookies ? "/api/v1/auth/cookie-sign-in" : "/api/v1/auth/sign-in",
+          {
+            body: { login: "alice", password: "alice-password" },
+            headers: cookies ? { ...headers, ...WEB_CLIENT_HEADERS } : headers,
+          }
+        ),
       // A session of its own, so Alice's stays.
       "sign-out": () =>
-        http.signIn("alice", "alice-password").pipe(
+        (cookies
+          ? http.cookieSignIn("alice", "alice-password")
+          : http.signIn("alice", "alice-password")
+        ).pipe(
           Effect.flatMap((own) =>
             http.request("POST", "/api/v1/auth/sign-out", {
               headers,
-              token: own,
+              ...as(own),
             })
           )
         ),
@@ -362,6 +377,44 @@ const everyPathBut = (
 
 const CHANGED: Observation = { status: 409, tag: "SchemaChanged" };
 
+/** One value per way of presenting a session. */
+interface BothWays<A> {
+  readonly bearer: A;
+  readonly cookie: A;
+}
+
+/**
+ * Every path's outcome with a stated revision, with a bearer token and
+ * with the session cookie.
+ *
+ * @param callers - The callers of each way.
+ * @param pool - The definitions the definition paths work on.
+ * @param revision - The header value.
+ * @returns Per way, per path, its observation.
+ */
+const allPathsBothWays = (
+  callers: BothWays<Callers>,
+  pool: DefinitionPool,
+  revision: string
+) =>
+  Effect.gen(function* everyPathBothWays() {
+    return {
+      bearer: yield* allPaths(callers.bearer, pool, revision),
+      cookie: yield* allPaths(callers.cookie, pool, revision),
+    };
+  });
+
+/**
+ * The same expected outcomes for both ways.
+ *
+ * @param outcomes - The outcomes.
+ * @returns Them, per way.
+ */
+const both = <A>(outcomes: A): BothWays<A> => ({
+  bearer: outcomes,
+  cookie: outcomes,
+});
+
 describe("stale-paths", () => {
   it("expects success where nothing is refused", () => {
     assert.deepStrictEqual(expected({})[0], ["list", 200, ""]);
@@ -414,92 +467,101 @@ describe("stale-paths", () => {
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect("every path checks the revision it was built at", () =>
-      Effect.gen(function* stalePaths() {
-        const callers = yield* signInAll;
-        const pool = yield* definitionPool(callers, 8);
-        const catalog = yield* Catalog;
-        const built = yield* catalog.refresh;
-        const stated = revisionHeaderValue(built);
+    dbTest.effect(
+      "every path checks the revision it was built at, by bearer token and by session cookie",
+      () =>
+        Effect.gen(function* stalePaths() {
+          const callers: BothWays<Callers> = {
+            bearer: yield* signInAllBy("bearer"),
+            cookie: yield* signInAllBy("cookie"),
+          };
 
-        // Malformed: 400 on every path, sign-out included.
-        assert.deepStrictEqual(
-          yield* allPaths(callers, pool, "12.not-a-uuid"),
-          expected(
-            everyPathBut({ status: 400, tag: "InvalidSchemaRevision" }, [])
-          )
-        );
+          const pool = yield* definitionPool(callers.bearer, 16);
+          const catalog = yield* Catalog;
 
-        // A revision this database never had: ahead, or another change
-        // set at the same number. Sign-out still ends the session.
-        for (const never of [
-          revisionHeaderValue({
-            changeSetId: built.changeSetId,
-            revision: built.revision + 5,
-          }),
-          revisionHeaderValue({
-            changeSetId: randomUUID(),
-            revision: built.revision,
-          }),
-        ]) {
+          const everyWay = (revision: string) =>
+            allPathsBothWays(callers, pool, revision);
+
+          const built = yield* catalog.refresh;
+          const stated = revisionHeaderValue(built);
+
+          // Malformed: 400 on every path, sign-out included.
           assert.deepStrictEqual(
-            yield* allPaths(callers, pool, never),
-            expected(everyPathBut(CHANGED, ["sign-out"])),
-            never
+            yield* everyWay("12.not-a-uuid"),
+            both(
+              expected(
+                everyPathBut({ status: 400, tag: "InvalidSchemaRevision" }, [])
+              )
+            )
           );
-        }
 
-        // The current revision.
-        assert.deepStrictEqual(
-          yield* allPaths(callers, pool, stated),
-          expected({})
-        );
+          // A revision this database never had: ahead, or another change
+          // set at the same number. Sign-out still ends the session.
+          for (const never of [
+            revisionHeaderValue({
+              changeSetId: built.changeSetId,
+              revision: built.revision + 5,
+            }),
+            revisionHeaderValue({
+              changeSetId: randomUUID(),
+              revision: built.revision,
+            }),
+          ]) {
+            assert.deepStrictEqual(
+              yield* everyWay(never),
+              both(expected(everyPathBut(CHANGED, ["sign-out"]))),
+              never
+            );
+          }
 
-        // Only a label changed since: nothing is relevant.
-        const status = built.field(ACME.status);
+          // The current revision.
+          assert.deepStrictEqual(yield* everyWay(stated), both(expected({})));
 
-        yield* change([
-          {
-            changes: { label: "Condition" },
-            id: ACME.status,
-            op: "update",
-            version: status?.version ?? 1,
-          },
-        ]);
+          // Only a label changed since: nothing is relevant.
+          const status = built.field(ACME.status);
 
-        assert.deepStrictEqual(
-          yield* allPaths(callers, pool, stated),
-          expected({})
-        );
+          yield* change([
+            {
+              changes: { label: "Condition" },
+              id: ACME.status,
+              op: "update",
+              version: status?.version ?? 1,
+            },
+          ]);
 
-        // Backfill, as table owner, so `status` can become required.
-        yield* values(
-          `UPDATE acme.asset SET status = 'in_use' WHERE status IS NULL
+          assert.deepStrictEqual(yield* everyWay(stated), both(expected({})));
+
+          // Backfill, as table owner, so `status` can become required.
+          yield* values(
+            `UPDATE acme.asset SET status = 'in_use' WHERE status IS NULL
            RETURNING id::text AS value`
-        );
+          );
 
-        // `status` became required: relevant to every path that names it
-        // (the default selection of history, the history filter on it) and
-        // to creates (a field required without a default). Not to reads
-        // and updates naming only `name`, to deletes, or to auth.
-        yield* change([
-          {
-            changes: { required: true },
-            id: ACME.status,
-            op: "update",
-            version: (yield* catalog.refresh).field(ACME.status)?.version ?? 1,
-          },
-        ]);
+          // `status` became required: relevant to every path that names it
+          // (the default selection of history, the history filter on it) and
+          // to creates (a field required without a default). Not to reads
+          // and updates naming only `name`, to deletes, or to auth.
+          yield* change([
+            {
+              changes: { required: true },
+              id: ACME.status,
+              op: "update",
+              version:
+                (yield* catalog.refresh).field(ACME.status)?.version ?? 1,
+            },
+          ]);
 
-        assert.deepStrictEqual(
-          yield* allPaths(callers, pool, stated),
-          expected({
-            create: CHANGED,
-            history: CHANGED,
-            "history?field": CHANGED,
-          })
-        );
-      })
+          assert.deepStrictEqual(
+            yield* everyWay(stated),
+            both(
+              expected({
+                create: CHANGED,
+                history: CHANGED,
+                "history?field": CHANGED,
+              })
+            )
+          );
+        })
     );
 
     dbTest.effect(

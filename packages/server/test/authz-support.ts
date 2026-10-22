@@ -15,30 +15,87 @@ import { Effect } from "effect";
 import { AcmeFixture, seedRecord } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
+import type {
+  TestRequestOptions,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 import { deliveryCount, subscribe } from "./outbox-support.ts";
 
 /** The callers of the two-user example, plus the administrator. */
 export type Who = "alice" | "bob" | "admin";
 
-/** Session tokens and the fixture. */
+/**
+ * How the callers present their sessions (decision 0018): a bearer token,
+ * the web app's session cookie with `STD-Client: web`, or the cookie
+ * without that header, as a cross-site form would send it.
+ */
+export type Transport = "bearer" | "cookie" | "cookieWithoutHeader";
+
+/** Both ways a real client presents a session. */
+export const TRANSPORTS: readonly Transport[] = ["bearer", "cookie"];
+
+/** Session tokens, how they are presented, and the fixture. */
 export interface Callers {
   readonly tokens: Readonly<Record<Who, string>>;
+  readonly transport: Transport;
   readonly fixture: AcmeData;
 }
 
-/** Signs in Alice, Bob and Ada (admin). */
-export const signInAll = Effect.gen(function* signInAll() {
-  const http = yield* TestHttpClient;
-  const fixture = yield* AcmeFixture;
+/**
+ * Signs in Alice, Bob and Ada (admin): by `POST /auth/sign-in`, or for a
+ * cookie transport by `POST /auth/cookie-sign-in`.
+ *
+ * @param transport - How the sessions are presented.
+ * @returns The callers.
+ */
+export const signInAllBy = Effect.fn("AuthzSupport.signInAllBy")(
+  function* signInAllBy(transport: Transport) {
+    const http = yield* TestHttpClient;
+    const fixture = yield* AcmeFixture;
 
-  const tokens: Record<Who, string> = {
-    admin: yield* http.signIn("ada", "ada-password"),
-    alice: yield* http.signIn("alice", "alice-password"),
-    bob: yield* http.signIn("bob", "bob-password"),
-  };
+    const signIn = (login: string) =>
+      transport === "bearer"
+        ? http.signIn(login, `${login}-password`)
+        : http.cookieSignIn(login, `${login}-password`);
 
-  return { fixture, tokens } satisfies Callers;
+    const tokens: Record<Who, string> = {
+      admin: yield* signIn("ada"),
+      alice: yield* signIn("alice"),
+      bob: yield* signIn("bob"),
+    };
+
+    return { fixture, tokens, transport } satisfies Callers;
+  }
+);
+
+/** Signs in Alice, Bob and Ada (admin) with bearer tokens. */
+export const signInAll = signInAllBy("bearer");
+
+/**
+ * The request options that present a session the callers' way.
+ *
+ * @param transport - How sessions are presented.
+ * @param token - The session token.
+ * @returns `token`, or `cookie` with or without `STD-Client: web`.
+ */
+export const presenting = (
+  transport: Transport,
+  token: string
+): Pick<TestRequestOptions, "cookie" | "token" | "webClient"> =>
+  transport === "bearer"
+    ? { token }
+    : { cookie: token, webClient: transport === "cookie" };
+
+/**
+ * The same callers presenting their sessions as bearer tokens, for setup
+ * that is not under test (a cookie sign-in's token is a bearer token too).
+ *
+ * @param callers - The callers.
+ * @returns The callers, by bearer token.
+ */
+export const asBearer = (callers: Callers): Callers => ({
+  ...callers,
+  transport: "bearer",
 });
 
 /**

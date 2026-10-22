@@ -203,6 +203,29 @@ WHERE "s"."token_hash" = ${tokenHashParameter(text)} AND "s"."expires_at" > now(
 );
 
 /**
+ * The display name of a user (`core.user.name`), for `auth/me`. Every
+ * active user may read every user's name (a built-in rule), so this
+ * reveals nothing the user could not list.
+ *
+ * @param snapshot - The configuration.
+ * @param userId - The user.
+ * @returns The name, or the login when the name is empty.
+ */
+export const displayName = Effect.fn("Sessions.displayName")(
+  function* displayName(snapshot: ConfigSnapshot, userId: DefinitionId) {
+    const tables = userTables(snapshot);
+
+    const [user] = yield* readRows(
+      sql`SELECT coalesce("u".${rawSql(quoteIdent(tables.name))}, "u".${rawSql(quoteIdent(tables.login))}) AS "name"
+FROM ${tables.user} AS "u"
+WHERE "u"."id" = ${textParameter(userId, "uuid")}`
+    );
+
+    return user?.name ?? "";
+  }
+);
+
+/**
  * Ends the presented session. An unknown token ends nothing.
  *
  * @param token - The presented token.

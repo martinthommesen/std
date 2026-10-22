@@ -1,5 +1,7 @@
 /**
  * The current session (Contracts 3.1): who it acts as, and sign-out.
+ * Sign-out ends the session whichever way it was presented; when that was
+ * the web app's session cookie, the response also clears the cookie.
  *
  * Both check a stated `STD-Schema-Revision` for its format (6.4). `me`
  * also refuses a revision this database never had at that number with
@@ -25,10 +27,12 @@ export const HeldRoleSchema = Schema.Struct({
 export type HeldRole = typeof HeldRoleSchema.Type;
 
 /**
- * The acting user of the session and their effective roles: `authenticated`
- * plus the live roles assigned to them, sorted by ID.
+ * The acting user of the session, their display name (`core.user.name`)
+ * and their effective roles: `authenticated` plus the live roles assigned
+ * to them, sorted by ID.
  */
 export const CurrentUserSchema = Schema.Struct({
+  name: Schema.String,
   roles: Schema.Array(HeldRoleSchema),
   schemaRevision: Schema.Int,
   userId: Schema.String,
