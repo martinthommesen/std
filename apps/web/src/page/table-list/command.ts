@@ -98,23 +98,28 @@ export const LoadTableMetadata = Command.define("LoadTableMetadata", {
 export const LoadTargetTable = Command.define("LoadTargetTable", {
   args: {
     maybeRevision: Schema.Option(SchemaRevision),
+    request: Schema.Int,
     table: Schema.String,
   },
-  execute: ({ maybeRevision, table }) =>
+  execute: ({ maybeRevision, request, table }) =>
     fetchTableMetadata(table, maybeRevision).pipe(
       Effect.map((loaded) =>
-        Message.SucceededLoadTargetTable({ table: loaded.table })
+        Message.SucceededLoadTargetTable({ request, table: loaded.table })
       ),
       Effect.catchTag("UnknownTable", () =>
         Effect.succeed(
-          Message.FailedLoadTargetTable({ error: "UnknownTable", table })
+          Message.FailedLoadTargetTable({
+            error: "UnknownTable",
+            request,
+            table,
+          })
         )
       ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadTargetTable({ error: "Unavailable", table })
+        Message.FailedLoadTargetTable({ error: "Unavailable", request, table })
       )
     ),
   messages: [

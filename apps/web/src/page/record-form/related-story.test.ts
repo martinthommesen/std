@@ -19,7 +19,7 @@ import {
   ticketTable,
   ticketWithRelated,
 } from "../../form-fixture.ts";
-import { REVISION_3 } from "../../table-fixture.ts";
+import { REVISION_3, revision } from "../../table-fixture.ts";
 import {
   LoadFormMetadata,
   LoadRecord,
@@ -31,7 +31,7 @@ import { FormMode } from "./model.ts";
 import type { Model, RelatedList } from "./model.ts";
 import { init, update } from "./update.ts";
 
-const KEY = "help.task/parent";
+const LIST = 1;
 
 const COLUMNS =
   "short_description,number,status,assignee,internal_cost,customer_email";
@@ -70,30 +70,31 @@ const withListOpen = after(
     purpose: "Open",
     record: ticketRecord,
   }),
-  Message.ToggledRelatedList({ isOpen: true, key: KEY })
+  Message.ToggledRelatedList({ isOpen: true, listId: LIST })
 );
 
 /** The ticket form with its related tasks open on their first page. */
 const onFirstPage = after(
   withListOpen,
   Message.SucceededLoadRelatedMetadata({
-    key: KEY,
+    generation: 1,
+    listId: LIST,
     revision: REVISION_5,
     table: TASKS,
   }),
   Message.SucceededLoadRelatedRecords({
     generation: 1,
-    key: KEY,
+    listId: LIST,
     maybeRevision: Option.none(),
     page: page("c2"),
   })
 );
 
-const listOf = (form: Model, key: string = KEY): RelatedList => {
-  const list = form.relatedLists[key];
+const listOf = (form: Model, listId: number = LIST): RelatedList => {
+  const list = form.relatedLists.find((candidate) => candidate.id === listId);
 
   if (list === undefined) {
-    throw new RangeError(`no related list ${key}`);
+    throw new RangeError(`no related list ${listId}`);
   }
 
   return list;
@@ -107,7 +108,7 @@ const pageRequest = (
     fields: COLUMNS,
     filter: `parent = "${TICKET_ID}"`,
     generation: 2,
-    key: KEY,
+    listId: LIST,
     revision: REVISION_5,
     table: "help.task",
     ...overrides,
@@ -118,7 +119,7 @@ describe("a related list's cursor", () => {
     story(
       update,
       given(onFirstPage),
-      message(Message.ClickedNextRelatedPage({ key: KEY })),
+      message(Message.ClickedNextRelatedPage({ listId: LIST })),
       Command.expectExact(pageRequest({ cursor: Option.some("c2") })),
       model((form) => {
         expect(listOf(form).cursors).toStrictEqual([Option.none()]);
@@ -128,7 +129,7 @@ describe("a related list's cursor", () => {
         Message.FailedLoadRelatedRecords({
           error: "Unavailable",
           generation: 2,
-          key: KEY,
+          listId: LIST,
         })
       ),
       model((form) => {
@@ -136,23 +137,23 @@ describe("a related list's cursor", () => {
         expect(listOf(form).maybePendingCursors).toStrictEqual(Option.none());
         expect(AsyncData.isStale(listOf(form).records)).toBeTruthy();
       }),
-      message(Message.ClickedRetryRelatedList({ key: KEY })),
+      message(Message.ClickedRetryRelatedList({ listId: LIST })),
       Command.expectExact(pageRequest({ generation: 3 })),
       Command.resolve(
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 3,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: page("c2"),
         })
       ),
-      message(Message.ClickedNextRelatedPage({ key: KEY })),
+      message(Message.ClickedNextRelatedPage({ listId: LIST })),
       Command.resolve(
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 4,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: page(null),
         })
@@ -182,7 +183,8 @@ describe("a related list without columns", () => {
       given(withListOpen),
       message(
         Message.SucceededLoadRelatedMetadata({
-          key: KEY,
+          generation: 1,
+          listId: LIST,
           revision: REVISION_5,
           table: BARE_TASKS,
         })
@@ -192,7 +194,7 @@ describe("a related list without columns", () => {
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 1,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: page(null),
         })
@@ -201,6 +203,80 @@ describe("a related list without columns", () => {
         expect(AsyncData.isSuccess(listOf(form).records)).toBeTruthy();
       })
     );
+  });
+});
+
+/**
+ * The ticket with the tasks' back-reference under a name, or none.
+ *
+ * @param field - The back-reference's name; null for no related list.
+ * @returns The ticket's metadata.
+ */
+const withEntries = (field: string | null): MetaTable => ({
+  ...ticketWithRelated,
+  relatedLists:
+    field === null
+      ? []
+      : [{ field, fieldLabel: field, label: "Task", table: "help.task" }],
+});
+
+describe("a related list that is removed and made again (review round 3)", () => {
+  it("is a new list: an answer meant for the removed one never reaches it", () => {
+    const remade = after(
+      onFirstPage,
+      // `parent` renamed `parent_ticket`; its next page is asked for.
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: withEntries("parent_ticket"),
+      }),
+      Message.ClickedNextRelatedPage({ listId: LIST }),
+      // The list is removed, then a new `parent` made.
+      Message.SucceededLoadFormMetadata({
+        revision: revision("7.00000000-0000-4000-8000-000000000c07"),
+        table: withEntries(null),
+      }),
+      Message.SucceededLoadFormMetadata({
+        revision: revision("8.00000000-0000-4000-8000-000000000c08"),
+        table: withEntries("parent"),
+      })
+    );
+
+    const [made] = remade.relatedLists;
+
+    expect(remade.relatedLists).toHaveLength(1);
+    expect(made?.id).not.toBe(LIST);
+
+    const opened = after(
+      remade,
+      Message.ToggledRelatedList({ isOpen: true, listId: made?.id ?? 0 }),
+      Message.SucceededLoadRelatedMetadata({
+        generation: 1,
+        listId: made?.id ?? 0,
+        revision: REVISION_6,
+        table: TASKS,
+      })
+    );
+
+    expect(AsyncData.isLoading(listOf(opened, made?.id).records)).toBeTruthy();
+
+    // The removed list's answers: its first page and its next page.
+    const late = after(
+      opened,
+      Message.SucceededLoadRelatedRecords({
+        generation: 1,
+        listId: LIST,
+        maybeRevision: Option.none(),
+        page: page("stale"),
+      }),
+      Message.SucceededLoadRelatedRecords({
+        generation: 2,
+        listId: LIST,
+        maybeRevision: Option.none(),
+        page: page("stale"),
+      })
+    );
+
+    expect(late.relatedLists).toStrictEqual(opened.relatedLists);
   });
 });
 
@@ -221,13 +297,13 @@ describe("a related list's page refused with SchemaChanged", () => {
   const refused = Message.FailedLoadRelatedRecords({
     error: "SchemaChanged",
     generation: 2,
-    key: KEY,
+    listId: LIST,
   });
 
   it("the related table's metadata still finds its list when the renamed endpoint metadata arrived first (review round 2)", () => {
     const parentFirst = after(
       onFirstPage,
-      Message.ClickedNextRelatedPage({ key: KEY }),
+      Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
@@ -238,7 +314,8 @@ describe("a related list's page refused with SchemaChanged", () => {
     const answered = update(
       parentFirst,
       Message.SucceededLoadRelatedMetadata({
-        key: KEY,
+        generation: 2,
+        listId: LIST,
         revision: REVISION_6,
         table: TASKS,
       })
@@ -261,7 +338,7 @@ describe("a related list's page refused with SchemaChanged", () => {
   it("asks for no page until the endpoint's metadata reloaded successfully, and Try again reloads it (review round 2)", () => {
     const parentFailed = after(
       onFirstPage,
-      Message.ClickedNextRelatedPage({ key: KEY }),
+      Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,
       Message.FailedLoadFormMetadata({ error: "Unavailable" })
     );
@@ -269,7 +346,8 @@ describe("a related list's page refused with SchemaChanged", () => {
     const relatedBack = update(
       parentFailed,
       Message.SucceededLoadRelatedMetadata({
-        key: KEY,
+        generation: 2,
+        listId: LIST,
         revision: REVISION_6,
         table: TASKS,
       })
@@ -284,14 +362,15 @@ describe("a related list's page refused with SchemaChanged", () => {
     story(
       update,
       given(relatedBack.model),
-      message(Message.ClickedRetryRelatedList({ key: KEY })),
+      message(Message.ClickedRetryRelatedList({ listId: LIST })),
       Command.expectExact(
         LoadFormMetadata({
           maybeRevision: Option.some(REVISION_5),
           table: TICKET,
         }),
         LoadRelatedMetadata({
-          key: KEY,
+          generation: 3,
+          listId: LIST,
           revision: REVISION_5,
           table: "help.task",
         })
@@ -299,7 +378,8 @@ describe("a related list's page refused with SchemaChanged", () => {
       Command.resolve(
         LoadRelatedMetadata,
         Message.SucceededLoadRelatedMetadata({
-          key: KEY,
+          generation: 3,
+          listId: LIST,
           revision: REVISION_6,
           table: TASKS,
         })
@@ -332,7 +412,7 @@ describe("a related list's page refused with SchemaChanged", () => {
           LoadRelatedRecords,
           Message.SucceededLoadRelatedRecords({
             generation: 3,
-            key: KEY,
+            listId: LIST,
             maybeRevision: Option.some(REVISION_6),
             page: page(null),
           }),
@@ -347,10 +427,11 @@ describe("a related list's page refused with SchemaChanged", () => {
   it("after the reload failed, Try again reloads both metadata instead of asking under the old name", () => {
     const reloadFailed = after(
       onFirstPage,
-      Message.ClickedNextRelatedPage({ key: KEY }),
+      Message.ClickedNextRelatedPage({ listId: LIST }),
       refused,
       Message.SucceededLoadRelatedMetadata({
-        key: KEY,
+        generation: 2,
+        listId: LIST,
         revision: REVISION_6,
         table: TASKS,
       }),
@@ -359,7 +440,7 @@ describe("a related list's page refused with SchemaChanged", () => {
 
     const retried = update(
       reloadFailed,
-      Message.ClickedRetryRelatedList({ key: KEY })
+      Message.ClickedRetryRelatedList({ listId: LIST })
     );
 
     expect(
@@ -371,7 +452,7 @@ describe("a related list's page refused with SchemaChanged", () => {
     story(
       update,
       given(onFirstPage),
-      message(Message.ClickedNextRelatedPage({ key: KEY })),
+      message(Message.ClickedNextRelatedPage({ listId: LIST })),
       Command.resolve(LoadRelatedRecords, refused),
       Command.expectExact(
         LoadFormMetadata({
@@ -379,7 +460,8 @@ describe("a related list's page refused with SchemaChanged", () => {
           table: TICKET,
         }),
         LoadRelatedMetadata({
-          key: KEY,
+          generation: 2,
+          listId: LIST,
           revision: REVISION_5,
           table: "help.task",
         })
@@ -388,7 +470,7 @@ describe("a related list's page refused with SchemaChanged", () => {
         // "Try again" before they arrive asks for no page under the old name.
         const retried = update(
           form,
-          Message.ClickedRetryRelatedList({ key: KEY })
+          Message.ClickedRetryRelatedList({ listId: LIST })
         );
 
         expect(
@@ -398,7 +480,8 @@ describe("a related list's page refused with SchemaChanged", () => {
       Command.resolve(
         LoadRelatedMetadata,
         Message.SucceededLoadRelatedMetadata({
-          key: KEY,
+          generation: 2,
+          listId: LIST,
           revision: REVISION_6,
           table: TASKS,
         })
@@ -428,15 +511,15 @@ describe("a related list's page refused with SchemaChanged", () => {
         pageRequest({
           filter: `parent_ticket = "${TICKET_ID}"`,
           generation: 3,
-          key: KEY,
+          listId: LIST,
           revision: REVISION_6,
         })
       ),
       model((form) => {
         // The renamed back-reference continues the open list.
-        expect(Object.keys(form.relatedLists)).toStrictEqual([KEY]);
+        expect(form.relatedLists.map((list) => list.id)).toStrictEqual([LIST]);
         expect(listOf(form).entry.field).toBe("parent_ticket");
-        expect(listOf(form, KEY).isOpen).toBeTruthy();
+        expect(listOf(form).isOpen).toBeTruthy();
       }),
       Command.resolveAll(
         [
@@ -452,15 +535,15 @@ describe("a related list's page refused with SchemaChanged", () => {
           LoadRelatedRecords,
           Message.SucceededLoadRelatedRecords({
             generation: 3,
-            key: KEY,
+            listId: LIST,
             maybeRevision: Option.some(REVISION_6),
             page: page(null),
           }),
         ]
       ),
       model((form) => {
-        expect(AsyncData.isSuccess(listOf(form, KEY).records)).toBeTruthy();
-        expect(listOf(form, KEY).cursors).toStrictEqual([Option.none()]);
+        expect(AsyncData.isSuccess(listOf(form).records)).toBeTruthy();
+        expect(listOf(form).cursors).toStrictEqual([Option.none()]);
       })
     );
   });

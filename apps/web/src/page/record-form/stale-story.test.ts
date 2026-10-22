@@ -90,7 +90,7 @@ const readyWith = (table: MetaTable): Model =>
       purpose: "Open",
       record: ticketRecord,
     }),
-    Message.SucceededLoadTarget({ table: userTable })
+    Message.SucceededLoadTarget({ request: 1, table: userTable })
   );
 
 const ready = readyWith(ticketTable);
@@ -242,6 +242,23 @@ describe("a save refused with SchemaChanged", () => {
       ),
       Command.expectExact(rereadAt6),
       model((page) => {
+        // Nothing is judged until the record is read under the new
+        // definitions (review round 3, Rule 1): every edit is still held.
+        expect(Object.keys(page.edits)).toHaveLength(4);
+        expect(page.droppedEdits).toStrictEqual([]);
+        expect(page.submission).toStrictEqual(Submission.Outdated());
+      }),
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_6),
+          purpose: "Refresh",
+          record: changedRecord,
+        })
+      ),
+      Command.expectNone(),
+      model((page) => {
         // Kept: the renamed field's edit and the choice, by field ID.
         expect(page.edits).toStrictEqual({
           [TICKET_FIELDS.shortDescription]: FieldInput.Text({ text: "Mine" }),
@@ -262,19 +279,6 @@ describe("a save refused with SchemaChanged", () => {
             reason: "Removed",
           },
         ]);
-        expect(page.submission).toStrictEqual(Submission.Outdated());
-      }),
-      Command.resolve(
-        LoadRecord,
-        Message.SucceededLoadRecord({
-          generation: 3,
-          maybeRevision: Option.some(REVISION_6),
-          purpose: "Refresh",
-          record: changedRecord,
-        })
-      ),
-      Command.expectNone(),
-      model((page) => {
         expect(page.submission).toStrictEqual(Submission.Outdated());
         // The choice no longer offered is flagged and blocks the save.
         expect(
@@ -375,6 +379,12 @@ describe("a save refused with SchemaChanged", () => {
       Message.SucceededLoadFormMetadata({
         revision: REVISION_6,
         table: readOnly,
+      }),
+      Message.SucceededLoadRecord({
+        generation: 2,
+        maybeRevision: Option.some(REVISION_6),
+        purpose: "Refresh",
+        record: ticketRecord,
       })
     );
 
@@ -705,13 +715,12 @@ describe("a newer revision on any answer", () => {
     story(
       update,
       given(withRelated),
-      message(
-        Message.ToggledRelatedList({ isOpen: true, key: "help.task/parent" })
-      ),
+      message(Message.ToggledRelatedList({ isOpen: true, listId: 1 })),
       Command.resolve(
         LoadRelatedMetadata,
         Message.SucceededLoadRelatedMetadata({
-          key: "help.task/parent",
+          generation: 1,
+          listId: 1,
           revision: REVISION_5,
           table: { ...ticketTable, name: "help.task" },
         })
@@ -720,7 +729,7 @@ describe("a newer revision on any answer", () => {
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 1,
-          key: "help.task/parent",
+          listId: 1,
           maybeRevision: Option.some(REVISION_6),
           page: {
             maybeCount: Option.some(0),
@@ -1056,7 +1065,7 @@ describe("the concrete class's metadata arriving after the record's reread (revi
         revision: REVISION_5,
         table: incidentTable,
       }),
-      Message.SucceededLoadTarget({ table: userTable }),
+      Message.SucceededLoadTarget({ request: 1, table: userTable }),
       Message.UpdatedText({
         fieldId: TICKET_FIELDS.shortDescription,
         text: "Mine",
@@ -1390,6 +1399,101 @@ describe("a rename while a save is in flight (review round 2)", () => {
           table: TICKET,
           values: { summary: "AB" },
           version: 1,
+        },
+      ],
+    ]);
+  });
+
+  it("a subclass record's later edit survives the class's metadata arriving before the reread (review round 3)", () => {
+    const renamedIncident = changeFields(incidentTable, (field) =>
+      field.id === TICKET_FIELDS.shortDescription
+        ? [{ ...field, name: "summary" }]
+        : [field]
+    );
+
+    const savedAt5 = {
+      ...incidentRecord,
+      values: { ...incidentRecord.values, short_description: "A" },
+      version: 4,
+    };
+
+    const classFirst = after(
+      init({
+        id: 1,
+        maybeAppRevision: Option.some(REVISION_3),
+        mode: FormMode.Edit({ recordId: INCIDENT_ID }),
+        table: TICKET,
+      }).model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: ticketTable,
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Open",
+        record: incidentRecord,
+      }),
+      Message.SucceededLoadClassMetadata({
+        revision: REVISION_5,
+        table: incidentTable,
+      }),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "A",
+      }),
+      Message.ClickedSave(),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "AB",
+      }),
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: renamed,
+      }),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.some(REVISION_5),
+        saved: savedAt5,
+      }),
+      // The class's current metadata, before the record is read again.
+      Message.SucceededLoadClassMetadata({
+        revision: REVISION_6,
+        table: renamedIncident,
+      })
+    );
+
+    expect(classFirst.edits).toStrictEqual({
+      [TICKET_FIELDS.shortDescription]: FieldInput.Text({ text: "AB" }),
+    });
+    expect(classFirst.droppedEdits).toStrictEqual([]);
+
+    const reread = after(
+      classFirst,
+      Message.SucceededLoadRecord({
+        generation: 4,
+        maybeRevision: Option.some(REVISION_6),
+        purpose: "Refresh",
+        record: withSummary(savedAt5),
+      })
+    );
+
+    expect(
+      (update(reread, Message.ClickedSave()).commands ?? []).map((command) => [
+        command.name,
+        command.args,
+      ])
+    ).toStrictEqual([
+      [
+        "UpdateRecord",
+        {
+          generation: 5,
+          recordId: INCIDENT_ID,
+          revision: REVISION_6,
+          secrets: {},
+          table: TICKET,
+          values: { summary: "AB" },
+          version: 4,
         },
       ],
     ]);

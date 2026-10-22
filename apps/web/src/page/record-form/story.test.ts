@@ -106,7 +106,7 @@ const ready = after(
     purpose: "Open",
     record: ticketRecord,
   }),
-  Message.SucceededLoadTarget({ table: userTable })
+  Message.SucceededLoadTarget({ request: 1, table: userTable })
 );
 
 /** The create form, ready. */
@@ -177,11 +177,11 @@ describe("opening a form", () => {
         })
       ),
       Command.expectExact(
-        LoadTarget({ revision: REVISION_5, table: "core.user" })
+        LoadTarget({ request: 1, revision: REVISION_5, table: "core.user" })
       ),
       Command.resolve(
         LoadTarget,
-        Message.SucceededLoadTarget({ table: userTable })
+        Message.SucceededLoadTarget({ request: 1, table: userTable })
       ),
       model((page) => {
         expect(AsyncData.isSuccess(page.record)).toBeTruthy();
@@ -229,7 +229,10 @@ describe("opening a form", () => {
             table: incidentTable,
           }),
         ],
-        [LoadTarget, Message.SucceededLoadTarget({ table: userTable })]
+        [
+          LoadTarget,
+          Message.SucceededLoadTarget({ request: 1, table: userTable }),
+        ]
       ),
       message(
         Message.SelectedChoice({ fieldId: TICKET_FIELDS.status, key: "closed" })
@@ -327,7 +330,10 @@ describe("opening a form", () => {
             record: ticketRecord,
           }),
         ],
-        [LoadTarget, Message.SucceededLoadTarget({ table: userTable })]
+        [
+          LoadTarget,
+          Message.SucceededLoadTarget({ request: 1, table: userTable }),
+        ]
       ),
       model((page) => {
         expect(AsyncData.isSuccess(page.record)).toBeTruthy();
@@ -1055,7 +1061,11 @@ describe("the reference picker", () => {
         ).toBeTruthy();
       }),
       message(
-        Message.FailedLoadTarget({ error: "Unavailable", table: "core.user" })
+        Message.FailedLoadTarget({
+          error: "Unavailable",
+          request: 1,
+          table: "core.user",
+        })
       ),
       model((page) => {
         expect(
@@ -1072,11 +1082,11 @@ describe("the reference picker", () => {
         })
       ),
       Command.expectExact(
-        LoadTarget({ revision: REVISION_5, table: "core.user" })
+        LoadTarget({ request: 2, revision: REVISION_5, table: "core.user" })
       ),
       Command.resolve(
         LoadTarget,
-        Message.SucceededLoadTarget({ table: userTable })
+        Message.SucceededLoadTarget({ request: 2, table: userTable })
       ),
       model((page) => {
         expect(
@@ -1308,16 +1318,17 @@ describe("related lists and history", () => {
     })
   );
 
-  const KEY = "help.task/parent";
+  const LIST = 1;
 
   it("loads a related list when first opened and pages it, once per click", () => {
     story(
       update,
       given(withRelated),
-      message(Message.ToggledRelatedList({ isOpen: true, key: KEY })),
+      message(Message.ToggledRelatedList({ isOpen: true, listId: LIST })),
       Command.expectExact(
         LoadRelatedMetadata({
-          key: KEY,
+          generation: 1,
+          listId: LIST,
           revision: REVISION_5,
           table: "help.task",
         })
@@ -1325,7 +1336,8 @@ describe("related lists and history", () => {
       Command.resolve(
         LoadRelatedMetadata,
         Message.SucceededLoadRelatedMetadata({
-          key: KEY,
+          generation: 1,
+          listId: LIST,
           revision: REVISION_5,
           table: { ...ticketTable, label: "Task", name: "help.task" },
         })
@@ -1337,7 +1349,7 @@ describe("related lists and history", () => {
             "short_description,number,status,assignee,internal_cost,customer_email",
           filter: `parent = "${TICKET_ID}"`,
           generation: 1,
-          key: KEY,
+          listId: LIST,
           revision: REVISION_5,
           table: "help.task",
         })
@@ -1346,7 +1358,7 @@ describe("related lists and history", () => {
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 1,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: {
             maybeCount: Option.some(12),
@@ -1355,12 +1367,12 @@ describe("related lists and history", () => {
           },
         })
       ),
-      message(Message.ClickedNextRelatedPage({ key: KEY })),
+      message(Message.ClickedNextRelatedPage({ listId: LIST })),
       model((page) => {
         // A second click while the page loads asks for nothing.
         expect(
-          update(page, Message.ClickedNextRelatedPage({ key: KEY })).commands ??
-            []
+          update(page, Message.ClickedNextRelatedPage({ listId: LIST }))
+            .commands ?? []
         ).toStrictEqual([]);
       }),
       Command.expectExact(
@@ -1370,7 +1382,7 @@ describe("related lists and history", () => {
             "short_description,number,status,assignee,internal_cost,customer_email",
           filter: `parent = "${TICKET_ID}"`,
           generation: 2,
-          key: KEY,
+          listId: LIST,
           revision: REVISION_5,
           table: "help.task",
         })
@@ -1379,7 +1391,7 @@ describe("related lists and history", () => {
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 2,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: {
             maybeCount: Option.some(12),
@@ -1389,10 +1401,9 @@ describe("related lists and history", () => {
         })
       ),
       model((page) => {
-        expect(page.relatedLists[KEY]?.cursors).toStrictEqual([
-          Option.none(),
-          Option.some("c2"),
-        ]);
+        expect(
+          page.relatedLists.find((list) => list.id === LIST)?.cursors
+        ).toStrictEqual([Option.none(), Option.some("c2")]);
       })
     );
   });

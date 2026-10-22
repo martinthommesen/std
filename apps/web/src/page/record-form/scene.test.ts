@@ -68,7 +68,7 @@ const openTicket = (record: typeof ticketRecord): Model =>
       purpose: "Open",
       record,
     }),
-    Message.SucceededLoadTarget({ table: userTable })
+    Message.SucceededLoadTarget({ request: 1, table: userTable })
   );
 
 const ready = openTicket(ticketRecord);
@@ -610,16 +610,17 @@ describe("a related list without columns", () => {
       purpose: "Open",
       record: ticketRecord,
     }),
-    Message.SucceededLoadTarget({ table: userTable }),
-    Message.ToggledRelatedList({ isOpen: true, key: "help.task/parent" }),
+    Message.SucceededLoadTarget({ request: 1, table: userTable }),
+    Message.ToggledRelatedList({ isOpen: true, listId: 1 }),
     Message.SucceededLoadRelatedMetadata({
-      key: "help.task/parent",
+      generation: 1,
+      listId: 1,
       revision: REVISION_5,
       table: bareTasks,
     }),
     Message.SucceededLoadRelatedRecords({
       generation: 1,
-      key: "help.task/parent",
+      listId: 1,
       maybeRevision: Option.none(),
       page: {
         maybeCount: Option.some(1),
@@ -644,7 +645,7 @@ describe("a related list without columns", () => {
 });
 
 describe("a related list loading another page", () => {
-  const KEY = "help.task/parent";
+  const LIST = 1;
 
   const onEmptyPage = after(
     ready,
@@ -652,15 +653,16 @@ describe("a related list loading another page", () => {
       revision: REVISION_5,
       table: ticketWithRelated,
     }),
-    Message.ToggledRelatedList({ isOpen: true, key: KEY }),
+    Message.ToggledRelatedList({ isOpen: true, listId: LIST }),
     Message.SucceededLoadRelatedMetadata({
-      key: KEY,
+      generation: 1,
+      listId: LIST,
       revision: REVISION_5,
       table: { ...ticketTable, label: "Task", name: "help.task" },
     }),
     Message.SucceededLoadRelatedRecords({
       generation: 1,
-      key: KEY,
+      listId: LIST,
       maybeRevision: Option.none(),
       page: {
         maybeCount: Option.some(0),
@@ -689,7 +691,7 @@ describe("a related list loading another page", () => {
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
           generation: 2,
-          key: KEY,
+          listId: LIST,
           maybeRevision: Option.none(),
           page: {
             maybeCount: Option.some(0),

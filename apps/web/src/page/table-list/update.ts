@@ -125,6 +125,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     maybeNotice: Option.none(),
     maybePendingCursors: Option.none(),
     metadata: Metadata.Loading(),
+    nextTargetRequest: 1,
     query: {
       maybeCondition: Option.none(),
       pageSize: pageSizeOf(config.address.limit),
@@ -132,6 +133,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     },
     records: Records.Idle(),
     table: config.table,
+    targetRequests: {},
     targets: {},
   },
 });
@@ -416,26 +418,60 @@ const missingTargets = (
 const isTargetPending = (model: Model): boolean =>
   Record.values(model.targets).some(AsyncData.isPending);
 
-const loadTargets =
-  (tables: readonly string[]): Step =>
-  (model) => ({
-    commands: tables.map((table) =>
-      LoadTargetTable({
-        maybeRevision: Option.map(tableMetaOf(model), (meta) => meta.revision),
-        table,
-      })
-    ),
-    model: modifyFields(model, {
-      targets: (targets) =>
-        Record.union(
-          targets,
-          Record.fromEntries(
-            tables.map((table) => [table, TargetMetadata.Loading()] as const)
+/**
+ * Asks for target tables' metadata (decision 0020, review round 3): each
+ * request gets the page's next request number, and only the answer to a
+ * table's latest request counts (`receiveTarget`).
+ *
+ * @param tables - The target tables.
+ * @param toState - What each table shows while it loads.
+ * @returns The step.
+ */
+const askForTargets =
+  (
+    tables: readonly string[],
+    toState: (current: Option.Option<TargetMetadata>) => TargetMetadata
+  ): Step =>
+  (model) => {
+    const numbered = tables.map(
+      (table, index) => [table, model.nextTargetRequest + index] as const
+    );
+
+    return {
+      commands: numbered.map(([table, request]) =>
+        LoadTargetTable({
+          maybeRevision: Option.map(
+            tableMetaOf(model),
+            (meta) => meta.revision
           ),
-          (_, loading) => loading
-        ),
-    }),
-  });
+          request,
+          table,
+        })
+      ),
+      model: modifyFields(model, {
+        nextTargetRequest: (next) => next + tables.length,
+        targetRequests: (requests) =>
+          Record.union(
+            requests,
+            Record.fromEntries(numbered),
+            (_, latest) => latest
+          ),
+        targets: (targets) =>
+          Record.union(
+            targets,
+            Record.fromEntries(
+              tables.map(
+                (table) => [table, toState(Record.get(targets, table))] as const
+              )
+            ),
+            (_, asked) => asked
+          ),
+      }),
+    };
+  };
+
+const loadTargets = (tables: readonly string[]): Step =>
+  askForTargets(tables, () => TargetMetadata.Loading());
 
 /**
  * Loads a stored condition into the builder and the list: the single entry
@@ -545,24 +581,28 @@ const refreshMetadata: Step = (model) =>
     onSome: (meta) =>
       AsyncData.isPending(model.metadata)
         ? { model }
-        : {
-            commands: [
-              LoadTableMetadata({
-                maybeRevision: Option.some(meta.revision),
-                table: model.table,
+        : Update.combine(
+            modifyFields(model, {
+              metadata: () => Metadata.Refreshing({ data: meta }),
+            }),
+            [
+              (stepModel) => ({
+                commands: [
+                  LoadTableMetadata({
+                    maybeRevision: Option.some(meta.revision),
+                    table: model.table,
+                  }),
+                ],
+                model: stepModel,
               }),
-              ...Record.keys(model.targets).map((table) =>
-                LoadTargetTable({
-                  maybeRevision: Option.some(meta.revision),
-                  table,
+              askForTargets(Record.keys(model.targets), (current) =>
+                Option.match(current, {
+                  onNone: () => TargetMetadata.Loading(),
+                  onSome: revalidating,
                 })
               ),
-            ],
-            model: modifyFields(model, {
-              metadata: () => Metadata.Refreshing({ data: meta }),
-              targets: Record.map(revalidating),
-            }),
-          },
+            ]
+          ),
   });
 
 /**
@@ -721,11 +761,33 @@ const failedTarget = (
     }
   );
 
-const receiveTarget = (model: Model, table: string, target: TargetMetadata) =>
-  Update.combine(modifyFields(model, { targets: Record.set(table, target) }), [
-    continueWaitingFilter,
-    retryAfterRefresh,
-  ]);
+/**
+ * A target table's answer: taken only when it answers the table's latest
+ * request (decision 0020, review round 3).
+ *
+ * @param model - The page.
+ * @param answer - The table, the request's number, and what it brought.
+ * @returns The page, and what the target let continue.
+ */
+const receiveTarget = (
+  model: Model,
+  answer: {
+    readonly request: number;
+    readonly table: string;
+    readonly target: TargetMetadata;
+  }
+): PlainReturn =>
+  Option.contains(
+    Record.get(model.targetRequests, answer.table),
+    answer.request
+  )
+    ? Update.combine(
+        modifyFields(model, {
+          targets: Record.set(answer.table, answer.target),
+        }),
+        [continueWaitingFilter, retryAfterRefresh]
+      )
+    : { model };
 
 const receiveRecords = (
   model: Model,
@@ -1030,8 +1092,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadTableMetadata: ({ error }) => failMetadata(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadTargetTable: ({ error, table }) =>
-      receiveTarget(model, table, failedTarget(model, table, error)),
+    FailedLoadTargetTable: ({ error, request, table }) =>
+      receiveTarget(model, {
+        request,
+        table,
+        target: failedTarget(model, table, error),
+      }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotFilterBuilderMessage: ({ message: builderMessage }) =>
       Option.match(scopeOf(model), {
@@ -1050,6 +1116,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededLoadTableMetadata: ({ revision, table }) =>
       receiveMetadata(model, table, revision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadTargetTable: ({ table }) =>
-      receiveTarget(model, table.name, TargetMetadata.Success({ data: table })),
+    SucceededLoadTargetTable: ({ request, table }) =>
+      receiveTarget(model, {
+        request,
+        table: table.name,
+        target: TargetMetadata.Success({ data: table }),
+      }),
   });

@@ -370,6 +370,7 @@ describe("list page", () => {
         LoadTargetTable,
         Message.FailedLoadTargetTable({
           error: "UnknownTable",
+          request: 1,
           table: "core.user",
         })
       ),

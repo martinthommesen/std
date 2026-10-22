@@ -20,6 +20,7 @@ import { SchemaChangeSchema } from "@std/api/errors/schemas";
 import { HistoryEntrySchema, RecordJsonSchema } from "@std/api/records";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import {
+  MetaFieldSchema,
   MetaRelatedListSchema,
   MetaTableSchema,
 } from "@std/definitions/table-metadata";
@@ -252,18 +253,24 @@ export type RelatedRecords = typeof RelatedRecords.schema.Type;
  * reference `entry.field` points at this record, shown in a disclosure and
  * loaded when it is first opened, with keyset paging. `cursors` is the
  * stack of the page shown; `maybePendingCursors` the stack of the page
- * being loaded, which becomes `cursors` only when it loads.
+ * being loaded, which becomes `cursors` only when it loads. `id` is the
+ * list's number in the page, never given to another list while the page
+ * lives (decision 0020, review round 3); every request and answer carries
+ * it with the request's number (`generation` for pages,
+ * `metadataGeneration` for the table's metadata).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const RelatedList = Schema.Struct({
   cursors: Schema.Array(Schema.Option(Schema.String)),
   entry: MetaRelatedListSchema,
   generation: Schema.Int,
+  id: Schema.Int,
   isOpen: Schema.Boolean,
   maybePendingCursors: Schema.Option(
     Schema.Array(Schema.Option(Schema.String))
   ),
   metadata: RelatedMetadata.schema,
+  metadataGeneration: Schema.Int,
   records: RelatedRecords.schema,
 });
 
@@ -331,6 +338,8 @@ export type History = typeof History.Type;
  * - `staleChanges`: the changes `SchemaChanged` refusals of saves named
  *   (Contracts 6.4), kept until a save succeeds, so the view marks those
  *   fields.
+ * - `reconciledFields`: the fields as the edits were last judged with
+ *   (`reconcileEdits`), so a later judgement knows what the user saw.
  * - `droppedEdits`: edits the form dropped because new definitions or a
  *   reread record no longer let it send them, with what the user had
  *   entered (decision 0020), kept until a save succeeds.
@@ -340,11 +349,14 @@ export type History = typeof History.Type;
  *   first save attempt).
  * - `submission`, `generation`: the save in flight and its number.
  * - `deletion`, `deleteDialog`: the delete and its confirmation.
- * - `targets`: reference targets' metadata, by table name, for pickers.
+ * - `targets`: reference targets' metadata, by table name, for pickers;
+ *   `targetRequests` the number of each table's latest request (from
+ *   `nextTargetRequest`, never reused while the page lives): only its
+ *   answer counts.
  * - `pickers`, `datePickers`: the stateful controls, by field ID.
- * - `relatedLists`: in metadata order, each under the key it got when it
- *   was made (its `table/field` then), kept across a rename of the
- *   back-reference, so a pending answer always finds its list.
+ * - `relatedLists`: in metadata order, each with its own ID (kept across
+ *   a rename of the back-reference); `nextRelatedListId` is the ID the
+ *   next new list gets, so an answer reaches only the list that asked.
  * - `history`: the history panel.
  * - `maybeToday`: today in UTC, for the Date Pickers.
  */
@@ -366,13 +378,17 @@ export const Model = Schema.Struct({
   maybeToday: Schema.Option(CalendarDate),
   metadata: Metadata.schema,
   mode: FormMode,
+  nextRelatedListId: Schema.Int,
+  nextTargetRequest: Schema.Int,
   pickers: Schema.Record(Schema.String, Picker),
+  reconciledFields: Schema.Array(MetaFieldSchema),
   record: StoredRecord.schema,
-  relatedLists: Schema.Record(Schema.String, RelatedList),
+  relatedLists: Schema.Array(RelatedList),
   serverErrors: Schema.Record(Schema.String, Schema.Array(Schema.String)),
   staleChanges: Schema.Array(SchemaChangeSchema),
   submission: Submission,
   table: Schema.String,
+  targetRequests: Schema.Record(Schema.String, Schema.Int),
   targets: Schema.Record(Schema.String, TargetMetadata.schema),
 });
 

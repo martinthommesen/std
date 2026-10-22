@@ -23,7 +23,11 @@ export const Message = defineMessageUnion({
     maybeRevision: Schema.Option(SchemaRevision),
   },
   FailedLoadTableMetadata: { error: MetaError },
-  FailedLoadTargetTable: { error: MetaError, table: Schema.String },
+  FailedLoadTargetTable: {
+    error: MetaError,
+    request: Schema.Int,
+    table: Schema.String,
+  },
   GotFilterBuilderMessage: { message: FilterBuilderMessage },
   SelectedPageSize: { pageSize: Schema.String },
   SelectedSavedFilter: { savedFilterId: Schema.String },
@@ -36,7 +40,7 @@ export const Message = defineMessageUnion({
     revision: SchemaRevision,
     table: MetaTableSchema,
   },
-  SucceededLoadTargetTable: { table: MetaTableSchema },
+  SucceededLoadTargetTable: { request: Schema.Int, table: MetaTableSchema },
 });
 
 /** What happens on a list page. */

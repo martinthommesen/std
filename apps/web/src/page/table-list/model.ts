@@ -148,6 +148,11 @@ export type Address = typeof Address.Type;
  *   app delivers a Command's answer only to the page that sent it.
  * - `maybeNotice`: something the user should know about the applied state,
  *   such as a filter from the address that could not be shown.
+ * - `targets`: the metadata of the tables the filter's paths reach, by
+ *   name; `targetRequests` the number of each table's latest request (from
+ *   `nextTargetRequest`, never reused while the page lives): only its
+ *   answer counts, so an older answer cannot replace a newer one
+ *   (decision 0020, review round 3).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = Schema.Struct({
@@ -164,9 +169,11 @@ export const Model = Schema.Struct({
     Schema.Array(Schema.Option(Schema.String))
   ),
   metadata: Metadata.schema,
+  nextTargetRequest: Schema.Int,
   query: ListQuery,
   records: Records.schema,
   table: Schema.String,
+  targetRequests: Schema.Record(Schema.String, Schema.Int),
   targets: Schema.Record(Schema.String, TargetMetadata.schema),
 });
 

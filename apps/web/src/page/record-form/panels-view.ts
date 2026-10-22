@@ -180,7 +180,7 @@ const countText = (page: RecordPage): string =>
   });
 
 const relatedPagerView = (
-  key: string,
+  listId: number,
   list: RelatedList,
   page: RecordPage,
   h: HtmlBuilder<Message>
@@ -196,7 +196,7 @@ const relatedPagerView = (
         {
           isDisabled:
             list.cursors.length < 2 || AsyncData.isPending(list.records),
-          onClick: Message.ClickedPreviousRelatedPage({ key }),
+          onClick: Message.ClickedPreviousRelatedPage({ listId }),
           text: "Previous page",
           variant: "quiet",
         },
@@ -208,7 +208,7 @@ const relatedPagerView = (
           isDisabled:
             Option.isNone(page.maybeNextCursor) ||
             AsyncData.isPending(list.records),
-          onClick: Message.ClickedNextRelatedPage({ key }),
+          onClick: Message.ClickedNextRelatedPage({ listId }),
           text: "Next page",
           variant: "quiet",
         },
@@ -217,7 +217,7 @@ const relatedPagerView = (
     ]
   );
 
-const relatedFailureView = (key: string, h: HtmlBuilder<Message>): Html =>
+const relatedFailureView = (listId: number, h: HtmlBuilder<Message>): Html =>
   h.div(
     [h.Class("list-failure")],
     [
@@ -227,7 +227,7 @@ const relatedFailureView = (key: string, h: HtmlBuilder<Message>): Html =>
       ),
       buttonView(
         {
-          onClick: Message.ClickedRetryRelatedList({ key }),
+          onClick: Message.ClickedRetryRelatedList({ listId }),
           text: "Try again",
           variant: "quiet",
         },
@@ -237,40 +237,41 @@ const relatedFailureView = (key: string, h: HtmlBuilder<Message>): Html =>
   );
 
 const relatedPageView = (
-  key: string,
+  listId: number,
   list: RelatedList,
   table: MetaTable,
   page: RecordPage,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  relatedPagerView(key, list, page, h),
+  relatedPagerView(listId, list, page, h),
   page.records.length === 0
     ? h.p([h.Class("placeholder")], ["No records."])
     : relatedTableView(list, table, page, h),
 ];
 
 const relatedContentView = (
-  key: string,
+  listId: number,
   list: RelatedList,
   h: HtmlBuilder<Message>
 ): readonly Html[] =>
   AsyncData.match(list.metadata, {
-    onFailure: () => [relatedFailureView(key, h)],
+    onFailure: () => [relatedFailureView(listId, h)],
     onIdle: () => [],
     onLoading: () => [h.p([h.Role("status")], ["Loading…"])],
     onRefreshing: () => [h.p([h.Role("status")], ["Loading…"])],
-    onStale: () => [relatedFailureView(key, h)],
+    onStale: () => [relatedFailureView(listId, h)],
     onSuccess: (meta) =>
       AsyncData.match(list.records, {
-        onFailure: () => [relatedFailureView(key, h)],
+        onFailure: () => [relatedFailureView(listId, h)],
         onIdle: () => [],
         onLoading: () => [h.p([h.Role("status")], ["Loading…"])],
-        onRefreshing: (page) => relatedPageView(key, list, meta.table, page, h),
+        onRefreshing: (page) =>
+          relatedPageView(listId, list, meta.table, page, h),
         onStale: ({ data }) => [
-          relatedFailureView(key, h),
-          ...relatedPageView(key, list, meta.table, data, h),
+          relatedFailureView(listId, h),
+          ...relatedPageView(listId, list, meta.table, data, h),
         ],
-        onSuccess: (page) => relatedPageView(key, list, meta.table, page, h),
+        onSuccess: (page) => relatedPageView(listId, list, meta.table, page, h),
       }),
   });
 
@@ -287,19 +288,20 @@ const isRelatedLoading = (list: RelatedList): boolean =>
   AsyncData.isPending(list.metadata) || AsyncData.isPending(list.records);
 
 const relatedListView = (
-  [key, list]: readonly [string, RelatedList],
+  list: RelatedList,
   index: number,
   h: HtmlBuilder<Message>
 ): Html =>
   h.keyed("section")(
-    key,
+    `related-list-${list.id}`,
     [h.Class("panel related-list")],
     [
       Disclosure.view(
         {
           id: `related-list-${index}`,
           isOpen: list.isOpen,
-          onToggle: (isOpen) => Message.ToggledRelatedList({ isOpen, key }),
+          onToggle: (isOpen) =>
+            Message.ToggledRelatedList({ isOpen, listId: list.id }),
           toView: (attributes) =>
             h.div(
               [],
@@ -322,7 +324,7 @@ const relatedListView = (
                     h.Class("disclosure-panel"),
                     h.AriaBusy(isRelatedLoading(list)),
                   ],
-                  list.isOpen ? relatedContentView(key, list, h) : []
+                  list.isOpen ? relatedContentView(list.id, list, h) : []
                 ),
               ]
             ),
@@ -333,8 +335,7 @@ const relatedListView = (
   );
 
 /**
- * The record's related lists, in metadata order (the page keeps them so,
- * each under the key it got when it was made).
+ * The record's related lists, in metadata order (the page keeps them so).
  *
  * @param model - The page.
  * @param h - The builder.
@@ -344,7 +345,7 @@ export const relatedListsView = (
   model: Model,
   h: HtmlBuilder<Message>
 ): Html => {
-  const lists = Record.toEntries(model.relatedLists);
+  const lists = model.relatedLists;
 
   return lists.length === 0
     ? h.empty

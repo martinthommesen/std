@@ -123,7 +123,7 @@ const openPickerWith = (users: MetaTable): Model => {
       purpose: "Open",
       record: ticketRecord,
     }),
-    Message.SucceededLoadTarget({ table: users })
+    Message.SucceededLoadTarget({ request: 1, table: users })
   );
 
   const picker = present(ready.pickers[ASSIGNEE]);
@@ -340,6 +340,37 @@ describe("a search refused with SchemaChanged", () => {
     revision: REVISION_5,
   });
 
+  it("takes only the answer to the target's latest request (review round 3)", () => {
+    const reloading = after(
+      openPickerWith(userTable),
+      Message.GotPickerMessage({
+        fieldId: ASSIGNEE,
+        message: Combobox.Message.UpdatedInputValue({ value: "Sa" }),
+      }),
+      refused
+    );
+
+    // The answer to the first request, arriving after the second was sent.
+    const late = after(
+      reloading,
+      Message.SucceededLoadTarget({ request: 1, table: userTable })
+    );
+
+    expect(late.targets).toStrictEqual(reloading.targets);
+    expect(
+      AsyncData.isRefreshing(late.targets[USER_TABLE_NAME] ?? AsyncData.Idle())
+    ).toBeTruthy();
+
+    const current = after(
+      late,
+      Message.SucceededLoadTarget({ request: 2, table: renamedUsers })
+    );
+
+    expect(
+      AsyncData.getData(current.targets[USER_TABLE_NAME] ?? AsyncData.Idle())
+    ).toStrictEqual(Option.some(renamedUsers));
+  });
+
   it("keeps the refusal, reloads the target's and the form's definitions, and searches again under them", () => {
     story(
       update,
@@ -355,7 +386,11 @@ describe("a search refused with SchemaChanged", () => {
       Command.resolve(SearchTargets, refused),
       expectOutMessage(OutMessage.SawCurrentRevision({ revision: REVISION_6 })),
       Command.expectExact(
-        LoadTarget({ revision: REVISION_5, table: USER_TABLE_NAME }),
+        LoadTarget({
+          request: 2,
+          revision: REVISION_5,
+          table: USER_TABLE_NAME,
+        }),
         LoadFormMetadata({
           maybeRevision: Option.some(REVISION_5),
           table: TICKET,
@@ -368,7 +403,7 @@ describe("a search refused with SchemaChanged", () => {
       }),
       Command.resolve(
         LoadTarget,
-        Message.SucceededLoadTarget({ table: renamedUsers })
+        Message.SucceededLoadTarget({ request: 2, table: renamedUsers })
       ),
       // The form's definitions are still loading: no search yet.
       Command.expectExact(

@@ -118,22 +118,22 @@ export const LoadClassMetadata = Command.define("LoadClassMetadata", {
  * the search filters on.
  */
 export const LoadTarget = Command.define("LoadTarget", {
-  args: { revision: SchemaRevision, table: Schema.String },
-  execute: ({ revision, table }) =>
+  args: { request: Schema.Int, revision: SchemaRevision, table: Schema.String },
+  execute: ({ request, revision, table }) =>
     fetchTableMetadata(table, Option.some(revision)).pipe(
       Effect.map((loaded) =>
-        Message.SucceededLoadTarget({ table: loaded.table })
+        Message.SucceededLoadTarget({ request, table: loaded.table })
       ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.catchTag("UnknownTable", () =>
         Effect.succeed(
-          Message.FailedLoadTarget({ error: "UnknownTable", table })
+          Message.FailedLoadTarget({ error: "UnknownTable", request, table })
         )
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadTarget({ error: UNAVAILABLE, table })
+        Message.FailedLoadTarget({ error: UNAVAILABLE, request, table })
       )
     ),
   messages: [
@@ -588,28 +588,40 @@ export const SearchTargets = Command.define("SearchTargets", {
   ],
 });
 
-/** Loads a related list's table metadata, for its columns. */
+/**
+ * Loads a related list's table metadata, for its columns; the answer names
+ * the list and the number of the request (decision 0020).
+ */
 export const LoadRelatedMetadata = Command.define("LoadRelatedMetadata", {
   args: {
-    key: Schema.String,
+    generation: Schema.Int,
+    listId: Schema.Int,
     revision: SchemaRevision,
     table: Schema.String,
   },
-  execute: ({ key, revision, table }) =>
+  execute: ({ generation, listId, revision, table }) =>
     fetchTableMetadata(table, Option.some(revision)).pipe(
       Effect.map((loaded) =>
-        Message.SucceededLoadRelatedMetadata({ key, ...loaded })
+        Message.SucceededLoadRelatedMetadata({ generation, listId, ...loaded })
       ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.catchTag("UnknownTable", () =>
         Effect.succeed(
-          Message.FailedLoadRelatedMetadata({ error: "UnknownTable", key })
+          Message.FailedLoadRelatedMetadata({
+            error: "UnknownTable",
+            generation,
+            listId,
+          })
         )
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadRelatedMetadata({ error: UNAVAILABLE, key })
+        Message.FailedLoadRelatedMetadata({
+          error: UNAVAILABLE,
+          generation,
+          listId,
+        })
       )
     ),
   messages: [
@@ -620,8 +632,8 @@ export const LoadRelatedMetadata = Command.define("LoadRelatedMetadata", {
 });
 
 const failedRelated =
-  (key: string, generation: number) => (error: RelatedError) =>
-    Message.FailedLoadRelatedRecords({ error, generation, key });
+  (listId: number, generation: number) => (error: RelatedError) =>
+    Message.FailedLoadRelatedRecords({ error, generation, listId });
 
 /**
  * Loads a page of a related list: `GET /tables/{table}/records` with
@@ -634,11 +646,11 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
     fields: Schema.String,
     filter: Schema.String,
     generation: Schema.Int,
-    key: Schema.String,
+    listId: Schema.Int,
     revision: SchemaRevision,
     table: Schema.String,
   },
-  execute: ({ cursor, fields, filter, generation, key, revision, table }) =>
+  execute: ({ cursor, fields, filter, generation, listId, revision, table }) =>
     Effect.gen(function* loadRelatedRecords() {
       const client = yield* StdApi;
 
@@ -668,24 +680,24 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
 
       return Message.SucceededLoadRelatedRecords({
         generation,
-        key,
+        listId,
         maybeRevision: responseRevision(response),
         page,
       });
     }).pipe(
       Effect.catchTag("SchemaChanged", () =>
-        Effect.succeed(failedRelated(key, generation)("SchemaChanged"))
+        Effect.succeed(failedRelated(listId, generation)("SchemaChanged"))
       ),
       Effect.catchTag("Unauthenticated", () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.catchTag("UnknownField", () =>
-        Effect.succeed(failedRelated(key, generation)("UnknownField"))
+        Effect.succeed(failedRelated(listId, generation)("UnknownField"))
       ),
       Effect.catchTag("UnknownTable", () =>
-        Effect.succeed(failedRelated(key, generation)("UnknownTable"))
+        Effect.succeed(failedRelated(listId, generation)("UnknownTable"))
       ),
-      Effect.orElseSucceed(() => failedRelated(key, generation)(UNAVAILABLE))
+      Effect.orElseSucceed(() => failedRelated(listId, generation)(UNAVAILABLE))
     ),
   messages: [
     Message.SucceededLoadRelatedRecords,

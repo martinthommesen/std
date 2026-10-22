@@ -22,7 +22,7 @@ import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { modifyFields } from "foldkit/struct";
 
-import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
+import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { listFieldsParameter } from "../../domain/list-columns.ts";
 import {
@@ -214,13 +214,17 @@ export const init = (config: InitConfig): UpdateReturn => ({
     maybeToday: Option.none(),
     metadata: Metadata.Loading(),
     mode: config.mode,
+    nextRelatedListId: 1,
+    nextTargetRequest: 1,
     pickers: {},
+    reconciledFields: [],
     record: StoredRecord.Idle(),
-    relatedLists: {},
+    relatedLists: [],
     serverErrors: {},
     staleChanges: [],
     submission: Submission.Idle(),
     table: config.table,
+    targetRequests: {},
     targets: {},
   },
 });
@@ -295,6 +299,57 @@ export const editableFieldsOf = (model: Model): readonly MetaField[] => {
 const keepExisting = <A>(existing: A): A => existing;
 
 /**
+ * Asks for a reference target's metadata (decision 0020, review round 3,
+ * Rule 2): the request gets the page's next request number, and only the
+ * answer to a table's latest request counts, so an older answer arriving
+ * after a newer one cannot replace it. Metadata already shown stays while
+ * the new one loads.
+ *
+ * @param table - The target table.
+ * @param revision - The form's revision.
+ * @returns The step.
+ */
+const askForTarget =
+  (table: string, revision: SchemaRevision): Step =>
+  (model) => {
+    const request = model.nextTargetRequest;
+
+    return {
+      commands: [LoadTarget({ request, revision, table })],
+      model: modifyFields(model, {
+        nextTargetRequest: (next) => next + 1,
+        targetRequests: Record.set(table, request),
+        targets: (known) =>
+          Record.set(
+            known,
+            table,
+            Option.match(
+              Option.flatMap(Record.get(known, table), AsyncData.getData),
+              {
+                onNone: () => TargetMetadata.Loading(),
+                onSome: (data) => TargetMetadata.Refreshing({ data }),
+              }
+            )
+          ),
+      }),
+    };
+  };
+
+/**
+ * Whether a target's answer is to the table's latest request.
+ *
+ * @param model - The page.
+ * @param table - The target table.
+ * @param request - The answered request's number.
+ * @returns True for the awaited answer.
+ */
+const isLatestTargetAnswer = (
+  model: Model,
+  table: string,
+  request: number
+): boolean => Option.contains(Record.get(model.targetRequests, table), request);
+
+/**
  * Creates the stateful controls the editable fields need and that the
  * page does not have yet: a Date Picker per date or date-time field, a
  * picker per reference field, and each picker target's metadata.
@@ -332,11 +387,10 @@ const setUpControls: Step = (model) =>
         ),
       ];
 
-      return {
-        commands: targets.map((table) =>
-          LoadTarget({ revision: meta.revision, table })
-        ),
-        model: modifyFields(model, {
+      return inSequence(
+        targets.map((table) => askForTarget(table, meta.revision))
+      )(
+        modifyFields(model, {
           datePickers: (pickers) =>
             Record.union(
               pickers,
@@ -355,17 +409,8 @@ const setUpControls: Step = (model) =>
               ]),
               keepExisting
             ),
-          targets: (known) =>
-            Record.union(
-              known,
-              Record.fromIterableWith(targets, (table) => [
-                table,
-                TargetMetadata.Loading(),
-              ]),
-              keepExisting
-            ),
-        }),
-      };
+        })
+      );
     },
   });
 
@@ -403,21 +448,35 @@ const resetPickerInputs = (model: Model): Model =>
 export const relatedKeyOf = (entry: MetaRelatedList): string =>
   `${entry.table}/${entry.field}`;
 
-const closedRelatedList = (entry: MetaRelatedList): RelatedList => ({
+/**
+ * A new, closed related list (decision 0020, review round 3, Rule 2): it
+ * gets the page's next list ID, which no other list of the page ever had
+ * or will have; its requests and answers carry that ID with their
+ * generation, so an answer meant for a list that is gone, or for an
+ * earlier list of the same name, reaches no list.
+ *
+ * @param id - Its ID.
+ * @param entry - Its entry.
+ * @returns The list.
+ */
+const closedRelatedList = (
+  id: number,
+  entry: MetaRelatedList
+): RelatedList => ({
   cursors: [Option.none()],
   entry,
   generation: 0,
+  id,
   isOpen: false,
   maybePendingCursors: Option.none(),
   metadata: RelatedMetadata.Idle(),
+  metadataGeneration: 0,
   records: RelatedRecords.Idle(),
 });
 
-type KeyedList = readonly [string, RelatedList];
-
 const isListOf =
   (entry: MetaRelatedList) =>
-  ([, list]: KeyedList): boolean =>
+  (list: RelatedList): boolean =>
     relatedKeyOf(list.entry) === relatedKeyOf(entry);
 
 /**
@@ -427,20 +486,20 @@ const isListOf =
  * new entry (metadata gives related lists no ID, so anything less certain
  * starts afresh).
  *
- * @param lists - The lists before, with their keys.
+ * @param lists - The lists before.
  * @param entries - The new metadata's entries.
  * @param entry - The new entry.
- * @returns The list it continues, with its key.
+ * @returns The list it continues.
  */
 const renamedListOf = (
-  lists: readonly KeyedList[],
+  lists: readonly RelatedList[],
   entries: readonly MetaRelatedList[],
   entry: MetaRelatedList
-): Option.Option<KeyedList> => {
+): Option.Option<RelatedList> => {
   const newNames = new Set(entries.map(relatedKeyOf));
 
   const gone = lists.filter(
-    ([, list]) =>
+    (list) =>
       list.entry.table === entry.table &&
       !newNames.has(relatedKeyOf(list.entry))
   );
@@ -458,27 +517,11 @@ const renamedListOf = (
 };
 
 /**
- * A key no other list has: the entry's name, else the name with a number.
- *
- * @param name - The entry's name.
- * @param taken - The keys in use.
- * @returns The key.
- */
-const freeKeyOf = (name: string, taken: ReadonlySet<string>): string => {
-  const numbered = (index: number): string =>
-    taken.has(`${name}#${index}`) ? numbered(index + 1) : `${name}#${index}`;
-
-  return taken.has(name) ? numbered(2) : name;
-};
-
-/**
- * The related lists of new metadata (decision 0020). A list keeps the key
- * it got when it was made (its entry's name then) for as long as it lives:
- * every request and answer of the list names that key, so an answer still
- * finds its list after the back-reference was renamed. Each entry keeps
- * its list (with the entry as the metadata now states it, so requests use
- * the field's current name), a renamed back-reference continues its list,
- * and a new entry gets a closed one under a free key.
+ * The related lists of new metadata, in its order (decision 0020). Each
+ * entry keeps its list (with the entry as the metadata now states it, so
+ * requests use the field's current name), a renamed back-reference
+ * continues its list, and a new entry gets a new list with the page's
+ * next list ID; a list whose entry is gone is gone with its ID.
  *
  * @param model - The page.
  * @param table - The endpoint's new metadata.
@@ -489,56 +532,49 @@ const syncRelatedLists = (model: Model, table: MetaTable): Model => {
     return model;
   }
 
-  const before = Record.toEntries(model.relatedLists);
+  const before = model.relatedLists;
 
   const kept = table.relatedLists.map((entry) =>
     Option.map(
       Option.orElse(Option.fromNullishOr(before.find(isListOf(entry))), () =>
         renamedListOf(before, table.relatedLists, entry)
       ),
-      ([key, list]): KeyedList => [
-        key,
-        modifyFields(list, { entry: () => entry }),
-      ]
+      (list) => modifyFields(list, { entry: () => entry })
     )
   );
 
-  const taken = new Set(
-    kept.flatMap((found) =>
-      pipe(
-        found,
-        Option.map(([key]) => key),
-        Option.toArray
+  const created = kept.filter(Option.isNone).length;
+
+  const lists = table.relatedLists.map((entry, index) =>
+    Option.getOrElse(kept[index] ?? Option.none(), () =>
+      closedRelatedList(
+        model.nextRelatedListId +
+          kept.slice(0, index).filter(Option.isNone).length,
+        entry
       )
     )
   );
 
-  const lists = table.relatedLists.map((entry, index): KeyedList => {
-    const found = kept[index] ?? Option.none();
-
-    if (Option.isSome(found)) {
-      return found.value;
-    }
-
-    const key = freeKeyOf(relatedKeyOf(entry), taken);
-
-    taken.add(key);
-
-    return [key, closedRelatedList(entry)];
-  });
-
   return modifyFields(model, {
-    relatedLists: () => Object.fromEntries(lists),
+    nextRelatedListId: (next) => next + created,
+    relatedLists: () => lists,
   });
 };
 
+const relatedListOf = (
+  model: Model,
+  listId: number
+): Option.Option<RelatedList> =>
+  Option.fromNullishOr(model.relatedLists.find((list) => list.id === listId));
+
 const writeRelatedList = (
   model: Model,
-  key: string,
+  listId: number,
   change: (list: RelatedList) => RelatedList
 ): Model =>
   modifyFields(model, {
-    relatedLists: (lists) => modifyEntry(lists, key, change),
+    relatedLists: (lists) =>
+      lists.map((list) => (list.id === listId ? change(list) : list)),
   });
 
 const relatedFilterOf = (list: RelatedList, recordId: string): string =>
@@ -565,7 +601,6 @@ const loadingRelatedPage =
 
 const relatedPageRequest = (
   model: Model,
-  key: string,
   list: RelatedList,
   recordId: string,
   cursors: CursorStack
@@ -582,14 +617,14 @@ const relatedPageRequest = (
             fields: listFieldsParameter(meta.table),
             filter: relatedFilterOf(list, recordId),
             generation,
-            key,
+            listId: list.id,
             revision: meta.revision,
             table: list.entry.table,
           }),
         ],
         model: writeRelatedList(
           model,
-          key,
+          list.id,
           loadingRelatedPage(generation, cursors)
         ),
       };
@@ -601,70 +636,75 @@ const relatedPageRequest = (
  * record are known. The page's cursor stack becomes the list's only when
  * the page loads (`receiveRelatedRecords`).
  *
- * @param key - The related list.
+ * @param listId - The related list.
  * @param toCursors - The cursor stack of the page, from the list.
  * @returns The step.
  */
 const requestRelatedPage =
-  (key: string, toCursors: (list: RelatedList) => CursorStack): Step =>
+  (listId: number, toCursors: (list: RelatedList) => CursorStack): Step =>
   (model) =>
-    Option.match(
-      Option.all([Record.get(model.relatedLists, key), recordOf(model)]),
-      {
-        onNone: () => ({ model }),
-        onSome: ([list, record]) =>
-          relatedPageRequest(model, key, list, record.id, toCursors(list)),
-      }
-    );
+    Option.match(Option.all([relatedListOf(model, listId), recordOf(model)]), {
+      onNone: () => ({ model }),
+      onSome: ([list, record]) =>
+        relatedPageRequest(model, list, record.id, toCursors(list)),
+    });
 
-const firstRelatedPage = (key: string): Step =>
-  requestRelatedPage(key, () => FIRST_PAGE);
+const firstRelatedPage = (listId: number): Step =>
+  requestRelatedPage(listId, () => FIRST_PAGE);
 
-const loadingRelatedMetadata = (list: RelatedList): RelatedList =>
-  modifyFields(list, {
-    metadata: (metadata) =>
-      Option.match(AsyncData.getData(metadata), {
-        onNone: () => RelatedMetadata.Loading(),
-        onSome: (data) => RelatedMetadata.Refreshing({ data }),
-      }),
-  });
+const loadingRelatedMetadata =
+  (generation: number) =>
+  (list: RelatedList): RelatedList =>
+    modifyFields(list, {
+      metadata: (metadata) =>
+        Option.match(AsyncData.getData(metadata), {
+          onNone: () => RelatedMetadata.Loading(),
+          onSome: (data) => RelatedMetadata.Refreshing({ data }),
+        }),
+      metadataGeneration: () => generation,
+    });
 
 const loadRelatedMetadata =
-  (key: string): Step =>
+  (listId: number): Step =>
   (model) =>
-    Option.match(
-      Option.all([Record.get(model.relatedLists, key), metaOf(model)]),
-      {
-        onNone: () => ({ model }),
-        onSome: ([list, meta]) => ({
+    Option.match(Option.all([relatedListOf(model, listId), metaOf(model)]), {
+      onNone: () => ({ model }),
+      onSome: ([list, meta]) => {
+        const generation = list.metadataGeneration + 1;
+
+        return {
           commands: [
             LoadRelatedMetadata({
-              key,
+              generation,
+              listId,
               revision: meta.revision,
               table: list.entry.table,
             }),
           ],
-          model: writeRelatedList(model, key, loadingRelatedMetadata),
-        }),
-      }
-    );
+          model: writeRelatedList(
+            model,
+            listId,
+            loadingRelatedMetadata(generation)
+          ),
+        };
+      },
+    });
 
 const toggleRelatedList = (
   model: Model,
-  key: string,
+  listId: number,
   isOpen: boolean
 ): UpdateReturn => {
-  const toggled = writeRelatedList(model, key, (list) =>
+  const toggled = writeRelatedList(model, listId, (list) =>
     modifyFields(list, { isOpen: () => isOpen })
   );
 
-  const isUnloaded = Option.exists(
-    Record.get(model.relatedLists, key),
-    (list) => AsyncData.isIdle(list.metadata)
+  const isUnloaded = Option.exists(relatedListOf(model, listId), (list) =>
+    AsyncData.isIdle(list.metadata)
   );
 
   return isOpen && isUnloaded
-    ? loadRelatedMetadata(key)(toggled)
+    ? loadRelatedMetadata(listId)(toggled)
     : { model: toggled };
 };
 
@@ -673,18 +713,18 @@ const isRelatedPaging = (list: RelatedList): boolean =>
 
 const pageRelated = (
   model: Model,
-  key: string,
+  listId: number,
   toCursors: (list: RelatedList) => Option.Option<CursorStack>
 ): UpdateReturn =>
   Option.match(
     pipe(
-      Record.get(model.relatedLists, key),
+      relatedListOf(model, listId),
       Option.filter((list) => !isRelatedPaging(list)),
       Option.flatMap(toCursors)
     ),
     {
       onNone: () => ({ model }),
-      onSome: (cursors) => requestRelatedPage(key, () => cursors)(model),
+      onSome: (cursors) => requestRelatedPage(listId, () => cursors)(model),
     }
   );
 
@@ -704,6 +744,11 @@ const previousRelatedCursors = (
     ? Option.some(list.cursors.slice(0, -1))
     : Option.none();
 
+const NAME_REFUSALS: ReadonlySet<RelatedError> = new Set([
+  "SchemaChanged",
+  "UnknownField",
+]);
+
 /**
  * Whether a related list's page was refused because of its names: the
  * definitions changed (`SchemaChanged`), or the back-reference field is
@@ -713,11 +758,6 @@ const previousRelatedCursors = (
  * @param list - The related list.
  * @returns True after such a refusal.
  */
-const NAME_REFUSALS: ReadonlySet<RelatedError> = new Set([
-  "SchemaChanged",
-  "UnknownField",
-]);
-
 const isRefusedRelatedPage = (list: RelatedList): boolean =>
   pipe(
     AsyncData.getError(list.records),
@@ -739,59 +779,78 @@ const isParentReadyFor = (model: Model, list: RelatedList): boolean =>
     ? AsyncData.isSuccess(model.metadata)
     : !AsyncData.isPending(model.metadata);
 
+/** A related list's answer: the list and the number of its request. */
+interface RelatedAnswer {
+  readonly listId: number;
+  readonly generation: number;
+}
+
+const isMetadataAnswerOf = (list: RelatedList, answer: RelatedAnswer) =>
+  list.id === answer.listId && list.metadataGeneration === answer.generation;
+
 /**
- * A related list's table metadata arrived: its first page is asked for
- * when the endpoint's metadata allows (`isParentReadyFor`); otherwise the
- * page is asked for when that metadata arrives (`requestWaitingRelated`),
- * and a refusal stays on screen until then.
+ * A related list's table metadata arrived (for the list that asked, at
+ * its latest request): its first page is asked for when the endpoint's
+ * metadata allows (`isParentReadyFor`); otherwise the page is asked for
+ * when that metadata arrives (`requestWaitingRelated`), and a refusal
+ * stays on screen until then.
  *
  * @param model - The page.
- * @param key - The related list.
+ * @param answer - The list and the number of its request.
  * @param meta - The related table's metadata and its revision.
  * @returns The page.
  */
 const receiveRelatedMetadata = (
   model: Model,
-  key: string,
+  answer: RelatedAnswer,
   meta: { readonly revision: SchemaRevision; readonly table: MetaTable }
 ): UpdateReturn => {
-  const known = writeRelatedList(model, key, (list) =>
+  const isAwaited = Option.exists(relatedListOf(model, answer.listId), (list) =>
+    isMetadataAnswerOf(list, answer)
+  );
+
+  if (!isAwaited) {
+    return { model };
+  }
+
+  const known = writeRelatedList(model, answer.listId, (list) =>
     modifyFields(list, {
       metadata: () => RelatedMetadata.Success({ data: meta }),
     })
   );
 
-  const canAsk = Option.exists(Record.get(known.relatedLists, key), (list) =>
+  const canAsk = Option.exists(relatedListOf(known, answer.listId), (list) =>
     isParentReadyFor(known, list)
   );
 
-  return canAsk ? firstRelatedPage(key)(known) : { model: known };
+  return canAsk ? firstRelatedPage(answer.listId)(known) : { model: known };
 };
 
 const failRelatedMetadata = (
   model: Model,
-  key: string,
+  answer: RelatedAnswer,
   error: MetaError
 ): PlainReturn => ({
-  model: writeRelatedList(model, key, (list) =>
-    modifyFields(list, {
-      metadata: (metadata) =>
-        Option.match(AsyncData.getData(metadata), {
-          onNone: () => RelatedMetadata.Failure({ error }),
-          onSome: (data) => RelatedMetadata.Stale({ data, error }),
-        }),
-    })
+  model: writeRelatedList(model, answer.listId, (list) =>
+    isMetadataAnswerOf(list, answer)
+      ? modifyFields(list, {
+          metadata: (metadata) =>
+            Option.match(AsyncData.getData(metadata), {
+              onNone: () => RelatedMetadata.Failure({ error }),
+              onSome: (data) => RelatedMetadata.Stale({ data, error }),
+            }),
+        })
+      : list
   ),
 });
 
 const receiveRelatedRecords = (
   model: Model,
-  key: string,
-  generation: number,
+  answer: RelatedAnswer,
   page: RecordPage
 ): PlainReturn => ({
-  model: writeRelatedList(model, key, (list) =>
-    list.generation === generation
+  model: writeRelatedList(model, answer.listId, (list) =>
+    list.generation === answer.generation
       ? modifyFields(list, {
           cursors: (cursors) =>
             Option.getOrElse(list.maybePendingCursors, () => cursors),
@@ -802,24 +861,19 @@ const receiveRelatedRecords = (
   ),
 });
 
-const isCurrentRelated = (
-  model: Model,
-  key: string,
-  generation: number
-): boolean =>
+const isCurrentRelated = (model: Model, answer: RelatedAnswer): boolean =>
   Option.exists(
-    Record.get(model.relatedLists, key),
-    (list) => list.generation === generation
+    relatedListOf(model, answer.listId),
+    (list) => list.generation === answer.generation
   );
 
 const failRelatedRecords = (
   model: Model,
-  key: string,
-  generation: number,
+  answer: RelatedAnswer,
   error: RelatedError
 ): Model =>
-  writeRelatedList(model, key, (list) =>
-    list.generation === generation
+  writeRelatedList(model, answer.listId, (list) =>
+    list.generation === answer.generation
       ? modifyFields(list, {
           maybePendingCursors: () => Option.none(),
           records: (records) =>
@@ -996,25 +1050,26 @@ const sawRevision = (
  * (`receiveRelatedMetadata`, `requestWaitingRelated`).
  *
  * @param model - The page.
- * @param key - The related list.
- * @param generation - The answered request's number.
+ * @param answer - The list and the number of the answered request.
  * @param error - Why it did not load.
  * @returns The page, reloading what the refusal needs.
  */
 const failRelatedPage = (
   model: Model,
-  key: string,
-  generation: number,
+  answer: RelatedAnswer,
   error: RelatedError
 ): UpdateReturn => {
-  if (!isCurrentRelated(model, key, generation)) {
+  if (!isCurrentRelated(model, answer)) {
     return { model };
   }
 
-  const failed = failRelatedRecords(model, key, generation, error);
+  const failed = failRelatedRecords(model, answer, error);
 
   return NAME_REFUSALS.has(error)
-    ? Update.combine(failed, [refreshMetadata, loadRelatedMetadata(key)])
+    ? Update.combine(failed, [
+        refreshMetadata,
+        loadRelatedMetadata(answer.listId),
+      ])
     : { model: failed };
 };
 
@@ -1030,16 +1085,16 @@ const isWaitingForPage = (list: RelatedList): boolean => {
 
 /**
  * Asks for the first page of each open related list that waits for one
- * (never loaded, or failed: refused for its names, or not answered) and whose table's
- * metadata is loaded, after the endpoint's metadata arrived.
+ * (never loaded, or failed: refused for its names, or not answered) and
+ * whose table's metadata is loaded, after the endpoint's metadata arrived.
  *
  * @param model - The page.
  * @returns It, with the requests.
  */
 const requestWaitingRelated: Step = (model) =>
   inSequence(
-    Record.toEntries(model.relatedLists).flatMap(([key, list]) =>
-      isWaitingForPage(list) ? [firstRelatedPage(key)] : []
+    model.relatedLists.flatMap((list) =>
+      isWaitingForPage(list) ? [firstRelatedPage(list.id)] : []
     )
   )(model);
 
@@ -1051,23 +1106,23 @@ const requestWaitingRelated: Step = (model) =>
  * again, with the back-reference's current name.
  *
  * @param model - The page.
- * @param key - The related list.
+ * @param listId - The related list.
  * @returns The page and its Commands.
  */
-const retryRelatedList = (model: Model, key: string): UpdateReturn =>
-  Option.match(Record.get(model.relatedLists, key), {
+const retryRelatedList = (model: Model, listId: number): UpdateReturn =>
+  Option.match(relatedListOf(model, listId), {
     onNone: () => ({ model }),
     onSome: (list) => {
       if (isRefusedRelatedPage(list) || AsyncData.isStale(model.metadata)) {
         return Update.combine(model, [
           refreshMetadata,
-          loadRelatedMetadata(key),
+          loadRelatedMetadata(listId),
         ]);
       }
 
       return AsyncData.isSuccess(list.metadata)
-        ? requestRelatedPage(key, (current) => current.cursors)(model)
-        : loadRelatedMetadata(key)(model);
+        ? requestRelatedPage(listId, (current) => current.cursors)(model)
+        : loadRelatedMetadata(listId)(model);
     },
   });
 
@@ -1354,12 +1409,7 @@ const reloadFailedTarget = (
       : { model };
   }
 
-  return {
-    commands: [LoadTarget({ revision, table: target })],
-    model: modifyFields(model, {
-      targets: Record.set(target, TargetMetadata.Loading()),
-    }),
-  };
+  return askForTarget(target, revision)(model);
 };
 
 /** What one picker search asks for. */
@@ -1594,7 +1644,15 @@ const retryRefusedSearches: Step = (model) =>
     }
   );
 
-const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
+const receiveTarget = (
+  model: Model,
+  target: MetaTable,
+  request: number
+): UpdateReturn => {
+  if (!isLatestTargetAnswer(model, target.name, request)) {
+    return { model };
+  }
+
   const known = modifyFields(model, {
     targets: Record.set(target.name, TargetMetadata.Success({ data: target })),
   });
@@ -1616,20 +1674,24 @@ const receiveTarget = (model: Model, target: MetaTable): UpdateReturn => {
  *
  * @param model - The page.
  * @param table - The target table.
+ * @param request - The answered request's number.
  * @param reason - Why its metadata did not load.
  * @returns The page.
  */
 const failTarget = (
   model: Model,
   table: string,
+  request: number,
   reason: MetaError
 ): PlainReturn =>
-  failTargetPickers(
-    modifyFields(model, {
-      targets: Record.set(table, TargetMetadata.Failure({ error: reason })),
-    }),
-    table
-  );
+  isLatestTargetAnswer(model, table, request)
+    ? failTargetPickers(
+        modifyFields(model, {
+          targets: Record.set(table, TargetMetadata.Failure({ error: reason })),
+        }),
+        table
+      )
+    : { model };
 
 /**
  * A picker's results: a new search's replace the list, "more results"
@@ -1682,15 +1744,6 @@ const receiveSearch = (
   model: writePicker(model, fieldId, answeredPicker(answer)),
 });
 
-const reloadingTarget = (
-  known: Model["targets"],
-  name: string
-): Model["targets"][string] =>
-  Option.match(Option.flatMap(Record.get(known, name), AsyncData.getData), {
-    onNone: () => TargetMetadata.Loading(),
-    onSome: (data) => TargetMetadata.Refreshing({ data }),
-  });
-
 /**
  * Reloads a target's metadata in the background, keeping it for the
  * pickers until the new one arrives.
@@ -1703,13 +1756,7 @@ const refreshTarget =
   (model) =>
     Option.match(Option.all([Option.fromNullishOr(table), metaOf(model)]), {
       onNone: () => ({ model }),
-      onSome: ([name, meta]) => ({
-        commands: [LoadTarget({ revision: meta.revision, table: name })],
-        model: modifyFields(model, {
-          targets: (known) =>
-            Record.set(known, name, reloadingTarget(known, name)),
-        }),
-      }),
+      onSome: ([name, meta]) => askForTarget(name, meta.revision)(model),
     });
 
 /**
@@ -1877,6 +1924,81 @@ const withReconciled = (model: Model, reconciled: Reconciled): Model =>
       });
 
 /**
+ * Whether the record on screen was read under other definitions than the
+ * form's metadata (its reread after a metadata change did not load): its
+ * values may carry old field names, so a save waits until it is read
+ * again (decision 0020).
+ *
+ * @param model - The page.
+ * @returns True while the record is not the metadata's.
+ */
+export const isRecordOutdated = (model: Model): boolean =>
+  !isCreating(model) &&
+  Option.isSome(recordOf(model)) &&
+  !Option.exists(metaOf(model), (meta) =>
+    Option.contains(model.maybeRecordRevision, meta.revision)
+  );
+
+/**
+ * Whether the page may judge the edits against its record now: on a
+ * create (no record) always; when editing, only with a record read (or
+ * saved) at the metadata's revision. Otherwise the record names its
+ * fields as other definitions do, and comparing by name would drop edits
+ * it seems not to deliver.
+ *
+ * @param model - The page.
+ * @returns True when the edits may be reconciled.
+ */
+const canReconcile = (model: Model): boolean =>
+  isCreating(model) ||
+  (Option.isSome(recordOf(model)) && !isRecordOutdated(model));
+
+/**
+ * The one reconciliation of the edits (decision 0020, review round 3,
+ * Rule 1): every arrival that may change what the form can send (its
+ * metadata, the concrete class's, a read of the record, a save's answer,
+ * a create turning into an edit) goes through here. Behind a gate: while
+ * the record is not the metadata's (`canReconcile`), nothing is judged;
+ * the arrival is stored, and the next read under the current metadata
+ * runs this once with everything that arrived. Otherwise the edits are
+ * judged against the definitions they were last judged with
+ * (`reconciledFields`, so a dropped field keeps the label the user saw)
+ * and the definitions now, then against the record as those show it;
+ * what can no longer be sent is dropped with a note.
+ *
+ * @param model - The page, with whatever just arrived stored.
+ * @returns It, with the edits reconciled, or unchanged behind the gate.
+ */
+const reconcileEdits = (model: Model): Model => {
+  if (!canReconcile(model)) {
+    return model;
+  }
+
+  const fields = fieldsOf(model);
+
+  const byDefinitions = withReconciled(
+    model,
+    reconcileWithMetadata(
+      model.edits,
+      model.reconciledFields,
+      fields,
+      isCreating(model)
+    )
+  );
+
+  const byRecord = isCreating(byDefinitions)
+    ? byDefinitions
+    : withReconciled(
+        byDefinitions,
+        reconcileWithRecord(byDefinitions.edits, fields, (field) =>
+          fieldShowOf(field, editedRecordOf(byDefinitions))
+        )
+      );
+
+  return modifyFields(byRecord, { reconciledFields: () => fields });
+};
+
+/**
  * Whether an answer about the concrete class's metadata is the one the
  * page waits for: for the record's class, asked at the metadata's current
  * revision (review round 2). An answer to a request made before the
@@ -1914,28 +2036,13 @@ const receiveClassMetadata = (model: Model, table: MetaTable): UpdateReturn => {
     return { model };
   }
 
-  const loaded = modifyFields(model, {
-    classMetadata: () => ClassMetadata.Success({ data: table }),
-  });
-
-  const byDefinitions = withReconciled(
-    loaded,
-    reconcileWithMetadata(
-      loaded.edits,
-      fieldsOf(model),
-      fieldsOf(loaded),
-      isCreating(loaded)
+  return setUpControls(
+    reconcileEdits(
+      modifyFields(model, {
+        classMetadata: () => ClassMetadata.Success({ data: table }),
+      })
     )
   );
-
-  const byRecord = withReconciled(
-    byDefinitions,
-    reconcileWithRecord(byDefinitions.edits, fieldsOf(byDefinitions), (field) =>
-      fieldShowOf(field, editedRecordOf(byDefinitions))
-    )
-  );
-
-  return setUpControls(byRecord);
 };
 
 /**
@@ -1983,20 +2090,15 @@ const receiveMetadata = (
     (reason) => reason === "SchemaChanged"
   );
 
-  // NOTE: edits are reconciled with the endpoint's new fields only; the
-  // concrete class's metadata and the record follow, and the record's
-  // reread reconciles again (`receiveRecord`).
-  const reconciled = isOtherRevision
-    ? reconcileWithMetadata(
-        model.edits,
-        fieldsOf(model),
-        formFieldsOf(table, Option.none()),
-        isCreating(model)
-      )
-    : { dropped: [], edits: model.edits };
+  // NOTE: on another revision the record on screen is not the metadata's
+  // until it is read again, so the gate holds the reconciliation back
+  // until that read (`reconcileEdits`); a create has no record, and is
+  // reconciled at once.
+  const reconcileIfMoved = (stepModel: Model): Model =>
+    isFirstLoad || isOtherRevision ? reconcileEdits(stepModel) : stepModel;
 
-  const loaded = syncRelatedLists(
-    withReconciled(
+  const loaded = reconcileIfMoved(
+    syncRelatedLists(
       modifyFields(model, {
         classMetadata: (classMetadata) =>
           isFirstLoad ? classMetadata : ClassMetadata.Idle(),
@@ -2006,9 +2108,8 @@ const receiveMetadata = (
             ? Submission.Outdated()
             : submission,
       }),
-      reconciled
-    ),
-    table
+      table
+    )
   );
 
   const next = Update.combine(loaded, [
@@ -2081,15 +2182,7 @@ const receiveRecord = (
       afterConflict ? Submission.Idle() : submission,
   });
 
-  const shown =
-    purpose === "Open"
-      ? read
-      : withReconciled(
-          read,
-          reconcileWithRecord(read.edits, fieldsOf(read), (field) =>
-            fieldShowOf(field, Option.some(record))
-          )
-        );
+  const shown = reconcileEdits(read);
 
   return sawRevision(
     Update.combine(resetPickerInputs(shown), [
@@ -2150,22 +2243,6 @@ const failRecord = (
 export const isReloading = (model: Model): boolean =>
   AsyncData.isRefreshing(model.metadata) ||
   (!isCreating(model) && AsyncData.isRefreshing(model.record));
-
-/**
- * Whether the record on screen was read under other definitions than the
- * form's metadata (its reread after a metadata change did not load): its
- * values may carry old field names, so a save waits until it is read
- * again (decision 0020).
- *
- * @param model - The page.
- * @returns True while the record is not the metadata's.
- */
-export const isRecordOutdated = (model: Model): boolean =>
-  !isCreating(model) &&
-  Option.isSome(recordOf(model)) &&
-  !Option.exists(metaOf(model), (meta) =>
-    Option.contains(model.maybeRecordRevision, meta.revision)
-  );
 
 const firstProblemField = (
   model: Model,
@@ -2404,30 +2481,11 @@ const receiveSave = (
     submission: () => Submission.Saved({ isVisible: true }),
   });
 
-  // NOTE: after a create, the later edits now judge by the update limits
-  // (a field writable only on create drops its edit with a note).
-  const asUpdate = wasCreating
-    ? withReconciled(
-        stored,
-        reconcileWithMetadata(
-          stored.edits,
-          fieldsOf(model),
-          fieldsOf(stored),
-          false
-        )
-      )
-    : stored;
-
-  // NOTE: the later edits now apply to the saved record; one it withholds
-  // or shows read-only is dropped with a note, as after any reread.
-  const rebased = isAtFormRevision
-    ? withReconciled(
-        asUpdate,
-        reconcileWithRecord(asUpdate.edits, fieldsOf(asUpdate), (field) =>
-          fieldShowOf(field, Option.some(withLabels))
-        )
-      )
-    : asUpdate;
+  // NOTE: the later edits now apply to the saved record (after a create,
+  // under the update limits): one it withholds or shows read-only is
+  // dropped with a note, as after any read. At another revision than the
+  // metadata's the gate holds this back until the reread.
+  const rebased = reconcileEdits(stored);
 
   const shown = Option.match(metaOf(rebased), {
     onNone: () => rebased,
@@ -2731,11 +2789,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedKeepSecret: ({ fieldId }) => forgetEdit(model, fieldId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ClickedNextRelatedPage: ({ key }) =>
-      pageRelated(model, key, nextRelatedCursors),
+    ClickedNextRelatedPage: ({ listId }) =>
+      pageRelated(model, listId, nextRelatedCursors),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ClickedPreviousRelatedPage: ({ key }) =>
-      pageRelated(model, key, previousRelatedCursors),
+    ClickedPreviousRelatedPage: ({ listId }) =>
+      pageRelated(model, listId, previousRelatedCursors),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedReloadDefinition: () => refreshMetadata(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -2746,7 +2804,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedRetry: () => retry(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ClickedRetryRelatedList: ({ key }) => retryRelatedList(model, key),
+    ClickedRetryRelatedList: ({ listId }) => retryRelatedList(model, listId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSave: () => save(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -2783,13 +2841,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedLoadRecord: ({ error, generation, maybeRevision }) =>
       failRecord(model, generation, error, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadRelatedMetadata: ({ error, key }) =>
-      failRelatedMetadata(model, key, error),
+    FailedLoadRelatedMetadata: ({ error, generation, listId }) =>
+      failRelatedMetadata(model, { generation, listId }, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadRelatedRecords: ({ error, generation, key }) =>
-      failRelatedPage(model, key, generation, error),
+    FailedLoadRelatedRecords: ({ error, generation, listId }) =>
+      failRelatedPage(model, { generation, listId }, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadTarget: ({ error, table }) => failTarget(model, table, error),
+    FailedLoadTarget: ({ error, request, table }) =>
+      failTarget(model, table, request, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedSaveRecord: ({ error, generation, maybeRevision }) =>
       failSave(model, generation, error, maybeRevision),
@@ -2847,20 +2906,30 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededLoadRecord: ({ generation, maybeRevision, purpose, record }) =>
       receiveRecord(model, generation, record, purpose, maybeRevision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadRelatedMetadata: ({ key, revision, table }) =>
-      receiveRelatedMetadata(model, key, { revision, table }),
+    SucceededLoadRelatedMetadata: ({ generation, listId, revision, table }) =>
+      receiveRelatedMetadata(
+        model,
+        { generation, listId },
+        { revision, table }
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadRelatedRecords: ({ generation, key, maybeRevision, page }) =>
+    SucceededLoadRelatedRecords: ({
+      generation,
+      listId,
+      maybeRevision,
+      page,
+    }) =>
       sawRevision(
         Update.combine(model, [
           (stepModel) =>
-            receiveRelatedRecords(stepModel, key, generation, page),
+            receiveRelatedRecords(stepModel, { generation, listId }, page),
           refreshIfNewer(maybeRevision),
         ]),
         maybeRevision
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadTarget: ({ table }) => receiveTarget(model, table),
+    SucceededLoadTarget: ({ request, table }) =>
+      receiveTarget(model, table, request),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededSaveRecord: ({ generation, maybeRevision, saved }) =>
       receiveSave(model, generation, saved, maybeRevision),
@@ -2879,8 +2948,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ToggledHistory: ({ isOpen }) => toggleHistory(model, isOpen),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ToggledRelatedList: ({ isOpen, key }) =>
-      toggleRelatedList(model, key, isOpen),
+    ToggledRelatedList: ({ isOpen, listId }) =>
+      toggleRelatedList(model, listId, isOpen),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     UpdatedText: ({ fieldId, text }) =>
       editField(model, fieldId, () => FieldInput.Text({ text })),

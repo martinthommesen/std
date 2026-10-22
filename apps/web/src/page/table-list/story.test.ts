@@ -429,6 +429,7 @@ describe("loading a stored filter", () => {
       described([
         LoadTargetTable({
           maybeRevision: Option.some(REVISION_3),
+          request: 1,
           table: "core.user",
         }),
       ])
@@ -440,7 +441,9 @@ describe("loading a stored filter", () => {
     story(
       update,
       given(stored.model),
-      message(Message.SucceededLoadTargetTable({ table: userTable })),
+      message(
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
+      ),
       Command.expectExact(
         listRequest({
           filter: Option.some('owner.name = "Bob"'),
@@ -790,7 +793,9 @@ describe("review fixes", () => {
           }),
         ]
       ),
-      message(Message.SucceededLoadTargetTable({ table: userTable })),
+      message(
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
+      ),
       Command.expectNone(),
       model((page) => {
         expect(page.query.maybeCondition).toStrictEqual(Option.none());
@@ -801,13 +806,41 @@ describe("review fixes", () => {
     );
   });
 
+  it("takes only the answer to a target table's latest request (review round 3)", () => {
+    const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
+
+    const refreshing = update(
+      update(
+        stored.model,
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
+      ).model,
+      Message.FailedLoadRecords({
+        error: "SchemaChanged",
+        generation: 3,
+        maybeRevision: Option.some(REVISION_4),
+      })
+    ).model;
+
+    // An answer to the first request, arriving after the second was sent.
+    const late = update(
+      refreshing,
+      Message.SucceededLoadTargetTable({
+        request: 1,
+        table: { ...userTable, label: "Old users" },
+      })
+    );
+
+    expect(late.model.targets).toStrictEqual(refreshing.targets);
+    expect(late.commands ?? []).toStrictEqual([]);
+  });
+
   it("after SchemaChanged, asks again only once the target tables are reloaded too", () => {
     const filtered = (() => {
       const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
 
       return update(
         stored.model,
-        Message.SucceededLoadTargetTable({ table: userTable })
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
       ).model;
     })();
 
@@ -832,12 +865,13 @@ describe("review fixes", () => {
       Command.expectExact(
         LoadTargetTable({
           maybeRevision: Option.some(REVISION_3),
+          request: 2,
           table: "core.user",
         })
       ),
       Command.resolve(
         LoadTargetTable,
-        Message.SucceededLoadTargetTable({ table: userTable })
+        Message.SucceededLoadTargetTable({ request: 2, table: userTable })
       ),
       Command.expectExact(
         listRequest({
@@ -866,7 +900,7 @@ describe("review fixes", () => {
 
       return update(
         stored.model,
-        Message.SucceededLoadTargetTable({ table: userTable })
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
       ).model;
     })();
 
@@ -891,6 +925,7 @@ describe("review fixes", () => {
         LoadTargetTable,
         Message.FailedLoadTargetTable({
           error: "Unavailable",
+          request: 2,
           table: "core.user",
         })
       ),
@@ -1408,7 +1443,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
     const filtered = after(
       applyStoredFilter(showing, Option.some(ownerIsBob)).model,
       [
-        Message.SucceededLoadTargetTable({ table: userTable }),
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable }),
         Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.cost }),
         Message.SucceededLoadRecords({
           generation: 4,
@@ -1446,7 +1481,9 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
       model((page) => {
         expect(AsyncData.isPending(page.records)).toBeTruthy();
       }),
-      message(Message.SucceededLoadTargetTable({ table: userTable })),
+      message(
+        Message.SucceededLoadTargetTable({ request: 2, table: userTable })
+      ),
       model((page) => {
         expect(page.isReloadDue).toBeFalsy();
         expect(page.address.sort).toStrictEqual(Option.none());
@@ -1549,7 +1586,7 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
     const refreshing = after(
       applyStoredFilter(showing, Option.some(costEmptyAndBob)).model,
       [
-        Message.SucceededLoadTargetTable({ table: userTable }),
+        Message.SucceededLoadTargetTable({ request: 1, table: userTable }),
         Message.SucceededLoadRecords({
           generation: 3,
           maybeRevision: Option.some(REVISION_4),
