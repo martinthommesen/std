@@ -763,11 +763,18 @@ const storedOf = Effect.fn("RecordSchemaProperty.storedOf")(function* storedOf(
   meta: MetaTable
 ) {
   const http = yield* TestHttpClient;
+  const names = meta.fields.map((field) => field.name);
 
+  // Every field is selected explicitly, so retired ones are delivered too.
+  // A caller who can read no field has nothing to select: an empty `fields`
+  // is a malformed parameter (`400 InvalidRequest`), so the default
+  // selection (empty for that caller) is read instead.
   const response = yield* http.get(
-    recordPath(table, id, {
-      fields: meta.fields.map((field) => field.name).join(","),
-    }),
+    recordPath(
+      table,
+      id,
+      names.length === 0 ? {} : { fields: names.join(",") }
+    ),
     { token }
   );
 
@@ -1096,6 +1103,24 @@ const plainField = (
  * of them; this makes the coverage gate independent of the seed, as the
  * error fuzz's targeted phase does (decision 0014).
  */
+/**
+ * Regression for seed -936010053: a table whose every field the restricted
+ * user cannot read. Its metadata has no fields, and the stored record of an
+ * update must still be read (with the default selection, not `fields=`).
+ */
+const ALL_HIDDEN_TABLE: TableSpec = {
+  autoNumber: false,
+  bodies: [
+    { extra: "none", values: [] },
+    { extra: "unknown", values: [] },
+  ],
+  fields: [
+    plainField("text", { kind: "text" }, { hiddenFromTester: true }),
+    plainField("integer", { kind: "integer" }, { hiddenFromTester: true }),
+    plainField("boolean", { kind: "boolean" }, { hiddenFromTester: true }),
+  ],
+};
+
 const COVERAGE_TABLE: TableSpec = {
   autoNumber: false,
   bodies: [
@@ -1165,6 +1190,7 @@ describe("recordSchema property", () => {
           );
 
           yield* runTable(COVERAGE_TABLE, context);
+          yield* runTable(ALL_HIDDEN_TABLE, context);
 
           assert.deepStrictEqual(mismatches, []);
           assert.isFalse(
