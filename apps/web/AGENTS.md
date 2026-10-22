@@ -7,6 +7,7 @@ Before changing anything here, read the root [`AGENTS.md`](../../AGENTS.md) (in 
 - Requests that act on metadata send its revision: wrap them in `atRevision(...)` (`src/std-client.ts`) with the revision of the metadata they were built from, and read the response's with `responseMode: "decoded-and-response"` and `responseRevision` (see `src/page/table-list/command.ts`).
 - Labelled Foldkit UI controls (`src/view/controls.ts`) and the Date Picker layout (`src/view/date-picker.ts`) are shared; pages use them rather than laying out controls again.
 - A stored filter (condition AST, fields by ID) loads into a list page only through `applyStoredFilter` (`src/page/table-list/update.ts`).
+- What becomes of a form's edits when its definitions change is decided in one place, `src/domain/stale-edits.ts` (kept, flagged, or dropped with a note); what the schema engine refuses per definition record that metadata cannot say is in `src/domain/definition-limits.ts` (decision 0020).
 - Browser tests use the fixture-free steps in `test/browser/app.ts`. `launchBrowser` (`test/browser/support.ts`) gives Chromium a fontconfig file of its own, made per run: the system configuration where there is one, plus the DejaVu fonts of the pinned dev dependency `dejavu-fonts-ttf`. Without any font, the headless shell aborts as soon as a layout measures text. Nothing needs setting by hand.
 
 - `pnpm --filter @std/web dev`: the Vite dev server, with DevTools; `/api` goes to a running `std serve` (`STD_WEB_API_TARGET`, default `http://127.0.0.1:8080`).
