@@ -496,8 +496,8 @@ const restrictedStaysHidden = async (
 
   const context = await browser.newContext();
   const page = await context.newPage();
-  const everything = captureResponses(page);
-  const bodies = captureApiBodies(page);
+  const everything = await captureResponses(page);
+  const bodies = await captureApiBodies(page);
   const { L, M, S } = fixture.records;
 
   await signIn(page, origin, BOB);

@@ -711,6 +711,26 @@ const hiddenFromTheAgent = async (
 };
 
 /**
+ * What kind of response a URL of the app is.
+ *
+ * @param url - The URL.
+ * @returns `api`, `script`, `style` or `document`.
+ */
+const responseKind = (url: string): string => {
+  const { pathname } = new URL(url);
+
+  if (pathname.startsWith("/api/")) {
+    return "api";
+  }
+
+  if (pathname.endsWith(".js")) {
+    return "script";
+  }
+
+  return pathname.endsWith(".css") ? "style" : "document";
+};
+
+/**
  * As the agent: the customer email of another agent's incidents shows as
  * restricted in the list, never as empty; the agent's own show their
  * value; the internal cost is no column at all. No response the browser
@@ -732,8 +752,8 @@ const restrictedFieldsStayHidden = async (
   const hidden = await hiddenFromTheAgent(origin, fixture);
   const context = await browser.newContext();
   const page = await context.newPage();
-  const everything = captureResponses(page);
-  const bodies = captureApiBodies(page);
+  const everything = await captureResponses(page);
+  const bodies = await captureApiBodies(page);
 
   const nothingHiddenAfter = async (step: string) => {
     await assertHiddenValuesAbsent(page, everything, hidden, step);
@@ -741,6 +761,17 @@ const restrictedFieldsStayHidden = async (
 
   await signIn(page, origin, visitorOf(fixture.agent));
   await nothingHiddenAfter("sign-in");
+
+  // The capture holds every kind of response with its body: the document,
+  // the script, the stylesheet and the API's answers.
+  const signedIn = await everything();
+
+  const kinds = signedIn.flatMap(({ body, url }) =>
+    body === "" ? [] : [responseKind(url)]
+  );
+
+  assert.includeMembers(kinds, ["document", "script", "style", "api"]);
+
   await openTableList(page, origin, INCIDENTS);
   await setPageSize(page, 50);
   await nothingHiddenAfter("the incident list");

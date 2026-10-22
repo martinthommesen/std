@@ -22,6 +22,7 @@ import { Effect } from "effect";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { inject } from "vitest";
 
+import { captureResponses } from "./app.ts";
 import {
   callWhenConnected,
   devToolsMcp,
@@ -104,18 +105,26 @@ const scriptReadable = async (page: Page): Promise<string> =>
 /**
  * One visitor's whole session in the browser.
  *
+ * With `recorded`, the response recorder of the restricted-field checks
+ * (`captureResponses`) holds every response before the page gets it; the
+ * session must behave exactly the same (decision 0020, "CI:
+ * deterministic response capture").
+ *
  * @param browser - The browser.
  * @param origin - The app's origin.
  * @param visitor - Who signs in.
+ * @param recorded - Whether the response recorder runs.
  * @returns Nothing; fails on the first difference.
  */
 const sessionInTheBrowser = async (
   browser: Browser,
   origin: string,
-  visitor: Visitor
+  visitor: Visitor,
+  recorded: boolean
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
+  const responses = recorded ? await captureResponses(page) : null;
 
   // A wrong password first: the real server's refusal reaches the form.
   await page.goto(`${origin}/sign-in`);
@@ -185,6 +194,20 @@ const sessionInTheBrowser = async (
 
   await page.goto(`${origin}/`);
   await page.waitForURL(`${origin}/sign-in`);
+
+  if (responses !== null) {
+    // The recorder held the session's answers, the refusal's included.
+    const held = await responses();
+    const paths = held.map(({ url }) => new URL(url).pathname);
+
+    assert.includeMembers(paths, [
+      "/sign-in",
+      "/api/v1/auth/cookie-sign-in",
+      "/api/v1/auth/me",
+      "/api/v1/auth/sign-out",
+    ]);
+  }
+
   await context.close();
 };
 
@@ -246,19 +269,29 @@ const forgedPost = async (page: Page, url: string, target: string) => {
  * @param browser - The browser.
  * @param origin - STD's origin.
  * @param forgingOrigin - The other page's origin.
+ * @param recorded - Whether the response recorder runs on both pages.
  * @returns Nothing; fails on the first difference.
  */
 const forgedPosts = async (
   browser: Browser,
   origin: string,
-  forgingOrigin: string
+  forgingOrigin: string,
+  recorded: boolean
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  if (recorded) {
+    await captureResponses(page);
+  }
+
   await signIn(page, origin, BOB);
 
   const forging = await context.newPage();
+
+  if (recorded) {
+    await captureResponses(forging);
+  }
 
   // The browser sends the SameSite=Strict cookie along (same site), and
   // only the missing STD-Client header gets the posts refused.
@@ -326,10 +359,17 @@ describe("web shell in a browser", () => {
           const server = yield* stdServe(database.url, inject("webRoot"));
           const browser = yield* launchBrowser;
 
-          for (const visitor of [ADA, BOB]) {
-            yield* Effect.promise(async () => {
-              await sessionInTheBrowser(browser, server.origin, visitor);
-            });
+          for (const recorded of [false, true]) {
+            for (const visitor of [ADA, BOB]) {
+              yield* Effect.promise(async () => {
+                await sessionInTheBrowser(
+                  browser,
+                  server.origin,
+                  visitor,
+                  recorded
+                );
+              });
+            }
           }
         }).pipe(Effect.scoped)
     );
@@ -346,9 +386,16 @@ describe("web shell in a browser", () => {
             forgingPages(server.origin)
           );
 
-          yield* Effect.promise(async () => {
-            await forgedPosts(browser, server.origin, forgingOrigin);
-          });
+          for (const recorded of [false, true]) {
+            yield* Effect.promise(async () => {
+              await forgedPosts(
+                browser,
+                server.origin,
+                forgingOrigin,
+                recorded
+              );
+            });
+          }
         }).pipe(Effect.scoped)
     );
 
