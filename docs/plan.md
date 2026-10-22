@@ -1,21 +1,30 @@
 # STD platform core: plan
 
-Status: revised 2026-10-20 after Martin's review. Nothing started yet. Awaiting Martin's sign-off.
+Status: revised 2026-10-20 after Martin's review; re-staged 2026-10-22 for Martin's TM Forum, ODA and ITIL requirement (decision 0021), and signed off by Martin on 2026-10-22 with every open decision accepted as recommended. Stage 0, Step 1 (`v0.0.1`) and Step 2 (`v0.0.2`) are done; Step 3 is next.
 
 **Goal of this milestone:** the platform core of an open source ServiceNow alternative. That means generic tables, records, forms, access rules and history that apps sit on top of, not a specific app. Long term, companies should be able to switch to STD when ServiceNow no longer fits or costs too much.
 
 **Direction (Martin, 2026-10-20):** aim for feature parity with ServiceNow, but as a ground-up modern "2.0" without its quirks and tech debt. STD copies the functionality, not the look, names, URLs, API or query syntax. ServiceNow is the feature checklist, not the spec. Switching is handled later by a migration toolkit that maps ServiceNow data onto STD.
 
+**Standards (Martin, 2026-10-22, hard requirement):** strict TM Forum, ODA and ITIL compatibility on everything, from Step 3 on (decision 0021):
+
+- STD's own generic API follows the TMF630 REST API Design Guidelines (Contracts 10).
+- Standard TMF Open APIs are shipped as mappings onto STD tables, and each passes its conformance gate in CI: TMF621 Trouble Ticket, TMF632 Party, TMF669 Party Role, TMF672 User Roles and Permissions, TMF688 Event with the hub/listener pattern, TMF638 Service Inventory, TMF639 Resource Inventory, TMF641 Service Ordering and TMF622 Product Ordering (Contracts 11, 12).
+- The ITIL practices behind them are incident, problem, change enablement, service request and service configuration management. Their behaviors are tested like any other guarantee (Contracts 14).
+- STD is packaged as ODA Components, and CI deploys them on the open source ODA Canvas (Contracts 13).
+
+Where the standards and ServiceNow differ, the standards win. ServiceNow stays the feature checklist. `v0.0.2` ships the generic UI as planned, and the requirement applies from Step 3.
+
 **Stack (chosen by Martin):** TypeScript + Effect 4 on Node 26, TypeScript 7 strict, pnpm monorepo, Postgres 18 through `@effect/sql-pg` behind STD's own SQL layer, a [Foldkit](https://foldkit.dev) + Vite web app (Martin, 2026-10-21, replacing React). See "Stack" and "Effect".
 
 ## How this plan is organized
 
-- Five stages: Stage 0 (architecture spike), then Steps 1 to 4. Each stage has a gate: evidence that must exist, as passing CI tests or committed measurements, before the next stage starts. The gates use Martin's review table as their base.
+- Six stages: Stage 0 (architecture spike), then Steps 1 to 5. Steps 3 to 5 were re-staged on 2026-10-22 (decision 0021): the old Step 3 items are split between Step 3 and Step 4, and the old Step 4 (release) is now Step 5. A contract that says "Step 4" for a release item means Step 5. Each stage has a gate: evidence that must exist, as passing CI tests or committed measurements, before the next stage starts. The gates use Martin's review table as their base.
 - Each stage is split into workstreams. A workstream names one observable guarantee and the test that proves it. Workstreams replace the old "four PRs"; a workstream can take several PRs.
 - Each PR names its workstream and adds or extends at least one of that workstream's proving tests, which pass in that PR. Code with no observable effect yet lands in the same PR as the first test that exercises it.
-- Implementation detail lives in "STD core contracts". Its sections 1 to 8 match the eight points of Martin's review; section 9 covers the Effect toolchain. This plan points to sections by name.
+- Implementation detail lives in "STD core contracts". Its sections 1 to 8 match the eight points of Martin's review; section 9 covers the Effect toolchain; sections 10 to 14 cover the standards (TMF630, the TMF Open API mappings, events, ODA Components and ITIL practices). This plan points to sections by name.
 - Each stage ends with something anyone can run on their own machine.
-- Each completed step is tagged as a pre-release (`v0.0.1` after Step 1, and so on), so the Step 4 upgrade test starts from a real earlier release. [judgment]
+- Each completed step is tagged as a pre-release (`v0.0.1` after Step 1, and so on), so the Step 5 upgrade test starts from a real earlier release. [judgment]
 
 ## Stage 0. Architecture spike
 
@@ -145,31 +154,40 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 
 **Runnable result.** `docker compose up`, open the browser, sign in as `admin` or `agent` from `examples/helpdesk`. Tag `v0.0.2`.
 
-## Step 3. Behavior and imports
+## Step 3. Behavior, the TMF630 API and the ITIL helpdesk
 
-**Purpose.** Behavior that admins configure without code, and a way to bring data in, both with explicit commit boundaries and concurrency-safe outcomes.
+**Purpose.** Behavior that admins configure without code, with explicit commit boundaries; STD's own API reworked to TMF630; events delivered to TMF listeners from the outbox; and the helpdesk rebuilt as ITIL incident and problem management behind TMF621. The new requirement applies from this step (decision 0021).
 
-**Gate.** Deterministic rules, explicit commit boundaries, resumable imports and concurrency-safe reconciliation. Concretely:
+**Gate.** Deterministic rules, explicit commit boundaries, a TMF630-conformant generic API with every Step 0 to 2 guarantee intact, events at least once and in per-record order, and the first TMF Open API passing its conformance kit. Concretely, in CI against Postgres 18:
 
 - Rule order is deterministic (order number, then stable ID), and the same inputs give the same committed state.
 - A failing after-write rule rolls back the whole transaction, nested saves included, even when hook code catches the nested failure.
 - After-commit effects run only from the outbox. Their record writes commit in one transaction with the fenced `done` update, so killing the worker between the writes and `done` causes zero duplicate writes. External calls get `change_id` as their idempotency key.
 - Outbox worker: the delivery soak test, and the lease-fencing test (a worker paused past its lease cannot mark the delivery done or failed, and n+1 is claimed only after n is done).
-- Rules and hooks follow the concrete class: resolving an incident through `/helpdesk.ticket` without resolution notes is refused.
-- Import resume: killing the runner after batch 3 of 10 ends with one record per source row, one result per row and no duplicate identity mappings.
-- Concurrency: the match-key race ends with exactly one record; a concurrent user edit to a mapped field is reported as a conflict under `skip`.
-- Re-importing an unchanged 10,000-row file creates no versions, change entries, deliveries or rule runs.
-- Grouped and one-row-at-a-time imports are equivalent, and no `SAVEPOINT` appears in the statement log. Equivalent means equal field values, versions, change-entry field maps and row results, compared after mapping generated IDs by source row and ignoring timestamps and operation IDs.
-- The helpdesk example uses rules to fill in fields and to require resolution notes when an incident is resolved.
+- Rules and hooks follow the concrete class: resolving an incident through `/api/v2/helpdesk.ticket` without resolution notes is refused.
+- TMF630: every rule of Contracts 10 has a passing test in `tmf630-conformance`. The Contracts 3 acceptance tests and `error-fuzz` run against `/api/v1` and `/api/v2` and pass on both. For generated TMF queries, the equivalent condition-syntax filter returns the same IDs in the same order (`tmf-filter-equivalence`).
+- `/api/v1` is frozen: the release-compatibility step runs `v0.0.2`'s quickstart unchanged against this branch, and every `/api/v1` response carries the `Deprecation` header.
+- Events: a listener registered through a hub receives one event per committed matching change, per record in version order, at least once, with an `eventId` stable across retries; never an event for a rolled-back save, for a record the registering user cannot see, of a type whose trigger fields that user cannot read on both images, or naming a field that user cannot read, also when rights change before delivery; events reach exactly the registered callback URL (`hub-delivery`, `hub-soak`, `hub-payload-filter`, `hub-event-authz`, `hub-callback-path`).
+- TMF621: TM Forum's TMF621 CTK at the pinned version passes under the runner's criteria (Contracts 11.1: every expected mandatory case passed, nothing failed, skipped or pending, a fresh report from the pinned image; `ctk-runner` proves the runner on bad reports), and every TMF621 response validates against the pinned OpenAPI document (`tmf-oas-contract`). TMF688 passes its OpenAPI contract tests (it has no CTK, Contracts 12.3).
+- Aggregates and patches: a write of a ticket's note or party through any API changes the ticket's version, history and events in the same transaction; owner references never change; owners are settled to a fixed point and persisted once per transaction without recursive saves; record rules of every phase and action kind behave as Contracts 4.10 declares (`aggregate-race`, `aggregate-ownership`, `aggregate-finalize`, `record-rule-actions`, `aggregate-quantifiers`, `tmf-arrays`); a JSON Patch is evaluated against the locked version (`json-patch-race`).
+- Requirements matrix (Contracts 15): `check-conformance-matrix --gate step3` passes for TMF630, TMF621, TMF688 and the Step 3 rows of Contracts 14, so every normative requirement of those specifications names a passing test or an exclusion Martin decided.
+- Party foundation: every user has exactly one individual after the upgrade from `v0.0.2` (the `data` migration, rerun and kill-resume included), and every new user gets one; a server refuses to start while a `data` migration is incomplete, and `doctor` reports it (`party-foundation`, `data-migration-interrupted`).
+- ITIL: incident priority follows the impact × urgency matrix for every cell through the generic API, TMF621 and the browser; the incident and problem state models refuse every transition outside Contracts 14; a known error needs a workaround; resolving a problem returns its waiting incidents to work (`itil-incident`, `itil-problem`).
+- The helpdesk set v2 to v3 upgrade (the ITIL rebuild) keeps every Step 2 incident, its history and the local overrides of the Step 2 upgrade test.
+- ODA Canvas probe: a stub component is deployed on the pinned ODA Canvas on kind in GitHub Actions, and the measurements are committed (time, disk, failure rate over 10 runs). This step's gate needs the measurements, not a green deployment.
 
 **Includes.**
 
 - Record rules on the three hook phases: before-write, after-write, after-commit (Contracts 4.1). After-commit rules are the first real outbox consumer.
 - The outbox worker (Contracts 4.6): claim, leases with fencing, backoff, dead letters, an admin view.
 - Form rules (conditional required, read-only, hidden) with browser evaluation that can return Unknown, and the form-state endpoint (Contracts 5.8, 6.3).
-- Groups, nested roles, roles from group membership; API tokens; explain mode; an access-rule editor built on the filter builder; `myGroups` in conditions; one reference hop in access-rule conditions.
-- CSV and JSON import with source systems and the external identity mapping, matching, field-level conflict detection, reference resolution, jobs with batches, checkpoints, resume, reports and dry run (Contracts 7).
-- `RecordService.saveBatch` (Contracts 7.7).
+- The generic API v2 under `/api/v2` per TMF630 (Contracts 10): flat resources with `id`, `href`, `@type`, `@baseType` and `@schemaLocation`, EntityRef references, `fields`, TMF filtering mapped onto the condition AST, `offset`/`limit` and `after` cursors, `X-Total-Count` and `X-Result-Count`, merge-patch and JSON Patch, the TMF Error shape, hubs. `/api/v1` is frozen and deprecated until `v0.1.0`. The web app, the quickstart and the per-table OpenAPI move to v2.
+- Hub/listener on every API and TMF688 topics and events, as an outbox consumer that calls registered callbacks (Contracts 12).
+- The TMF Open API framework (Contracts 11.1): mapping a TMF resource onto a class subtree, attribute and state maps, embedded arrays as child records, polymorphic `@type`, the CTK runner and OpenAPI contract tests in CI.
+- The party foundation in `core` (`core.party`, `core.individual`, `core.organization`, `core.user.individual`) with a `data` migration that gives every existing user an individual (Contracts 1.9, 11.3).
+- Aggregate parts (Contracts 6.5, 11.1) and the requirements matrix with its CI check (Contracts 15).
+- TMF621 Trouble Ticket over ITIL incident and problem management; the helpdesk set v3 rebuilt on it (Contracts 11.2, 14).
+- The ODA Canvas probe (Contracts 13.6).
 
 **Workstreams.**
 
@@ -178,44 +196,94 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 | 3A Hooks and record rules | Rules run in a fixed order inside defined commit boundaries, chosen by the concrete class | Rule-order test; after-write rollback test; incident-through-ticket test; renaming a field that a record rule reads and writes keeps the rule working |
 | 3B Outbox worker | Per-record delivery order holds under crashes and lease expiry; in-database effects happen once | Soak test; lease-fencing test; crash-before-`done` test |
 | 3C Form rules | The browser never guesses; the server's verdict is binding | Browser soundness property test; form-state test |
-| 3D Identity and access admin | Explain mode names the rule that decided, and agrees with enforcement | Property test comparing explain output with enforced decisions [judgment] |
-| 3E Import reconciliation | Imports are resumable, re-runnable and safe under concurrent edits | Resume, match-key race, concurrent-edit and unchanged re-import tests |
-| 3F Bulk save | Grouping is never observable | Equivalence test; no-`SAVEPOINT` test |
+| 3G TMF630 generic API | Every generic route follows Contracts 10, and no Step 0 to 2 guarantee weakens on it | the TMF630 v4.2.0 rows of the requirements matrix; `tmf630-conformance`; `json-patch-race`; the Contracts 3 tests and `error-fuzz` on v1 and v2; `tmf-filter-equivalence` property test; browser tests on v2; release compatibility on the frozen v1 |
+| 3H Events and hubs | A listener gets exactly the committed changes it may read, per record in order, at least once, deduplicable by `eventId`, and no event whose existence reveals a field it cannot read | `hub-event-authz`, `hub-callback-path`, `hub-delivery`, `hub-soak` (worker killed mid-delivery), `hub-payload-filter`, `hub-unregister`; TMF688 OpenAPI contract tests |
+| 3T TMF API framework and requirements matrix | A TMF API never shows or accepts more than the record service allows the caller; an aggregate changes whenever a part does; a mapped API passes its conformance gate; every normative requirement is tested or excluded by Martin | `tmf-noninterference` (the Contracts 3 hidden-field tests through TMF621); `aggregate-race`; `aggregate-ownership`; `aggregate-finalize`; `tmf-arrays`; `tmf-oas-contract`; `ctk-runner`; the CTK job; `conformance-matrix-check` |
+| 3P Party foundation | Every user, old and new, has exactly one individual, so TMF621 names parties consistently; an interrupted backfill never goes unnoticed | `party-foundation` (backfill from `v0.0.2`, rerun, kill and resume, concurrent user creation); `data-migration-interrupted` |
+| 3I ITIL incident and problem on TMF621 | ITIL behaviors hold the same through the generic API, TMF621 and the browser | TMF621 CTK; `itil-incident`; `itil-problem`; `helpdesk-v3-upgrade`; browser test of the incident form |
+| 3K ODA Canvas probe | The Step 5 Canvas gate rests on measurements, not hope | Committed probe results: Canvas install time, disk use and failures over 10 runs on `ubuntu-latest` |
 
-**Runnable result.** `examples/helpdesk/import.sh` imports a sample CSV twice (second run all `unchanged`), then the browser shows rules filling fields and requiring resolution notes. Tag `v0.0.3`.
+**Runnable result.** `docker compose up`, then the browser shows the ITIL helpdesk (rules computing priority and requiring resolution notes); `examples/helpdesk/tmf621.sh` opens, updates and resolves a trouble ticket through TMF621 while `examples/listener` prints the events it receives; `pnpm ctk tmf621` runs TM Forum's kit against the running server. Tag `v0.0.3`.
 
-## Step 4. Release (v0.1)
+## Step 4. Identity, CMDB, orders and imports
 
-**Purpose.** Ship v0.1.0 with measured performance and proven upgrade, backup and recovery paths.
+**Purpose.** Parties, roles and permissions behind TMF632, TMF669 and TMF672; the CMDB behind TMF638 and TMF639; ITIL change enablement and service requests behind TMF641 and TMF622; and the import path that loads CMDB and party data, with concurrency-safe reconciliation.
 
-**Gate.** Measured import and query performance, upgrade test, backup restoration and recovery documentation. Concretely:
+**Gate.** Every TMF API of this step passes its conformance gate, the ITIL change and request models hold, explain mode agrees with enforcement, and imports are resumable and concurrency-safe. Concretely:
 
-- A 100,000-row import on the reference machine: total time recorded, every batch commits in under 2 s, no `SAVEPOINT`.
-- The benchmark reruns at 10M records with Q1 to Q7 and W1 to W3 issued through the record service (STD-generated SQL, unrestricted and restricted callers) and meets the Contracts 2.6 budgets.
-- Release upgrade: from `v0.0.3` with helpdesk, 10,000 records with history and customizations, the candidate's `std upgrade` leaves `doctor` exiting 0, content checksums unchanged except where a documented migration changes them, every customization effective, and exactly the expected conflicts open.
-- Backup and restore: a `pg_dump` taken under load during a change set's follow-up phase restores into an empty Postgres 18; the change set completes, auto-numbers continue, sign-in works, and outbox consumers that dedupe by change ID apply each repeated delivery once.
-- Restore then upgrade: a `v0.0.3` backup restored and upgraded reaches the same state as the release upgrade test.
-- The recovery runbook (interrupted schema change, failed or waiting index build, dead letters, paused imports) is executed by CI, so documented commands cannot drift from the code.
+- TM Forum's CTKs at the pinned versions pass under the runner's criteria for TMF632, TMF669, TMF672, TMF638, TMF639, TMF641 and TMF622, every response validates against the pinned OpenAPI document, and `check-conformance-matrix --gate step4` passes for those specifications.
+- Config events: a TMF672 hub receives role Create, AttributeValueChange and Delete events from change sets, generic definition writes and set loads, in each role's version order, and none from a change set that rolled back (`config-events`, Contracts 4.6).
+- Party and roles: a user's TMF672 `PermissionSet`s equal its role assignments; a role created through TMF672 is the same `core.role` the generic API shows; a TMF672 write is refused exactly when the change-set path refuses the same change; `CheckPermission` agrees with enforcement (property test, as explain mode).
+- Explain mode names the rule that decided and agrees with enforced decisions (property test).
+- CMDB: a TMF639 `PhysicalResource` is a `cmdb.physical_resource` through every API; CI relationships keep referential integrity (a CI with relationships cannot be deleted); incidents, problems and changes reference CIs (`cmdb-relationships`).
+- ITIL change enablement: standard changes skip authorization, normal changes cannot be scheduled before every required approval is given, emergency changes need the emergency change authority, a rejected approval rejects the change, and a completed change item updates the service it names in the inventory (`itil-change`, `change-updates-cmdb`).
+- Service requests: a request whose catalog item needs approval waits in `pending` until approved; a rejected approval ends it `rejected`; cancellation through `CancelProductOrder` follows Contracts 14 (`itil-request`).
+- Import resume: killing the runner after batch 3 of 10 ends with one record per source row, one result per row and no duplicate identity mappings.
+- Concurrency: the match-key race ends with exactly one record; a concurrent user edit to a mapped field is reported as a conflict under `skip`.
+- Re-importing an unchanged 10,000-row file creates no versions, change entries, deliveries or rule runs.
+- Grouped and one-row-at-a-time imports are equivalent, and no `SAVEPOINT` appears in the statement log. Equivalent means equal field values, versions, change-entry field maps and row results, compared after mapping generated IDs by source row and ignoring timestamps and operation IDs.
 
 **Includes.**
 
-- COPY only if the import measurement requires it (Contracts 7.8).
-- Docker image on ghcr.io with the web app built in, OpenTelemetry tracing and a metrics endpoint.
-- Docs site with the contracts, the ServiceNow mapping, backup and recovery runbooks.
-- Schema snapshot endpoint and SDK codegen CLI (Contracts 6.8).
-- Final public project name and npm scope.
-- Tag `v0.1.0` and label good-first-issues.
+- Groups, nested roles, roles from group membership; API tokens; explain mode; an access-rule editor built on the filter builder; `myGroups` in conditions; one reference hop in access-rule conditions (moved from Step 3).
+- Party roles in `core` and the TMF632, TMF669 and TMF672 adapters over the Step 3 party foundation and over STD's roles and access rules, with config subscriptions for role events (Contracts 4.6, 11.3).
+- The `cmdb` app set and TMF638 and TMF639 (Contracts 11.4).
+- Change requests, approvals, service requests and a minimal request catalog in the helpdesk set v4, behind TMF641 and TMF622 (Contracts 11.5, 14).
+- CSV and JSON import with source systems and the external identity mapping, matching, field-level conflict detection, reference resolution, jobs with batches, checkpoints, resume, reports and dry run (Contracts 7), moved from Step 3: its first real consumers are CMDB and party loads.
+- `RecordService.saveBatch` (Contracts 7.7), moved from Step 3.
 
 **Workstreams.**
 
 | Workstream | Guarantee it proves | Test that proves it |
 | --- | --- | --- |
-| 4A Performance | Published numbers are reproducible | Committed import and benchmark results, rerunnable by script |
-| 4B Upgrade | An existing install with data and customizations upgrades safely | Release upgrade test |
-| 4C Backup and recovery | A restore, and an interrupted change, end in a consistent, usable install | Backup-restore drill; restore-then-upgrade test; runbook in CI |
-| 4D Packaging, docs, SDK | What we ship matches what we tested | Image smoke test; SDK golden-file test |
+| 4D Identity, parties and access admin (was 3D) | Explain mode and TMF672 `CheckPermission` name the rule that decided and agree with enforcement; TMF632, TMF669 and TMF672 change only what the change-set and record paths allow; role events are transactional | Explain property test [judgment]; CTKs for TMF632, TMF669 and TMF672; `tmf672-roles` (TMF672 and generic writes agree, refusals included); `config-events` |
+| 4C CMDB | Every CI has one class and one identity through the generic API, TMF638 and TMF639; relationships keep referential integrity | CTKs for TMF638 and TMF639; `cmdb-relationships`; `@type` polymorphism test over the resource subtypes |
+| 4O Change enablement and service requests | The Contracts 14.4 transition tables, approval invalidation, request derivation and cancellation rules hold through every API, and every concurrent outcome is one of those 14.4 lists | CTKs for TMF641 and TMF622; `itil-change` (every table cell, the concurrent outcomes with forced interleavings); `itil-request` (derivation property test, terminal guards); `approval-finality`; `change-updates-cmdb` |
+| 4E Import reconciliation (was 3E) | Imports are resumable, re-runnable and safe under concurrent edits | Resume, match-key race, concurrent-edit and unchanged re-import tests |
+| 4F Bulk save (was 3F) | Grouping is never observable | Equivalence test; no-`SAVEPOINT` test |
 
-**Runnable result.** `docker run` of the v0.1.0 image, or `docker compose up` from the release, then the helpdesk example and import script.
+**Runnable result.** `examples/cmdb/import.sh` imports a sample CI file twice (second run all `unchanged`); `examples/helpdesk/change.sh` raises a normal change through TMF641, approves it and completes it, and TMF638 then shows the updated service; a service request through TMF622 waits for approval. Tag `v0.0.4`.
+
+## Step 5. ODA Components and release (v0.1)
+
+**Purpose.** Ship v0.1.0 as ODA Components that deploy on the ODA Canvas, with measured performance and proven upgrade, backup and recovery paths. This is the old Step 4 plus ODA.
+
+**Gate.** Measured import and query performance, upgrade test, backup restoration, recovery documentation, and a Canvas deployment that passes the conformance kits through the Canvas gateway. Concretely:
+
+- A 100,000-row import on the reference machine: total time recorded, every batch commits in under 2 s, no `SAVEPOINT`.
+- The benchmark reruns at 10M records with Q1 to Q7 and W1 to W3 issued through the record service (STD-generated SQL, unrestricted and restricted callers) and meets the Contracts 2.6 budgets, with Q3 and Q4 measured on a quiet or dedicated machine (Martin, 2026-10-22). Q7 is reported against its budget and stays a known risk until one of the options in decision 0004 is chosen. A TMF list with `X-Total-Count` is measured too (Contracts 10.4).
+- Release upgrade: from `v0.0.4` with the helpdesk and CMDB sets, 10,000 records with history and customizations, the candidate's `std upgrade` leaves `doctor` exiting 0, content checksums unchanged except where a documented migration changes them, every customization effective, and exactly the expected conflicts open.
+- Backup and restore: a `pg_dump` taken under load during a change set's follow-up phase restores into an empty Postgres 18; the change set completes, auto-numbers continue, sign-in works, and outbox consumers that dedupe by change ID (hub listeners by `eventId`) apply each repeated delivery once.
+- Restore then upgrade: a `v0.0.4` backup restored and upgraded reaches the same state as the release upgrade test.
+- The recovery runbook (interrupted schema change, failed or waiting index build, dead letters, paused imports) is executed by CI, so documented commands cannot drift from the code.
+- ODA: the component's YAML validates against the `oda.tmforum.org/v1` Component CRD; on kind with the pinned Canvas chart, the component reaches `Complete`, its exposed APIs are published through the Canvas gateway, the Canvas identity operator has created its Keycloak client with exactly the roles STD's TMF672 serves (and follows a role created afterwards), and every CTK of Steps 3 and 4 passes again through the gateway with Keycloak-issued tokens (`oda-canvas-deploy`). The Canvas BDD features for install, upgrade, uninstall, exposed APIs and permission specification sets pass with STD's chart as the component under test. `helm install` (bundled or external database, with and without `--wait`) starts no server or worker before this attempt's `std upgrade` has finished; a real `helm upgrade` from the previous release keeps upgrades offline (no server or worker session while `std upgrade` migrates); a failed migration leaves every pod waiting until a fixed new attempt completes (checked through Kubernetes in every mode, and as a Helm failure with `--wait`); and going back is a restore plus `helm upgrade` of the older chart (`oda-helm-lifecycle`, Contracts 13.1).
+- `check-conformance-matrix --gate step5` passes for every pinned specification, the ODA Component CRD included.
+- ODA security: a Keycloak token whose roles include `agent` gets exactly what a local `agent` session gets, through the generic API and TMF621 (the Contracts 3 hidden-field tests repeated with OIDC callers); a role the token names that STD does not know grants nothing.
+- `/api/v1` is gone, with a migration note in the release notes.
+- Release checklist: TMF630 v5 rules checked by a TM Forum member (Martin, 2026-10-22; decision 0021, decision 1), with the matrix's v5 rows changed from [unverified] accordingly.
+
+**Includes.**
+
+- COPY only if the import measurement requires it (Contracts 7.8).
+- Docker image on ghcr.io with the web app built in, OpenTelemetry tracing and a metrics endpoint (the component's management API).
+- The ODA Component (Contracts 13): component YAML, a hook-free Helm chart whose per-attempt upgrade Job runs `std upgrade` while `Recreate` Deployments wait in init containers for that attempt's completion (works with and without `--wait`; the attempt ID can be supplied for GitOps), recovery to an older version by restore and `helm upgrade` (no `helm rollback` after migrations), OIDC bearer tokens from the Canvas identity provider, the Canvas deployment workflow.
+- Docs site with the contracts, the ServiceNow and TM Forum mappings, backup and recovery runbooks.
+- Schema snapshot endpoint and SDK codegen CLI (Contracts 6.8).
+- Final public project name and npm scope.
+- Removal of `/api/v1`. Tag `v0.1.0` and label good-first-issues.
+
+**Workstreams.**
+
+| Workstream | Guarantee it proves | Test that proves it |
+| --- | --- | --- |
+| 5A Performance (was 4A) | Published numbers are reproducible | Committed import and benchmark results, rerunnable by script; Q3 and Q4 on a quiet or dedicated machine; Q7 reported as a known risk |
+| 5B Upgrade (was 4B) | An existing install with data and customizations upgrades safely | Release upgrade test |
+| 5C Backup and recovery (was 4C) | A restore, and an interrupted change, end in a consistent, usable install | Backup-restore drill; restore-then-upgrade test; runbook in CI |
+| 5D Packaging, docs, SDK (was 4D) | What we ship matches what we tested | Image smoke test; SDK golden-file test |
+| 5O ODA Component and Canvas | What the Canvas deploys is what CI tested, every exposed API is conformant behind the Canvas gateway, and chart upgrades stay offline | `oda-component-schema`; `oda-canvas-deploy` with the CTKs through the gateway; `oda-helm-lifecycle`; the Canvas BDD features |
+| 5S ODA security | The Canvas identity provider authenticates and assigns roles; STD alone decides access | OIDC versions of the Contracts 3 tests; `oidc-unknown-role`; Keycloak role sync test |
+
+**Runnable result.** `docker run` of the v0.1.0 image, or `docker compose up` from the release, then the helpdesk and CMDB examples; or `helm install` of the component onto an ODA Canvas (`deploy/oda/README.md`). Tag `v0.1.0`.
 
 ## Stack
 
@@ -225,6 +293,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Validation: Effect Schema, built at run time from definitions, shared by server and browser.
 - Web app: [Foldkit](https://foldkit.dev) (Elm Architecture on Effect: Schema Model, pure `update`, Commands and Subscriptions as Effects) with [Foldkit UI](https://foldkit.dev/ui/overview) components and Vite, chosen by Martin on 2026-10-21 in place of React. Effect runs the whole web app, not only Schema and the typed client. Foldkit pins `effect` and `@effect/platform-browser` to exactly 4.0.0 as peers; STD keeps one 4.0.5 copy (see `AGENTS.md`, "Frontend: Foldkit").
 - Tests: vitest with `@effect/vitest` against a real Postgres 18.
+- Standards tooling (decision 0021): TM Forum's dockerized CTKs, downloaded in CI by pinned URL and digest; from Step 5, an ODA Component Helm chart deployed in CI on the ODA Canvas (pinned `canvas-oda` chart, kind with Kubernetes 1.30, Istio, Keycloak).
 - Code layering: definitions, the condition engine and access-rule evaluation are plain packages (Effect Schema only); only the server package uses the rest of Effect. A CI import check enforces "Schema only", and the stability diagnostics enforce the unstable-API allow lists (Contracts 9).
 - Node runs one thread per process, so CPU-heavy work (big imports, large exports) runs in worker processes.
 
@@ -266,10 +335,14 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 | --- | --- | --- |
 | Server language | TypeScript + Effect 4 on Node 26, chosen by Martin (see "Effect") | Every line of Stage 0 depends on it |
 | License | Apache-2.0, signed-off commits, no CLA. AGPL-3.0 instead if blocking closed hosted copies matters more than easy company adoption | Hard to change once others contribute |
-| How data is stored | Postgres 18, typed columns, namespaces as Postgres schemas, UUIDv7 IDs. Class-table inheritance: each class has its own table for the fields it adds, sharing the record's `id`; the root row holds the concrete class, the single version and the audit fields. For: the 1,600-column cap applies per table; every class is a real foreign-key target; unique constraints work at any level; data reads with plain SQL. Against: joins grow with depth; a filter on one level with a sort on another cannot use one index; writes touch one row per level; adding a class briefly locks every ancestor. Considered: one table per hierarchy (no joins, but the whole hierarchy shares the column cap and needs a field-to-column map), one table per hierarchy partitioned by class (keys must include the class), and one table per concrete class with all inherited fields (child reads hit one table, but parent endpoints need UNION ALL, and there is no real foreign key or unique constraint across the hierarchy). The Stage 0 benchmark keeps or reopens this. Result (`docs/decisions/0004-storage-benchmark.md`): the rule is formally not met, because every storage model misses the Q6 and Q7 budgets; the baseline is never more than 2x faster. Q2 misses in every model under concurrent load. Q3 and Q4 miss only in class-table under load (every alternative passes them) and met their budgets in a quieter run: the storage-specific risk. Provisional decision: keep class-table storage, pending Martin's confirmation. The read compiler's branch form (rule OR split into index-friendly UNION ALL branches) meets Q6 and is a requirement for ws/0c-reads and the Step 4 rerun. Q7 still misses (53.2 ms p95 at best) | Very hard to change once real data exists |
+| How data is stored | Postgres 18, typed columns, namespaces as Postgres schemas, UUIDv7 IDs. Class-table inheritance: each class has its own table for the fields it adds, sharing the record's `id`; the root row holds the concrete class, the single version and the audit fields. For: the 1,600-column cap applies per table; every class is a real foreign-key target; unique constraints work at any level; data reads with plain SQL. Against: joins grow with depth; a filter on one level with a sort on another cannot use one index; writes touch one row per level; adding a class briefly locks every ancestor. Considered: one table per hierarchy (no joins, but the whole hierarchy shares the column cap and needs a field-to-column map), one table per hierarchy partitioned by class (keys must include the class), and one table per concrete class with all inherited fields (child reads hit one table, but parent endpoints need UNION ALL, and there is no real foreign key or unique constraint across the hierarchy). The Stage 0 benchmark keeps or reopens this. Result (`docs/decisions/0004-storage-benchmark.md`): the rule is formally not met, because every storage model misses the Q6 and Q7 budgets; the baseline is never more than 2x faster. Q2 misses in every model under concurrent load. Q3 and Q4 miss only in class-table under load (every alternative passes them) and met their budgets in a quieter run: the storage-specific risk. Decision (confirmed by Martin on 2026-10-22): keep class-table storage; Q3 and Q4 are rerun on a quiet or dedicated machine in Step 5, and Q7 stays a known risk until one of its options in decision 0004 is chosen. The read compiler's branch form (rule OR split into index-friendly UNION ALL branches) meets Q6 and is a requirement for ws/0c-reads and the Step 5 rerun. Q7 still misses (53.2 ms p95 at best) | Very hard to change once real data exists |
 | Configuration ownership | Every config record, roles included, has a stable ID and an owner layer (`core`, `app`, `local`); shipped values and local overrides are stored separately, and upgrades open conflicts instead of overwriting | Step 1 already loads shipped definitions that admins will edit |
 | Import identity | An external identity mapping keyed by source system, source table and source record ID, with no source ID field on records | One field cannot hold IDs from several systems |
 | Deletes | Every reference refuses deletion of its target in v0.1; only the storage links between a record's own inheritance rows cascade | Database cascades would change records without hooks, authorization or history |
+| Standards | Strict TM Forum, ODA and ITIL compatibility from Step 3, chosen by Martin (decision 0021): STD's generic API follows TMF630; TMF Open APIs are mappings onto STD classes, each gated by TM Forum's CTK at a pinned version (Contracts 11.1); STD ships as ODA Components tested on the ODA Canvas; ITIL 4 practice concepts, in STD's own words. STD's record service stays the one place that enforces access, history and the outbox, so a TMF API can never show or accept more than the generic API | Every later API, app and deployment decision depends on it |
+| API versions and compatibility | `/api/v2` is the TMF630 API from Step 3; `/api/v1` is frozen, deprecated and removed at `v0.1.0`. TMF APIs live under `/tmf-api/{apiName}/v{major}` and keep their major version in the path | Release compatibility must keep holding while the API changes shape |
+| Authorization with ODA | STD stays the policy decision point for every record and field. The Canvas identity provider (Keycloak) authenticates users and may assign STD roles through token claims; STD publishes its roles to the Canvas through TMF672 | ODA security could otherwise move decisions out of STD's access rules |
+| ODA packaging | One STD component per install for v0.1 (all exposed APIs in one component, one database), not split along TM Forum's golden components | ODA Components are meant to own their data; STD's one data model is its point (decision 0021) |
 | Project name | STD stays the code name. Pick the final public name, and check that a matching npm scope is free, before v0.1.0. Internal packages use a placeholder scope until then | Names are awkward to change after the first release |
 
 ## Deliberately later
@@ -277,7 +350,7 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 - Changing a field's type on a table that holds data.
 - Clear-on-delete and cascading deletes, as audited record-service operations that authorize each affected record.
 - Changing a record's class, as a dedicated record-service operation.
-- Outbox consumers beyond rules: webhooks (and their payload contract), search indexing, an optional pull feed, and backfill for new subscriptions.
+- Outbox consumers beyond rules and hub callbacks: generic webhooks with their own payload contract (the TMF event envelope of Contracts 12 is the one payload contract in v0.1), search indexing, an optional pull feed, and backfill for new subscriptions.
 - History retention, and erasure of a purged field's values from history (with data-protection work).
 - History of deleted records for non-admins.
 - Selecting child-only fields through a parent endpoint.
@@ -285,10 +358,12 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 - Accent-insensitive search; field types such as duration, currency, multi-choice, attachment, rich text, comment and internal-note logs.
 - Migration toolkit: a ServiceNow importer, and an optional ServiceNow-compatible API adapter.
 - Scripting: JavaScript or TypeScript checked against generated types, run in a locked-down process behind one protocol, reading and writing through the record service as a known user.
-- Flows, approvals, SLAs, notifications, email and scheduled jobs, on a Postgres-backed engine over versioned definitions. Effect's workflow module is an option, not a commitment.
-- Real apps: full incident, problem, change, catalog, knowledge and CMDB.
+- Flows, SLAs and service level management, notifications, email and scheduled jobs (auto-close of resolved incidents included), on a Postgres-backed engine over versioned definitions. Effect's workflow module is an option, not a commitment. Approvals in v0.1 are approval records driven by record rules (Contracts 14.4), not a flow engine.
+- Full apps beyond the v0.1 ITIL scope (incident, problem, change enablement, service request and the CMDB at the depth of Contracts 14): knowledge, a service catalog UI and portal, the TMF620 and TMF633 catalog APIs, CSDM-style service modeling.
+- TMF APIs beyond the nine in scope, and second major versions of those (for example v4 next to v5 for TM Forum's golden components, which mostly name v4); TMF724 Incident and TMF656 Service Problem; JSONPath filtering and JSON Patch Query (TMF630 parts 5 and 6, Contracts 10).
+- Splitting STD into several ODA Components along TM Forum's golden components, with federated references between them.
 - App packaging beyond definition sets: data in sets, transformations, a distribution channel.
-- SSO (OIDC and SAML), LDAP, MFA, impersonation.
+- SAML, LDAP, MFA, impersonation, and OIDC sign-in for the web app outside a Canvas. OIDC bearer tokens from the Canvas identity provider are in v0.1 (Step 5).
 - Reporting, dashboards, search UI, portal, mobile, translations, GraphQL.
 
 ## Known risks
@@ -299,9 +374,22 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 - Adding a class briefly locks every ancestor table. The fallback design (a stored class path) is in the contracts.
 - The benchmark may reopen the storage decision after Stage 0.
 - Restricted list requests depend on the read compiler, not storage. Stage 0 measured Q6 at 10M at 300 ms p95 in the plain form and 1.1 ms in the branch form. On a referencing endpoint, the branch form is correct only when the request filters on the target. Q7 (a reference filter behind the target's visibility guard, about 0.4% of tickets) stays at 53.2 ms p95 even with serial execution and a covering index. In one run, rule-shaped `OR` predicates also made Postgres's generic plans about 5x slower than custom plans. Mitigations: the branch form, per-statement plan settings, and a decision on Q7 (`docs/decisions/0004-storage-benchmark.md`).
-- Class-table Q3 and Q4 (a filter on one level, a sort on another) run at about 50 ms p50 at 10M. They met the 50 ms p95 budget in a quiet run and missed it (58 ms) under concurrent load on the shared host, where every other storage model passed them. Unlike Q2, Q6 and Q7, these misses are specific to class-table. The Step 4 rerun needs a quiet or dedicated machine to settle them.
+- Class-table Q3 and Q4 (a filter on one level, a sort on another) run at about 50 ms p50 at 10M. They met the 50 ms p95 budget in a quiet run and missed it (58 ms) under concurrent load on the shared host, where every other storage model passed them. Unlike Q2, Q6 and Q7, these misses are specific to class-table. The Step 5 rerun needs a quiet or dedicated machine to settle them.
 - STD's server layer sits on unstable Effect APIs, the driver is young, and agents default to Effect 3. See "Effect".
 - TypeScript 7.0 has no programmatic API, so tools that embed the compiler stay on TypeScript 6 until 7.1.
 - Outbox delivery is blocked per record by a dead letter under the default policy, and writes one row per matching subscription per change.
 - A Postgres major upgrade with newer Unicode data can change case-folding results. The upgrade procedure checks the fold table version and reindexes.
 - With its own names and API, STD needs a mapping step for anyone switching from ServiceNow. `docs/servicenow-mapping.md` records it from Step 1.
+- TMF630 v4.2.0 (production) is available to all, but v5.0.0 (pre-production) needs a TM Forum membership, and this re-plan could not fetch either. Contracts 10's first draft is read from the 2015 Part 1 and the public v5 documents; workstream 3G checks every rule against v4.2.0 through the requirements matrix, and Martin decided (2026-10-22) that STD joins TM Forum, or has a member check the v5 rules, before `v0.1.0` (decision 0021, decision 1). The CTKs are the only external check, and they test the TMF APIs, not STD's own generic API.
+- CTK licensing is unclear: the dockerized v5 kits download from a public bucket without login and their scripts carry Apache-2.0 headers, but the bundles have no licence file and older kits and the conformance profiles are under TM Forum's RAND terms. CI downloads pinned kits by URL and digest and never commits them. TMF621's kit container exits 0 even when tests fail (observed for that kit), so the runner trusts no kit's exit code and checks the report against the expected mandatory cases (Contracts 11.1).
+- Spec churn: TMF641 has no stable v5 (v5.0.0 is a 2024 preview without a kit); TMF688 has only a pre-production v4.0.0 and no kit; TMF672 v5.1 replaced v4's `UserRole` and `Permission` with permission specifications and sets; TM Forum's golden ODA components mostly name v4 APIs; ITIL (Version 5) launched in 2026 while ITIL 4 runs until the end of 2027; the Canvas chart moves fast (1.2.5 stable, 1.2.6 release candidates) and supports Kubernetes only up to 1.30. Every version is pinned in one table (Contracts 11.1) and moved in its own PR.
+- The ODA Canvas in CI is heavy and flaky: TM Forum's own kind-based workflow takes about 30 minutes, and about half of recent upstream runs failed (sampled 2026-10-22, [runs](https://github.com/tmforum-oda/oda-canvas/actions/workflows/trigger_tests.yml)); a GitHub runner has 14 GB of disk against the documented 50 GB. The Step 3 probe measures it first; the Canvas workflow runs nightly and on release candidates, not on every PR (Contracts 13.6).
+- The TMF630 rework touches every generic route, the record JSON, the error shape, the web app's client, the quickstart and most HTTP tests, and two API versions coexist until `v0.1.0`. The authorization tests run on both versions so the rework cannot weaken them.
+- ODA Components are meant to own their data and talk through APIs; STD is one data model with foreign keys and one set of access rules. v0.1 ships one component, so STD cannot claim conformance to a TM Forum golden component (none of the 35 examined golden specifications exposes TMF621 anyway; decision 0021).
+- TMF resources embed arrays (notes, related parties, order items) that STD stores as child records, so one TMF write can be several record saves with their own versions, history and deliveries (Contracts 11.1).
+- `X-Total-Count` on every list costs a count query per page, and deep `offset` paging costs O(offset); both are measured in Step 5 (Contracts 10.4).
+- A hub registration is a subscription, which is config, so each registration is a config commit with its brief global pause (Contracts 12.2).
+- ITIL is a trademark and its guidance is licensed: STD describes the concepts in its own words, links to the sources and carries the trademark notice; commercial use of official ITIL content needs a PeopleCert licence.
+- The requirement grows v0.1 from four steps to five.
+- "Strict compatibility" is only as good as the requirements matrix (Contracts 15): its completeness against each source is a reviewed judgment, not a mechanical check, and each excluded requirement needs Martin's decision before its step's gate.
+- Aggregate parts lock their parent first, so concurrent writes to many parts of one popular record serialize on it; config subscriptions add delivery inserts to config commits under `CONFIG_KEY`.

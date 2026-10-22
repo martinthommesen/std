@@ -1,0 +1,136 @@
+# Conformance decision log (Contracts 15.1). Each entry is an exclusion of
+# requirement rows; `rows` lists the row IDs it covers and is filled in as the
+# matrix files are written (workstreams 3G and 3T).
+entries:
+  - id: E14-jsonpath-filter
+    decision0021: 14
+    rows: []
+    requirement: "TMF630 part 6: JSONPath `filter` query parameter"
+    reason: "The condition AST has no array semantics; refused with `InvalidFilter` `jsonPathNotSupported` (Contracts 10.3)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E15-json-patch-query
+    decision0021: 15
+    rows: []
+    requirement: "TMF630 part 5: `application/json-patch-query+json`"
+    reason: "Refused with 415 (Contracts 10.5)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E16-array-json-filters
+    decision0021: 16
+    rows: []
+    requirement: "Filters on array and json attributes of TMF resources"
+    reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E17-regex-exact-operators
+    decision0021: 17
+    rows: []
+    requirement: "The `.regex` and `.exact` filter operators"
+    reason: "The condition AST has no regular expressions (Contracts 10.3)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E18-if-match-required
+    decision0021: 18
+    rows: []
+    requirement: "`If-Match` required on the generic API's PATCH and DELETE"
+    reason: "STD's generic API never writes last-wins; TMF APIs keep it optional (Contracts 10.5, 11.1)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E19-generic-api-extensions
+    decision0021: 19
+    rows: []
+    requirement: "STD's extensions to the generic API: `withheld`, `condition`, `count=false`, refusal of unknown query parameters"
+    reason: "They keep restricted fields visible as restricted and never widen a result silently (Contracts 10.2, 10.3)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E20-resources-not-served
+    decision0021: 20
+    rows: []
+    requirement: "`troubleTicketSpecification` (TMF621) and `serviceOrderSpecification` (TMF641)"
+    reason: "Not served in v0.1 (Contracts 11.1)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E21-order-events-and-cancellation-states
+    decision0021: 21
+    rows: []
+    requirement: "TMF641 and TMF622 Milestone, Jeopardy and ErrorMessage events; `assessingCancellation` and `pendingCancellation` never shown"
+    reason: "Cancellations are decided synchronously (Contracts 11.5, 14.4)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E22-tmf621-notes-attachments
+    decision0021: 22
+    rows: []
+    requirement: "TMF621 notes append-only; attachments as references only"
+    reason: "ITIL work notes are a journal; attachments are a later field type (Contracts 11.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E23-tmf672-not-representable
+    decision0021: 23
+    rows: []
+    requirement: "TMF672 writes of rules the projection cannot represent"
+    reason: "Denies, field rules and conditional rules stay read-only through TMF672 (Contracts 11.3)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E24-tmf688-resource-topic-post
+    decision0021: 24
+    rows: []
+    requirement: "POST of events on TMF688 resource topics"
+    reason: "Those events come only from saves; `405` (Contracts 12.3)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
+  - id: E25-oda-no-dependencies
+    decision0021: 25
+    rows: []
+    requirement: "No dependent APIs and no subscribed events in the ODA Component"
+    reason: "STD masters its parties, CIs and orders in v0.1 (Contracts 13.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "All 33 open decisions of decision 0021 are accepted as recommended."
+    date: 2026-10-22
