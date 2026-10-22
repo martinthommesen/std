@@ -35,7 +35,7 @@ import type {
 } from "./definition.ts";
 import { isActive } from "./definition.ts";
 import { typeClassOf } from "./dependencies.ts";
-import { guardChange, guardCreate, guardNewOverride } from "./guards.ts";
+import { guardChange, guardNewDefinition } from "./guards.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
   deleteDefinition,
@@ -178,7 +178,7 @@ const create = (work: Work, operation: CreateOperation): void => {
     return;
   }
 
-  if (!guardCreate(work, operation)) {
+  if (!guardNewDefinition(work, operation.op, definition)) {
     return;
   }
 
@@ -444,12 +444,7 @@ const createOverride = (
 
   if (
     !(
-      guardNewOverride(
-        work,
-        definition.id,
-        definition.owner,
-        definition.classId
-      ) &&
+      guardNewDefinition(work, operation.op, definition) &&
       overrideKeepsRetiredOptional(
         work,
         definition.id,

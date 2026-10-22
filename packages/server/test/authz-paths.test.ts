@@ -25,6 +25,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Option, Ref } from "effect";
 import type { Layer } from "effect";
 
+import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -128,7 +129,10 @@ const list =
       )
     );
 
-const recordName = (callers: Callers, name: "L" | "K" | "AM") =>
+/** A fixture record by its short name. */
+type RecordName = keyof AcmeData["records"];
+
+const recordName = (callers: Callers, name: RecordName) =>
   callers.fixture.records[name];
 
 const getOne =
@@ -209,7 +213,7 @@ const versionAndCost = (entry: JsonValue): string => {
 const historyOf =
   (
     table: string,
-    name: "L" | "K",
+    name: RecordName,
     query: Readonly<Record<string, string>> = {}
   ) =>
   (callers: Callers, who: Who) =>
@@ -550,6 +554,24 @@ const READ_ROWS: readonly PathRow[] = [
     bob: refused(404, "NotFound"),
     path: "GET /acme.laptop/{K}/history",
     run: historyOf(LAPTOP, "K"),
+  },
+  {
+    alice: okDetail(["1:cost"]),
+    bob: okDetail(["1:-"]),
+    path: "GET /acme.monitor/{M}/history",
+    run: historyOf(MONITOR, "M"),
+  },
+  {
+    alice: okDetail(["1:cost"]),
+    bob: okDetail(["1:-"]),
+    path: "GET /acme.asset/{M}/history",
+    run: historyOf(ASSET, "M"),
+  },
+  {
+    alice: okDetail(["1:cost"]),
+    bob: refused(404, "NotFound"),
+    path: "GET /acme.monitor/{AM}/history",
+    run: historyOf(MONITOR, "AM"),
   },
   {
     alice: refused(404, "UnknownTable"),

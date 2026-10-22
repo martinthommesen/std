@@ -26,7 +26,10 @@ import { applyChangeSet } from "../src/schema/change-set.ts";
 import {
   ACME,
   addField,
+  addIndex,
+  addOverride,
   createClass,
+  createNamespace,
   currentRevision,
   freshId,
   loadCoreAndAcme,
@@ -163,6 +166,13 @@ describe("protected-definitions", () => {
             yield* loadCoreAndAcme;
 
             const fingerprint = yield* catalogFingerprint;
+            const snapshot = yield* (yield* Catalog).refresh;
+
+            const roleName =
+              snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name")?.id ?? "";
+
+            const userRoleUser =
+              snapshot.fieldByName(USER_ROLE_CLASS_ID, "user")?.id ?? "";
 
             const refused: readonly (readonly [string, Operation])[] = [
               [
@@ -186,6 +196,37 @@ describe("protected-definitions", () => {
                 createClass("role_child", { parentId: PLATFORM_CLASS_IDS.role })
                   .op,
               ],
+              [
+                "notExtensible",
+                createClass("user_role_child", { parentId: USER_ROLE_CLASS_ID })
+                  .op,
+              ],
+              [
+                "platform",
+                addIndex(PLATFORM_CLASS_IDS.role, [roleName], false).op,
+              ],
+              [
+                "notExtensible",
+                addIndex(USER_ROLE_CLASS_ID, [userRoleUser], false).op,
+              ],
+              [
+                "platform",
+                addOverride(PLATFORM_CLASS_IDS.role, roleName, { maxLength: 5 })
+                  .op,
+              ],
+              [
+                "notExtensible",
+                addOverride(USER_ROLE_CLASS_ID, userRoleUser, {
+                  required: true,
+                }).op,
+              ],
+              // Platform storage is for the core set only: nothing would
+              // create the table or schema (this was a 500).
+              [
+                "platform",
+                createClass("own_platform", { storage: "platform" }).op,
+              ],
+              ["platform", createNamespace("own_platform", "platform").op],
             ];
 
             for (const [reason, operation] of refused) {
