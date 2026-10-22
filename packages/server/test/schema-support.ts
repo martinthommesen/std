@@ -11,6 +11,7 @@ import type {
   ClassDraft,
   FieldDraft,
   IndexDraft,
+  NamespaceDraft,
   OverrideDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
@@ -135,7 +136,11 @@ const local = { owner: { layer: "local" }, protected: false } as const;
  */
 export const createClass = (
   name: string,
-  options: { readonly namespaceId?: string; readonly parentId?: string } = {}
+  options: {
+    readonly namespaceId?: string;
+    readonly parentId?: string;
+    readonly storage?: ClassDraft["storage"];
+  } = {}
 ): BuiltOperation => {
   const definition: ClassDraft = {
     ...local,
@@ -148,10 +153,34 @@ export const createClass = (
     name,
     namespaceId: options.namespaceId ?? SITE_NAMESPACE_ID,
     parentId: options.parentId ?? null,
-    storage: "standard",
+    storage: options.storage ?? "standard",
   };
 
   return { id: definition.id, op: { definition, op: "createClass" } };
+};
+
+/**
+ * Creates a local namespace.
+ * @param name - The namespace name.
+ * @param storage - Its storage.
+ * @returns The operation and the namespace ID.
+ */
+export const createNamespace = (
+  name: string,
+  storage: NamespaceDraft["storage"] = "standard"
+): BuiltOperation => {
+  const definition: NamespaceDraft = {
+    ...local,
+    extensible: false,
+    helpText: null,
+    id: freshId(),
+    kind: "namespace",
+    label: name,
+    name,
+    storage,
+  };
+
+  return { id: definition.id, op: { definition, op: "createNamespace" } };
 };
 
 /**

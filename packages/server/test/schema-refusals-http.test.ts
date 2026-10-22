@@ -41,9 +41,11 @@ import {
   addAccessRule,
   addField,
   addIndex,
+  addOverride,
   addRole,
   change,
   createClass,
+  createNamespace,
   ensureSite,
   insertRecords,
   values,
@@ -818,7 +820,107 @@ describe("schema-refusals-http", () => {
       );
 
       dbTest.effect(
-        "purging a table is refused while a child class, an incoming reference, an access rule or a subscription is on it (gate 1.5)",
+        "retiring a table is refused while a condition field names it, a field of its own references it, or a retired table's active reference points at it (gate 1.4)",
+        () =>
+          Effect.gen(function* namingRetire() {
+            yield* siteDefinitions;
+
+            const token = yield* userWithRoles("naming_admin", ["admin"]);
+
+            // A condition field on another table names `gauge`.
+            const gauge = createClass("gauge");
+            const panel = createClass("panel");
+
+            const watches = addField(panel.id, "watches", {
+              classId: gauge.id,
+              kind: "condition",
+              profile: "filter",
+            });
+
+            // `node` references itself.
+            const node = createClass("node");
+
+            const next = addField(node.id, "next", {
+              kind: "reference",
+              targetClassId: node.id,
+            });
+
+            // `spoke` is retired; its active field still points at `hub`.
+            const hub = createClass("hub");
+            const spoke = createClass("spoke");
+
+            const toHub = addField(spoke.id, "to_hub", {
+              kind: "reference",
+              targetClassId: hub.id,
+            });
+
+            yield* change([
+              gauge.op,
+              panel.op,
+              watches.op,
+              node.op,
+              next.op,
+              hub.op,
+              spoke.op,
+              toHub.op,
+            ]);
+            yield* change([yield* retireAt(spoke.id)]);
+
+            assert.strictEqual(yield* stateOf(spoke.id), "retired");
+            assert.strictEqual(yield* stateOf(toHub.id), "active");
+
+            const cases = [
+              ["a table a condition field names", gauge.id, watches.id],
+              ["a table that references itself", node.id, next.id],
+              [
+                "a table a retired table's active reference points at",
+                hub.id,
+                toHub.id,
+              ],
+            ] as const;
+
+            const refusals: Refusal[] = [];
+
+            for (const [label, table, blocker] of cases) {
+              const version = yield* definitionVersion(table);
+
+              refusals.push(
+                {
+                  detail: [blocker],
+                  label: `generic retire of ${label}`,
+                  send: patch(token, "core.class", table, version, {
+                    state: "retired",
+                  }),
+                  status: 409,
+                  tag: "DependencyConflict",
+                },
+                {
+                  detail: [blocker],
+                  label: `endpoint retire of ${label}`,
+                  send: postChangeSet(token, [
+                    { id: table, op: "retire", version },
+                  ]),
+                  status: 409,
+                  tag: "DependencyConflict",
+                }
+              );
+            }
+
+            yield* expectRefusals(refusals);
+
+            // The self-reference retired first, in the same change set:
+            // accepted.
+            const retired = yield* postChangeSet(token, [
+              yield* retireAt(next.id),
+              yield* retireAt(node.id),
+            ]);
+
+            assert.strictEqual(retired.status, 201, retired.text);
+          })
+      );
+
+      dbTest.effect(
+        "purging a table is refused while a child class, an incoming reference or condition field, an access rule or a subscription is on it (gate 1.5)",
         () =>
           Effect.gen(function* tablePurgeRefusals() {
             yield* siteDefinitions;
@@ -852,6 +954,14 @@ describe("schema-refusals-http", () => {
             );
 
             const crane = createClass("crane");
+            const meter = createClass("meter");
+            const dial = createClass("dial");
+
+            const readsMeter = addField(dial.id, "reads_meter", {
+              classId: meter.id,
+              kind: "condition",
+              profile: "filter",
+            });
 
             yield* change([
               pallet.op,
@@ -864,13 +974,17 @@ describe("schema-refusals-http", () => {
               bayRule.op,
               dormantBayRule.op,
               crane.op,
+              meter.op,
+              dial.op,
+              readsMeter.op,
             ]);
 
             const craneSubscription = yield* subscribe({ classId: crane.id });
 
             // Every table is retired in an earlier change set, and so is
-            // every dependent that can be: the child class and the
-            // reference field. Access rules and subscriptions only report.
+            // every dependent that can be: the child class, the reference
+            // field and the condition field. Access rules and subscriptions
+            // only report.
             yield* change([
               yield* retireAt(skid.id),
               yield* retireAt(pallet.id),
@@ -878,6 +992,8 @@ describe("schema-refusals-http", () => {
               yield* retireAt(dock.id),
               yield* retireAt(bay.id),
               yield* retireAt(crane.id),
+              yield* retireAt(readsMeter.id),
+              yield* retireAt(meter.id),
             ]);
 
             yield* expectRefusals([
@@ -908,6 +1024,13 @@ describe("schema-refusals-http", () => {
                 detail: [craneSubscription],
                 label: "purge of a table a subscription is on",
                 send: postChangeSet(purger, [yield* purgeAt(crane.id)]),
+                status: 409,
+                tag: "DependencyConflict",
+              },
+              {
+                detail: [readsMeter.id],
+                label: "purge of a table a condition field not purged names",
+                send: postChangeSet(purger, [yield* purgeAt(meter.id)]),
                 status: 409,
                 tag: "DependencyConflict",
               },
@@ -996,12 +1119,21 @@ describe("schema-refusals-http", () => {
       );
 
       dbTest.effect(
-        "local additions in reserved namespaces, on non-extensible core tables and on platform tables are refused through both HTTP paths (gate 1.7)",
+        "local additions in reserved namespaces, on non-extensible core tables and on platform tables, and platform storage, are refused through both HTTP paths (gate 1.7)",
         () =>
           Effect.gen(function* localAdditions() {
             yield* siteDefinitions;
 
             const token = yield* userWithRoles("addition_admin", ["admin"]);
+            const snapshot = yield* (yield* Catalog).refresh;
+
+            const roleName = idOf(
+              snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name")
+            );
+
+            const userRoleUser = idOf(
+              snapshot.fieldByName(USER_ROLE_CLASS_ID, "user")
+            );
 
             const additions: readonly (readonly [
               string,
@@ -1035,6 +1167,49 @@ describe("schema-refusals-http", () => {
                   parentId: PLATFORM_CLASS_IDS.role,
                 }),
               ],
+              [
+                "notExtensible",
+                "a child class of the non-extensible core.user_role",
+                createClass("user_role_child", {
+                  parentId: USER_ROLE_CLASS_ID,
+                }),
+              ],
+              [
+                "platform",
+                "an index on the platform table core.role",
+                addIndex(PLATFORM_CLASS_IDS.role, [roleName], false),
+              ],
+              [
+                "notExtensible",
+                "an index on the non-extensible core.user_role",
+                addIndex(USER_ROLE_CLASS_ID, [userRoleUser], false),
+              ],
+              [
+                "platform",
+                "an override on the platform table core.role",
+                addOverride(PLATFORM_CLASS_IDS.role, roleName, {
+                  maxLength: 5,
+                }),
+              ],
+              [
+                "notExtensible",
+                "an override on the non-extensible core.user_role",
+                addOverride(USER_ROLE_CLASS_ID, userRoleUser, {
+                  required: true,
+                }),
+              ],
+              // Platform storage belongs to the core set: nothing creates
+              // such a table or schema (before the fix, a 500).
+              [
+                "platform",
+                "a local table with platform storage",
+                createClass("own_platform", { storage: "platform" }),
+              ],
+              [
+                "platform",
+                "a local namespace with platform storage",
+                createNamespace("own_platform", "platform"),
+              ],
             ];
 
             const refusals: Refusal[] = [];
@@ -1059,6 +1234,39 @@ describe("schema-refusals-http", () => {
                 }
               );
             }
+
+            // The shapes that reached a 500: a platform-storage table with
+            // a field, and a table in a platform-storage namespace, each in
+            // one change set.
+            const ownTable = createClass("own_platform_table", {
+              storage: "platform",
+            });
+
+            const ownNamespace = createNamespace("own_platform_ns", "platform");
+
+            refusals.push(
+              {
+                detail: "platform",
+                label: "endpoint: a platform-storage table and its field",
+                send: postChangeSet(token, [
+                  ownTable.op,
+                  addField(ownTable.id, "x", { kind: "text" }).op,
+                ]),
+                status: 403,
+                tag: "DefinitionProtected",
+              },
+              {
+                detail: "platform",
+                label:
+                  "endpoint: a platform-storage namespace and a table in it",
+                send: postChangeSet(token, [
+                  ownNamespace.op,
+                  createClass("t", { namespaceId: ownNamespace.id }).op,
+                ]),
+                status: 403,
+                tag: "DefinitionProtected",
+              }
+            );
 
             yield* expectRefusals(refusals);
 
