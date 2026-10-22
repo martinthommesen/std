@@ -258,6 +258,111 @@ describe("write-authorization", () => {
       })
     );
 
+    dbTest.effect(
+      "history and history-endpoint through /acme.monitor: versions, field protection, no cost key for Bob",
+      () =>
+        Effect.gen(function* monitorHistories() {
+          const http = yield* TestHttpClient;
+          const { alice, bob, fixture } = yield* tokens;
+          const { AM, M } = fixture.records;
+
+          const { values = {}, version } = yield* savedOf(
+            yield* http.get(recordPath(MONITOR, M), { token: alice })
+          );
+
+          const costAndStatus = yield* patch(alice, ASSET, M, version, {
+            cost: "350.00",
+            status: "repair",
+          });
+
+          assert.strictEqual(costAndStatus.status, 200, costAndStatus.text);
+
+          const size = yield* patch(alice, MONITOR, M, version + 1, {
+            size_inches: 32,
+          });
+
+          assert.strictEqual(size.status, 200, size.text);
+
+          const versions = Array.from(
+            { length: version + 2 },
+            (_, index) => index + 1
+          );
+
+          for (const table of [ASSET, MONITOR]) {
+            const seen = yield* history(bob, table, M);
+
+            assert.deepStrictEqual(
+              seen.entries
+                .map((entry) => entry.version)
+                .toSorted((left, right) => left - right),
+              versions,
+              table
+            );
+            assert.deepStrictEqual(
+              seen.entries.find((entry) => entry.version === version + 1)
+                ?.changes,
+              { status: { after: "repair", before: values.status ?? null } },
+              table
+            );
+            // No rule lets an employee read `size_inches` (rule 8 grants
+            // only a laptop's serial): the entry is there, its change is not.
+            assert.deepStrictEqual(
+              seen.entries.find((entry) => entry.version === version + 2)
+                ?.changes,
+              {},
+              table
+            );
+            assert.isTrue(
+              seen.entries.every(
+                (entry) =>
+                  !("cost" in entry.changes || "size_inches" in entry.changes)
+              ),
+              table
+            );
+          }
+
+          for (const table of [ASSET, MONITOR]) {
+            const aliceSees = yield* history(alice, table, M);
+
+            assert.deepStrictEqual(
+              aliceSees.entries
+                .map((entry) => entry.version)
+                .toSorted((left, right) => left - right),
+              versions,
+              table
+            );
+            assert.deepStrictEqual(
+              aliceSees.entries.find((entry) => entry.version === version + 1)
+                ?.changes.cost,
+              { after: "350.00", before: values.cost ?? null },
+              table
+            );
+            assert.deepStrictEqual(
+              aliceSees.entries.find((entry) => entry.version === version + 2)
+                ?.changes,
+              {
+                size_inches: { after: 32, before: values.size_inches ?? null },
+              },
+              table
+            );
+          }
+
+          // Alice's monitor: Bob's history request is 404, as for a
+          // record that does not exist.
+          const hidden = yield* http.get(`${recordPath(MONITOR, AM)}/history`, {
+            token: bob,
+          });
+
+          const missing = yield* http.get(
+            `${recordPath(MONITOR, randomUUID())}/history`,
+            { token: bob }
+          );
+
+          assert.strictEqual(hidden.status, 404);
+          assert.strictEqual(hidden.text, missing.text);
+        })
+    );
+
     dbTest.effect("referenced", () =>
       Effect.gen(function* referenced() {
         const { alice, fixture } = yield* tokens;
