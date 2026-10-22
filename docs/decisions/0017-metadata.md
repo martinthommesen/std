@@ -90,6 +90,10 @@ Roles, access rules, choices and layouts are written through the generic record 
 
 Every refusal in the new suites is checked to commit nothing with `committed-state.ts`. The metadata endpoints read only, so `error-fuzz` and `schema-fuzz` (which fuzz stored values in error bodies) gain nothing from them.
 
+## API change for change-set clients
+
+Drafts carry every property, nullable ones as `null` (as `default` and `helpText` always did), so change-set payloads change: an `addField` draft needs `numberPrefix` (`null` for an ordinary field) and a `setOverride` draft `choices` and `numberPrefix`. A v0.0.1 payload without them is `400 InvalidRequest`. Plain packages cannot use Effect-valued decoding defaults, and a silent default would differ from every other draft property, so clients send the keys; `examples/quickstart.sh` does (found by the quickstart CI step).
+
 ## Open items
 
 - Form rules and the `form-state` endpoint (Step 3).
