@@ -7,24 +7,18 @@
  * (`data-cell`).
  */
 import { Button } from "@foldkit/ui";
-import type { RecordJson } from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
-import { Match, Option, Record } from "effect";
+import type { MetaField } from "@std/definitions/table-metadata";
+import { Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { ID_FIELD, cellOf, listColumns } from "../../domain/list-columns.ts";
-import type { Cell } from "../../domain/list-columns.ts";
+import { ID_FIELD, listColumns } from "../../domain/list-columns.ts";
 import { PAGE_SIZES, isSortable } from "../../domain/list-query.ts";
 import type { SortKey } from "../../domain/list-query.ts";
 import { view as filterBuilderView } from "../../filter-builder/view.ts";
-import {
-  homeRouter,
-  newRecordRouter,
-  recordRouter,
-  tableListRouter,
-} from "../../route.ts";
+import { homeRouter, newRecordRouter, tableListRouter } from "../../route.ts";
 import { buttonView, selectField } from "../../view/controls.ts";
+import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";
 import { view as notFoundView } from "../not-found.ts";
 import { Message } from "./message.ts";
 import type { ListError, Model, RecordPage, TableMeta } from "./model.ts";
@@ -94,101 +88,7 @@ const savedFilterView = (model: Model, h: HtmlBuilder<Message>): Html => {
 /** The element ID of the page size select. */
 export const PAGE_SIZE_ID = "table-list-page-size";
 
-const RESTRICTED_TEXT = "Restricted";
-
-const RESTRICTED_LABEL = "Restricted: you are not allowed to read this value";
-
-const cellContent = (cell: Cell, h: HtmlBuilder<Message>): Html =>
-  Match.value(cell).pipe(
-    Match.tag("Shown", ({ text }) => h.span([], [text])),
-    Match.tag("Empty", () =>
-      h.span(
-        [h.Class("cell-empty")],
-        [h.span([h.Class("visually-hidden")], ["Empty"])]
-      )
-    ),
-    Match.tag("Restricted", () =>
-      h.span(
-        [h.Class("cell-restricted"), h.Title(RESTRICTED_LABEL)],
-        [
-          h.span([h.AriaHidden(true)], [RESTRICTED_TEXT]),
-          h.span([h.Class("visually-hidden")], [RESTRICTED_LABEL]),
-        ]
-      )
-    ),
-    Match.tag("NotDelivered", () =>
-      h.span([h.Class("cell-missing")], ["Not delivered"])
-    ),
-    Match.exhaustive
-  );
-
-const CELL_STATE = {
-  Empty: "empty",
-  NotDelivered: "not-delivered",
-  Restricted: "restricted",
-  Shown: "value",
-} as const satisfies Record<Cell["_tag"], string>;
-
-const linkText = (cell: Cell, record: RecordJson): string =>
-  cell._tag === "Shown" ? cell.text : record.id;
-
-const cellView = (
-  table: MetaTable,
-  record: RecordJson,
-  field: MetaField,
-  isFirst: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const cell = cellOf(record, field);
-
-  const content = isFirst
-    ? h.a(
-        [
-          h.Href(recordRouter({ id: record.id, table: table.name })),
-          h.Class("link"),
-        ],
-        [linkText(cell, record)]
-      )
-    : cellContent(cell, h);
-
-  return h.keyed("td")(
-    field.id,
-    [h.DataAttribute("cell", CELL_STATE[cell._tag])],
-    isFirst && cell._tag !== "Shown"
-      ? [content, " ", cellContent(cell, h)]
-      : [content]
-  );
-};
-
 const ID_LABEL = "ID";
-
-/**
- * The cell of the ID column, the list's only column when the table has no
- * other to show: the record's ID, linking to its form.
- *
- * @param table - The table.
- * @param record - The record.
- * @param h - The builder.
- * @returns The cell.
- */
-const idCellView = (
-  table: MetaTable,
-  record: RecordJson,
-  h: HtmlBuilder<Message>
-): Html =>
-  h.keyed("td")(
-    ID_FIELD,
-    [h.DataAttribute("cell", CELL_STATE.Shown)],
-    [
-      h.a(
-        [
-          h.Href(recordRouter({ id: record.id, table: table.name })),
-          h.Class("link"),
-        ],
-        [record.id]
-      ),
-    ]
-  );
 
 const sortOf = (
   sort: readonly SortKey[],
@@ -273,9 +173,9 @@ const recordsTable = (
             record.id,
             [h.DataAttribute("record-id", record.id)],
             columns.length === 0
-              ? [idCellView(meta.table, record, h)]
+              ? [recordIdCellView(meta.table, record, h)]
               : columns.map((field, index) =>
-                  cellView(meta.table, record, field, index === 0, h)
+                  recordCellView(meta.table, record, field, index === 0, h)
                 )
           )
         )

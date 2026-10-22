@@ -15,27 +15,22 @@
  *   the version.
  */
 import { Disclosure } from "@foldkit/ui";
-import type {
-  HistoryEntrySchema,
-  HistoryField,
-  RecordJson,
-} from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
+import type { HistoryEntrySchema, HistoryField } from "@std/api/records";
+import type { MetaTable } from "@std/definitions/table-metadata";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
-import { Match, Option, Record } from "effect";
+import { Option, Record } from "effect";
 import { AsyncData } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import {
   ID_FIELD,
-  cellOf,
   formatInstant,
   listColumns,
 } from "../../domain/list-columns.ts";
 import { valueText } from "../../domain/value-text.ts";
-import { recordRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
+import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";
 import type { RecordPage } from "../table-list/model.ts";
 import { USER_TABLE } from "./command.ts";
 import { editedRecordOf } from "./form.ts";
@@ -57,73 +52,6 @@ const disclosureMark = (isOpen: boolean, h: HtmlBuilder<Message>): Html =>
   );
 
 // RELATED LISTS
-
-const relatedCellView = (
-  table: MetaTable,
-  record: RecordJson,
-  field: MetaField,
-  isFirst: boolean,
-  h: HtmlBuilder<Message>
-): Html => {
-  const cell = cellOf(record, field);
-
-  const text = Match.value(cell).pipe(
-    Match.tag("Shown", ({ text: shown }) => shown),
-    Match.tag("Empty", () => ""),
-    Match.tag("Restricted", () => "Restricted"),
-    Match.tag("NotDelivered", () => "Not delivered"),
-    Match.exhaustive
-  );
-
-  return h.keyed("td")(
-    field.id,
-    [
-      h.DataAttribute(
-        "cell",
-        cell._tag === "Shown" ? "value" : cell._tag.toLowerCase()
-      ),
-    ],
-    [
-      isFirst
-        ? h.a(
-            [
-              h.Href(recordRouter({ id: record.id, table: table.name })),
-              h.Class("link"),
-            ],
-            [text === "" ? record.id : text]
-          )
-        : text,
-    ]
-  );
-};
-
-/**
- * The ID cell, the related list's only column when its table has no other
- * to show (decision 0020): the record's ID, linking to its form.
- *
- * @param table - The related table.
- * @param record - The record.
- * @param h - The builder.
- * @returns The cell.
- */
-const relatedIdCellView = (
-  table: MetaTable,
-  record: RecordJson,
-  h: HtmlBuilder<Message>
-): Html =>
-  h.keyed("td")(
-    ID_FIELD,
-    [h.DataAttribute("cell", "value")],
-    [
-      h.a(
-        [
-          h.Href(recordRouter({ id: record.id, table: table.name })),
-          h.Class("link"),
-        ],
-        [record.id]
-      ),
-    ]
-  );
 
 const relatedTableView = (
   list: RelatedList,
@@ -162,9 +90,9 @@ const relatedTableView = (
             record.id,
             [h.DataAttribute("record-id", record.id)],
             isIdOnly
-              ? [relatedIdCellView(table, record, h)]
+              ? [recordIdCellView(table, record, h)]
               : columns.map((field, index) =>
-                  relatedCellView(table, record, field, index === 0, h)
+                  recordCellView(table, record, field, index === 0, h)
                 )
           )
         )

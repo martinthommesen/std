@@ -581,6 +581,81 @@ describe("a stale form", () => {
   });
 });
 
+describe("a related list's cells", () => {
+  const TASK_ID = "019a0000-0000-7000-8000-0000000f2002";
+
+  const shown = after(
+    init({
+      id: 1,
+      maybeAppRevision: Option.none(),
+      mode: FormMode.Edit({ recordId: TICKET_ID }),
+      table: TICKET,
+    }).model,
+    Message.SucceededLoadFormMetadata({
+      revision: REVISION_5,
+      table: ticketWithRelated,
+    }),
+    Message.SucceededLoadRecord({
+      generation: 1,
+      maybeRevision: Option.none(),
+      purpose: "Open",
+      record: ticketRecord,
+    }),
+    Message.SucceededLoadTarget({ request: 1, table: userTable }),
+    Message.ToggledRelatedList({ isOpen: true, listId: 1 }),
+    Message.SucceededLoadRelatedMetadata({
+      generation: 1,
+      listId: 1,
+      revision: REVISION_5,
+      table: { ...ticketTable, label: "Task", name: "help.task" },
+    }),
+    Message.SucceededLoadRelatedRecords({
+      generation: 1,
+      listId: 1,
+      maybeRevision: Option.none(),
+      page: {
+        maybeCount: Option.some(1),
+        maybeNextCursor: Option.none(),
+        records: [
+          {
+            class: "help.task",
+            id: TASK_ID,
+            // `status` is not delivered, `assignee` is empty, and
+            // `customer_email` is withheld.
+            values: {
+              assignee: null,
+              internal_cost: "12.00",
+              number: "TSK0000001",
+              short_description: "Replace the cable",
+            },
+            version: 1,
+            withheld: ["customer_email"],
+          },
+        ],
+      },
+    })
+  );
+
+  it("say what each holds as the list page's cells do: a value, empty, restricted or not delivered", () => {
+    scene(
+      { update, view },
+      given(shown),
+      acknowledgePicker,
+      inside(
+        selector(".related-list"),
+        expect(selector('[data-cell="value"]')).toExist(),
+        expect(selector('[data-cell="not-delivered"]')).toHaveText(
+          "Not delivered"
+        ),
+        expect(selector('[data-cell="empty"]')).toHaveText("Empty"),
+        expect(selector('[data-cell="restricted"]')).toHaveText(
+          /Restricted: you are not allowed to read this value/u
+        )
+      )
+    );
+  });
+});
+
 describe("a related list without columns", () => {
   const bareTasks = {
     ...ticketTable,
