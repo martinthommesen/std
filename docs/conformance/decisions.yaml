@@ -108,9 +108,13 @@ entries:
     date: 2026-10-22
   - id: E23-tmf672-not-representable
     decision0021: 23
-    rows: []
-    requirement: "TMF672 writes of rules the projection cannot represent"
-    reason: "Denies, field rules and conditional rules stay read-only through TMF672 (Contracts 11.3)."
+    rows:
+      - TMF672@5.1.0/CP/post/permissionSet-not-one-role
+      - TMF672@5.1.0/CP/post/permissionSpecificationSet-read-only-rule
+      - TMF672@5.1.0/OAS/operations/patchPermissionSpecification-read-only-rule
+      - TMF672@5.1.0/OAS/operations/deletePermissionSpecification-read-only-rule
+    requirement: "TMF672 writes the projection cannot represent: changing or deleting a deny, field, conditional or multi-action rule; a set POST naming such a rule; a permissionSet POST whose permission[] is not one role's projected specifications or a subset"
+    reason: "Denies, field rules and conditional rules stay read-only through TMF672 (Contracts 11.3); PATCH and DELETE are optional in TMF672 CP v5.1.0, but POST of permissionSet and of permissionSpecificationSet is mandatory, so the refusals reach mandatory operations; STD's kit payloads stay within what the projection represents. Widened on 2026-10-22 (decision 0021, decision 43). The rows are for 4D's TMF672 matrix file, which uses these IDs."
     recommendation: accept
     state: decided
     outcome: accepted
