@@ -9,9 +9,23 @@
  * Field schemas follow Contracts 6.5: big integers and decimals are
  * strings, date-times RFC 3339, references and UUIDs lowercase UUIDs,
  * password and secret values `{"set": bool}` when read and plaintext when
- * written, choices the keys of the table's choices (active ones on writes).
- * A field the caller can never write on a route is left out of that
- * route's body.
+ * written, choices the keys of the table's choices.
+ *
+ * The document never refuses traffic the server accepts; where JSON Schema
+ * cannot say what the server checks, it says less and describes the rest:
+ *
+ * - Read values hold the selected fields, the audit fields and, for a
+ *   `fields` selection naming reference paths, dotted members
+ *   (`docked_to.name`).
+ * - A create body may name active choice keys; an update body also the
+ *   hidden ones, which the server keeps only when unchanged (6.5).
+ * - Write bodies name every field the caller can read: forms send whole
+ *   records, and an unchanged field the caller may not write is accepted
+ *   (3.9). `x-std-write` states whether the caller may write it (`yes`,
+ *   `no`, `perRecord`), and a read-only field is marked `readOnly`.
+ * - Text lengths bound read values; written text is converted first
+ *   (trimmed, normalized, Contracts 5.5), so its limit is described, not
+ *   enforced.
  */
 import type {
   MetaField,
@@ -49,17 +63,51 @@ const boundsOf = (
   return bounds;
 };
 
-const valueSchema = (field: MetaField, mode: "read" | "write"): JsonObject => {
+/** Which values a schema describes: a read, or a create or update body. */
+type ValueMode = "read" | "create" | "update";
+
+const textSchema = (
+  maxLength: number | undefined,
+  mode: ValueMode
+): JsonObject => {
+  if (maxLength === undefined) {
+    return { type: "string" };
+  }
+
+  return mode === "read"
+    ? { maxLength, type: "string" }
+    : {
+        description: `At most ${maxLength} code points after conversion (trimmed and normalized, Contracts 5.5).`,
+        type: "string",
+      };
+};
+
+const choiceSchema = (field: MetaField, mode: ValueMode): JsonObject => {
+  const choices = field.choices ?? [];
+
+  const keys = choices.flatMap((choice) =>
+    mode === "create" && choice.retired ? [] : [choice.key]
+  );
+
+  const hidden = choices.some((choice) => choice.retired);
+
+  return mode === "update" && hidden
+    ? {
+        description:
+          "Hidden (retired) keys are accepted only when they equal the stored value.",
+        enum: keys,
+        type: "string",
+      }
+    : { enum: keys, type: "string" };
+};
+
+const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
   const { type } = field;
 
   switch (type.kind) {
     case "text":
     case "longText": {
-      return nullable(
-        type.maxLength === undefined
-          ? { type: "string" }
-          : { maxLength: type.maxLength, type: "string" }
-      );
+      return nullable(textSchema(type.maxLength, mode));
     }
 
     case "integer": {
@@ -90,11 +138,7 @@ const valueSchema = (field: MetaField, mode: "read" | "write"): JsonObject => {
     }
 
     case "choice": {
-      const keys = (field.choices ?? []).flatMap((choice) =>
-        mode === "write" && choice.retired ? [] : [choice.key]
-      );
-
-      return nullable({ enum: keys, type: "string" });
+      return nullable(choiceSchema(field, mode));
     }
 
     case "reference":
@@ -146,25 +190,57 @@ const withOptional = (
     ),
   ]);
 
-const described = (field: MetaField, schema: JsonObject): JsonObject =>
-  withOptional({ ...schema, title: field.label }, [
+const described = (
+  field: MetaField,
+  schema: JsonObject,
+  mode: ValueMode
+): JsonObject => {
+  const titled = withOptional({ ...schema, title: field.label }, [
     ["description", field.helpText ?? undefined],
     ["readOnly", field.readOnly ? true : undefined],
   ]);
 
+  return mode === "read"
+    ? titled
+    : { ...titled, "x-std-write": field.write[mode] };
+};
+
+// The audit fields are values of every record (Contracts 2.1, 6.6).
+const AUDIT_VALUES: JsonObject = {
+  created_at: { format: "date-time", readOnly: true, type: "string" },
+  created_by: { format: "uuid", readOnly: true, type: "string" },
+  updated_at: { format: "date-time", readOnly: true, type: "string" },
+  updated_by: { format: "uuid", readOnly: true, type: "string" },
+};
+
+// A followed reference's value appears under its dotted path (6.6).
+const PATH_MEMBERS: JsonObject = {
+  "^[^.]+\\.[^.]+$": {
+    description:
+      "A one-hop reference path selected with `fields` (`docked_to.name`): the target field's value, or null.",
+  },
+};
+
 const valuesSchema = (
   fields: readonly MetaField[],
-  mode: "read" | "write"
-): JsonObject => ({
-  additionalProperties: false,
-  properties: Object.fromEntries(
+  mode: ValueMode
+): JsonObject => {
+  const properties: JsonObject = Object.fromEntries(
     fields.map((field) => [
       field.name,
-      described(field, valueSchema(field, mode)),
+      described(field, valueSchema(field, mode), mode),
     ])
-  ),
-  type: "object",
-});
+  );
+
+  return mode === "read"
+    ? {
+        additionalProperties: false,
+        patternProperties: PATH_MEMBERS,
+        properties: { ...properties, ...AUDIT_VALUES },
+        type: "object",
+      }
+    : { additionalProperties: false, properties, type: "object" };
+};
 
 const ref = (name: string): JsonObject => ({
   $ref: `#/components/schemas/${name}`,
@@ -233,16 +309,30 @@ const recordSchema: JsonObject = {
   type: "object",
 };
 
-const bodyFields = (
-  table: MetaTable,
-  action: "create" | "update"
-): readonly MetaField[] =>
-  table.fields.filter((field) => field.write[action] !== "no");
-
 const paths = (table: MetaTable): JsonObject => {
   const base = `/api/v1/tables/${table.name}/records`;
   const id = parameter("id", "path");
-  const saved = { record: ref("Record"), schemaRevision: { type: "integer" } };
+  const read = { record: ref("Record"), schemaRevision: { type: "integer" } };
+
+  // After a write, a record the caller can no longer see is only its ID
+  // and version (Contracts 3.9).
+  const saved = {
+    record: {
+      anyOf: [
+        ref("Record"),
+        {
+          additionalProperties: false,
+          properties: {
+            id: { format: "uuid", type: "string" },
+            version: { type: "integer" },
+          },
+          required: ["id", "version"],
+          type: "object",
+        },
+      ],
+    },
+    schemaRevision: { type: "integer" },
+  };
 
   const create: JsonObject = {
     operationId: "create",
@@ -301,7 +391,7 @@ const paths = (table: MetaTable): JsonObject => {
           parameter("labels", "query"),
         ],
         responses: {
-          "200": ok("One record.", { properties: saved, type: "object" }),
+          "200": ok("One record.", { properties: read, type: "object" }),
           ...errors,
         },
       },
@@ -357,9 +447,9 @@ export const tableOpenApi = (
   return {
     components: {
       schemas: {
-        CreateBody: valuesSchema(bodyFields(table, "create"), "write"),
+        CreateBody: valuesSchema(table.fields, "create"),
         Record: recordSchema,
-        UpdateBody: valuesSchema(bodyFields(table, "update"), "write"),
+        UpdateBody: valuesSchema(table.fields, "update"),
         Values: valuesSchema(table.fields, "read"),
       },
     },
