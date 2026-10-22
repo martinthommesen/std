@@ -351,6 +351,40 @@ describe("api-client", () => {
         })
       );
 
+      dbTest.effect(
+        "reads table metadata and the per-table OpenAPI document",
+        () =>
+          Effect.gen(function* metadata() {
+            const bob = yield* clientFor(yield* signIn("bob"));
+
+            const asset = yield* bob.metadata.table({
+              params: { table: ASSET },
+            });
+
+            assert.strictEqual(asset.table.name, ASSET);
+            assert.notInclude(
+              asset.table.fields.map((field) => field.name),
+              "cost"
+            );
+
+            const document = yield* bob.metadata.tableOpenApi({
+              params: { table: ASSET },
+            });
+
+            assert.strictEqual(document.openapi, "3.1.0");
+            assert.strictEqual(
+              document["x-std-schema-revision"],
+              asset.schemaRevision
+            );
+
+            const hidden = yield* bob.metadata
+              .table({ params: { table: "core.change" } })
+              .pipe(Effect.flip);
+
+            assert.strictEqual(hidden._tag, "UnknownTable");
+          })
+      );
+
       dbTest.effect("serves the OpenAPI 3.1 document of the definition", () =>
         Effect.gen(function* openApi() {
           const response = yield* fetchRaw(OPENAPI_PATH);

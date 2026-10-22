@@ -6,11 +6,23 @@
  * holds `CONFIG_KEY` shared, and inside a config commit it is held
  * exclusively, so no config commit can interleave and the tables read are
  * exactly the configuration at the transaction's revision.
+ *
+ * The load reads the shape the database has, not the shape this version's
+ * migrations give it: a definition table a pending platform migration
+ * creates is read as empty, and a column one adds as null (every column a
+ * later migration adds is nullable, and its property's documented default
+ * is null). `std upgrade` plans against a database from an earlier release
+ * before it runs that release's pending migrations (Contracts 8.5), and
+ * `--plan` must never run them, so this is what lets both read an older
+ * database (decision 0017, "Release compatibility"). A server never serves
+ * such a database: it refuses to start while a migration is pending (1.9),
+ * and `doctor`'s platform-table check reports a column missing from a
+ * migrated database.
  */
 import type { Definition } from "@std/definitions/definition";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { SnapshotKey } from "@std/definitions/snapshot";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
@@ -24,33 +36,71 @@ import {
   selectStatement,
 } from "./definition-tables.ts";
 
-const decoders = new Map(
-  DEFINITION_TABLES.map((entry) => [entry.kind, decodeRows(rowSchema(entry))])
+const decodeColumns = decodeRows(
+  Schema.Struct({ column_name: Schema.String, table_name: Schema.String })
 );
 
 /**
- * Reads every definition in the current transaction.
+ * The columns of the definition tables as the database has them.
  *
- * @param key - The `(revision, change_set_id)` the transaction runs at.
- * @returns The snapshot; a corrupt row is a defect.
+ * @returns The column names by table name in `core`.
+ */
+const presentColumns = Effect.gen(function* presentColumns() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const rows = yield* readOnly(sql`
+    SELECT c.relname::text AS table_name, a.attname::text AS column_name
+      FROM pg_catalog.pg_attribute AS a
+      JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'core' AND c.relkind = 'r'
+       AND a.attnum > 0 AND NOT a.attisdropped
+       AND c.relname = ANY(${DEFINITION_TABLES.map((entry) => entry.table)})`).pipe(
+    Effect.flatMap(decodeColumns)
+  );
+
+  const columns = new Map<string, Set<string>>();
+
+  for (const row of rows) {
+    const known = columns.get(row.table_name) ?? new Set<string>();
+
+    known.add(row.column_name);
+    columns.set(row.table_name, known);
+  }
+
+  return columns;
+});
+
+/**
+ * Loads the snapshot for the given configuration state.
+ *
+ * @param key - The revision and change set ID the caller's transaction runs at.
+ * @returns The snapshot.
  */
 export const loadSnapshot = Effect.fn("Catalog.loadSnapshot")(
   function* loadSnapshot(
     key: SnapshotKey
   ): Effect.fn.Return<ConfigSnapshot, SqlError, SqlClient.SqlClient> {
     const sql = yield* SqlClient.SqlClient;
+    const columns = yield* presentColumns;
     const definitions: Definition[] = [];
 
     for (const entry of DEFINITION_TABLES) {
-      const decode = decoders.get(entry.kind);
-      const rows = yield* readOnly(sql.unsafe(selectStatement(entry)));
-      const decoded = decode === undefined ? [] : yield* decode(rows);
+      const present = columns.get(entry.table);
 
-      for (const row of decoded) {
-        // A corrupt row throws CorruptDefinitionRow: a defect.
-        definitions.push(
-          yield* Effect.sync(() => definitionFromRow(entry, row))
+      if (present !== undefined) {
+        const rows = yield* readOnly(
+          sql.unsafe(selectStatement(entry, present))
         );
+
+        const decoded = yield* decodeRows(rowSchema(entry, present))(rows);
+
+        for (const row of decoded) {
+          // A corrupt row throws CorruptDefinitionRow: a defect.
+          definitions.push(
+            yield* Effect.sync(() => definitionFromRow(entry, row))
+          );
+        }
       }
     }
 

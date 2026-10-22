@@ -416,6 +416,28 @@ const DRIFTS: readonly Drift[] = [
     ],
   },
   {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.number_counter/number_counter_pkey"
+    ),
+    name: "a core.number_counter without its key",
+    statements: [
+      "ALTER TABLE core.number_counter DROP CONSTRAINT number_counter_pkey",
+    ],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.choice/choice_key_live"
+    ),
+    name: "a dropped live-key index of core.choice",
+    statements: ["DROP INDEX core.choice_key_live"],
+  },
+  {
     expected: expect(11, "warning", "columnHeadroom", "fx.wide"),
     name: "1,400 columns",
     statements: [
@@ -646,6 +668,7 @@ describe("doctor", () => {
             operations: [
               {
                 definition: {
+                  choices: null,
                   classId: ACME.laptop,
                   default: null,
                   fieldId: ACME.cost,
@@ -656,6 +679,7 @@ describe("doctor", () => {
                   max: null,
                   maxLength: null,
                   min: null,
+                  numberPrefix: null,
                   owner: { layer: "local" },
                   protected: false,
                   readOnly: true,
@@ -712,6 +736,45 @@ describe("doctor", () => {
             )
           );
           assert.strictEqual(edited.exitCode, 1);
+        })
+    );
+
+    dbTest.effect(
+      "a definition revision an earlier release wrote, without the properties added since, is not stale; any other difference is",
+      () =>
+        Effect.gen(function* releasedRevisions() {
+          // v0.0.1 wrote field revisions without numberPrefix (decision
+          // 0017, "Release compatibility").
+          const strip = `UPDATE core.definition_revision SET effective = effective - 'numberPrefix'
+            WHERE definition_id = '${FX.x}'::uuid`;
+
+          yield* run(strip);
+
+          const released = yield* runDoctor();
+
+          yield* run(
+            `UPDATE core.definition_revision SET effective = effective || '{"label": "stale"}'
+             WHERE definition_id = '${FX.x}'::uuid`
+          );
+
+          const drifted = yield* runDoctor();
+
+          yield* run(
+            `UPDATE core.definition_revision AS r SET effective = r.effective || jsonb_build_object('label', f.label, 'numberPrefix', f.number_prefix)
+               FROM core.field AS f
+              WHERE r.definition_id = '${FX.x}'::uuid AND f.id = r.definition_id`
+          );
+
+          assert.deepStrictEqual(notInfo(released.findings), []);
+          assert.strictEqual(released.exitCode, 0);
+          assert.isTrue(
+            drifted.findings.some(
+              (entry) =>
+                entry.code === "definitionRevisionStale" &&
+                entry.subject === FX.x
+            )
+          );
+          assert.strictEqual((yield* runDoctor()).exitCode, 0);
         })
     );
 

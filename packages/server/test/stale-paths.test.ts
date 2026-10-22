@@ -63,6 +63,8 @@ const PATHS = [
   "me",
   "sign-out",
   "openapi",
+  "metadata",
+  "metadata openapi",
   "change-set apply",
   "change-set read",
   "definition create",
@@ -271,6 +273,15 @@ const take = (
           token,
         }),
       me: () => http.get("/api/v1/auth/me", { headers, token }),
+      // Metadata is what a stale client asks for: an older revision is
+      // served, one the database never had is not.
+      metadata: () =>
+        http.get("/api/v1/meta/tables/acme.asset", { headers, token }),
+      "metadata openapi": () =>
+        http.get("/api/v1/meta/tables/acme.asset/openapi.json", {
+          headers,
+          token,
+        }),
       openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
       "sign-in": () =>
         http.request("POST", "/api/v1/auth/sign-in", {
@@ -327,6 +338,8 @@ const success: Readonly<Record<PathName, number>> = {
   "history?field": 200,
   list: 200,
   me: 200,
+  metadata: 200,
+  "metadata openapi": 200,
   openapi: 200,
   "sign-in": 200,
   "sign-out": 204,

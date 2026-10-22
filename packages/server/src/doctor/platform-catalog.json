@@ -1033,6 +1033,445 @@
       }
     ]
   },
+  "core.choice": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "field_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "key",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "label",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "sort_order",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "hidden",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "columns": ["owner_layer", "owner_set_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_class_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_created_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_created_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["field_id"],
+        "deferrable": true,
+        "deferred": true,
+        "deleteAction": "a",
+        "name": "choice_field_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.field",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["field_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_field_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["hidden"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_hidden_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["key"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_key_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["label"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_label_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_owner_layer_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_owner_layer_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["protected"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_protected_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["sort_order"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_sort_order_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_state_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_updated_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_updated_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((version > 0))",
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "choice_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_pk_633ddece067a4340a43d8dd8ae45b294",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((class_id = '633ddece-067a-4340-a43d-8dd8ae45b294'::uuid))",
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_sc_633ddece067a4340a43d8dd8ae45b294",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id", "class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_uq_633ddece067a4340a43d8dd8ae45b294",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["field_id", "key"],
+        "method": "btree",
+        "name": "choice_key_live",
+        "predicate": "state <> 'purged'::text",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "std_pk_633ddece067a4340a43d8dd8ae45b294",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id", "class_id"],
+        "method": "btree",
+        "name": "std_uq_633ddece067a4340a43d8dd8ae45b294",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "function": "core.refuse_class_change",
+        "name": "std_tg_633ddece067a4340a43d8dd8ae45b294",
+        "type": 19,
+        "when": "old.class_id IS DISTINCT FROM new.class_id"
+      }
+    ]
+  },
   "core.class": {
     "columns": [
       {
@@ -3930,6 +4369,12 @@
         "name": "default_value",
         "notNull": false,
         "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "number_prefix",
+        "notNull": false,
+        "type": "text"
       }
     ],
     "constraints": [
@@ -4450,6 +4895,18 @@
         "name": "default_value",
         "notNull": false,
         "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "choices",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "number_prefix",
+        "notNull": false,
+        "type": "text"
       }
     ],
     "constraints": [
@@ -5237,6 +5694,420 @@
       }
     ]
   },
+  "core.layout": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "layout_type",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "elements",
+        "notNull": true,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "columns": ["owner_layer", "owner_set_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_class_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_created_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_created_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["elements"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_elements_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((layout_type = ANY (ARRAY['form'::text, 'list'::text])))",
+        "columns": ["layout_type"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_layout_type_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["layout_type"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_layout_type_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_owner_layer_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_owner_layer_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["protected"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_protected_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_state_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["table_id"],
+        "deferrable": true,
+        "deferred": true,
+        "deleteAction": "a",
+        "name": "layout_table_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.class",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["table_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_table_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_updated_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_updated_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((version > 0))",
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "layout_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_pk_ae98b973f4364315a093057af79dbc5c",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((class_id = 'ae98b973-f436-4315-a093-057af79dbc5c'::uuid))",
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_sc_ae98b973f4364315a093057af79dbc5c",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id", "class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_uq_ae98b973f4364315a093057af79dbc5c",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["table_id", "layout_type"],
+        "method": "btree",
+        "name": "layout_table_live",
+        "predicate": "state <> 'purged'::text",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "std_pk_ae98b973f4364315a093057af79dbc5c",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id", "class_id"],
+        "method": "btree",
+        "name": "std_uq_ae98b973f4364315a093057af79dbc5c",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "function": "core.refuse_class_change",
+        "name": "std_tg_ae98b973f4364315a093057af79dbc5c",
+        "type": 19,
+        "when": "old.class_id IS DISTINCT FROM new.class_id"
+      }
+    ]
+  },
   "core.namespace": {
     "columns": [
       {
@@ -5662,6 +6533,107 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.number_counter": {
+    "columns": [
+      {
+        "default": null,
+        "name": "field_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "prefix",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "last_value",
+        "notNull": true,
+        "type": "bigint"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["field_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "number_counter_field_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((last_value > 0))",
+        "columns": ["last_value"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "number_counter_last_value_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["last_value"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "number_counter_last_value_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["field_id", "prefix"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "number_counter_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["prefix"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "number_counter_prefix_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["field_id", "prefix"],
+        "method": "btree",
+        "name": "number_counter_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.permission": {
     "columns": [

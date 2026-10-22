@@ -67,14 +67,23 @@ import {
 } from "./ddl.ts";
 import { lockNames, planLifecycle } from "./plan-lifecycle.ts";
 import type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
-import { defaultLiteral, quoteIdent, tableName } from "./sql-text.ts";
+import {
+  choicePredicates,
+  defaultLiteral,
+  quoteIdent,
+  tableName,
+} from "./sql-text.ts";
 
 export type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 
-/** Follow-up step kinds (Contracts 1.5); `backfill` arrives in Step 2. */
+/**
+ * Follow-up step kinds (Contracts 1.5); `backfill` numbers the existing
+ * rows of a new auto-numbered field (Step 2).
+ */
 export type StepKind =
   | "validate_constraint"
   | "validate_override"
+  | "backfill"
   | "create_index_concurrently"
   | "drop_index_concurrently"
   | "complete";
@@ -83,6 +92,7 @@ export type StepKind =
 export const STEP_ORDER: readonly StepKind[] = [
   "validate_constraint",
   "validate_override",
+  "backfill",
   "create_index_concurrently",
   "drop_index_concurrently",
   "complete",
@@ -424,6 +434,72 @@ const planNewTables = (
 const hasColumnDefault = (field: FieldDefinition): boolean =>
   field.default !== null || field.type.kind === "boolean";
 
+/**
+ * The details of a planned backfill step.
+ *
+ * @param input - The field, its table and column as Postgres names them
+ *   after the main transaction, and the effective prefix of each class of
+ *   the field's subtree.
+ * @returns The step details.
+ */
+const backfillDetails = (input: {
+  readonly definitionId: string;
+  readonly table: string;
+  readonly column: string;
+  readonly prefix: string;
+  readonly prefixes: Readonly<Record<string, string>>;
+}): JsonObject => ({
+  column: input.column,
+  cursor: null,
+  definitionId: input.definitionId,
+  prefix: input.prefix,
+  prefixes: { ...input.prefixes },
+  table: input.table,
+});
+
+/**
+ * Plans the `backfill` step of an auto-numbered field added to an existing
+ * table: always, not only when the preflight saw rows, because a row
+ * created between the preflight and the main commit predates the column
+ * too. On an empty table the step finds nothing to number.
+ *
+ * @param planning - The planning run.
+ * @param field - The new field.
+ * @param table - Its quoted table after the change set.
+ */
+const planBackfill = (
+  planning: Planning,
+  field: FieldDefinition,
+  table: string
+): void => {
+  if (field.numberPrefix === null) {
+    return;
+  }
+
+  const prefixes: Record<string, string> = {};
+
+  for (const classId of planning.after.subtreeIds(field.classId)) {
+    const prefix = effectiveField(planning.after, classId, field).numberPrefix;
+
+    if (prefix !== null) {
+      prefixes[classId] = prefix;
+    }
+  }
+
+  planning.steps.push({
+    details: backfillDetails({
+      column: quoteIdent(field.name),
+      definitionId: field.id,
+      prefix: field.numberPrefix,
+      prefixes,
+      table,
+    }),
+    kind: "backfill",
+    sql: null,
+    targetId: field.id,
+  });
+};
+
 const planAddedColumns = (
   planning: Planning,
   fields: readonly FieldDefinition[]
@@ -437,6 +513,7 @@ const planAddedColumns = (
       const hasRows = populated(planning, field.classId);
 
       planning.tables.push(addColumn(table, field));
+      planBackfill(planning, field, table);
 
       if (field.required && !hasColumnDefault(field) && hasRows) {
         planning.violations.push({
@@ -717,6 +794,7 @@ const overridePredicate = (
     ...(now.required && !was.required ? [`${column} IS NULL`] : []),
     ...lengthPredicates(column, now.type, was.type),
     ...boundPredicates(column, now.type, was.type),
+    ...choicePredicates(column, now.choices, was.choices),
   ];
 
   return predicates.length === 0

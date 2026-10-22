@@ -86,6 +86,9 @@ const adminPaths = (records: {
     ["GET", listPath("core.access_rule"), {}],
     ["GET", listPath("core.role"), {}],
     ["GET", listPath("core.user_role"), {}],
+    ["GET", "/api/v1/meta/tables/acme.asset", {}],
+    ["GET", "/api/v1/meta/tables/acme.laptop/openapi.json", {}],
+    ["GET", "/api/v1/meta/tables/core.access_rule", {}],
     [
       "PATCH",
       recordPath("core.user", records.user),
@@ -114,7 +117,7 @@ const changeSetBody = (operations: readonly Operation[]): JsonValue => {
 
 /** What an admin gets on every path after the allow-all rules are gone. */
 const REFUSED: readonly Observation[] = [
-  ...Array.from({ length: 13 }, () => ({
+  ...Array.from({ length: 16 }, () => ({
     status: 404,
     tag: "UnknownTable",
   })),
@@ -548,6 +551,14 @@ describe("no-bypass", () => {
           const asAdmin = (method: string, url: string, options = {}) =>
             http.request(method, url, { ...options, token: tokens.admin });
 
+          // What admin's metadata holds with the rules in place.
+          const metadataBefore = yield* http.get(
+            "/api/v1/meta/tables/acme.asset",
+            { token: tokens.admin }
+          );
+
+          assert.strictEqual(metadataBefore.status, 200, metadataBefore.text);
+
           // What admin reads with the rules in place.
           const before = yield* http.get(
             listPath("acme.asset", { fields: "name,cost", sort: "name" }),
@@ -608,6 +619,11 @@ describe("no-bypass", () => {
               observe(yield* asAdmin("GET", listPath(table))),
               { status: 404, tag: "UnknownTable" },
               table
+            );
+            assert.deepStrictEqual(
+              observe(yield* asAdmin("GET", `/api/v1/meta/tables/${table}`)),
+              { status: 404, tag: "UnknownTable" },
+              `metadata of ${table}`
             );
           }
 
@@ -731,6 +747,16 @@ describe("no-bypass", () => {
           assert.deepStrictEqual(
             withoutRevision(asDeputy.json),
             withoutRevision(before.json)
+          );
+
+          const deputyMetadata = yield* http.get(
+            "/api/v1/meta/tables/acme.asset",
+            { token: eve }
+          );
+
+          assert.deepStrictEqual(
+            withoutRevision(deputyMetadata.json),
+            withoutRevision(metadataBefore.json)
           );
 
           // Platform tables match only core rules: the copies are local, so

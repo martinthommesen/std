@@ -25,6 +25,7 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "ajv": "catalog:",
     "fast-check": "catalog:",
     "oxc-parser": "catalog:",
     "typescript": "catalog:",

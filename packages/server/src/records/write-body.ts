@@ -1,4 +1,3 @@
-import type { ReadOnlyFieldError } from "@std/api/errors/field-errors";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 /**
@@ -18,6 +17,7 @@ import { ValidationFailed } from "@std/api/errors/validation-failed";
  *   name and a never-readable field give the same `UnknownField`.
  */
 import type { FieldDefinition } from "@std/definitions/definition";
+import type { ReadOnlyFieldError } from "@std/definitions/field-errors";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Result, Schema } from "effect";

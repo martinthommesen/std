@@ -1,10 +1,9 @@
+import { FieldErrorSchema } from "@std/definitions/field-errors";
 /**
  * `ValidationFailed` (Contracts 3.8, HTTP 422): every field error of a
  * write, returned together (6.7).
  */
 import { Schema } from "effect";
-
-import { FieldErrorSchema } from "./field-errors.ts";
 
 /**
  * A write was refused because of its values. Lists field errors only for

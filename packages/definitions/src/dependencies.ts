@@ -5,9 +5,10 @@
  * Kinds registered so far: `extends`, `field_of`, `references_table`,
  * `condition_on` (a condition field to the class its conditions apply to),
  * `index_on`, `display_field`, `access_rule_on`, `rule_role`, `overrides`,
- * `condition_reads`, `subscription_on` (a subscription to its class) and
- * `grant_of` (a grant to its role and its permission). Later features add
- * `layout_uses`, `rule_writes` and `choice_of`.
+ * `condition_reads`, `subscription_on` (a subscription to its class),
+ * `grant_of` (a grant to its role and its permission), `choice_of` (a
+ * choice to its field) and `layout_uses` (a layout to its class and to each
+ * field it shows). Step 3 adds `rule_writes`.
  */
 import type { FieldType } from "@std/values/field-type";
 
@@ -16,12 +17,14 @@ import type { Condition } from "./condition.ts";
 import type {
   AccessRuleDraft,
   AccessTarget,
+  ChoiceDraft,
   ClassDraft,
   Definition,
   DefinitionKind,
   FieldDraft,
   GrantDraft,
   IndexDraft,
+  LayoutDraft,
   NamespaceDraft,
   OverrideDraft,
   PermissionDraft,
@@ -45,6 +48,8 @@ export const DEPENDENCY_KINDS = [
   "condition_reads",
   "subscription_on",
   "grant_of",
+  "choice_of",
+  "layout_uses",
 ] as const;
 
 /** A dependency kind. */
@@ -66,7 +71,9 @@ export type Referencing =
   | PermissionDraft
   | GrantDraft
   | AccessRuleDraft
-  | SubscriptionDraft;
+  | SubscriptionDraft
+  | ChoiceDraft
+  | LayoutDraft;
 
 /** One dependency: `from` refers to `to`. */
 export interface Dependency {
@@ -88,6 +95,8 @@ export const REFERENCING_KINDS: ReadonlySet<DefinitionKind> =
     "accessRule",
     "grant",
     "subscription",
+    "choice",
+    "layout",
   ]);
 
 const edge = (
@@ -196,6 +205,21 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
     ];
   }
 
+  if (definition.kind === "choice") {
+    return [edge(id, definition.fieldId, "choice_of")];
+  }
+
+  if (definition.kind === "layout") {
+    return [
+      edge(id, definition.classId, "layout_uses"),
+      ...definition.elements.flatMap((element) =>
+        element.kind === "field"
+          ? [edge(id, element.fieldId, "layout_uses")]
+          : []
+      ),
+    ];
+  }
+
   return definition.kind === "subscription"
     ? [
         edge(id, definition.classId, "subscription_on"),
@@ -217,7 +241,9 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
  *   `condition_reads` each field its condition reads;
  * - grant: `grant_of` its role and its permission;
  * - subscription: `subscription_on` its class, `condition_reads` each field
- *   its condition reads.
+ *   its condition reads;
+ * - choice: `choice_of` its field;
+ * - layout: `layout_uses` its class and each field element.
  *
  * @param definition - Any definition.
  * @returns Its dependencies, sorted by kind and target.

@@ -1,0 +1,314 @@
+/**
+ * Admins edit roles, user-role assignments and access rules through the
+ * generic record routes only (plan Step 2; Contracts 1.2, 1.4, 3.1): role
+ * and access-rule writes are config, so each runs as a one-operation
+ * change set (the revision and the journal grow by one); a user-role
+ * assignment is data, so it takes no revision and no journal entry, and
+ * writes a change entry instead. The new user's access follows. Alice and
+ * Bob get `UnknownTable` for each of these tables and change nothing.
+ */
+import { randomUUID } from "node:crypto";
+
+import { assert, describe, it, layer } from "@effect/vitest";
+import type { JsonObject } from "@std/values/json-value";
+import { Effect } from "effect";
+
+import { TestHttpClient } from "../../testing/src/http-client.ts";
+import type { TestResponse } from "../../testing/src/http-client.ts";
+import { objectOf, signInAll, textOf } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
+import { listOf, readsTestLayer, recordPath } from "./reads-support.ts";
+import { ACME, values } from "./schema-support.ts";
+
+/** The revision, journal entries and change entries. */
+const counters = values(
+  `SELECT concat_ws(' ',
+     (SELECT revision FROM core.config_state),
+     (SELECT count(*) FROM core.schema_change),
+     (SELECT count(*) FROM core."change")) AS value`
+).pipe(Effect.map(([value]) => (value ?? "").split(" ").map(Number)));
+
+const idOf = (response: TestResponse): string =>
+  textOf(objectOf(objectOf(response.json).record).id);
+
+const versionOf = (response: TestResponse): number =>
+  Number(objectOf(objectOf(response.json).record).version);
+
+const storedVersion = (table: string, id: string) =>
+  values(
+    `SELECT version::text AS value FROM core."${table}" WHERE id = $1::uuid`,
+    [id]
+  ).pipe(Effect.map(([version]) => Number(version)));
+
+/** One write by the administrator through the generic routes. */
+interface Write {
+  readonly method: string;
+  readonly path: string;
+  readonly body?: JsonObject;
+  readonly version?: number;
+}
+
+/** A change set (revision and journal grow by one), or data (neither). */
+const CONFIG = [1, 1];
+
+/**
+ * Runs a write as `token` and returns its response and how the revision,
+ * the journal and `core.change` grew.
+ */
+const measured = Effect.fn("AdminEditing.measured")(function* measured(
+  token: string,
+  write: Write,
+  status: number
+) {
+  const http = yield* TestHttpClient;
+  const headers: Record<string, string> = {};
+
+  if (write.version !== undefined) {
+    headers["if-match"] = `"${write.version}"`;
+  }
+
+  const before = yield* counters;
+
+  const response = yield* http.request(
+    write.method,
+    write.path,
+    write.body === undefined
+      ? { headers, token }
+      : { body: write.body, headers, token }
+  );
+
+  assert.strictEqual(response.status, status, response.text);
+
+  const after = yield* counters;
+  const deltas = after.map((value, index) => value - (before[index] ?? 0));
+
+  return { deltas, response };
+});
+
+const RULES = "/api/v1/tables/core.access_rule/records";
+
+const ruleBody = (roleId: string, target: JsonObject): JsonObject => ({
+  actions: ["read"],
+  effect: "allow",
+  name: null,
+  role_ids: [roleId],
+  table_id: ACME.asset,
+  ...target,
+});
+
+describe("admin config editing", () => {
+  it("builds rules naming one role", () => {
+    assert.deepStrictEqual(ruleBody("r", { target: "records" }).role_ids, [
+      "r",
+    ]);
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "roles and access rules are change sets, role assignments are data",
+      () =>
+        Effect.gen(function* adminEditing() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const token = tokens.admin;
+
+          // A role, as a change set.
+          const role = yield* measured(
+            token,
+            {
+              body: {
+                label: "Auditor",
+                name: `auditor_${randomUUID().slice(0, 8)}`,
+              },
+              method: "POST",
+              path: "/api/v1/tables/core.role/records",
+            },
+            201
+          );
+
+          assert.deepStrictEqual(role.deltas.slice(0, 2), CONFIG);
+
+          const roleId = idOf(role.response);
+
+          // Access rules naming it: read every asset and its `name`.
+          const records = yield* measured(
+            token,
+            {
+              body: ruleBody(roleId, { target: "records" }),
+              method: "POST",
+              path: RULES,
+            },
+            201
+          );
+
+          const fields = yield* measured(
+            token,
+            {
+              body: ruleBody(roleId, { fields: [ACME.name], target: "fields" }),
+              method: "POST",
+              path: RULES,
+            },
+            201
+          );
+
+          assert.deepStrictEqual(records.deltas.slice(0, 2), CONFIG);
+          assert.deepStrictEqual(fields.deltas.slice(0, 2), CONFIG);
+
+          const updatedRule = yield* measured(
+            token,
+            {
+              body: { description: "Auditors read every asset." },
+              method: "PATCH",
+              path: recordPath("core.access_rule", idOf(records.response)),
+              version: versionOf(records.response),
+            },
+            200
+          );
+
+          assert.deepStrictEqual(updatedRule.deltas.slice(0, 2), CONFIG);
+
+          // A user, and the role assigned to them: data, no revision.
+          const login = `auditor-${randomUUID().slice(0, 8)}`;
+          const password = `pw-${randomUUID()}`;
+
+          const user = yield* measured(
+            token,
+            {
+              body: { active: true, login, name: "Audrey Auditor", password },
+              method: "POST",
+              path: "/api/v1/tables/core.user/records",
+            },
+            201
+          );
+
+          assert.deepStrictEqual(user.deltas, [0, 0, 1]);
+
+          const auditor = yield* http.signIn(login, password);
+          const assetList = "/api/v1/tables/acme.asset/records";
+          const unknown = yield* http.get(assetList, { token: auditor });
+
+          assert.strictEqual(unknown.status, 404, unknown.text);
+          assert.strictEqual(objectOf(unknown.json)._tag, "UnknownTable");
+
+          const assignment = yield* measured(
+            token,
+            {
+              body: { role: roleId, user: idOf(user.response) },
+              method: "POST",
+              path: "/api/v1/tables/core.user_role/records",
+            },
+            201
+          );
+
+          assert.deepStrictEqual(assignment.deltas, [0, 0, 1]);
+
+          const seen = yield* listOf(
+            yield* http.get(assetList, { token: auditor })
+          );
+
+          assert.isAbove(seen.records.length, 4);
+
+          for (const record of seen.records) {
+            assert.property(record.values, "name");
+            assert.notProperty(record.values, "cost");
+            assert.notProperty(record.values, "status");
+          }
+
+          // Removing the assignment is data too, and access ends.
+          const removed = yield* measured(
+            token,
+            {
+              method: "DELETE",
+              path: recordPath("core.user_role", idOf(assignment.response)),
+              version: versionOf(assignment.response),
+            },
+            200
+          );
+
+          assert.deepStrictEqual(removed.deltas, [0, 0, 1]);
+          assert.strictEqual(
+            (yield* http.get(assetList, { token: auditor })).status,
+            404
+          );
+
+          // Deleting the rules, then retiring and deleting the role: each a
+          // change set.
+          for (const created of [records, fields]) {
+            const id = idOf(created.response);
+
+            const deleted = yield* measured(
+              token,
+              {
+                method: "DELETE",
+                path: recordPath("core.access_rule", id),
+                version: yield* storedVersion("access_rule", id),
+              },
+              200
+            );
+
+            assert.deepStrictEqual(deleted.deltas.slice(0, 2), CONFIG);
+          }
+
+          const retired = yield* measured(
+            token,
+            {
+              body: { state: "retired" },
+              method: "PATCH",
+              path: recordPath("core.role", roleId),
+              version: yield* storedVersion("role", roleId),
+            },
+            200
+          );
+
+          assert.deepStrictEqual(retired.deltas.slice(0, 2), CONFIG);
+
+          const deletedRole = yield* measured(
+            token,
+            {
+              method: "DELETE",
+              path: recordPath("core.role", roleId),
+              version: yield* storedVersion("role", roleId),
+            },
+            200
+          );
+
+          assert.deepStrictEqual(deletedRole.deltas.slice(0, 2), CONFIG);
+        })
+    );
+
+    dbTest.effect(
+      "Alice and Bob cannot name these tables and change nothing",
+      () =>
+        Effect.gen(function* nonAdmins() {
+          const http = yield* TestHttpClient;
+          const { fixture, tokens } = yield* signInAll;
+          const role = randomUUID();
+
+          const writes: readonly (readonly [string, JsonObject])[] = [
+            ["core.role", { label: "Sneaky", name: "sneaky" }],
+            ["core.access_rule", ruleBody(role, { target: "records" })],
+            ["core.user_role", { role, user: fixture.bob.id }],
+          ];
+
+          for (const who of ["alice", "bob"] as const) {
+            for (const [table, body] of writes) {
+              const before = yield* committedState;
+
+              const response = yield* http.request(
+                "POST",
+                `/api/v1/tables/${table}/records`,
+                { body, token: tokens[who] }
+              );
+
+              assert.strictEqual(response.status, 404, `${who} ${table}`);
+              assert.deepStrictEqual(objectOf(response.json), {
+                _tag: "UnknownTable",
+                table,
+              });
+              assert.deepStrictEqual(yield* committedState, before);
+            }
+          }
+        })
+    );
+  });
+});

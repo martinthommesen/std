@@ -17,6 +17,7 @@ import { migration0004 } from "@std/server/platform/migrations/0004-history";
 import { migration0005 } from "@std/server/platform/migrations/0005-config-layers";
 import { migration0006 } from "@std/server/platform/migrations/0006-definition-names";
 import { migration0007 } from "@std/server/platform/migrations/0007-outbox";
+import { migration0008 } from "@std/server/platform/migrations/0008-ui-config";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
@@ -235,6 +236,7 @@ describe("test-database", () => {
         migration0005,
         migration0006,
         migration0007,
+        migration0008,
       ])
     );
     assert.notStrictEqual(

@@ -12,7 +12,7 @@
  * | incoming equals the local value | converged: override dropped, `converged` entry |
  * | local value differs | conflict: base updated, local value stays effective, conflict opened |
  * | renamed | applied by ID (roles and permissions now; tables and fields through the lifecycle operations) |
- * | removed upstream | access rules deactivated, subscriptions disabled, everything else retired through the lifecycle operations; local dependents reported; a role an active access rule names refuses the set |
+ * | removed upstream | access rules deactivated, subscriptions disabled, choices hidden, layouts deleted, everything else retired through the lifecycle operations; local dependents reported; a role an active access rule names refuses the set |
  * | type changed | refused |
  *
  * Planning is pure: it returns the operations of the set's change set, the
@@ -654,13 +654,38 @@ const rulesNaming = (
   );
 };
 
-/** How a removed rule or subscription is switched off. */
+/** How a removed rule, subscription, choice or layout is switched off. */
 interface Deactivation {
   readonly op: Operation | undefined;
   readonly action: ChangeAction;
 }
 
 const deactivation = (current: Definition): Deactivation => {
+  // A removed choice is hidden (8.4): stored keys stay readable, new
+  // writes refuse it.
+  if (current.kind === "choice") {
+    return {
+      action: "hidden",
+      op: current.hidden
+        ? undefined
+        : {
+            changes: { hidden: true },
+            id: current.id,
+            op: "update",
+            version: current.version,
+          },
+    };
+  }
+
+  // A removed layout is deleted; the class falls back to its nearest
+  // ancestor's layout. [judgment, decision 0017]
+  if (current.kind === "layout") {
+    return {
+      action: "deleted",
+      op: { id: current.id, op: "delete", version: current.version },
+    };
+  }
+
   if (current.kind === "accessRule") {
     return {
       action: "deactivated",
@@ -697,7 +722,12 @@ const planRemoval = (
   const { installed } = planning.input;
   const name = displayName(installed, current);
 
-  if (current.kind === "accessRule" || current.kind === "subscription") {
+  if (
+    current.kind === "accessRule" ||
+    current.kind === "subscription" ||
+    current.kind === "choice" ||
+    current.kind === "layout"
+  ) {
     const { action, op } = deactivation(current);
 
     if (op !== undefined) {

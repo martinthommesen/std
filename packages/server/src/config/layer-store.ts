@@ -81,7 +81,13 @@ export const jsonColumn = (text: string): Effect.Effect<JsonValue> => {
     : Effect.die(new Error("A jsonb column did not hold JSON"));
 };
 
-const jsonObjectColumn = (text: string): Effect.Effect<JsonObject> =>
+/**
+ * Parses a jsonb column read as text that must hold an object.
+ *
+ * @param text - The column's text.
+ * @returns The object; anything else is a defect.
+ */
+export const jsonObjectColumn = (text: string): Effect.Effect<JsonObject> =>
   jsonColumn(text).pipe(
     Effect.flatMap((value) =>
       isJsonObject(value)
@@ -134,6 +140,8 @@ const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "permission",
   "role",
   "subscription",
+  "choice",
+  "layout",
 ]);
 
 const isDefinitionKind = (kind: string): kind is DefinitionKind =>
