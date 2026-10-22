@@ -48,7 +48,7 @@ examples/
 bench/           Stage 0 inheritance benchmark, Step 5 rerun
 docker/          the quickstart's development image (the release image is Step 5)
 deploy/oda/      the ODA Component Helm chart and Canvas workflow inputs (Step 5)
-docs/            plan, contracts, architecture, decisions/, servicenow-mapping.md, runbooks
+docs/            plan, contracts, architecture, decisions/, conformance/ (requirements matrix, Contracts 15), servicenow-mapping.md, runbooks
 repos/           read-only upstream source: effect/ (effect@<lockfile version>), foldkit/ (foldkit@<pinned tag>)
 FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from repos/foldkit
 ```

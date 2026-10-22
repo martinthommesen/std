@@ -55,7 +55,7 @@ Filled in at each stage gate from the tables above.
 
 | Gate | Date | Upgrade hours (max per patch or minor PR) | Effect defects per completed workstream | Agent rework rate | Threshold crossed | Decision by Martin |
 | --- | --- | --- | --- | --- | --- | --- |
-| Stage 0 | 2026-10-21 | n/a (no upgrade PR) | 0 (no defect with an Effect root cause; 6 completed workstreams, 0A to 0F) | 33% (4 of 12: `ws/0a-sql-layer`, `ws/0f-probes`, `ws/0b-schema-core`, `ws/0e-bench`) | Yes: the agent rework rate, 33%, is above the 30% threshold. Upgrade effort and Effect-attributable defects are below theirs |  |
+| Stage 0 | 2026-10-21 | n/a (no upgrade PR) | 0 (no defect with an Effect root cause; 6 completed workstreams, 0A to 0F) | 33% (4 of 12: `ws/0a-sql-layer`, `ws/0f-probes`, `ws/0b-schema-core`, `ws/0e-bench`) | Yes: the agent rework rate, 33%, is above the 30% threshold. Upgrade effort and Effect-attributable defects are below theirs |  | 2026-10-22: keep Effect as is (misuse concentrated in Stage 0; Step 1 and Step 2 at 0%); measure again at the next gate. |
 | Step 1 (provisional, 1A not yet merged) | 2026-10-21 | n/a (no upgrade PR) | 0.25 (1 defect with an Effect root cause, the type-level `Effect.fn` inference in 1B; 4 completed workstreams, 1B to 1E) | 0% (0 of 5) | No, so far |  |
 
 A branch counts for Stage 0 when `docs/workstreams.md` lists a Stage 0 workstream (0A to 0F) for it, follow-ups included, and for Step 1 otherwise:
