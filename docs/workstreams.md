@@ -15,7 +15,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | merged |
 | 3 | `ws/0c-writes` | 0B, 0C, 1E (history) | save pipeline, deletes, history and history endpoint, two-user write scenario, `spike:demo` | merged |
 | 3 | `ws/0a-foldkit-tooling` | 0A (web toolchain) | Foldkit source vendored at `repos/foldkit`, Foldkit agent skills for Claude Code and Codex, `@foldkit/oxlint-plugin` (all preset) on `apps/web`, vendor checks and canaries; vendored Effect moved to `repos/effect` | merged |
-| 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | in review |
+| 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | merged |
 | 4 | `ws/1b-config-layers` | 1B | owner layers, sets, overrides, conflicts, `std upgrade --plan`, `doctor` | merged |
 | 4 | `ws/0a-lock-holder-sampling` | 0A follow-up | `SchemaLockTimeout` names the sessions that held the waited lock, sampled while waiting | merged |
 | 4 | `ws/0a-test-isolation` | 0A follow-up | Postgres-backed suites stay reliable when several CI runs share one cluster; conditions tests use `@std/testing` | merged |
