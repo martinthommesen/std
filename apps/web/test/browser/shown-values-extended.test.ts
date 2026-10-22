@@ -684,7 +684,7 @@ const uiShowsTheApiValues = async (
 ): Promise<Seen> => {
   const context = await browser.newContext({ timezoneId: FAR_ZONE });
   const page = await context.newPage();
-  const responses = captureResponses(page);
+  const responses = await captureResponses(page);
   const seen: Seen = new Set();
 
   const noPlaintextAfter = async (step: string) => {

@@ -336,117 +336,291 @@ export interface ReceivedResponse {
   readonly body: string;
 }
 
-const isRedirect = (response: Response): boolean =>
-  response.status() >= 300 && response.status() < 400;
+/** A response as the recorder held it, before the page received it. */
+interface HeldResponse extends ReceivedResponse {
+  readonly method: string;
+  readonly status: number;
+}
 
-/**
- * Reads a response's body. A redirect has none, and a request that failed
- * (aborted by a navigation) delivered none to the page; any other body
- * that cannot be read fails the test, so no body goes unchecked.
- *
- * @param response - The response.
- * @returns The URL and the body.
- */
-const receivedOf = async (response: Response): Promise<ReceivedResponse> => {
-  try {
-    return { body: await response.text(), url: response.url() };
-  } catch (error) {
-    if (isRedirect(response) || response.request().failure() !== null) {
-      return { body: "", url: response.url() };
-    }
-
-    throw new Error(`The body of ${response.url()} could not be read`, {
-      cause: error,
-    });
-  }
-};
-
-/** A response being read, and the document that received it. */
-interface Reading {
-  /** The number of the main frame's document it arrived in. */
-  readonly document: number;
-  /** The response, or why its body could not be read. */
-  readonly received: Promise<ReceivedResponse | Error>;
-  /** Whether its body has been read (or found to have none). */
-  readonly isRead: () => boolean;
+/** What a page's recorder has held so far. */
+interface Recorder {
+  /** Every response, in the order its body was read. */
+  readonly held: HeldResponse[];
+  /** Why a body that went on to the page could not be read, by response. */
+  readonly unread: { readonly index: number; readonly reason: string }[];
+  /** The responses paused now, until their body is held. */
+  readonly reading: Set<Promise<void>>;
+  /** The URLs of the responses paused now, by CDP `Fetch` request ID. */
+  readonly paused: Map<string, string>;
 }
 
 /**
- * Reads a response's body, then says so.
+ * Waits until every response paused now has its body held, recorded as
+ * unreadable, or given up because its request failed or was cancelled
+ * (or the page closed). Responses still paused have not reached the page.
  *
- * @param response - The response.
- * @param read - Called once the body has been read or refused.
- * @returns The URL and the body.
+ * @param recorder - The recorder.
+ * @returns Nothing.
  */
-const readingOf = async (
-  response: Response,
-  read: () => void
-): Promise<ReceivedResponse | Error> => {
-  try {
-    return await receivedOf(response);
-  } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
-  } finally {
-    read();
-  }
+const settledReads = async (recorder: Recorder): Promise<void> => {
+  await Promise.all(recorder.reading);
+};
+
+/** The parts of `Fetch.requestPaused` the recorder uses. */
+interface PausedResponse {
+  readonly requestId: string;
+  /** The request's `Network` ID, which `Network.loadingFailed` names. */
+  readonly networkId?: string;
+  readonly request: { readonly url: string; readonly method: string };
+  readonly responseStatusCode?: number;
+  readonly responseErrorReason?: string;
+  readonly responseHeaders?: readonly {
+    readonly name: string;
+    readonly value: string;
+  }[];
+}
+
+const recorders = new WeakMap<Page, Promise<Recorder>>();
+
+/**
+ * Whether a paused response is a redirect, which has no body (CDP's
+ * `Fetch.getResponseBody`: a 3xx status with a `Location` header).
+ *
+ * @param paused - The paused response.
+ * @returns True for a redirect.
+ */
+const isRedirect = (paused: PausedResponse): boolean => {
+  const status = paused.responseStatusCode ?? 0;
+
+  return (
+    status >= 300 &&
+    status < 400 &&
+    (paused.responseHeaders ?? []).some(
+      (header) => header.name.toLowerCase() === "location"
+    )
+  );
+};
+
+/**
+ * The text of a body as CDP returns it.
+ *
+ * @param body - The body.
+ * @param isBase64 - Whether CDP encoded it in base64.
+ * @returns The text, as UTF-8.
+ */
+const bodyText = (body: string, isBase64: boolean): string =>
+  isBase64 ? Buffer.from(body, "base64").toString("utf-8") : body;
+
+/**
+ * Starts recording every response of a page: Chromium pauses each one
+ * when its headers arrive (`Fetch.enable` at the `Response` stage), the
+ * recorder reads its whole body, and only then lets it go on to the page.
+ * The request itself is the browser's own (its cookies, credentials mode,
+ * redirects and headers are untouched), and the cache is off so every
+ * response comes from the network through the recorder.
+ *
+ * @param page - The page.
+ * @returns The recorder, once recording.
+ */
+const startRecorder = async (page: Page): Promise<Recorder> => {
+  const session = await page.context().newCDPSession(page);
+
+  const recorder: Recorder = {
+    held: [],
+    paused: new Map(),
+    reading: new Set(),
+    unread: [],
+  };
+
+  // NOTE: a request that fails or is cancelled while its response is
+  // paused never delivers its body, and `Fetch.getResponseBody` would
+  // wait for it until the page closes. Its read is given up when
+  // `Network.loadingFailed` names it (by `networkId`), or when the page
+  // closes.
+  const failed = new Set<string>();
+  const giveUps = new Map<string, () => void>();
+  let isClosed = false;
+
+  const giveUpOn = (networkId: string) => {
+    failed.add(networkId);
+    giveUps.get(networkId)?.();
+  };
+
+  session.on("Network.loadingFailed", (event) => {
+    giveUpOn(event.requestId);
+  });
+
+  page.once("close", () => {
+    isClosed = true;
+
+    for (const giveUp of giveUps.values()) {
+      giveUp();
+    }
+  });
+
+  /**
+   * Resolves once the paused request has failed, been cancelled, or the
+   * page closed; never for a request that goes on.
+   *
+   * @param paused - The paused response.
+   * @returns The promise and how to forget it.
+   */
+  const gaveUp = (paused: PausedResponse) => {
+    const { networkId } = paused;
+    const over = Promise.withResolvers<"gave up">();
+
+    const giveUp = () => {
+      over.resolve("gave up");
+    };
+
+    const isOver =
+      isClosed || (networkId !== undefined && failed.has(networkId));
+
+    if (isOver) {
+      giveUp();
+    } else if (networkId !== undefined) {
+      giveUps.set(networkId, giveUp);
+    }
+
+    return {
+      forget: () => {
+        if (networkId !== undefined) {
+          giveUps.delete(networkId);
+        }
+      },
+      promise: over.promise,
+    };
+  };
+
+  const readBody = async (paused: PausedResponse): Promise<void> => {
+    const hasBody =
+      paused.responseErrorReason === undefined && !isRedirect(paused);
+
+    if (hasBody) {
+      const over = gaveUp(paused);
+
+      try {
+        // NOTE: `Promise.race` also handles the body read's rejection
+        // when the page closes after the read was given up.
+        const answer = await Promise.race([
+          session.send("Fetch.getResponseBody", {
+            requestId: paused.requestId,
+          }),
+          over.promise,
+        ]);
+
+        if (answer === "gave up") {
+          // The body never reached the page: nothing to hold or check.
+          return;
+        }
+
+        recorder.held.push({
+          body: bodyText(answer.body, answer.base64Encoded),
+          method: paused.request.method,
+          status: paused.responseStatusCode ?? 0,
+          url: paused.request.url,
+        });
+      } catch (error) {
+        recorder.unread.push({
+          index: recorder.held.length,
+          reason: `${paused.request.url}: ${String(error)}`,
+        });
+      } finally {
+        over.forget();
+      }
+    }
+  };
+
+  const hold = async (paused: PausedResponse): Promise<void> => {
+    const reading = readBody(paused);
+
+    recorder.paused.set(paused.requestId, paused.request.url);
+    recorder.reading.add(reading);
+    await reading;
+    recorder.reading.delete(reading);
+    recorder.paused.delete(paused.requestId);
+
+    try {
+      await session.send("Fetch.continueRequest", {
+        requestId: paused.requestId,
+      });
+    } catch {
+      // The page closed meanwhile: nothing goes on to it.
+    }
+  };
+
+  session.on("Fetch.requestPaused", (paused) => {
+    void hold(paused);
+  });
+
+  await session.send("Network.enable");
+  await session.send("Network.setCacheDisabled", { cacheDisabled: true });
+  await session.send("Fetch.enable", {
+    patterns: [{ requestStage: "Response", urlPattern: "*" }],
+  });
+
+  return recorder;
+};
+
+/**
+ * The page's recorder, started on first use. Start it before the page
+ * loads anything a test checks.
+ *
+ * @param page - The page.
+ * @returns The recorder.
+ */
+const recorderOf = async (page: Page): Promise<Recorder> => {
+  const started = recorders.get(page) ?? startRecorder(page);
+
+  recorders.set(page, started);
+
+  return await started;
+};
+
+/**
+ * The URLs of the page's responses the recorder holds paused now, while
+ * it reads their bodies (for the recorder's own tests).
+ *
+ * @param page - The page.
+ * @returns The URLs.
+ */
+export const pausedResponseUrls = async (page: Page): Promise<string[]> => {
+  const recorder = await recorderOf(page);
+
+  return [...recorder.paused.values()];
 };
 
 /**
  * Records every response the page receives from now on, of every kind
- * (the HTML, scripts, styles, API answers), with its body. The body is
- * read as the response arrives.
+ * (the HTML, scripts, styles, API answers), with its body.
  *
- * A body the page had not finished reading when it went on to another
- * document never reaches any script: Chromium drops it without a failure
- * event, so Playwright would wait for it forever. Such a body is left
- * out; every other body is waited for.
+ * Each body is read before the page receives it (`startRecorder`), so a
+ * check never races the page: whatever the page could have read is
+ * already recorded, and nothing is read after the event, when Chromium
+ * may have dropped the body (after a navigation, or from a full buffer).
+ * A body that could not be read fails the check that covers it.
  *
- * @param page - The page.
- * @returns The responses received so far.
+ * @param page - The page, before it loads what the test checks.
+ * @returns The responses received from now on.
  */
-export const captureResponses = (
+export const captureResponses = async (
   page: Page
-): (() => Promise<ReceivedResponse[]>) => {
-  const readings: Reading[] = [];
-  let documents = 0;
-
-  page.on("response", (response) => {
-    // NOTE: the main frame's navigation response starts a new document.
-    const startsDocument =
-      response.request().isNavigationRequest() &&
-      response.frame() === page.mainFrame();
-
-    if (startsDocument) {
-      documents += 1;
-    }
-
-    let isRead = false;
-
-    readings.push({
-      document: documents,
-      isRead: () => isRead,
-      received: readingOf(response, () => {
-        isRead = true;
-      }),
-    });
-  });
+): Promise<() => Promise<ReceivedResponse[]>> => {
+  const recorder = await recorderOf(page);
+  const from = recorder.held.length;
 
   return async () => {
-    const received = await Promise.all(
-      readings.flatMap((reading) =>
-        reading.isRead() || reading.document === documents
-          ? [reading.received]
-          : []
-      )
-    );
+    await settledReads(recorder);
 
-    return received.map((response) => {
-      if (response instanceof Error) {
-        throw response;
-      }
+    const unread = recorder.unread.filter((failure) => failure.index >= from);
 
-      return response;
-    });
+    if (unread.length > 0) {
+      throw new Error(
+        `Bodies the page received could not be read:\n${unread.map((failure) => failure.reason).join("\n")}`
+      );
+    }
+
+    return recorder.held.slice(from).map(({ body, url }) => ({ body, url }));
   };
 };
 
@@ -456,8 +630,10 @@ export const captureResponses = (
  * @param page - The page.
  * @returns The bodies received so far, by call.
  */
-export const captureApiBodies = (page: Page): (() => Promise<string[]>) => {
-  const responses = captureResponses(page);
+export const captureApiBodies = async (
+  page: Page
+): Promise<() => Promise<string[]>> => {
+  const responses = await captureResponses(page);
 
   return async () => {
     const received = await responses();
@@ -1465,6 +1641,11 @@ const RECORD_PATH = /\/tables\/[^/]+\/records\/[\da-f-]+$/u;
  * @returns The request's body and the response's status.
  */
 export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
+  // NOTE: the answer's body is held before the page reads it, never read
+  // after the response event (decision 0020, "CI: deterministic response
+  // capture").
+  const recorder = await recorderOf(page);
+  const from = recorder.held.length;
   const answered = page.waitForResponse(isWriteResponse);
 
   await page
@@ -1491,7 +1672,23 @@ export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
     body: response.request().postData() ?? "",
     ifMatch: response.request().headers()["if-match"],
     requestRevision: response.request().headers()[REVISION_HEADER],
-    responseBody: async () => await response.text(),
+    responseBody: async () => {
+      await settledReads(recorder);
+
+      const held = recorder.held
+        .slice(from)
+        .findLast(
+          (answer) =>
+            answer.url === response.url() &&
+            answer.method === response.request().method()
+        );
+
+      if (held === undefined) {
+        throw new Error(`The body of ${response.url()} was not recorded`);
+      }
+
+      return held.body;
+    },
     revision: response.headers()[REVISION_HEADER],
     status: response.status(),
   };
