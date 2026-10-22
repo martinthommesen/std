@@ -8,6 +8,7 @@ import { HttpApi } from "effect/http-api";
 
 import { SignInGroup } from "./auth.ts";
 import { MetaGroup } from "./meta.ts";
+import { MetadataGroup } from "./metadata.ts";
 import { RecordsGroup } from "./records.ts";
 import { RequestDecoding } from "./request-decoding.ts";
 import { SchemaChangesGroup } from "./schema-changes.ts";
@@ -30,5 +31,6 @@ export class StdApi extends HttpApi.make("std")
   .add(RecordsGroup)
   .add(SchemaChangesGroup)
   .add(MetaGroup)
+  .add(MetadataGroup)
   .middleware(RequestDecoding)
   .prefix("/api/v1") {}

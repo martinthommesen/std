@@ -17,6 +17,7 @@ import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
 import { MetaHandlers } from "./meta-handlers.ts";
+import { MetadataHandlers } from "./metadata-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
@@ -27,7 +28,8 @@ export const ApiHandlers = Layer.mergeAll(
   SessionHandlers,
   RecordHandlers,
   SchemaChangeHandlers,
-  MetaHandlers
+  MetaHandlers,
+  MetadataHandlers
 );
 
 /**

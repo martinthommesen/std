@@ -1,0 +1,609 @@
+/**
+ * `recordSchema(table, mode)` (Contracts 6.3): the one builder of the
+ * Schema that validates a record's values, from table metadata
+ * (`table-metadata.ts`).
+ *
+ * The browser builds it from the filtered metadata the server sends; the
+ * server's save pipeline runs the same field rules (`record-rules.ts`) on
+ * full definitions, and the metadata carries exactly what those rules read
+ * of each field (`rulesOfMetaField` rebuilds them). So for every field both
+ * sides see, both give the same verdict.
+ *
+ * The Schema decodes a write body (a JSON object of field names to values)
+ * and reports one issue per failing field, at the field's name. The verdict
+ * mirrors the save pipeline step by step:
+ *
+ * - Keys are resolved first: a name the metadata does not hold is unknown
+ *   (the server answers `UnknownField`, and nothing else), and a system
+ *   member (`id`, `class`, `version`, audit fields) is `ReadOnlyField`
+ *   (only those are reported then).
+ * - `create`: each supplied value is converted under the field's type and
+ *   choices; an absent active field gets its default or empty value; every
+ *   value is rechecked as the pipeline does after before-write hooks; a
+ *   supplied field counts as written when it is retired or differs from what
+ *   the create stores without it; then `InvalidValue`, or `DefinitionRetired`
+ *   / `ReadOnlyField` when written and `Required` when empty.
+ * - `update`: supplied values are converted against the stored record (an
+ *   unchanged retired choice key is kept); a field is written when it is
+ *   invalid, withheld from the caller on this record, or changed; when no
+ *   field is written the save is a no-op and nothing is refused. `Required`
+ *   is judged over the body value, else the stored value, and left out when
+ *   the stored value was not delivered.
+ * - `read`: every delivered value must be canonical JSON of its type.
+ *
+ * Checks only the server can make are not here: uniqueness, reference
+ * targets, access rules, a condition value's check against the caller's
+ * view of its table (`invalidCondition`), form rules, stale revisions and
+ * versions.
+ */
+import { decodeIn } from "@std/values/codec";
+import { storedEquals } from "@std/values/compare";
+import type { StoredOrPlaintext } from "@std/values/compare";
+import type { InvalidValue } from "@std/values/field-error";
+import type { FieldType } from "@std/values/field-type";
+import { isBoolean } from "@std/values/field-value";
+import type { DecodedInput } from "@std/values/field-value";
+import { isJsonObject } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { LONG_TEXT_MAX_LENGTH, TEXT_MAX_LENGTH_LIMIT } from "@std/values/text";
+import { secretState } from "@std/values/write-only";
+import { isFailure } from "effect/Result";
+import {
+  Json,
+  makeFilter,
+  Record as SchemaRecord,
+  String as SchemaString,
+} from "effect/Schema";
+import type { FilterIssue } from "effect/Schema";
+import { InvalidValue as InvalidValueIssue } from "effect/SchemaIssue";
+import type { Issue } from "effect/SchemaIssue";
+import { decodeUnknownResult } from "effect/SchemaParser";
+
+import { invalidValue } from "./field-errors.ts";
+import type { FieldError } from "./field-errors.ts";
+import {
+  absentCreateValue,
+  choiceListOf,
+  convertCreate,
+  convertUpdate,
+  fieldErrorsOf,
+  recheckValue,
+  writtenOnCreate,
+} from "./record-rules.ts";
+import type { FieldRules } from "./record-rules.ts";
+import type { MetaField, MetaFieldType, MetaTable } from "./table-metadata.ts";
+
+/** What a record Schema validates: a create, an update or a read. */
+export type RecordMode = "create" | "update" | "read";
+
+/**
+ * A stored record's values as a read delivered them (`record.values` of
+ * Contracts 6.6): an absent key was withheld or not selected.
+ */
+export type StoredValues = Readonly<Record<string, JsonValue>>;
+
+/** The verdict of one body. */
+export interface RecordVerdict {
+  /** Whether the body is not a JSON object (the server's `InvalidRequest`). */
+  readonly invalidBody: boolean;
+  /** Names that resolve to no field (the server's `UnknownField`). */
+  readonly unknownFields: readonly string[];
+  /** Every field error, in field order. */
+  readonly errors: readonly FieldError[];
+}
+
+/** The system members of a record (Contracts 3.2, 6.6), never writable. */
+export const SYSTEM_MEMBER_NAMES: ReadonlySet<string> = new Set([
+  "id",
+  "class",
+  "version",
+  "created_at",
+  "created_by",
+  "updated_at",
+  "updated_by",
+]);
+
+// A syntactically valid ID for the codec: `decodeIn` reads no setting of a
+// reference (only the UUID format) or of a condition (only that the value
+// is a JSON object), so the placeholder never affects a verdict.
+const NO_CLASS = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * The field type the codec converts with, from a metadata type.
+ *
+ * @param type - The metadata type.
+ * @returns The field type.
+ */
+export const codecTypeOf = (type: MetaFieldType): FieldType => {
+  if (type.kind === "reference") {
+    return { kind: "reference", targetClassId: NO_CLASS };
+  }
+
+  if (type.kind === "condition") {
+    return { classId: NO_CLASS, kind: "condition", profile: type.profile };
+  }
+
+  return type;
+};
+
+/**
+ * The field rules a metadata field carries: the same values the server
+ * reads from full definitions (`fieldRulesOf`).
+ *
+ * @param field - A metadata field.
+ * @returns Its rules.
+ */
+export const rulesOfMetaField = (field: MetaField): FieldRules => ({
+  autoNumber: field.autoNumber !== null,
+  choices:
+    field.choices === null
+      ? null
+      : choiceListOf(
+          field.choices.map((choice) => ({
+            hidden: choice.retired,
+            key: choice.key,
+          }))
+        ),
+  default: field.default,
+  id: field.id,
+  name: field.name,
+  readOnly: field.readOnly,
+  required: field.required,
+  state: field.state,
+  type: codecTypeOf(field.type),
+});
+
+// A stored value is converted without the bounds and lengths a later
+// override may have tightened: it is what is stored, not a new value.
+const storedTypeOf = (type: FieldType): FieldType => {
+  if (type.kind === "text") {
+    return { ...type, maxLength: TEXT_MAX_LENGTH_LIMIT };
+  }
+
+  if (type.kind === "longText") {
+    return { ...type, maxLength: LONG_TEXT_MAX_LENGTH };
+  }
+
+  if (type.kind === "integer" || type.kind === "bigInteger") {
+    return { kind: type.kind };
+  }
+
+  if (type.kind === "decimal") {
+    return { kind: "decimal", precision: type.precision, scale: type.scale };
+  }
+
+  return type;
+};
+
+/**
+ * A delivered value as the server holds it stored.
+ *
+ * @param type - The field type.
+ * @param json - The delivered canonical JSON.
+ * @returns The stored value, or undefined when it does not convert.
+ */
+const storedValueOf = (
+  type: FieldType,
+  json: JsonValue
+): StoredOrPlaintext | undefined => {
+  if (type.kind === "password" || type.kind === "secret") {
+    const set = isJsonObject(json) ? json.set : undefined;
+
+    return isBoolean(set) ? secretState(set) : undefined;
+  }
+
+  const decoded = decodeIn(storedTypeOf(type), json);
+
+  return decoded.ok ? decoded.value : undefined;
+};
+
+/** One field with its rules. */
+interface RuledField {
+  readonly rules: FieldRules;
+}
+
+/** The fields' proposal: converted values and refusals, by name. */
+interface Proposal {
+  readonly values: Map<string, DecodedInput>;
+  readonly invalid: Map<string, InvalidValue>;
+}
+
+/** The body's keys, resolved against the metadata. */
+interface ResolvedBody {
+  readonly unknown: readonly string[];
+  readonly system: readonly string[];
+  readonly entries: ReadonlyMap<string, JsonValue>;
+}
+
+const resolveBody = (
+  byName: ReadonlyMap<string, RuledField>,
+  body: JsonObject
+): ResolvedBody => {
+  const unknown: string[] = [];
+  const system: string[] = [];
+  const entries = new Map<string, JsonValue>();
+
+  for (const [name, json] of Object.entries(body)) {
+    if (SYSTEM_MEMBER_NAMES.has(name)) {
+      system.push(name);
+    } else if (byName.has(name)) {
+      entries.set(name, json);
+    } else {
+      unknown.push(name);
+    }
+  }
+
+  return { entries, system, unknown };
+};
+
+// The pipeline's recheck after before-write hooks (`finalize*`): every
+// value is converted again from its canonical form.
+const recheck = (
+  fields: readonly RuledField[],
+  proposal: Proposal,
+  stored: (rules: FieldRules) => StoredOrPlaintext | undefined
+): Proposal => {
+  const values = new Map<string, DecodedInput>();
+  const invalid = new Map(proposal.invalid);
+
+  for (const { rules } of fields) {
+    const value = proposal.values.get(rules.name);
+
+    if (proposal.values.has(rules.name) && value !== undefined) {
+      const rechecked = recheckValue(rules, value, stored(rules) ?? null);
+
+      if (!invalid.has(rules.name)) {
+        if (rechecked.ok) {
+          values.set(rules.name, rechecked.value);
+        } else {
+          invalid.set(rules.name, rechecked.error);
+        }
+      }
+    }
+  }
+
+  return { invalid, values };
+};
+
+const errorsOf = (
+  fields: readonly RuledField[],
+  proposal: Proposal,
+  written: ReadonlySet<string>,
+  candidateOf: (rules: FieldRules) => {
+    readonly known: boolean;
+    readonly value: StoredOrPlaintext | undefined;
+  }
+): FieldError[] =>
+  fields.flatMap(({ rules }) => {
+    const refused = proposal.invalid.get(rules.name);
+
+    if (refused !== undefined) {
+      return [invalidValue(rules.name, refused)];
+    }
+
+    const candidate = candidateOf(rules);
+
+    return fieldErrorsOf(
+      rules,
+      candidate.value,
+      written.has(rules.name)
+    ).filter((error) => candidate.known || error._tag !== "Required");
+  });
+
+const createErrors = (
+  fields: readonly RuledField[],
+  entries: ReadonlyMap<string, JsonValue>
+): FieldError[] => {
+  const values = new Map<string, DecodedInput>();
+  const invalid = new Map<string, InvalidValue>();
+
+  for (const { rules } of fields) {
+    const json = entries.get(rules.name);
+
+    if (entries.has(rules.name) && json !== undefined) {
+      const converted = convertCreate(rules, json);
+
+      if (converted.ok) {
+        values.set(rules.name, converted.value);
+      } else {
+        invalid.set(rules.name, converted.error);
+      }
+    } else if (rules.state === "active") {
+      values.set(rules.name, absentCreateValue(rules));
+    }
+  }
+
+  const final = recheck(fields, { invalid, values }, () => null);
+
+  const written = new Set(
+    [...entries.keys()].filter((name) => {
+      const ruled = fields.find((field) => field.rules.name === name);
+      const value = final.values.get(name);
+
+      return (
+        ruled === undefined ||
+        value === undefined ||
+        writtenOnCreate(ruled.rules, value)
+      );
+    })
+  );
+
+  return errorsOf(fields, final, written, (rules) => ({
+    known: true,
+    value: final.values.get(rules.name),
+  }));
+};
+
+const updateWritten = (
+  fields: readonly RuledField[],
+  proposal: Proposal,
+  storedOf: (rules: FieldRules) => StoredOrPlaintext | undefined,
+  readable: (name: string) => boolean
+): Set<string> =>
+  new Set(
+    fields.flatMap(({ rules }) => {
+      const { name } = rules;
+      const value = proposal.values.get(name);
+      const supplied = proposal.values.has(name) || proposal.invalid.has(name);
+
+      if (!supplied) {
+        return [];
+      }
+
+      const changed =
+        value === undefined ||
+        !storedEquals(rules.type.kind, storedOf(rules) ?? null, value);
+
+      return !readable(name) || proposal.invalid.has(name) || changed
+        ? [name]
+        : [];
+    })
+  );
+
+const updateErrors = (
+  fields: readonly RuledField[],
+  entries: ReadonlyMap<string, JsonValue>,
+  stored: StoredValues
+): FieldError[] => {
+  const storedOf = (rules: FieldRules): StoredOrPlaintext | undefined => {
+    const json = Object.hasOwn(stored, rules.name)
+      ? stored[rules.name]
+      : undefined;
+
+    return json === undefined ? undefined : storedValueOf(rules.type, json);
+  };
+
+  const readable = (name: string): boolean => Object.hasOwn(stored, name);
+  const values = new Map<string, DecodedInput>();
+  const invalid = new Map<string, InvalidValue>();
+
+  for (const { rules } of fields) {
+    const json = entries.get(rules.name);
+
+    if (entries.has(rules.name) && json !== undefined) {
+      const converted = convertUpdate(rules, json, storedOf(rules));
+
+      if (converted.ok) {
+        values.set(rules.name, converted.value);
+      } else {
+        invalid.set(rules.name, converted.error);
+      }
+    }
+  }
+
+  if (
+    updateWritten(fields, { invalid, values }, storedOf, readable).size === 0
+  ) {
+    return [];
+  }
+
+  const final = recheck(fields, { invalid, values }, storedOf);
+  const written = updateWritten(fields, final, storedOf, readable);
+
+  if (written.size === 0) {
+    return [];
+  }
+
+  return errorsOf(fields, final, written, (rules) =>
+    final.values.has(rules.name)
+      ? { known: true, value: final.values.get(rules.name) }
+      : { known: readable(rules.name), value: storedOf(rules) }
+  );
+};
+
+const readErrors = (
+  fields: readonly RuledField[],
+  entries: ReadonlyMap<string, JsonValue>
+): FieldError[] =>
+  fields.flatMap(({ rules }) => {
+    const json = entries.get(rules.name);
+
+    if (json === undefined) {
+      return [];
+    }
+
+    const { kind } = rules.type;
+
+    if (kind === "password" || kind === "secret") {
+      return storedValueOf(rules.type, json) === undefined
+        ? [
+            {
+              _tag: "InvalidValue",
+              field: rules.name,
+              message: 'Expected {"set": true} or {"set": false}.',
+              reason: "wrongJsonType",
+            } satisfies FieldError,
+          ]
+        : [];
+    }
+
+    const decoded = decodeIn(storedTypeOf(rules.type), json);
+
+    return decoded.ok ? [] : [invalidValue(rules.name, decoded.error)];
+  });
+
+/**
+ * The verdict of one body, without the Schema around it.
+ *
+ * @param table - The table's metadata.
+ * @param mode - Create, update or read.
+ * @param body - The body's values object.
+ * @param stored - The stored record's delivered values (update).
+ * @returns Unknown names and field errors.
+ */
+const verdictOf = (
+  table: MetaTable,
+  mode: RecordMode,
+  body: JsonObject,
+  stored: StoredValues
+): Omit<RecordVerdict, "invalidBody"> => {
+  const fields = table.fields.map((field) => ({
+    rules: rulesOfMetaField(field),
+  }));
+
+  const byName = new Map(fields.map((field) => [field.rules.name, field]));
+  const resolved = resolveBody(byName, body);
+
+  if (resolved.unknown.length > 0) {
+    return { errors: [], unknownFields: resolved.unknown };
+  }
+
+  if (resolved.system.length > 0 && mode !== "read") {
+    return {
+      errors: resolved.system.map((name) => ({
+        _tag: "ReadOnlyField",
+        field: name,
+      })),
+      unknownFields: [],
+    };
+  }
+
+  if (mode === "create") {
+    return {
+      errors: createErrors(fields, resolved.entries),
+      unknownFields: [],
+    };
+  }
+
+  if (mode === "update") {
+    return {
+      errors: updateErrors(fields, resolved.entries, stored),
+      unknownFields: [],
+    };
+  }
+
+  return { errors: readErrors(fields, resolved.entries), unknownFields: [] };
+};
+
+// Each issue the Schema reports maps back to its field error or unknown
+// name, so `validateRecord` reads them without parsing messages.
+const fieldErrorOfIssue = new WeakMap<Issue, FieldError>();
+const unknownOfIssue = new WeakMap<Issue, string>();
+
+const issuesOf = (
+  verdict: Omit<RecordVerdict, "invalidBody">
+): FilterIssue[] => [
+  ...verdict.unknownFields.map((name) => {
+    const issue = new InvalidValueIssue({
+      message: "This table has no field of this name.",
+    });
+
+    unknownOfIssue.set(issue, name);
+
+    return { issue, path: [name] };
+  }),
+  ...verdict.errors.map((error) => {
+    const issue = new InvalidValueIssue({
+      message: error._tag === "InvalidValue" ? error.message : error._tag,
+    });
+
+    fieldErrorOfIssue.set(issue, error);
+
+    return { issue, path: [error.field] };
+  }),
+];
+
+const BodySchema = SchemaRecord(SchemaString, Json);
+
+/**
+ * The Schema of a record's values for one table and mode: it decodes a
+ * body object and fails with one issue per failing field, at the field's
+ * name.
+ *
+ * @param table - The table's metadata (`TableMetadata.table`).
+ * @param mode - `create`, `update` or `read`.
+ * @param stored - For an update, the stored record's `values` as read.
+ * @returns The Schema.
+ */
+export const recordSchema = (
+  table: MetaTable,
+  mode: RecordMode,
+  stored: StoredValues = {}
+) =>
+  BodySchema.check(
+    makeFilter((body) => {
+      const issues = issuesOf(verdictOf(table, mode, body, stored));
+
+      return issues.length === 0 ? undefined : issues;
+    })
+  );
+
+const collect = (
+  issue: Issue,
+  errors: FieldError[],
+  unknown: string[]
+): void => {
+  const error = fieldErrorOfIssue.get(issue);
+  const name = unknownOfIssue.get(issue);
+
+  if (error !== undefined) {
+    errors.push(error);
+  }
+
+  if (name !== undefined) {
+    unknown.push(name);
+  }
+
+  if ("issue" in issue) {
+    collect(issue.issue, errors, unknown);
+  }
+
+  if ("issues" in issue) {
+    for (const nested of issue.issues) {
+      collect(nested, errors, unknown);
+    }
+  }
+};
+
+/**
+ * Validates a body with `recordSchema` and returns the verdict per field.
+ *
+ * @param table - The table's metadata.
+ * @param mode - `create`, `update` or `read`.
+ * @param body - The body, as the form would send it.
+ * @param stored - For an update, the stored record's `values` as read.
+ * @returns Whether the body is an object, unknown names and field errors.
+ */
+export const validateRecord = (
+  table: MetaTable,
+  mode: RecordMode,
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a form body is validated from any input
+  body: unknown,
+  stored: StoredValues = {}
+): RecordVerdict => {
+  const result = decodeUnknownResult(recordSchema(table, mode, stored))(body);
+
+  if (!isFailure(result)) {
+    return { errors: [], invalidBody: false, unknownFields: [] };
+  }
+
+  const errors: FieldError[] = [];
+  const unknown: string[] = [];
+
+  collect(result.failure, errors, unknown);
+
+  // A failure no field accounts for is the body itself: not a JSON object.
+  const invalidBody = errors.length === 0 && unknown.length === 0;
+
+  return { errors, invalidBody, unknownFields: unknown };
+};
