@@ -57,12 +57,14 @@ import {
   FAR_ZONE,
   INCIDENTS,
   addLocalFields,
+  adminCall,
   appendToLayout,
   assertRows,
   cellJsonText,
   cellOfApi,
   createIncident,
   decodeList,
+  decodeRead,
   decodeMetadata,
   fieldsOfLayout,
   formShowsTheApiValues,
@@ -145,6 +147,26 @@ const LONG_RULE: Schema.Json = {
   op: "and",
 };
 
+/**
+ * A long text as typed: CRLF line breaks (the server stores LF, Contracts
+ * 5.5), leading and trailing spaces (long text is never trimmed), a blank
+ * line and a character past the Basic Multilingual Plane (U+1D11E).
+ */
+const TYPED_DESCRIPTION =
+  "  Printer jams on tray 2\r\nSince Monday 𝄞 every morning\r\n\r\n    indented note  ";
+
+/** The same long text as the server stores and returns it. */
+const STORED_DESCRIPTION = TYPED_DESCRIPTION.replaceAll("\r\n", "\n");
+
+/**
+ * The agent's rewrite as typed, the value the lists and forms then show;
+ * the history entry shows the first one as the old long text.
+ */
+const AGENT_DESCRIPTION = "  Rewritten by the agent\r\n  second line 🙂 \r\n";
+
+/** The rewrite as the server stores it. */
+const STORED_AGENT_DESCRIPTION = AGENT_DESCRIPTION.replaceAll("\r\n", "\n");
+
 /** The incidents, by role in the test. */
 interface Seeded {
   /** Every value set, assigned to the agent; two children; a history. */
@@ -178,8 +200,11 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   const fieldId = (name: string): string =>
     ids[LOCAL_FIELDS.findIndex(([each]) => each === name)] ?? "";
 
+  // The helpdesk's long text (`description`) is on the form layout
+  // already; the list (and so the related list) gets it too.
   await appendToLayout(origin, token, HELPDESK.layouts.incidentList, [
     HELPDESK.fields.customerEmail,
+    HELPDESK.fields.description,
     ...shown,
   ]);
   await appendToLayout(origin, token, HELPDESK.layouts.incidentForm, shown);
@@ -188,6 +213,7 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
     assignee: fixture.agent.id,
     big_count: "9007199254740993",
     customer_email: "full@extended.example",
+    description: TYPED_DESCRIPTION,
     frozen: [1, "two", { three: 3 }],
     frozen_rule: { arg: { path: [HELPDESK.fields.assignee] }, op: "empty" },
     payload: {
@@ -218,6 +244,14 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
 
   const fullPath = `/tables/${INCIDENTS}/records/${full}`;
 
+  // The server stored the long text with LF and its spaces kept.
+  assert.strictEqual(
+    decodeRead(
+      await adminCall(origin, token, { method: "GET", path: fullPath })
+    ).record.values.description,
+    STORED_DESCRIPTION
+  );
+
   await patchRecord(origin, token, fullPath, {
     big_count: "1234567890123456789",
     payload: { tags: [] },
@@ -230,9 +264,17 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   const agentToken = await bearerToken(origin, visitorOf(fixture.agent));
 
   await patchRecord(origin, agentToken, fullPath, {
+    description: AGENT_DESCRIPTION,
     rule: condition("eq", [HELPDESK.fields.priority], { value: "critical" }),
     short_description: "Structured values, changed by the agent",
   });
+
+  assert.strictEqual(
+    decodeRead(
+      await adminCall(origin, token, { method: "GET", path: fullPath })
+    ).record.values.description,
+    STORED_AGENT_DESCRIPTION
+  );
 
   // After the entries: labels and a name change, and two fields become
   // read-only.
@@ -708,6 +750,13 @@ const COVERED = [
   "history big_count: Big count: 9007199254740993 → 1234567890123456789",
   "history ref_uuid: Ref code: 3f2504e0-4f89-41d3-9a0c-0305e82c3301 → 0f0e0d0c-0b0a-4000-8000-00000000abcd",
   "history pin: PIN: Changed (the value is never shown)",
+  // Long text: in the list, the related list's empty cells, the textarea
+  // and the history, line breaks and spaces kept.
+  "the list longText:value",
+  "the related list longText:empty",
+  "form longText:control",
+  STORED_AGENT_DESCRIPTION,
+  `history description: Description: ${STORED_DESCRIPTION} → ${STORED_AGENT_DESCRIPTION}`,
 ];
 
 const sameValuesForBothUsers = async (

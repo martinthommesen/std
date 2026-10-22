@@ -18,6 +18,11 @@
  *   (a form's time input `HH:MM`, with seconds and then milliseconds only
  *   when not zero), never the device's zone;
  * - integers, big integers, decimals and UUIDs their canonical text;
+ * - text and long text the API's text exactly, in a list cell too (never
+ *   cut): a long text's line breaks (LF, as the server stores them,
+ *   Contracts 5.5), its leading and trailing spaces and characters past
+ *   the Basic Multilingual Plane are kept, in a cell, a form's textarea
+ *   and the history;
  * - json and condition values their JSON text: compact in a list cell,
  *   cut to 80 characters with "…" when longer; indented by two spaces on a
  *   form (read-only or in its JSON editor) and in the history;
@@ -441,7 +446,7 @@ export const expectedCell = (
   const shown = cellOfApi(field, record);
 
   return isFirst && shown.state !== "value"
-    ? { state: shown.state, text: `${record.id} ${shown.text}`.trim() }
+    ? { state: shown.state, text: `${record.id} ${shown.text}` }
     : shown;
 };
 
@@ -454,7 +459,8 @@ export interface ShownRow {
 // NOTE: the functions passed to `evaluate` run in the page, where no
 // closure reaches, so each spells out "the visible text": the element's
 // text without the text only screen readers get (`.visually-hidden`),
-// trimmed (inner whitespace kept, so indented JSON is compared exactly).
+// not trimmed, so line breaks, leading and trailing spaces and indented JSON
+// are compared exactly.
 
 /**
  * A records table's rows: each record's ID, and each cell's `data-cell`
@@ -477,7 +483,7 @@ export const shownRows = async (rows: Locator): Promise<readonly ShownRow[]> =>
 
         return {
           state: cell.dataset.cell ?? "",
-          text: (copy.textContent ?? "").trim(),
+          text: copy.textContent ?? "",
         };
       }),
       id: row instanceof HTMLElement ? (row.dataset.recordId ?? "") : "",
@@ -500,7 +506,7 @@ export const visibleTextOf = async (element: Locator): Promise<string> =>
       }
     }
 
-    return (copy.textContent ?? "").trim();
+    return copy.textContent ?? "";
   });
 
 /**
