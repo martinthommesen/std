@@ -6,6 +6,7 @@
  * stored empty, a restricted field or one that was not delivered
  * (`data-cell`).
  */
+import { Button } from "@foldkit/ui";
 import type { RecordJson } from "@std/api/records";
 import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import { Match, Option, Record } from "effect";
@@ -119,20 +120,30 @@ const headerView = (
 ): Html => {
   const direction = sortOf(sort, field);
 
+  if (!isSortable(field)) {
+    return h.keyed("th")(field.id, [h.Scope("col")], [field.label]);
+  }
+
   return h.keyed("th")(
     field.id,
     [h.Scope("col"), h.AriaSort(direction)],
     [
-      isSortable(field)
-        ? buttonView(
-            {
-              onClick: Message.ClickedSortColumn({ fieldId: field.id }),
-              text: `${field.label}${SORT_MARKS[direction]}`,
-              variant: "quiet",
-            },
-            h
-          )
-        : field.label,
+      Button.view(
+        {
+          onClick: Message.ClickedSortColumn({ fieldId: field.id }),
+          toView: (attributes) =>
+            h.button(
+              [...attributes.button, h.Class("button button-quiet")],
+              [
+                field.label,
+                // NOTE: the column header's `aria-sort` states the order;
+                // the arrow only shows it.
+                h.span([h.AriaHidden(true)], [SORT_MARKS[direction]]),
+              ]
+            ),
+        },
+        h
+      ),
     ]
   );
 };
@@ -193,7 +204,8 @@ const pagerView = (
     [
       buttonView(
         {
-          isDisabled: model.cursors.length < 2,
+          isDisabled:
+            model.cursors.length < 2 || AsyncData.isPending(model.records),
           onClick: Message.ClickedPreviousPage(),
           text: "Previous page",
           variant: "quiet",
@@ -203,7 +215,9 @@ const pagerView = (
       h.span([h.Class("pager-position")], [`Page ${model.cursors.length}`]),
       buttonView(
         {
-          isDisabled: Option.isNone(page.maybeNextCursor),
+          isDisabled:
+            Option.isNone(page.maybeNextCursor) ||
+            AsyncData.isPending(model.records),
           onClick: Message.ClickedNextPage(),
           text: "Next page",
           variant: "quiet",
@@ -237,30 +251,41 @@ const LIST_ERRORS = {
   InvalidFilter:
     "The server did not accept this filter. Change it and apply it again.",
   SchemaChanged:
-    "The table's definition changed. Its new definition is loading; the list follows.",
+    "The table's definition changed, and its new definition could not be loaded. Try again.",
   Unavailable: "The records could not be loaded. Try again.",
   UnknownField:
     "The filter or sort names a field you cannot read here. Change it and apply it again.",
   UnknownTable: "This table is no longer available to you.",
 } as const satisfies Record<ListError, string>;
 
-const listFailureView = (error: ListError, h: HtmlBuilder<Message>): Html =>
-  h.div(
-    [h.Class("list-failure")],
-    [
-      h.p([h.Role("alert"), h.Class("form-alert")], [LIST_ERRORS[error]]),
-      error === "SchemaChanged"
-        ? h.empty
-        : buttonView(
+const TRY_AGAIN = "Try again";
+
+const ALERT_CLASS = "form-alert";
+
+const REFRESHING_TEXT =
+  "The table's definition changed. Its new definition is loading; the list follows.";
+
+const listFailureView = (
+  model: Model,
+  error: ListError,
+  h: HtmlBuilder<Message>
+): Html =>
+  error === "SchemaChanged" && AsyncData.isPending(model.metadata)
+    ? h.p([h.Role("status"), h.Class("notice")], [REFRESHING_TEXT])
+    : h.div(
+        [h.Class("list-failure")],
+        [
+          h.p([h.Role("alert"), h.Class(ALERT_CLASS)], [LIST_ERRORS[error]]),
+          buttonView(
             {
               onClick: Message.ClickedRetry(),
-              text: "Try again",
+              text: TRY_AGAIN,
               variant: "quiet",
             },
             h
           ),
-    ]
-  );
+        ]
+      );
 
 const loadedListView = (
   meta: TableMeta,
@@ -291,11 +316,14 @@ const recordsView = (
     [
       h.h2([h.Id(RECORDS_HEADING_ID)], ["Records"]),
       ...AsyncData.match(model.records, {
-        onFailure: (error) => [listFailureView(error, h)],
+        onFailure: (error) => [listFailureView(model, error, h)],
         onIdle: () => [],
         onLoading: () => [h.p([h.Role("status")], ["Loading records…"])],
         onRefreshing: (page) => loadedListView(meta, model, page, h),
-        onStale: ({ data }) => loadedListView(meta, model, data, h),
+        onStale: ({ data, error }) => [
+          listFailureView(model, error, h),
+          ...loadedListView(meta, model, data, h),
+        ],
         onSuccess: (page) => loadedListView(meta, model, page, h),
       }),
     ]
@@ -307,6 +335,37 @@ const loadingTables = (model: Model): ReadonlySet<string> =>
       AsyncData.isLoading(target) ? [table] : []
     )
   );
+
+/**
+ * When a refresh of the table's definition failed: the page keeps the
+ * definition it had, says so and offers to try again.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The alert, or nothing.
+ */
+const staleMetadataView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  AsyncData.isStale(model.metadata)
+    ? h.div(
+        [h.Class("list-failure")],
+        [
+          h.p(
+            [h.Role("alert"), h.Class(ALERT_CLASS)],
+            [
+              "The table's definition may have changed, and it could not be reloaded. Try again.",
+            ]
+          ),
+          buttonView(
+            {
+              onClick: Message.ClickedRetry(),
+              text: "Reload the definition",
+              variant: "quiet",
+            },
+            h
+          ),
+        ]
+      )
+    : h.empty;
 
 const tableView = (
   meta: TableMeta,
@@ -322,6 +381,7 @@ const tableView = (
         onSome: (notice) =>
           h.p([h.Role("status"), h.Class("notice")], [notice]),
       }),
+      staleMetadataView(model, h),
       Option.match(scopeOf(model), {
         onNone: () => h.empty,
         onSome: (scope) =>
@@ -364,13 +424,13 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
             [
               h.h1([], [model.table]),
               h.p(
-                [h.Role("alert"), h.Class("form-alert")],
+                [h.Role("alert"), h.Class(ALERT_CLASS)],
                 ["The table could not be loaded. Try again."]
               ),
               buttonView(
                 {
                   onClick: Message.ClickedRetry(),
-                  text: "Try again",
+                  text: TRY_AGAIN,
                   variant: "primary",
                 },
                 h

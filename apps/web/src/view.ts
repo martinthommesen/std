@@ -56,8 +56,10 @@ const shellView = (config: ShellConfig, h: HtmlBuilder<Message>): Html =>
       h.div(
         [h.Class("app-body")],
         [
-          config.side ?? h.empty,
+          // NOTE: the navigation follows `main` in the document, so the
+          // page's h1 comes first; the stylesheet shows it on the left.
           h.main([h.Id(MAIN_ID), h.Class(config.mainClass)], [config.page]),
+          config.side ?? h.empty,
         ]
       ),
     ]
@@ -217,7 +219,7 @@ const signedInPageView = (
             model: page,
             slotId: "table-list",
             toParentMessage: (message) =>
-              Message.GotTableListMessage({ message }),
+              Message.GotTableListMessage({ message, pageId: page.id }),
             view: tableListView,
           }),
       })

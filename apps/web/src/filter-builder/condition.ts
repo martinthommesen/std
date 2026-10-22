@@ -479,13 +479,23 @@ interface Collected {
 
 const PLACEHOLDER: Expr = { op: "true" };
 
+const EMPTY_GROUP =
+  "This group has no conditions. Add one or remove the group.";
+
 const collect = (node: FilterNode, scope: ConditionScope): Collected => {
   if (node._tag === "Group") {
     const children = node.children.map((child) => collect(child, scope));
 
+    // NOTE: `and []` is true and `or []` false (5.2); a group left empty
+    // in the builder is almost always unfinished, so it is refused.
+    const emptyGroup: readonly ConditionProblem[] =
+      node.children.length === 0
+        ? [{ conditionId: node.id, message: EMPTY_GROUP }]
+        : [];
+
     return {
       expr: { args: children.map((child) => child.expr), op: node.junction },
-      problems: children.flatMap((child) => child.problems),
+      problems: [...emptyGroup, ...children.flatMap((child) => child.problems)],
     };
   }
 
@@ -509,7 +519,7 @@ const collect = (node: FilterNode, scope: ConditionScope): Collected => {
  *
  * @param root - The tree.
  * @param scope - The tables.
- * @returns The AST, or every condition's problem.
+ * @returns The AST, or every condition's (and empty group's) problem.
  */
 export const toCondition = (
   root: FilterNode,

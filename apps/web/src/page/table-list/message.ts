@@ -46,10 +46,14 @@ export type Message = typeof Message.Type;
  *
  * - `SawRevision`: a response stated this schema revision; the app keeps
  *   the latest and refreshes its table list when it is newer.
+ * - `SawCurrentRevision`: a `SchemaChanged` refusal stated the database's
+ *   current revision, which replaces the app's even when it is lower
+ *   (after a restore).
  * - `SessionEnded`: the server no longer accepts the session.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const OutMessage = defineMessageUnion({
+  SawCurrentRevision: { revision: SchemaRevision },
   SawRevision: { revision: SchemaRevision },
   SessionEnded: {},
 });

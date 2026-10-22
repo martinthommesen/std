@@ -130,7 +130,10 @@ describe("app", () => {
       Command.expectExact(LoadCurrentUser()),
       Command.resolve(
         LoadCurrentUser,
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
       expect(within(banner, text("Ada Lovelace"))).toExist(),
       expect(role("status")).toHaveText("Loading the tables…"),
@@ -173,10 +176,16 @@ describe("app", () => {
       type(label("Password"), "ada-password"),
       submit(role("form", { name: "Sign in to STD" })),
       Command.expectExact(SignIn),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
       Command.expectExact(
         ReplaceUrl({ url: homeRouter() }),
-        LoadTables({ maybeRevision: Option.none() }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3) }),
         FocusMain()
       ),
       Command.resolveAll(

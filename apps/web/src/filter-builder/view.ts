@@ -517,9 +517,38 @@ const operandView = (
     Match.exhaustive
   );
 
+const maybeProblemOf = (
+  context: NodeContext,
+  node: FilterNode
+): Option.Option<string> =>
+  context.model.isShowingProblems
+    ? Option.fromNullishOr(context.problems.get(node.id))
+    : Option.none();
+
+/**
+ * The attributes that tie a node's fieldset to its problem, when shown.
+ *
+ * @param context - The view's context.
+ * @param node - The condition or group.
+ * @param h - The builder.
+ * @returns `aria-describedby` and `aria-invalid`, or nothing.
+ */
+const problemAttributes = (
+  context: NodeContext,
+  node: FilterNode,
+  h: HtmlBuilder<Message>
+) =>
+  Option.match(maybeProblemOf(context, node), {
+    onNone: () => [],
+    onSome: () => [
+      h.AriaDescribedBy(elementId(context.model, node.id, "problem")),
+      h.AriaInvalid(true),
+    ],
+  });
+
 const problemView = (
   context: NodeContext,
-  condition: Condition,
+  node: FilterNode,
   h: HtmlBuilder<Message>
 ): Html =>
   // NOTE: the live region stays mounted, so a problem that appears in it is
@@ -527,12 +556,17 @@ const problemView = (
   h.div(
     [h.AriaLive("polite")],
     [
-      context.model.isShowingProblems && context.problems.has(condition.id)
-        ? h.p(
-            [h.Class("field-error")],
-            [context.problems.get(condition.id) ?? ""]
-          )
-        : h.empty,
+      Option.match(maybeProblemOf(context, node), {
+        onNone: () => h.empty,
+        onSome: (problem) =>
+          h.p(
+            [
+              h.Id(elementId(context.model, node.id, "problem")),
+              h.Class("field-error"),
+            ],
+            [problem]
+          ),
+      }),
     ]
   );
 
@@ -571,7 +605,11 @@ const conditionView = (
   );
 
   return h.fieldset(
-    [h.Class("filter-condition"), h.AriaLabelledBy(legendId)],
+    [
+      h.Class("filter-condition"),
+      h.AriaLabelledBy(legendId),
+      ...problemAttributes(context, condition, h),
+    ],
     [
       h.legend(
         [h.Id(legendId), h.Class(LEGEND_CLASS)],
@@ -665,7 +703,11 @@ const groupView = (
   const isRoot = group.id === context.model.root.id;
 
   return h.fieldset(
-    [h.Class("filter-group"), h.AriaLabelledBy(legendId)],
+    [
+      h.Class("filter-group"),
+      h.AriaLabelledBy(legendId),
+      ...problemAttributes(context, group, h),
+    ],
     [
       h.legend(
         [h.Id(legendId), h.Class(LEGEND_CLASS)],
@@ -702,6 +744,7 @@ const groupView = (
         )
       ),
       h.div([h.Class(NODE_ACTIONS_CLASS)], addButtons(context, group.id, h)),
+      problemView(context, group, h),
     ]
   );
 };

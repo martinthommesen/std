@@ -137,6 +137,8 @@ export type Address = typeof Address.Type;
  *   the first), so "Previous" can go back with keyset paging.
  * - `generation`: the number of the latest list request; an older answer
  *   is ignored.
+ * - `id`: the page's number, unique among the pages the app opened; the
+ *   app delivers a Command's answer only to the page that sent it.
  * - `maybeNotice`: something the user should know about the applied state,
  *   such as a filter from the address that could not be shown.
  */
@@ -147,6 +149,7 @@ export const Model = Schema.Struct({
   cursors: Schema.Array(Schema.Option(Schema.String)),
   filterLoad: FilterLoad,
   generation: Schema.Int,
+  id: Schema.Int,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeNotice: Schema.Option(Schema.String),
   metadata: Metadata.schema,

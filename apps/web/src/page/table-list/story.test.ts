@@ -43,6 +43,7 @@ const noAddress = {
 
 const opened = init({
   address: noAddress,
+  id: 1,
   maybeAppRevision: Option.some(REVISION_3),
   table: ASSETS,
 });
@@ -348,7 +349,7 @@ describe("list page", () => {
           maybeRevision: Option.some(REVISION_4),
         })
       ),
-      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_4 })),
+      expectOutMessage(OutMessage.SawCurrentRevision({ revision: REVISION_4 })),
       Command.expectExact(
         LoadTableMetadata({
           maybeRevision: Option.some(REVISION_3),
@@ -436,7 +437,7 @@ describe("loading a stored filter", () => {
       Command.expectExact(
         listRequest({
           filter: Option.some('owner.name = "Bob"'),
-          generation: 2,
+          generation: 3,
         }),
         ReplaceListUrl({
           url: `${listUrl}?filter=${encodeURIComponent(JSON.stringify(ownerIsBob))}`,
@@ -447,7 +448,7 @@ describe("loading a stored filter", () => {
         [
           LoadRecords,
           Message.SucceededLoadRecords({
-            generation: 2,
+            generation: 3,
             maybeRevision: Option.some(REVISION_3),
             page: lastPage,
           }),
@@ -490,6 +491,7 @@ describe("loading a stored filter", () => {
         limit: Option.some("5"),
         sort: Option.some(`-${ASSET_FIELDS.name},${ASSET_FIELDS.specs}`),
       },
+      id: 1,
       maybeAppRevision: Option.none(),
       table: ASSETS,
     });
@@ -520,6 +522,7 @@ describe("loading a stored filter", () => {
         limit: Option.none(),
         sort: Option.none(),
       },
+      id: 1,
       maybeAppRevision: Option.none(),
       table: ASSETS,
     });
@@ -659,5 +662,300 @@ describe("list Commands against the server", () => {
       Message.FailedLoadTableMetadata({ error: "UnknownTable" })
     );
     expect(api.seen[0]?.headers["std-schema-revision"]).toBeUndefined();
+  });
+});
+
+describe("review fixes", () => {
+  /** The page after its first page of records arrived. */
+  const showing = (() => {
+    const withMetadata = update(
+      opened.model,
+      Message.SucceededLoadTableMetadata({
+        revision: REVISION_3,
+        table: assetTable,
+      })
+    );
+
+    return update(
+      withMetadata.model,
+      Message.SucceededLoadRecords({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_3),
+        page: firstPage,
+      })
+    ).model;
+  })();
+
+  const ownerIsBob: Expr = {
+    left: { path: [ASSET_FIELDS.owner, USER_FIELDS.name] },
+    op: "eq",
+    right: { value: "Bob" },
+  };
+
+  it("ignores metadata of another table", () => {
+    story(
+      update,
+      given(opened.model),
+      message(
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_3,
+          table: userTable,
+        })
+      ),
+      model((page) => {
+        expect(AsyncData.isLoading(page.metadata)).toBeTruthy();
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("pages once per click: a second click while the page loads does nothing", () => {
+    const once = update(showing, Message.ClickedNextPage());
+    const twice = update(once.model, Message.ClickedNextPage());
+    const back = update(once.model, Message.ClickedPreviousPage());
+
+    expect(described(once.commands)).toStrictEqual(
+      described([listRequest({ cursor: Option.some("c2"), generation: 2 })])
+    );
+    expect(twice.commands ?? []).toStrictEqual([]);
+    expect(twice.model.cursors).toStrictEqual([
+      Option.none(),
+      Option.some("c2"),
+    ]);
+    expect(back.commands ?? []).toStrictEqual([]);
+  });
+
+  it("keeps the rows on screen when a later request fails", () => {
+    story(
+      update,
+      given(showing),
+      message(Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.name })),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.FailedLoadRecords({
+            error: "Unavailable",
+            generation: 2,
+            maybeRevision: Option.none(),
+          }),
+        ]
+      ),
+      model((page) => {
+        expect(AsyncData.isStale(page.records)).toBeTruthy();
+        expect(recordsOf(page)).toStrictEqual(
+          Option.some(firstPage.records.map((entry) => entry.id))
+        );
+      })
+    );
+  });
+
+  it("a newer state wins over a stored filter still waiting for its tables", () => {
+    const waiting = applyStoredFilter(showing, Option.some(ownerIsBob));
+
+    expect(waiting.model.generation).toBe(2);
+
+    story(
+      update,
+      given(waiting.model),
+      message(
+        Message.SucceededLoadRecords({
+          generation: 1,
+          maybeRevision: Option.some(REVISION_3),
+          page: lastPage,
+        })
+      ),
+      model((page) => {
+        expect(AsyncData.isRefreshing(page.records)).toBeTruthy();
+      }),
+      message(Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.name })),
+      model((page) => {
+        expect(page.filterLoad).toStrictEqual(FilterLoad.Settled());
+      }),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 3,
+            maybeRevision: Option.some(REVISION_3),
+            page: firstPage,
+          }),
+        ]
+      ),
+      message(Message.SucceededLoadTargetTable({ table: userTable })),
+      Command.expectNone(),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(page.query.sort).toStrictEqual([
+          { fieldId: ASSET_FIELDS.name, isDescending: false },
+        ]);
+      })
+    );
+  });
+
+  it("after SchemaChanged, asks again only once the target tables are reloaded too", () => {
+    const filtered = (() => {
+      const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
+
+      return update(
+        stored.model,
+        Message.SucceededLoadTargetTable({ table: userTable })
+      ).model;
+    })();
+
+    story(
+      update,
+      given(filtered),
+      message(
+        Message.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 3,
+          maybeRevision: Option.some(REVISION_4),
+        })
+      ),
+      Command.expectHas(LoadTableMetadata, LoadTargetTable),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: assetTable,
+        })
+      ),
+      Command.expectExact(
+        LoadTargetTable({
+          maybeRevision: Option.some(REVISION_3),
+          table: "core.user",
+        })
+      ),
+      Command.resolve(
+        LoadTargetTable,
+        Message.SucceededLoadTargetTable({ table: userTable })
+      ),
+      Command.expectExact(
+        listRequest({
+          filter: Option.some('owner.name = "Bob"'),
+          generation: 4,
+          revision: REVISION_4,
+        })
+      ),
+      Command.resolve(
+        LoadRecords,
+        Message.SucceededLoadRecords({
+          generation: 4,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        })
+      ),
+      model((page) => {
+        expect(AsyncData.isSuccess(page.records)).toBeTruthy();
+      })
+    );
+  });
+
+  it("when the refresh after SchemaChanged fails, offers to try again instead of waiting forever", () => {
+    story(
+      update,
+      given(showing),
+      message(
+        Message.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 1,
+          maybeRevision: Option.some(REVISION_4),
+        })
+      ),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.FailedLoadTableMetadata({ error: "Unavailable" })
+      ),
+      model((page) => {
+        expect(AsyncData.isStale(page.metadata)).toBeTruthy();
+      }),
+      message(Message.ClickedRetry()),
+      Command.expectExact(
+        LoadTableMetadata({
+          maybeRevision: Option.some(REVISION_3),
+          table: ASSETS,
+        })
+      ),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: assetTable,
+        })
+      ),
+      Command.expectExact(listRequest({ generation: 2, revision: REVISION_4 })),
+      Command.resolve(
+        LoadRecords,
+        Message.SucceededLoadRecords({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        })
+      ),
+      model((page) => {
+        expect(AsyncData.isSuccess(page.records)).toBeTruthy();
+      })
+    );
+  });
+
+  it("a filter whose field disappears is dropped from the list and from the builder", () => {
+    const filtered = (() => {
+      const stored = applyStoredFilter(
+        showing,
+        Option.some({ arg: { path: [ASSET_FIELDS.cost] }, op: "empty" })
+      );
+
+      return update(
+        stored.model,
+        Message.SucceededLoadRecords({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_3),
+          page: firstPage,
+        })
+      ).model;
+    })();
+
+    const withoutCost = {
+      ...assetTable,
+      fields: assetTable.fields.filter(
+        (field) => field.id !== ASSET_FIELDS.cost
+      ),
+    };
+
+    story(
+      update,
+      given(filtered),
+      message(
+        Message.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 2,
+          maybeRevision: Option.some(REVISION_4),
+        })
+      ),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        })
+      ),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(page.builder.root).toStrictEqual(
+          expect.objectContaining({ _tag: "Group", children: [] })
+        );
+        expect(Option.isSome(page.maybeNotice)).toBeTruthy();
+      }),
+      Command.resolve(
+        LoadRecords,
+        Message.SucceededLoadRecords({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        })
+      )
+    );
   });
 });

@@ -104,14 +104,15 @@ const initSignedOut = (
 ): Model => Model.SignedOut({ maybeReturnRoute, route, signIn: signInInit() });
 
 const initSignedIn =
-  (user: CurrentUser) =>
+  (user: CurrentUser, maybeRevision: Option.Option<SchemaRevision>) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
-      maybeRevision: Option.none(),
+      maybeRevision,
       maybeTableList: Option.none(),
+      nextPageId: 1,
       route,
       signOutRequest: SignOutRequest.Idle(),
-      tables: Tables.Loading(),
+      tables: Tables.Idle(),
       user,
     });
 
@@ -131,6 +132,18 @@ const focusingMain = (result: UpdateReturn): UpdateReturn => ({
 const readTableList = (model: Model): Option.Option<TableListModel> =>
   Model.guards.SignedIn(model) ? model.maybeTableList : Option.none();
 
+/**
+ * The open list page, if it is the one with this number: an answer to a
+ * Command of a page the user has left reaches no page.
+ *
+ * @param pageId - The page's number.
+ * @returns The reader.
+ */
+const readTableListPage =
+  (pageId: number) =>
+  (model: Model): Option.Option<TableListModel> =>
+    Option.filter(readTableList(model), (page) => page.id === pageId);
+
 const writeTableList = (model: Model, nextTableList: TableListModel): Model =>
   Model.guards.SignedIn(model)
     ? modifyFields(model, { maybeTableList: () => Option.some(nextTableList) })
@@ -141,8 +154,10 @@ const withTableList =
   (page: TableListModel): Model =>
     writeTableList(model, page);
 
-const toGotTableListMessage = (message: TableListMessage): Message =>
-  Message.GotTableListMessage({ message });
+const toGotTableListMessage =
+  (pageId: number) =>
+  (message: TableListMessage): Message =>
+    Message.GotTableListMessage({ message, pageId });
 
 /**
  * The table list after a failed load: the last list stays, marked stale.
@@ -169,6 +184,20 @@ const reloadTables = (tables: TablesState): TablesState =>
   });
 
 /**
+ * Reloads the table list at the app's revision, keeping it on screen.
+ *
+ * @param model - The state.
+ * @returns It, reloading.
+ */
+const reloadTableList: Step = (model) =>
+  Model.guards.SignedIn(model) && !AsyncData.isPending(model.tables)
+    ? {
+        commands: [LoadTables({ maybeRevision: model.maybeRevision })],
+        model: modifyFields(model, { tables: reloadTables }),
+      }
+    : { model };
+
+/**
  * Keeps the latest revision a response stated, and reloads the table list
  * when it is newer than the one the list was loaded at (Contracts 6.4: a
  * newer revision triggers a background metadata refresh).
@@ -193,12 +222,34 @@ const noteRevision =
         Option.some(latestRevision(maybeRevision, revision)),
     });
 
-    return isCatalogStale && !AsyncData.isPending(model.tables)
-      ? {
-          commands: [LoadTables({ maybeRevision: Option.some(revision) })],
-          model: modifyFields(noted, { tables: reloadTables }),
-        }
-      : { model: noted };
+    return isCatalogStale ? reloadTableList(noted) : { model: noted };
+  };
+
+/**
+ * Takes the database's current revision from a `SchemaChanged` refusal,
+ * even when it is lower than the app's (the database was restored), and
+ * reloads the table list when the list was loaded at another one.
+ *
+ * @param revision - The current revision the refusal stated.
+ * @returns The step.
+ */
+const replaceRevision =
+  (revision: SchemaRevision): Step =>
+  (model) => {
+    if (!Model.guards.SignedIn(model)) {
+      return { model };
+    }
+
+    const replaced = modifyFields(model, {
+      maybeRevision: () => Option.some(revision),
+    });
+
+    const isCatalogOther = Option.match(AsyncData.getData(model.tables), {
+      onNone: () => false,
+      onSome: (catalog) => catalog.revision !== revision,
+    });
+
+    return isCatalogOther ? reloadTableList(replaced) : { model: replaced };
   };
 
 /**
@@ -219,18 +270,21 @@ const endSession: Step = (model) =>
 
 const foldTableListOutMessage = TableListOutMessage.match<Step>({
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  SawCurrentRevision: ({ revision }) => replaceRevision(revision),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
   SawRevision: ({ revision }) => noteRevision(revision),
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
   SessionEnded: () => endSession,
 });
 
-const foldTableList = Update.foldChild({
-  foldOutMessage: foldTableListOutMessage,
-  read: readTableList,
-  toParentMessage: toGotTableListMessage,
-  update: tableListUpdate,
-  write: writeTableList,
-});
+const foldTableList = (pageId: number) =>
+  Update.foldChild({
+    foldOutMessage: foldTableListOutMessage,
+    read: readTableListPage(pageId),
+    toParentMessage: toGotTableListMessage(pageId),
+    update: tableListUpdate,
+    write: writeTableList,
+  });
 
 /**
  * Brings the list page in line with the route: a list route opens the
@@ -264,21 +318,25 @@ const syncTableList: Step = (model) => {
             Update.foldChildInit(
               tableListInit({
                 address,
+                id: model.nextPageId,
                 maybeAppRevision: model.maybeRevision,
                 table: route.table,
               }),
               {
                 foldOutMessage: foldTableListOutMessage,
-                toParentMessage: toGotTableListMessage,
-                toParentModel: withTableList(model),
+                toParentMessage: toGotTableListMessage(model.nextPageId),
+                toParentModel: withTableList(
+                  modifyFields(model, { nextPageId: (next) => next + 1 })
+                ),
               }
             ),
-          onSome: () =>
+          onSome: (page) =>
             Update.foldChildStep({
               foldOutMessage: foldTableListOutMessage,
-              read: readTableList,
-              toParentMessage: toGotTableListMessage,
-              update: (page: TableListModel) => followAddress(page, address),
+              read: readTableListPage(page.id),
+              toParentMessage: toGotTableListMessage(page.id),
+              update: (openPage: TableListModel) =>
+                followAddress(openPage, address),
               write: writeTableList,
             })(model),
         }
@@ -298,13 +356,7 @@ const syncTableList: Step = (model) => {
  * @returns It, with those Commands.
  */
 const enterSignedIn: Step = (model) =>
-  Update.combine(model, [
-    (stepModel) => ({
-      commands: [LoadTables({ maybeRevision: Option.none() })],
-      model: stepModel,
-    }),
-    syncTableList,
-  ]);
+  Update.combine(model, [reloadTableList, syncTableList]);
 
 /**
  * Moves the signed-out state to another page. The redirect to sign-in
@@ -360,6 +412,18 @@ const landOnRoute = (model: Model, route: AppRoute): UpdateReturn =>
   );
 
 /**
+ * The table a route shows, if any.
+ *
+ * @param route - The route.
+ * @returns The table's name.
+ */
+const tableOf = (route: AppRoute): Option.Option<string> =>
+  Match.value(route).pipe(
+    Match.tag("TableList", "Record", ({ table }) => Option.some(table)),
+    Match.orElse(() => Option.none())
+  );
+
+/**
  * Applies a new address, and moves focus when another page appears.
  *
  * @param model - The state.
@@ -367,18 +431,19 @@ const landOnRoute = (model: Model, route: AppRoute): UpdateReturn =>
  * @returns The next state, any redirect, and the focus move.
  */
 const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
-  const routed = landOnRoute(model, route);
-  const synced = syncTableList(routed.model);
-
-  const landed = {
-    commands: [...(routed.commands ?? []), ...(synced.commands ?? [])],
-    model: synced.model,
-  };
+  const landed = Update.combine(model, [
+    (stepModel) => landOnRoute(stepModel, route),
+    syncTableList,
+  ]);
 
   const showsAnotherPage =
     (Model.guards.SignedIn(landed.model) ||
       Model.guards.SignedOut(landed.model)) &&
-    landed.model.route._tag !== model.route._tag;
+    (landed.model.route._tag !== model.route._tag ||
+      !Option.makeEquivalence((a: string, b: string) => a === b)(
+        tableOf(landed.model.route),
+        tableOf(model.route)
+      ));
 
   return showsAnotherPage ? focusingMain(landed) : landed;
 };
@@ -388,23 +453,21 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
  *
  * @param route - The route the app started on.
  * @param maybeUser - The session's user, if there is a session.
+ * @param maybeRevision - The revision `auth/me`'s answer stated.
  * @returns The state and any redirect.
  */
 const settleSession = (
   route: AppRoute,
-  maybeUser: Option.Option<CurrentUser>
+  maybeUser: Option.Option<CurrentUser>,
+  maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn =>
   Option.match(maybeUser, {
     onNone: () => landSignedOut(route, initSignedOut),
-    onSome: (user) => {
-      const landed = landSignedIn(route, initSignedIn(user));
-      const entered = enterSignedIn(landed.model);
-
-      return {
-        commands: [...(landed.commands ?? []), ...(entered.commands ?? [])],
-        model: entered.model,
-      };
-    },
+    onSome: (user) =>
+      Update.combine(initSignedIn(user, maybeRevision)(AppRoute.Home()), [
+        () => landSignedIn(route, initSignedIn(user, maybeRevision)),
+        enterSignedIn,
+      ]),
   });
 
 /**
@@ -442,10 +505,11 @@ const inCheckingSession = (
  * sign-in or on the home page.
  *
  * @param user - Who signed in.
+ * @param maybeRevision - The revision the sign-in's answer stated.
  * @returns The step from the signed-out state.
  */
 const enterAfterSignIn =
-  (user: CurrentUser): Step =>
+  (user: CurrentUser, maybeRevision: Option.Option<SchemaRevision>): Step =>
   (model) => {
     if (!Model.guards.SignedOut(model)) {
       return { model };
@@ -455,20 +519,21 @@ const enterAfterSignIn =
       AppRoute.Home()
     );
 
-    const entered = enterSignedIn(initSignedIn(user)(route));
-
-    return focusingMain({
-      commands: [
-        ReplaceUrl({ url: signedInRouteToUrl(route) }),
-        ...(entered.commands ?? []),
-      ],
-      model: entered.model,
-    });
+    return focusingMain(
+      Update.combine(initSignedIn(user, maybeRevision)(route), [
+        (stepModel) => ({
+          commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
+          model: stepModel,
+        }),
+        enterSignedIn,
+      ])
+    );
   };
 
 const foldSignInOutMessage = SignInOutMessage.match<Step>({
   // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-  SucceededSignIn: ({ user }) => enterAfterSignIn(user),
+  SucceededSignIn: ({ maybeRevision, user }) =>
+    enterAfterSignIn(user, maybeRevision),
 });
 
 const foldSignIn = Update.foldChild({
@@ -561,11 +626,13 @@ export const update = (model: Model, message: Message) =>
     GotSignInMessage: ({ message: signInMessage }) =>
       foldSignIn(model, signInMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    GotTableListMessage: ({ message: tableListMessage }) =>
-      foldTableList(model, tableListMessage),
+    GotTableListMessage: ({ message: tableListMessage, pageId }) =>
+      foldTableList(pageId)(model, tableListMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadCurrentUser: ({ maybeUser }) =>
-      inCheckingSession(model, (route) => settleSession(route, maybeUser)),
+    SucceededLoadCurrentUser: ({ maybeRevision, maybeUser }) =>
+      inCheckingSession(model, (route) =>
+        settleSession(route, maybeUser, maybeRevision)
+      ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadTables: ({ revision, tables }) =>
       inSignedIn(model, (signedInModel) => ({

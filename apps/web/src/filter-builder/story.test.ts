@@ -440,3 +440,28 @@ describe("filter builder", () => {
     );
   });
 });
+
+describe("filter builder: empty groups", () => {
+  it("refuses to apply a group left without conditions", () => {
+    const withEmptyGroup = update(
+      update(empty, Message.ClickedAddCondition({ groupId: 0 }), assetsOnly)
+        .model,
+      Message.ClickedAddGroup({ groupId: 0 }),
+      assetsOnly
+    ).model;
+
+    const typedName = update(
+      withEmptyGroup,
+      Message.UpdatedText({ conditionId: FIRST, text: "x" }),
+      assetsOnly
+    ).model;
+
+    const applied = update(typedName, Message.ClickedApply(), assetsOnly);
+
+    expect(applied.outMessage).toBeUndefined();
+    expect(applied.model.isShowingProblems).toBeTruthy();
+    expect(
+      Result.isFailure(currentCondition(typedName, assetsOnly))
+    ).toBeTruthy();
+  });
+});

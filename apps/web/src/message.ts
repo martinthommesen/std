@@ -25,8 +25,11 @@ export const Message = defineMessageUnion({
   FailedLoadTables: {},
   FailedSignOut: {},
   GotSignInMessage: { message: SignInMessage },
-  GotTableListMessage: { message: TableListMessage },
-  SucceededLoadCurrentUser: { maybeUser: Schema.Option(CurrentUserSchema) },
+  GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
+  SucceededLoadCurrentUser: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    maybeUser: Schema.Option(CurrentUserSchema),
+  },
   SucceededLoadTables: {
     revision: SchemaRevision,
     tables: Schema.Array(MetaTableSummarySchema),

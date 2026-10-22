@@ -18,13 +18,22 @@ export const MAIN_ID = "main";
 export const LoadCurrentUser = Command.define("LoadCurrentUser", {
   execute: Effect.gen(function* loadCurrentUser() {
     const client = yield* StdApi;
-    const user = yield* client.session.me();
 
-    return Message.SucceededLoadCurrentUser({ maybeUser: Option.some(user) });
+    const [user, response] = yield* client.session.me({
+      responseMode: "decoded-and-response",
+    });
+
+    return Message.SucceededLoadCurrentUser({
+      maybeRevision: responseRevision(response),
+      maybeUser: Option.some(user),
+    });
   }).pipe(
     Effect.catchTag("Unauthenticated", () =>
       Effect.succeed(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
       )
     ),
     Effect.orElseSucceed(() => Message.FailedLoadCurrentUser())

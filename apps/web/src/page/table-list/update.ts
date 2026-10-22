@@ -11,7 +11,7 @@
  */
 import type { Expr } from "@std/conditions/ast";
 import type { MetaTable } from "@std/definitions/table-metadata";
-import { Option, Record, Result } from "effect";
+import { Option, Record, Result, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -55,6 +55,7 @@ import { FilterLoad, Metadata, Records, TargetMetadata } from "./model.ts";
 import type {
   Address,
   ListError,
+  MetaError,
   Model,
   RecordPage,
   TableMeta,
@@ -67,6 +68,8 @@ type UpdateReturn = Update.ReturnWithOutMessage<
   StdApi
 >;
 
+type PlainReturn = Update.Return<Model, Message, StdApi>;
+
 type Step = Update.Step<Model, Message, StdApi>;
 
 /** The element ID prefix of the page's filter builder. */
@@ -76,6 +79,12 @@ export const FILTER_BUILDER_ID = "filter";
 
 /** What a list page opens with. */
 export interface InitConfig {
+  /**
+   * The page's number, unique among the pages the app opens, so an answer
+   * meant for an earlier page (of this table or another) never reaches
+   * this one.
+   */
+  readonly id: number;
   /** The table, from the route. */
   readonly table: string;
   /** The list state in the address. */
@@ -105,6 +114,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     cursors: [Option.none()],
     filterLoad: FilterLoad.Settled(),
     generation: 0,
+    id: config.id,
     maybeAppRevision: config.maybeAppRevision,
     maybeNotice: Option.none(),
     metadata: Metadata.Loading(),
@@ -166,25 +176,35 @@ const reloading = (records: Records): Records =>
     onSome: (data) => Records.Refreshing({ data }),
   });
 
+const DROPPED_NOTICE =
+  "The filter named a field that is no longer available, so it was removed.";
+
+const clearBuilder =
+  (scope: ConditionScope) =>
+  (builder: FilterBuilderModel): FilterBuilderModel =>
+    Result.getOrElse(
+      loadFilterBuilder(builder, Option.none(), scope),
+      () => builder
+    );
+
 /**
  * Asks for the current page of records with the applied state, printed
  * with the names of the page's metadata and sent at its revision. A filter
- * naming a field the metadata no longer has is dropped, with a notice.
+ * naming a field the metadata no longer has is dropped from the list and
+ * the builder, with a notice.
  *
  * @param model - The page.
  * @returns The page, loading, and the request.
  */
-const requestRecords = (model: Model): UpdateReturn =>
-  Option.match(tableMetaOf(model), {
+const requestRecords: Step = (model) =>
+  Option.match(Option.all([tableMetaOf(model), scopeOf(model)]), {
     onNone: () => ({ model }),
-    onSome: (meta) => {
-      const tables = tablesOf(model, meta.table);
-
+    onSome: ([meta, scope]) => {
       const printed = Option.match(model.query.maybeCondition, {
         onNone: () => Result.succeed(Option.none<string>()),
         onSome: (condition) =>
           Result.map(
-            filterParameter(condition, meta.table.name, tables),
+            filterParameter(condition, meta.table.name, scope.tables),
             Option.some
           ),
       });
@@ -192,10 +212,8 @@ const requestRecords = (model: Model): UpdateReturn =>
       if (Result.isFailure(printed)) {
         return requestRecords(
           modifyFields(model, {
-            maybeNotice: () =>
-              Option.some(
-                "The filter named a field that is no longer available, so it was removed."
-              ),
+            builder: clearBuilder(scope),
+            maybeNotice: () => Option.some(DROPPED_NOTICE),
             query: (query) =>
               modifyFields(query, { maybeCondition: () => Option.none() }),
           })
@@ -228,81 +246,84 @@ const requestRecords = (model: Model): UpdateReturn =>
   });
 
 /**
- * Applies a new list state from the first page, writes it into the
- * address and asks for the records.
+ * Writes the page's address into the browser's, without a history entry.
  *
  * @param model - The page.
- * @param query - The new state.
- * @returns The page and its Commands.
+ * @returns It, with the Command.
  */
-const showQuery = (model: Model, query: ListQuery): UpdateReturn => {
-  const address = addressOf(query);
+const replaceAddress: Step = (model) => ({
+  commands: [
+    ReplaceListUrl({
+      url: tableListRouter({ ...model.address, table: model.table }),
+    }),
+  ],
+  model,
+});
 
-  const requested = requestRecords(
-    modifyFields(model, {
-      address: () => address,
-      cursors: () => [Option.none()],
-      query: () => query,
-    })
-  );
-
-  return {
-    commands: [
-      ...(requested.commands ?? []),
-      ReplaceListUrl({
-        url: tableListRouter({ ...address, table: model.table }),
+/**
+ * Applies a new list state from the first page, writes it into the
+ * address and asks for the records. A filter still waiting for its target
+ * tables is abandoned: the newer state wins.
+ *
+ * @param query - The new state.
+ * @returns The step.
+ */
+const showQuery =
+  (query: ListQuery): Step =>
+  (model) =>
+    Update.combine(
+      modifyFields(model, {
+        address: () => addressOf(query),
+        cursors: () => [Option.none()],
+        filterLoad: () => FilterLoad.Settled(),
+        query: () => query,
       }),
-    ],
-    model: requested.model,
-  };
-};
+      [requestRecords, replaceAddress]
+    );
 
 const LOAD_NOTICE =
   "The filter in the address cannot be shown here (it names fields you cannot read, or uses a form the builder does not show), so the list is not filtered.";
 
-const clearBuilder =
-  (scope: ConditionScope) =>
-  (builder: FilterBuilderModel): FilterBuilderModel =>
-    Result.getOrElse(
-      loadFilterBuilder(builder, Option.none(), scope),
-      () => builder
+const withCondition = (
+  query: ListQuery,
+  maybeCondition: Option.Option<Expr>
+): ListQuery => modifyFields(query, { maybeCondition: () => maybeCondition });
+
+const settleFilterIn = (
+  model: Model,
+  maybeCondition: Option.Option<Expr>,
+  scope: ConditionScope
+): PlainReturn => {
+  const loaded = loadFilterBuilder(model.builder, maybeCondition, scope);
+
+  if (Result.isFailure(loaded)) {
+    return showQuery(withCondition(model.query, Option.none()))(
+      modifyFields(model, {
+        builder: clearBuilder(scope),
+        maybeNotice: () => Option.some(LOAD_NOTICE),
+      })
     );
+  }
+
+  return showQuery(withCondition(model.query, maybeCondition))(
+    modifyFields(model, { builder: () => loaded.success })
+  );
+};
 
 /**
  * Loads a condition into the builder and applies it to the list, once the
  * target tables of its paths are known.
  *
- * @param model - The page, with metadata.
  * @param maybeCondition - The condition; `None` is no filter.
- * @returns The page and its Commands.
+ * @returns The step.
  */
-const settleFilter = (
-  model: Model,
-  maybeCondition: Option.Option<Expr>
-): UpdateReturn =>
-  Option.match(scopeOf(model), {
-    onNone: () => ({ model }),
-    onSome: (scope) =>
-      Result.match(loadFilterBuilder(model.builder, maybeCondition, scope), {
-        onFailure: () =>
-          showQuery(
-            modifyFields(model, {
-              builder: clearBuilder(scope),
-              filterLoad: () => FilterLoad.Settled(),
-              maybeNotice: () => Option.some(LOAD_NOTICE),
-            }),
-            modifyFields(model.query, { maybeCondition: () => Option.none() })
-          ),
-        onSuccess: (builder) =>
-          showQuery(
-            modifyFields(model, {
-              builder: () => builder,
-              filterLoad: () => FilterLoad.Settled(),
-            }),
-            modifyFields(model.query, { maybeCondition: () => maybeCondition })
-          ),
-      }),
-  });
+const settleFilter =
+  (maybeCondition: Option.Option<Expr>): Step =>
+  (model) =>
+    Option.match(scopeOf(model), {
+      onNone: () => ({ model }),
+      onSome: (scope) => settleFilterIn(model, maybeCondition, scope),
+    });
 
 /**
  * The target tables a condition's paths go through that the page has not
@@ -328,110 +349,106 @@ const missingTargets = (
       : [];
   });
 
-const isLoadingTarget = (model: Model): boolean =>
-  Record.values(model.targets).some(AsyncData.isLoading);
+const isTargetPending = (model: Model): boolean =>
+  Record.values(model.targets).some(AsyncData.isPending);
 
-const loadTargets = (
-  model: Model,
-  tables: readonly string[],
-  maybeRevision: Option.Option<SchemaRevision>
-): UpdateReturn => ({
-  commands: tables.map((table) => LoadTargetTable({ maybeRevision, table })),
-  model: modifyFields(model, {
-    targets: (targets) =>
-      Record.union(
-        targets,
-        Record.fromEntries(
-          tables.map((table) => [table, TargetMetadata.Loading()] as const)
+const loadTargets =
+  (tables: readonly string[]): Step =>
+  (model) => ({
+    commands: tables.map((table) =>
+      LoadTargetTable({
+        maybeRevision: Option.map(tableMetaOf(model), (meta) => meta.revision),
+        table,
+      })
+    ),
+    model: modifyFields(model, {
+      targets: (targets) =>
+        Record.union(
+          targets,
+          Record.fromEntries(
+            tables.map((table) => [table, TargetMetadata.Loading()] as const)
+          ),
+          (_, loading) => loading
         ),
-        (_, loading) => loading
-      ),
-  }),
-});
+    }),
+  });
 
 /**
  * Loads a stored condition into the builder and the list: the single entry
  * point for a filter that comes from outside the builder (the address
  * today, saved filters later). Paths through references wait for their
- * target tables; a condition the builder cannot show is not applied, and a
- * notice says so.
+ * target tables (any answer still in flight for the earlier state is
+ * ignored from now on); a condition the builder cannot show is not
+ * applied, and a notice says so.
  *
  * @param model - The page.
  * @param maybeCondition - The condition, fields by ID; `None` is no filter.
- * @returns The page, its Commands, and what the app should know.
+ * @returns The page and its Commands.
  */
 export const applyStoredFilter = (
   model: Model,
   maybeCondition: Option.Option<Expr>
-): UpdateReturn =>
-  Option.match(tableMetaOf(model), {
-    onNone: () => ({ model }),
-    onSome: (meta) => {
-      const missing = Option.match(maybeCondition, {
-        onNone: () => [],
-        onSome: (condition) => missingTargets(model, meta.table, condition),
-      });
+): PlainReturn =>
+  Option.match(Option.all([tableMetaOf(model), maybeCondition]), {
+    onNone: () => settleFilter(maybeCondition)(model),
+    onSome: ([meta, condition]) => {
+      const missing = missingTargets(model, meta.table, condition);
 
-      const waiting = Option.match(maybeCondition, {
-        onNone: () => FilterLoad.Settled(),
-        onSome: (condition) =>
-          missing.length > 0 || isLoadingTarget(model)
-            ? FilterLoad.WaitingForTables({ condition })
-            : FilterLoad.Settled(),
-      });
-
-      if (FilterLoad.guards.Settled(waiting)) {
-        return settleFilter(model, maybeCondition);
+      if (missing.length === 0 && !isTargetPending(model)) {
+        return settleFilter(maybeCondition)(model);
       }
 
-      return loadTargets(
+      return loadTargets(missing)(
         modifyFields(model, {
-          filterLoad: () => waiting,
+          filterLoad: () => FilterLoad.WaitingForTables({ condition }),
+          generation: (generation) => generation + 1,
           records: reloading,
-        }),
-        missing,
-        Option.some(meta.revision)
+        })
       );
     },
   });
 
-const continueWaitingFilter = (model: Model): UpdateReturn =>
+const continueWaitingFilter: Step = (model) =>
   FilterLoad.guards.WaitingForTables(model.filterLoad) &&
-  !isLoadingTarget(model)
-    ? settleFilter(model, Option.some(model.filterLoad.condition))
+  !isTargetPending(model)
+    ? settleFilter(Option.some(model.filterLoad.condition))(model)
     : { model };
 
 /**
  * Applies the list state of an address: the sort and page size at once,
  * the filter through {@link applyStoredFilter}.
  *
- * @param model - The page, with metadata.
  * @param address - The address's list state.
- * @returns The page and its Commands.
+ * @returns The step.
  */
-const applyAddress = (model: Model, address: ListAddress): UpdateReturn =>
-  Option.match(tableMetaOf(model), {
-    onNone: () => ({ model: modifyFields(model, { address: () => address }) }),
-    onSome: (meta) => {
-      const maybeCondition = conditionOf(address.filter);
+const applyAddress =
+  (address: ListAddress): Step =>
+  (model) =>
+    Option.match(tableMetaOf(model), {
+      onNone: () => ({
+        model: modifyFields(model, { address: () => address }),
+      }),
+      onSome: (meta) => {
+        const maybeCondition = conditionOf(address.filter);
 
-      const malformed =
-        Option.isSome(address.filter) && Option.isNone(maybeCondition);
+        const malformed =
+          Option.isSome(address.filter) && Option.isNone(maybeCondition);
 
-      return applyStoredFilter(
-        modifyFields(model, {
-          maybeNotice: () =>
-            malformed ? Option.some(LOAD_NOTICE) : Option.none(),
-          query: () => ({
-            maybeCondition: Option.none(),
-            pageSize: pageSizeOf(address.limit),
-            sort: sortKeysOf(address.sort, meta.table),
+        return applyStoredFilter(
+          modifyFields(model, {
+            address: () => address,
+            maybeNotice: () =>
+              malformed ? Option.some(LOAD_NOTICE) : Option.none(),
+            query: () => ({
+              maybeCondition: Option.none(),
+              pageSize: pageSizeOf(address.limit),
+              sort: sortKeysOf(address.sort, meta.table),
+            }),
           }),
-        }),
-        maybeCondition
-      );
-    },
-  });
+          maybeCondition
+        );
+      },
+    });
 
 /**
  * Follows the address when it changed outside the page (back, forward, an
@@ -441,14 +458,24 @@ const applyAddress = (model: Model, address: ListAddress): UpdateReturn =>
  * @param address - The new address's list state.
  * @returns The page and its Commands.
  */
-export const followAddress = (model: Model, address: Address): UpdateReturn =>
+export const followAddress = (model: Model, address: Address): PlainReturn =>
   isSameAddress(model.address, address)
     ? { model }
-    : applyAddress(model, address);
+    : applyAddress(address)(model);
 
 // REVISIONS
 
-const refreshMetadata = (model: Model): UpdateReturn =>
+const revalidating = (target: TargetMetadata): TargetMetadata =>
+  Option.getOrElse(AsyncData.revalidate(target), () => target);
+
+/**
+ * Reloads the page's metadata and its target tables' in the background,
+ * keeping what is on screen.
+ *
+ * @param model - The page.
+ * @returns The page, refreshing, and the requests.
+ */
+const refreshMetadata: Step = (model) =>
   Option.match(tableMetaOf(model), {
     onNone: () => ({ model }),
     onSome: (meta) =>
@@ -469,42 +496,48 @@ const refreshMetadata = (model: Model): UpdateReturn =>
             ],
             model: modifyFields(model, {
               metadata: () => Metadata.Refreshing({ data: meta }),
+              targets: Record.map(revalidating),
             }),
           },
   });
 
 /**
- * Notes a revision a response stated: a newer one than the page's
- * metadata refreshes the metadata in the background, and the app hears of
- * every one.
+ * Refreshes the metadata when a response stated a newer revision than the
+ * page's metadata.
  *
- * @param result - The page after the response.
- * @param maybeRevision - The revision the response stated.
- * @returns The result, refreshing when needed, with `SawRevision`.
+ * @param revision - The revision a response stated.
+ * @returns The step.
  */
-const noteRevision = (
-  result: UpdateReturn,
-  maybeRevision: Option.Option<SchemaRevision>
-): UpdateReturn =>
-  Option.match(maybeRevision, {
-    onNone: () => result,
-    onSome: (revision) => {
-      const isNewer = Option.match(tableMetaOf(result.model), {
-        onNone: () => false,
-        onSome: (meta) => isNewerRevision(revision, meta.revision),
-      });
+const refreshIfNewer =
+  (revision: SchemaRevision): Step =>
+  (model) =>
+    Option.match(tableMetaOf(model), {
+      onNone: () => ({ model }),
+      onSome: (meta) =>
+        isNewerRevision(revision, meta.revision)
+          ? refreshMetadata(model)
+          : { model },
+    });
 
-      const refreshed = isNewer
-        ? refreshMetadata(result.model)
-        : { model: result.model };
-
-      return {
-        commands: [...(result.commands ?? []), ...(refreshed.commands ?? [])],
-        model: refreshed.model,
-        outMessage: OutMessage.SawRevision({ revision }),
-      };
-    },
+/**
+ * Asks again for records the server refused with `SchemaChanged`, once
+ * the page's metadata and every target table's have been reloaded, so the
+ * filter prints with the current names.
+ *
+ * @param model - The page.
+ * @returns The page, and the request when it is time.
+ */
+const retryAfterRefresh: Step = (model) => {
+  const isRefused = Option.match(AsyncData.getError(model.records), {
+    onNone: () => false,
+    onSome: (error) => error === "SchemaChanged",
   });
+
+  const isSettled =
+    AsyncData.isSuccess(model.metadata) && !isTargetPending(model);
+
+  return isRefused && isSettled ? requestRecords(model) : { model };
+};
 
 // UPDATE
 
@@ -513,43 +546,30 @@ const receiveMetadata = (
   table: MetaTable,
   revision: SchemaRevision
 ): UpdateReturn => {
+  if (table.name !== model.table) {
+    return { model };
+  }
+
   const isFirstLoad = Option.isNone(tableMetaOf(model));
+  const fieldIds = new Set(table.fields.map((field) => field.id));
 
   const loaded = modifyFields(model, {
     metadata: () => Metadata.Success({ data: { revision, table } }),
-  });
-
-  if (isFirstLoad) {
-    return noteRevision(
-      applyAddress(loaded, model.address),
-      Option.some(revision)
-    );
-  }
-
-  const fieldIds = new Set(table.fields.map((field) => field.id));
-
-  const kept = modifyFields(loaded, {
     query: (query) =>
       modifyFields(query, {
         sort: (sort) => sort.filter((key) => fieldIds.has(key.fieldId)),
       }),
   });
 
-  const isRefused = Option.match(AsyncData.getError(model.records), {
-    onNone: () => false,
-    onSome: (error) => error === "SchemaChanged",
-  });
-
-  return noteRevision(
-    isRefused ? requestRecords(kept) : { model: kept },
-    Option.some(revision)
+  return Update.withOutMessage(
+    isFirstLoad
+      ? applyAddress(model.address)(loaded)
+      : retryAfterRefresh(loaded),
+    OutMessage.SawRevision({ revision })
   );
 };
 
-const failMetadata = (
-  model: Model,
-  error: "UnknownTable" | "Unavailable"
-): UpdateReturn => ({
+const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
   model: modifyFields(model, {
     metadata: (metadata) =>
       Option.match(AsyncData.getData(metadata), {
@@ -562,22 +582,41 @@ const failMetadata = (
   }),
 });
 
+const receiveTarget = (model: Model, table: string, target: TargetMetadata) =>
+  Update.combine(modifyFields(model, { targets: Record.set(table, target) }), [
+    continueWaitingFilter,
+    retryAfterRefresh,
+  ]);
+
 const receiveRecords = (
   model: Model,
   generation: number,
   page: RecordPage,
   maybeRevision: Option.Option<SchemaRevision>
-): UpdateReturn =>
-  generation === model.generation
-    ? noteRevision(
-        {
-          model: modifyFields(model, {
-            records: () => Records.Success({ data: page }),
-          }),
-        },
-        maybeRevision
-      )
-    : { model };
+): UpdateReturn => {
+  if (generation !== model.generation) {
+    return { model };
+  }
+
+  const shown = modifyFields(model, {
+    records: () => Records.Success({ data: page }),
+  });
+
+  return Option.match(maybeRevision, {
+    onNone: () => ({ model: shown }),
+    onSome: (revision) =>
+      Update.withOutMessage(
+        refreshIfNewer(revision)(shown),
+        OutMessage.SawRevision({ revision })
+      ),
+  });
+};
+
+const failed = (records: Records, error: ListError): Records =>
+  Option.match(AsyncData.getData(records), {
+    onNone: () => Records.Failure({ error }),
+    onSome: (data) => Records.Stale({ data, error }),
+  });
 
 const failRecords = (
   model: Model,
@@ -589,24 +628,29 @@ const failRecords = (
     return { model };
   }
 
-  const failed = modifyFields(model, {
-    records: () => Records.Failure({ error }),
+  const refused = modifyFields(model, {
+    records: (records) => failed(records, error),
   });
 
   if (error !== "SchemaChanged") {
-    return { model: failed };
+    return { model: refused };
   }
 
-  const refreshed = refreshMetadata(failed);
-
-  return Option.match(maybeRevision, {
-    onNone: () => refreshed,
-    onSome: (revision) => ({
-      ...refreshed,
-      outMessage: OutMessage.SawRevision({ revision }),
-    }),
-  });
+  // NOTE: a SchemaChanged answer states the database's current revision,
+  // which may be lower than one the app saw (after a restore).
+  return Update.withOutMessage(
+    refreshMetadata(refused),
+    Option.getOrUndefined(
+      pipe(
+        maybeRevision,
+        Option.map((revision) => OutMessage.SawCurrentRevision({ revision }))
+      )
+    )
+  );
 };
+
+const isPaging = (model: Model): boolean =>
+  AsyncData.isPending(model.records) || !AsyncData.hasData(model.records);
 
 const pageTo = (model: Model, cursors: readonly Option.Option<string>[]) =>
   requestRecords(modifyFields(model, { cursors: () => cursors }));
@@ -614,8 +658,12 @@ const pageTo = (model: Model, cursors: readonly Option.Option<string>[]) =>
 const nextPage = (model: Model): UpdateReturn =>
   Option.match(
     Option.flatMap(
-      AsyncData.getData(model.records),
-      (page) => page.maybeNextCursor
+      Option.liftPredicate(model, (page) => !isPaging(page)),
+      (page) =>
+        Option.flatMap(
+          AsyncData.getData(page.records),
+          (data) => data.maybeNextCursor
+        )
     ),
     {
       onNone: () => ({ model }),
@@ -625,54 +673,37 @@ const nextPage = (model: Model): UpdateReturn =>
   );
 
 const previousPage = (model: Model): UpdateReturn =>
-  model.cursors.length > 1
+  model.cursors.length > 1 && !isPaging(model)
     ? pageTo(model, model.cursors.slice(0, -1))
     : { model };
 
 const sortBy = (model: Model, fieldId: string): UpdateReturn =>
   showQuery(
-    model,
     modifyFields(model.query, { sort: (sort) => nextSort(sort, fieldId) })
-  );
+  )(model);
 
 const PAGE_SIZE_TEXT = /^\d+$/u;
 
 const resize = (model: Model, pageSize: string): UpdateReturn =>
   PAGE_SIZE_TEXT.test(pageSize)
     ? showQuery(
-        model,
         modifyFields(model.query, {
           pageSize: () => pageSizeOf(Option.some(pageSize)),
         })
-      )
+      )(model)
     : { model };
 
 const requestTarget =
   (table: string): Step =>
-  (stepModel) => {
-    if (Record.has(stepModel.targets, table)) {
-      return { model: stepModel };
-    }
-
-    const loading = loadTargets(
-      stepModel,
-      [table],
-      Option.map(tableMetaOf(stepModel), (meta) => meta.revision)
-    );
-
-    return { commands: loading.commands ?? [], model: loading.model };
-  };
+  (model) =>
+    Record.has(model.targets, table) ? { model } : loadTargets([table])(model);
 
 const submitFilter =
   (maybeCondition: Option.Option<Expr>): Step =>
-  (stepModel) => {
-    const shown = showQuery(
-      modifyFields(stepModel, { maybeNotice: () => Option.none() }),
-      modifyFields(stepModel.query, { maybeCondition: () => maybeCondition })
-    );
-
-    return { commands: shown.commands ?? [], model: shown.model };
-  };
+  (model) =>
+    showQuery(
+      modifyFields(model.query, { maybeCondition: () => maybeCondition })
+    )(modifyFields(model, { maybeNotice: () => Option.none() }));
 
 const foldFilterBuilder = (scope: ConditionScope) =>
   Update.foldChild({
@@ -692,6 +723,36 @@ const foldFilterBuilder = (scope: ConditionScope) =>
   });
 
 /**
+ * "Try again": the metadata when the page has none, a refresh when it is
+ * stale or the records wait for one, else the records.
+ *
+ * @param model - The page.
+ * @returns The page and its Commands.
+ */
+const retry = (model: Model): UpdateReturn => {
+  if (Option.isNone(tableMetaOf(model))) {
+    return {
+      commands: [
+        LoadTableMetadata({
+          maybeRevision: model.maybeAppRevision,
+          table: model.table,
+        }),
+      ],
+      model: modifyFields(model, { metadata: () => Metadata.Loading() }),
+    };
+  }
+
+  const waitsForRefresh = Option.match(AsyncData.getError(model.records), {
+    onNone: () => false,
+    onSome: (error) => error === "SchemaChanged",
+  });
+
+  return AsyncData.isStale(model.metadata) || waitsForRefresh
+    ? refreshMetadata(model)
+    : requestRecords(model);
+};
+
+/**
  * The list page's update.
  *
  * @param model - The page.
@@ -705,18 +766,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedPreviousPage: () => previousPage(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ClickedRetry: () =>
-      Option.isSome(tableMetaOf(model))
-        ? requestRecords(model)
-        : {
-            commands: [
-              LoadTableMetadata({
-                maybeRevision: model.maybeAppRevision,
-                table: model.table,
-              }),
-            ],
-            model: modifyFields(model, { metadata: () => Metadata.Loading() }),
-          },
+    ClickedRetry: () => retry(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSortColumn: ({ fieldId }) => sortBy(model, fieldId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -739,11 +789,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedLoadTableMetadata: ({ error }) => failMetadata(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadTargetTable: ({ error, table }) =>
-      continueWaitingFilter(
-        modifyFields(model, {
-          targets: Record.set(table, TargetMetadata.Failure({ error })),
-        })
-      ),
+      receiveTarget(model, table, TargetMetadata.Failure({ error })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotFilterBuilderMessage: ({ message: builderMessage }) =>
       Option.match(scopeOf(model), {
@@ -760,12 +806,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       receiveMetadata(model, table, revision),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadTargetTable: ({ table }) =>
-      continueWaitingFilter(
-        modifyFields(model, {
-          targets: Record.set(
-            table.name,
-            TargetMetadata.Success({ data: table })
-          ),
-        })
-      ),
+      receiveTarget(model, table.name, TargetMetadata.Success({ data: table })),
   });

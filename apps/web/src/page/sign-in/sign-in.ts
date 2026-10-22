@@ -15,7 +15,8 @@ import { defineMessageUnion } from "foldkit/message";
 import { defineTaggedUnion } from "foldkit/schema";
 import { modifyFields } from "foldkit/struct";
 
-import { StdApi } from "../../std-client.ts";
+import { SchemaRevision } from "../../domain/schema-revision.ts";
+import { StdApi, responseRevision } from "../../std-client.ts";
 
 // MODEL
 
@@ -115,7 +116,10 @@ export const Message = defineMessageUnion({
   CompletedFocusField: {},
   FailedSignIn: { error: SignInError },
   SubmittedForm: {},
-  SucceededSignIn: { user: CurrentUserSchema },
+  SucceededSignIn: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    user: CurrentUserSchema,
+  },
   UpdatedLogin: { value: Schema.String },
   UpdatedPassword: { maybePassword: Schema.Option(Password) },
 });
@@ -128,7 +132,10 @@ export type Message = typeof Message.Type;
 /** What the form tells the app. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const OutMessage = defineMessageUnion({
-  SucceededSignIn: { user: CurrentUserSchema },
+  SucceededSignIn: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    user: CurrentUserSchema,
+  },
 });
 
 /** What the form tells the app. */
@@ -175,14 +182,22 @@ export const SignIn = Command.define("SignIn", {
         payload: { login, password: Redacted.value(password) },
       });
 
-      const maybeUser = yield* client.session.me().pipe(
-        Effect.map(Option.some),
-        Effect.catchTag("Unauthenticated", () => Effect.succeed(Option.none()))
-      );
+      const maybeSession = yield* client.session
+        .me({ responseMode: "decoded-and-response" })
+        .pipe(
+          Effect.map(Option.some),
+          Effect.catchTag("Unauthenticated", () =>
+            Effect.succeed(Option.none())
+          )
+        );
 
-      return Option.match(maybeUser, {
+      return Option.match(maybeSession, {
         onNone: () => Message.FailedSignIn({ error: "SessionNotKept" }),
-        onSome: (user) => Message.SucceededSignIn({ user }),
+        onSome: ([user, response]) =>
+          Message.SucceededSignIn({
+            maybeRevision: responseRevision(response),
+            user,
+          }),
       });
     }).pipe(
       Effect.catchTag("InvalidCredentials", () =>
@@ -285,9 +300,9 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SubmittedForm: () => submit(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededSignIn: ({ user }) => ({
+    SucceededSignIn: ({ maybeRevision, user }) => ({
       model,
-      outMessage: OutMessage.SucceededSignIn({ user }),
+      outMessage: OutMessage.SucceededSignIn({ maybeRevision, user }),
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     UpdatedLogin: ({ value }) => ({

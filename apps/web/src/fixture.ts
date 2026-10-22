@@ -25,6 +25,7 @@ export const ada: CurrentUser = {
 export const adaAtHome = Model.SignedIn({
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  nextPageId: 1,
   route: AppRoute.Home(),
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Success({
@@ -35,8 +36,9 @@ export const adaAtHome = Model.SignedIn({
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
-  maybeRevision: Option.none(),
+  maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  nextPageId: 1,
   route: AppRoute.Home(),
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Loading(),

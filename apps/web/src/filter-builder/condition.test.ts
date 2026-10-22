@@ -301,7 +301,7 @@ const condition: Arbitrary<Expr> = letrec<{ expr: Expr }>((tie) => ({
     atom,
     tuple(
       constantFrom("and" as const, "or" as const),
-      arrayOf(tie("expr"), { maxLength: 3 })
+      arrayOf(tie("expr"), { maxLength: 3, minLength: 1 })
     ).map(([op, args]) => ({ args, op })),
     tie("expr").map((arg) => ({ arg, op: "not" as const }))
   ),

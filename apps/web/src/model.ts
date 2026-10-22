@@ -55,7 +55,9 @@ export type Tables = typeof Tables.schema.Type;
  *   after sign-in.
  * - `SignedIn`: the user, the page and any sign-out in progress; the
  *   tables the user can open; the latest schema revision a response
- *   stated (Contracts 6.2); and the list page's state on a list route. The
+ *   stated (Contracts 6.2), seeded from `auth/me` or sign-in; the list
+ *   page's state on a list route, and the number the next list page gets.
+ *   The
  *   session token is never here: it lives in the HTTP-only cookie.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -65,6 +67,7 @@ export const Model = defineTaggedUnion({
   SignedIn: {
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),
+    nextPageId: Schema.Int,
     route: SignedInRoute,
     signOutRequest: SignOutRequest,
     tables: Tables.schema,

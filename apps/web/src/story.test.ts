@@ -46,6 +46,7 @@ import type { SignedOutRoute } from "./route.ts";
 import {
   REVISION_3,
   REVISION_4,
+  revision,
   adaTables,
   assetTable,
 } from "./table-fixture.ts";
@@ -95,12 +96,17 @@ describe("start-up", () => {
       update,
       given(checkingAt("/")),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
       model((app) => {
         expect(app).toStrictEqual(adaEnteringHome);
       }),
-      Command.expectExact(LoadTables({ maybeRevision: Option.none() })),
+      Command.expectExact(
+        LoadTables({ maybeRevision: Option.some(REVISION_3) })
+      ),
       loadedTables,
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
@@ -114,11 +120,14 @@ describe("start-up", () => {
       update,
       given(checkingAt("/sign-in")),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
       Command.expectExact(
         ReplaceUrl({ url: homeRouter() }),
-        LoadTables({ maybeRevision: Option.none() })
+        LoadTables({ maybeRevision: Option.some(REVISION_3) })
       ),
       Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
       loadedTables,
@@ -134,7 +143,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       Command.expectExact(ReplaceUrl({ url: signInRouter() })),
       Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
       message(Message.ChangedUrl({ url: urlOf(signInRouter()) })),
@@ -149,7 +163,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/sign-in")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(signInOpenedDirectly);
       }),
@@ -161,7 +180,12 @@ describe("start-up", () => {
     story(
       update,
       given(checkingAt("/no/such/page")),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(
           signedOutAt(AppRoute.NotFound({ path: "/no/such/page" }))
@@ -178,7 +202,10 @@ describe("start-up", () => {
       message(Message.ChangedUrl({ url: urlOf("/elsewhere") })),
       Command.expectNone(),
       message(
-        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
       ),
       model((app) => {
         expect(app).toStrictEqual(
@@ -219,7 +246,12 @@ describe("start-up", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.none(),
+          maybeUser: Option.none(),
+        })
+      ),
       message(Message.FailedLoadCurrentUser()),
       message(Message.ClickedRetrySessionCheck()),
       model((app) => {
@@ -240,13 +272,20 @@ describe("signing in", () => {
         expect(JSON.stringify(app)).not.toContain("ada-password");
         expect(JSON.stringify(app)).toContain("<redacted:password>");
       }),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
           "maybeRevision",
           "maybeTableList",
+          "nextPageId",
           "route",
           "signOutRequest",
           "tables",
@@ -255,7 +294,7 @@ describe("signing in", () => {
       }),
       Command.expectExact(
         ReplaceUrl({ url: homeRouter() }),
-        LoadTables({ maybeRevision: Option.none() }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3) }),
         FocusMain()
       ),
       Command.resolveAll(
@@ -271,7 +310,13 @@ describe("signing in", () => {
       update,
       given(signInOpenedDirectly),
       ...typeAndSubmit("ada-password"),
-      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      Command.resolve(
+        SignIn,
+        SignInMessage.SucceededSignIn({
+          maybeRevision: Option.some(REVISION_3),
+          user: ada,
+        })
+      ),
       model((app) => {
         expect(app).toStrictEqual(adaEnteringHome);
       }),
@@ -292,7 +337,10 @@ describe("signing in", () => {
       given(adaAtHome),
       message(
         Message.GotSignInMessage({
-          message: SignInMessage.SucceededSignIn({ user: ada }),
+          message: SignInMessage.SucceededSignIn({
+            maybeRevision: Option.some(REVISION_3),
+            user: ada,
+          }),
         })
       ),
       model((app) => {
@@ -473,7 +521,13 @@ describe("the session requests", () => {
   const SIGN_OUT = "/api/v1/auth/sign-out";
 
   it("auth/me: a user, no session, or an unreachable server", async () => {
-    const withUser = fakeStdApi({ [ME]: { body: ada, status: 200 } });
+    const withUser = fakeStdApi({
+      [ME]: {
+        body: ada,
+        headers: { "std-schema-revision": REVISION_3 },
+        status: 200,
+      },
+    });
 
     const withoutSession = fakeStdApi({
       [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
@@ -487,10 +541,16 @@ describe("the session requests", () => {
       );
 
     await expect(load(withUser.layer)).resolves.toStrictEqual(
-      Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.some(REVISION_3),
+        maybeUser: Option.some(ada),
+      })
     );
     await expect(load(withoutSession.layer)).resolves.toStrictEqual(
-      Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.none(),
+        maybeUser: Option.none(),
+      })
     );
     await expect(load(down.layer)).resolves.toStrictEqual(
       Message.FailedLoadCurrentUser()
@@ -702,5 +762,108 @@ describe("tables and revisions", () => {
     expect(
       unknownRevision.seen.map((seen) => seen.headers["std-schema-revision"])
     ).toStrictEqual([REVISION_4, undefined]);
+  });
+});
+
+/**
+ * Commands as their names and arguments, to compare.
+ *
+ * @param commands - The Commands.
+ * @returns Name and arguments of each.
+ */
+const namesAndArgs = (
+  commands: readonly { readonly name: string; readonly args?: unknown }[] = []
+) => commands.map((command) => [command.name, command.args]);
+
+describe("review fixes: pages and revisions", () => {
+  const atAssets = update(
+    adaAtHome,
+    Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })
+  ).model;
+
+  const toUsers = update(
+    atAssets,
+    Message.ChangedUrl({ url: urlOf("/tables/core.user") })
+  );
+
+  it("an answer meant for a page the user has left reaches no page", () => {
+    expect(
+      signedIn(toUsers.model).maybeTableList.pipe(Option.map((page) => page.id))
+    ).toStrictEqual(Option.some(2));
+
+    const late = update(
+      toUsers.model,
+      Message.GotTableListMessage({
+        message: TableListMessage.SucceededLoadTableMetadata({
+          revision: REVISION_3,
+          table: assetTable,
+        }),
+        pageId: 1,
+      })
+    );
+
+    const refusedLate = update(
+      toUsers.model,
+      Message.GotTableListMessage({
+        message: TableListMessage.FailedLoadTableMetadata({
+          error: "UnknownTable",
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(late.model).toStrictEqual(toUsers.model);
+    expect(late.commands ?? []).toStrictEqual([]);
+    expect(refusedLate.model).toStrictEqual(toUsers.model);
+  });
+
+  it("going from one table's list to another's moves focus to the new page", () => {
+    expect((toUsers.commands ?? []).map((command) => command.name)).toContain(
+      "FocusMain"
+    );
+  });
+
+  it("a deep link's first requests carry the revision auth/me stated", () => {
+    const entered = update(
+      init(urlOf("/tables/acme.asset")).model,
+      Message.SucceededLoadCurrentUser({
+        maybeRevision: Option.some(REVISION_3),
+        maybeUser: Option.some(ada),
+      })
+    );
+
+    expect(namesAndArgs(entered.commands)).toStrictEqual(
+      expect.arrayContaining([
+        ["LoadTables", { maybeRevision: Option.some(REVISION_3) }],
+        [
+          "LoadTableMetadata",
+          { maybeRevision: Option.some(REVISION_3), table: ASSETS },
+        ],
+      ])
+    );
+  });
+
+  it("a SchemaChanged refusal's current revision replaces the app's, even a lower one", () => {
+    const restored = revision("2.00000000-0000-4000-8000-000000000c02");
+
+    const refused = update(
+      atAssets,
+      Message.GotTableListMessage({
+        message: TableListMessage.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 0,
+          maybeRevision: Option.some(restored),
+        }),
+        pageId: 1,
+      })
+    );
+
+    expect(signedIn(refused.model).maybeRevision).toStrictEqual(
+      Option.some(restored)
+    );
+    expect(namesAndArgs(refused.commands)).toContainEqual([
+      "LoadTables",
+      { maybeRevision: Option.some(restored) },
+    ]);
   });
 });

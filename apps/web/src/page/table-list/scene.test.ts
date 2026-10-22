@@ -18,7 +18,12 @@ import {
 import { describe, it } from "vitest";
 
 import { ASSET_FIELDS, REVISION_3, assetTable } from "../../table-fixture.ts";
-import { LoadRecords, LoadTargetTable, ReplaceListUrl } from "./command.ts";
+import {
+  LoadRecords,
+  LoadTableMetadata,
+  LoadTargetTable,
+  ReplaceListUrl,
+} from "./command.ts";
 import { Message, OutMessage } from "./message.ts";
 import type { Model, RecordPage } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -68,6 +73,7 @@ const loaded: Model = (() => {
       limit: Option.none(),
       sort: Option.none(),
     },
+    id: 1,
     maybeAppRevision: Option.none(),
     table: ASSETS,
   });
@@ -178,7 +184,7 @@ describe("list page", () => {
         ]
       ),
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
-      expect(role("columnheader", { name: "Cost ▲" })).toHaveAttr(
+      expect(role("columnheader", { name: "Cost" })).toHaveAttr(
         "aria-sort",
         "ascending"
       )
@@ -206,6 +212,7 @@ describe("list page", () => {
               limit: Option.none(),
               sort: Option.none(),
             },
+            id: 1,
             maybeAppRevision: Option.none(),
             table: "acme.secret",
           }).model,
@@ -285,6 +292,50 @@ describe("list page", () => {
       expect(
         within(role("group", { name: "Condition 1" }), text(/whole number/u))
       ).toExist()
+    );
+  });
+});
+
+describe("list page failures", () => {
+  it("keeps the rows when the definition could not be reloaded, says so and offers to try again", () => {
+    const refused = update(
+      loaded,
+      Message.FailedLoadRecords({
+        error: "SchemaChanged",
+        generation: 1,
+        maybeRevision: Option.none(),
+      })
+    ).model;
+
+    const stuck = update(
+      refused,
+      Message.FailedLoadTableMetadata({ error: "Unavailable" })
+    ).model;
+
+    scene(
+      { update, view },
+      given(stuck),
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
+      expect(text(/could not be reloaded/u)).toExist(),
+      expect(role("button", { name: "Try again" })).toBeEnabled(),
+      expect(text("AST0000001")).toExist(),
+      expect(role("button", { name: "Next page" })).toBeEnabled(),
+      click(role("button", { name: "Try again" })),
+      Command.expectHas(LoadTableMetadata),
+      expect(role("button", { name: "Next page" })).toBeEnabled(),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.FailedLoadTableMetadata({ error: "Unavailable" })
+      )
+    );
+  });
+
+  it("disables the pager while a page loads", () => {
+    scene(
+      { update, view },
+      given(update(loaded, Message.ClickedNextPage()).model),
+      expect(role("button", { name: "Next page" })).toBeDisabled(),
+      expect(role("button", { name: "Previous page" })).toBeDisabled()
     );
   });
 });
