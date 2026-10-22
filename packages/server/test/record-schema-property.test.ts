@@ -985,6 +985,71 @@ const REQUIRED_CODES = [
   "InvalidValue:nullNotAllowed",
 ] as const;
 
+const plainField = (
+  kind: Kind,
+  type: FieldType,
+  options: Partial<FieldSpec> = {}
+): FieldSpec => ({
+  childMaxLength: null,
+  childSubset: null,
+  hiddenFromTester: false,
+  kind,
+  readOnly: false,
+  required: false,
+  retire: false,
+  type,
+  useDefault: false,
+  ...options,
+});
+
+/**
+ * The targeted phase: one fixed table whose bodies reach every verdict of
+ * `REQUIRED_CODES`, compared like the random tables. Random runs reach most
+ * of them; this makes the coverage gate independent of the seed, as the
+ * error fuzz's targeted phase does (decision 0014).
+ */
+const COVERAGE_TABLE: TableSpec = {
+  autoNumber: false,
+  bodies: [
+    // null boolean, required text emptied, hidden choice, empty password
+    {
+      extra: "none",
+      values: [
+        [0, -1],
+        [1, 0],
+        [5, 2],
+        [6, 1],
+      ],
+    },
+    // wrong JSON type, too long, inexact scale, invalid date, invalid UUID,
+    // unknown choice, read-only and retired fields written
+    {
+      extra: "none",
+      values: [
+        [0, 2],
+        [1, 4],
+        [2, 0],
+        [3, 1],
+        [4, 2],
+        [5, 3],
+        [7, 2],
+        [8, 2],
+      ],
+    },
+  ],
+  fields: [
+    plainField("boolean", { kind: "boolean" }),
+    plainField("text", { kind: "text", maxLength: 3 }, { required: true }),
+    plainField("decimal", { kind: "decimal", precision: 10, scale: 2 }),
+    plainField("date", { kind: "date" }),
+    plainField("uuid", { kind: "uuid" }),
+    plainField("choice", { kind: "choice" }),
+    plainField("password", { kind: "password" }),
+    plainField("text", { kind: "text" }, { readOnly: true }),
+    plainField("text", { kind: "text" }, { retire: true }),
+  ],
+};
+
 describe("recordSchema property", () => {
   it("covers every type of Contracts 6.5 the engine creates", () => {
     assert.lengthOf(KINDS, 14);
@@ -1011,6 +1076,9 @@ describe("recordSchema property", () => {
             async () => await checkTables(run, runTable, context, mismatches)
           );
 
+          yield* runTable(COVERAGE_TABLE, context);
+
+          assert.deepStrictEqual(mismatches, []);
           assert.isFalse(
             result.failed,
             `${JSON.stringify(mismatches.slice(0, 3), null, 1)} ${String(result.errorInstance)} (seed ${result.seed})`
