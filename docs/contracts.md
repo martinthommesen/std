@@ -1580,14 +1580,16 @@ The documents' `servers` entries are inconsistent (`https://serverRoot`, `{apiRo
 
 The helpdesk set v3 (decision 0021) rebuilds `helpdesk.ticket` as the TroubleTicket base, `helpdesk.incident` and the new `helpdesk.problem` extending it. Notes are `helpdesk.ticket_note` records and other related parties `helpdesk.ticket_party` records, both referencing their ticket.
 
+Operations [checked: TMF621 CP v5.0.0, TroubleTicket Mandatory Operations p.6 and the GET, POST, PATCH and DELETE sections pp.7-10]: `GET /troubleTicket`, `GET /troubleTicket/{id}` (`404` when absent), `POST /troubleTicket` (`201`) and `DELETE /troubleTicket/{id}` (`204`) are mandatory; `PATCH` is optional (`200`, merge-patch mandatory when offered), and STD serves it. TroubleTicket is the only mandatory resource; `hub` and `troubleTicketSpecification` are optional [checked: CP p.2]. Every ticket, however it was created (TMF621, `/api/v2`, a form, an import), renders the attributes the profile makes mandatory in responses, non-blank: `@type`, `href`, `description`, `severity` and `ticketType` [checked: CP pp.2-3]. So `description` is required on `helpdesk.ticket` itself, `impact` always has a value, and `ticketType` always renders from the class or `ticket_type` (`tmf621-mandatory-output`).
+
 | TMF621 attribute | STD | Read-only | Notes |
 | --- | --- | --- | --- |
 | `id`, `href` | `id` | yes |  |
 | `@type` | `TroubleTicket` for the shipped classes; a local class's own name (11.1) | yes | [judgment: the kit and TMF clients post `TroubleTicket`; the ITIL class is carried by `ticketType`] |
-| `ticketType` | the concrete class: `incident`, `problem`; any other value creates a `helpdesk.ticket` and is stored in `ticket_type` | after create | Required on create [checked] |
+| `ticketType` | the concrete class: `incident`, `problem`; any other value creates a `helpdesk.ticket` and is stored in `ticket_type` | after create | Required on create [checked: TMF621 CP v5.0.0 p.8; UG v5.0.1 pp.69-70; OAS `TroubleTicket_FVO`]. Free text in TMF621 [checked: UG p.8] |
 | `name` | `short_description` (display field) | no | When absent on create, a shipped before-write rule fills it from the first line of `description`, cut to 160 code points |
-| `description` | `description` | no | Required on create [checked] |
-| `severity` | `impact`: `Critical` ↔ 1, `Major` ↔ 2, `Minor` ↔ 3 | no | Required on create [checked]; other values `ValidationFailed` |
+| `description` | `description` | no | Required on create [checked: as `ticketType`] |
+| `severity` | `impact`: `Critical` ↔ 1, `Major` ↔ 2, `Minor` ↔ 3 | no | Required on create [checked: as `ticketType`]; other values `ValidationFailed`. TMF621's `severity` is free text with these three as examples [checked: OAS, no enum; UG p.8]; decision 0026 M5 asks Martin whether to accept other values |
 | `priority` | `priority` label: `Critical`, `High`, `Medium`, `Low`, `Planning` (1 to 5) | yes | Computed from impact and urgency (14.2) |
 | `status` | `status` (and `hold_reason`), table below | no | Writes follow the state model (14.2, 14.3) |
 | `statusChangeDate`, `statusChangeReason` | `status_changed_at` (set by the pipeline rule on every status change), `status_reason` | date only |  |
@@ -1596,15 +1598,18 @@ The helpdesk set v3 (decision 0021) rebuilds `helpdesk.ticket` as the TroubleTic
 | `requestedResolutionDate`, `expectedResolutionDate`, `resolutionDate` | `requested_resolution_at`, `expected_resolution_at`, `resolved_at` (set on entering `resolved`) | `resolutionDate` |  |
 | `channel` | `channel` choice: key ↔ `ChannelRef.id`, label ↔ `name` | no |  |
 | `note[]` | `helpdesk.ticket_note`: `author` (reference to `core.user`, rendered as its display name), `date` (= `created_at`), `text` | existing notes | Append-only: a write may add notes; changing or removing an existing one is `ValidationFailed` [judgment: ITIL work notes are a journal] |
-| `relatedParty[]` | role `reporter` ↔ `caller` (reference to `core.party`); role `assignee` ↔ `assigned_to` (`core.user`, rendered as its individual, 11.3); other roles ↔ `helpdesk.ticket_party` (`party`, `role`) | no | Writes resolve `partyOrPartyRole.id` to the party, or for `assignee` to the user whose individual it is |
-| `troubleTicketRelationship[]` | `relationshipType` `causedBy` ↔ an incident's `problem` (reference to `helpdesk.problem`); `parent` ↔ `parent_incident` | no | Other relationship types `ValidationFailed` |
+| `relatedParty[]` | role `reporter` ↔ `caller` (reference to `core.party`); role `assignee` ↔ `assigned_to` (`core.user`, rendered as its individual, 11.3); other roles ↔ `helpdesk.ticket_party` (`party`, `role`) | no | Writes resolve `partyOrPartyRole.id` to the party, or for `assignee` to the user whose individual it is. Each item renders `{"@type": "RelatedPartyRefOrPartyRoleRef", role, partyOrPartyRole: {"@type": "PartyRef", id, name, "@referredType"}}` (11.3 for `href`); a write without `role` or `partyOrPartyRole.id` is `ValidationFailed` [checked: TMF621 CP v5.0.0 p.3]. Roles are free text in TMF621; `reporter` and `assignee` are STD's names |
+| `troubleTicketRelationship[]` | `relationshipType` `causedBy` ↔ an incident's `problem` (reference to `helpdesk.problem`); `parent` ↔ `parent_incident` | no | Each item renders `@type` `TroubleTicketRelationship`, `id` and `relationshipType` [checked: TMF621 CP v5.0.0 p.4]. `relationshipType` is free text [checked: OAS, no enum], so other types are kept as given in json `ticket_relationship` |
 | `relatedEntity[]` | role `affectedConfigurationItem` ↔ `configuration_item` (reference to `cmdb.ci`, from helpdesk v4 in Step 4); role `change` ↔ `caused_by_change` (Step 4); anything else kept as given in json `related_entity` | no |  |
 | `troubleTicketCharacteristic[]` | `urgency` ↔ `urgency` (1 to 3), `majorIncident` ↔ `major_incident`, `holdReason` ↔ `hold_reason`, `resolutionCode` ↔ `resolution_code`, `resolutionNotes` ↔ `resolution_notes`; problems: `knownError`, `workaround`, `rootCause`; any other characteristic kept in json `characteristic` | per field | Typed as the v5 characteristic subtypes |
 | `externalIdentifier[]` | first item `{owner: "STD", externalIdentifierType: "number", id: <number>}` (read-only), then json `external_identifier` | the first item |  |
-| `attachment[]` | json `attachment` (references and URLs only) | no | Attachments are a later field type |
+| `attachment[]` | json `attachment` (references and URLs only) | no | Attachments are a later field type (exclusion E22). Each item needs `@type`, `id`, `attachmentType` and `mimeType` [checked: TMF621 CP v5.0.0 p.3; OAS `Attachment_FVO`], else `ValidationFailed`; inline `content` is refused |
 | `troubleTicketSpecification` | not supported (11.1) |  |  |
 
-Status (TMF621's set is an example set [checked: user guide], so STD's ITIL states map onto it):
+- **Sub-resources** carry `@type` and, where the profile requires it, `id` [checked: TMF621 CP v5.0.0 pp.2-4]: `ChannelRef` (`id` the choice key), `Note` (`id` the `helpdesk.ticket_note` ID), `ExternalIdentifier`, `RelatedEntity` (with `entity.@type` and `entity.id`), `StatusChange`, and the characteristic subtypes. A mapped characteristic renders `id` = its name (`urgency`, …) and `@type` `IntegerCharacteristic`, `BooleanCharacteristic` or `StringCharacteristic`; a json-stored characteristic, external identifier or related entity must carry the attributes the profile names for it, and a characteristic without `id` gets one on write.
+- **Read-only although the guide lists them as patchable** [checked: TMF621 UG v5.0.1 pp.73-74]: `priority` (the guide itself calls it set by the system, p.8), `statusChangeHistory` (populated by the server, p.8), `resolutionDate` (set on entering `resolved`) and `ticketType` after create (decision 0026 M6). A write of one of them is `ReadOnlyField` unless its value is unchanged (3.9), and each is a deviation row in the requirements matrix.
+
+Status (TMF621's introduction calls its states an example set, but `status` is a closed enumeration of eight values [checked: TMF621 UG v5.0.1 p.1 and p.8; OAS `TroubleTicketStatusType`], so STD renders only these eight and maps its ITIL states onto them; the guide's life-cycle diagram, p.2, exists only as a figure):
 
 | TMF621 `status` | Incident (read) | Problem (read) | On write |
 | --- | --- | --- | --- |
@@ -1618,7 +1623,7 @@ Status (TMF621's set is an example set [checked: user guide], so STD's ITIL stat
 | `rejected` | `canceled` with `status_reason` `rejected` | the same | `canceled`, `status_reason` `rejected` |
 
 - A filter `status=pending` compiles to `status = on_hold and hold_reason = awaiting_caller`, `status=inProgress` to the `in` of its group, so TMF filters and reads agree (`tmf-filter-equivalence` covers TMF621).
-- Events (12.3): `TroubleTicketCreateEvent`, `TroubleTicketAttributeValueChangeEvent`, `TroubleTicketStatusChangeEvent` (TMF `status` changed), `TroubleTicketResolvedEvent` (entered `resolved`), `TroubleTicketInformationRequiredEvent` (entered `pending`), `TroubleTicketDeleteEvent`.
+- Events (12.3): `TroubleTicketCreateEvent`, `TroubleTicketAttributeValueChangeEvent`, `TroubleTicketStatusChangeEvent` (TMF `status` changed), `TroubleTicketResolvedEvent` (entered `resolved`), `TroubleTicketInformationRequiredEvent` (entered `pending`; without the optional `informationRequired` patch), `TroubleTicketDeleteEvent` [checked: TMF621 UG v5.0.1 p.38; none is mandatory, CP v5.0.0 p.5].
 
 ### 11.3 TMF632 Party, TMF669 Party Role and TMF672 User Role Permission (party foundation in Step 3, the three APIs in Step 4)
 
@@ -1686,6 +1691,7 @@ TMF641 never shows `held` (an ITIL change has no hold state), and never `assessi
 - `tmf-oas-contract`: every TMF response of every test validates against the pinned OpenAPI document.
 - `tmf-noninterference`: Bob's view through TMF621 of tickets with hidden fields equals his generic view: a hidden field is an absent attribute, a filter on it is `UnknownField`, an invisible ticket is `NotFound` identical to a random ID, and the `noninterference` property holds through TMF621 queries.
 - `tmf-local-class`: a local `local.vip_incident` extending `helpdesk.incident` appears in TMF621 with its own `@type`, `@baseType` `TroubleTicket` and a schema naming its local field; a `POST` with that `@type` creates it.
+- `tmf621-mandatory-output`: tickets, incidents and problems created through `/api/v2`, a form and an import read through TMF621 with non-blank `@type`, `href`, `description`, `severity` and `ticketType`, and every sub-resource with the attributes 11.2 lists.
 - `tmf-arrays`: adding a note through TMF621 creates one `helpdesk.ticket_note`, bumps the ticket's version once for the note and writes one change entry per version; adding a note through the generic API does the same; changing an existing note is refused with nothing written.
 - `party-foundation`: upgrading a `v0.0.2` database with 1,000 users gives each exactly one individual through the `data` migration, with change entries; killing `std upgrade` mid-migration and rerunning completes it, and a second rerun changes nothing; users created concurrently with the migration end with exactly one individual each.
 - `tmf672-roles`: a set created through TMF672 is a `core.role` with a change-set journal entry; a non-admin's TMF672 write is refused exactly as the generic write is; a conditional rule is read-only through TMF672.
