@@ -610,8 +610,10 @@ rows:
     source: TMF630 v5.0.0 P1 §3.1 p.26
     level: optional
     requirement: A server may support HEAD, but only to return response metadata as RFC 9110 defines; HEAD must not be used for anything else.
-    status: pending
-    note: "gap: Contracts 10 does not say whether v2 answers HEAD"
+    status: tested
+    tests:
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.5: HEAD is offered wherever GET is and answers GET's status and headers without a body; OPTIONS is 204 with Allow."
   - id: TMF630@5.0.0/P1/3.1/get-by-id-retrieves-resource
     source: TMF630 v5.0.0 P1 §3.1 p.26
     level: mandatory
@@ -855,7 +857,9 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `PUT` is `405`; gap: Contracts 10 does not say other unsupported methods (for example POST on `/{table}/{id}`) are 405"
+      - packages/server/test/v2-review.test.ts#v2-review
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.5: every method a resource route does not serve (PUT, unknown methods, POST on /{table}/{id}, ...) is 405 with an accurate Allow, decided by the route alone."
   - id: TMF630@5.0.0/P1/3.3.3/status-406-not-acceptable
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: recommended
@@ -2309,8 +2313,9 @@ rows:
     requirement: A server that supports the (optional) history pattern exposes it at {resource}/{id}/history. (lowercase 'must' in the source)
     status: tested
     tests:
-      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1: GET /api/v2/{table}/{id}/history; no GET .../history/{revisionId} for a single entry is listed (gap)"
+      - packages/server/test/v2-history.test.ts#v2-history
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.4 (Martin 2026-10-22, D3): GET /api/v2/{table}/{id}/history and .../history/{changeId}."
   - id: TMF630@5.0.0/P1/12.3.1/history-same-pagination
     source: TMF630 v5.0.0 P1 §12.3.1 p.214
     level: mandatory
@@ -2325,6 +2330,30 @@ rows:
     tests:
       - packages/server/test/v2-history.test.ts#v2-history
     note: "C10.4 (Martin 2026-10-22, D3): history lists take paging, fields and filters on ChangeEntry attributes; filters on record values are refused (3.7)."
+  - id: TMF630@5.0.0/P1/12.3/history-links-on-resource
+    source: TMF630 v5.0.0 P1 §12.3 p.210
+    level: recommended
+    requirement: A revisioned resource's response links its history (rel=version-history) and its latest revision (rel=latest-version). (no keyword; shown in the example)
+    status: tested
+    tests:
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.4: single-resource answers carry version-history and latest-version, the latest entry the caller may see (3.7)."
+  - id: TMF630@5.0.0/P1/12.3.3/history-entry-links
+    source: TMF630 v5.0.0 P1 §12.3.3 p.232
+    level: recommended
+    requirement: A single history entry's response links itself (rel=self), the history (rel=version-history) and the latest revision (rel=latest-version). (no keyword; shown in the example)
+    status: tested
+    tests:
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.4: history/{changeId} carries self, version-history and latest-version, among the entries the caller may see."
+  - id: TMF630@5.0.0/P1/12.4/history-link-relations
+    source: TMF630 v5.0.0 P1 §12.4 p.238
+    level: optional
+    requirement: History links use the RFC 5829 relations version-history, latest-version, predecessor-version and successor-version.
+    status: tested
+    tests:
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.4: entries also link predecessor-version and successor-version where they exist among the entries the caller may see."
   - id: TMF630@5.0.0/P1/13.1.1/major-version-on-incompatible-change
     source: TMF630 v5.0.0 P1 §13.1.1 p.239
     level: mandatory
@@ -2592,7 +2621,8 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.2: @schemaLocation is /api/v2/tableMetadata/{class}/schema.json, the caller's JSON Schema of the concrete class"
+      - packages/server/test/v2-review-2.test.ts#v2-review-2
+    note: "C10.2: @schemaLocation is /api/v2/tableMetadata/{class}/schema.json, the caller's JSON Schema of the concrete class; every resource validates against it, typed references included."
   - id: TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base
     source: TMF630 v4.0.0 P2 §2.1 p.11
     level: mandatory
