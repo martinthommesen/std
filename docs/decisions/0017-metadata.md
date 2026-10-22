@@ -94,6 +94,10 @@ Roles, access rules, choices and layouts are written through the generic record 
 | `choices`, `stale-choices` | subsets through child and parent endpoints, hidden keys, preflight and `doctor`; `choicesChanged`; filter literals |  |
 | `layouts` | layering through a set and its upgrade, whole-layout override and convergence, inheritance, rename survival, retire and purge, refusals on both paths |  |
 | `admin-config-editing` | the generic admin pages' writes |  |
+| `table-openapi` | real responses and accepted bodies validate against the per-table document (ajv) | 14 validation errors against the round-0 document |
+| `transient-retry` | a deadlock in a request transaction is rerun, not a 500 | without the retry the request is a 500 |
+| `auto-numbers` (round 1) | a backfill batch and a create referencing its rows never deadlock; digit-ending prefixes refused; the 7-digit boundary | `FOR UPDATE` in the batch: 40P01; with digit-ending prefixes accepted, `A10000000` equals `A1` + `0000001` |
+| `stale-choices` (round 1) | a child's subset change leaves a stale parent create alone and refuses child creates and updates through the parent | reach including descendants for creates: the parent create is 409 |
 | `authz-paths`, `stale-paths`, `no-bypass` | the two new endpoints for Alice, Bob and admin; malformed, unknown and older revisions; with the allow-all rules removed |  |
 
 Every refusal in the new suites is checked to commit nothing with `committed-state.ts`. The metadata endpoints read only, so `error-fuzz` and `schema-fuzz` (which fuzz stored values in error bodies) gain nothing from them.
