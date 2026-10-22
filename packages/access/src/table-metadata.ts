@@ -13,7 +13,9 @@
  *   class; `write.update`: the record and field update decisions over every
  *   row-visible class of its subtree. Each is `no` when never, `yes` when
  *   always for every class, otherwise `perRecord`; both are `no` for a
- *   read-only or retired field or a table that accepts no writes.
+ *   read-only or retired field or a table that accepts no writes. The
+ *   server caps both, and `creatable`, with the `WriteLimits` of its write
+ *   paths, so no write it always refuses shows as allowed (platform tables).
  * - A reference's target and a condition field's table are named only when
  *   the caller knows that table; otherwise null. No class ID of another
  *   table appears.
@@ -23,7 +25,11 @@
  * - Nothing of an access rule appears: no condition, no field a condition
  *   reads, no rule ID.
  */
-import type { AccessAction, LayoutType } from "@std/definitions/definition";
+import type {
+  AccessAction,
+  FieldDefinition,
+  LayoutType,
+} from "@std/definitions/definition";
 import {
   effectiveChoices,
   effectiveClass,
@@ -48,6 +54,58 @@ import { fieldDecision, knowsTable, recordDecision } from "./rules.ts";
 import type { Caller, FieldAction } from "./rules.ts";
 import { visibleSchema } from "./visible-schema.ts";
 import type { VisibleField } from "./visible-schema.ts";
+
+/** A field's write states, before or after a limit. */
+export interface WriteStates {
+  readonly create: AccessState;
+  readonly update: AccessState;
+}
+
+/**
+ * What the server's write paths allow at all, whatever the access rules
+ * say: the generic record routes refuse some tables and columns for every
+ * caller (platform tables, columns a definition write never sets). The
+ * metadata's `creatable` and `write` are capped by it, so they never show
+ * a write the server always refuses (guarantee 2A).
+ */
+export interface WriteLimits {
+  /**
+   * @param classId - The endpoint's class.
+   * @returns Whether a generic create of the class can succeed at all.
+   */
+  readonly creatable: (classId: DefinitionId) => boolean;
+  /**
+   * @param classId - The endpoint's class.
+   * @param field - A field of its lineage.
+   * @returns The most a generic write of the field can be.
+   */
+  readonly field: (
+    classId: DefinitionId,
+    field: FieldDefinition
+  ) => WriteStates;
+}
+
+/** No limits: only the access rules and the definitions decide. */
+export const NO_WRITE_LIMITS: WriteLimits = {
+  creatable: () => true,
+  field: () => ({ create: "yes", update: "yes" }),
+};
+
+const RANK: Readonly<Record<AccessState, number>> = {
+  no: 0,
+  perRecord: 1,
+  yes: 2,
+};
+
+/**
+ * The lower of two states.
+ *
+ * @param left - A state.
+ * @param right - Another state.
+ * @returns `no` before `perRecord` before `yes`.
+ */
+const lower = (left: AccessState, right: AccessState): AccessState =>
+  RANK[left] <= RANK[right] ? left : right;
 
 /**
  * The state of one class's record and field decisions together.
@@ -149,6 +207,7 @@ interface FieldContext {
   readonly classId: DefinitionId;
   readonly rowClasses: readonly DefinitionId[];
   readonly acceptsWrites: boolean;
+  readonly limits: WriteLimits;
 }
 
 const metaFieldOf = (
@@ -162,6 +221,8 @@ const metaFieldOf = (
 
   const blocked =
     rules.readOnly || rules.state !== "active" || !context.acceptsWrites;
+
+  const limit = context.limits.field(classId, effective.field);
 
   const choices =
     effective.type.kind === "choice"
@@ -197,13 +258,13 @@ const metaFieldOf = (
     write: blocked
       ? { create: "no", update: "no" }
       : {
-          create: writeState(snapshot, caller, "create", [classId], id),
-          update: writeState(
-            snapshot,
-            caller,
-            "update",
-            context.rowClasses,
-            id
+          create: lower(
+            limit.create,
+            writeState(snapshot, caller, "create", [classId], id)
+          ),
+          update: lower(
+            limit.update,
+            writeState(snapshot, caller, "update", context.rowClasses, id)
           ),
         },
   };
@@ -246,13 +307,15 @@ const layoutOf = (
  * @param snapshot - The configuration at the request's revision.
  * @param caller - The caller's roles.
  * @param classId - The endpoint's class E.
+ * @param limits - What the server's write paths allow at all.
  * @returns The table's description, or undefined when the caller does not
  *   know the table.
  */
 export const tableMetadata = (
   snapshot: ConfigSnapshot,
   caller: Caller,
-  classId: DefinitionId
+  classId: DefinitionId,
+  limits: WriteLimits = NO_WRITE_LIMITS
 ): MetaTable | undefined => {
   const definition = snapshot.class(classId);
   const name = knownName(snapshot, caller, classId);
@@ -270,6 +333,7 @@ export const tableMetadata = (
     acceptsWrites,
     caller,
     classId,
+    limits,
     rowClasses: view.rows.groups.flatMap((group) => group.classIds),
     snapshot,
   };
@@ -293,6 +357,7 @@ export const tableMetadata = (
 
   const creatable =
     acceptsWrites &&
+    limits.creatable(classId) &&
     recordDecision(snapshot, caller, "create", classId).kind !== "never";
 
   return {

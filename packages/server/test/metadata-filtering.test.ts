@@ -23,6 +23,7 @@ import { Effect, Schema } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -482,6 +483,146 @@ describe("metadata filtering", () => {
           ]);
 
           assert.notStrictEqual((yield* read).asset, before.asset);
+        })
+    );
+
+    dbTest.effect(
+      "platform tables show only the writes the server can accept",
+      () =>
+        Effect.gen(function* platformWrites() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const snapshot = yield* (yield* Catalog).refresh;
+
+          const platform = snapshot
+            .all("class")
+            .filter((entry) => entry.storage === "platform")
+            .flatMap((entry) => {
+              const name = snapshot.qualifiedNameOf(entry.id);
+
+              return name === undefined ? [] : [name];
+            });
+
+          const definitionTables = new Set(
+            [...DEFINITION_KIND_OF_TABLE.keys()].filter((name) =>
+              platform.includes(name)
+            )
+          );
+
+          assert.isAbove(definitionTables.size, 10);
+
+          for (const table of platform.filter(
+            (name) => !definitionTables.has(name)
+          )) {
+            const { body } = yield* metadataOf(tokens.admin, table);
+
+            assert.isFalse(body.table.creatable, table);
+            assert.isTrue(
+              body.table.fields.every(
+                (field) =>
+                  field.write.create === "no" && field.write.update === "no"
+              ),
+              table
+            );
+          }
+
+          // The server's verdict: a generic create there is `NotAllowed`.
+          const before = yield* committedState;
+
+          const refused = yield* http.request(
+            "POST",
+            "/api/v1/tables/core.change/records",
+            { body: {}, token: tokens.admin }
+          );
+
+          assert.strictEqual(refused.status, 403, refused.text);
+          assert.deepStrictEqual(objectOf(refused.json), {
+            _tag: "NotAllowed",
+          });
+          assert.deepStrictEqual(yield* committedState, before);
+
+          // A definition table: owner, protection and state on create are
+          // never writable; a role's name and label are, and its state
+          // only by a retire or reactivation the engine decides.
+          const role = (yield* metadataOf(tokens.admin, "core.role")).body;
+
+          assert.isTrue(role.table.creatable);
+          assert.deepStrictEqual(
+            Object.fromEntries(
+              ["owner_layer", "protected", "state", "name", "label"].map(
+                (name) => [
+                  name,
+                  `${fieldOf(role.table, name).write.create}/${fieldOf(role.table, name).write.update}`,
+                ]
+              )
+            ),
+            {
+              label: "yes/perRecord",
+              name: "yes/perRecord",
+              owner_layer: "no/no",
+              protected: "no/no",
+              state: "no/perRecord",
+            }
+          );
+
+          for (const body of [{ owner_layer: "local" }, { state: "active" }]) {
+            const refusedColumn = yield* http.request(
+              "POST",
+              "/api/v1/tables/core.role/records",
+              {
+                body: { label: "X", name: "x_role", ...body },
+                token: tokens.admin,
+              }
+            );
+
+            assert.strictEqual(refusedColumn.status, 422, refusedColumn.text);
+            assert.include(refusedColumn.text, "ReadOnlyField");
+          }
+
+          // A choice's key never changes; a namespace never retires.
+          const choiceMeta = (yield* metadataOf(tokens.admin, "core.choice"))
+            .body;
+
+          assert.strictEqual(
+            fieldOf(choiceMeta.table, "key").write.update,
+            "no"
+          );
+          assert.strictEqual(
+            fieldOf(choiceMeta.table, "label").write.update,
+            "perRecord"
+          );
+
+          const namespace = (yield* metadataOf(tokens.admin, "core.namespace"))
+            .body;
+
+          assert.strictEqual(
+            fieldOf(namespace.table, "state").write.update,
+            "no"
+          );
+
+          const grade = snapshot
+            .fields(ACME.asset)
+            .find((field) => field.name === "grade");
+
+          const good = snapshot
+            .choicesOf(grade?.id ?? "")
+            .find((entry) => entry.key === "good");
+
+          assert.isDefined(good);
+
+          const keyChange = yield* http.request(
+            "PATCH",
+            `/api/v1/tables/core.choice/records/${good?.id ?? ""}`,
+            {
+              body: { key: "great" },
+              headers: { "if-match": `"${good?.version ?? 0}"` },
+              token: tokens.admin,
+            }
+          );
+
+          assert.isAtLeast(keyChange.status, 400, keyChange.text);
+          assert.isBelow(keyChange.status, 500, keyChange.text);
+          assert.deepStrictEqual(yield* committedState, before);
         })
     );
 

@@ -62,7 +62,7 @@ import { checkRequestRevision } from "./stale-request.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
 
 /** Columns no write may set: system, owner, protection and enforcement. */
-const READ_ONLY_COLUMNS: ReadonlySet<string> = new Set([
+export const READ_ONLY_COLUMNS: ReadonlySet<string> = new Set([
   "id",
   "class",
   "class_id",

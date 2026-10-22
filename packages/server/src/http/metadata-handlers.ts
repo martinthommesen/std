@@ -21,6 +21,7 @@ import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { genericWriteLimits } from "./metadata-limits.ts";
 import {
   asActor,
   inRequestTransaction,
@@ -48,7 +49,9 @@ const metadataOf = Effect.fn("Metadata.table")(function* metadataOf(
   const found = snapshot.classByName(table);
 
   const described: MetaTable | undefined =
-    found === undefined ? undefined : tableMetadata(snapshot, actor, found.id);
+    found === undefined
+      ? undefined
+      : tableMetadata(snapshot, actor, found.id, genericWriteLimits(snapshot));
 
   if (described === undefined) {
     return yield* new UnknownTable({ table });
