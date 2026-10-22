@@ -196,7 +196,7 @@ Resume:
 | Operation | Refused when | Reported but allowed |
 | --- | --- | --- |
 | Rename | target is protected, or owned by core or an app and the caller is not its set | nothing |
-| Retire field | protected; display field; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
+| Retire field | protected; display field of a live table, unless the same change set retires that table; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
 | Retire table | protected; has a child class not retired; a non-retired reference field points at it, or a non-retired condition field names it (whatever its own table's state, self-references included) | other dependents |
 | Reactivate field or table | a reference or condition field that would be active names a retired table | nothing |
 | Purge field | not retired; any non-retired dependent except layout entries and single-field indexes | count of non-null values (counted under `SCHEMA_KEY`) |
@@ -1201,7 +1201,7 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 | Changed, incoming equals the local value | converged: override dropped, `converged` entry recorded |
 | Changed, local value differs | conflict: base updated, local value stays effective, conflict opened with old shipped, new shipped and local values |
 | Renamed (any kind, roles included) | applied by ID; everything that refers to it by ID keeps working |
-| Removed upstream | tables and fields retired (never purged; a removed table's fields go with it), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
+| Removed upstream | tables and fields retired (never purged; a removed table's fields are retired explicitly, then the table), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
 | Type changed | refused in v0.1; author adds a field and retires the old one |
 | Tightened constraint violated by data | refused at plan time with counts |
 
