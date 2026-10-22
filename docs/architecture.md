@@ -41,8 +41,11 @@ apps/
   web/           @std/web          Foldkit + Foldkit UI + Vite web app (Step 2; see AGENTS.md, "Frontend: Foldkit")
 examples/
   acme/          Stage 0 two-user example (definition set, demo script)
+  quickstart.sh  Step 1 runnable result, against `std serve` (decision 0016)
+  quickstart/    `pnpm quickstart:ci`: runs quickstart.sh against a disposable database
   helpdesk/      Step 2 and 3 example app definition set, import sample
 bench/           Stage 0 inheritance benchmark, Step 4 rerun
+docker/          the quickstart's development image (the release image is Step 4)
 docs/            plan, contracts, architecture, decisions/, servicenow-mapping.md, runbooks
 repos/           read-only upstream source: effect/ (effect@<lockfile version>), foldkit/ (foldkit@<pinned tag>)
 FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from repos/foldkit
@@ -108,7 +111,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `auth/` | users, password hashing, sessions, roles and permissions, acting-user service, API tokens (Step 3) | 3.1 |
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, `saveBatch` (Step 3) | 2, 3, 4 |
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
-| `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `schema pull`, `codegen` | 1.10, 8.5, 8.7 |
+| `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
 | `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |

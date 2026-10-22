@@ -149,12 +149,17 @@ export const startServe = (url: string) =>
  * and waits for it to exit.
  * @param url - The database.
  * @param args - The command line.
+ * @param env - Further environment variables.
  * @returns Exit code and output.
  */
-export const runCli = (url: string, args: readonly string[]) =>
+export const runCli = (
+  url: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>> = {}
+) =>
   Effect.callback<CliResult>((resume) => {
     const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      env: { ...process.env, STD_DATABASE_URL: url },
+      env: { ...process.env, ...env, STD_DATABASE_URL: url },
     });
 
     const chunks: string[] = [];

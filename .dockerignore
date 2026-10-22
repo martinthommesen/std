@@ -1,0 +1,11 @@
+# The quickstart image (docker/quickstart.Dockerfile) needs the workspace
+# sources and manifests only.
+**/node_modules
+.git
+.claude
+.agents
+repos
+assets
+docs
+bench/results
+**/*.log

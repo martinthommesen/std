@@ -50,6 +50,12 @@ jobs:
         run: test "$(node --version)" = v26.12.0 && test "$(pnpm --version)" = 12.14.0
       - name: Install
         run: pnpm install --frozen-lockfile
+      # The quickstart's credential check (and its tests) trace every execve
+      # with strace. A no-op outside GitHub Actions: `pnpm ci:local` runs
+      # this step too and must not call sudo; locally, install strace yourself
+      # (`pnpm quickstart:ci` fails with instructions when it is missing).
+      - name: strace (for the quickstart's execve trace)
+        run: if [ -n "${GITHUB_ACTIONS:-}" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq strace; fi
       - name: Postgres
         run: pnpm check:postgres
       - name: Lint and format
@@ -62,3 +68,8 @@ jobs:
         run: pnpm test
       - name: Toolchain canaries
         run: pnpm test:canaries
+      # The Step 1 runnable result: `std upgrade`, `std bootstrap-admin` and
+      # `std serve` on a disposable database, then examples/quickstart.sh
+      # twice (the rerun must succeed too), each ending with `std doctor`.
+      - name: Quickstart (examples/quickstart.sh against std serve, run twice)
+        run: pnpm quickstart:ci

@@ -18,7 +18,8 @@
     "bench": "pnpm --filter @std/bench bench",
     "std": "node packages/server/src/cli/main.ts",
     "probes": "node packages/probes/src/main.ts",
-    "spike:demo": "node examples/acme/src/main.ts"
+    "spike:demo": "node examples/acme/src/main.ts",
+    "quickstart:ci": "node examples/quickstart/src/ci.ts"
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",
