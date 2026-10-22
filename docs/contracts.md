@@ -604,6 +604,7 @@ Nested saves:
 
 - A nested save joins the outer transaction and never opens a savepoint.
 - If a nested save fails after its first write, the transaction is poisoned. The SQL layer counts every statement as a potential write unless the code that built it marks it read-only, so it never infers a write from statement text. The SQL layer refuses to commit a poisoned transaction (it rolls back and logs a defect), whether or not the caller handled the error. The same rule applies to hooked rows in `saveBatch` (7.7).
+- Stricter for the record service: any failure of a nested save (a create, update or delete through the record service inside another save's hooks or an after-commit effect) poisons the transaction at the nested save's boundary, whatever the error and whether or not it wrote anything, failures before it joins the transaction included. So hook code that catches a nested guard, invariant, validation or access refusal cannot commit the saves around it. Plain reads that fail (a lookup's `NotFound`) do not poison. [judgment, decision 0022]
 - The record service tracks which records are in the current save stack and refuses a nested save to any of them with `RecordInSave`, which fails the outer save. Reason: otherwise a hook that writes B, whose hook writes A, changes A after A's proposed-state check.
 
 Hooks and record rules are selected by the record's concrete class: those attached to it and to every ancestor run, whichever endpoint is used. Order: by order number, then stable hook ID.

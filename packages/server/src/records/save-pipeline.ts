@@ -78,6 +78,7 @@ import {
 import type { ColumnWrite, RootLock } from "./save-sql.ts";
 import {
   checkDepth,
+  poisonIfNested,
   refuseNestedSave,
   SaveStack,
   withinSave,
@@ -596,7 +597,7 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
   const { request } = yield* Transactions;
 
   return yield* request(createInTransaction(input, body));
-});
+}, poisonIfNested);
 
 /**
  * Steps 2 of 4.1: lock the root row alone, then (next statements) load the
@@ -897,7 +898,7 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
   const { request } = yield* Transactions;
 
   return yield* request(updateInTransaction(input, body));
-});
+}, poisonIfNested);
 
 const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
   function* deleteInTransaction(input: DeleteInput) {
@@ -978,4 +979,4 @@ export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
   const { request } = yield* Transactions;
 
   return yield* request(deleteInTransaction(input));
-});
+}, poisonIfNested);

@@ -8,7 +8,7 @@
  */
 import { HookDepthExceeded } from "@std/api/errors/hook-depth-exceeded";
 import type { RecordInSave } from "@std/api/errors/record-in-save";
-import { Context, Effect } from "effect";
+import { Context, Effect, Option } from "effect";
 
 import { CurrentTransaction } from "../sql/transaction-context.ts";
 
@@ -80,6 +80,39 @@ export const refuseNestedSave = Effect.fn("Records.refuseNestedSave")(
     return yield* refusal;
   }
 );
+
+/**
+ * Poisons the running transaction when a nested save fails, whatever the
+ * failure and whether or not the save wrote anything, including failures
+ * before it joins the transaction (an undecodable body). A save is
+ * nested when it runs inside another save's hooks or an after-commit
+ * effect (`depth > 0`). So hook code that catches a nested save's
+ * refusal (a guard, an invariant, validation, an access check) can never
+ * commit the saves around it. [judgment, review round 2: stricter than
+ * Contracts 4.1's "fails after its first write"] An outermost save, and
+ * plain reads, are left alone.
+ *
+ * @param effect - A record-service write: `createRecord`, `updateRecord`
+ *   or `deleteRecord`.
+ * @returns The same effect.
+ */
+export const poisonIfNested = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Effect.gen(function* nestedSave() {
+    const stack = yield* SaveStack;
+    const transaction = yield* Effect.serviceOption(CurrentTransaction);
+
+    if (stack.depth === 0 || Option.isNone(transaction)) {
+      return yield* effect;
+    }
+
+    return yield* effect.pipe(
+      Effect.onError(() =>
+        transaction.value.refuseCommit("a nested save failed")
+      )
+    );
+  });
 
 /**
  * Refuses a save nested deeper than {@link MAX_HOOK_DEPTH}, poisoning the

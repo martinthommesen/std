@@ -20,6 +20,7 @@
  * - Renaming the fields a rule reads and writes keeps it working.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { Condition } from "@std/definitions/condition";
 import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
@@ -841,6 +842,68 @@ describe("record-rules", () => {
 
           assert.strictEqual(refusalOf(caughtRightThere)?.reason, "poisoned");
           assert.deepStrictEqual(yield* committedCounts, before);
+        })
+    );
+
+    dbTest.effect(
+      "any failure of a nested save poisons the transaction, even one that wrote nothing",
+      () =>
+        Effect.gen(function* nestedFailures() {
+          // The `g-` guard and invariant of an earlier test, and a closed
+          // record the guard keeps closed.
+          const closed = yield* createParent({
+            name: "g-nested",
+            status: "closed",
+          });
+
+          const hooks = yield* SaveHooks;
+          const access = yield* WriteAccess;
+
+          const refusingAccess = WriteAccess.of({
+            ...access,
+            checkExisting: () => Effect.fail(new NotAllowed()),
+          });
+
+          const reopen = updateRecord({
+            body: { status: "open" },
+            endpointClassId: PARENT.id,
+            expectedVersion: closed.version,
+            id: closed.id,
+          });
+
+          const rejected = {
+            access: reopen.pipe(
+              Effect.provideService(WriteAccess, refusingAccess)
+            ),
+            guard: reopen,
+            invariant: createParent({ name: "g-nested-2", status: "resolved" }),
+            validation: createParent({ name: "v".repeat(200) }),
+          };
+
+          for (const [label, nested] of Object.entries(rejected)) {
+            const before = yield* committedCounts;
+
+            // Hook code catches the nested failure right around the save.
+            const catching = SaveHooks.of({
+              ...hooks,
+              afterWrite: (input) =>
+                input.after?.values.get(P.name.id) === "nest-outer"
+                  ? nested.pipe(
+                      Effect.ignore,
+                      Effect.andThen(hooks.afterWrite(input))
+                    )
+                  : hooks.afterWrite(input),
+            });
+
+            const outer = yield* Effect.exit(
+              createParent({ name: "nest-outer" }).pipe(
+                Effect.provideService(SaveHooks, catching)
+              )
+            );
+
+            assert.strictEqual(refusalOf(outer)?.reason, "poisoned", label);
+            assert.deepStrictEqual(yield* committedCounts, before, label);
+          }
         })
     );
 
