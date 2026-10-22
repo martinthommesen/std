@@ -87,7 +87,7 @@ Martin, 2026-10-22: "tmforum always takes priority over ITIL. We can always lock
 - **Known error and root cause** (14.3): form rules.
 - **Form rules are not API acceptance** (5.8, 5.10, 6.3, after review round 2): the form-state verdict binds the browser form; the record service never refuses a write because a form rule would prevent it.
 - **Rule kinds** (14.4 table): the incident and problem `invariant` rows become `derive` rows for the hold-reason defaults; the requirements they held are form rules (5.8, 3C).
-- **Tests and gate**: `itil-incident`, `itil-problem` and the plan's Step 3 ITIL gate bullet follow; `STD-ITIL@14.yaml` is regenerated to match (49 rows).
+- **Tests and gate**: `itil-incident`, `itil-problem` and the plan's Step 3 ITIL gate bullet follow; `STD-ITIL@14.yaml` is regenerated to match (50 rows).
 - **TMF621 attributes** (11.2): `severity`, `priority`, `ticketType` (within its class), `statusChangeHistory` and `resolutionDate` are writable (M5, M6, M19).
 
 Candidates in Step 4's sections, for 4O and 4C to settle against their pinned specifications before they ship the rules (not changed here, because the specifications' writable attributes and life cycles need their matrix rows first): 14.4's `change_type` read-only after `new` (now an STD extension attribute, so probably no conflict); "items added or removed only while the request is a draft" (TMF622 lists `productOrderItem` as patchable); the request's user transitions (`draft` → `submitted` or `canceled` only) against TMF622's `state` writes; "a non-draft request has at least one item"; "`closed` needs `close_code`" and "`standard` needs `standard_change_template`" against TMF641; 14.5's refused `contains` cycle against TMF638's and TMF639's relationships. Approval guards are not TMF-facing (approvals are not in TMF641 or TMF622) and access rules are not ITIL behaviors, so both stay.
@@ -114,6 +114,21 @@ What stays as it is in Step 3: `std upgrade` stays offline (8.5), and the server
 ## Review round 1 (GPT-6.1-Sol)
 
 No licence problem was found. Fixed: titles count only for tests that run and are vitest's (P1, FMX-07); every JSON pointer in a row's source must resolve, and four TMF621 pointers now go through `#/components/requestBodies` (P2, FMX-15); Delete event payloads carry `id`, `href` and `@type` (P1); hub registration requires `@type` as TMF621's `Hub_FVO` does, and a returned hub's `id` and `href` are STD's own requirement in the matrix (P2); every page citation of the TMF632, TMF669, TMF638, TMF639, TMF622 and TMF672 documents now uses the printed page (they used PDF page markers; corrected by 3 or 4 pages, each checked against the printed label), and TMF621's notification list is UG pp.38-39 (P2); the 206 wording in 0021 (P3); the cancellation outcome is Martin's decision 54 (P2).
+
+## Step 3 obligations from 8.8
+
+What Step 3 must already deliver so that Step 5's rolling upgrades need no retrofit (review round 3); the fence mechanics, the phase execution and RU11's refusal stay in Step 5:
+
+- phase-tagged, additive (`expand`) platform migrations (RU1, RU2, RU5; 3A, 3B, 3P, checked by 3R's `migration-phases`);
+- tolerance of unknown kinds in the catalog loader, the change-set validator, the dependency index and `doctor` (RU12; 3A, 3B), shipped in `v0.0.3`;
+- set versions whose additive and behavior changes are separable (RU7; 3A, 3I);
+- 3P's resumable, repeatable backfill and its handling of users the backfill has not reached (RU6);
+- 3B's delivery-version compatibility: `min_worker_version` on every delivery, and workers that never claim above their version (RU9);
+- versioned application names, `std-server@<version>`, `std-worker@<version>`, `std-cli@<version>` (RU10).
+
+## Review round 3 (GPT-6.1-Sol)
+
+Fixed: control commands pass `core.admit` with the version floor only, so N+1's expand and `wait-upgraded` can run before N+1's expand exists (8.8); an interrupted finalize resumes in the same attempt or is taken over by a newer attempt for the same version from its recorded steps, and abort is refused after the fence (8.8; `upgrade-fence`); only JSON Patch operations that write `/priority` supply it (14.2); form-state returns the proposed record after `derive` rules, so the form's major-incident correction, the form-state verdict and the save agree (6.3, 14.2; `itil-incident`); row counts (TMF621 88, ITIL 50).
 
 ## Review round 2 (GPT-6.1-Sol)
 
@@ -232,8 +247,8 @@ The eight kit zips hold only `README.md`, `run.sh`, `run.bat`, `config.json`, `.
 - **Test titles** (FMX-07): only `describe`, `it` and `it.effect` calls whose first argument is a string literal or a template without expressions count, and only for tests that run: `describe` and `it` must be imported from `vitest` or `@effect/vitest`; the call needs a test callback; it must be a statement of the file's top level or of a counted `describe`'s callback; and neither it nor an enclosing call may be modified by `skip`, `todo`, `skipIf`, `runIf`, `fails`, `each` or `for` (also as a string-literal computed member). A file that binds an imported test name anywhere else (variable, destructuring, parameter, function or class name, catch binding, other import) or uses another computed member on one is refused; `test` does not count [judgment: conservative reading of 15.4; review rounds 1 and 2].
 - **JSON pointers** (FMX-15): every `#/...` pointer in a row's `source` must resolve in the pinned OpenAPI document that the same `;`-separated part names (`TMF621 OAS`), or in the row's own specification's document; a specification without a pinned document cannot cite one (review round 1).
 - **Levels** (FMX-08): rows use the three levels of 15.1. A profile's conditional item (mandatory when its parent is present) is `mandatory`, with the condition in the requirement.
-- **Rows** (FMX-09): `TMF621@5.0.1.yaml` 87 rows (CP 29, OAS 53, UG 4, KIT 1), `TMF688@4.0.0.yaml` 49 (CP 22, OAS 26, SPEC 1), `STD-ITIL@14.yaml` 49 (Step 3: 14.1, 14.2, 14.3 and the Step 3 rule kinds of 14.4). All are `pending` except 6 excluded by accepted decisions (E14 1, E15 1, E16 2, E22 1, E24 1); after Martin's decisions, E20 and E26 exclude no Step 3 row. The TMF rows cover the profiles' mandatory and optional items and the OpenAPI documents' operations, status codes, media types, required properties and enumerations; the ITIL rows cite the ITIL 4 practice concept each implements, in STD's words.
-- **`--gate step3` fails today** only because 179 rows are `pending` and `TMF630@5.0.0.yaml` is not written yet (3G). It passes when 3G's file lands and every Step 3 row names a passing test or an accepted exclusion.
+- **Rows** (FMX-09): `TMF621@5.0.1.yaml` 88 rows (CP 29, OAS 54, UG 4, KIT 1), `TMF688@4.0.0.yaml` 49 (CP 22, OAS 26, SPEC 1), `STD-ITIL@14.yaml` 50 (Step 3: 14.1, 14.2, 14.3 and the Step 3 rule kinds of 14.4). All are `pending` except 6 excluded by accepted decisions (E14 1, E15 1, E16 2, E22 1, E24 1); after Martin's decisions, E20 and E26 exclude no Step 3 row. The TMF rows cover the profiles' mandatory and optional items and the OpenAPI documents' operations, status codes, media types, required properties and enumerations; the ITIL rows cite the ITIL 4 practice concept each implements, in STD's words.
+- **`--gate step3` fails today** only because 181 rows are `pending` and `TMF630@5.0.0.yaml` is not written yet (3G). It passes when 3G's file lands and every Step 3 row names a passing test or an accepted exclusion.
 - FMX-10: the matrix treats TMF621's listener paths as what STD delivers to callbacks (an event body valid against the event schema), not as endpoints STD serves (12.2: STD subscribes to nothing).
 - FMX-11: TMF688's profile requires `id` and `href` on events, which its swagger's Event lacks; the matrix follows the profile for responses (F688-03).
 - FMX-12: E14 and E15 are TMF630 decisions that also cover TMF621's `filter` parameter and its `json-patch-query` media type; their `rows` now hold those TMF621 rows. 3G adds its TMF630 rows to the same lists, so the two branches touch the same `rows` lines of `decisions.yaml`; the merge keeps both lists.
