@@ -59,6 +59,7 @@ import type { NameProblem } from "./names.ts";
 import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
+import { USER_FIELD_IDS } from "./well-known.ts";
 
 /** Field kinds that can be created in Step 1 (Contracts plan, Step 1). */
 export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
@@ -851,12 +852,45 @@ const checkOverrideChoices = (
   }
 };
 
+/**
+ * Fields whose value the record service assigns (Contracts 11.3, decision
+ * 0024): a user's individual. They are read-only for every caller, so an
+ * override may change their label and help text only; a `required`
+ * override would refuse every create before the service assigns the value.
+ */
+const SERVICE_ASSIGNED_FIELDS: ReadonlySet<DefinitionId> = new Set([
+  USER_FIELD_IDS.individual,
+]);
+
+const checkServiceAssigned = (
+  problems: Problems,
+  override: OverrideDefinition,
+  field: FieldDefinition
+): void => {
+  const changes =
+    override.required !== null ||
+    override.readOnly !== null ||
+    override.default !== null;
+
+  if (SERVICE_ASSIGNED_FIELDS.has(field.id) && changes) {
+    problems.push(
+      problem(
+        "overrideInvalid",
+        override.id,
+        `The record service assigns ${field.name}; an override may change only its label and help text.`
+      )
+    );
+  }
+};
+
 const checkOverrideTightening = (
   problems: Problems,
   snapshot: ConfigSnapshot,
   override: OverrideDefinition,
   field: FieldDefinition
 ): void => {
+  checkServiceAssigned(problems, override, field);
+
   const inherited = effectiveField(snapshot, override.classId, field, {
     exclusive: true,
   });

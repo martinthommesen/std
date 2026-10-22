@@ -45,9 +45,20 @@ describe("catalog release shape", () => {
           const after = yield* loadSnapshot(KEY);
 
           assert.isAbove(after.all("field").length, 100);
+          // Choices and an override's choices arrived with migration
+          // 0008, so they read as absent and null (the core set's party
+          // statuses, decision 0024).
           assert.deepStrictEqual(
             after.definitions().map(effectiveText),
-            before.definitions().map(effectiveText)
+            before
+              .definitions()
+              .filter((definition) => definition.kind !== "choice")
+              .map((definition) =>
+                definition.kind === "override"
+                  ? { ...definition, choices: null }
+                  : definition
+              )
+              .map(effectiveText)
           );
           assert.isTrue(
             after.all("field").every((field) => field.numberPrefix === null)

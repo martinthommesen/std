@@ -23,8 +23,10 @@ import { SqlClient } from "effect/sql";
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import type { TestDatabaseOptions } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { CORE_SET_DIRECTORY } from "../src/config/set-files.ts";
+import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import type { ChangeSetOptions } from "../src/schema/change-set.ts";
 import { decodeRows } from "../src/sql/rows.ts";
@@ -65,10 +67,18 @@ export const FAST_RETRIES: ChangeSetOptions = {
  * @returns The layer.
  */
 export const schemaTestLayer = (options: TestDatabaseOptions = {}) =>
-  Catalog.layer.pipe(Layer.provideMerge(testDatabaseLayer(options)));
+  Layer.merge(Catalog.layer, InstanceSettings.layer).pipe(
+    Layer.provideMerge(testDatabaseLayer(options))
+  );
 
-/** Loads the core set. */
-export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY);
+/**
+ * Loads the core set, then runs the `data` migrations that need it, as
+ * `std upgrade` does (so every user has its individual and `doctor`
+ * finds no pending migration).
+ */
+export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY).pipe(
+  Effect.tap(() => runDataMigrations())
+);
 
 /** Loads the acme example set. */
 export const loadAcme = loadSetDirectory(ACME_SET_DIRECTORY);

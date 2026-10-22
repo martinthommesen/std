@@ -2,7 +2,8 @@
  * `std serve`: the HTTP server process (Contracts 6.1).
  *
  * At startup it refuses to run with pending, unknown or changed platform
- * migrations (`checkPlatformMigrations`, Contracts 1.9), starts the schema
+ * migrations, or a `data` migration left `running`
+ * (`checkPlatformMigrations`, Contracts 1.9), starts the schema
  * resumer (`STD_SCHEMA_RESUME_INTERVAL`, Contracts 1.5), then serves the
  * STD API on Node's HTTP server. The catalog listens on `std_config`, so a
  * config commit by any process reloads the snapshot early; correctness

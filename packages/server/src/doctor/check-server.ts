@@ -6,31 +6,31 @@ import { FOLD_TABLE_UNICODE_VERSION } from "@std/values/fold-table";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { compareLedger } from "../platform/ledger.ts";
+import {
+  compareLedger,
+  decodeLedgerRows,
+  decodeLedgerColumns,
+  LEDGER_COLUMNS,
+  ledgerRows,
+} from "../platform/ledger.ts";
 import type { PlatformMigration } from "../platform/migration.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
 
-const decodeLedger = decodeRows(
-  Schema.Struct({ checksum: Schema.String, id: Schema.Int })
-);
-
-const decodePresent = decodeRows(Schema.Struct({ present: Schema.Boolean }));
-
-/** The ledger, read with statements marked read-only. */
+/** The ledger, in the columns the database has, read with statements marked read-only. */
 const diagnosticLedger = Effect.gen(function* diagnosticLedger() {
   const sql = yield* SqlClient.SqlClient;
 
-  const [presence] = yield* readOnly(
-    sql`SELECT to_regclass('core.platform_migration') IS NOT NULL AS present`
-  ).pipe(Effect.flatMap(decodePresent));
+  const [columns] = yield* readOnly(sql.unsafe(LEDGER_COLUMNS)).pipe(
+    Effect.flatMap(decodeLedgerColumns)
+  );
 
-  return presence?.present === true
-    ? yield* readOnly(
-        sql`SELECT id, checksum FROM core.platform_migration ORDER BY id`
-      ).pipe(Effect.flatMap(decodeLedger))
+  return columns?.present === true
+    ? yield* readOnly(sql.unsafe(ledgerRows(columns.stateful))).pipe(
+        Effect.flatMap(decodeLedgerRows)
+      )
     : [];
 });
 
@@ -70,6 +70,15 @@ export const checkLedger = Effect.fn("Doctor.checkLedger")(
           "migrationChanged",
           `The checksum of applied platform migration ${id} differs from the code's.`,
           String(id)
+        )
+      ),
+      ...comparison.incomplete.map(({ migration, progress }) =>
+        finding(
+          1,
+          "error",
+          "dataMigrationIncomplete",
+          `Data migration ${migration.id} (${migration.name}) is still running: std upgrade stopped before its last batch (progress ${progress ?? "none: no batch committed"}). Rerun std upgrade to complete it; servers refuse to start until then.`,
+          String(migration.id)
         )
       ),
     ];
