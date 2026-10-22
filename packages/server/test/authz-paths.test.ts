@@ -233,6 +233,38 @@ const historyOf =
       })
     );
 
+// Metadata of a table: its field names, sorted, and its read states.
+const metadataOf = (table: string) => (callers: Callers, who: Who) =>
+  send(callers, who, "GET", `/api/v1/meta/tables/${table}`).pipe(
+    Effect.map((response) =>
+      observe(response, {
+        detail: arrayOf(objectOf(objectOf(response.json).table).fields)
+          .map((field) => {
+            const { name, read } = objectOf(field);
+
+            return `${textOf(name)}:${textOf(read)}`;
+          })
+          .toSorted(),
+      })
+    )
+  );
+
+// The per-table OpenAPI document: the record value names it describes.
+const tableOpenApiOf = (table: string) => (callers: Callers, who: Who) =>
+  send(callers, who, "GET", `/api/v1/meta/tables/${table}/openapi.json`).pipe(
+    Effect.map((response) => {
+      const schemas = objectOf(
+        objectOf(objectOf(response.json).components).schemas
+      );
+
+      return observe(response, {
+        detail: Object.keys(
+          objectOf(objectOf(schemas.Values).properties)
+        ).toSorted(),
+      });
+    })
+  );
+
 const me = (callers: Callers, who: Who) =>
   send(callers, who, "GET", "/api/v1/auth/me").pipe(
     Effect.map((response) =>
@@ -596,6 +628,72 @@ const READ_ROWS: readonly PathRow[] = [
     bob: okDetail(["authenticated", "employee"]),
     path: "GET /auth/me",
     run: me,
+  },
+  {
+    alice: okDetail([
+      "cost:yes",
+      "docked_to:yes",
+      "name:yes",
+      "owner:yes",
+      "purchased_on:yes",
+      "status:yes",
+    ]),
+    bob: okDetail([
+      "docked_to:perRecord",
+      "name:yes",
+      "owner:yes",
+      "purchased_on:perRecord",
+      "status:yes",
+    ]),
+    path: "GET /meta/tables/acme.asset",
+    run: metadataOf(ASSET),
+  },
+  {
+    alice: okDetail([
+      "cost:yes",
+      "disk_key:yes",
+      "docked_to:yes",
+      "name:yes",
+      "owner:yes",
+      "purchased_on:yes",
+      "serial:yes",
+      "status:yes",
+    ]),
+    bob: okDetail([
+      "docked_to:perRecord",
+      "name:yes",
+      "owner:yes",
+      "purchased_on:perRecord",
+      "serial:yes",
+      "status:yes",
+    ]),
+    path: "GET /meta/tables/acme.laptop",
+    run: metadataOf(LAPTOP),
+  },
+  {
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "GET /meta/tables/core.change (platform table)",
+    run: metadataOf("core.change"),
+  },
+  {
+    alice: okDetail([
+      "cost",
+      "docked_to",
+      "name",
+      "owner",
+      "purchased_on",
+      "status",
+    ]),
+    bob: okDetail(["docked_to", "name", "owner", "purchased_on", "status"]),
+    path: "GET /meta/tables/acme.asset/openapi.json",
+    run: tableOpenApiOf(ASSET),
+  },
+  {
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "GET /meta/tables/core.access_rule/openapi.json (platform table)",
+    run: tableOpenApiOf("core.access_rule"),
   },
   {
     alice: okDetail([200, 204, 401, 401]),
@@ -1065,6 +1163,36 @@ describe("authz-paths", () => {
           }
         }
       })
+    );
+
+    dbTest.effect(
+      "metadata paths, for Alice, Bob, the admin and no session, commit nothing",
+      () =>
+        Effect.gen(function* metadataPaths() {
+          const callers = yield* signInAll;
+          const http = yield* TestHttpClient;
+          const before = yield* committedState;
+
+          const admin = yield* metadataOf("core.access_rule")(callers, "admin");
+
+          assert.strictEqual(admin.status, 200);
+          assert.include(textOf(admin.detail), "condition:yes");
+
+          for (const path of [
+            "/api/v1/meta/tables/acme.asset",
+            "/api/v1/meta/tables/acme.asset/openapi.json",
+          ]) {
+            assert.strictEqual((yield* http.get(path)).status, 401);
+          }
+
+          for (const who of ["alice", "bob", "admin"] as const) {
+            const missing = yield* metadataOf("acme.nosuch")(callers, who);
+
+            assert.deepStrictEqual(missing, refused(404, "UnknownTable"));
+          }
+
+          assert.deepStrictEqual(yield* committedState, before);
+        })
     );
 
     dbTest.effect("every write path, for Alice and Bob", () =>
