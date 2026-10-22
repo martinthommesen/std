@@ -104,6 +104,7 @@ export const field = (
   kind: "field",
   label: name,
   name,
+  numberPrefix: null,
   owner: { layer: "local" },
   protected: false,
   readOnly: false,
@@ -125,6 +126,7 @@ export const override = (
   target: FieldDefinition,
   extra: Partial<OverrideDefinition>
 ): OverrideDefinition => ({
+  choices: null,
   classId: owner.id,
   default: null,
   enforcement: "enforced",
@@ -137,6 +139,7 @@ export const override = (
   max: null,
   maxLength: null,
   min: null,
+  numberPrefix: null,
   owner: { layer: "local" },
   protected: false,
   readOnly: null,

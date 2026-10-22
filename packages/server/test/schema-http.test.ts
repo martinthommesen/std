@@ -452,6 +452,25 @@ const REFERENCE_CASES: Readonly<
       addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], { fields: [id] }).op,
     ],
   ],
+  choice_of: [
+    "field",
+    (id) => [
+      {
+        definition: {
+          fieldId: id,
+          hidden: false,
+          id: freshId(),
+          key: "k_choice",
+          kind: "choice",
+          label: "K",
+          order: 1,
+          owner: { layer: "local" },
+          protected: false,
+        },
+        op: "createChoice",
+      },
+    ],
+  ],
   condition_on: [
     "class",
     (id) => [
@@ -504,6 +523,23 @@ const REFERENCE_CASES: Readonly<
     ],
   ],
   index_on: ["field", (id) => [addIndex(ACME.asset, [id], false).op]],
+  layout_uses: [
+    "field",
+    (id) => [
+      {
+        definition: {
+          classId: ACME.asset,
+          elements: [{ fieldId: id, kind: "field" }],
+          id: freshId(),
+          kind: "layout",
+          owner: { layer: "local" },
+          protected: false,
+          type: "list",
+        },
+        op: "createLayout",
+      },
+    ],
+  ],
   overrides: [
     "field",
     (id) => [addOverride(ACME.laptop, id, { required: true }).op],
@@ -558,6 +594,8 @@ const changesOf = (response: TestResponse): readonly string[] => {
 
 /** Visible local definitions the generic walk patches, by role. */
 interface WalkRecords {
+  readonly choice: string;
+  readonly layout: string;
   readonly class: string;
   readonly field: string;
   readonly refField: string;
@@ -591,6 +629,9 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
   const permission = freshId();
   const grant = freshId();
   const subscription = freshId();
+  const choiceField = addField(walkClass.id, "walk_choice", { kind: "choice" });
+  const choice = freshId();
+  const layout = freshId();
   const local = { owner: { layer: "local" }, protected: false } as const;
 
   yield* change([
@@ -602,6 +643,31 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     rule.op,
     override.op,
     role.op,
+    choiceField.op,
+    {
+      definition: {
+        ...local,
+        fieldId: choiceField.id,
+        hidden: false,
+        id: choice,
+        key: "walk",
+        kind: "choice",
+        label: "Walk",
+        order: 1,
+      },
+      op: "createChoice",
+    },
+    {
+      definition: {
+        ...local,
+        classId: walkClass.id,
+        elements: [{ fieldId: field.id, kind: "field" }],
+        id: layout,
+        kind: "layout",
+        type: "list",
+      },
+      op: "createLayout",
+    },
     {
       definition: {
         ...local,
@@ -642,10 +708,12 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
   ]);
 
   return {
+    choice,
     class: walkClass.id,
     field: field.id,
     grant,
     index: index.id,
+    layout,
     override: override.id,
     refField: refField.id,
     rule: rule.id,
@@ -672,6 +740,7 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     "rule",
     (id) => ({ fields: [id], target: "fields" }),
   ],
+  choice_of: ["field", "core.choice", "choice", (id) => ({ field_id: id })],
   condition_on: [
     "class",
     "core.field",
@@ -699,6 +768,12 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     (id) => ({ role_id: id }),
   ],
   index_on: ["field", "core.index", "index", (id) => ({ field_ids: [id] })],
+  layout_uses: [
+    "field",
+    "core.layout",
+    "layout",
+    (id) => ({ elements: [{ fieldId: id, kind: "field" }] }),
+  ],
   overrides: [
     "field",
     "core.field_override",
@@ -793,6 +868,7 @@ const HIDDEN_OVERRIDE_LABEL = "Matrix hidden override";
  */
 const matrixOverride = (id: string): OverrideDraft => ({
   ...LOCAL,
+  choices: null,
   classId: ACME.laptop,
   default: null,
   fieldId: ACME.cost,
@@ -803,6 +879,7 @@ const matrixOverride = (id: string): OverrideDraft => ({
   max: null,
   maxLength: null,
   min: null,
+  numberPrefix: null,
   readOnly: null,
   required: null,
 });
@@ -878,6 +955,25 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
     },
     target: "none",
   },
+  createChoice: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          fieldId: refs.field,
+          hidden: false,
+          id,
+          key: "m_choice",
+          kind: "choice",
+          label: "Matrix",
+          order: 1,
+        },
+        op: "createChoice",
+      }),
+      references: true,
+    },
+    target: "none",
+  },
   createClass: {
     create: {
       build: (id, refs) => {
@@ -905,6 +1001,23 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
           roleId: refs.role,
         },
         op: "createGrant",
+      }),
+      references: true,
+    },
+    target: "none",
+  },
+  createLayout: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          classId: refs.class,
+          elements: [{ fieldId: refs.field, kind: "field" }],
+          id,
+          kind: "layout",
+          type: "list",
+        },
+        op: "createLayout",
       }),
       references: true,
     },
@@ -3149,10 +3262,39 @@ describe("schema-http", () => {
             const past = (yield* catalog.refresh).key;
             const rule = addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin]);
 
-            // A stored subscription, so the generic routes are probed on
-            // every definition kind.
+            const choiceField = addField(ACME.asset, "m_status", {
+              kind: "choice",
+            });
+
+            // A stored subscription, choice and layout, so the generic
+            // routes are probed on every definition kind.
             yield* change([
               rule.op,
+              choiceField.op,
+              {
+                definition: {
+                  ...LOCAL,
+                  fieldId: choiceField.id,
+                  hidden: false,
+                  id: freshId(),
+                  key: "stored",
+                  kind: "choice",
+                  label: "Stored",
+                  order: 1,
+                },
+                op: "createChoice",
+              },
+              {
+                definition: {
+                  ...LOCAL,
+                  classId: ACME.laptop,
+                  elements: [{ fieldId: ACME.cost, kind: "field" }],
+                  id: freshId(),
+                  kind: "layout",
+                  type: "form",
+                },
+                op: "createLayout",
+              },
               ...(OPERATION_CASES.createSubscription.create === "none"
                 ? []
                 : [

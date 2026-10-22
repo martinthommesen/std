@@ -62,7 +62,7 @@ import { checkRequestRevision } from "./stale-request.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
 
 /** Columns no write may set: system, owner, protection and enforcement. */
-const READ_ONLY_COLUMNS: ReadonlySet<string> = new Set([
+export const READ_ONLY_COLUMNS: ReadonlySet<string> = new Set([
   "id",
   "class",
   "class_id",
@@ -88,10 +88,12 @@ const STORED_ONLY: ReadonlySet<string> = new Set([
 
 const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
   accessRule: "createAccessRule",
+  choice: "createChoice",
   class: "createClass",
   field: "addField",
   grant: "createGrant",
   index: "addIndex",
+  layout: "createLayout",
   namespace: "createNamespace",
   override: "setOverride",
   permission: "createPermission",
@@ -108,9 +110,11 @@ const DEFAULTS = {
   displayFieldId: null,
   extensible: false,
   helpText: null,
+  hidden: false,
   max: null,
   maxLength: null,
   min: null,
+  numberPrefix: null,
   parentId: null,
   readOnly: false,
   required: false,
@@ -119,6 +123,7 @@ const DEFAULTS = {
 } satisfies Readonly<Record<string, JsonValue>>;
 
 const OVERRIDE_DEFAULTS = {
+  choices: null,
   label: null,
   readOnly: null,
   required: null,

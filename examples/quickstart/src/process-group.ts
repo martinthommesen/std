@@ -84,6 +84,8 @@ export class GroupNotEnded extends Schema.TaggedError<
 export interface GroupOptions {
   readonly env: NodeJS.ProcessEnv;
   readonly stdio: StdioOptions;
+  /** The working directory (default: this process's). */
+  readonly cwd?: string;
 }
 
 /**
@@ -233,6 +235,7 @@ export const spawnGroup = (
   Effect.acquireRelease(
     Effect.sync(() =>
       spawn(command, args, {
+        cwd: options.cwd ?? process.cwd(),
         detached: true,
         env: options.env,
         stdio: options.stdio,

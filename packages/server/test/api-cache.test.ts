@@ -370,6 +370,10 @@ describe("api-cache", () => {
               token,
             }),
             "bearer auth/me": yield* http.get("/api/v1/auth/me", { token }),
+            "bearer metadata": yield* http.get(
+              "/api/v1/meta/tables/acme.asset",
+              { token }
+            ),
             "bearer sign-out": yield* http.request(
               "POST",
               "/api/v1/auth/sign-out",
@@ -379,6 +383,14 @@ describe("api-cache", () => {
               cookie,
             }),
             "cookie auth/me": yield* http.get("/api/v1/auth/me", { cookie }),
+            "cookie metadata": yield* http.get(
+              "/api/v1/meta/tables/acme.asset",
+              { cookie }
+            ),
+            "cookie metadata openapi": yield* http.get(
+              "/api/v1/meta/tables/acme.asset/openapi.json",
+              { cookie }
+            ),
             "cookie sign-in": yield* http.request(
               "POST",
               "/api/v1/auth/cookie-sign-in",
@@ -390,6 +402,10 @@ describe("api-cache", () => {
               { cookie }
             ),
             "error: no session": yield* http.get("/api/v1/auth/me"),
+            "error: unknown metadata table": yield* http.get(
+              "/api/v1/meta/tables/acme.nothing",
+              { cookie: yield* http.cookieSignIn("bob", "bob-password") }
+            ),
             "error: unknown route": yield* http.get("/api/v1/nothing-here"),
             "error: unknown table": yield* http.get(listPath("acme.nothing"), {
               token: yield* http.signIn("bob", "bob-password"),
@@ -415,12 +431,22 @@ describe("api-cache", () => {
           assert.deepStrictEqual(seen, {
             "bearer GET records": { cacheControl: "no-store", status: 200 },
             "bearer auth/me": { cacheControl: "no-store", status: 200 },
+            "bearer metadata": { cacheControl: "no-store", status: 200 },
             "bearer sign-out": { cacheControl: "no-store", status: 204 },
             "cookie GET records": { cacheControl: "no-store", status: 200 },
             "cookie auth/me": { cacheControl: "no-store", status: 200 },
+            "cookie metadata": { cacheControl: "no-store", status: 200 },
+            "cookie metadata openapi": {
+              cacheControl: "no-store",
+              status: 200,
+            },
             "cookie sign-in": { cacheControl: "no-store", status: 200 },
             "cookie sign-out": { cacheControl: "no-store", status: 204 },
             "error: no session": { cacheControl: "no-store", status: 401 },
+            "error: unknown metadata table": {
+              cacheControl: "no-store",
+              status: 404,
+            },
             "error: unknown route": { cacheControl: "no-store", status: 404 },
             "error: unknown table": { cacheControl: "no-store", status: 404 },
             "error: wrong password": { cacheControl: "no-store", status: 401 },

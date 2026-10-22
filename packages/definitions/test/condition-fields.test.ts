@@ -175,6 +175,7 @@ const conditionDraft = (
   kind: "field",
   label: "Rule",
   name: "rule",
+  numberPrefix: null,
   readOnly: false,
   required: false,
   type: { classId: conditionClassId, kind: "condition", profile },

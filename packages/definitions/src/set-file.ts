@@ -58,6 +58,7 @@ import {
 import { ConditionSchema } from "./condition.ts";
 import {
   AccessActionSchema,
+  LayoutTypeSchema,
   StorageSchema,
   SubscriptionOperationSchema,
 } from "./definition.ts";
@@ -105,6 +106,7 @@ export const SimpleKindSchema = Literals([
   "uuid",
   "password",
   "json",
+  "choice",
 ]);
 
 /** A reference type in a file names its target table. */
@@ -138,11 +140,29 @@ export const TypeEntrySchema = Union([
 /** A field type entry. */
 export type TypeEntry = typeof TypeEntrySchema.Type;
 
+/**
+ * A choice of a choice field; `order` defaults to its 1-based position in
+ * the field's list.
+ */
+export const ChoiceEntrySchema = Struct({
+  hidden: optionalKey(SchemaBoolean),
+  id: DefinitionIdSchema,
+  key: SchemaString,
+  label: SchemaString,
+  order: optionalKey(Int),
+  protected: optionalKey(SchemaBoolean),
+});
+
+/** One choice entry. */
+export type ChoiceEntry = typeof ChoiceEntrySchema.Type;
+
 /** A field entry. */
 export const FieldEntrySchema = Struct({
   ...flags,
+  choices: optionalKey(SchemaArray(ChoiceEntrySchema)),
   default: optionalKey(Json),
   name: SchemaString,
+  numberPrefix: optionalKey(SchemaString),
   readOnly: optionalKey(SchemaBoolean),
   required: optionalKey(SchemaBoolean),
   type: TypeEntrySchema,
@@ -155,6 +175,7 @@ const BoundEntry = Union([Finite, SchemaString]);
 
 /** An override entry: tightens an inherited field, named by field name. */
 export const OverrideEntrySchema = Struct({
+  choices: optionalKey(SchemaArray(SchemaString)),
   default: optionalKey(Json),
   field: SchemaString,
   helpText: optionalKey(SchemaString),
@@ -163,6 +184,7 @@ export const OverrideEntrySchema = Struct({
   max: optionalKey(BoundEntry),
   maxLength: optionalKey(Int),
   min: optionalKey(BoundEntry),
+  numberPrefix: optionalKey(SchemaString),
   protected: optionalKey(SchemaBoolean),
   readOnly: optionalKey(SchemaBoolean),
   required: optionalKey(SchemaBoolean),
@@ -184,7 +206,24 @@ export const IndexEntrySchema = Struct({
 /** An index entry. */
 export type IndexEntry = typeof IndexEntrySchema.Type;
 
-/** A table entry with its fields, overrides and indexes. */
+/** A layout element: a field of the table's lineage by name, or a section. */
+export const LayoutElementEntrySchema = Union([
+  Struct({ field: SchemaString }),
+  Struct({ section: SchemaString }),
+]);
+
+/** A form or list layout of a table. */
+export const LayoutEntrySchema = Struct({
+  elements: SchemaArray(LayoutElementEntrySchema),
+  id: DefinitionIdSchema,
+  protected: optionalKey(SchemaBoolean),
+  type: LayoutTypeSchema,
+});
+
+/** One layout entry. */
+export type LayoutEntry = typeof LayoutEntrySchema.Type;
+
+/** A table entry with its fields, overrides, indexes and layouts. */
 export const TableEntrySchema = Struct({
   ...flags,
   displayField: optionalKey(SchemaString),
@@ -192,6 +231,7 @@ export const TableEntrySchema = Struct({
   extensible: optionalKey(SchemaBoolean),
   fields: optionalKey(SchemaArray(FieldEntrySchema)),
   indexes: optionalKey(SchemaArray(IndexEntrySchema)),
+  layouts: optionalKey(SchemaArray(LayoutEntrySchema)),
   /** The qualified name, `namespace.table`. */
   name: SchemaString,
   overrides: optionalKey(SchemaArray(OverrideEntrySchema)),

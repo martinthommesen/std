@@ -182,6 +182,9 @@ catalogs:
     '@types/node':
       specifier: 26.6.5
       version: 26.6.5
+    ajv:
+      specifier: 8.18.0
+      version: 8.18.0
     effect:
       specifier: 4.0.5
       version: 4.0.5
@@ -591,6 +594,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
+      ajv:
+        specifier: 'catalog:'
+        version: 8.18.0
       fast-check:
         specifier: 'catalog:'
         version: 4.10.2

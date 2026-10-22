@@ -16,6 +16,7 @@ import { resolveCondition, timeZoneFor } from "@std/conditions/resolve";
 import { compileCondition } from "@std/conditions/sql";
 import type { CompiledCondition } from "@std/conditions/sql";
 import { locateIssues, parseCondition } from "@std/conditions/syntax-parse";
+import { withChoices } from "@std/definitions/condition-view";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { FieldKind } from "@std/values/field-type";
 import { Effect, Option } from "effect";
@@ -269,7 +270,9 @@ export const filterClassView = (scope: ReadScope): ClassView => {
   const fieldOf = (classId: DefinitionId, fieldId: DefinitionId) => {
     const field = scope.view(classId).byId(fieldId);
 
-    return field === undefined ? undefined : fieldInfoOf(field);
+    return field === undefined
+      ? undefined
+      : withChoices(scope.snapshot, fieldInfoOf(field));
   };
 
   return {
@@ -278,7 +281,9 @@ export const filterClassView = (scope: ReadScope): ClassView => {
     fieldByName: (classId, name) => {
       const field = scope.view(classId).byName(name);
 
-      return field === undefined ? undefined : fieldInfoOf(field);
+      return field === undefined
+        ? undefined
+        : withChoices(scope.snapshot, fieldInfoOf(field));
     },
   };
 };

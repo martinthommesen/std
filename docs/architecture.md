@@ -42,7 +42,7 @@ apps/
 examples/
   acme/          Stage 0 two-user example (definition set, demo script)
   quickstart.sh  Step 1 runnable result, against `std serve` (decision 0016)
-  quickstart/    `pnpm quickstart:ci`: runs quickstart.sh against a disposable database
+  quickstart/    `pnpm quickstart:ci`: runs quickstart.sh against a disposable database; `pnpm release-compat:ci`: the previous release upgraded to this branch
   helpdesk/      Step 2 and 3 example app definition set, import sample
 bench/           Stage 0 inheritance benchmark, Step 4 rerun
 docker/          the quickstart's development image (the release image is Step 4)
@@ -93,8 +93,11 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
 | `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
+| `pnpm release-compat:ci` | Release compatibility, below |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
+
+**Release compatibility** (CI step "Release compatibility", `examples/quickstart/src/release-compat.ts`). Step 4 upgrades installs from real releases, so every branch proves that the latest release's databases and clients keep working. The step extracts the tree of the previous release's tag with `git archive` (without `repos/`) into a temporary directory and installs it; on a disposable empty database it runs that release's own `std upgrade`, `std bootstrap-admin`, `std serve` and `examples/quickstart.sh`, then this branch's `std upgrade` on the same database, `std doctor` (must exit 0), this branch's `std serve`, the release's quickstart again, unchanged, and this branch's quickstart. On a second empty database it installs this branch and runs the release's quickstart first, so the release's change-set, user and record requests reach this branch's API in the release's wire format. It needs the tag in the clone (CI checks out with `fetch-depth: 0` and `fetch-tags: true`) and takes about 15 s. The previous release is one setting, `PREVIOUS_RELEASE` in `examples/quickstart/src/previous-release.ts`: each release moves it to the tag it publishes. What it implies for code (decision 0017): a property added to a definition or request schema decodes an absent key as its documented default (`nullWhenAbsent` in `@std/definitions/definition`); stored JSON from a release is compared after `withAddedDefaults`; the catalog load reads the definition tables in the shape the database has, so `std upgrade` and `--plan` can read a database before its pending migrations run.
 
 ### Vendored source (`repos/`)
 

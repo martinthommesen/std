@@ -4,9 +4,11 @@
  * `validateSnapshot` checks every live definition against the others: names
  * and their uniqueness scopes, references between definitions, the
  * `extends` graph, field types and constant defaults, tighten-only
- * overrides, indexes, grants, access rules and subscriptions. It returns
+ * overrides, indexes, grants, access rules, subscriptions, choices and
+ * layouts. It returns
  * every problem it finds; an empty list means the configuration is valid.
  */
+import { isChoiceKey } from "@std/values/choice";
 import { decodeIn } from "@std/values/codec";
 import { FieldTypeSchema, maxLengthOf } from "@std/values/field-type";
 import type {
@@ -14,6 +16,7 @@ import type {
   FieldKind,
   FieldType,
 } from "@std/values/field-type";
+import { isString } from "@std/values/field-value";
 import type { JsonValue } from "@std/values/json-value";
 import { isFailure } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
@@ -22,11 +25,13 @@ import { conditionProblems } from "./condition-view.ts";
 import type { ConditionPurpose } from "./condition-view.ts";
 import type {
   AccessRuleDefinition,
+  ChoiceDefinition,
   ClassDefinition,
   Definition,
   FieldDefinition,
   GrantDefinition,
   IndexDefinition,
+  LayoutDefinition,
   NamespaceDefinition,
   OverrideDefinition,
   PermissionDefinition,
@@ -39,6 +44,7 @@ import {
   effectiveField,
   tightenType,
 } from "./effective-schema.ts";
+import type { EffectiveField } from "./effective-schema.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
   fieldNameProblem,
@@ -68,6 +74,7 @@ export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
     "password",
     "json",
     "condition",
+    "choice",
   ]
 );
 
@@ -83,6 +90,7 @@ export const DEFAULTABLE_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>([
   "dateTime",
   "uuid",
   "json",
+  "choice",
 ]);
 
 /** Field kinds an index may cover. */
@@ -96,6 +104,7 @@ export const INDEXABLE_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>([
   "dateTime",
   "uuid",
   "reference",
+  "choice",
 ]);
 
 /**
@@ -428,6 +437,100 @@ export const defaultProblem = (
   return decoded.value === null ? "The default must not be empty." : undefined;
 };
 
+/** An auto-number prefix: a letter, then up to 15 letters, digits, `_`, `-`. */
+// It ends with a character that is not a digit, so a prefix and the digits
+// after it never read as another prefix's number: past seven digits, "A"
+// with 10000001 would equal "A1" with 0000001 (decision 0017).
+const NUMBER_PREFIX = /^[A-Za-z](?:[\w-]{0,14}[A-Z_a-z-])?$/u;
+
+/** Digits an auto-number may need after its prefix: a bigint's 19. */
+const NUMBER_DIGITS = 19;
+
+/**
+ * Why an auto-number prefix is invalid for a field type, if it is.
+ *
+ * @param type - The field's type.
+ * @param prefix - The prefix.
+ * @returns A message, or undefined.
+ */
+export const numberPrefixProblem = (
+  type: FieldType,
+  prefix: string
+): string | undefined => {
+  if (type.kind !== "text") {
+    return "Only text fields can be auto-numbered.";
+  }
+
+  if (!NUMBER_PREFIX.test(prefix)) {
+    return "An auto-number prefix is 1 to 16 characters: a letter, then letters, digits, _ or -, ending with a character that is not a digit.";
+  }
+
+  return maxLengthOf(type) < prefix.length + NUMBER_DIGITS
+    ? `The max length must leave ${NUMBER_DIGITS} characters for the number after the prefix.`
+    : undefined;
+};
+
+const checkNumberPrefix = (
+  problems: Problems,
+  field: FieldDefinition
+): void => {
+  if (field.numberPrefix === null) {
+    return;
+  }
+
+  const invalid = (message: string): void => {
+    problems.push(problem("invalidAutoNumber", field.id, message));
+  };
+
+  const found = numberPrefixProblem(field.type, field.numberPrefix);
+
+  if (found !== undefined) {
+    invalid(found);
+  }
+
+  if (field.default !== null) {
+    invalid(
+      "An auto-numbered field has no default: the record service assigns it."
+    );
+  }
+
+  if (field.required) {
+    invalid(
+      "An auto-numbered field is never required: the record service assigns it."
+    );
+  }
+};
+
+/**
+ * Why a choice field's default is not allowed for a class, if it is not:
+ * it must be a live, not hidden choice of the field inside the class's
+ * effective subset.
+ *
+ * @param snapshot - The configuration.
+ * @param effective - The field as it applies to the class.
+ * @returns A message, or undefined.
+ */
+const choiceDefaultProblem = (
+  snapshot: ConfigSnapshot,
+  effective: EffectiveField
+): string | undefined => {
+  const value = effective.default;
+
+  if (effective.type.kind !== "choice" || !isString(value)) {
+    return undefined;
+  }
+
+  const found = snapshot
+    .choicesOf(effective.field.id)
+    .find((choice) => choice.key === value && !choice.hidden);
+
+  const allowed =
+    found !== undefined &&
+    (effective.choices === null || effective.choices.includes(value));
+
+  return allowed ? undefined : "The default is not a choice this field offers.";
+};
+
 const checkField = (
   problems: Problems,
   snapshot: ConfigSnapshot,
@@ -485,8 +588,15 @@ const checkField = (
     }
   }
 
+  checkNumberPrefix(problems, field);
+
   if (field.default !== null) {
-    const found = defaultProblem(field.type, field.default);
+    const found =
+      defaultProblem(field.type, field.default) ??
+      choiceDefaultProblem(
+        snapshot,
+        effectiveField(snapshot, field.classId, field)
+      );
 
     if (found !== undefined) {
       problems.push(
@@ -631,6 +741,54 @@ const checkOverrideMaxLength = (
   }
 };
 
+const checkOverrideChoices = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  override: OverrideDefinition,
+  inherited: EffectiveField
+): void => {
+  if (override.choices === null) {
+    return;
+  }
+
+  const invalid = (message: string): void => {
+    problems.push(problem("overrideInvalid", override.id, message));
+  };
+
+  if (inherited.type.kind !== "choice") {
+    invalid(`Fields of type ${inherited.type.kind} have no choices.`);
+
+    return;
+  }
+
+  if (override.choices.length === 0) {
+    invalid("A choice subset keeps at least one choice.");
+  }
+
+  if (new Set(override.choices).size !== override.choices.length) {
+    invalid("A choice subset names each choice once.");
+  }
+
+  const keys = new Set(
+    snapshot.choicesOf(override.fieldId).map((choice) => choice.key)
+  );
+
+  if (override.choices.some((key) => !keys.has(key))) {
+    invalid("A choice subset names only choices of the field.");
+  }
+
+  const allowed =
+    inherited.choices === null ? null : new Set(inherited.choices);
+
+  if (allowed !== null && override.choices.some((key) => !allowed.has(key))) {
+    loosens(
+      problems,
+      override,
+      "A choice subset may only narrow the choices the parent allows."
+    );
+  }
+};
+
 const checkOverrideTightening = (
   problems: Problems,
   snapshot: ConfigSnapshot,
@@ -650,6 +808,18 @@ const checkOverrideTightening = (
   }
 
   checkOverrideMaxLength(problems, override, inherited.type);
+  checkOverrideChoices(problems, snapshot, override, inherited);
+
+  if (override.numberPrefix !== null) {
+    const found =
+      inherited.numberPrefix === null
+        ? "Only an auto-numbered field's prefix can be overridden."
+        : numberPrefixProblem(inherited.type, override.numberPrefix);
+
+    if (found !== undefined) {
+      problems.push(problem("invalidAutoNumber", override.id, found));
+    }
+  }
 
   const bounds = overrideBoundsProblem(inherited.type, override);
 
@@ -666,7 +836,9 @@ const checkOverrideTightening = (
   const effective = effectiveField(snapshot, override.classId, field);
 
   if (effective.default !== null && bounds === undefined) {
-    const found = defaultProblem(effective.type, effective.default);
+    const found =
+      defaultProblem(effective.type, effective.default) ??
+      choiceDefaultProblem(snapshot, effective);
 
     if (found !== undefined) {
       problems.push(
@@ -1021,6 +1193,110 @@ const checkUniqueness = (
     (subscription) => subscription.name,
     (subscription) => `The subscription name "${subscription.name}"`
   );
+  duplicates(
+    problems,
+    snapshot.all("choice").filter(isLive),
+    (choice) => `${choice.fieldId}/${choice.key}`,
+    (choice) => `The choice key "${choice.key}" of its field`
+  );
+  duplicates(
+    problems,
+    snapshot.all("layout").filter(isLive),
+    (layout) => `${layout.classId}/${layout.type}`,
+    (layout) => `A ${layout.type} layout of ${layout.classId}`
+  );
+};
+
+const checkChoice = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  choice: ChoiceDefinition
+): void => {
+  checkLabel(problems, choice, choice.label);
+
+  if (!refersTo(problems, snapshot, choice, choice.fieldId, "field", "field")) {
+    return;
+  }
+
+  if (snapshot.field(choice.fieldId)?.type.kind !== "choice") {
+    problems.push(
+      problem(
+        "invalidChoice",
+        choice.id,
+        `The field ${choice.fieldId} is not a choice field.`
+      )
+    );
+  }
+
+  if (!isChoiceKey(choice.key)) {
+    problems.push(
+      problem(
+        "invalidChoice",
+        choice.id,
+        "Choice keys are 1 to 63 characters of a-z, 0-9 and _, starting with a letter or digit."
+      )
+    );
+  }
+};
+
+const layoutElementProblem = (
+  snapshot: ConfigSnapshot,
+  layout: LayoutDefinition,
+  lineage: ReadonlySet<DefinitionId>,
+  element: LayoutDefinition["elements"][number]
+): string | undefined => {
+  if (element.kind === "section") {
+    if (layout.type === "list") {
+      return "A list layout holds fields only.";
+    }
+
+    return element.label.trim().length === 0
+      ? "A section label must not be empty."
+      : undefined;
+  }
+
+  // Tombstones count: a purged field's entry stays in the layout and is
+  // skipped where the layout is served (Contracts 1.7: layout entries
+  // never block a purge).
+  const field = snapshot.field(element.fieldId);
+
+  return field !== undefined && lineage.has(field.classId)
+    ? undefined
+    : `The field ${element.fieldId} is not a field of the table or its ancestors.`;
+};
+
+const checkLayout = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  layout: LayoutDefinition
+): void => {
+  if (!refersTo(problems, snapshot, layout, layout.classId, "class", "class")) {
+    return;
+  }
+
+  const lineage = new Set(
+    snapshot.lineage(layout.classId).map((level) => level.id)
+  );
+
+  const messages = new Set(
+    layout.elements.flatMap((element) => {
+      const found = layoutElementProblem(snapshot, layout, lineage, element);
+
+      return found === undefined ? [] : [found];
+    })
+  );
+
+  const fieldIds = layout.elements.flatMap((element) =>
+    element.kind === "field" ? [element.fieldId] : []
+  );
+
+  if (new Set(fieldIds).size !== fieldIds.length) {
+    messages.add("A layout names each field once.");
+  }
+
+  for (const message of messages) {
+    problems.push(problem("invalidLayout", layout.id, message));
+  }
 };
 
 const checkNamed = (
@@ -1053,6 +1329,10 @@ const checkAccessDefinition = (
     checkAccessRule(problems, snapshot, definition, purpose);
   } else if (definition.kind === "subscription") {
     checkSubscription(problems, snapshot, definition, purpose);
+  } else if (definition.kind === "choice") {
+    checkChoice(problems, snapshot, definition);
+  } else if (definition.kind === "layout") {
+    checkLayout(problems, snapshot, definition);
   }
 };
 

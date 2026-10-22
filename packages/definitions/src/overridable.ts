@@ -12,11 +12,14 @@
  * - table: label and display field;
  * - role: label;
  * - access rule: `active` only;
+ * - choice: label, order and hidden (shipped choices are never deleted);
+ * - layout: its element list, as one property (a layout is overridden as a
+ *   whole);
+ * - field: also an auto-numbered field's prefix;
  * - protected definitions: label and help text only (Contracts 1.8), so a
  *   protected access rule cannot be disabled.
  *
- * Choices, layouts and record rules join the list with their features
- * (Step 2 and 3). Max-length tightening of a field is listed in 8.2 but
+ * Record rules join the list with their feature (Step 3). Max-length tightening of a field is listed in 8.2 but
  * lives inside the field's type, which v0.1 never changes, so it is not
  * overridable yet.
  */
@@ -28,10 +31,19 @@ import type { Definition, DefinitionKind } from "./definition.ts";
 export const OVERRIDABLE: Readonly<Record<DefinitionKind, readonly string[]>> =
   {
     accessRule: ["active"],
+    choice: ["hidden", "label", "order"],
     class: ["displayFieldId", "label"],
-    field: ["default", "helpText", "label", "readOnly", "required"],
+    field: [
+      "default",
+      "helpText",
+      "label",
+      "numberPrefix",
+      "readOnly",
+      "required",
+    ],
     grant: [],
     index: [],
+    layout: ["elements"],
     namespace: [],
     override: [],
     permission: [],

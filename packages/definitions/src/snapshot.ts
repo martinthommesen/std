@@ -9,6 +9,7 @@
  */
 import type {
   AccessRuleDefinition,
+  ChoiceDefinition,
   ClassDefinition,
   Definition,
   DefinitionKind,
@@ -16,6 +17,7 @@ import type {
   FieldDefinition,
   GrantDefinition,
   IndexDefinition,
+  LayoutDefinition,
   NamespaceDefinition,
   OverrideDefinition,
   PermissionDefinition,
@@ -87,6 +89,8 @@ export class ConfigSnapshot implements SnapshotKey {
   readonly #fieldsByClass = new Map<DefinitionId, FieldDefinition[]>();
   readonly #overridesByClass = new Map<DefinitionId, OverrideDefinition[]>();
   readonly #indexesByClass = new Map<DefinitionId, IndexDefinition[]>();
+  readonly #choicesByField = new Map<DefinitionId, ChoiceDefinition[]>();
+  readonly #layoutsByClass = new Map<DefinitionId, LayoutDefinition[]>();
   readonly #classesByNamespace = new Map<DefinitionId, ClassDefinition[]>();
 
   private constructor(
@@ -189,6 +193,21 @@ export class ConfigSnapshot implements SnapshotKey {
 
     for (const index of this.all("index").filter(isLive)) {
       appendTo(this.#indexesByClass, index.classId, index);
+    }
+
+    for (const choice of this.all("choice").filter(isLive)) {
+      appendTo(this.#choicesByField, choice.fieldId, choice);
+    }
+
+    for (const list of this.#choicesByField.values()) {
+      list.sort(
+        (left, right) =>
+          left.order - right.order || compareIds(left.key, right.key)
+      );
+    }
+
+    for (const layout of this.all("layout").filter(isLive)) {
+      appendTo(this.#layoutsByClass, layout.classId, layout);
     }
   }
 
@@ -514,6 +533,22 @@ export class ConfigSnapshot implements SnapshotKey {
    */
   indexes(classId: DefinitionId): readonly IndexDefinition[] {
     return this.#indexesByClass.get(classId) ?? [];
+  }
+
+  /**
+   * @param fieldId - A field ID.
+   * @returns The field's live choices, sorted by order, then key.
+   */
+  choicesOf(fieldId: DefinitionId): readonly ChoiceDefinition[] {
+    return this.#choicesByField.get(fieldId) ?? [];
+  }
+
+  /**
+   * @param classId - A class ID.
+   * @returns The live layouts attached to the class itself, sorted by ID.
+   */
+  layoutsOf(classId: DefinitionId): readonly LayoutDefinition[] {
+    return this.#layoutsByClass.get(classId) ?? [];
   }
 
   /**

@@ -5,6 +5,7 @@
  */
 import { checkConditionJson } from "@std/conditions/check";
 import type { ClassView, FieldInfo } from "@std/conditions/class-view";
+import type { ChoiceList } from "@std/values/choice";
 import type { ConditionProfile } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 
@@ -14,13 +15,63 @@ import type { FieldDefinition } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
-const fieldInfo = (field: FieldDefinition): FieldInfo => ({
-  classId: field.classId,
-  id: field.id,
-  name: field.name,
-  retired: field.state === "retired",
-  type: field.type,
-});
+/**
+ * A choice field's keys as conditions check literals against them
+ * (Contracts 5.2): every live choice of the field, the class's subset not
+ * applied, so a filter through a parent endpoint can name a key only a
+ * child allows; a hidden choice is retired, which a literal may still name.
+ *
+ * @param snapshot - The configuration.
+ * @param field - A field.
+ * @returns The keys, or undefined for a field that is not a choice field.
+ */
+export const conditionChoicesOf = (
+  snapshot: ConfigSnapshot,
+  field: Pick<FieldDefinition, "id" | "type">
+): ChoiceList | undefined => {
+  if (field.type.kind !== "choice") {
+    return undefined;
+  }
+
+  const choices = snapshot.choicesOf(field.id);
+
+  return {
+    active: new Set(
+      choices.flatMap((choice) => (choice.hidden ? [] : [choice.key]))
+    ),
+    retired: new Set(
+      choices.flatMap((choice) => (choice.hidden ? [choice.key] : []))
+    ),
+  };
+};
+
+/**
+ * A field info with its choices, when it is a choice field.
+ *
+ * @param snapshot - The configuration.
+ * @param info - The field info.
+ * @returns The info, with `choices` for a choice field.
+ */
+export const withChoices = (
+  snapshot: ConfigSnapshot,
+  info: FieldInfo
+): FieldInfo => {
+  const choices = conditionChoicesOf(snapshot, info);
+
+  return choices === undefined ? info : { ...info, choices };
+};
+
+const fieldInfo = (
+  snapshot: ConfigSnapshot,
+  field: FieldDefinition
+): FieldInfo =>
+  withChoices(snapshot, {
+    classId: field.classId,
+    id: field.id,
+    name: field.name,
+    retired: field.state === "retired",
+    type: field.type,
+  });
 
 /**
  * The condition engine's view of a snapshot: a class's own and inherited
@@ -35,12 +86,12 @@ export const classViewOf = (snapshot: ConfigSnapshot): ClassView => ({
       .fields(classId)
       .find((field) => field.id === fieldId);
 
-    return found === undefined ? undefined : fieldInfo(found);
+    return found === undefined ? undefined : fieldInfo(snapshot, found);
   },
   fieldByName: (classId, name) => {
     const found = snapshot.fieldByName(classId, name);
 
-    return found === undefined ? undefined : fieldInfo(found);
+    return found === undefined ? undefined : fieldInfo(snapshot, found);
   },
 });
 

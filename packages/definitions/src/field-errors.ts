@@ -2,20 +2,30 @@
  * The field errors a `ValidationFailed` lists (Contracts 3.8, 6.7):
  * `InvalidValue`, `Required`, `ReadOnlyField` and `DefinitionRetired`.
  *
+ * They live in this plain package so the browser's `recordSchema` and the
+ * server's save pipeline produce the same values (Contracts 6.3); the API
+ * error `ValidationFailed` (`@std/api/errors/validation-failed`) carries them.
+ *
  * Each names the field by its API name and never carries the refused value,
  * so an error can be returned or logged without leaking a password, a
  * secret or a hidden value (Contracts 4.3).
  */
 import { InvalidValueReasonSchema } from "@std/values/field-error";
 import type { InvalidValue } from "@std/values/field-error";
-import { Schema } from "effect";
+import {
+  Literals,
+  optionalKey,
+  String as SchemaString,
+  TaggedStruct,
+  Union,
+} from "effect/Schema";
 
 /**
  * Why a value is invalid: every reason of `@std/values`, plus `notUnique`
  * for a unique index violation (the accepted leak of Contracts 3.8: the
  * value is taken).
  */
-export const FieldValueReasonSchema = Schema.Literals([
+export const FieldValueReasonSchema = Literals([
   ...InvalidValueReasonSchema.literals,
   "notUnique",
 ]);
@@ -24,10 +34,10 @@ export const FieldValueReasonSchema = Schema.Literals([
 export type FieldValueReason = typeof FieldValueReasonSchema.Type;
 
 /** The value does not convert under the field's type and settings (6.5). */
-export const InvalidValueErrorSchema = Schema.TaggedStruct("InvalidValue", {
-  field: Schema.String,
-  hint: Schema.optionalKey(Schema.String),
-  message: Schema.String,
+export const InvalidValueErrorSchema = TaggedStruct("InvalidValue", {
+  field: SchemaString,
+  hint: optionalKey(SchemaString),
+  message: SchemaString,
   reason: FieldValueReasonSchema,
 });
 
@@ -35,32 +45,31 @@ export const InvalidValueErrorSchema = Schema.TaggedStruct("InvalidValue", {
 export type InvalidValueError = typeof InvalidValueErrorSchema.Type;
 
 /** A required field (with the overrides of the concrete class) is empty. */
-export const RequiredErrorSchema = Schema.TaggedStruct("Required", {
-  field: Schema.String,
+export const RequiredErrorSchema = TaggedStruct("Required", {
+  field: SchemaString,
 });
 
 /** A `Required` field error. */
 export type RequiredError = typeof RequiredErrorSchema.Type;
 
 /** A system field, or a read-only field, is written. */
-export const ReadOnlyFieldErrorSchema = Schema.TaggedStruct("ReadOnlyField", {
-  field: Schema.String,
+export const ReadOnlyFieldErrorSchema = TaggedStruct("ReadOnlyField", {
+  field: SchemaString,
 });
 
 /** A `ReadOnlyField` field error. */
 export type ReadOnlyFieldError = typeof ReadOnlyFieldErrorSchema.Type;
 
 /** A retired field is written (Contracts 1.6). */
-export const DefinitionRetiredErrorSchema = Schema.TaggedStruct(
-  "DefinitionRetired",
-  { field: Schema.String }
-);
+export const DefinitionRetiredErrorSchema = TaggedStruct("DefinitionRetired", {
+  field: SchemaString,
+});
 
 /** A `DefinitionRetired` field error. */
 export type DefinitionRetiredError = typeof DefinitionRetiredErrorSchema.Type;
 
 /** Any field error of `ValidationFailed`. */
-export const FieldErrorSchema = Schema.Union([
+export const FieldErrorSchema = Union([
   InvalidValueErrorSchema,
   RequiredErrorSchema,
   ReadOnlyFieldErrorSchema,

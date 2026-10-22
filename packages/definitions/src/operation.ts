@@ -21,7 +21,7 @@
  * - `delete`: what a generic `DELETE` asks for. Refused with
  *   `UseRetireOrPurge` for fields, tables and namespaces; drops an index
  *   (follow-up `DROP INDEX CONCURRENTLY`); removes a role, grant, access
- *   rule, subscription or permission, leaving a tombstone.
+ *   rule, subscription, permission, choice or layout, leaving a tombstone.
  *
  * - `adopt`: moves a definition its set removed into the `local` layer
  *   (Contracts 8.1); only the config service issues it.
@@ -44,10 +44,12 @@ import {
 
 import {
   AccessRuleDraftSchema,
+  ChoiceDraftSchema,
   ClassDraftSchema,
   FieldDraftSchema,
   GrantDraftSchema,
   IndexDraftSchema,
+  LayoutDraftSchema,
   NamespaceDraftSchema,
   OverrideDraftSchema,
   PermissionDraftSchema,
@@ -80,6 +82,8 @@ export const OperationSchema = Union([
     definition: SubscriptionDraftSchema,
     op: Literal("createSubscription"),
   }),
+  Struct({ definition: ChoiceDraftSchema, op: Literal("createChoice") }),
+  Struct({ definition: LayoutDraftSchema, op: Literal("createLayout") }),
   /**
    * Adds an override (`version` null) or replaces the stored one
    * (`version` its current version). Loosening is refused.
@@ -194,8 +198,10 @@ export const OPERATION_FORMS = {
   addIndex: { create: "always", creates: "index", target: false },
   adopt: { create: "never", creates: null, target: true },
   createAccessRule: { create: "always", creates: "accessRule", target: false },
+  createChoice: { create: "always", creates: "choice", target: false },
   createClass: { create: "always", creates: "class", target: false },
   createGrant: { create: "always", creates: "grant", target: false },
+  createLayout: { create: "always", creates: "layout", target: false },
   createNamespace: { create: "always", creates: "namespace", target: false },
   createPermission: { create: "always", creates: "permission", target: false },
   createRole: { create: "always", creates: "role", target: false },
@@ -303,10 +309,19 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
     "roleIds",
     "target",
   ],
+  choice: ["hidden", "label", "order"],
   class: ["displayFieldId", "helpText", "label"],
-  field: ["default", "helpText", "label", "readOnly", "required"],
+  field: [
+    "default",
+    "helpText",
+    "label",
+    "numberPrefix",
+    "readOnly",
+    "required",
+  ],
   grant: [],
   index: [],
+  layout: ["elements"],
   namespace: ["helpText", "label"],
   override: [],
   permission: ["helpText", "label", "name"],

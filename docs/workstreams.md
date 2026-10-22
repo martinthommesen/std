@@ -27,8 +27,9 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 4 | `ws/1d-condition-fields` | 1D follow-up | a `condition` field's value is checked against its profile and class on save (Contracts 6.5); the field definition names the class its conditions apply to; cross-process test commits through A's change-set endpoint | merged |
 | 4 | `ws/1-gate-final` | Step 1 gate | the last gaps of gate rows 1.4 to 1.7 over HTTP: retiring a table with a child class not retired; table-purge refusals for a child class, an incoming reference, an access rule and a subscription; deleting a role only an inactive access rule names; local additions refused as `reserved`, `notExtensible` and `platform`; after review and the gate audit, one guard for every new definition (fixing a 500 on platform storage), history through `/acme.monitor`, condition-field, self-reference and retired-source refusals | merged |
 | 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | merged; tagged `v0.0.1` |
-| 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, OpenAPI, typed client | planned |
-| 5 | `ws/2b-web` | 2B, 2C | Foldkit web app, lists, forms, filter builder, picker, history panel, stale forms, browser tests | planned |
+| 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, per-table OpenAPI, admin editing of roles, assignments and rules; release-compatibility CI step | merged |
+| 5 | `ws/2b-web-foundation` | 2B (foundation) | `apps/web` on Foldkit and Foldkit UI over Effect 4.0.5, cookie sessions with CSRF protection, app shell, serving from `std serve`, story, scene and browser test harness | in progress |
+| 5 | `ws/2b-web-pages` | 2B, 2C | lists, forms, filter builder, picker, history panel, stale forms, browser tests | planned |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set, upgrade test, rename test, `v0.0.2` | planned |
 | 6 | `ws/3a-hooks` | 3A | hooks and record rules | planned |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker, leases, dead letters | planned |
