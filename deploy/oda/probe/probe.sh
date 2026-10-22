@@ -1,0 +1,774 @@
+#!/usr/bin/env bash
+# The ODA Canvas probe (Contracts 13.6, docs/decisions/0027-oda-canvas-probe.md).
+#
+# Creates a kind cluster with Kubernetes 1.30, installs Istio and the pinned
+# canvas-oda chart the way the Canvas's own CI does, deploys the stub
+# component (deploy/oda/probe-stub/) and waits for it to reach `Complete`.
+# It measures every phase and writes one JSON result, whatever happens:
+#
+#   $PROBE_OUT_DIR/result.json   phases and durations, disk (sampled every
+#                                2 s), runner, tool versions, provenance,
+#                                outcome, failing phase and its log excerpt
+#   $PROBE_OUT_DIR/logs/         one log per phase, diagnostics on failure
+#
+# Nothing retries: the probe measures the true failure rate. Every phase runs
+# under `timeout` with its own limit, inside an overall budget, so the probe
+# finishes (and its result is written) well before the workflow's job limit.
+#
+# One kind cluster per Docker host. cloud-provider-kind, which gives the
+# Istio ingress its address, serves every kind cluster it finds through
+# Docker and, when it stops, deletes every container it ever labelled, for
+# any cluster (cloud-provider-kind v0.10.0, pkg/controller/controller.go).
+# So the probe refuses to start, before it creates anything, while any kind
+# cluster, cloud-provider-kind container or cloud-provider-kind process
+# exists on this Docker host. A kind cluster created by someone else while
+# the probe runs is not protected; on a GitHub runner there is none.
+#
+# A local run needs bash 5, curl, sha256sum, tar, timeout, jq and Docker. It
+# touches nothing outside its own cluster, its own containers and the
+# directories below (kubeconfig and Helm settings stay in the state
+# directory, never in ~/.kube or ~/.config/helm).
+#
+# Settings (environment variables, with defaults):
+#   PROBE_OUT_DIR          results and logs                ./oda-canvas-probe-out
+#   PROBE_TOOLS_DIR        downloaded tools, charts        $PROBE_OUT_DIR/tools
+#   PROBE_CLUSTER          kind cluster name               std-oda-probe-<time>-<pid>
+#   PROBE_KEEP_CLUSTER     1 keeps the cluster             0
+#   PROBE_BUDGET_SECONDS   time for all phases together    5100
+#
+# Exit status: 0 when the component reached `Complete`; 1 when the probe
+# failed (the result says where); 2 when it refused to start; 3 when the
+# result could not be written, whatever the outcome.
+set -euo pipefail
+shopt -s inherit_errexit
+
+# --- Pins (docs/decisions/0027-oda-canvas-probe.md, "Pins") -----------------
+# kind, its node image and kubectl as the Canvas's run-bdd-tests action pins
+# them; the node image by the digest kind v0.23.0's release notes publish.
+readonly KIND_VERSION=v0.23.0
+readonly KIND_SHA256=1d86e3069ffbe3da9f1a918618aecbc778e00c75f838882d0dfa2d363bc4a68c
+readonly KIND_NODE_IMAGE=kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+readonly KUBECTL_VERSION=v1.30.0
+readonly KUBECTL_SHA256=7c3807c0f5c1b30110a2ff1e55da1d112a6d0096201f1beb81b269f582b5d1c5
+readonly HELM_VERSION=v3.18.4
+readonly HELM_SHA256=f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1
+# The release binary of the version upstream builds from source.
+readonly CLOUD_PROVIDER_KIND_VERSION=0.10.0
+readonly CLOUD_PROVIDER_KIND_SHA256=8b88095d72f8dbb4ce65ecf34e4bde5c1c8a3de90c65e66dda7dcd65fba2d58b
+# Upstream pins only the gateway chart (1.26.3); base and istiod use the same.
+readonly ISTIO_VERSION=1.26.3
+readonly ISTIO_BASE_SHA256=4176fb642b575315980caf8b422a9f06e7830a609b78a49c0880e28531af0d8c
+readonly ISTIO_ISTIOD_SHA256=f2df1ac103bcc3d408ad2d5f6bc254149136afb01b10a5c2f76cd429b8c779b1
+readonly ISTIO_GATEWAY_SHA256=2afa5f170b2d5a3a36dfea62d9128d329471fb09dbefa7e95f9424bf782c4988
+# Contracts 13.5; the digest is the chart index's.
+readonly CANVAS_VERSION=1.2.5
+readonly CANVAS_SHA256=c16d5f6bbfe0a885d3d06f77f08349c469c52376858e5706002d67ccc9f9d145
+
+# --- Limits, in seconds --------------------------------------------------------
+# Each phase's whole run, enforced by `timeout` (descendants included).
+readonly TOOLS_LIMIT=600
+readonly CLUSTER_LIMIT=720
+readonly ISTIO_LIMIT=1500
+readonly CANVAS_LIMIT=2400
+readonly COMPONENT_LIMIT=1020
+readonly GATEWAY_LIMIT=180
+readonly DIAGNOSTICS_LIMIT=300
+readonly CLEANUP_LIMIT=300
+# Everything after the phases (results, diagnostics, cleanup) shares this.
+readonly FINISH_LIMIT=900
+# Any single Docker call outside a phase.
+readonly DOCKER_LIMIT=30
+# Waits inside the phases.
+readonly CLUSTER_WAIT=600
+readonly ISTIO_WAIT=600
+readonly LOAD_BALANCER_WAIT=300
+readonly CANVAS_HELM_WAIT=1200
+readonly CANVAS_READY_WAIT=600
+readonly COMPONENT_WAIT=900
+readonly GATEWAY_WAIT=120
+readonly POLL=5
+readonly DISK_SAMPLE_INTERVAL=2
+# Every kubectl call that only reads gives up after this.
+readonly REQUEST_TIMEOUT=20s
+
+readonly COMPONENT=std-probe
+readonly COMPONENT_NAMESPACE=components
+# Without Vault, the secrets-management operator cannot start (the Canvas
+# installation guide, "HashiCorp Vault"); components that do not request
+# secrets management are unaffected, so the readiness wait skips it.
+readonly SKIPPED_DEPLOYMENT=canvas-smanop
+
+self=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+readonly self
+repo_root=$(cd "$(dirname "$self")/../../.." && pwd)
+readonly repo_root
+readonly stub_chart="$repo_root/deploy/oda/probe-stub"
+readonly pinned_crd="$repo_root/deploy/oda/crds/oda-component-crd.yaml"
+
+out_dir=${PROBE_OUT_DIR:-$PWD/oda-canvas-probe-out}
+mkdir -p "$out_dir"
+out_dir=$(cd "$out_dir" && pwd)
+readonly out_dir
+tools_dir=${PROBE_TOOLS_DIR:-$out_dir/tools}
+mkdir -p "$tools_dir"
+tools_dir=$(cd "$tools_dir" && pwd)
+readonly tools_dir
+readonly cluster=${PROBE_CLUSTER:-std-oda-probe-$(date -u +%Y%m%d%H%M%S)-$$}
+readonly keep_cluster=${PROBE_KEEP_CLUSTER:-0}
+readonly budget=${PROBE_BUDGET_SECONDS:-5100}
+readonly log_dir="$out_dir/logs"
+readonly state_dir="$out_dir/state"
+readonly result="$out_dir/result.json"
+# The phases run as `probe.sh --phase <name>` under `timeout`; they find the
+# same directories and cluster through these.
+export PROBE_OUT_DIR="$out_dir" PROBE_TOOLS_DIR="$tools_dir" PROBE_CLUSTER="$cluster"
+
+export PATH="$tools_dir/bin:$PATH"
+export KUBECONFIG="$state_dir/kubeconfig"
+export HELM_CACHE_HOME="$state_dir/helm/cache"
+export HELM_CONFIG_HOME="$state_dir/helm/config"
+export HELM_DATA_HOME="$state_dir/helm/data"
+
+iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+say() { printf '[probe %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+# Runs an external command under `timeout`, cut to what is left of the
+# finishing deadline once `finish` has set one; fails at once (124) when
+# nothing is left.
+finish_deadline=0
+bounded() {
+  local limit=$1
+  shift
+  if ((finish_deadline > 0)); then
+    local left=$((finish_deadline - $(date +%s)))
+    if ((left < limit)); then limit=$left; fi
+  fi
+  if ((limit < 1)); then return 124; fi
+  timeout --kill-after=5 "$limit" "$@"
+}
+
+# Prints `{"usedBytes":…,"availableBytes":…}` for the root file system.
+disk_json() {
+  local used avail
+  read -r used avail < <(df -B1 --output=used,avail / | tail -n 1)
+  jq -cn --argjson used "$used" --argjson avail "$avail" \
+    '{usedBytes: $used, availableBytes: $avail}'
+}
+
+# Downloads a URL into a file and checks its SHA-256.
+fetch() {
+  local url=$1 file=$2 sha=$3
+  curl --fail --silent --show-error --location --retry 0 --max-time 300 -o "$file" "$url"
+  printf '%s  %s\n' "$sha" "$file" | sha256sum --check --strict
+}
+
+# --- Phases (each runs as `probe.sh --phase <name>`) ------------------------
+phase_tools() {
+  local dl="$tools_dir/downloads"
+  mkdir -p "$dl" "$tools_dir/bin"
+  fetch "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64" \
+    "$dl/kind" "$KIND_SHA256"
+  install -m 0755 "$dl/kind" "$tools_dir/bin/kind"
+  fetch "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl" "$dl/kubectl" "$KUBECTL_SHA256"
+  install -m 0755 "$dl/kubectl" "$tools_dir/bin/kubectl"
+  fetch "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz" "$dl/helm.tar.gz" "$HELM_SHA256"
+  rm -rf "$dl/helm" && mkdir -p "$dl/helm"
+  tar -xzf "$dl/helm.tar.gz" -C "$dl/helm" linux-amd64/helm
+  install -m 0755 "$dl/helm/linux-amd64/helm" "$tools_dir/bin/helm"
+  fetch "https://github.com/kubernetes-sigs/cloud-provider-kind/releases/download/v$CLOUD_PROVIDER_KIND_VERSION/cloud-provider-kind_${CLOUD_PROVIDER_KIND_VERSION}_linux_amd64.tar.gz" \
+    "$dl/cloud-provider-kind.tar.gz" "$CLOUD_PROVIDER_KIND_SHA256"
+  rm -rf "$dl/cloud-provider-kind" && mkdir -p "$dl/cloud-provider-kind"
+  tar -xzf "$dl/cloud-provider-kind.tar.gz" -C "$dl/cloud-provider-kind" cloud-provider-kind
+  install -m 0755 "$dl/cloud-provider-kind/cloud-provider-kind" "$tools_dir/bin/cloud-provider-kind"
+
+  local chart
+  for chart in base:"$ISTIO_BASE_SHA256" istiod:"$ISTIO_ISTIOD_SHA256" gateway:"$ISTIO_GATEWAY_SHA256"; do
+    fetch "https://istio-release.storage.googleapis.com/charts/${chart%%:*}-$ISTIO_VERSION.tgz" \
+      "$tools_dir/istio-${chart%%:*}-$ISTIO_VERSION.tgz" "${chart#*:}"
+  done
+  fetch "https://github.com/tmforum-oda/oda-canvas/releases/download/canvas-oda-$CANVAS_VERSION/canvas-oda-$CANVAS_VERSION.tgz" \
+    "$tools_dir/canvas-oda-$CANVAS_VERSION.tgz" "$CANVAS_SHA256"
+
+  # The CRD that `pnpm check:tooling` validates the stub against must be the
+  # one this chart installs.
+  rm -rf "$dl/canvas" && mkdir -p "$dl/canvas"
+  tar -xzf "$tools_dir/canvas-oda-$CANVAS_VERSION.tgz" -C "$dl/canvas" \
+    canvas-oda/charts/oda-crds/templates/oda-component-crd.yaml
+  cmp "$dl/canvas/canvas-oda/charts/oda-crds/templates/oda-component-crd.yaml" "$pinned_crd"
+  echo "deploy/oda/crds/oda-component-crd.yaml equals the chart's Component CRD"
+
+  kind version
+  kubectl version --client
+  helm version
+}
+
+phase_cluster() {
+  kind create cluster --name "$cluster" --image "$KIND_NODE_IMAGE" \
+    --kubeconfig "$KUBECONFIG" --wait "${CLUSTER_WAIT}s"
+  # cloud-provider-kind gives LoadBalancer Services an address, as upstream
+  # runs it; the Istio API operator builds every exposed API's URL from the
+  # ingress address. It is started only here, after the preflight found no
+  # other kind cluster (see the header). Its output goes to its own log, and
+  # `setsid` takes it out of this phase's process group, so the phase's
+  # `timeout` does not kill it once the phase has succeeded.
+  setsid cloud-provider-kind >"$log_dir/cloud-provider-kind.log" 2>&1 </dev/null &
+  echo $! >"$state_dir/cloud-provider-kind.pid"
+  kubectl get nodes -o wide --request-timeout="$REQUEST_TIMEOUT"
+}
+
+phase_istio() {
+  kubectl create namespace istio-system
+  helm install istio-base "$tools_dir/istio-base-$ISTIO_VERSION.tgz" -n istio-system
+  helm install istiod "$tools_dir/istio-istiod-$ISTIO_VERSION.tgz" -n istio-system \
+    --wait --timeout "${ISTIO_WAIT}s"
+  kubectl create namespace istio-ingress
+  kubectl label namespace istio-ingress istio-injection=enabled
+  helm install istio-ingress "$tools_dir/istio-gateway-$ISTIO_VERSION.tgz" -n istio-ingress \
+    --set labels.app=istio-ingress --set labels.istio=ingressgateway \
+    --wait --timeout "${ISTIO_WAIT}s"
+  local deadline=$((SECONDS + LOAD_BALANCER_WAIT)) address=""
+  while [[ -z $address ]]; do
+    address=$(kubectl get service istio-ingress -n istio-ingress --request-timeout="$REQUEST_TIMEOUT" \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')
+    if [[ -z $address ]]; then
+      if ((SECONDS > deadline)); then
+        echo "istio-ingress has no load-balancer address after ${LOAD_BALANCER_WAIT}s" >&2
+        return 1
+      fi
+      sleep "$POLL"
+    fi
+  done
+  echo "istio-ingress address: $address"
+}
+
+phase_canvas() {
+  # As the Canvas's installation guide and CI install it: no --wait (its
+  # post-install hooks would deadlock), the Istio pre-install check off on
+  # kind; Vault disabled (Contracts 13.5).
+  helm install canvas "$tools_dir/canvas-oda-$CANVAS_VERSION.tgz" -n canvas --create-namespace \
+    --set preqrequisitechecks.istio=false --set canvas-vault.enabled=false \
+    --timeout "${CANVAS_HELM_WAIT}s"
+  local namespace deployments
+  for namespace in cert-manager canvas; do
+    deployments=$(kubectl get deployments -n "$namespace" -o name --request-timeout="$REQUEST_TIMEOUT" |
+      grep -v "/$SKIPPED_DEPLOYMENT\$" || true)
+    if [[ -n $deployments ]]; then
+      # shellcheck disable=SC2086 # one argument per deployment
+      kubectl wait -n "$namespace" --for=condition=Available --timeout="${CANVAS_READY_WAIT}s" $deployments
+    fi
+  done
+  local statefulset
+  for statefulset in $(kubectl get statefulsets -n canvas -o name --request-timeout="$REQUEST_TIMEOUT"); do
+    kubectl rollout status -n canvas "$statefulset" --timeout="${CANVAS_READY_WAIT}s"
+  done
+  kubectl get crd components.oda.tmforum.org --request-timeout="$REQUEST_TIMEOUT" \
+    -o jsonpath='{range .spec.versions[*]}{.name} served={.served} storage={.storage}{"\n"}{end}'
+  kubectl get pods -n canvas -o wide --request-timeout="$REQUEST_TIMEOUT"
+}
+
+component_status() {
+  kubectl get component "$COMPONENT" -n "$COMPONENT_NAMESPACE" -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
+    jq -r '.status["summary/status"].deployment_status // ""' || true
+}
+
+phase_component() {
+  # The API server validates the rendered Component against the live CRD,
+  # its CEL rules included, before anything is installed.
+  helm template "$COMPONENT" "$stub_chart" -n "$COMPONENT_NAMESPACE" >"$state_dir/stub.yaml"
+  kubectl apply --dry-run=server -n "$COMPONENT_NAMESPACE" -f "$state_dir/stub.yaml"
+  local start=$SECONDS
+  helm install "$COMPONENT" "$stub_chart" -n "$COMPONENT_NAMESPACE"
+  local deadline=$((start + COMPONENT_WAIT)) previous="" current=""
+  while true; do
+    current=$(component_status)
+    if [[ $current != "$previous" ]]; then
+      echo "$((SECONDS - start))s: ${current:-<no status>}"
+      jq -cn --arg status "$current" --argjson at "$((SECONDS - start))" \
+        '{status: $status, atSeconds: $at}' >>"$state_dir/transitions.jsonl"
+      previous=$current
+    fi
+    if [[ $current == Complete ]]; then
+      break
+    fi
+    if ((SECONDS > deadline)); then
+      echo "component $COMPONENT is '${current:-<no status>}' after ${COMPONENT_WAIT}s, not Complete" >&2
+      return 1
+    fi
+    sleep "$POLL"
+  done
+  kubectl get components,exposedapis,identityconfigs -n "$COMPONENT_NAMESPACE" --request-timeout="$REQUEST_TIMEOUT"
+}
+
+# Not gating: whether the exposed API answers through the Canvas gateway, the
+# first thing the Step 5 workflow needs beyond `Complete`.
+phase_gateway() {
+  local url status=""
+  url=$(kubectl get component "$COMPONENT" -n "$COMPONENT_NAMESPACE" -o json --request-timeout="$REQUEST_TIMEOUT" |
+    jq -r '.status.coreAPIs[0].url // ""')
+  local deadline=$((SECONDS + GATEWAY_WAIT))
+  while [[ -n $url ]]; do
+    status=$(curl --insecure --silent --output /dev/null --max-time 10 --write-out '%{http_code}' \
+      "${url%/}/openapi.json" || true)
+    if [[ $status == 200 ]] || ((SECONDS > deadline)); then break; fi
+    sleep "$POLL"
+  done
+  echo "gateway: ${url:-<no url>} -> ${status:-<none>}"
+  jq -cn --arg url "$url" --arg status "$status" \
+    '{url: $url, httpStatus: $status, ok: ($status == "200")}' >"$state_dir/gateway.json"
+}
+
+phase_diagnostics() {
+  local k=(kubectl --request-timeout="$REQUEST_TIMEOUT")
+  echo "== kubectl get all,components,exposedapis,identityconfigs -A"
+  "${k[@]}" get all,components,exposedapis,identityconfigs -A -o wide || true
+  echo "== events"
+  "${k[@]}" get events -A --sort-by=.lastTimestamp | tail -n 200 || true
+  echo "== pods that are not ready"
+  "${k[@]}" get pods -A -o json |
+    jq -r '.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status != "True"))
+      | "\(.metadata.namespace) \(.metadata.name)"' |
+    while read -r namespace pod; do
+      "${k[@]}" describe pod -n "$namespace" "$pod" | tail -n 40 || true
+    done || true
+  local deployment
+  for deployment in component-operator api-operator-istio identityconfig-operator-keycloak; do
+    echo "== logs: $deployment"
+    "${k[@]}" logs -n canvas "deployment/$deployment" --all-containers --tail=200 || true
+  done
+  echo "== helm list"
+  helm list -A || true
+}
+
+# --- Result --------------------------------------------------------------------
+collect_images() {
+  bounded 30 kubectl get pods -A -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
+    jq -c '[.items[].status | (.containerStatuses // []) + (.initContainerStatuses // []) | .[]
+      | {image, imageID}] | unique' 2>/dev/null || echo '[]'
+}
+
+tool_versions() {
+  jq -cn \
+    --arg kind "$(bounded 10 kind version 2>/dev/null || true)" \
+    --arg kubectl "$(bounded 10 kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion || true)" \
+    --arg kubernetes "$(bounded 30 kubectl version -o json --request-timeout="$REQUEST_TIMEOUT" 2>/dev/null |
+      jq -r '.serverVersion.gitVersion // ""' || true)" \
+    --arg helm "$(bounded 10 helm version --short 2>/dev/null || true)" \
+    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
+    --arg docker "$(bounded "$DOCKER_LIMIT" docker version --format '{{.Server.Version}}' 2>/dev/null || true)" \
+    --arg jq "$(jq --version)" \
+    --arg curl "$(curl --version | head -n 1)" \
+    --arg bash "$BASH_VERSION" \
+    '$ARGS.named'
+}
+
+runner_json() {
+  local os=""
+  if [[ -r /etc/os-release ]]; then os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '"'); fi
+  jq -cn \
+    --arg imageOS "${ImageOS:-}" \
+    --arg imageVersion "${ImageVersion:-}" \
+    --arg runnerName "${RUNNER_NAME:-}" \
+    --arg os "$os" \
+    --arg kernel "$(uname -r)" \
+    --argjson cpus "$(nproc)" \
+    --argjson memoryBytes "$(awk '/^MemTotal:/ { print $2 * 1024 }' /proc/meminfo)" \
+    '$ARGS.named'
+}
+
+pins_json() {
+  jq -cn \
+    --arg kind "$KIND_VERSION" --arg kindSha256 "$KIND_SHA256" --arg kindNodeImage "$KIND_NODE_IMAGE" \
+    --arg kubectl "$KUBECTL_VERSION" --arg kubectlSha256 "$KUBECTL_SHA256" \
+    --arg helm "$HELM_VERSION" --arg helmSha256 "$HELM_SHA256" \
+    --arg cloudProviderKind "$CLOUD_PROVIDER_KIND_VERSION" \
+    --arg cloudProviderKindSha256 "$CLOUD_PROVIDER_KIND_SHA256" \
+    --arg istio "$ISTIO_VERSION" --arg istioBaseSha256 "$ISTIO_BASE_SHA256" \
+    --arg istioIstiodSha256 "$ISTIO_ISTIOD_SHA256" --arg istioGatewaySha256 "$ISTIO_GATEWAY_SHA256" \
+    --arg canvasOda "$CANVAS_VERSION" --arg canvasOdaSha256 "$CANVAS_SHA256" \
+    '$ARGS.named'
+}
+
+# What ran: the commit, the run and attempt, and hashes of the probe script
+# and the stub chart, so a summary can tell whether runs are comparable.
+provenance_json() {
+  local sha=${GITHUB_SHA:-}
+  if [[ -z $sha ]]; then sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true); fi
+  jq -cn \
+    --argjson githubActions "$([[ -n ${GITHUB_ACTIONS:-} ]] && echo true || echo false)" \
+    --arg repository "${GITHUB_REPOSITORY:-}" \
+    --arg runId "${GITHUB_RUN_ID:-}" --arg runAttempt "${GITHUB_RUN_ATTEMPT:-}" \
+    --arg sha "$sha" --arg ref "${GITHUB_REF:-}" \
+    --arg probeSha256 "$(sha256sum "$self" | cut -d ' ' -f 1)" \
+    --arg stubChartSha256 "$(cd "$stub_chart" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d ' ' -f 1)" \
+    '$ARGS.named'
+}
+
+# The kind node's own footprint, independent of whatever else uses the disk,
+# measured at the end, before the cluster is deleted: the node image, the
+# node container's writable layer, and its /var, a Docker volume in kind
+# that holds the pulled and unpacked images, etcd and the logs.
+kind_node_json() {
+  local node="$cluster-control-plane" writable image var
+  writable=$(bounded 60 docker inspect --size --format '{{.SizeRw}}' "$node" 2>/dev/null || true)
+  image=$(bounded "$DOCKER_LIMIT" docker image inspect --format '{{.Size}}' "$KIND_NODE_IMAGE" 2>/dev/null || true)
+  var=$(bounded 120 docker exec "$node" du -sxb /var 2>/dev/null | cut -f1 || true)
+  jq -cn --argjson writable "${writable:-null}" --argjson image "${image:-null}" \
+    --argjson var "${var:-null}" \
+    '{nodeWritableBytes: $writable, nodeImageBytes: $image, nodeVarBytes: $var}'
+}
+
+jsonl_array() {
+  if [[ -s $1 ]]; then jq -cs . "$1"; else echo '[]'; fi
+}
+
+disk_samples_json() {
+  if [[ -s $state_dir/disk-samples ]]; then
+    jq -Rcs '[split("\n")[] | select(length > 0) | split(" ") | map(tonumber)
+      | {at: .[0], usedBytes: .[1], availableBytes: .[2]}]' "$state_dir/disk-samples"
+  else
+    echo '[]'
+  fi
+}
+
+# Replaces `result` with `$1` after checking that it is the JSON the summary
+# expects; the old file stays when anything fails.
+publish_result() {
+  local candidate=$1
+  jq -e '.schemaVersion == 1 and (.outcome == "success" or .outcome == "failure")
+    and (.phases | type == "array") and (.run.sha | type == "string")' "$candidate" >/dev/null &&
+    mv -f "$candidate" "$result"
+}
+
+# Writes the result atomically (a temporary file, checked, then renamed).
+# `stage` is "partial" before diagnostics and "complete" after them.
+write_result() {
+  local stage=$1 outcome=success excerpt=""
+  if [[ -n $failed_phase ]]; then
+    outcome=failure
+    excerpt=$(tail -n 60 "$log_dir/$failed_phase.log" 2>/dev/null || true)
+  fi
+  local gateway='null'
+  if [[ -s $state_dir/gateway.json ]]; then gateway=$(cat "$state_dir/gateway.json"); fi
+  # Every part goes through a file: the disk samples alone outgrow the
+  # kernel's limit on one command-line argument (128 KiB) after about an
+  # hour at one sample every 2 s.
+  local parts="$state_dir/result-parts"
+  rm -rf "$parts"
+  mkdir -p "$parts"
+  {
+    provenance_json >"$parts/run.json" &&
+      runner_json >"$parts/runner.json" &&
+      pins_json >"$parts/pins.json" &&
+      tool_versions >"$parts/tools.json" &&
+      disk_json >"$parts/disk-after.json" &&
+      disk_samples_json >"$parts/samples.json" &&
+      jsonl_array "$state_dir/phases.jsonl" >"$parts/phases.json" &&
+      jsonl_array "$state_dir/transitions.jsonl" >"$parts/transitions.json" &&
+      printf '%s\n' "$gateway" >"$parts/gateway.json" &&
+      collect_images >"$parts/images.json" &&
+      printf '%s' "$excerpt" >"$parts/excerpt.txt"
+  } || return 1
+  if [[ $stage == complete ]]; then
+    kind_node_json >"$parts/kind-node.json" || return 1
+  else
+    echo null >"$parts/kind-node.json"
+  fi
+  local candidate="$result.tmp.$$"
+  jq -n \
+    --arg stage "$stage" \
+    --arg startedAt "$started_at" --arg finishedAt "$(iso_now)" \
+    --arg outcome "$outcome" --arg failedPhase "$failed_phase" \
+    --rawfile excerpt "$parts/excerpt.txt" \
+    --arg cluster "$cluster" \
+    --argjson budget "$budget" \
+    --argjson diskBefore "$disk_before" \
+    --argjson interval "$DISK_SAMPLE_INTERVAL" \
+    --slurpfile runs "$parts/run.json" \
+    --slurpfile runners "$parts/runner.json" \
+    --slurpfile pinss "$parts/pins.json" \
+    --slurpfile toolss "$parts/tools.json" \
+    --slurpfile diskAfters "$parts/disk-after.json" \
+    --slurpfile sampless "$parts/samples.json" \
+    --slurpfile kindNodes "$parts/kind-node.json" \
+    --slurpfile phasess "$parts/phases.json" \
+    --slurpfile transitionss "$parts/transitions.json" \
+    --slurpfile gateways "$parts/gateway.json" \
+    --slurpfile imagess "$parts/images.json" \
+    '$runs[0] as $run | $runners[0] as $runner | $pinss[0] as $pins
+    | $toolss[0] as $tools | $diskAfters[0] as $diskAfter | $sampless[0] as $samples
+    | $kindNodes[0] as $kindNode | $phasess[0] as $phases
+    | $transitionss[0] as $transitions | $gateways[0] as $gateway
+    | $imagess[0] as $images
+    | {
+      schemaVersion: 1,
+      probe: "oda-canvas-probe",
+      stage: $stage,
+      startedAt: $startedAt,
+      finishedAt: $finishedAt,
+      outcome: $outcome,
+      failedPhase: (if $failedPhase == "" then null else $failedPhase end),
+      failureExcerpt: (if $excerpt == "" then null else $excerpt end),
+      cluster: $cluster,
+      budgetSeconds: $budget,
+      run: $run,
+      runner: $runner,
+      pins: $pins,
+      tools: $tools,
+      disk: {
+        before: $diskBefore,
+        after: $diskAfter,
+        sampleIntervalSeconds: $interval,
+        sampleCount: ($samples | length),
+        peakUsedBytes: ([$diskBefore.usedBytes, $diskAfter.usedBytes] + [$samples[].usedBytes] | max),
+        minAvailableBytes: ([$diskBefore.availableBytes, $diskAfter.availableBytes] + [$samples[].availableBytes] | min),
+        kindNode: $kindNode
+      },
+      phases: [$phases[] | . as $phase
+        | if .startEpoch == null then . else
+            . + {peakUsedBytes: ([$samples[] | select(.at >= $phase.startEpoch and .at <= $phase.endEpoch)
+              | .usedBytes] | max)}
+          end],
+      component: {transitions: $transitions},
+      gateway: $gateway,
+      images: $images
+    }' >"$candidate" && publish_result "$candidate"
+}
+
+if [[ ${1:-} == --phase ]]; then
+  "phase_$2"
+  exit 0
+fi
+
+# For tooling/test/oda-probe-publish.test.ts: publishes a complete result
+# from the state directory as it stands, without a cluster.
+if [[ ${1:-} == --publish-test ]]; then
+  started_at=$(iso_now)
+  disk_before=$(disk_json)
+  failed_phase=""
+  write_result complete
+  exit 0
+fi
+
+# --- Preflight: refuse before creating anything -------------------------------
+# An earlier run's result in the same directory must not outlive a refusal.
+rm -f "$result"
+
+refuse() {
+  printf 'oda-canvas-probe: refusing to start: %s\n' "$*" >&2
+  exit 2
+}
+
+for tool in bash curl sha256sum tar timeout setsid jq docker df; do
+  command -v "$tool" >/dev/null || refuse "$tool is not installed"
+done
+if ((BASH_VERSINFO[0] < 5)); then refuse "bash 5 or later is required"; fi
+timeout "$DOCKER_LIMIT" docker info >/dev/null 2>&1 || refuse "Docker did not answer within ${DOCKER_LIMIT}s"
+kind_labels=$(timeout "$DOCKER_LIMIT" docker ps -a --filter label=io.x-k8s.kind.cluster \
+  --format '{{.Label "io.x-k8s.kind.cluster"}}') || refuse "Docker did not list containers within ${DOCKER_LIMIT}s"
+other_clusters=$(sort -u <<<"$kind_labels" | paste -sd ' ' -)
+if [[ -n $other_clusters ]]; then
+  refuse "kind clusters exist on this Docker host ($other_clusters); cloud-provider-kind would manage them and delete their load balancers. Run the probe on a host without kind clusters."
+fi
+provider_containers=$(timeout "$DOCKER_LIMIT" docker ps -aq --filter label=io.x-k8s.cloud-provider-kind.cluster) ||
+  refuse "Docker did not list containers within ${DOCKER_LIMIT}s"
+if [[ -n $provider_containers ]]; then
+  refuse "cloud-provider-kind containers exist on this Docker host; the probe's cloud-provider-kind would delete them when it stops."
+fi
+if pgrep -f '^([^ ]*/)?cloud-provider-kind( |$)' >/dev/null; then
+  refuse "a cloud-provider-kind process is already running on this host."
+fi
+# Only node containers created after this instant can belong to this run's
+# cluster: the check above found none with any kind cluster label.
+preflight_epoch=$(date +%s)
+readonly preflight_epoch
+
+rm -rf "$log_dir" "$state_dir"
+mkdir -p "$log_dir" "$state_dir" "$tools_dir/bin"
+
+started_at=$(iso_now)
+readonly started_at
+disk_before=$(disk_json)
+readonly disk_before
+readonly deadline_epoch=$((preflight_epoch + budget))
+failed_phase=""
+result_failed=0
+# 0: no `kind` network yet, so this run may remove the one kind creates.
+set +e
+timeout "$DOCKER_LIMIT" docker network inspect kind >/dev/null 2>&1
+network_status=$?
+set -e
+case $network_status in
+  0) kind_network_existed=1 ;;
+  1) kind_network_existed=0 ;;
+  *) refuse "Docker did not answer within ${DOCKER_LIMIT}s" ;;
+esac
+
+# Samples the root file system every DISK_SAMPLE_INTERVAL seconds until the
+# probe ends, so the peak is a real peak, not the largest phase-boundary value.
+(
+  while true; do
+    read -r used avail < <(df -B1 --output=used,avail / | tail -n 1)
+    printf '%s %s %s\n' "$(date +%s)" "$used" "$avail"
+    sleep "$DISK_SAMPLE_INTERVAL"
+  done
+) >"$state_dir/disk-samples" 2>/dev/null &
+readonly disk_sampler=$!
+
+# --- Phase runner ------------------------------------------------------------
+# Runs `probe.sh --phase <name>` under `timeout` with the phase's limit, cut
+# to what is left of the overall budget; tees its output to logs/<name>.log
+# and appends a record to state/phases.jsonl. After a failure, later phases
+# are recorded as skipped.
+run_phase() {
+  local name=$1 limit=$2
+  if [[ -n $failed_phase ]]; then
+    jq -cn --arg name "$name" '{name: $name, status: "skipped"}' >>"$state_dir/phases.jsonl"
+    return 0
+  fi
+  local left=$((deadline_epoch - $(date +%s)))
+  if ((left < limit)); then limit=$left; fi
+  local start_epoch phase_started_at start end rc
+  start_epoch=$(date +%s)
+  phase_started_at=$(iso_now)
+  start=$EPOCHREALTIME
+  say "phase $name: start (limit ${limit}s)"
+  set +e
+  if ((limit < 10)); then
+    echo "the probe's budget of ${budget}s is used up" >"$log_dir/$name.log"
+    rc=124
+  else
+    timeout --kill-after=30 "$limit" "$self" --phase "$name" 2>&1 | tee "$log_dir/$name.log"
+    rc=${PIPESTATUS[0]}
+  fi
+  set -e
+  end=$EPOCHREALTIME
+  local status=success timed_out=false
+  if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    timed_out=true
+    echo "phase $name exceeded its limit of ${limit}s" | tee -a "$log_dir/$name.log"
+  fi
+  if [[ $rc -ne 0 ]]; then
+    status=failure
+    failed_phase=$name
+  fi
+  jq -cn --arg name "$name" --arg status "$status" --arg startedAt "$phase_started_at" \
+    --argjson startEpoch "$start_epoch" --argjson endEpoch "$(date +%s)" \
+    --argjson duration "$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.1f", b - a }')" \
+    --argjson exitCode "$rc" --argjson limit "$limit" --argjson timedOut "$timed_out" \
+    --argjson disk "$(disk_json)" \
+    '{name: $name, status: $status, startedAt: $startedAt, startEpoch: $startEpoch,
+      endEpoch: $endEpoch, durationSeconds: $duration, limitSeconds: $limit,
+      timedOut: $timedOut, exitCode: $exitCode, diskAfter: $disk}' \
+    >>"$state_dir/phases.jsonl"
+  say "phase $name: $status (exit $rc)"
+}
+
+# This run's cluster: node containers labelled with its name, all created
+# after the preflight (which found no kind cluster at all). Prints nothing,
+# and fails, when a node container is older, so cleanup never deletes a
+# cluster this run did not create.
+owned_cluster() {
+  local ids id created
+  ids=$(bounded "$DOCKER_LIMIT" docker ps -aq --filter "label=io.x-k8s.kind.cluster=$cluster") || return 1
+  for id in $ids; do
+    created=$(bounded "$DOCKER_LIMIT" docker inspect --format '{{.Created}}' "$id") || return 1
+    if (($(date -d "$created" +%s) < preflight_epoch)); then
+      say "not deleting kind cluster $cluster: node container $id predates this run"
+      return 1
+    fi
+  done
+  [[ -n $ids ]]
+}
+
+cleanup() {
+  if [[ $keep_cluster == 1 ]]; then
+    say "keeping cluster $cluster (PROBE_KEEP_CLUSTER=1)"
+    return 0
+  fi
+  # Stop cloud-provider-kind and wait for it to exit; it then removes the
+  # load-balancer containers it created.
+  local pid="" _
+  if [[ -s $state_dir/cloud-provider-kind.pid ]]; then pid=$(cat "$state_dir/cloud-provider-kind.pid"); fi
+  if [[ -n $pid ]]; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      if ((finish_deadline > 0 && $(date +%s) >= finish_deadline)); then break; fi
+      sleep 1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  if owned_cluster; then
+    say "deleting cluster $cluster"
+    bounded "$CLEANUP_LIMIT" kind delete cluster --name "$cluster" --kubeconfig "$KUBECONFIG" || true
+  fi
+  # Any load-balancer container left for this run's cluster.
+  local containers
+  containers=$(bounded "$DOCKER_LIMIT" docker ps -aq --filter "label=io.x-k8s.cloud-provider-kind.cluster=$cluster" || true)
+  if [[ -n $containers ]]; then
+    # shellcheck disable=SC2086 # one argument per container
+    bounded 60 docker rm -f $containers >/dev/null || true
+  fi
+  # The `kind` network, when this run created it and nothing else uses it.
+  if [[ $kind_network_existed -eq 0 ]]; then
+    for _ in $(seq 10); do
+      if [[ $(bounded "$DOCKER_LIMIT" docker network inspect kind --format '{{len .Containers}}' 2>/dev/null || echo gone) != 0 ]]; then break; fi
+      bounded "$DOCKER_LIMIT" docker network rm kind >/dev/null 2>&1 && break
+      sleep 1
+    done
+    if bounded "$DOCKER_LIMIT" docker network inspect kind >/dev/null 2>&1; then
+      say "left the docker network kind in place (in use, or Docker did not answer)"
+    fi
+  fi
+}
+
+finish() {
+  local rc=$?
+  trap - EXIT
+  # Results, diagnostics and cleanup share one deadline.
+  finish_deadline=$(($(date +%s) + FINISH_LIMIT))
+  if [[ -z $failed_phase && $rc -ne 0 ]]; then failed_phase=script; fi
+  # A partial result first, so a hang below still leaves one.
+  write_result partial || say "could not write the partial result"
+  if [[ -n $failed_phase && -s $KUBECONFIG ]]; then
+    bounded "$DIAGNOSTICS_LIMIT" "$self" --phase diagnostics >"$log_dir/diagnostics.log" 2>&1 || true
+  fi
+  kill "$disk_sampler" 2>/dev/null || true
+  if ! write_result complete; then
+    result_failed=1
+    say "could not write $result"
+  fi
+  cleanup || true
+  if [[ $result_failed -eq 0 ]]; then
+    local candidate="$result.tmp.$$"
+    if jq --argjson disk "$(disk_json)" '.disk.afterCleanup = $disk' "$result" >"$candidate" &&
+      publish_result "$candidate"; then
+      :
+    else
+      result_failed=1
+      say "could not add the disk after cleanup to $result"
+    fi
+  fi
+  if [[ -n $failed_phase ]]; then
+    say "outcome: failure (failed phase: $failed_phase)"
+  else
+    say "outcome: success"
+  fi
+  say "result: $result"
+  if [[ $result_failed -eq 1 ]]; then exit 3; fi
+  if [[ -n $failed_phase ]]; then exit 1; fi
+  exit 0
+}
+trap finish EXIT
+trap 'exit 130' INT TERM
+
+say "cluster $cluster, results in $out_dir, budget ${budget}s"
+run_phase tools "$TOOLS_LIMIT"
+run_phase cluster "$CLUSTER_LIMIT"
+run_phase istio "$ISTIO_LIMIT"
+run_phase canvas "$CANVAS_LIMIT"
+run_phase component "$COMPONENT_LIMIT"
+# Not gating: a gateway failure is recorded in the result, not in `failedPhase`.
+if [[ -z $failed_phase ]]; then
+  timeout --kill-after=10 "$GATEWAY_LIMIT" "$self" --phase gateway 2>&1 | tee "$log_dir/gateway.log" || true
+fi

@@ -209,7 +209,7 @@ export const systemUserCreateFields = (snapshot: ConfigSnapshot): JsonObject =>
  * set, so audit columns and reference FKs to `core.user` have a target, and
  * writes its version-1 create entry with it, as a save would (Contracts
  * 4.2: one entry per version; review round 3 of decision 0023), so its
- * history starts with a complete create. Data migration 0015 writes the same
+ * history starts with a complete create. Data migration 0016 writes the same
  * entry on installations whose system user predates this.
  *
  * @param snapshot - The configuration after the change set.

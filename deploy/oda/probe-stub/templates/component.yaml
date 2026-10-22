@@ -1,0 +1,49 @@
+# The Component the Canvas reconciles, against the `oda.tmforum.org/v1`
+# schema of the pinned Component CRD (deploy/oda/crds/). One core exposed
+# API, no dependent APIs, no events, and two static roles that the identity
+# operator creates as Keycloak client roles (Contracts 13.6).
+apiVersion: oda.tmforum.org/v1
+kind: Component
+metadata:
+  name: std-probe
+  labels:
+    oda.tmforum.org/componentName: std-probe
+spec:
+  componentMetadata:
+    id: STD-PROBE
+    name: std-probe
+    version: 0.1.0
+    description: Stub component for STD's ODA Canvas probe; serves a static OpenAPI document.
+    functionalBlock: Production
+    maintainers:
+      - name: STD maintainers
+    owners:
+      - name: STD maintainers
+  coreFunction:
+    exposedAPIs:
+      - name: probe
+        id: STD-PROBE-API
+        specification:
+          - url: http://std-probe-api.components.svc.cluster.local:8080/std-probe/probe/v1/openapi.json
+            version: 1.0.0
+        apiType: openapi
+        apiSDO: STD
+        implementation: std-probe-api
+        path: /std-probe/probe/v1
+        port: 8080
+    dependentAPIs: []
+  managementFunction:
+    exposedAPIs: []
+    dependentAPIs: []
+  securityFunction:
+    canvasSystemRole: canvas_system
+    componentRole:
+      - name: probe_reader
+        description: Reads the probe API
+      - name: probe_admin
+        description: Administers the probe API
+    exposedAPIs: []
+    dependentAPIs: []
+  eventNotification:
+    publishedEvents: []
+    subscribedEvents: []

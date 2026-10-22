@@ -1,5 +1,5 @@
 /**
- * Migration 0015: the system user's version-1 create entry (Contracts 4.2,
+ * Migration 0016: the system user's version-1 create entry (Contracts 4.2,
  * 4.5; decision 0023, review round 3), a `data` migration.
  *
  * The system user is inserted by SQL in the change set that creates
@@ -35,7 +35,7 @@ import { Transactions } from "../../sql/transactions.ts";
 import { DataMigrationFailed } from "../migration.ts";
 import type { DataMigration } from "../migration.ts";
 
-const ID = 15;
+const ID = 16;
 const NAME = "system-user-history";
 
 const failed = (error: { readonly message: string }): DataMigrationFailed =>
@@ -109,8 +109,8 @@ const remaining = missingSince.pipe(
   Effect.mapError(failed)
 );
 
-/** Migration 0015. Never change its description without a reason. */
-export const migration0015: DataMigration = {
+/** Migration 0016. Never change its description without a reason. */
+export const migration0016: DataMigration = {
   batch,
   description:
     "Writes the system user's missing version-1 create entry in core.change: kind create, actor the system user, the schema revision that created core.user, and the fields of the values the system user was inserted with (name System, login system, active false; every other field empty), when the system user exists and has no version-1 entry.",

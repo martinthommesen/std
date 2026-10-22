@@ -5,7 +5,7 @@
  * - A fresh install: the change set that creates `core.user` inserts the
  *   system user and its version-1 create entry together.
  * - An upgraded database, whose system user predates that: `data`
- *   migration 0015 writes the same entry, once.
+ *   migration 0016 writes the same entry, once.
  * - Why it matters: a subscription on `core.user` whose identity is denied
  *   active users gets the system user's rename with its name, because the
  *   system user's `active` (false) is known from that entry; without it the
@@ -151,14 +151,14 @@ const upgradedDatabase = Effect.gen(function* upgradedDatabaseTest() {
   const [fresh] = yield* createEntry;
 
   // An installation from before the fix: no version-1 entry, migration
-  // 0015 not yet in the ledger.
+  // 0016 not yet in the ledger.
   yield* values(
     `DELETE FROM core."change" WHERE record_id = $1::uuid AND record_version = 1
      RETURNING id::text AS value`,
     [SYSTEM_USER_ID]
   );
   yield* values(
-    `DELETE FROM core.platform_migration WHERE id = 15 RETURNING id::text AS value`
+    `DELETE FROM core.platform_migration WHERE id = 16 RETURNING id::text AS value`
   );
   assert.deepStrictEqual(yield* createEntry, []);
 
@@ -166,7 +166,7 @@ const upgradedDatabase = Effect.gen(function* upgradedDatabaseTest() {
 
   assert.deepStrictEqual(
     outcomes
-      .filter((outcome) => outcome.id === 15)
+      .filter((outcome) => outcome.id === 16)
       .map((outcome) => [outcome.outcome, outcome.changed]),
     [["applied", 1]]
   );
@@ -191,7 +191,7 @@ const upgradedDatabase = Effect.gen(function* upgradedDatabaseTest() {
   );
   assert.deepStrictEqual(restored?.cause, {
     kind: "system",
-    migration: { id: 15, name: "system-user-history" },
+    migration: { id: 16, name: "system-user-history" },
   });
 
   // A rerun finds nothing to do.
@@ -216,7 +216,7 @@ describe("system-user-history", () => {
     );
 
     dbTest.effect(
-      "an upgraded database gets the same entry from data migration 0015, once",
+      "an upgraded database gets the same entry from data migration 0016, once",
       () => upgradedDatabase
     );
   });

@@ -10,7 +10,7 @@
     "test:canaries": "vitest run --config tooling/vitest.config.ts",
     "check": "ultracite check && node tooling/check-foldkit-lint.ts",
     "check:postgres": "node tooling/check-postgres.ts",
-    "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts && node tooling/check-vendor.ts",
+    "check:tooling": "node tooling/check-tsconfig.ts && node tooling/check-imports.ts && node tooling/check-lockfile.ts && node tooling/check-vendor.ts && node tooling/check-oda-component-schema.ts",
     "ci:local": "node tooling/ci-local.ts",
     "fix": "ultracite fix",
     "db:up": "docker compose up -d --wait postgres",
@@ -18,6 +18,7 @@
     "bench": "pnpm --filter @std/bench bench",
     "std": "node packages/server/src/cli/main.ts",
     "probes": "node packages/probes/src/main.ts",
+    "oda-probe:summary": "node tooling/oda-canvas-probe-summary.ts",
     "spike:demo": "node examples/acme/src/main.ts",
     "helpdesk:seed": "node examples/helpdesk/src/seed.ts",
     "quickstart:ci": "node examples/quickstart/src/ci.ts",
@@ -43,7 +44,8 @@
     "oxlint-tsgolint": "^7.0.2004",
     "typescript": "catalog:",
     "ultracite": "8.0.1",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "2.9.1"
   },
   "devEngines": {
     "runtime": {

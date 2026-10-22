@@ -168,11 +168,3 @@ export class DeliveryHandlers extends Context.Service<
   ): Layer.Layer<DeliveryHandlers> =>
     Layer.succeed(DeliveryHandlers, DeliveryHandlers.of({ handlers }));
 }
-
-/**
- * The handlers `std worker` runs. Workstream 3A adds `afterCommit` record
- * rules and 3H the hub callbacks here; until then no subscription is
- * served, and deliveries wait as `pending`.
- */
-export const ProductionDeliveryHandlers: Layer.Layer<DeliveryHandlers> =
-  DeliveryHandlers.layerOf([]);

@@ -94,6 +94,7 @@ export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
     namespace: "namespace",
     override: "field_override",
     permission: "permission",
+    recordRule: "record_rule",
     role: "role",
     savedFilter: "saved_filter",
     subscription: "subscription",

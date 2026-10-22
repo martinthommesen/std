@@ -13,6 +13,7 @@ import type {
   IndexDraft,
   NamespaceDraft,
   OverrideDraft,
+  RecordRuleDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
@@ -364,6 +365,42 @@ export const addAccessRule = (
   };
 
   return { id: definition.id, op: { definition, op: "createAccessRule" } };
+};
+
+/**
+ * A local record rule: by default a `before` guard on `update` that
+ * refuses with `RuleRefused`; `rule` overrides any property.
+ * @param classId - The class it is attached to.
+ * @param rule - Properties that differ from the default.
+ * @returns The operation and the rule ID.
+ */
+export const addRecordRule = (
+  classId: string,
+  rule: Partial<Omit<RecordRuleDraft, "classId" | "kind">> = {}
+): BuiltOperation => {
+  const id = rule.id ?? freshId();
+
+  const definition: RecordRuleDraft = {
+    ...local,
+    actions: [{ code: "RuleRefused", message: "Refused", type: "refuse" }],
+    active: true,
+    condition: null,
+    description: null,
+    name: `r_${id.replaceAll("-", "").slice(-16)}`,
+    once: false,
+    operations: ["update"],
+    order: 0,
+    phase: "before",
+    ruleKind: "guard",
+    runAsId: null,
+    subscriptionId: null,
+    ...rule,
+    classId,
+    id,
+    kind: "recordRule",
+  };
+
+  return { id, op: { definition, op: "createRecordRule" } };
 };
 
 /**

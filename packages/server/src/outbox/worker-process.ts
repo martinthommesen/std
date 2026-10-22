@@ -8,7 +8,7 @@
  * At startup it refuses to run with pending, unknown or changed platform
  * migrations, like `std serve`. Its catalog listens on `std_config`; its
  * record effects save through the same pipeline hooks as the server (the
- * outbox producer, and the record rules of Step 3) and hash passwords with
+ * outbox producer and the record rules, `RecordRuleSaveHooks`) and hash passwords with
  * scrypt.
  *
  * Settings: `STD_WORKER_BATCH_SIZE`, `STD_WORKER_EFFECT_TIMEOUT`,
@@ -20,15 +20,15 @@ import { Layer } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
 import { checkPlatformMigrations } from "../platform/runner.ts";
-import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import {
   DatabaseConfig,
   WORKER_APPLICATION_NAME,
 } from "../sql/database-config.ts";
 import { SqlLayer } from "../sql/layer.ts";
-import { ProductionDeliveryHandlers } from "./delivery-effects.ts";
+import { ProductionDeliveryHandlers } from "./production-handlers.ts";
 import { OutboxWorkerLayer, WorkerSettings } from "./worker.ts";
 
 /** The database, the listening catalog and the instance settings. */
@@ -47,7 +47,7 @@ const StartupCheckLayer = Layer.effectDiscard(checkPlatformMigrations());
 const WorkerServices = Layer.mergeAll(
   ProductionDeliveryHandlers,
   WorkerSettings.fromEnv,
-  OutboxSaveHooks,
+  RecordRuleSaveHooks,
   WriteOnlyValues.scrypt
 );
 

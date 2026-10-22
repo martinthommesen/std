@@ -33,6 +33,12 @@ import { passthrough, transformOptional } from "effect/SchemaGetter";
 
 import { ConditionSchema } from "./condition.ts";
 import { DefinitionIdSchema } from "./ids.ts";
+import {
+  RuleActionSchema,
+  RuleKindSchema,
+  RuleOperationSchema,
+  RulePhaseSchema,
+} from "./rule-definition.ts";
 
 /** Owner layers (Contracts 8.1). */
 export const OwnerLayerSchema = Literals(["core", "app", "local"]);
@@ -558,6 +564,61 @@ export type SavedFilterDraft = typeof SavedFilterDraftSchema.Type;
 /** A saved filter definition. */
 export type SavedFilterDefinition = typeof SavedFilterDefinitionSchema.Type;
 
+/** Properties of a record rule definition that its draft has too. */
+const recordRuleFields = {
+  /** The ordered actions (4.10). */
+  actions: SchemaArray(RuleActionSchema),
+  /** Overridable (8.2): an inactive rule never runs. */
+  active: SchemaBoolean,
+  /** The class it is attached to; it applies to its descendants too. */
+  classId: DefinitionIdSchema,
+  /** A `recordRule`-profile condition (5.10); null always holds. */
+  condition: NullOr(ConditionSchema),
+  description: NullableText,
+  kind: Literal("recordRule"),
+  /** An identifier, unique among the class's live record rules. */
+  name: SchemaString,
+  /** `aggregate` only: fires at most once per owner and transaction. */
+  once: SchemaBoolean,
+  /** `create`, `update`, `delete`; empty for `aggregate`. */
+  operations: SchemaArray(RuleOperationSchema),
+  /** Order number; ties by stable ID. */
+  order: Int,
+  phase: RulePhaseSchema,
+  /** `before` only, required: `derive`, `guard` or `invariant`. */
+  ruleKind: NullOr(RuleKindSchema),
+  /** `after` only: the user its actions run as (needs `rules.run_as`). */
+  runAsId: NullOr(DefinitionIdSchema),
+  /**
+   * `afterCommit` only, required: the subscription whose deliveries run
+   * the rule, and whose identity its actions run as (decision 0022).
+   */
+  subscriptionId: NullOr(DefinitionIdSchema),
+} as const;
+
+/**
+ * A record rule (Contracts 4.10): behavior an admin configures without
+ * code, attached to a class and selected by a record's concrete class
+ * (4.1). Its condition and actions name fields by stable ID, so renames
+ * never break it.
+ */
+export const RecordRuleDefinitionSchema = Struct({
+  ...common,
+  ...recordRuleFields,
+});
+
+/** What a create operation supplies for a record rule definition. */
+export const RecordRuleDraftSchema = Struct({
+  ...draft,
+  ...recordRuleFields,
+});
+
+/** A record rule draft. */
+export type RecordRuleDraft = typeof RecordRuleDraftSchema.Type;
+
+/** A record rule definition. */
+export type RecordRuleDefinition = typeof RecordRuleDefinitionSchema.Type;
+
 /** Any definition. */
 export const DefinitionSchema = Union([
   NamespaceDefinitionSchema,
@@ -573,6 +634,7 @@ export const DefinitionSchema = Union([
   ChoiceDefinitionSchema,
   LayoutDefinitionSchema,
   SavedFilterDefinitionSchema,
+  RecordRuleDefinitionSchema,
 ]);
 
 /** Any definition. */
@@ -602,6 +664,7 @@ export const DEFINITION_KINDS: readonly DefinitionKind[] = [
   "choice",
   "layout",
   "savedFilter",
+  "recordRule",
 ];
 
 /**

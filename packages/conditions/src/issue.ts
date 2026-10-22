@@ -47,6 +47,7 @@ export const IssueReasonSchema = Literals([
   "syntax",
   "unknownName",
   "tooDeep",
+  "scopeNotAllowed",
 ]);
 
 /** A reason code. */

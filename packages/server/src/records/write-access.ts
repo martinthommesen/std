@@ -29,6 +29,7 @@ import { Context, Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import type { ActingUser } from "../auth/actor.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import type { RequestRevision } from "../sql/request-revision.ts";
 import { existingTargets } from "./save-sql.ts";
@@ -163,6 +164,12 @@ export interface WriteAccessApi {
   readonly project: (
     input: ProjectionInput
   ) => Effect.Effect<JsonObject, SqlError | DatabaseError, InTransaction>;
+  /**
+   * The same access layer for another acting user: the identity a record
+   * rule's nested saves run as (Contracts 4.1, `runAs` and after-commit
+   * identities).
+   */
+  readonly forActor: (actor: ActingUser) => WriteAccessApi;
 }
 
 /**
@@ -196,6 +203,30 @@ export const projectAll = (input: ProjectionInput): JsonObject => {
   };
 };
 
+/**
+ * Sees and allows everything, for every acting user: `WriteAccess.allowAll`.
+ */
+const ALLOW_ALL: WriteAccessApi = {
+  checkExisting: () => Effect.void,
+  checkProposed: () => Effect.void,
+  conditionView: classViewOf,
+  forActor: () => ALLOW_ALL,
+  nameable: (input) => input.snapshot.fields(input.endpointClassId),
+  project: (input) => Effect.succeed(projectAll(input)),
+  readableOnProposal: (input) =>
+    Effect.succeed(
+      new Set(input.snapshot.fields(input.classId).map((field) => field.id))
+    ),
+  visibility: (input) =>
+    Effect.succeedSome<ReadonlySet<DefinitionId>>(
+      new Set(
+        input.snapshot.fields(input.record.classId).map((field) => field.id)
+      )
+    ),
+  visibleTargets: (input) =>
+    existingTargets(input.snapshot, input.targetClassId, input.ids),
+};
+
 /** The access layer's answers for the acting user.
  *
  * Its methods run inside the save's transaction and use that
@@ -213,24 +244,6 @@ export class WriteAccess extends Context.Service<WriteAccess, WriteAccessApi>()(
    */
   static readonly allowAll: Layer.Layer<WriteAccess> = Layer.succeed(
     WriteAccess,
-    WriteAccess.of({
-      checkExisting: () => Effect.void,
-      checkProposed: () => Effect.void,
-      conditionView: classViewOf,
-      nameable: (input) => input.snapshot.fields(input.endpointClassId),
-      project: (input) => Effect.succeed(projectAll(input)),
-      readableOnProposal: (input) =>
-        Effect.succeed(
-          new Set(input.snapshot.fields(input.classId).map((field) => field.id))
-        ),
-      visibility: (input) =>
-        Effect.succeedSome<ReadonlySet<DefinitionId>>(
-          new Set(
-            input.snapshot.fields(input.record.classId).map((field) => field.id)
-          )
-        ),
-      visibleTargets: (input) =>
-        existingTargets(input.snapshot, input.targetClassId, input.ids),
-    })
+    WriteAccess.of(ALLOW_ALL)
   );
 }

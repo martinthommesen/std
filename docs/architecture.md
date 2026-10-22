@@ -91,11 +91,12 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm typecheck [dir ...]` | `tsc -p` for the root project (tooling and config files) and every workspace package |
 | `pnpm test` | Vitest, one project per workspace package (for `apps/web`, the Foldkit story and scene tests) |
 | `pnpm --filter @std/web test:browser` | The web app in Playwright's Chromium against a real `std serve` on a disposable database (decision 0018); needs `pnpm --filter @std/web exec playwright install chromium` once |
-| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template) |
+| `pnpm check:tooling` | `check-tsconfig` (profiles), `check-imports` (plain packages import only Schema), `check-lockfile` (one Effect version, no `@effect/sql` or `@effect/platform`), `check-vendor` (vendored Effect and Foldkit tags equal the lockfile, `FOLDKIT.md` equals its template), `check-oda-component-schema` (the Canvas probe's stub Component validates against the pinned Component CRD's `v1` schema, decision 0027) |
 | `pnpm check:postgres` | Signs in at `STD_DATABASE_URL` (SCRAM, MD5 or cleartext) and requires Postgres 18 and a UTF8 database |
-| `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/` |
+| `pnpm test:canaries` | The Contracts 9 acceptance tests in `tooling/test/`, against the fixture packages in `tooling/canaries/`, and the tests of the `oda-component-schema` check and the Canvas probe summary (decision 0027) |
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 | `pnpm release-compat:ci` | Release compatibility, below |
+| `pnpm oda-probe:summary` | Summarizes the last runs of the `oda-canvas-probe` workflow (downloaded with `gh`) or local probe results as Markdown (decision 0027) |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 
@@ -119,7 +120,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `worker` (Step 3), `wait-upgraded` (Step 5), `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
-| `hooks/` | hook phases and record rules (Step 3) | 4.1 |
+| `hooks/` | record rules (Step 3): selection, `before` rules (with the settled mode and `applyDeriveRules` for aggregates), `after` rules as nested saves, run-as identities, `afterCommit` carriers and their executor, the `RecordRuleSaveHooks` layer (decision 0022) | 4.1, 4.10 |
 | `outbox/` | claim, fenced `done` and failure updates, backoff (1E); the delivery worker (`std worker`), effect handlers, payloads, dead letters and metrics (3B, decision 0023) | 4.5, 4.6 |
 | `import/` | import jobs (Step 4) | 7 |
 | `definitions/` (directory at package root, not in `src`) | the shipped `core` definition set files | 1.8, 3.1 |

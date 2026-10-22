@@ -12,7 +12,7 @@ import { StdApi } from "@std/api/api";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 
-import { OutboxSaveHooks } from "../records/outbox-producer.ts";
+import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
 import { AuthenticationLayer } from "./authentication.ts";
@@ -38,7 +38,10 @@ export const ApiHandlers = Layer.mergeAll(
  * routes: the outbox producer (no hooks or record rules until Step 3),
  * scrypt as sign-in.
  */
-const SaveServices = Layer.mergeAll(OutboxSaveHooks, WriteOnlyValues.scrypt);
+const SaveServices = Layer.mergeAll(
+  RecordRuleSaveHooks,
+  WriteOnlyValues.scrypt
+);
 
 /**
  * The API routes with their handlers and middleware. The OpenAPI 3.1

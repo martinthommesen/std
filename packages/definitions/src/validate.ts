@@ -5,7 +5,7 @@
  * and their uniqueness scopes, references between definitions, the
  * `extends` graph, field types and constant defaults, tighten-only
  * overrides, indexes, grants, access rules, subscriptions, choices,
- * layouts and saved filters. It returns
+ * layouts, saved filters and record rules (`rule-validation.ts`). It returns
  * every problem it finds; an empty list means the configuration is valid.
  */
 import { isChoiceKey } from "@std/values/choice";
@@ -58,6 +58,7 @@ import {
 import type { NameProblem } from "./names.ts";
 import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
+import { recordRuleProblems } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 import { CONFIG_SUBSCRIPTION_CLASS_IDS, USER_FIELD_IDS } from "./well-known.ts";
 
@@ -1312,6 +1313,19 @@ const checkUniqueness = (
     (filter) => `${filter.classId}/${filter.name}`,
     (filter) => `The saved filter name "${filter.name}" on its table`
   );
+  duplicates(
+    problems,
+    snapshot.recordRules(),
+    (rule) => `${rule.classId}/${rule.name}`,
+    (rule) => `The record rule name "${rule.name}" on its table`
+  );
+  // One subscription carries one afterCommit rule (decision 0022).
+  duplicates(
+    problems,
+    snapshot.recordRules(),
+    (rule) => rule.subscriptionId ?? undefined,
+    (rule) => `The subscription ${rule.subscriptionId ?? ""} of the rule`
+  );
 };
 
 const checkChoice = (
@@ -1483,6 +1497,8 @@ const checkAccessDefinition = (
     checkLayout(problems, snapshot, definition);
   } else if (definition.kind === "savedFilter") {
     checkSavedFilter(problems, snapshot, definition, purpose);
+  } else if (definition.kind === "recordRule") {
+    problems.push(...recordRuleProblems(snapshot, definition, purpose));
   }
 };
 

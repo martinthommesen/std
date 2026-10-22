@@ -1,5 +1,5 @@
 /**
- * Migration 0013: `core.delivery.finished_at`, for the outbox worker
+ * Migration 0014: `core.delivery.finished_at`, for the outbox worker
  * (Contracts 4.6, workstream 3B, decision 0023).
  *
  * - `finished_at`: when a row became `done` or `dead`. The worker sets it
@@ -10,16 +10,16 @@
  * Additive only (expand, Contracts 1.4 and the rolling-upgrade rules): a
  * nullable column without a default, no constraint the previous release's
  * writes could violate (its fenced updates do not set the column), no
- * rewrite. The index the retention delete uses is migration 0014, built
+ * rewrite. The index the retention delete uses is migration 0015, built
  * concurrently.
  *
  * This file is frozen once applied: the ledger records its checksum.
  */
 import type { TxMigration } from "../migration.ts";
 
-/** Migration 0013. Never edit it: the ledger records its checksum. */
-export const migration0013: TxMigration = {
-  id: 13,
+/** Migration 0014. Never edit it: the ledger records its checksum. */
+export const migration0014: TxMigration = {
+  id: 14,
   kind: "tx",
   name: "outbox-worker",
   statements: [

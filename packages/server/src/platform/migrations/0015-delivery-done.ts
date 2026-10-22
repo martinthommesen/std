@@ -1,5 +1,5 @@
 /**
- * Migration 0014: the index behind the deletion of old `done` deliveries
+ * Migration 0015: the index behind the deletion of old `done` deliveries
  * (Contracts 4.6, decision 0023).
  *
  * - `core.delivery_done`: a partial index on `finished_at` of `done` rows,
@@ -12,9 +12,9 @@
  */
 import type { ConcurrentIndexMigration } from "../migration.ts";
 
-/** Migration 0014. Never edit it: the ledger records its checksum. */
-export const migration0014: ConcurrentIndexMigration = {
-  id: 14,
+/** Migration 0015. Never edit it: the ledger records its checksum. */
+export const migration0015: ConcurrentIndexMigration = {
+  id: 15,
   index: "delivery_done",
   kind: "concurrent_index",
   name: "delivery-done",

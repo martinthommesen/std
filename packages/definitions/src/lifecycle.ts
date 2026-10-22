@@ -7,11 +7,11 @@
  * | Operation | Refused when (blocking dependents) | Reported but allowed | Cascade |
  * | --- | --- | --- | --- |
  * | rename | protected; core or app owned and not its set; the new name is in use before this change set | nothing | none |
- * | retire field | protected; display field of a class; part of a multi-field unique index | other dependents | none (`required` becomes false) |
+ * | retire field | protected; display field of a class; part of a multi-field unique index; an active record rule writes it | other dependents | none (`required` becomes false) |
  * | retire table | protected; an active child class; an active reference field on an active table points at it | other dependents | none |
  * | retire role | protected; an active access rule names it | other dependents | none |
  * | purge field | not retired before this change set; any dependent that is not retired, except single-field indexes, overrides, choices and layout entries (a saved filter reading it blocks, decision 0019) | none | its single-field indexes, overrides and choices (layouts keep the entry, skipped where served) |
- * | purge table | not retired before; a child class or incoming reference field not purged; an access rule or subscription on it | none | its fields with their choices, indexes, overrides, layouts and saved filters |
+ * | purge table | not retired before; a child class or incoming reference field not purged; an access rule, subscription or record rule on it | none | its fields with their choices, indexes, overrides, layouts and saved filters |
  * | delete role | protected; any access rule names it | its grants | its grants |
  * | delete permission | protected | its grants | its grants |
  * | delete field, table, namespace | always (`UseRetireOrPurge`) | | |
@@ -136,6 +136,10 @@ const namingScope = (
     return snapshot.savedFiltersOf(target.classId);
   }
 
+  if (target.kind === "recordRule") {
+    return snapshot.recordRulesOf(target.classId);
+  }
+
   return target.kind === "class"
     ? snapshot.classesIn(target.namespaceId)
     : snapshot.all(target.kind).filter(isLive);
@@ -217,9 +221,39 @@ const isMultiFieldUnique = (edge: DependentEdge): boolean =>
   edge.definition.fieldIds.length > 1;
 
 /**
+ * Whether an edge is a live table naming the field as its display field,
+ * unless the same change set retires that table.
+ *
+ * @param edge - A dependent edge of a field.
+ * @param retiredInChangeSet - What some retire of the change set targets.
+ * @returns True for a blocking table.
+ */
+const isLiveDisplayField = (
+  edge: DependentEdge,
+  retiredInChangeSet: ReadonlySet<DefinitionId>
+): boolean =>
+  edge.kind === "display_field" &&
+  isLive(edge.definition) &&
+  !retiredInChangeSet.has(edge.definition.id);
+
+/**
+ * Whether an edge is an active record rule writing the field (Contracts
+ * 1.7: "an active rule writes it").
+ *
+ * @param edge - A dependent edge of a field.
+ * @returns True for a blocking rule.
+ */
+const writtenByActiveRule = (edge: DependentEdge): boolean =>
+  edge.kind === "rule_writes" &&
+  edge.definition.kind === "recordRule" &&
+  edge.definition.active &&
+  isActive(edge.definition);
+
+/**
  * What keeps a field from being retired: a live table naming it as its
- * display field, unless the same change set retires that table too, and a
- * multi-field unique index on it (Contracts 1.7).
+ * display field, unless the same change set retires that table too, a
+ * multi-field unique index on it, and an active record rule writing it
+ * (Contracts 1.7).
  *
  * @param edges - The field's dependents.
  * @param retiredInChangeSet - What some retire of the change set targets.
@@ -231,10 +265,9 @@ const retireFieldBlockers = (
 ): readonly DependentEdge[] =>
   edges.filter(
     (edge) =>
-      (edge.kind === "display_field" &&
-        isLive(edge.definition) &&
-        !retiredInChangeSet.has(edge.definition.id)) ||
-      isMultiFieldUnique(edge)
+      isLiveDisplayField(edge, retiredInChangeSet) ||
+      isMultiFieldUnique(edge) ||
+      writtenByActiveRule(edge)
   );
 
 /**
@@ -547,7 +580,8 @@ const goesWithField = (edge: DependentEdge): boolean => {
     case "accessRule":
     case "subscription":
     case "layout":
-    case "savedFilter": {
+    case "savedFilter":
+    case "recordRule": {
       return false;
     }
 
@@ -591,6 +625,11 @@ const ownParts = (
   ...view.savedFiltersOf(target.id),
 ];
 
+/** The kinds whose definitions on a table keep it from being purged. */
+const ATTACHED_BEHAVIOR: ReadonlySet<Definition["kind"]> = new Set<
+  Definition["kind"]
+>(["accessRule", "subscription", "recordRule"]);
+
 /**
  * Whether a dependent of a table (or of one of its fields) keeps the table
  * from being purged: a child class, a reference field pointing at it, a
@@ -606,8 +645,7 @@ const blocksTablePurge = (
 ): boolean =>
   kind === "extends" ||
   NAMES_TABLE.has(kind) ||
-  definition.kind === "accessRule" ||
-  definition.kind === "subscription";
+  ATTACHED_BEHAVIOR.has(definition.kind);
 
 const classPurgeBlockers = (
   view: ConfigSnapshot,

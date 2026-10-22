@@ -38,6 +38,8 @@ export type Json = JsonValue;
 export interface Path {
   readonly path: readonly string[];
   readonly image?: "previous";
+  /** `record`: read the rule's record (record-rule `where` only). */
+  readonly scope?: "record";
 }
 
 /** The comparison operators. */
@@ -238,6 +240,7 @@ export const isStableId = (text: string): boolean => UUID_TEXT.test(text);
 export const PathSchema = Struct({
   image: optionalKey(Literal("previous")),
   path: SchemaArray(StableIdSchema),
+  scope: optionalKey(Literal("record")),
 });
 
 const LiteralValueSchema = Struct({ value: JsonSchema });

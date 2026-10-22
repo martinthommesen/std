@@ -22,7 +22,7 @@
  *   with `LeaseLost`. They run in the caller's transaction when there is
  *   one (a delivery transaction that holds the effect's record writes, 4.1)
  *   and fail inside it, so the whole transaction rolls back.
- * - `done` and `dead` set `finished_at` (migration 0013): `done` rows are
+ * - `done` and `dead` set `finished_at` (migration 0014): `done` rows are
  *   deleted 7 days after it, `dead` rows stay.
  * - A failure returns the row to `pending` after `retryDelay` (10 s doubling
  *   to 1 h, minus up to 20 % jitter), or makes it `dead` once it has been
