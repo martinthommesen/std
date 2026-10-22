@@ -27,6 +27,7 @@ import type { ChangeKind } from "../records/change-entry.ts";
 import { writeDeliveries } from "../records/outbox-producer.ts";
 import { SaveHooks } from "../records/save-hooks.ts";
 import type { AfterWriteInput } from "../records/save-hooks.ts";
+import { WriteAccess } from "../records/write-access.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
 import { afterCommitCarriers } from "./after-commit-rules.ts";
 import { runBeforeRules } from "./before-rules.ts";
@@ -76,6 +77,7 @@ export const runAfterRules = Effect.fn("Rules.after")(function* runAfterRules(
   }
 
   const acting = yield* Actor;
+  const access = yield* WriteAccess;
   const context = yield* contextOf(timeZone);
   const previous = input.before === null ? null : imageOf(input.before);
   const record = { id: entry.recordId, image: imageOf(image) };
@@ -101,7 +103,10 @@ export const runAfterRules = Effect.fn("Rules.after")(function* runAfterRules(
         record,
         rule,
         snapshot,
-      }).pipe(Effect.provideService(Actor, actor));
+      }).pipe(
+        Effect.provideService(Actor, actor),
+        Effect.provideService(WriteAccess, access.forActor(actor))
+      );
     }
   }
 

@@ -41,6 +41,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Clock, Effect, Layer, Option } from "effect";
 
 import { Actor } from "../auth/actor.ts";
+import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import { fieldPredicate, recordPredicate } from "./access-sql.ts";
@@ -57,7 +58,7 @@ import {
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import { WriteAccess } from "./write-access.ts";
-import type { ProposedCheck } from "./write-access.ts";
+import type { ProposedCheck, WriteAccessApi } from "./write-access.ts";
 
 const ALIAS = "r";
 
@@ -86,6 +87,184 @@ const proposedCheck = (input: ProposedCheck): RuleCheck => ({
   written: input.written,
 });
 
+/** What the rule-based access layer reads besides the acting user. */
+interface RuleAccessDeps {
+  readonly catalog: Catalog["Service"];
+  readonly timeZone: string;
+  /** The instant access-rule conditions resolve `now` with. */
+  readonly now: number;
+}
+
+/**
+ * The rule-based access layer for one acting user.
+ *
+ * @param actor - The acting user.
+ * @param deps - The catalog, the instance time zone and `now`.
+ * @returns The access layer; `forActor` builds it for another user.
+ */
+const makeRuleWriteAccess = (
+  actor: ActingUser,
+  deps: RuleAccessDeps
+): WriteAccessApi => {
+  const { catalog, now } = deps;
+  const settings = { timeZone: deps.timeZone };
+
+  const context: AccessContext = {
+    me: actor.userId,
+    now,
+    timeZone: settings.timeZone,
+  };
+
+  const scopeOf = (snapshot: ConfigSnapshot) =>
+    makeReadScope(snapshot, actor, context);
+
+  const allowed = Effect.fn("WriteAccess.allowed")(function* allowed(
+    check: RuleCheck
+  ) {
+    const classIds = [check.classId];
+
+    const predicates = [
+      recordPredicate(
+        check.snapshot,
+        actor,
+        check.action,
+        classIds,
+        ALIAS,
+        context
+      ).predicate,
+      ...[...check.written].map(
+        (fieldId) =>
+          fieldPredicate(
+            check.snapshot,
+            actor,
+            check.fieldAction,
+            classIds,
+            fieldId,
+            ALIAS,
+            context
+          ).predicate
+      ),
+    ];
+
+    const every = sql`(${joinSql(predicates, " AND ")})`;
+
+    const [row] = yield* readRows(
+      sql`SELECT ${truthColumn(every, "allowed")}
+${byId(check.snapshot, check.classId, check.id)}`
+    );
+
+    if (row?.allowed !== "true") {
+      return yield* new NotAllowed();
+    }
+
+    return yield* Effect.void;
+  });
+
+  return WriteAccess.of({
+    checkExisting: (input) =>
+      allowed({
+        action: input.action,
+        classId: input.record.classId,
+        fieldAction: "update",
+        id: input.record.id,
+        snapshot: input.snapshot,
+        written: input.written,
+      }),
+    checkProposed: (input) => allowed(proposedCheck(input)),
+    conditionView: (snapshot) => filterClassView(scopeOf(snapshot)),
+    forActor: (other) => makeRuleWriteAccess(other, deps),
+    nameable: (input) => {
+      const scope = scopeOf(input.snapshot);
+
+      return input.snapshot
+        .fields(input.endpointClassId)
+        .filter((field) =>
+          isNameable(scope, input.endpointClassId, input.action, field.id)
+        );
+    },
+    project: Effect.fn("WriteAccess.project")(function* project(input) {
+      const table = input.snapshot.qualifiedNameOf(input.endpointClassId);
+
+      const projected = yield* getRecord({
+        id: input.record.id,
+        table: table ?? "",
+      }).pipe(
+        Effect.map((body) => Option.some(body.record)),
+        Effect.catchTag("NotFound", () => Effect.succeedNone),
+        Effect.catchTags({
+          InvalidRequest: Effect.die,
+          UnknownField: Effect.die,
+          UnknownTable: Effect.die,
+        }),
+        Effect.provideService(Actor, actor),
+        Effect.provideService(Catalog, catalog),
+        Effect.provideService(InstanceSettings, settings)
+      );
+
+      return Option.getOrElse(projected, () => ({
+        id: input.record.id,
+        version: input.record.version,
+      }));
+    }),
+    readableOnProposal: (input) =>
+      readableOnProposal(scopeOf(input.snapshot), {
+        actorId: actor.userId,
+        classId: input.classId,
+        existing: input.existing,
+        values: input.values,
+      }),
+    visibility: (input) =>
+      readableOnRecord(
+        scopeOf(input.snapshot),
+        input.record.classId,
+        input.record.id
+      ),
+    visibleTargets: Effect.fn("WriteAccess.visibleTargets")(
+      function* visibleTargets(input) {
+        if (input.ids.length === 0) {
+          return new Set<string>();
+        }
+
+        const scope = scopeOf(input.snapshot);
+        const view = scope.view(input.targetClassId);
+
+        // The allowed-records condition in the caller's view (decision
+        // 0020): hidden values count as empty, so whether a target is
+        // refused reveals nothing about them.
+        const limit =
+          input.allowedRecords === null
+            ? undefined
+            : compileAllowedRecords(
+                scope,
+                input.targetClassId,
+                input.allowedRecords,
+                ALIAS
+              );
+
+        const rows = yield* readRows(
+          sql`SELECT ${identSql(ALIAS, "id")}::text AS "id"
+FROM ${recordRelation(input.snapshot, input.targetClassId)} AS ${identSql(ALIAS)}${limit === undefined ? rawSql("") : sql` ${limit.joins}`}
+WHERE ${identSql(ALIAS, "id")} = ANY(${arrayParameter(input.ids, "uuid")})
+  AND ${view.visibility(ALIAS)}${
+    limit === undefined
+      ? rawSql("")
+      : sql`
+  AND (${limit.predicate})`
+  }`
+        );
+
+        const visible: ReadonlySet<string> = new Set(
+          rows.flatMap((row) =>
+            row.id === null || row.id === undefined ? [] : [row.id]
+          )
+        );
+
+        return visible;
+      }
+    ),
+  });
+};
+
 /**
  * The `WriteAccess` of the request's `Actor`, with the access-rule context
  * (`me`, `now`, the instance time zone) fixed for the request.
@@ -102,158 +281,10 @@ export const RuleWriteAccess: Layer.Layer<
     const settings = yield* InstanceSettings;
     const now = yield* Clock.currentTimeMillis;
 
-    const context: AccessContext = {
-      me: actor.userId,
+    return makeRuleWriteAccess(actor, {
+      catalog,
       now,
       timeZone: settings.timeZone,
-    };
-
-    const scopeOf = (snapshot: ConfigSnapshot) =>
-      makeReadScope(snapshot, actor, context);
-
-    const allowed = Effect.fn("WriteAccess.allowed")(function* allowed(
-      check: RuleCheck
-    ) {
-      const classIds = [check.classId];
-
-      const predicates = [
-        recordPredicate(
-          check.snapshot,
-          actor,
-          check.action,
-          classIds,
-          ALIAS,
-          context
-        ).predicate,
-        ...[...check.written].map(
-          (fieldId) =>
-            fieldPredicate(
-              check.snapshot,
-              actor,
-              check.fieldAction,
-              classIds,
-              fieldId,
-              ALIAS,
-              context
-            ).predicate
-        ),
-      ];
-
-      const every = sql`(${joinSql(predicates, " AND ")})`;
-
-      const [row] = yield* readRows(
-        sql`SELECT ${truthColumn(every, "allowed")}
-${byId(check.snapshot, check.classId, check.id)}`
-      );
-
-      if (row?.allowed !== "true") {
-        return yield* new NotAllowed();
-      }
-
-      return yield* Effect.void;
-    });
-
-    return WriteAccess.of({
-      checkExisting: (input) =>
-        allowed({
-          action: input.action,
-          classId: input.record.classId,
-          fieldAction: "update",
-          id: input.record.id,
-          snapshot: input.snapshot,
-          written: input.written,
-        }),
-      checkProposed: (input) => allowed(proposedCheck(input)),
-      conditionView: (snapshot) => filterClassView(scopeOf(snapshot)),
-      nameable: (input) => {
-        const scope = scopeOf(input.snapshot);
-
-        return input.snapshot
-          .fields(input.endpointClassId)
-          .filter((field) =>
-            isNameable(scope, input.endpointClassId, input.action, field.id)
-          );
-      },
-      project: Effect.fn("WriteAccess.project")(function* project(input) {
-        const table = input.snapshot.qualifiedNameOf(input.endpointClassId);
-
-        const projected = yield* getRecord({
-          id: input.record.id,
-          table: table ?? "",
-        }).pipe(
-          Effect.map((body) => Option.some(body.record)),
-          Effect.catchTag("NotFound", () => Effect.succeedNone),
-          Effect.catchTags({
-            InvalidRequest: Effect.die,
-            UnknownField: Effect.die,
-            UnknownTable: Effect.die,
-          }),
-          Effect.provideService(Actor, actor),
-          Effect.provideService(Catalog, catalog),
-          Effect.provideService(InstanceSettings, settings)
-        );
-
-        return Option.getOrElse(projected, () => ({
-          id: input.record.id,
-          version: input.record.version,
-        }));
-      }),
-      readableOnProposal: (input) =>
-        readableOnProposal(scopeOf(input.snapshot), {
-          actorId: actor.userId,
-          classId: input.classId,
-          existing: input.existing,
-          values: input.values,
-        }),
-      visibility: (input) =>
-        readableOnRecord(
-          scopeOf(input.snapshot),
-          input.record.classId,
-          input.record.id
-        ),
-      visibleTargets: Effect.fn("WriteAccess.visibleTargets")(
-        function* visibleTargets(input) {
-          if (input.ids.length === 0) {
-            return new Set<string>();
-          }
-
-          const scope = scopeOf(input.snapshot);
-          const view = scope.view(input.targetClassId);
-
-          // The allowed-records condition in the caller's view (decision
-          // 0020): hidden values count as empty, so whether a target is
-          // refused reveals nothing about them.
-          const limit =
-            input.allowedRecords === null
-              ? undefined
-              : compileAllowedRecords(
-                  scope,
-                  input.targetClassId,
-                  input.allowedRecords,
-                  ALIAS
-                );
-
-          const rows = yield* readRows(
-            sql`SELECT ${identSql(ALIAS, "id")}::text AS "id"
-FROM ${recordRelation(input.snapshot, input.targetClassId)} AS ${identSql(ALIAS)}${limit === undefined ? rawSql("") : sql` ${limit.joins}`}
-WHERE ${identSql(ALIAS, "id")} = ANY(${arrayParameter(input.ids, "uuid")})
-  AND ${view.visibility(ALIAS)}${
-    limit === undefined
-      ? rawSql("")
-      : sql`
-  AND (${limit.predicate})`
-  }`
-          );
-
-          const visible: ReadonlySet<string> = new Set(
-            rows.flatMap((row) =>
-              row.id === null || row.id === undefined ? [] : [row.id]
-            )
-          );
-
-          return visible;
-        }
-      ),
     });
   })
 );

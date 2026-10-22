@@ -47,6 +47,7 @@ import type { AfterWriteInput } from "../records/save-hooks.ts";
 import { loadRecord } from "../records/save-sql.ts";
 import { SaveStack } from "../records/save-stack.ts";
 import { readRows } from "../records/sql-run.ts";
+import { WriteAccess } from "../records/write-access.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { runSaveActions } from "./rule-actions.ts";
 import { imageOf, ruleConditionHolds } from "./rule-condition.ts";
@@ -290,6 +291,10 @@ export const runAfterCommitRule = Effect.fn("Rules.afterCommit")(
       snapshot,
     }).pipe(
       Effect.provideService(Actor, identity),
+      Effect.provideService(
+        WriteAccess,
+        (yield* WriteAccess).forActor(identity)
+      ),
       Effect.provideService(SaveStack, { depth, recordIds: new Set<string>() })
     );
 

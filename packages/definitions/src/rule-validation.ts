@@ -403,6 +403,16 @@ const checkSelection = (
     );
   }
 
+  // The selection compiles to SQL over the class's own relation, which
+  // joins no reference target. [judgment, decision 0022]
+  const hops = conditionPaths(condition).some(
+    (path) => path.scope === undefined && path.path.length > 1
+  );
+
+  if (hops) {
+    invalid(checking, `${at} follows no reference: name fields of its class.`);
+  }
+
   conditionAt(
     checking,
     at,
