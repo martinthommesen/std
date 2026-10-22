@@ -25,6 +25,7 @@ import {
   updateRecord,
 } from "../src/records/save-pipeline.ts";
 import type { StoredRecord } from "../src/records/stored-record.ts";
+import type { LoggedStatement } from "../src/sql/statement-log.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
@@ -59,6 +60,39 @@ const notifyIndexes = (entries: readonly { readonly text: string }[]) =>
   entries.flatMap((entry, index) =>
     entry.text.toLowerCase().includes("notify") ? [index] : []
   );
+
+const lastCommittedDelivery = (entries: readonly LoggedStatement[]): number =>
+  entries.findLastIndex((entry, index) => {
+    if (entry.text !== "COMMIT") {
+      return false;
+    }
+
+    const begin = entries.findLastIndex(
+      (candidate, candidateIndex) =>
+        candidateIndex < index &&
+        candidate.connection === entry.connection &&
+        candidate.text.startsWith("BEGIN")
+    );
+
+    return (
+      begin !== -1 &&
+      entries
+        .slice(begin + 1, index)
+        .some(
+          (candidate) =>
+            candidate.connection === entry.connection &&
+            candidate.text.includes("INSERT INTO core.delivery")
+        )
+    );
+  });
+
+const wakeUpSettled = (entries: readonly LoggedStatement[]): boolean => {
+  const commit = lastCommittedDelivery(entries);
+
+  return (
+    commit === -1 || notifyIndexes(entries).some((index) => index > commit)
+  );
+};
 
 const watch = (
   name: string,
@@ -407,6 +441,7 @@ describe("outbox-producer", () => {
         Effect.gen(function* wakeUp() {
           const log = yield* StatementLog;
 
+          yield* waitUntil(log.entries.pipe(Effect.map(wakeUpSettled)));
           yield* log.clear;
 
           yield* createRecord({
