@@ -45,8 +45,9 @@ import { dropConstraint } from "./ddl.ts";
 import { RecoverySettings } from "./recovery-settings.ts";
 import { SchemaChangeNotOpen } from "./schema-change-not-open.ts";
 import { SchemaNeedsAttention } from "./schema-needs-attention.ts";
-import { detailText, STEP_SPECS } from "./steps.ts";
-import type { StepRow } from "./steps.ts";
+import { detailText } from "./step-spec.ts";
+import type { StepRow } from "./step-spec.ts";
+import { STEP_SPECS } from "./steps.ts";
 
 /** `application_name` of the connection that tries to resume. */
 export const RESUMER_APPLICATION_NAME = "std-resumer";

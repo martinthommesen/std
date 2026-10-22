@@ -59,6 +59,7 @@ import { Effect, Option, Result } from "effect";
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
 import { RecordInSave } from "./record-in-save.ts";
@@ -517,7 +518,9 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     });
     yield* checkReferences(snapshot, fields, proposal.values, supplied);
 
-    const writes = yield* columnWrites(fields, proposal.values);
+    // Auto-numbered fields get their number last, in this transaction.
+    const numbered = yield* assignNumbers(fields, proposal.values);
+    const writes = yield* columnWrites(fields, numbered);
 
     const id = yield* insertRecord(
       snapshot,

@@ -35,8 +35,8 @@ import { runDdl, takeTableLocks } from "./lock-budget.ts";
 import { lockInventory } from "./plan.ts";
 import { stepBoundary } from "./recovery-settings.ts";
 import { SchemaBusy } from "./schema-busy.ts";
+import type { StepRow } from "./step-spec.ts";
 import { STEP_SPECS } from "./steps.ts";
-import type { StepRow } from "./steps.ts";
 import { watchStep } from "./watchdog.ts";
 
 /** `application_name` of the coordinator's connection. */
@@ -121,6 +121,7 @@ const decodeSteps = decodeRows(
     kind: Schema.Literals([
       "validate_constraint",
       "validate_override",
+      "backfill",
       "create_index_concurrently",
       "drop_index_concurrently",
       "complete",
