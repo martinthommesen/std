@@ -88,6 +88,31 @@ describe("trace-parse", () => {
     assert.deepStrictEqual(trace.calls, []);
   });
 
+  it("shows an unreadable line's shape, redacted, then shortened", () => {
+    const password = `pw-${"x".repeat(70)}-shape-probe`;
+    const token = newSessionToken();
+
+    const trace = parseTrace(
+      [
+        `90 something(${JSON.stringify(token)}, ${JSON.stringify(password)}) = 0`,
+        `91 unknown(${"y".repeat(200)})`,
+      ].join("\n")
+    );
+
+    const problems = checkTrace(trace, [password], []);
+
+    assert.deepStrictEqual(problems, [
+      'trace line 1: not a recognized line: "90 something(\\"<token>\\", \\"<password>\\") = 0"',
+      `trace line 2: not a recognized line: "91 unknown(${"y".repeat(69)}..."`,
+    ]);
+    assert.isFalse(
+      problems.some(
+        (problem) =>
+          problem.includes(token) || problem.includes(password.slice(0, 20))
+      )
+    );
+  });
+
   it("refuses unknown lines, lines without a PID and other syscalls", () => {
     const trace = parseTrace(
       [
@@ -99,11 +124,11 @@ describe("trace-parse", () => {
       ].join("\n")
     );
 
-    assert.deepStrictEqual(trace.problems, [
-      "trace line 2: no PID prefix",
-      "trace line 3: not a recognized line",
-      "trace line 4: not a recognized line",
-      "trace line 5: no PID prefix",
+    assert.deepStrictEqual(checkTrace(trace, [], []), [
+      'trace line 2: no PID prefix: "execve(\\"/usr/bin/true\\", [\\"true\\"], 0x1) = 0"',
+      'trace line 3: not a recognized line: "41 open(\\"/etc/passwd\\", O_RDONLY) = 3"',
+      'trace line 4: not a recognized line: "41 --- SIGCHLD {si_signo=SIGCHLD} ---"',
+      'trace line 5: no PID prefix: "strace: Process 42 attached"',
     ]);
     assert.lengthOf(trace.calls, 1);
   });
@@ -119,13 +144,16 @@ describe("trace-parse", () => {
       ].join("\n")
     );
 
-    assert.deepStrictEqual(trace.problems, [
-      "trace line 1: an execve that does not parse",
-      "trace line 2: an execve that does not parse",
-      "trace line 4: a resumed execve that never started",
-      "trace line 5: an execveat that does not parse",
-      "trace line 3: an execve that never finished",
-    ]);
+    assert.deepStrictEqual(
+      trace.problems.map((found) => [found.line, found.problem]),
+      [
+        [1, "an execve that does not parse"],
+        [2, "an execve that does not parse"],
+        [4, "a resumed execve that never started"],
+        [5, "an execveat that does not parse"],
+        [3, "an execve that never finished"],
+      ]
+    );
   });
 
   it("reports a string or a list strace shortened", () => {

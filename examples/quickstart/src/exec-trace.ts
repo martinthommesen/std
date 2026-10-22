@@ -175,6 +175,12 @@ const redact = (text: string, needles: readonly string[]): string => {
 };
 
 /**
+ * How much of an unreadable line a problem shows, after redaction: enough
+ * to see the line's form in a CI log.
+ */
+const EXCERPT_LENGTH = 80;
+
+/**
  * The problems of one call.
  * @param call - The call.
  * @param number - Its position in the trace, from 1.
@@ -240,7 +246,16 @@ export const checkTrace = (
   );
 
   return [
-    ...trace.problems,
+    ...trace.problems.map((found) => {
+      const visible = redact(found.text, needles);
+
+      const excerpt =
+        visible.length > EXCERPT_LENGTH
+          ? `${visible.slice(0, EXCERPT_LENGTH)}...`
+          : visible;
+
+      return `trace line ${found.line}: ${found.problem}: ${JSON.stringify(excerpt)}`;
+    }),
     ...trace.calls.flatMap((call, index) =>
       callProblems(call, index + 1, needles)
     ),

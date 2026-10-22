@@ -1,0 +1,25 @@
+2513  execve("/usr/bin/bash", ["bash", "/work/probe.sh"], 0x7ffd6bc3e6a0 /* 6 vars */) = 0
+2515  execve("/usr/bin/jq", ["jq", "-n", "--arg", "p", "a\"b\\c\nd", "."], 0x57a9aeae4490 /* 6 vars */) = 0
+2517  execve("/usr/bin/seq", ["seq", "1", "300"], 0x57a9aeae4490 /* 6 vars */) = 0
+2518  execve("/bin/true", ["/bin/true", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "tab\t\303\251"], 0x57a9aeae4490 /* 6 vars */) = 0
+2519  execve("/bin/true", ["/bin/true", "one", "two"], 0x57a9aeae4490 /* 6 vars */) = 0
+2520  execve("/bin/echo", ["/bin/echo", "1"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2521  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2522  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2523  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2524  execve("/bin/echo", ["/bin/echo", "2"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2525  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */ <unfinished ...>
+2526  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */ <unfinished ...>
+2525  <... execve resumed>)             = 0
+2526  <... execve resumed>)             = 0
+2527  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2528  execve("/bin/echo", ["/bin/echo", "3"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2529  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */ <unfinished ...>
+2530  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */ <unfinished ...>
+2529  <... execve resumed>)             = 0
+2531  execve("/usr/bin/cat", ["cat"], 0x57a9aeae8de0 /* 6 vars */ <unfinished ...>
+2530  <... execve resumed>)             = 0
+2531  <... execve resumed>)             = 0
+2532  execve("/usr/bin/python3", ["python3", "-c", "import os; fd = os.open(\"/bin/true\", os.O_RDONLY); os.execve(fd, [\"true\", \"via-fd\"], {})"], 0x57a9aeae8de0 /* 6 vars */) = 0
+2532  execveat(3, "", ["true", "via-fd"], 0x7ceadb518230 /* 0 vars */, AT_EMPTY_PATH) = 0
+2533  execve("/nonexistent/thing", ["/nonexistent/thing"], 0x57a9aeae8de0 /* 6 vars */) = -1 ENOENT (No such file or directory)
