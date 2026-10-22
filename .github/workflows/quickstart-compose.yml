@@ -9,8 +9,14 @@
 # stack serves the built web app at `/`; `admin` and `agent` sign in with
 # the README's demo passwords the way the web app does (cookie sign-in) and
 # list `helpdesk.incident`; the admin sees `internal_cost`, the agent sees
-# neither the key nor its values. It does not drive a browser; the browser
-# tests (`ci.yml`) do, against `std serve` on a test database.
+# neither the key nor its values. Then, in Chromium, against the build the
+# stack serves (apps/web/test/compose-smoke, run with
+# apps/web/vitest-compose-smoke.config.ts): for `admin` and `agent`, open
+# `/`, sign in by typing into the rendered form and clicking "Sign in", open
+# "Incident" from the navigation and see at least one incident, with no
+# uncaught exception, console error or failed same-origin load; the agent's
+# list has no internal cost column, or only restricted cells. Node, pnpm
+# and Chromium are set up as in `ci.yml`, after the stack is up.
 #
 # This job skips the credential check (the execve trace of decision 0016):
 # the check is a TypeScript program that would need Node and the workspace
@@ -25,7 +31,8 @@
 # and remove it afterwards with `docker compose -p std-try down --volumes`.
 # Point the scripts at it with STD_URL=http://127.0.0.1:58080 (and, for
 # quickstart.sh, STD_DOCTOR_COMMAND='docker compose -p std-try exec -T
-# server pnpm --silent std doctor').
+# server pnpm --silent std doctor'). The browser smoke test reads STD_URL too:
+#   STD_URL=http://127.0.0.1:58080 pnpm --filter @std/web exec vitest run --config vitest-compose-smoke.config.ts
 name: Quickstart (docker compose)
 
 on:
@@ -54,6 +61,20 @@ jobs:
         run: examples/quickstart.sh
       - name: "Step 2 runnable result: the web app at /, admin and agent sign in and list incidents"
         run: examples/helpdesk-sign-in.sh
+      # Node, pnpm and Chromium for the browser smoke test, as in ci.yml.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.12.0
+          cache: pnpm
+      - name: Toolchain versions
+        run: test "$(node --version)" = v26.12.0 && test "$(pnpm --version)" = 12.14.0
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Chromium (for the browser smoke test)
+        run: pnpm --filter @std/web exec playwright install --with-deps chromium
+      - name: "Step 2 runnable result in Chromium: admin and agent sign in through the form and open the incident list"
+        run: pnpm --filter @std/web exec vitest run --config vitest-compose-smoke.config.ts
       - name: Logs
         if: failure()
         run: docker compose logs
