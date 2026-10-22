@@ -11,11 +11,11 @@ Stack: TypeScript 7 and Effect 4 on Node 26, a pnpm 12 workspace, Postgres 18.
 Requires Docker, bash, curl and jq.
 
 ```sh
-docker compose up --build                  # Postgres 18, then `std upgrade` once, then `std serve`
+docker compose up --build                  # Postgres 18, then `std upgrade` once, then `std serve` and `std worker`
 examples/quickstart.sh                     # in a second terminal, from the repository root
 ```
 
-`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade --set examples/helpdesk/v2`, which applies the platform migrations and loads the core definition set and the helpdesk example; then `std bootstrap-admin`, which creates the first administrator; then `pnpm helpdesk:seed`, the helpdesk's demo users and incidents), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
+`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade --set examples/helpdesk/v2`, which applies the platform migrations and loads the core definition set and the helpdesk example; then `std bootstrap-admin`, which creates the first administrator; then `pnpm helpdesk:seed`, the helpdesk's demo users and incidents), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> and the `worker` service (`std worker`, the outbox worker that runs after-commit effects; decision 0023) once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
 
 `examples/quickstart.sh` then works through the HTTP API only:
 

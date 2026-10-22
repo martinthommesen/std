@@ -60,7 +60,7 @@ import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import { recordRuleProblems } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { USER_FIELD_IDS } from "./well-known.ts";
+import { CONFIG_SUBSCRIPTION_CLASS_IDS, USER_FIELD_IDS } from "./well-known.ts";
 
 /** Field kinds that can be created in Step 1 (Contracts plan, Step 1). */
 export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
@@ -1184,13 +1184,18 @@ const checkSubscription = (
 
   // Platform and config tables change through migrations and change sets,
   // never through the save pipeline, so a subscription on one would never
-  // receive a delivery (Contracts 4.6).
-  if (snapshot.class(subscription.classId)?.storage === "platform") {
+  // receive a delivery (Contracts 4.6). The config kinds `role` and
+  // `accessRule` are the exception: change sets write their deliveries
+  // (config subscriptions, Step 3).
+  if (
+    snapshot.class(subscription.classId)?.storage === "platform" &&
+    !CONFIG_SUBSCRIPTION_CLASS_IDS.has(subscription.classId)
+  ) {
     problems.push(
       problem(
         "invalidSubscription",
         subscription.id,
-        "A subscription cannot watch a platform table: its rows are not saved through the record service."
+        "A subscription cannot watch a platform table other than core.role and core.access_rule: its rows are not saved through the record service."
       )
     );
   }

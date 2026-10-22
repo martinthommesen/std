@@ -92,6 +92,9 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Outbound REST message, IntegrationHub step, or Flow trigger "on record created/updated" | A subscription consumed by an after-commit rule or an integration (Step 3 and later) | External calls get `change_id` as their idempotency key; they are at least once, in-database effects exactly once (4.7). |
 | Event retries, `sys_trigger` retry and error state | Backoff 10 s doubling to 1 h with jitter; `dead` after `max_attempts` (default 10) | Dead-letter policy per subscription: `block` (later versions of that record wait) or `skip`. Operators retry or discard dead rows (Step 3). |
 | Run the async rule as the user who made the change (`gs.getUserID()` in the session) | The subscription's identity (`identity_id`), a fixed user | Payloads are filtered for that identity under current access rules (4.5). |
+| Scheduler worker threads on each node (`sys_trigger` processing, `glide.sys.schedulers`) | `std worker` processes (decision 0023), any number per install, each claiming with a lease | A worker that stalls past its lease cannot finish the job another worker took over; an async rule's record writes and its "processed" mark commit in one transaction, so they happen exactly once. |
+| Events in `error` state, rerun or cleared by an admin from the event log | Dead deliveries: listed, retried or discarded by admins (decision 0023), counted by the `std_outbox_dead_deliveries` metric | `done` rows are deleted after 7 days; `dead` rows stay until an operator acts. |
+| Role changes replicated to other systems (for example by an IntegrationHub spoke on `sys_user_role`) | Subscriptions on the config kinds `role` and `accessRule` (Contracts 4.6) | Written in the change set's own transaction, in each role's version order; an access-rule change also gives every role it names a new version. |
 
 ## Schema: dictionary changes (Contracts 1)
 

@@ -23,6 +23,23 @@ export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
  */
 export const SERVER_APPLICATION_NAME = "std-server";
 
+/**
+ * The `application_name` of the outbox worker process, `std worker`
+ * (Contracts 4.6, 13.1). `std upgrade` refuses to run while a session with
+ * this name is connected, like a server's (Contracts 8.5).
+ */
+export const WORKER_APPLICATION_NAME = "std-worker";
+
+/**
+ * The sessions `std upgrade` waits for and refuses to run beside
+ * (Contracts 8.5): servers and outbox workers. The one place that decides
+ * it; `platform/runner.ts` (`checkUpgradePreconditions`) reads it.
+ */
+export const UPGRADE_BLOCKING_APPLICATION_NAMES: readonly string[] = [
+  SERVER_APPLICATION_NAME,
+  WORKER_APPLICATION_NAME,
+];
+
 /** The `application_name` of the `std` command line tool. */
 export const CLI_APPLICATION_NAME = "std-cli";
 

@@ -19,7 +19,7 @@ import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { SERVER_APPLICATION_NAME } from "../sql/database-config.ts";
+import { UPGRADE_BLOCKING_APPLICATION_NAMES } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
@@ -91,7 +91,7 @@ export class UpgradeRefused extends Schema.TaggedError<UpgradeRefused>()(
     }
 
     if (this.reason === SERVERS_REFUSAL) {
-      return `std upgrade refuses to run while std-server sessions are connected (pids ${pids}); stop the servers first`;
+      return `std upgrade refuses to run while std-server sessions are connected (pids ${pids}); stop the servers and workers (std-worker) first`;
     }
 
     return `SCHEMA_KEY is held by another session (pids ${pids}); a change set or another upgrade is running`;
@@ -163,8 +163,9 @@ export interface PreconditionOptions {
 }
 
 /**
- * Refuses the upgrade on a non-UTF8 database or while `std-server` sessions
- * are connected to it.
+ * Refuses the upgrade on a non-UTF8 database or while `std-server` or
+ * `std-worker` sessions are connected to it (Contracts 8.5: the outbox
+ * worker counts as a server).
  * @param sql - A client connected to the database.
  * @param options - Whether connected servers are only reported.
  * @returns The PIDs of connected `std-server` sessions (empty unless allowed).
@@ -198,7 +199,7 @@ export const checkUpgradePreconditions: (
       const servers = yield* sql`
         SELECT pid FROM pg_stat_activity
         WHERE datname = current_database()
-          AND application_name = ${SERVER_APPLICATION_NAME}
+          AND application_name IN ${sql.in(UPGRADE_BLOCKING_APPLICATION_NAMES)}
           AND pid <> pg_backend_pid()
         ORDER BY pid`.pipe(Effect.flatMap(decodePids));
 

@@ -65,7 +65,7 @@ const decodeOpen = decodeRows(
   Schema.Struct({
     coordinator_pid: Schema.NullOr(Schema.Int),
     error: Schema.NullOr(Schema.String),
-    first_revision: Schema.NullOr(Schema.String),
+    first_revision_text: Schema.NullOr(Schema.String),
     id: Schema.String,
     state: Schema.Literals(["applying", "needs_attention"]),
   })
@@ -100,16 +100,18 @@ export const openChangeSets = Effect.fn("Schema.openChangeSets")(
     }
 
     const rows = yield* execute(
-      `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision
-       FROM core."schema_change" WHERE state IN ('applying', 'needs_attention')
-       ORDER BY first_revision`
+      `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision_text
+       FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
+       ORDER BY sc.first_revision`
     ).pipe(Effect.flatMap(decodeOpen));
 
     return rows.map((row) => ({
       coordinatorPid: row.coordinator_pid,
       error: row.error,
       firstRevision:
-        row.first_revision === null ? null : Number(row.first_revision),
+        row.first_revision_text === null
+          ? null
+          : Number(row.first_revision_text),
       id: row.id,
       state: row.state,
     }));

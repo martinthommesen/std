@@ -17,6 +17,9 @@
  * - `std serve`: serves the STD API over HTTP (`STD_HTTP_HOST`,
  *   `STD_HTTP_PORT`) until interrupted; refuses to start with pending
  *   platform migrations or an incomplete `data` migration.
+ * - `std worker`: runs the outbox worker (Contracts 4.6) until interrupted;
+ *   refuses to start like `std serve` (`outbox/worker-process.ts`,
+ *   decision 0023).
  * - `std schema status [--json]`: open change sets, their steps and last
  *   errors, build progress and the `SCHEMA_KEY` holder (Contracts 8.7).
  * - `std schema resume <id>`: runs the unfinished steps of a change set in
@@ -46,6 +49,7 @@ import { planUpgrade, runUpgrade } from "../config/upgrade.ts";
 import type { UpgradeOptions } from "../config/upgrade.ts";
 import { runDoctor } from "../doctor/doctor.ts";
 import { ServerLayer } from "../http/serve.ts";
+import { WorkerProcessLayer } from "../outbox/worker-process.ts";
 import { recoverySettingsFromEnv } from "../schema/recovery-settings.ts";
 import { abandonChangeSet, resumeOnRequest } from "../schema/recovery.ts";
 import { formatStatus, schemaStatus } from "../schema/status.ts";
@@ -66,6 +70,7 @@ Commands:
                   changes nothing.
   doctor [--json] Check the database; exit 0 clean, 1 errors, 2 warnings
   serve           Serve the STD API over HTTP
+  worker          Run the outbox worker (deliveries and their effects)
   schema status [--json]
                   Show open change sets, their steps, build progress and the
                   SCHEMA_KEY holder
@@ -347,6 +352,17 @@ const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
   })
 );
 
+/** `std worker`: runs the outbox worker until interrupted. */
+const worker: Effect.Effect<void> = Layer.launch(WorkerProcessLayer).pipe(
+  Effect.matchEffect({
+    onFailure: (failure) =>
+      Console.error(`std worker: ${String(failure)}`).pipe(
+        Effect.andThen(setExitCode(EXIT_FAILURE))
+      ),
+    onSuccess: () => Effect.void,
+  })
+);
+
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;
 
@@ -364,6 +380,10 @@ const main = (args: readonly string[]): Effect.Effect<void> => {
 
   if (command === "serve" && rest.length === 0) {
     return serve;
+  }
+
+  if (command === "worker" && rest.length === 0) {
+    return worker;
   }
 
   if (command === "bootstrap-admin" && rest.length === 0) {

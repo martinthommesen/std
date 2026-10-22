@@ -38,6 +38,15 @@ export const PLATFORM_CLASS_IDS = {
   subscription: "31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
 
+/**
+ * The config kinds a subscription may watch (Contracts 4.6, config
+ * subscriptions): `core.role` and `core.access_rule`. Change sets write
+ * their deliveries; every other platform table is refused.
+ */
+export const CONFIG_SUBSCRIPTION_CLASS_IDS: ReadonlySet<DefinitionId> = new Set(
+  [PLATFORM_CLASS_IDS.role, PLATFORM_CLASS_IDS.access_rule]
+);
+
 /** A platform table name. */
 export type PlatformTable = keyof typeof PLATFORM_CLASS_IDS;
 

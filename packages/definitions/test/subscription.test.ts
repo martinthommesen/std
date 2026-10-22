@@ -8,6 +8,7 @@ import type { Condition } from "../src/condition.ts";
 import type { SubscriptionDefinition } from "../src/definition.ts";
 import { dependenciesOf } from "../src/dependencies.ts";
 import { validateSnapshot } from "../src/validate.ts";
+import { PLATFORM_CLASS_IDS } from "../src/well-known.ts";
 import { field, freshId, namespace, snapshotOf, table } from "./fixtures.ts";
 
 const hierarchy = () => {
@@ -125,6 +126,30 @@ describe("subscription-definitions", () => {
       ["invalidSubscription"]
     );
     assert.deepStrictEqual(codes(subscription(platform.id)), [
+      "invalidSubscription",
+    ]);
+  });
+
+  it("may watch the config kinds role and accessRule, and no other platform table", () => {
+    const h = hierarchy();
+
+    const platformTable = (name: string, id: string) => ({
+      ...table(h.ns, name),
+      id,
+      storage: "platform" as const,
+    });
+
+    const role = platformTable("role", PLATFORM_CLASS_IDS.role);
+    const rule = platformTable("access_rule", PLATFORM_CLASS_IDS.access_rule);
+    const user = platformTable("subscription", PLATFORM_CLASS_IDS.subscription);
+    const base = [h.ns, h.asset, role, rule, user];
+
+    const codes = (definition: SubscriptionDefinition) =>
+      validateSnapshot(snapshotOf([...base, definition])).map((p) => p.code);
+
+    assert.deepStrictEqual(codes(subscription(role.id)), []);
+    assert.deepStrictEqual(codes(subscription(rule.id)), []);
+    assert.deepStrictEqual(codes(subscription(user.id)), [
       "invalidSubscription",
     ]);
   });

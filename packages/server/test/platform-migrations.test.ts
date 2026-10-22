@@ -127,7 +127,7 @@ describe("platform-migrations", () => {
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
     assert.deepStrictEqual(
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
@@ -160,7 +160,7 @@ describe("platform-migrations", () => {
             const empty = yield* Effect.exit(checkPlatformMigrations());
             assert.deepStrictEqual(
               stateRefusal(errorOf(empty))?.pending,
-              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
             );
 
             const applied = yield* runPlatformMigrations([migration0001]);
@@ -226,6 +226,27 @@ describe("platform-migrations", () => {
             })
           )
       );
+
+      dbTest.effect(
+        "upgrade-refuses-worker: std upgrade refuses while only a std-worker session is connected",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* upgradeRefusesWorker() {
+              const database = yield* TestDatabase;
+              const worker = yield* database.session("std-worker");
+
+              const connected = errorOf(
+                yield* Effect.exit(runPlatformMigrations([migration0001]))
+              );
+
+              assert.instanceOf(connected, UpgradeRefused);
+              assert.strictEqual(connected?.reason, "servers-connected");
+              assert.deepStrictEqual(connected?.sessions, [worker.processId]);
+              assert.include(connected?.message ?? "", "std-worker");
+              assert.deepStrictEqual(yield* ledgerIds, [1], "nothing applied");
+            })
+          )
+      );
     }
   );
 
@@ -265,7 +286,7 @@ describe("platform-migrations", () => {
           Effect.gen(function* upgradeCommand() {
             const database = yield* TestDatabase;
             const first = yield* runCli(database.url, ["upgrade"]);
-            assert.strictEqual(first.code, 0);
+            assert.strictEqual(first.code, 0, first.output);
             assert.include(
               first.output,
               "Platform migration 0001 core: applied"

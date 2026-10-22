@@ -8,8 +8,9 @@
  *
  * The entry's fields are the definition table's columns, keyed by the field
  * IDs the core set describes for that platform table, with their values
- * before and after in canonical JSON. Platform tables carry no
- * subscriptions (workstream 1E refuses them), so no delivery rows follow.
+ * before and after in canonical JSON. The written entries are returned, so
+ * the change set can write the deliveries of config subscriptions on
+ * `role` and `accessRule` (`config-deliveries.ts`, Contracts 4.6).
  */
 import type { Definition } from "@std/definitions/definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -19,7 +20,14 @@ import { Effect } from "effect";
 
 import { tableOf } from "../catalog/definition-tables.ts";
 import { writeChangeEntry } from "../records/change-entry.ts";
-import type { ChangeCause } from "../records/change-entry.ts";
+import type { ChangeCause, ChangeEntry } from "../records/change-entry.ts";
+
+/** A definition the change set wrote, with its change entry. */
+export interface WrittenDefinitionChange {
+  readonly before: Definition | undefined;
+  readonly after: Definition;
+  readonly entry: ChangeEntry;
+}
 
 const fieldsValue = (fields: "*" | readonly string[]): JsonValue =>
   fields === "*" ? "*" : [...fields];
@@ -93,7 +101,7 @@ const fieldsOf = (
  * @param cause - `api` for requests, `system` for set loads.
  * @param revision - The revision the main transaction commits, at which
  *   the entries' field IDs (the core set's) exist.
- * @returns An effect in the main transaction.
+ * @returns The written entries, with their definitions.
  */
 export const writeDefinitionChanges = Effect.fn(
   "Schema.writeDefinitionChanges"
@@ -107,11 +115,13 @@ export const writeDefinitionChanges = Effect.fn(
   cause: ChangeCause,
   revision: number
 ) {
+  const written: WrittenDefinitionChange[] = [];
+
   for (const { before, after } of changes) {
     // Before the core set describes the platform tables there is nothing
     // to key the entry by.
     if (snapshot.class(tableOf(after.kind).classId) !== undefined) {
-      yield* writeChangeEntry(
+      const entry = yield* writeChangeEntry(
         {
           actorId,
           cause,
@@ -123,6 +133,10 @@ export const writeDefinitionChanges = Effect.fn(
         },
         revision
       );
+
+      written.push({ after, before, entry });
     }
   }
+
+  return written;
 });

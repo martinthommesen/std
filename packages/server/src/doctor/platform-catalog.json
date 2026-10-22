@@ -4008,6 +4008,12 @@
         "name": "last_error",
         "notNull": false,
         "type": "text"
+      },
+      {
+        "default": null,
+        "name": "finished_at",
+        "notNull": false,
+        "type": "timestamp(3) with time zone"
       }
     ],
     "constraints": [
@@ -4221,6 +4227,15 @@
       }
     ],
     "indexes": [
+      {
+        "included": [],
+        "keys": ["finished_at"],
+        "method": "btree",
+        "name": "delivery_done",
+        "predicate": "status = 'done'::text",
+        "unique": false,
+        "valid": true
+      },
       {
         "included": [],
         "keys": ["subscription_id", "record_id", "record_version"],

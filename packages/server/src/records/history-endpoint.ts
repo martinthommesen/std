@@ -245,16 +245,18 @@ LIMIT 1`
 const ALIAS = "r";
 const CHANGE = "c";
 
+// Each column of the entry and its text alias; the version's alias is
+// not the column's name, so no ORDER BY can sort its text.
 const CHANGE_COLUMNS = [
-  "id",
-  "operation_id",
-  "record_version",
-  "kind",
-  "actor_id",
-  "occurred_at",
-  "schema_revision",
-  "cause",
-  "fields",
+  ["id", "id"],
+  ["operation_id", "operation_id"],
+  ["record_version", "version_text"],
+  ["kind", "kind"],
+  ["actor_id", "actor_id"],
+  ["occurred_at", "occurred_at"],
+  ["schema_revision", "schema_revision"],
+  ["cause", "cause"],
+  ["fields", "fields"],
 ] as const;
 
 const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
@@ -341,7 +343,8 @@ const liveHistory = Effect.fn("History.live")(function* liveHistory(
       truthColumn(readableSql(field.id), `f${index}`)
     ),
     ...CHANGE_COLUMNS.map(
-      (column) => sql`${identSql(CHANGE, column)}::text AS ${identSql(column)}`
+      ([column, alias]) =>
+        sql`${identSql(CHANGE, column)}::text AS ${identSql(alias)}`
     ),
   ];
 
