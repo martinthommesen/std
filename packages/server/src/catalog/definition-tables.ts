@@ -235,18 +235,47 @@ const COMMON_SCHEMAS = {
 } as const;
 
 /**
+ * The kind-specific columns of a definition table.
+ *
+ * @param entry - The table.
+ * @returns Its columns, the special ones last.
+ */
+const columnsOf = (entry: DefinitionTable): readonly PropertyColumn[] => [
+  ...entry.columns,
+  ...entry.special,
+];
+
+/**
+ * The columns that are read: every column, or those the database has.
+ *
+ * @param entry - The table.
+ * @param present - The table's columns in the database; undefined: all.
+ * @returns The columns read, in table order.
+ */
+const readColumns = (
+  entry: DefinitionTable,
+  present: ReadonlySet<string> | undefined
+): readonly PropertyColumn[] =>
+  present === undefined
+    ? columnsOf(entry)
+    : columnsOf(entry).filter((spec) => present.has(spec.column));
+
+/**
  * The schema of one row of a definition table, for `decodeRows`.
  *
  * @param entry - The table.
+ * @param present - The table's columns in the database (a column a pending
+ *   migration adds is left out and reads as null); undefined: all.
  * @returns A struct schema of its cells.
  */
 export const rowSchema = (
-  entry: DefinitionTable
+  entry: DefinitionTable,
+  present?: ReadonlySet<string>
 ): Schema.Codec<Readonly<Record<string, Cell>>> =>
   Schema.Struct({
     ...COMMON_SCHEMAS,
     ...Object.fromEntries(
-      [...entry.columns, ...entry.special].map((spec) => [
+      readColumns(entry, present).map((spec) => [
         spec.column,
         CELL_SCHEMAS[spec.codec],
       ])
@@ -257,10 +286,17 @@ export const rowSchema = (
  * The SELECT of a definition table, with its columns listed.
  *
  * @param entry - The table.
+ * @param present - The table's columns in the database; undefined: all.
  * @returns The statement.
  */
-export const selectStatement = (entry: DefinitionTable): string =>
-  `SELECT ${[...COMMON_COLUMNS, ...[...entry.columns, ...entry.special].map((spec) => spec.column)].join(", ")} FROM core."${entry.table}"`;
+export const selectStatement = (
+  entry: DefinitionTable,
+  present?: ReadonlySet<string>
+): string =>
+  `SELECT ${[
+    ...COMMON_COLUMNS,
+    ...readColumns(entry, present).map((spec) => spec.column),
+  ].join(", ")} FROM core."${entry.table}"`;
 
 /** A definition whose row could not be read back; the catalog is corrupt. */
 export class CorruptDefinitionRowError extends Error {

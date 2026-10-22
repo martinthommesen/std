@@ -2,6 +2,7 @@
  * `doctor` checks of the configuration tables (Contracts 1.10 checks 6, 7,
  * 8, 9, 10, 16 and the data part of 12). Every query only reads.
  */
+import { withAddedDefaults } from "@std/definitions/definition";
 import type { Definition } from "@std/definitions/definition";
 import { dependenciesOf } from "@std/definitions/dependencies";
 import { effectiveJson } from "@std/definitions/effective-json";
@@ -28,7 +29,12 @@ import { Effect, Result, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { jsonColumn, jsonHash, setHash } from "../config/layer-store.ts";
+import {
+  jsonColumn,
+  jsonHash,
+  jsonObjectColumn,
+  setHash,
+} from "../config/layer-store.ts";
 import { readSetDirectory, CORE_SET_DIRECTORY } from "../config/set-files.ts";
 import {
   choicePredicates,
@@ -792,7 +798,14 @@ export const checkDefinitionRevisions = Effect.fn(
           definition.id
         )
       );
-    } else if (!sameJson(yield* jsonColumn(text), effectiveJson(definition))) {
+    } else if (
+      // A revision an earlier release wrote lacks the properties added
+      // since; their absence means their default (decision 0017).
+      !sameJson(
+        withAddedDefaults(yield* jsonObjectColumn(text)),
+        effectiveJson(definition)
+      )
+    ) {
       found.push(
         finding(
           16,

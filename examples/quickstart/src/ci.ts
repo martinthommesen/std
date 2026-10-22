@@ -38,12 +38,17 @@ import { fileURLToPath } from "node:url";
 import { NodeRuntime } from "@effect/platform-node";
 import { authenticationClient, makeStdClient } from "@std/api/client";
 import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
-import { Console, Effect, Layer, Redacted, Schedule, Schema } from "effect";
+import { Console, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
 
 import { findStrace, program, traceScript } from "./exec-trace.ts";
 import type { ExpectedProgram } from "./exec-trace.ts";
-import { exitCode, spawnGroup } from "./process-group.ts";
+import {
+  listeningAt,
+  QuickstartStepFailed,
+  run,
+  startServer,
+} from "./steps.ts";
 
 const CLI = fileURLToPath(
   new URL("../../../packages/server/src/cli/main.ts", import.meta.url)
@@ -66,141 +71,6 @@ const PASSWORDS = {
 };
 
 const ADMIN_LOGIN = "administrator";
-
-/** How long `std serve` may take to listen: 150 polls, 200 ms apart. */
-const LISTEN_POLLS = 150;
-const LISTEN_POLL_INTERVAL = "200 millis";
-
-/** The line `std serve` logs once it listens (Effect's Node HTTP server). */
-const LISTENING = /Listening on (?<url>http:\/\/[\d.:]+)/u;
-
-/** A step of the run failed. */
-// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
-class QuickstartStepFailed extends Schema.TaggedError<
-  QuickstartStepFailed,
-  { readonly brand: unique symbol }
->()("QuickstartStepFailed", {
-  code: Schema.NullOr(Schema.Number),
-  detail: Schema.String,
-  reason: Schema.Literals(["exited", "notListening", "trace"]),
-  step: Schema.String,
-}) {
-  /**
-   * Names the step and what went wrong.
-   * @returns The message.
-   */
-  override get message(): string {
-    if (this.reason === "exited") {
-      return `${this.step} exited with ${String(this.code)}`;
-    }
-
-    return this.reason === "notListening"
-      ? `${this.step} is not listening yet`
-      : `${this.step}: its execve trace failed the check: ${this.detail}`;
-  }
-}
-
-/**
- * Runs a command in its own process group, with inherited output, and ends
- * the group when it exits (or when interrupted).
- * @param step - What it is, for the heading and errors.
- * @param command - The executable.
- * @param args - Its arguments.
- * @param env - Its environment.
- * @returns Fails unless it exits 0.
- */
-const run = (
-  step: string,
-  command: string,
-  args: readonly string[],
-  env: NodeJS.ProcessEnv
-) =>
-  Effect.scoped(
-    Effect.gen(function* runStep() {
-      yield* Console.log(`\n### ${step}`);
-
-      const child = yield* spawnGroup(command, args, { env, stdio: "inherit" });
-      const code = yield* exitCode(child);
-
-      if (code !== 0) {
-        return yield* new QuickstartStepFailed({
-          code,
-          detail: "",
-          reason: "exited",
-          step,
-        });
-      }
-
-      return code;
-    })
-  );
-
-/** A running `std serve` and what it has logged so far. */
-interface Server {
-  readonly exitCode: () => number | null;
-  readonly log: () => string;
-}
-
-/**
- * Starts `std serve` in its own process group, ended when the scope closes.
- * Its log (one line per request) is kept, not printed, so the quickstart's
- * output stays readable.
- * @param env - Its environment.
- * @returns The server.
- */
-const startServer = Effect.fn("QuickstartCi.startServer")(function* startServer(
-  env: NodeJS.ProcessEnv
-) {
-  const chunks: string[] = [];
-
-  const child = yield* spawnGroup(process.execPath, [CLI, "serve"], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  const keep = (chunk: Uint8Array) => {
-    chunks.push(String(chunk));
-  };
-
-  child.stdout?.on("data", keep);
-  child.stderr?.on("data", keep);
-
-  return {
-    exitCode: () => child.exitCode,
-    log: () => chunks.join(""),
-  } satisfies Server;
-});
-
-/**
- * Waits until the server logs the address it listens on.
- * @param server - The server.
- * @returns Its origin, such as `http://127.0.0.1:41234`.
- */
-const listeningAt = (server: Server) =>
-  Effect.suspend(() => {
-    const address = LISTENING.exec(server.log())?.groups?.url;
-
-    if (address !== undefined) {
-      return Effect.succeed(address);
-    }
-
-    const code = server.exitCode();
-
-    return Effect.fail(
-      new QuickstartStepFailed({
-        code,
-        detail: "",
-        reason: code === null ? "notListening" : "exited",
-        step: "std serve",
-      })
-    );
-  }).pipe(
-    Effect.retry({
-      schedule: Schedule.spaced(LISTEN_POLL_INTERVAL),
-      times: LISTEN_POLLS,
-      while: (failure) => failure.reason === "notListening",
-    })
-  );
 
 /** Fetch without keep-alive, so nothing holds the server open. */
 const Fetch = FetchHttpClient.layer.pipe(
@@ -341,7 +211,7 @@ const quickstart = Effect.gen(function* runQuickstart() {
     env
   );
 
-  const server = yield* startServer(env);
+  const server = yield* startServer(CLI, env);
 
   yield* Effect.gen(function* runWithServer() {
     const url = yield* listeningAt(server);

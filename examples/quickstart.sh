@@ -196,7 +196,7 @@ else
       --argjson type "$4" --argjson required "${5:-false}" \
       '{op: "addField", definition: ($local + {kind: "field", id: $id, classId: $class,
         name: $name, label: ($name | gsub("_"; " ") | ascii_upcase[0:1] + .[1:]),
-        helpText: null, type: $type, required: $required, readOnly: false, default: null, numberPrefix: null})}'
+        helpText: null, type: $type, required: $required, readOnly: false, default: null})}'
   }
 
   # class ID NAME LABEL PARENT DISPLAY_FIELD: a createClass operation.

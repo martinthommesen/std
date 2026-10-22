@@ -740,6 +740,45 @@ describe("doctor", () => {
     );
 
     dbTest.effect(
+      "a definition revision an earlier release wrote, without the properties added since, is not stale; any other difference is",
+      () =>
+        Effect.gen(function* releasedRevisions() {
+          // v0.0.1 wrote field revisions without numberPrefix (decision
+          // 0017, "Release compatibility").
+          const strip = `UPDATE core.definition_revision SET effective = effective - 'numberPrefix'
+            WHERE definition_id = '${FX.x}'::uuid`;
+
+          yield* run(strip);
+
+          const released = yield* runDoctor();
+
+          yield* run(
+            `UPDATE core.definition_revision SET effective = effective || '{"label": "stale"}'
+             WHERE definition_id = '${FX.x}'::uuid`
+          );
+
+          const drifted = yield* runDoctor();
+
+          yield* run(
+            `UPDATE core.definition_revision AS r SET effective = r.effective || jsonb_build_object('label', f.label, 'numberPrefix', f.number_prefix)
+               FROM core.field AS f
+              WHERE r.definition_id = '${FX.x}'::uuid AND f.id = r.definition_id`
+          );
+
+          assert.deepStrictEqual(notInfo(released.findings), []);
+          assert.strictEqual(released.exitCode, 0);
+          assert.isTrue(
+            drifted.findings.some(
+              (entry) =>
+                entry.code === "definitionRevisionStale" &&
+                entry.subject === FX.x
+            )
+          );
+          assert.strictEqual((yield* runDoctor()).exitCode, 0);
+        })
+    );
+
+    dbTest.effect(
       "a table lock held past the diagnostic lock timeout gives a diagnosticTimeout finding and exit 1",
       () =>
         Effect.scoped(
