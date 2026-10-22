@@ -2,9 +2,12 @@
  * The platform migration runner (Contracts 1.9, 8.5).
  *
  * - `checkPlatformMigrations` is the server's startup check: it refuses to
- *   start when a migration is pending, when the ledger holds one the code
- *   does not know, or when an applied checksum differs.
- * - `runPlatformMigrations` is the migration step of `std upgrade`. It
+ *   start when a migration is pending, when a `data` migration's row is
+ *   still `running` (an interrupted `std upgrade`), when the ledger holds
+ *   one the code does not know, or when an applied checksum differs.
+ * - `runPlatformMigrations` is the migration step of `std upgrade` for
+ *   `tx` and `concurrent_index` migrations (`data` migrations run after the
+ *   sets load, `data-migrations.ts`). It
  *   refuses on a non-UTF8 database and while a `std-server` session is
  *   connected to the database, takes `SCHEMA_KEY` with
  *   `pg_try_advisory_lock` on a dedicated connection, and applies the
