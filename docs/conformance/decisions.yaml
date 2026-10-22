@@ -4,7 +4,19 @@
 entries:
   - id: E14-jsonpath-filter
     decision0021: 14
-    rows: []
+    rows:
+      - TMF630@4.2.0/v5.0.0-P1/13.3/keep-guideline-parameters-and-patterns
+      - TMF630@4.2.0/v5.0.0-P1/4.4.1/prefer-jsonpath
+      - TMF630@4.2.0/v5.0.0-P6/2.3.6/function-extensions-side-effect-free
+      - TMF630@4.2.0/v5.0.0-P6/2.3.7/non-standard-function-extensions
+      - TMF630@4.2.0/v5.0.0-P6/2.3.7/standard-function-extensions
+      - TMF630@4.2.0/v5.0.0-P6/4/filter-and-basic-filter-conjunction
+      - TMF630@4.2.0/v5.0.0-P6/4/filter-leading-root-optional
+      - TMF630@4.2.0/v5.0.0-P6/4/filter-paginated-as-part1
+      - TMF630@4.2.0/v5.0.0-P6/4/filter-parameter-name
+      - TMF630@4.2.0/v5.0.0-P6/4/filter-returns-full-representation
+      - TMF630@4.2.0/v5.0.0-P6/4/invalid-filter-400
+      - TMF630@4.2.0/v5.0.0-P6/4/jsonpath-filter-optional
     requirement: "TMF630 part 6: JSONPath `filter` query parameter"
     reason: "The condition AST has no array semantics; refused with `InvalidFilter` `jsonPathNotSupported` (Contracts 10.3)."
     recommendation: accept
@@ -15,7 +27,12 @@ entries:
     date: 2026-10-22
   - id: E15-json-patch-query
     decision0021: 15
-    rows: []
+    rows:
+      - TMF630@4.2.0/v5.0.0-P1/3.2/patch-json-patch-query
+      - TMF630@4.2.0/v5.0.0-P5/4/jsonpath-syntax-error-400
+      - TMF630@4.2.0/v5.0.0-P5/4/patch-query-failure-not-successful
+      - TMF630@4.2.0/v5.0.0-P5/4/patch-query-stop-on-failure
+      - TMF630@4.2.0/v5.0.0-P5/6/dot-notation-condition-must-be-true
     requirement: "TMF630 part 5: `application/json-patch-query+json`"
     reason: "Refused with 415 (Contracts 10.5)."
     recommendation: accept
@@ -26,7 +43,8 @@ entries:
     date: 2026-10-22
   - id: E16-array-json-filters
     decision0021: 16
-    rows: []
+    rows:
+      - TMF630@4.2.0/v5.0.0-P1/4.4.1/array-any-element-match
     requirement: "Filters on array and json attributes of TMF resources"
     reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1)."
     recommendation: accept
@@ -37,7 +55,11 @@ entries:
     date: 2026-10-22
   - id: E17-regex-exact-operators
     decision0021: 17
-    rows: []
+    rows:
+      - TMF630@4.2.0/v5.0.0-P1/4.4/no-unconstrained-regex
+      - TMF630@4.2.0/v5.0.0-P1/4.4/regex-operator
+      - TMF630@4.2.0/v5.0.0-P1/4.4/regex-special-chars-encoded
+      - TMF630@4.2.0/v5.0.0-P1/4.4/regex-tilde-delimiter
     requirement: "The `.regex` and `.exact` filter operators"
     reason: "The condition AST has no regular expressions (Contracts 10.3)."
     recommendation: accept
@@ -59,7 +81,8 @@ entries:
     date: 2026-10-22
   - id: E19-generic-api-extensions
     decision0021: 19
-    rows: []
+    rows:
+      - TMF630@4.2.0/v4.0.0-P2/2/extension-conformance
     requirement: "STD's extensions to the generic API: `withheld`, `condition`, `count=false`, refusal of unknown query parameters"
     reason: "They keep restricted fields visible as restricted and never widen a result silently (Contracts 10.2, 10.3)."
     recommendation: accept
