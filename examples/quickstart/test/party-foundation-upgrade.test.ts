@@ -185,6 +185,21 @@ const concurrentUsers = (url: string, wave: string) =>
   );
 
 /**
+ * The database URL for the upgrade the test kills: no lock timeout, so a
+ * server or URL default cannot end its wait at the barrier before the
+ * kill (request transactions set their own 30 s statement timeout).
+ * @param url - The database.
+ * @returns The URL with `options=-c lock_timeout=0`.
+ */
+const withoutLockTimeout = (url: string): string => {
+  const parsed = new URL(url);
+
+  parsed.searchParams.set("options", "-c lock_timeout=0");
+
+  return parsed.toString();
+};
+
+/**
  * Starts this branch's `std upgrade`; the scope kills it with SIGKILL and
  * waits for it to exit.
  * @param url - The database.
@@ -194,7 +209,7 @@ const startUpgrade = (url: string) =>
   Effect.acquireRelease(
     Effect.sync(() =>
       spawn(process.execPath, [CURRENT.cli, "upgrade"], {
-        env: envFor(url),
+        env: envFor(withoutLockTimeout(url)),
         stdio: "ignore",
       })
     ),
@@ -335,10 +350,28 @@ describe("party-foundation", () => {
 
             // This branch's upgrade, killed (SIGKILL) once it waits at the
             // barrier: seven batches committed, the eighth in flight.
+            const started = yield* Deferred.make<ChildProcess>();
+
             const upgrade = yield* Effect.forkChild(
               Effect.scoped(
-                startUpgrade(database.url).pipe(Effect.andThen(Effect.never))
+                startUpgrade(database.url).pipe(
+                  Effect.flatMap((child) => Deferred.succeed(started, child)),
+                  Effect.andThen(Effect.never)
+                )
               )
+            );
+
+            const child = yield* Deferred.await(started);
+
+            // Users created while the data migration is under way, started
+            // as soon as it runs, so the upgrade waits at the barrier as
+            // briefly as possible before the kill.
+            yield* waitUntil(
+              ledger.pipe(Effect.map((row) => row.startsWith("running")))
+            );
+
+            const during = yield* Effect.forkChild(
+              concurrentUsers(database.url, "during-run")
             );
 
             yield* waitUntil(
@@ -348,11 +381,17 @@ describe("party-foundation", () => {
                 )
               )
             );
+            yield* Fiber.join(during);
 
-            // Users created while the data migration is under way.
-            yield* concurrentUsers(database.url, "during-run");
+            // Still waiting at the barrier, so only the kill ends it: an
+            // upgrade that gave up on its own fails the test.
+            assert.isNull(child.exitCode, "std upgrade exited before the kill");
+            assert.isTrue(yield* upgradeWaitsForLock);
 
             yield* Fiber.interrupt(upgrade);
+
+            assert.strictEqual(child.signalCode, "SIGKILL");
+            assert.isNull(child.exitCode);
             yield* Deferred.succeed(unlock, true);
             yield* Fiber.join(barrier);
             yield* waitUntil(cliGone);
