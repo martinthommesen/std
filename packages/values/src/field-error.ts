@@ -46,6 +46,7 @@ export const InvalidValueReasonSchema = Literals([
   "emptyLiteral",
   "emptyNeedle",
   "notComparable",
+  "invalidCondition",
 ]);
 
 /** A reason code of {@link InvalidValue}. */

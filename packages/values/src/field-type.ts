@@ -128,7 +128,13 @@ const ReferenceTypeSchema = Struct({
   targetClassId: SchemaString.check(isPattern(UUID_TEXT)),
 });
 
+/**
+ * A condition field names the class whose fields its conditions may name
+ * (`classId`, like a reference's target) and the profile they are checked
+ * under (Contracts 5.2, 6.5).
+ */
 const ConditionTypeSchema = Struct({
+  classId: SchemaString.check(isPattern(UUID_TEXT)),
   kind: Literal("condition"),
   profile: ConditionProfileSchema,
 });

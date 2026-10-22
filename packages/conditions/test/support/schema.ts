@@ -83,7 +83,11 @@ export const ASSET_FIELDS = {
   notes: field(ASSET, "notes", { kind: "longText" }),
   opened: field(ASSET, "opened", { kind: "dateTime" }),
   owner: field(ASSET, "owner", { kind: "reference", targetClassId: PERSON }),
-  rule: field(ASSET, "rule", { kind: "condition", profile: "filter" }),
+  rule: field(ASSET, "rule", {
+    classId: ASSET,
+    kind: "condition",
+    profile: "filter",
+  }),
   serial: field(ASSET, "serial", { kind: "bigInteger" }),
   status: field(ASSET, "status", { kind: "choice" }),
   token: field(ASSET, "token", { kind: "secret" }),

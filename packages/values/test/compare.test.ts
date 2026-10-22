@@ -166,7 +166,11 @@ describe("field types", () => {
         kind: "reference",
         targetClassId: "01920c4e-0000-7000-8000-000000000001",
       },
-      { kind: "condition", profile: "accessRule" },
+      {
+        classId: "01920c4e-0000-7000-8000-000000000001",
+        kind: "condition",
+        profile: "accessRule",
+      },
     ];
 
     const invalid: unknown[] = [
@@ -181,7 +185,13 @@ describe("field types", () => {
       { kind: "bigInteger", max: "9223372036854775808" },
       { kind: "bigInteger", max: "1", min: "2" },
       { kind: "reference", targetClassId: "X" },
-      { kind: "condition", profile: "other" },
+      {
+        classId: "01920c4e-0000-7000-8000-000000000001",
+        kind: "condition",
+        profile: "other",
+      },
+      { kind: "condition", profile: "filter" },
+      { classId: "X", kind: "condition", profile: "filter" },
       { kind: "duration" },
     ];
 

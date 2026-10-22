@@ -14,6 +14,8 @@ import type { NotAllowed } from "@std/api/errors/not-allowed";
  * create, update and delete on both states, the target-visibility guard
  * and projection with the caller's read rights.
  */
+import type { ClassView } from "@std/conditions/class-view";
+import { classViewOf } from "@std/definitions/condition-view";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -100,6 +102,12 @@ export interface WriteAccessApi {
    * name, misspelled or never readable, is `UnknownField`.
    */
   readonly nameable: (input: NameableInput) => readonly FieldDefinition[];
+  /**
+   * What the caller may name in a condition value (Contracts 5.10, the
+   * filter profile: the caller's readable fields on every hop). A field the
+   * caller can never read is not in it, like one that does not exist.
+   */
+  readonly conditionView: (snapshot: ConfigSnapshot) => ClassView;
   /**
    * Visibility of the existing record, checked in the statement after the
    * root lock and before the version check: `None` when the caller cannot
@@ -198,6 +206,7 @@ export class WriteAccess extends Context.Service<WriteAccess, WriteAccessApi>()(
     WriteAccess.of({
       checkExisting: () => Effect.void,
       checkProposed: () => Effect.void,
+      conditionView: classViewOf,
       nameable: (input) => input.snapshot.fields(input.endpointClassId),
       project: (input) => Effect.succeed(projectAll(input)),
       readableOnProposal: (input) =>

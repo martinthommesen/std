@@ -41,6 +41,7 @@ import type {
   FieldDefinition,
 } from "./definition.ts";
 import { isActive, isLive } from "./definition.ts";
+import { typeClassOf } from "./dependencies.ts";
 import { DependencyConflict } from "./dependency-conflict.ts";
 import { dependentsOf, describeDependent } from "./dependents.ts";
 import type { DependentEdge } from "./dependents.ts";
@@ -239,13 +240,21 @@ export const isActiveLineage = (
 
 /**
  * What keeps a table from being retired: an active child class, or an
- * active reference field pointing at it, whatever its own table's state and
- * including the table's own fields (Contracts 1.7). The field's own state
- * decides; retire it first.
+ * active reference field pointing at it or condition field naming it,
+ * whatever its own table's state and including the table's own fields
+ * (Contracts 1.7). The field's own state decides; retire it first.
  *
  * @param edges - The table's dependents.
  * @returns The blocking ones.
  */
+/**
+ * The dependency kinds by which a field's type names a table: a
+ * reference's target, a condition field's class.
+ */
+const NAMES_TABLE: ReadonlySet<DependentEdge["kind"]> = new Set<
+  DependentEdge["kind"]
+>(["references_table", "condition_on"]);
+
 const retireClassBlockers = (
   edges: readonly DependentEdge[]
 ): readonly DependentEdge[] =>
@@ -255,7 +264,7 @@ const retireClassBlockers = (
     }
 
     return (
-      kind === "references_table" &&
+      NAMES_TABLE.has(kind) &&
       definition.kind === "field" &&
       isActive(definition)
     );
@@ -381,15 +390,16 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
 };
 
 /**
- * The tables that are not active and that an active reference field of
- * the reactivated definition would point at: a reactivated reference field
- * must not point at a retired table, nor may a reactivated table carry an
- * active reference field that does (Contracts 1.7, the retire rule seen
- * from the other side).
+ * The tables that are not active and that an active reference or condition
+ * field of the reactivated definition would name: a reactivated field must
+ * not name a retired table, nor may a reactivated table carry an active
+ * field that does (Contracts 1.7, the retire rule seen from the other
+ * side).
  *
  * @param view - The configuration so far.
  * @param current - The definition to reactivate.
- * @returns The targets, as dependents of kind `references_table`.
+ * @returns The targets, as dependents of kind `references_table` or
+ *   `condition_on`.
  */
 const inactiveTargets = (
   view: ConfigSnapshot,
@@ -404,15 +414,16 @@ const inactiveTargets = (
   }
 
   return fields.flatMap((field) => {
-    const target =
-      field.type.kind === "reference"
-        ? view.class(field.type.targetClassId)
-        : undefined;
+    const targetId = typeClassOf(field.type);
+    const target = targetId === null ? undefined : view.class(targetId);
+
+    const kind =
+      field.type.kind === "condition" ? "condition_on" : "references_table";
 
     // A table's reference to itself becomes active with it.
     return target === undefined || isActive(target) || target.id === current.id
       ? []
-      : [{ definition: target, kind: "references_table" as const }];
+      : [{ definition: target, kind }];
   });
 };
 
@@ -527,8 +538,8 @@ const ownParts = (
 
 /**
  * Whether a dependent of a table (or of one of its fields) keeps the table
- * from being purged: a child class, a reference field pointing at it, or an
- * access rule or subscription on it.
+ * from being purged: a child class, a reference field pointing at it, a
+ * condition field naming it, or an access rule or subscription on it.
  *
  * @param definition - The dependent.
  * @param kind - How it depends.
@@ -539,7 +550,7 @@ const blocksTablePurge = (
   kind: DependentEdge["kind"]
 ): boolean =>
   kind === "extends" ||
-  kind === "references_table" ||
+  NAMES_TABLE.has(kind) ||
   definition.kind === "accessRule" ||
   definition.kind === "subscription";
 
