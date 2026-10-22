@@ -117,7 +117,7 @@ rows:
   - id: TMF621@5.0.1/CP/attributes/troubleTicketSpecification-ref
     source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
     level: mandatory
-    requirement: "A troubleTicketSpecification reference on a ticket carries @type and id (STD serves no specifications, so it never renders one). (Mandatory only when the parent is present.)"
+    requirement: "A troubleTicketSpecification reference on a ticket carries @type and id. (Mandatory only when the parent is present.)"
     status: pending
   - id: TMF621@5.0.1/CP/notifications/none-mandatory
     source: "TMF621 CP v5.0.0 Notification Model Conformance p.5"
@@ -390,63 +390,53 @@ rows:
   - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationCreateEvent
     source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationCreateEvent/post"
     level: optional
-    requirement: "TroubleTicketSpecificationCreateEvent: STD serves no trouble ticket specifications, so it produces none."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "TroubleTicketSpecificationCreateEvent: STD produces it for trouble ticket specifications (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationAttributeValueChangeEvent
     source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationAttributeValueChangeEvent/post"
     level: optional
-    requirement: "TroubleTicketSpecificationAttributeValueChangeEvent: STD serves no trouble ticket specifications, so it produces none."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "TroubleTicketSpecificationAttributeValueChangeEvent: STD produces it for trouble ticket specifications (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationStatusChangeEvent
     source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationStatusChangeEvent/post"
     level: optional
-    requirement: "TroubleTicketSpecificationStatusChangeEvent: STD serves no trouble ticket specifications, so it produces none."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "TroubleTicketSpecificationStatusChangeEvent: STD produces it for trouble ticket specifications (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationDeleteEvent
     source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationDeleteEvent/post"
     level: optional
-    requirement: "TroubleTicketSpecificationDeleteEvent: STD serves no trouble ticket specifications, so it produces none."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "TroubleTicketSpecificationDeleteEvent: STD produces it for trouble ticket specifications (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/operations/listTroubleTicketSpecification
     source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification/get; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
     level: optional
-    requirement: "listTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "listTroubleTicketSpecification on troubleTicketSpecification; STD serves it (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/operations/createTroubleTicketSpecification
     source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification/post; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
     level: optional
-    requirement: "createTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "createTroubleTicketSpecification on troubleTicketSpecification; STD serves it (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/operations/retrieveTroubleTicketSpecification
     source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/get; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
     level: optional
-    requirement: "retrieveTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "retrieveTroubleTicketSpecification on troubleTicketSpecification; STD serves it (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/operations/patchTroubleTicketSpecification
     source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/patch; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
     level: optional
-    requirement: "patchTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "patchTroubleTicketSpecification on troubleTicketSpecification; STD serves it (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/operations/deleteTroubleTicketSpecification
     source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/delete; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
     level: optional
-    requirement: "deleteTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
-    status: excluded
-    decision: E20-resources-not-served
+    requirement: "deleteTroubleTicketSpecification on troubleTicketSpecification; STD serves it (Contracts 11.2; decision 0021, decision 38)."
+    status: pending
   - id: TMF621@5.0.1/OAS/patch/note-replace
     source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicket_MVO (note); TMF621 UG v5.0.1 PATCH examples pp.74-81"
     level: optional
-    requirement: "A PATCH may change or remove existing notes; STD keeps notes append-only and refuses that with ValidationFailed."
-    status: excluded
-    decision: E22-tmf621-notes-attachments
+    requirement: "A merge-patch note array replaces the old one: omitted notes are deleted, changed ones updated, new ones created (strict RFC 7396; decision 0021, decision 41)."
+    status: pending
   - id: TMF621@5.0.1/OAS/attachment/content
     source: "TMF621 OAS v5.0.1 #/components/schemas/Attachment_FVO (content)"
     level: optional
@@ -456,27 +446,23 @@ rows:
   - id: TMF621@5.0.1/UG/patchable/priority
     source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
     level: optional
-    requirement: "A PATCH may change priority; STD refuses a changed value with ReadOnlyField because STD computes it from impact and urgency (Contracts 14.2); the guide itself calls it set by the system (p.8)."
-    status: excluded
-    decision: E26-tmf621-read-only-attributes
+    requirement: "A PATCH may change priority, and STD accepts it (decision 0021, decisions 34 and 53); any ITIL behavior behind it is a default and a form rule."
+    status: pending
   - id: TMF621@5.0.1/UG/patchable/statusChangeHistory
     source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
     level: optional
-    requirement: "A PATCH may change statusChangeHistory; STD refuses a changed value with ReadOnlyField because STD derives it from the record's history; the guide itself calls it populated by the server (p.8)."
-    status: excluded
-    decision: E26-tmf621-read-only-attributes
+    requirement: "A PATCH may change statusChangeHistory, and STD accepts it (decision 0021, decisions 34 and 53); any ITIL behavior behind it is a default and a form rule."
+    status: pending
   - id: TMF621@5.0.1/UG/patchable/resolutionDate
     source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
     level: optional
-    requirement: "A PATCH may change resolutionDate; STD refuses a changed value with ReadOnlyField because STD sets it on entering resolved (Contracts 14.2)."
-    status: excluded
-    decision: E26-tmf621-read-only-attributes
+    requirement: "A PATCH may change resolutionDate, and STD accepts it (decision 0021, decisions 34 and 53); any ITIL behavior behind it is a default and a form rule."
+    status: pending
   - id: TMF621@5.0.1/UG/patchable/ticketType
     source: "TMF621 UG v5.0.1 Patchable and Non Patchable Attributes pp.73-74; OAS #/components/schemas/TroubleTicket_MVO"
     level: optional
-    requirement: "A PATCH may change ticketType; STD refuses a changed value with ReadOnlyField because it selects the concrete class, so STD makes it read-only after create (Contracts 11.2; decision 0026 M6)."
-    status: excluded
-    decision: E26-tmf621-read-only-attributes
+    requirement: "A PATCH may change ticketType, and STD accepts it (decision 0021, decisions 34 and 53); any ITIL behavior behind it is a default and a form rule."
+    status: pending
   - id: TMF621@5.0.1/KIT/mandatory-cases
     source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1)"
     level: mandatory

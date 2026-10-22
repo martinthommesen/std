@@ -74,17 +74,8 @@ entries:
     date: 2026-10-22
   - id: E20-resources-not-served
     decision0021: 20
-    rows:
-      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationCreateEvent
-      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationAttributeValueChangeEvent
-      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationStatusChangeEvent
-      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationDeleteEvent
-      - TMF621@5.0.1/OAS/operations/listTroubleTicketSpecification
-      - TMF621@5.0.1/OAS/operations/createTroubleTicketSpecification
-      - TMF621@5.0.1/OAS/operations/retrieveTroubleTicketSpecification
-      - TMF621@5.0.1/OAS/operations/patchTroubleTicketSpecification
-      - TMF621@5.0.1/OAS/operations/deleteTroubleTicketSpecification
-    requirement: "`troubleTicketSpecification` (TMF621) and `serviceOrderSpecification` (TMF641)"
+    rows: []
+    requirement: "`serviceOrderSpecification` (TMF641); TMF621 `troubleTicketSpecification` was withdrawn from this exclusion on 2026-10-22 and is served (decision 0021, decision 38)"
     reason: "Not served in v0.1 (Contracts 11.1). Both are optional: TMF621 CP v5.0.0 p.2 and TMF641 CP v4.2.0 §2.1 p.6 make TroubleTicket and ServiceOrder the only mandatory resources. Decision 0026 M4 asks whether the TMF621 kit tests troubleTicketSpecification anyway."
     recommendation: accept
     state: decided
@@ -106,10 +97,9 @@ entries:
   - id: E22-tmf621-notes-attachments
     decision0021: 22
     rows:
-      - TMF621@5.0.1/OAS/patch/note-replace
       - TMF621@5.0.1/OAS/attachment/content
-    requirement: "TMF621 notes append-only; attachments as references only"
-    reason: "ITIL work notes are a journal; attachments are a later field type (Contracts 11.2)."
+    requirement: "TMF621 attachments as references only (notes are no longer append-only: a merge-patch replaces the note array, decision 0021, decision 41)"
+    reason: "Attachments are a later field type (Contracts 11.2)."
     recommendation: accept
     state: decided
     outcome: accepted
@@ -151,12 +141,12 @@ entries:
     words: "All 33 open decisions of decision 0021 are accepted as recommended."
     date: 2026-10-22
   - id: E26-tmf621-read-only-attributes
-    rows:
-      - TMF621@5.0.1/UG/patchable/priority
-      - TMF621@5.0.1/UG/patchable/statusChangeHistory
-      - TMF621@5.0.1/UG/patchable/resolutionDate
-      - TMF621@5.0.1/UG/patchable/ticketType
-    requirement: "TMF621 attributes the user guide lists as patchable that STD keeps read-only: priority, statusChangeHistory, resolutionDate, and ticketType after create"
-    reason: "STD derives the first three (Contracts 14.2, 3.7), and the guide's own field descriptions call priority system-set and statusChangeHistory server-populated; ticketType selects the concrete class (Contracts 11.2). An unchanged value is not a write (3.9), so a PATCH repeating it passes. Found by the spec check (decision 0026, F621-05, F621-06)."
+    rows: []
+    requirement: "TMF621 attributes the user guide lists as patchable that STD would keep read-only: priority, statusChangeHistory, resolutionDate, and ticketType after create"
+    reason: "Proposed by the spec check (decision 0026, F621-05, F621-06). Martin rejected it: the four are writable through TMF621 PATCH (ticketType within its class), the ITIL behaviors behind them are defaults and form rules (decision 0021, decisions 34, 40 and 53); the rows it covered are pending again."
     recommendation: accept
-    state: proposed
+    state: decided
+    outcome: rejected
+    decidedBy: Martin
+    words: "tmforum always takes priority over ITIL. We can always lock down fields that tmforum wants writeable in the ui."
+    date: 2026-10-22

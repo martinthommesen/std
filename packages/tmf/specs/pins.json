@@ -17,7 +17,7 @@
       "kind": "openApi",
       "step": 3,
       "basePath": "/tmf-api/troubleTicket/v5",
-      "resources": ["troubleTicket", "hub"],
+      "resources": ["troubleTicket", "troubleTicketSpecification", "hub"],
       "openApi": {
         "file": "TMF621-Trouble_Ticket-v5.0.1.oas.yaml",
         "licence": "Apache-2.0",

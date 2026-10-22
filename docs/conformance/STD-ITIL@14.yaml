@@ -30,63 +30,73 @@ rows:
   - id: STD-ITIL@14/C14/14.1/concrete-class
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
-    requirement: "Rules follow the record's concrete class: resolving an incident through /api/v2/helpdesk.ticket without resolution code and notes is refused."
+    requirement: "Rules follow the record's concrete class: an incident saved through /api/v2/helpdeskTicket gets the incident's derived priority and resolved_at."
+    status: pending
+  - id: STD-ITIL@14/C14/14.1/tmf-over-itil
+    source: "Contracts 14.1 (TM Forum takes priority over ITIL; decision 0021, decision 34)"
+    level: mandatory
+    requirement: "Where TMF621 allows a write that an ITIL behavior would refuse, every API accepts it: the ITIL behavior is a default (a derive rule) and, for people, a form rule; no guard or invariant refuses what TMF621 allows."
     status: pending
   - id: STD-ITIL@14/C14/14.2/impact-urgency
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
-    requirement: "An incident has impact and urgency, each a choice of 1 (high), 2 (medium) or 3 (low), both required; urgency defaults to 3, so a TMF621 create naming only severity is valid."
+    requirement: "An incident has impact and urgency, each a choice of 1 (high), 2 (medium) or 3 (low), always set; each defaults to 3, so a TMF621 create naming only severity, or a severity STD does not map, is valid."
     note: "ITIL 4 incident management practice: an incident's priority weighs its impact on the business against how urgently it needs resolving."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 1 and urgency 1 gets priority 1, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 1 and urgency 1, priority becomes 1, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 1 and urgency 2 gets priority 2, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 1 and urgency 2, priority becomes 2, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 2 and urgency 1 gets priority 2, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 2 and urgency 1, priority becomes 2, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 1 and urgency 3 gets priority 3, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 1 and urgency 3, priority becomes 3, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 2 and urgency 2 gets priority 3, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 2 and urgency 2, priority becomes 3, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 3 and urgency 1 gets priority 3, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 3 and urgency 1, priority becomes 3, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 2 and urgency 3 gets priority 4, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 2 and urgency 3, priority becomes 4, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 3 and urgency 2 gets priority 4, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 3 and urgency 2, priority becomes 4, set by its own shipped derive rule."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
-    requirement: "An incident with impact 3 and urgency 3 gets priority 5, set by its own shipped derive rule."
+    requirement: "When impact or urgency changes to impact 3 and urgency 3, priority becomes 5, set by its own shipped derive rule."
     status: pending
-  - id: STD-ITIL@14/C14/14.2/priority-read-only
+  - id: STD-ITIL@14/C14/14.2/priority-explicit-wins
+    source: "Contracts 14.2 (first bullet); decision 0021, decision 53"
+    level: mandatory
+    requirement: "An explicit priority (1 critical to 5 planning) in the same write as an impact or urgency change wins over the derived one, through every API."
+    status: pending
+  - id: STD-ITIL@14/C14/14.2/priority-form-read-only
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
-    requirement: "Priority (1 critical to 5 planning) is read-only to users and recomputed whenever impact or urgency changes."
+    requirement: "The incident form shows priority read-only by default (a form rule)."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority-cell-override
     source: "Contracts 14.2 (first bullet)"
@@ -100,29 +110,29 @@ rows:
     note: "ITIL 4 incident management practice: an incident is an unplanned interruption or reduction in quality of a service, worked until service is restored."
     status: pending
   - id: STD-ITIL@14/C14/14.2/hold-reason
-    source: "Contracts 14.2 (second bullet); Contracts 14.4 rule kinds (incident invariant)"
+    source: "Contracts 14.2 (second bullet); Contracts 14.4 rule kinds (incident derive)"
     level: mandatory
-    requirement: "hold_reason (awaiting_caller, awaiting_change, awaiting_problem, awaiting_vendor) is required exactly while the incident is on_hold, on every save, system saves included."
+    requirement: "Entering on_hold without a hold_reason (awaiting_caller, awaiting_change, awaiting_problem, awaiting_vendor) sets awaiting_vendor, leaving on_hold clears it, and the form requires it while on hold."
     status: pending
   - id: STD-ITIL@14/C14/14.2/transitions/from-new
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
-    requirement: "From new an incident may move only to in_progress, on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing."
+    requirement: "From new an incident may move only to in_progress, on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.2/transitions/from-in-progress
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
-    requirement: "From in_progress an incident may move only to on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing."
+    requirement: "From in_progress an incident may move only to on_hold, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.2/transitions/from-on-hold
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
-    requirement: "From on_hold an incident may move only to in_progress, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing."
+    requirement: "From on_hold an incident may move only to in_progress, resolved or canceled; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.2/transitions/from-resolved
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
-    requirement: "From resolved an incident may move only to in_progress (reopen) or closed; a user's write of any other status is InvalidTransition (422) and writes nothing."
+    requirement: "From resolved an incident may move only to in_progress (reopen) or closed; a user's write of any other status is InvalidTransition (422) and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.2/transitions/final
     source: "Contracts 14.2 (second bullet)"
@@ -135,15 +145,15 @@ rows:
     requirement: "The transition rules are one guard per source state, so they judge users' writes and never the saves that aggregate settling persists."
     status: pending
   - id: STD-ITIL@14/C14/14.2/resolution-required
-    source: "Contracts 14.2 (third bullet); Contracts 14.4 rule kinds (incident invariant)"
+    source: "Contracts 14.2 (third bullet); Contracts 14.1"
     level: mandatory
-    requirement: "Entering resolved needs resolution_code and resolution_notes, as an invariant on every save."
+    requirement: "The incident form requires resolution_code and resolution_notes to resolve; every API accepts a resolve without them."
     note: "ITIL 4 incident management practice: resolution records how service was restored, so it can be confirmed and reused."
     status: pending
   - id: STD-ITIL@14/C14/14.2/resolved-at
     source: "Contracts 14.2 (third bullet); Contracts 14.4 rule kinds (ticket derive)"
     level: mandatory
-    requirement: "Entering resolved sets resolved_at; leaving resolved (reopen) clears it; entering closed keeps the resolution fields and resolved_at."
+    requirement: "Entering resolved sets resolved_at unless the write gives it; leaving resolved (reopen) clears it; entering closed keeps the resolution fields and resolved_at."
     status: pending
   - id: STD-ITIL@14/C14/14.2/major-incident-role
     source: "Contracts 14.2 (fourth bullet)"
@@ -152,9 +162,9 @@ rows:
     note: "ITIL 4 incident management practice: a major incident is handled by its own procedure, under a dedicated manager."
     status: pending
   - id: STD-ITIL@14/C14/14.2/major-incident-priority
-    source: "Contracts 14.2 (fourth bullet); Contracts 14.4 rule kinds (incident invariant)"
+    source: "Contracts 14.2 (fourth bullet); Contracts 14.1"
     level: mandatory
-    requirement: "major_incident may be true only while priority is 1, as an invariant on every save."
+    requirement: "The incident form offers major_incident only while priority is 1; the APIs accept it at any priority."
     status: pending
   - id: STD-ITIL@14/C14/14.2/major-incident-tmf621
     source: "Contracts 14.2 (fourth bullet); Contracts 11.2 troubleTicketCharacteristic"
@@ -174,33 +184,38 @@ rows:
   - id: STD-ITIL@14/C14/14.3/states
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "Problem states are new, assess, root_cause_analysis, fix_in_progress, resolved, closed and canceled."
+    requirement: "Problem states are new, assess, root_cause_analysis, fix_in_progress, on_hold, resolved, closed and canceled."
     note: "ITIL 4 problem management practice: a problem is a cause, or potential cause, of one or more incidents; the practice identifies, analyses and controls problems and their errors."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/from-new
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "From new a problem may move only to assess or canceled; a user's write of any other status is InvalidTransition and writes nothing."
+    requirement: "From new a problem may move only to assess, root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/from-assess
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "From assess a problem may move only to root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing."
+    requirement: "From assess a problem may move only to root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/from-root-cause-analysis
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "From root_cause_analysis a problem may move only to fix_in_progress, resolved or canceled; a user's write of any other status is InvalidTransition and writes nothing."
+    requirement: "From root_cause_analysis a problem may move only to fix_in_progress, on_hold, resolved or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/from-fix-in-progress
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "From fix_in_progress a problem may move only to resolved or root_cause_analysis; a user's write of any other status is InvalidTransition and writes nothing."
+    requirement: "From fix_in_progress a problem may move only to resolved, root_cause_analysis, on_hold or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
+    status: pending
+  - id: STD-ITIL@14/C14/14.3/transitions/from-on-hold
+    source: "Contracts 14.3 (first bullet)"
+    level: mandatory
+    requirement: "From on_hold a problem may move only to root_cause_analysis or canceled; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/from-resolved
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
-    requirement: "From resolved a problem may move only to closed or root_cause_analysis; a user's write of any other status is InvalidTransition and writes nothing."
+    requirement: "From resolved a problem may move only to closed or root_cause_analysis; a user's write of any other status is InvalidTransition and writes nothing. Every TMF621 life-cycle transition is among the allowed ones."
     status: pending
   - id: STD-ITIL@14/C14/14.3/transitions/final
     source: "Contracts 14.3 (first bullet)"
@@ -213,9 +228,9 @@ rows:
     requirement: "The problem transition rules are one guard per source state (users' writes only)."
     status: pending
   - id: STD-ITIL@14/C14/14.3/known-error-workaround
-    source: "Contracts 14.3 (second bullet); Contracts 14.4 rule kinds (problem invariant)"
+    source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
-    requirement: "known_error may be true only with a non-empty workaround, as an invariant on every save."
+    requirement: "The problem form requires a non-empty workaround while known_error is set; the APIs accept the flag without one."
     note: "ITIL 4 problem management practice: a known error is a problem that has been analysed but not resolved; a workaround reduces or removes its impact while no full resolution exists."
     status: pending
   - id: STD-ITIL@14/C14/14.3/known-error-any-state
@@ -224,9 +239,9 @@ rows:
     requirement: "A problem is a known error from the moment the flag is set, whatever its state; the flag is not a lifecycle step."
     status: pending
   - id: STD-ITIL@14/C14/14.3/root-cause-required
-    source: "Contracts 14.3 (second bullet); Contracts 14.4 rule kinds (problem invariant)"
+    source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
-    requirement: "root_cause is required to enter fix_in_progress and resolved."
+    requirement: "The problem form requires root_cause to enter fix_in_progress and resolved; the APIs accept both without it."
     status: pending
   - id: STD-ITIL@14/C14/14.3/incident-link
     source: "Contracts 14.3 (third bullet); Contracts 11.2 troubleTicketRelationship"
@@ -248,8 +263,8 @@ rows:
     level: mandatory
     requirement: "Every status change sets status_changed_at, by a derive rule."
     status: pending
-  - id: STD-ITIL@14/C14/14.4/invariants-on-settled-saves
+  - id: STD-ITIL@14/C14/14.4/guards-users-only
     source: "Contracts 14.4 rule kinds; Contracts 4.10"
     level: mandatory
-    requirement: "The incident and problem invariants also hold on the saves that settling persists and on system transitions, while their guards judge users' writes only."
+    requirement: "The incident and problem transition guards judge users' writes only, never the saves that settling persists; their derive rules run on every save."
     status: pending
