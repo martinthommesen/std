@@ -52,7 +52,13 @@ import {
   waitForForm,
 } from "./app.ts";
 import type { Visitor } from "./app.ts";
-import { launchBrowser, stdServe } from "./support.ts";
+import {
+  callWhenConnected,
+  devToolsMcp,
+  launchBrowser,
+  stdServe,
+  viteDevServer,
+} from "./support.ts";
 
 const INCIDENTS = "helpdesk.incident";
 
@@ -692,6 +698,34 @@ const passwordIsWriteOnly = async (
   await context.close();
 };
 
+const TYPED_TEXT = "typed-but-never-recorded";
+
+/**
+ * On the development server, types a new password into a user's form,
+ * leaving the page open so DevTools keeps its runtime.
+ *
+ * @param browser - The browser.
+ * @param devOrigin - The Vite dev server.
+ * @param fixture - The helpdesk fixture.
+ * @returns Nothing, once the form holds the typed password.
+ */
+const typePasswordOnDevServer = async (
+  browser: Browser,
+  devOrigin: string,
+  fixture: HelpdeskData
+) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await signIn(page, devOrigin, visitorOf(fixture.admin));
+  await openRecordForm(page, devOrigin, {
+    id: fixture.agent2.id,
+    table: "core.user",
+  });
+  await page.getByLabel("Password: new value").fill(TYPED_TEXT);
+  await rendered(page);
+};
+
 describe("record forms", () => {
   it("names the helpers' fixture tables", () => {
     assert.strictEqual(INCIDENTS, "helpdesk.incident");
@@ -843,6 +877,40 @@ describe("record forms", () => {
           yield* Effect.promise(async () => {
             await passwordIsWriteOnly(browser, server.origin, fixture);
           });
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "in development, the DevTools record holds the form but never a typed password",
+      () =>
+        Effect.gen(function* devToolsTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const devOrigin = yield* viteDevServer(server.origin);
+          const browser = yield* launchBrowser;
+          const mcp = yield* devToolsMcp;
+
+          yield* Effect.promise(async () => {
+            await typePasswordOnDevServer(browser, devOrigin, fixture);
+          });
+
+          const model = yield* callWhenConnected(mcp, "foldkit_get_model", {
+            expand: true,
+          });
+
+          const history = yield* mcp.callTool("foldkit_list_messages", {
+            limit: 200,
+          });
+
+          const recorded = `${model}\n${history}`;
+
+          // The record is real: it holds the form and the redacted input.
+          assert.include(model, "maybeRecordForm");
+          assert.include(model, fixture.agent2.name);
+          assert.include(history, "ChangedWriteOnly");
+          assert.include(recorded, "<redacted:write-only value>");
+          assert.notInclude(recorded, TYPED_TEXT);
         }).pipe(Effect.scoped)
     );
   });
