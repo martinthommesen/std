@@ -295,7 +295,7 @@ rows:
   - id: TMF621@5.0.1/OAS/required/Hub
     source: "TMF621 OAS v5.0.1 #/components/schemas/Hub/allOf/1/required"
     level: mandatory
-    requirement: "A returned Hub carries callback (and id and href from Entity)."
+    requirement: "A returned Hub carries callback. STD also always returns its id and href, as its own requirement: Entity and Addressable declare neither as required."
     status: pending
   - id: TMF621@5.0.1/OAS/required/Error
     source: "TMF621 OAS v5.0.1 #/components/schemas/Error/allOf/1/required"
