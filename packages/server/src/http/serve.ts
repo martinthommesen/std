@@ -32,6 +32,7 @@ import {
   SERVER_APPLICATION_NAME,
 } from "../sql/database-config.ts";
 import { SqlLayer } from "../sql/layer.ts";
+import { answerApiFailures } from "./api-cache.ts";
 import { HttpAppLayer } from "./app.ts";
 import { sessionCookieSecureFromEnv } from "./session-cookie.ts";
 import { WebAppLayer } from "./web-app.ts";
@@ -81,7 +82,8 @@ const ResumerLayer = SchemaResumer.pipe(Layer.provide(recoverySettingsFromEnv));
  * the session cookie's `Secure` setting. Launch it with `Layer.launch`.
  */
 export const ServerLayer = HttpRouter.serve(
-  Layer.mergeAll(HttpAppLayer, WebAppLayer)
+  Layer.mergeAll(HttpAppLayer, WebAppLayer),
+  { middleware: (httpApp) => answerApiFailures(httpApp) }
 ).pipe(
   Layer.provide(sessionCookieSecureFromEnv),
   Layer.provide(NodeServerLayer),
