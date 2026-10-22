@@ -4,7 +4,7 @@ Status: draft, 2026-10-20. Companion to "STD platform core: plan".
 
 ## How to read this
 
-Sections 1 to 8 match the eight points of Martin's review, in order. Section 9 covers the Effect toolchain. Each section states decisions with a one-line reason, then lists acceptance tests. The plan says in which stage each part lands. Markers: **[checked: link]** is a fact verified in the Postgres 18 docs, the Postgres or Effect source, or another primary source; **[unverified]** is not verified; **[judgment]** is a design choice or claim that is the author's judgment; **[spike]** must be confirmed in Stage 0 before Step 1 relies on it. All paths and command names are placeholders until implemented.
+Sections 1 to 8 match the eight points of Martin's review, in order. Section 9 covers the Effect toolchain. Sections 10 to 14 cover Martin's TM Forum, ODA and ITIL requirement (2026-10-22, decision 0021): the generic API under TMF630, the TMF Open API mappings, events, the ODA Component and the ITIL practices. Each section states decisions with a one-line reason, then lists acceptance tests. The plan says in which stage each part lands. Markers: **[checked: link]** is a fact verified in the Postgres 18 docs, the Postgres or Effect source, or another primary source; **[unverified]** is not verified; **[judgment]** is a design choice or claim that is the author's judgment; **[spike]** must be confirmed in Stage 0 before Step 1 relies on it. All paths and command names are placeholders until implemented.
 
 ## Glossary
 
@@ -27,6 +27,8 @@ Sections 1 to 8 match the eight points of Martin's review, in order. Section 9 c
 - **External identity**: a mapping from (source system, source table, source record ID) to a logical record.
 - **Condition**: an expression tree (AST) stored as JSON. A **profile** restricts what a condition may use and where it runs.
 - **Canonical JSON**: the one JSON form of each field type's values.
+- **TMF Open API**: a TM Forum REST API (TMF621 and so on); STD serves some as **mappings** onto its classes (11). A **CTK** is TM Forum's conformance test kit for one API version. A **hub** is a listener registration; a **listener** is the callback a client exposes for events (12).
+- **ODA Component**: a deployable unit described by TM Forum's Component resource (`oda.tmforum.org/v1`); the **ODA Canvas** is the Kubernetes platform that deploys it (13).
 
 ## 1. Schema lifecycle
 
@@ -249,7 +251,7 @@ Checks:
 10. Protected definitions match the installed core set by hash.
 11. Column headroom per table, counting dropped columns; warning at 1,400 [judgment].
 12. Inheritance invariants (2.2): each non-root record has its lowest level row; `class_id` is NOT NULL in every table; FK delete and update actions match 3.10.
-13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1). Until imports add the table (Step 3) the check reports "not applicable" as informational.
+13. Mappings in `core.external_identity` that point at missing records (informational: this is the expected `TargetDeleted` state, 7.1). Until imports add the table (Step 4) the check reports "not applicable" as informational.
 14. The fold table's Unicode version equals the server's `unicode_version()` [checked: [system information functions](https://www.postgresql.org/docs/18/functions-info.html)] (5.5).
 15. The database encoding is UTF8 (5.5), and `client_connection_check_interval` is 0 (1.5).
 16. Each definition's latest `core.definition_revision` row equals its effective record (4.4). A row written before a release added a property is read with that property's documented default (absent `numberPrefix` and `choices` are null), so old rows are not drift and real differences still are [decision 0017].
@@ -324,7 +326,7 @@ CREATE TRIGGER asset_class_fixed BEFORE UPDATE ON acme.asset FOR EACH ROW
    - Lock order: every write first locks the root row alone (`SELECT version ... FOR NO KEY UPDATE`), then computes visibility and existing-state checks in the next statement, which takes a fresh snapshot, then writes level rows top down. Reason: under READ COMMITTED, after a lock wait only the locked row is re-fetched, so a single statement could judge joined level rows on stale data.
    - Updates use `FOR NO KEY UPDATE`, except that a patch changing a column with a non-partial, non-expression unique index locks `FOR UPDATE` from the start, because such an UPDATE takes `FOR UPDATE` anyway [checked: [explicit locking](https://www.postgresql.org/docs/18/explicit-locking.html)]. Deletes use `FOR UPDATE`. `FOR NO KEY UPDATE` does not block the `FOR KEY SHARE` locks other transactions' FK checks take [checked: same page].
 4. **Whole-record delete.** The service deletes the root row with a version check; level FKs remove level rows in the same statement. One change entry holds all levels; it and its deliveries carry `record_version` = current version + 1. This is not a cascade between records: no other record changes. A reference from any other record refuses the delete (3.10).
-5. **Child rules through the parent endpoint.** The service reads and locks the root row to learn the concrete class C, validates against C's effective schema (its fields plus overrides from C and its ancestors), applies access rules attached to C and every ancestor, and runs hooks and record rules attached to C and every ancestor, whichever endpoint is used. The parent endpoint can name only fields of its class and ancestors; a child-only field gets `UnknownField`. A create makes a record of exactly the endpoint's class. [judgment]
+5. **Child rules through the parent endpoint.** The service reads and locks the root row to learn the concrete class C, validates against C's effective schema (its fields plus overrides from C and its ancestors), applies access rules attached to C and every ancestor, and runs hooks and record rules attached to C and every ancestor, whichever endpoint is used. The parent endpoint can name only fields of its class and ancestors; a child-only field gets `UnknownField`. A create makes a record of exactly the endpoint's class. [judgment] (v1; in v2 a create may name a class of the endpoint's subtree with `@type`, 10.5.)
 6. **No class changes.** `class` is read-only in the API, the service never writes `class_id` after insert, and the trigger refuses it. A later class-change feature must be a dedicated record-service operation.
 
 ### 2.3 What each endpoint shows
@@ -367,7 +369,7 @@ Rule: a child may tighten an inherited field, never loosen it. Reason: every chi
 - No database CHECK enforces overrides in v0.1: it would sit on the parent's table and be rewritten whenever the subtree grows. [judgment]
 - Adding or tightening an override follows the 1.4 tightening pattern: take `SCHEMA_KEY` and run a preflight count before `CONFIG_KEY` (refused with the count if any record in the subtree violates it); the record service enforces it from the main commit; a follow-up `validate_override` step rechecks and sets enforcement. `doctor` reports violations.
 
-### 2.6 Benchmark (Stage 0, rerun in Step 4)
+### 2.6 Benchmark (Stage 0, rerun in Step 5)
 
 - **Hierarchy:** four levels, nine classes. L1 `bench.item` (12 own fields); L2 `device`, `furniture`, `license` (8 each); L3 under device: `computer`, `network`, `peripheral` (8); L4 under computer: `laptop`, `server` (6). Records: item 10%, furniture 10%, license 10%, device 5%, network 10%, peripheral 15%, computer 5%, laptop 25%, server 10%.
 - **Data:** 1M and 10M records; 50k users referenced from `item.owner`; `bench.ticket` with 20% as many rows, each referencing an item; mixed field types at each level.
@@ -386,7 +388,7 @@ Rule: a child may tighten an inherited field, never loosen it. Reason: every chi
 | Q7 | ticket | filter through the reference to an L1 field, restricted |
 | W1, W2, W3 | L4, L4, L1 | insert; update one L4 field (bumps root version); delete an L4 record via the root; 16 clients each |
 
-- **Method:** Postgres 18, hardware and config recorded; reference machine 8 vCPU, 32 GB, NVMe [judgment]. Seeded generator, `ANALYZE`, 10 warm-up and 200 measured runs per read with random parameters, p50 and p95, `EXPLAIN (ANALYZE, BUFFERS)` of a median run, writes for 60 s, table plus index size. In Stage 0 the alternatives are hand-written SQL. In Step 4, class-table queries are issued through the record service (STD-generated SQL) for both callers. Results and script are committed.
+- **Method:** Postgres 18, hardware and config recorded; reference machine 8 vCPU, 32 GB, NVMe [judgment]. Seeded generator, `ANALYZE`, 10 warm-up and 200 measured runs per read with random parameters, p50 and p95, `EXPLAIN (ANALYZE, BUFFERS)` of a median run, writes for 60 s, table plus index size. In Stage 0 the alternatives are hand-written SQL. In Step 5, class-table queries are issued through the record service (STD-generated SQL) for both callers. Results and script are committed.
 - **Budgets at 10M** [judgment]: Q5 p95 at most 5 ms; Q1, Q3, Q4, Q6, Q7 at most 50 ms; Q2 at most 250 ms; writes at most 20 ms.
 - **Decision rule:** keep class-table if it meets every budget and the baseline is not more than 2x faster at p95 on more than one read query. Otherwise, after trying the `class_id` index mitigations, benchmark the other two models and send the decision to Martin with the numbers.
 
@@ -412,12 +414,12 @@ Alternatives on their own trade-offs (the same list as the plan's storage decisi
 
 ### 3.1 What exists in Step 1
 
-- `core.user` (`name` as display field, `login`, password hash of type `password`, `active`), `core.role`, `core.user_role`. Roles are flat in Step 1; groups and nested roles come in Step 3.
+- `core.user` (`name` as display field, `login`, password hash of type `password`, `active`), `core.role`, `core.user_role`. Roles are flat in Step 1; groups and nested roles come in Step 4.
 - Roles are config records with a stable ID and an owner layer. They are shipped in sets, loaded in the phase before access rules (8.3), and covered by the schema revision (1.2). User-role assignments (`core.user_role`) stay data. Deleting or retiring a role that an active access rule names is refused with `DependencyConflict` (`rule_role`, 1.7).
-- Permissions are protected built-in config records (`core.permission`, with stable IDs), granted to roles through `core.role_permission` (config, covered by the revision) and checked by permission ID [judgment]. v0.1 permissions: `schema.purge` (1.6), `schema.snapshot` (6.8), `rules.run_as` (4.1).
+- Permissions are protected built-in config records (`core.permission`, with stable IDs), granted to roles through `core.role_permission` (config, covered by the revision) and checked by permission ID [judgment]. v0.1 permissions: `schema.purge` (1.6), `schema.snapshot` (6.8), `rules.run_as` (4.1), `events.subscribe` (12.2), `access.explain` (11.3).
 - `core.access_rule`: `effect` (allow or deny), `roles`, `class` (one class or `*`), `target` (records, or fields as a list or `*`), `actions` (read, create, update, delete; field rules cannot use delete), optional `condition`.
 - Built-in roles: `admin`; `authenticated`, held implicitly by every active user [judgment]; `schema_purger`, which holds `schema.purge`. Built-in roles, permissions and rules are protected definitions.
-- Password sign-in for every active user (Stage 0: the demo users). The first administrator of an install is created by `std bootstrap-admin`, as the system user through the save pipeline, once per login (decision 0016). API tokens, explain mode and the rule editor come in Step 3. The web app holds its session in an HTTP-only, `SameSite=Strict` cookie set by `POST /api/v1/auth/cookie-sign-in`; an unsafe request authenticated by it needs `STD-Client: web` (decision 0018).
+- Password sign-in for every active user (Stage 0: the demo users). The first administrator of an install is created by `std bootstrap-admin`, as the system user through the save pipeline, once per login (decision 0016). API tokens, explain mode and the rule editor come in Step 4. The web app holds its session in an HTTP-only, `SameSite=Strict` cookie set by `POST /api/v1/auth/cookie-sign-in`; an unsafe request authenticated by it needs `STD-Client: web` (decision 0018).
 - The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap and definition loading: it never signs in and no session authenticates as it, even if it is activated and given a password (decision 0014).
 
 ### 3.2 Decision rule
@@ -889,9 +891,9 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 | Used for | lists, API `filter`, picker limits | allow and deny conditions | conditional required, read-only, hidden | before and after conditions | which changes create deliveries |
 | Operators | all but `changed` | all but `changed` | all | all | all but `changed` |
 | `previous` | no | no | yes | yes (all-null on create) | no |
-| Context | me, now, myGroups (Step 3) | me, now, myGroups (Step 3) | me, now | me, now | now only |
+| Context | me, now, myGroups (Step 4) | me, now, myGroups (Step 4) | me, now | me, now | now only |
 | Time zone | user's | instance | instance | instance | instance |
-| Path hops | 1 | 0 in Step 1, 1 from Step 3 | preloaded paths only | up to 3, preloaded as system | 0 |
+| Path hops | 1 | 0 in Step 1, 1 from Step 4 | preloaded paths only | up to 3, preloaded as system | 0 |
 | Fields | caller's readable fields on every hop (3.4) | all, as system | caller's masked image: unreadable fields count as empty | all, as system | all, as system |
 | Evaluated in | SQL (authoritative), server TS allowed | SQL, for reads and for both write checks (3.9); server TS only for explain mode and tests | browser (advisory), server (binding) | server TS | server TS |
 
@@ -1006,6 +1008,8 @@ The representation of every type is fixed in Step 1, including types implemented
 
 ### 6.6 Record JSON
 
+This is the `/api/v1` shape, frozen from Step 3; `/api/v2` uses the TMF630 representation of 10.2.
+
 ```json
 {
   "schemaRevision": 1240,
@@ -1048,7 +1052,7 @@ The representation of every type is fixed in Step 1, including types implemented
 - `PATCH` and `DELETE` require `If-Match: "<version>"`, the version the change is based on. Missing gives `428 VersionRequired`; a stale value gives `VersionConflict`. Reason: the body holds only values, so `ReadOnlyField` stays a simple rule. [judgment]
 - All field errors are returned together in `ValidationFailed`. Text `""` becomes null before the required check.
 
-### 6.8 Application SDK (Step 4)
+### 6.8 Application SDK (Step 5)
 
 - `GET /api/v1/schema/snapshot?namespace=helpdesk` (needs the `schema.snapshot` permission, 3.1) returns `snapshotFormat`, `schemaRevision` and tables with full field definitions, IDs and a per-table fingerprint.
 - `std schema pull` writes it into the app's repo; `std codegen` emits read, create and patch types, Effect Schemas, field constants and a typed wrapper. Read properties are optional (withheld or unselected); `| null` only for nullable columns.
@@ -1071,7 +1075,7 @@ The representation of every type is fixed in Step 1, including types implemented
 - `recordSchema` from filtered metadata and from full definitions gives identical per-field errors for generated payloads.
 - The web app's client is built with `HttpApiClient.make` from the shared definition, and the type check fails on an incompatible endpoint change.
 - Password reads return `{"set": true}`; the plaintext never appears in history, labels or captured logs.
-- SDK golden test (Step 4): identical output for the same snapshot; `SchemaChanged` surfaces as a typed error.
+- SDK golden test (Step 5): identical output for the same snapshot; `SchemaChanged` surfaces as a typed error.
 
 ## 7. Import reconciliation and bulk operations
 
@@ -1122,7 +1126,7 @@ Per row: (1) a mapped source ID found in `external_identity` updates that record
 - `core.import_job`, `core.import_batch`, `core.import_row_result` are platform tables with fixed endpoints.
 - A job pins the uploaded file (immutable, with SHA-256), a mapping snapshot, options, the target class and its revision, and the user.
 - A pre-scan streams the file without writing records: parses, checks headers, counts rows, finds duplicate source IDs and duplicate match keys.
-- Batches are contiguous row ranges, default 500 [judgment], tuned in Step 4 so each commits in under 2 s, since a batch holds its record locks until commit.
+- Batches are contiguous row ranges, default 500 [judgment], tuned in Step 5 so each commits in under 2 s, since a batch holds its record locks until commit.
 - A batch's transaction writes records, row results and the batch's committed mark together. The mark is an insert into `core.import_batch` under a unique (job, batch) key, so retrying can never apply a batch twice.
 - A runner claims the job with a fenced lease, like deliveries (4.6): the claim writes a new `lease_token`, and each batch transaction checks it with a conditional update whose row count is checked; if the lease is lost, the batch rolls back.
 - Before each batch the runner checks for schema changes since the pinned revision with the 6.4 relevance rules, with scope set to the mapped fields across the target class, its ancestors and its descendants. A relevant change pauses the job with `SchemaChanged` until the user re-checks and resumes or cancels [judgment].
@@ -1153,7 +1157,7 @@ Per row: (1) a mapped source ID found in `external_identity` updates that record
 ### 7.8 COPY
 
 - `@effect/sql-pg` 4.0.5 implements the wire protocol itself and fails on COPY messages with "COPY is not supported" [checked: `src/PgConnection.ts` in [sql-pg-4.0.5.tgz](https://registry.npmjs.org/@effect/sql-pg/-/sql-pg-4.0.5.tgz)]. Adding COPY means a second driver outside `SqlClient`.
-- COPY is added in Step 4 only if the measurement requires it, as a loading optimization (staging tables, flushed groups). It never changes hooks, validation, access checks, change entries, deliveries or outcomes. Rows with a matching hook never use it. The equivalence test also runs on the COPY path.
+- COPY is added in Step 5 only if the measurement requires it, as a loading optimization (staging tables, flushed groups). It never changes hooks, validation, access checks, change entries, deliveries or outcomes. Rows with a matching hook never use it. The equivalence test also runs on the COPY path.
 
 ### Acceptance tests
 
@@ -1269,9 +1273,9 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 - Name clash: a v2 adding field `foo` to a shipped table where a local field `foo` exists is refused at plan time with a report naming the local field; after the admin renames it, the rerun succeeds and the local field's data and the rules reading it are intact.
 - `--plan` leaves revision, catalog (schema-only dump diff) and config tables unchanged, and the real run's report equals the plan.
 - `std upgrade` refuses to run while a `std-server` session is connected, and on a non-UTF8 database.
-- Release upgrade (Step 4): from the previous pre-release with helpdesk, 10,000 records with history and customizations (local field on a shipped table, overrides, a local class extending a shipped one, a local access rule, a local role), the candidate upgrade leaves `doctor` exiting 0, content checksums unchanged except for documented migrations, customizations effective, expected conflicts only.
-- Backup and restore (Step 4): `pg_dump -Fc` under load during a follow-up phase, restored into an empty Postgres 18, then `std upgrade`: the change set completes, `doctor` exits 0, checksums match the snapshot, auto-numbers continue, sign-in works, a new change set succeeds.
-- Restore then upgrade (Step 4): a previous pre-release backup reaches the same state as the release upgrade test.
+- Release upgrade (Step 5): from the previous pre-release with helpdesk, 10,000 records with history and customizations (local field on a shipped table, overrides, a local class extending a shipped one, a local access rule, a local role), the candidate upgrade leaves `doctor` exiting 0, content checksums unchanged except for documented migrations, customizations effective, expected conflicts only.
+- Backup and restore (Step 5): `pg_dump -Fc` under load during a follow-up phase, restored into an empty Postgres 18, then `std upgrade`: the change set completes, `doctor` exits 0, checksums match the snapshot, auto-numbers continue, sign-in works, a new change set succeeds.
+- Restore then upgrade (Step 5): a previous pre-release backup reaches the same state as the release upgrade test.
 - CI runs every runbook command against these scenarios.
 
 ## 9. Effect toolchain
@@ -1302,6 +1306,393 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 - An Effect 3-era API in any package fails CI (`outdatedApi`).
 - The vendored Effect source tag equals the lockfile version (CI check).
 
+## 10. The generic API under TMF630 (Step 3)
+
+Martin's requirement (2026-10-22, decision 0021): STD's own API follows the TMF630 REST API Design Guidelines. TMF630's text is for TM Forum members only. v4.2.0 is the production version (2021) and v5.0.0 is pre-production. So the rules below are read from what TM Forum publishes openly and what applies TMF630: the v5 OpenAPI documents (TMF621 v5.0.1 above all), their user guides and conformance profiles, and the public 2015 Part 1 (R14.5.1). A rule seen only in R14.5.1 is marked **[unverified for v5]** until someone reads the current text (open question 7). Where STD deviates on purpose, the rule says **[judgment]** with the reason. Each rule has a named test in `tmf630-conformance`.
+
+### 10.1 Versions and paths
+
+- STD's API v2 lives under `/api/v2`. The major version is in the path, and minor versions never change it [checked: every v5 OpenAPI document serves `{apiRoot}/tmf-api/<apiName>/v5/`; TMF656 v5.1.0 still uses `/v5`]. The `/tmf-api` prefix is kept for TM Forum's own APIs (11.1) [judgment].
+- `/api/v1` is frozen from Step 3: no new endpoint, parameter or field, and every response carries `Deprecation: @<epoch of the v0.0.3 tag>` (RFC 9745) and `Link: </api/v2>; rel="successor-version"`. It is removed in `v0.1.0`. Contracts 6.6 and 6.7 describe v1; this section describes v2.
+- Resource names are singular lowerCamelCase nouns [checked: `/troubleTicket`, `/troubleTicketSpecification`, `/hub` in TMF621 v5.0.1]. A table is its own collection: `/api/v2/{table}` and `/api/v2/{table}/{id}`, where `{table}` is the qualified name (`helpdesk.incident`). Fixed resources never contain a dot and table names always do, so they cannot collide [judgment]:
+
+| v1 | v2 |
+| --- | --- |
+| `GET`, `POST /api/v1/tables/{table}/records` | `GET`, `POST /api/v2/{table}` |
+| `GET`, `PATCH`, `DELETE .../records/{id}` | `GET`, `PATCH`, `DELETE /api/v2/{table}/{id}` |
+| `GET .../records/{id}/history` | `GET /api/v2/{table}/{id}/history` (a collection of `ChangeEntry`) |
+| `POST /api/v1/tables/{table}/form-state` | `POST /api/v2/formStateCheck` (a task resource) |
+| `GET /api/v1/meta/tables[/{table}[/openapi.json]]` | `GET /api/v2/tableMetadata[/{table}[/openapi.json]]`; `GET /api/v2/tableMetadata/{table}/schema.json` (JSON Schema of the class's resource for the caller) |
+| `POST`, `GET /api/v1/schema/change-sets[/{id}]` | `POST`, `GET /api/v2/changeSet[/{id}]` (a task resource) |
+| `POST /api/v1/auth/sign-in`, `cookie-sign-in`; `GET auth/me`; `POST auth/sign-out` | `POST /api/v2/session` (`tokenDelivery`: `body` or `cookie`); `GET`, `DELETE /api/v2/session/current` |
+| none | `POST /api/v2/hub`, `GET`, `DELETE /api/v2/hub/{id}` (12.2) |
+| `GET /api/v1/openapi.json` | `GET /api/v2/openapi.json` |
+
+- The session cookie's path becomes `/api` while both versions exist. `STD-Client: web`, `STD-Schema-Revision`, `Cache-Control: no-store` and the stale-request rules (6.2, 6.4) are unchanged in v2.
+
+### 10.2 Resource representation
+
+- A record is one flat JSON object, not an envelope [checked: v5 `*_RES` schemas]:
+
+```json
+{
+  "id": "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f",
+  "href": "https://std.example/api/v2/helpdesk.incident/01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f",
+  "@type": "helpdesk.incident",
+  "@baseType": "helpdesk.ticket",
+  "@schemaLocation": "https://std.example/api/v2/tableMetadata/helpdesk.incident/schema.json",
+  "version": 7,
+  "createdAt": "2026-10-20T08:15:30.123Z",
+  "createdBy": {
+    "@type": "EntityRef",
+    "@referredType": "core.user",
+    "id": "…",
+    "href": "…",
+    "name": "Admin"
+  },
+  "number": "INC0001001",
+  "shortDescription": "Mail is down",
+  "assignedTo": {
+    "@type": "EntityRef",
+    "@referredType": "core.user",
+    "id": "…",
+    "href": "…",
+    "name": "Alice Smith"
+  },
+  "estimate": "12.50",
+  "withheld": ["customerEmail"]
+}
+```
+
+- `id` and `href` are always present; `href` is the absolute URL of the record through its concrete class [checked: `Addressable`; `id` and `href` required in `TroubleTicket_RES`]. `@type` is always present [checked: v5 `Extensible` requires `@type`].
+- **Attribute names** are lowerCamelCase [checked: every v5 schema]. A field's API name is its definition name with each `_x` turned into `X` (`short_description` → `shortDescription`). The schema engine refuses a field whose API name equals the API name of another live field of the hierarchy, or a reserved name (`id`, `href`, `version`, `createdAt`, `createdBy`, `updatedAt`, `updatedBy`, `withheld` and anything starting with `@`), with `DefinitionInvalid` problem `apiNameClash` [judgment: definition names stay snake_case so plain SQL stays readable (1.1); open question 9]. Filter text, `fields`, `sort` and write bodies in v2 use API names; v1 keeps definition names.
+- System fields: `version` (number), `createdAt`, `createdBy`, `updatedAt`, `updatedBy`; `class` becomes `@type`.
+- **Polymorphism** [checked: `@type`, `@baseType`, `@schemaLocation` in v5 `Extensible`]: `@type` is the qualified name of the concrete class; `@baseType` is the qualified name of its parent class, absent on a root's own records; `@schemaLocation` is the caller's JSON Schema of the concrete class (`/api/v2/tableMetadata/{class}/schema.json`, built from the same metadata as 6.3, so it names no field the caller cannot read). A caller who can see a record always knows its concrete class (3.4), so none of the three leaks a class name. Through a parent endpoint the record still shows only the endpoint's lineage fields (2.3); `@type` tells a client where to read the rest.
+- **References** are EntityRefs [checked: v5 `EntityRef` requires `id`, adds `name`, `@referredType`, `href`]: `{"@type": "EntityRef", "id", "href", "@referredType", "name"}`. `@referredType` and `href` name the target's concrete class when the target is visible to the caller, otherwise the declared target class if the caller knows it (6.3), otherwise both are absent. `name` is the label under exactly the 3.6 rule. This replaces `labels=true`; choice labels come from metadata. In writes only `id` is read; a non-null `@referredType` must name the field's target class or a descendant, else `InvalidReference`.
+- `withheld` lists selected attributes withheld on this record (6.6). It is STD's extension of the record base type, not a TMF attribute [judgment: TMF has no "restricted" marker, and a restricted field must never look empty, Step 2 gate].
+- Value shapes are 6.5's, unchanged (big integers and decimals stay strings).
+
+### 10.3 Query parameters on lists and reads
+
+| Parameter | Meaning | Source |
+| --- | --- | --- |
+| `fields` | Comma-separated attribute names (one-hop paths allowed, `assignedTo.name`); `id`, `href` and `@type` are always returned | [checked: TMF621 v5.0.1 `fields`; the TMF621 conformance profile makes first-level attribute selection mandatory] |
+| `<attr>=<v>` | `eq(attr, v)`; several attributes AND | [checked: TMF621 conformance profile `?severity=…&status=…`] |
+| `<attr>=<v1>,<v2>` and `<attr>=<v1>&<attr>=<v2>` | `in(attr, [v1, v2])` | [unverified for v5: R14.5.1] |
+| `<attr>.gt=`, `.gte=`, `.lt=`, `.lte=` | `gt`, `ge`, `lt`, `le` | [unverified for v5: R14.5.1] |
+| `<ref>.id=`, `<ref>.name=`, `<ref>.<attr>=` | a one-hop path (5.9, 3.6 masks) | [judgment, from the dotted-attribute convention] |
+| `@type=<class>` | `class` equals the class (2.3); `@type=a,b` is `in` | [judgment] |
+| `offset`, `limit` | offset paging; `limit` 1 to 1,000, default 100 | [checked: v5 `offset`, `limit`] |
+| `after`, `before` | opaque cursors (STD's keyset cursor, 3.5) | [checked: v5 `after`, `before` "opaque string"] |
+| `sort` | `sort=-cost,name`; ascending by default, `-` reverses | [checked: v5 `sort`] |
+| `filter` | JSONPath filter (TMF630 Part 6): refused in v0.1 with `InvalidFilter` reason `jsonPathNotSupported` | [checked: v5 `filter` "Filter a collection using JSONPath"; judgment to refuse, open question 13] |
+| `condition` | STD's condition text syntax (Contracts 5, `@std/conditions`) with API names, ANDed with the TMF filters | STD extension [judgment] |
+| `count` | `count=false` drops `X-Total-Count` | STD extension [judgment] |
+
+- Mapping onto the condition AST (5.2): values are parsed from query text by the field type's input rules (6.5): a JSON number for integers (`5`), text for big integers and decimals, `true`/`false`, dates and date-times as in 6.5, choice keys, UUIDs. `<attr>=` with an empty value, an operator suffix the type does not support (5.4), `.regex` and `.exact` are `InvalidFilter`. Text equality uses the field's key (5.5), so `name=alice` matches `Alice` on a case-insensitive field [judgment: TMF630 does not define case]. Every name resolves against the caller's visible schema, so a hidden attribute gives `UnknownField` exactly as a missing one (3.4). Repeated parameters for the same attribute and operator are OR; everything else is AND.
+- Unknown query parameters are `InvalidRequest` [judgment: an unknown attribute must not be silently ignored, because an ignored filter widens the result].
+- `offset` and `after`/`before` together are `InvalidRequest`. Offset pages use the same `ORDER BY` with `OFFSET` and the same masking (3.5); STD makes no stability promise across changes for offset pages (the cursor gives that) [judgment].
+
+### 10.4 List responses
+
+- `200` with a JSON array of resources [checked: v5 list responses are arrays with `200`; no `206` is defined in v4 or v5 OpenAPI documents].
+- `X-Result-Count`: the number of items in this response. `X-Total-Count`: the number matching the filter, computed with the page's `FROM` and `WHERE` (3.5), on every list unless `count=false` [checked: both headers on every v4 and v5 list; judgment: always on, so a TMF client gets it without asking].
+- The next page: `Link: <…?after=<cursor>&…>; rel="next"` (RFC 8288) when a cursor page has more; offset pages give `rel="next"` with the next offset [judgment: v5 defines the `after` parameter but not where a client reads its value].
+- History lists are `ChangeEntry` resources: `{"@type": "ChangeEntry", "id": <change ID>, "operationId", "version", "kind", "actor": EntityRef, "occurredAt", "schemaRevision", "cause", "changes", "fields"}`, filtered as in 3.7.
+
+### 10.5 Writes
+
+- `POST /api/v2/{table}`: `201` with the resource and `Location` [checked: v5 `201`]. `@type` is optional and defaults to `{table}`; if given it must name a class of subtree(table) the caller knows, and the body resolves against that class's fields, so a client can create a child-class record through the parent collection [judgment: TMF polymorphic create; this widens 2.2 item 5 for v2 only, and the access checks run on the class created]. `@baseType` and `@schemaLocation` in a body are ignored when they match the created class's, else `InvalidRequest`. `id`, `href`, `version` and the audit attributes are `ReadOnlyField` (6.7).
+- `PATCH /api/v2/{table}/{id}` takes `application/merge-patch+json` (RFC 7396), and `application/json` as the same, and `application/json-patch+json` (RFC 6902) [checked: TMF621 user guide: merge-patch mandatory, JSON Patch optional]. `application/json-patch-query+json` is `415` [judgment, open question 13].
+  - Merge-patch is the 6.7 update body: an absent attribute is unchanged, `null` clears. For a json field the patch value is merged into the stored value by RFC 7396 [judgment: TMF clients expect merge semantics on nested objects]; for a reference only the EntityRef's `id` counts.
+  - JSON Patch operations apply in order to the caller's readable image of the record (its stored values with unreadable fields absent), and the result becomes an update body. A path is `/<attribute>` or a pointer into a json field. `test`, `copy` and `move` read their source, so a source the caller cannot read is `UnknownField`, as in 3.4. A failed `test` is `409 PatchTestFailed` and writes nothing. An operation on a read-only attribute is `ReadOnlyField`.
+  - Non-patchable: `id`, `href`, `@type`, `@baseType`, `@schemaLocation`, `version`, the audit attributes, auto-numbers and read-only fields [checked: the TMF621 user guide's non-patchable list].
+  - The result is `200` with the resource and `ETag: "<version>"`.
+- `DELETE /api/v2/{table}/{id}`: `204` with no body [checked: v5 `204`].
+- **Version checks.** `PATCH` and `DELETE` in v2 still require `If-Match: "<version>"` (`428 VersionRequired`), and every single-resource response carries `ETag: "<version>"` [judgment: TMF630 does not require a precondition, but STD's generic API never writes last-wins, 6.7; the TMF Open APIs make it optional, 11.1].
+- The save pipeline (4.1) is unchanged underneath: the stale check (6.4) runs on the attributes the patch names, before validation, access and version checks; a JSON Patch's scope is every attribute its operations touch or read.
+- `PUT` is `405` [judgment: TMF630 makes it optional].
+
+### 10.6 Errors
+
+- Every error body is a TMF `Error` [checked: v5 `Error` requires `code` and `reason`; adds `message`, `status`, `referenceError`, and `@type` from `Extensible`]: `{"@type": "<_tag>", "@baseType": "Error", "code": "<_tag>", "reason": "<fixed text per _tag>", "status": "<HTTP status>", …}`. STD's details stay as extension attributes of the subtype: `fieldErrors` (`ValidationFailed`), `currentVersion` (`VersionConflict`), `requestRevision`, `currentRevision`, `changes` (`SchemaChanged`), `problems` (`DefinitionInvalid`), `issues` (`InvalidFilter`) [judgment: TMF630 extends by subtyping].
+- `message` is a fixed template per tag, never a value or Postgres text (3.8). The identical-response rules of 3.4 and 3.8 (`UnknownTable`, `UnknownField`, `NotFound`, `InvalidReference`) hold byte for byte in v2.
+- Status codes are those of 3.8; `PatchTestFailed` is 409 and an unsupported media type is 415.
+
+### 10.7 What changes for clients
+
+- `v0.0.1` and `v0.0.2` clients keep working on the frozen `/api/v1` until `v0.1.0`; the release-compatibility step keeps running the previous release's quickstart unchanged (architecture, "Release compatibility").
+- The web app, `examples/quickstart.sh` and the typed client move to v2 in Step 3, so the `v0.0.3` quickstart already speaks v2 and the step stays meaningful when v1 is removed in `v0.1.0`.
+- Request schemas in v2 decode an absent new property as its default, as v1's do (decision 0017).
+
+### Acceptance tests
+
+- `tmf630-conformance`: one test per rule in 10.1 to 10.6, against the acme and helpdesk fixtures: paths, the representation (every attribute name in lowerCamelCase, `@type` on every object, `href` dereferences to the same resource), `fields`, each filter form and its AST, offset and cursor paging with both count headers, `sort`, polymorphic create through a parent, merge-patch including a nested json merge, every JSON Patch operation including a failed `test`, `204` on delete, `ETag` on reads and writes, the Error shape for every `_tag`.
+- `tmf-filter-equivalence`: property test. For generated TMF queries over every condition-capable type, the IDs and order of `/api/v2` equal those of the same query written in the `condition` syntax, and of `/api/v1` with the text filter.
+- The Contracts 3 tests named for Stage 0 and Step 1, `error-fuzz` and `invisible-identity` run against v1 and v2.
+- `api-name-clash`: a field `due_date` next to a live `dueDate` is refused with `apiNameClash`, and so are `href` and `@x`.
+- `v1-frozen`: every `/api/v1` response carries `Deprecation`; the v1 OpenAPI document is byte-identical to the `v0.0.2` one apart from the version string.
+
+## 11. TMF Open API mappings (Steps 3 and 4)
+
+### 11.1 Common rules
+
+- **Pinned versions** [checked: the TM Forum Open API directory and its document bucket, 2026-10-22, decision 0021]. Moving a pin is its own PR, with its kit:
+
+| API | Version | Base path | Resources STD serves | CTK | Step |
+| --- | --- | --- | --- | --- | --- |
+| TMF621 Trouble Ticket | 5.0.1 | `/tmf-api/troubleTicket/v5` | `troubleTicket`, `hub` | `tmf621-v5.0.0-ctk-1.0.1` | 3 |
+| TMF688 Event | 4.0.0 (pre-production) | `/tmf-api/event/v4` | `topic`, `topic/{id}/event`, `topic/{id}/hub`, `hub` | none: OpenAPI contract tests | 3 |
+| TMF632 Party | 5.0.0 | `/tmf-api/partyManagement/v5` | `individual`, `organization`, `hub` | `tmf632-v5.0.0-ctk-1.0.1` | 4 |
+| TMF669 Party Role | 5.0.0 | `/tmf-api/partyRoleManagement/v5` | `partyRole`, `partyRoleSpecification`, `hub` | `tmf669-v5.0.0-ctk-1.0.1` | 4 |
+| TMF672 User Role Permission | 5.1.0 | `/tmf-api/rolesAndPermissionsManagement/v5` | `permissionSpecification`, `permissionSpecificationSet`, `permissionSet`, `checkPermission`, `hub` | `tmf672-v5.1.0-ctk-1.0.1` | 4 |
+| TMF638 Service Inventory | 5.0.0 | `/tmf-api/serviceInventory/v5` | `service`, `hub` | `tmf638-v5.0.0-ctk-1.0.1` | 4 |
+| TMF639 Resource Inventory | 5.0.0 | `/tmf-api/resourceInventory/v5` | `resource`, `hub` | `tmf639-v5.0.0-ctk-1.0.1` | 4 |
+| TMF641 Service Ordering | 4.2.0 (no stable v5) | `/tmf-api/serviceOrdering/v4` | `serviceOrder`, `cancelServiceOrder`, `hub` | `tmf641-v4.2.0-ctk-1.0.0` | 4 |
+| TMF622 Product Ordering | 5.0.0 | `/tmf-api/productOrderingManagement/v5` | `productOrder`, `cancelProductOrder`, `hub` | `tmf622-v5.0.0-ctk-1.0.1` | 4 |
+
+The documents' `servers` entries are inconsistent (`https://serverRoot`, `{apiRoot}` with a default, a full path), so a base path follows the pinned kit's default `url` [checked for TMF621: `/tmf-api/troubleTicket/v5`; TMF641 v4.2.0 `basePath` `/tmf-api/serviceOrdering/v4`; TMF632, TMF639 and TMF672 from their `servers` defaults]. The TMF669, TMF638 and TMF622 paths are [unverified] until their kits run, and a kit that disagrees wins. The pinned OpenAPI documents (Apache-2.0) are vendored under `packages/tmf/specs/` with their source URL and SHA-256.
+
+- **One enforcement point.** A TMF API is an adapter over the record service: every read is a generic read of the mapped classes, every write a save or nested saves in one request transaction (4.1), as the calling user. No mapping reads or writes a table directly, and no mapping uses `WriteAccess.allowAll`. So access rules, masks, history, the outbox and stale checks apply unchanged, and a TMF API can never show or accept more than the generic API would. An attribute the caller cannot read is absent from the resource, and a filter on it is `UnknownField` (3.4) rendered as a TMF `Error`.
+- **Where mappings live.** A mapping is code in `@std/tmf` (plain package: attribute and state maps, query translation, event rendering, payload shapes) plus its routes in `server/http/tmf/`; it names fields by the stable IDs of the shipped sets, so renames never break it. The classes come from shipped sets: `core` (parties), `helpdesk` (tickets, changes, requests), `cmdb` (configuration items). A mapping covers its class and every descendant, local ones included.
+- **`@type` and local classes.** A shipped class renders the TMF type its mapping names. A local child class of a mapped class renders `@type` = its qualified STD name, `@baseType` = the TMF type of its nearest mapped ancestor, and `@schemaLocation` = its JSON Schema, which adds its local attributes (with API names, 10.2) to the pinned TMF schema [checked: the v5 extension pattern; judgment on names]. `POST` with such an `@type` creates that class.
+- **Embedded arrays.** A TMF array either maps onto STD reference fields and child records (when its items name STD records: notes, related parties, order items, relationships) or is stored whole in a `json` field (value objects STD does not interpret: characteristics, contact media, external references, prices). Each mapping table says which. A write that changes the array runs the child saves first, then the parent save, in one transaction; the parent's `last_update` field is set by every TMF write that changes anything, so the parent's version, history and events always move with its children [judgment]. Child records of a resource are deleted with it by the TMF `DELETE`, each delete authorized for the caller (3.10 still holds for other referrers).
+- **Versions.** TMF responses carry `ETag: "<parent version>"`. `If-Match` is optional on TMF writes: present, it is checked as in 6.7; absent, the write applies to the version it locks [judgment: the CTKs and TMF clients send no precondition; the generic API keeps it required, 10.5].
+- **Queries, paging, errors, hubs** follow 10.3, 10.4, 10.6 and 12, with TMF attribute names. Filters on an attribute stored as json or as an array are `InvalidFilter` reason `attributeNotFilterable` [judgment: the condition AST has no "any element" operator; the conformance runs record whether a kit needs one].
+- **Unsupported resources** of an API (for example `troubleTicketSpecification`) answer `404` with a TMF `Error` and are listed in the API's conformance note; a kit that requires one is a gap, not a pass.
+- **Conformance gate.** CI downloads each pinned kit by URL, checks its SHA-256 and the image digest, never commits it, writes its `config.json` (base URL on the `tmf` Docker network, a bearer token for the `tmf_ctk` test user, payloads naming seeded STD records), runs the kit's compose service directly (not `run.sh`, which opens a browser), and passes only when `reports/index.json` has zero failures and the expected number of tests (the container exits 0 even when tests fail) [checked: the TMF621 v5 kit's README, `docker-entrypoint.sh` and sample report]. Every TMF response in every test also validates against the pinned OpenAPI document (`tmf-oas-contract`). Reports are kept as CI artifacts, so a certification submission can reuse them.
+
+### 11.2 TMF621 Trouble Ticket over ITIL incident and problem (Step 3)
+
+The helpdesk set v3 (decision 0021) rebuilds `helpdesk.ticket` as the TroubleTicket base, `helpdesk.incident` and the new `helpdesk.problem` extending it. Notes are `helpdesk.ticket_note` records and other related parties `helpdesk.ticket_party` records, both referencing their ticket.
+
+| TMF621 attribute | STD | Read-only | Notes |
+| --- | --- | --- | --- |
+| `id`, `href` | `id` | yes |  |
+| `@type` | `TroubleTicket` for the shipped classes; a local class's own name (11.1) | yes | [judgment: the kit and TMF clients post `TroubleTicket`; the ITIL class is carried by `ticketType`] |
+| `ticketType` | the concrete class: `incident`, `problem`; any other value creates a `helpdesk.ticket` and is stored in `ticket_type` | after create | Required on create [checked] |
+| `name` | `short_description` (display field) | no | When absent on create, a shipped before-write rule fills it from the first line of `description`, cut to 160 code points |
+| `description` | `description` | no | Required on create [checked] |
+| `severity` | `impact`: `Critical` ↔ 1, `Major` ↔ 2, `Minor` ↔ 3 | no | Required on create [checked]; other values `ValidationFailed` |
+| `priority` | `priority` label: `Critical`, `High`, `Medium`, `Low`, `Planning` (1 to 5) | yes | Computed from impact and urgency (14.2) |
+| `status` | `status` (and `hold_reason`), table below | no | Writes follow the state model (14.2, 14.3) |
+| `statusChangeDate`, `statusChangeReason` | `status_changed_at` (set by the pipeline rule on every status change), `status_reason` | date only |  |
+| `statusChangeHistory[]` | the status changes in the record's history (3.7) | yes | Absent when the caller cannot read `status` |
+| `creationDate`, `lastUpdate` | `created_at`, `updated_at` | yes |  |
+| `requestedResolutionDate`, `expectedResolutionDate`, `resolutionDate` | `requested_resolution_at`, `expected_resolution_at`, `resolved_at` (set on entering `resolved`) | `resolutionDate` |  |
+| `channel` | `channel` choice: key ↔ `ChannelRef.id`, label ↔ `name` | no |  |
+| `note[]` | `helpdesk.ticket_note`: `author` (reference to `core.user`, rendered as its display name), `date` (= `created_at`), `text` | existing notes | Append-only: a write may add notes; changing or removing an existing one is `ValidationFailed` [judgment: ITIL work notes are a journal] |
+| `relatedParty[]` | role `reporter` ↔ `caller` (reference to `core.party`); role `assignee` ↔ `assigned_to` (`core.user`, rendered as its individual, 11.3); other roles ↔ `helpdesk.ticket_party` (`party`, `role`) | no | Writes resolve `partyOrPartyRole.id` to the party, or for `assignee` to the user whose individual it is |
+| `troubleTicketRelationship[]` | `relationshipType` `causedBy` ↔ an incident's `problem` (reference to `helpdesk.problem`); `parent` ↔ `parent_incident` | no | Other relationship types `ValidationFailed` |
+| `relatedEntity[]` | role `affectedConfigurationItem` ↔ `configuration_item` (reference to `cmdb.ci`, from helpdesk v4 in Step 4); role `change` ↔ `caused_by_change` (Step 4); anything else kept as given in json `related_entity` | no |  |
+| `troubleTicketCharacteristic[]` | `urgency` ↔ `urgency` (1 to 3), `majorIncident` ↔ `major_incident`, `holdReason` ↔ `hold_reason`, `resolutionCode` ↔ `resolution_code`, `resolutionNotes` ↔ `resolution_notes`; problems: `knownError`, `workaround`, `rootCause`; any other characteristic kept in json `characteristic` | per field | Typed as the v5 characteristic subtypes |
+| `externalIdentifier[]` | first item `{owner: "STD", externalIdentifierType: "number", id: <number>}` (read-only), then json `external_identifier` | the first item |  |
+| `attachment[]` | json `attachment` (references and URLs only) | no | Attachments are a later field type |
+| `troubleTicketSpecification` | not supported (11.1) |  |  |
+
+Status (TMF621's set is an example set [checked: user guide], so STD's ITIL states map onto it):
+
+| TMF621 `status` | Incident (read) | Problem (read) | On write |
+| --- | --- | --- | --- |
+| `acknowledged` | `new` | `new`, `assess` | incident `new`; problem unchanged if in the group, else `new` |
+| `inProgress` | `in_progress` | `root_cause_analysis`, `fix_in_progress` | incident `in_progress`; problem unchanged if in the group, else `root_cause_analysis` |
+| `pending` | `on_hold` with `hold_reason` `awaiting_caller` | none | incident `on_hold` + `awaiting_caller`; problem `ValidationFailed` |
+| `held` | `on_hold` with another `hold_reason` | none | incident `on_hold`, `hold_reason` from the characteristic, else `awaiting_vendor`; problem `ValidationFailed` |
+| `resolved` | `resolved` | `resolved` | `resolved` (14.2 needs resolution code and notes) |
+| `closed` | `closed` | `closed` | `closed` |
+| `cancelled` | `canceled` | `canceled` | `canceled` |
+| `rejected` | `canceled` with `status_reason` `rejected` | the same | `canceled`, `status_reason` `rejected` |
+
+- A filter `status=pending` compiles to `status = on_hold and hold_reason = awaiting_caller`, `status=inProgress` to the `in` of its group, so TMF filters and reads agree (`tmf-filter-equivalence` covers TMF621).
+- Events (12.3): `TroubleTicketCreateEvent`, `TroubleTicketAttributeValueChangeEvent`, `TroubleTicketStatusChangeEvent` (TMF `status` changed), `TroubleTicketResolvedEvent` (entered `resolved`), `TroubleTicketInformationRequiredEvent` (entered `pending`), `TroubleTicketDeleteEvent`.
+
+### 11.3 TMF632 Party, TMF669 Party Role and TMF672 User Role Permission (Step 4)
+
+The core set gains a party model [judgment: tickets, CIs and orders all name parties, so it belongs in `core`]: `core.party` (root: `name` as display field, `status`), `core.individual` (`given_name` and `family_name`, both required, `name` filled from them by a core rule, `birth_date`, json `contact_medium`, `individual_identification`, `external_reference`, `party_characteristic`), `core.organization` (`name` required, `trading_name`, `is_legal_entity`, `organization_type`, `exists_from`, `exists_until`, json `organization_identification`), `core.party_role` and `core.party_role_specification`. `core.user` gains `individual` (unique reference to `core.individual`), created with the user by a core hook; JIT users from the identity provider (13.4) get one too.
+
+| TMF resource | STD | Notes |
+| --- | --- | --- |
+| TMF632 `Individual` | `core.individual` | `givenName`, `familyName` required [checked]; `status` choice `initialized`, `validated`, `deceased` [checked] |
+| TMF632 `Organization` | `core.organization` | `name` required [checked]; `status` choice `initialized`, `validated`, `closed` [checked] |
+| TMF669 `PartyRole` | `core.party_role`: `name`, `role`, `engaged_party` (reference to `core.party`), `party_role_specification`, `status` (text: the spec has no enum [checked]), `status_reason`, `valid_from`, `valid_until`; json for characteristics, accounts, agreements, contact media, payment methods, credit profiles | `name` and `engagedParty` required [checked]. Business roles (customer, supplier, agent); they grant no STD access [judgment] |
+| TMF669 `PartyRoleSpecification` | `core.party_role_specification`: `name`, `description`, `status`, `lifecycle_status`, `permission_specification_set` (reference to `core.role`) | The link from a business role to an STD role is informational in v0.1 |
+| TMF672 `PermissionSpecificationSet` | `core.role` (config): `name`, `label` as description | Writes run as one-operation change sets with the caller as requester (1.4); `permissionSpecification[]` lists the role's projected rules |
+| TMF672 `PermissionSpecification` | a projection of one access rule and one action: `function` = the rule's class (`*` as `*`), `action` = `read`, `create`, `update` or `delete`; `id` = UUIDv5 of the rule's ID and the action; characteristics carry `effect`, `target`, `fields` and the condition in the text syntax | `POST` creates an allow rule on records of `function` for `action` with no condition and no role; adding it to a set adds the set's role to the rule's `roles`. A rule that is a deny, targets fields, has a condition or several actions is read-only through TMF672 (`PATCH` and `DELETE` give `NotRepresentable`, 422) [judgment, open question 11] |
+| TMF672 `PermissionSet` | `core.user_role` (gains `valid_from`, `valid_until`): `user` ↔ the user's individual as `PartyRef`; `permissionSpecificationSet` ↔ the role; `granter` ↔ `created_by`'s individual; `permission[]` derived, read-only | A `PermissionSet` with ad-hoc `permission[]` and no set is `NotRepresentable` |
+| TMF672 `CheckPermission` | explain mode (Step 4): for `user`, `permissionSpecification` and each `entity`, the decision and the rule that decided | A task resource; needs the `access.explain` permission, and entities the caller cannot see answer as missing |
+
+- Effective roles (3.1, 13.4) are `authenticated`, the user's `core.user_role` rows valid now, and, for OIDC sessions, the token's role claims that name live STD roles. A role name STD does not know grants nothing.
+- Events: the Create, AttributeValueChange, StateChange (where the resource has a status) and Delete events of each resource [checked].
+
+### 11.4 TMF638 Service Inventory and TMF639 Resource Inventory: the CMDB (Step 4)
+
+The `cmdb` app set (requires `core`): `cmdb.ci` (root: `name`, `description`, `category`, `owned_by` reference to `core.party`, `lifecycle` choice, json `characteristic`, `external_identifier`, `place`), `cmdb.ci_relationship` (`source` and `target` references to `cmdb.ci`, `relationship_type` choice, unique per triple), `cmdb.service` and `cmdb.resource` extending `cmdb.ci`, `cmdb.logical_resource`, `cmdb.physical_resource`, `cmdb.software_resource` and `cmdb.resource_function` extending `cmdb.resource`, and `cmdb.service_specification` and `cmdb.resource_specification` (`name`, `version`).
+
+| TMF | STD | Notes |
+| --- | --- | --- |
+| TMF638 `Service` | `cmdb.service`: `service_specification` (required reference), `state` choice `feasibilityChecked`, `designed`, `reserved`, `inactive`, `active`, `terminated`, `suspended` (v5.0.0 [checked]), `operating_status` choice (10 values [checked]), `service_type`, `is_bundle`, `is_service_enabled`, `has_started`, `start_mode`, `is_stateful`, `start_date`, `end_date`; json `feature`, `intent` | `serviceSpecification` and `state` required [checked]. `serviceSpecification` is a reference to an STD record, not to a TMF633 catalog (out of scope) |
+| `serviceRelationship[]`, `supportingService[]`, `supportingResource[]` | `cmdb.ci_relationship` rows with `relationship_type` = the TMF relationship type, `supportingService` or `supportingResource` | Real references, so a CI with relationships cannot be deleted while they exist (3.10); the TMF `DELETE` removes the CI's own outgoing relationships first |
+| `serviceOrderItem[]` | change items referencing the service (11.5) | read-only |
+| TMF639 `Resource` and subtypes | `cmdb.resource`, and `@type` `LogicalResource`, `PhysicalResource`, `SoftwareResource`, `ResourceFunction` ↔ the four child classes | Only `@type` required [checked]; `POST` with a subtype creates that class (10.5) |
+| resource states | choices `administrative_state` (`locked`, `unlocked`, `shuttingDown`), `operational_state` (`enabled`, `disabled`), `usage_state` (`idle`, `active`, `busy`), `lifecycle_state` (`planned`, `installed`, `pendingRemoval`); the other v5 status attributes in json `status_detail` | [checked: TMF639 v5.0.0] |
+| `resourceRelationship[]` | `cmdb.ci_relationship` |  |
+
+- ITIL configuration records are these records; ITIL "configuration item classes" are STD classes, so local CI types are local child classes and appear in TMF639 or TMF638 with their own `@type` (11.1).
+- Events: Create, AttributeValueChange, StateChange (any mapped state attribute changed), Delete; TMF638 also `ServiceOperatingStatusChangeEvent` [checked].
+
+### 11.5 TMF641 Service Ordering and TMF622 Product Ordering: change and service requests (Step 4)
+
+The helpdesk set v4 adds `helpdesk.change` (ITIL change request) with `helpdesk.change_item`, `helpdesk.change_cancellation`, `helpdesk.request` (ITIL service request) with `helpdesk.request_item`, `helpdesk.request_cancellation`, `helpdesk.catalog_item` (a minimal request catalog: `name`, `description`, `approval_required`, `fulfilment_group`) and `helpdesk.approval` (14.4).
+
+| TMF641 v4.2.0 `ServiceOrder` | `helpdesk.change` | Notes |
+| --- | --- | --- |
+| `category` | `change_type` choice `standard`, `normal`, `emergency` | [judgment: the ITIL change type is the order's category] |
+| `description`, `priority` | `description`, `priority` |  |
+| `requestedStartDate`, `requestedCompletionDate`, `expectedCompletionDate`, `startDate`, `completionDate`, `orderDate` | `planned_start`, `planned_end`, `expected_end`, `actual_start`, `actual_end`, `created_at` | the last three read-only |
+| `serviceOrderItem[]` | `helpdesk.change_item`: `item_id` (text, unique per change), `action` (`add`, `modify`, `delete`, `noChange`), `service` (reference to `cmdb.service`), json `service_value` (the desired service for `add` and `modify`), `state` | `serviceOrderItem`, and per item `id`, `action`, `service` required [checked] |
+| `state` | `status` and `close_code`, table below |  |
+| `note[]`, `relatedParty[]`, `externalReference[]`, `orderRelationship[]` | as 11.2; `requested_by` ↔ role `requester`, change authority ↔ role `changeAuthority` |  |
+| `CancelServiceOrder` | `helpdesk.change_cancellation`: `change`, `reason`, `requested_date`, `state` (`accepted`, `inProgress`, `done`, `terminatedWithError` [checked: v4.2 `TaskStateType`]) | 14.4 says when it succeeds |
+
+| ITIL change `status` | TMF641 `state` |
+| --- | --- |
+| `new`, `assess` | `acknowledged` |
+| `authorize` | `pending` |
+| `scheduled`, `implement`, `review` | `inProgress` |
+| `closed` with `close_code` `successful`, `unsuccessful`, `partial` | `completed`, `failed`, `partial` |
+| `canceled` | `cancelled` |
+| `rejected` | `rejected` |
+| a cancellation `accepted` or `inProgress` | `assessingCancellation`, then `pendingCancellation` |
+
+TMF641 never shows `held` (an ITIL change has no hold state) [judgment]. TMF622 v5.0.0 `ProductOrder` maps onto `helpdesk.request` the same way: `productOrderItem[]` ↔ `helpdesk.request_item` (`item_id`, `action`, `product_offering` reference to `helpdesk.catalog_item`, `quantity`, json `product`, `state`); `requestedInitialState` `draft` ↔ status `draft`, otherwise `submitted`; states `draft` ↔ `draft`, `acknowledged` ↔ `submitted`, `pending` ↔ `awaiting_approval`, `inProgress` ↔ `in_fulfilment`, `held` ↔ `on_hold`, `completed` ↔ `fulfilled`, `partial` ↔ `partially_fulfilled`, `failed` ↔ `failed`, `rejected` ↔ `rejected`, `cancelled` ↔ `canceled`; `CancelProductOrder` ↔ `helpdesk.request_cancellation`. Billing account, agreements, quotes, prices and payments are json, kept as given [judgment: STD is not a commerce system]. Events: each API's Create, AttributeValueChange, StateChange, Delete and InformationRequired events; Milestone, Jeopardy and ErrorMessage events are not produced in v0.1 [judgment].
+
+### 11.6 Acceptance tests
+
+- `tmf-ctk-<api>` for every row of 11.1 with a kit: zero failures, the expected test count, report kept.
+- `tmf-oas-contract`: every TMF response of every test validates against the pinned OpenAPI document.
+- `tmf-noninterference`: Bob's view through TMF621 of tickets with hidden fields equals his generic view: a hidden field is an absent attribute, a filter on it is `UnknownField`, an invisible ticket is `NotFound` identical to a random ID, and the `noninterference` property holds through TMF621 queries.
+- `tmf-local-class`: a local `local.vip_incident` extending `helpdesk.incident` appears in TMF621 with its own `@type`, `@baseType` `TroubleTicket` and a schema naming its local field; a `POST` with that `@type` creates it.
+- `tmf-arrays`: adding a note through TMF621 creates one `helpdesk.ticket_note`, bumps the ticket's version once and writes one change entry per record; changing an existing note is refused with nothing written.
+- `tmf672-roles`: a set created through TMF672 is a `core.role` with a change-set journal entry; a non-admin's TMF672 write is refused exactly as the generic write is; a conditional rule is read-only through TMF672.
+
+## 12. Events: hubs, listeners and TMF688 (Step 3)
+
+### 12.1 What an event is
+
+- An event is one rendering of one committed change entry (4.2) for one API: the generic API (`Record*Event`), or a TMF API for its mapped classes (11). It is produced only from the outbox: one delivery row per matching subscription and change, written in the save transaction (4.6). So no event exists for a rolled-back save, and per subscription and record events follow version order (4.7).
+- Envelope [checked: v5 `Event`]: `{"@type": "Event", "eventId", "eventTime", "eventType", "timeOccurred", "correlationId", "domain", "title", "description", "priority", "source", "event": {"<resourceName>": <resource>}}`. `eventId` is the UUIDv5 of the change ID and the event type, so a retry sends the same `eventId` and two types of one change differ [judgment]. `timeOccurred` is the change's `occurred_at`; `eventTime` is when the delivery was rendered; `correlationId` is the operation ID (4.2); `domain` is the API name; `source` is an EntityRef to the record.
+- Event types per change: generic API `RecordCreateEvent`, `RecordAttributeValueChangeEvent`, `RecordDeleteEvent`; each TMF API its own (11.2 to 11.5), where one change can give several (an update that changes the TMF status gives AttributeValueChange and StatusChange) [checked: the TMF621 notification list].
+- The resource in `event` is rendered for the subscription's identity on the version's own image (4.5): attributes the identity cannot read are absent, and a change to a record the identity cannot see produces no event. An AttributeValueChange whose changed attributes are all unreadable to the identity produces no event [judgment: its existence would reveal a hidden change, 3.7].
+
+### 12.2 Hubs
+
+- Every API has `POST /hub` (`{callback, query}`, `201` with `id`, `callback`, `query`), `GET /hub/{id}` and `DELETE /hub/{id}` (`204`) [checked: TMF621 v5.0.1].
+- A hub registration is a `core.subscription` (4.6) created through a one-operation change set: owner layer `local`, class = the API's mapped class (or the table for the generic hub), operations = all, identity = the registering user, a `callback`, the API and its `query`. It needs the new built-in permission `events.subscribe` (3.1), not access rules on `core.subscription`. Only the registering user or an admin may read or delete it [judgment]. A registration is a config commit, so registrations are rate-limited to 10 per user per minute [judgment on the value].
+- `query` uses the 10.3 grammar on the event: `eventType=a,b` selects event types, and attribute filters on the resource become the subscription's condition (subscription profile, 5.10). Only attributes the registering user can always read (3.4) may be named, checked at registration; at delivery, an event is dropped when the identity can no longer read every attribute the query names on that record [judgment: the subscription profile evaluates as system, so the check keeps a query from testing hidden values].
+- Callbacks are `POST <callback>/listener/<eventType in lowerCamelCase>` [checked: `/listener/troubleTicketStatusChangeEvent`] with the event as body. A 2xx answer is success; anything else, a timeout (10 s [judgment]) or a refused connection fails the delivery and retries with the 4.6 backoff and dead letters. The callback is called outside any transaction, at least once; listeners dedupe by `eventId`. Callback URLs must be `https` except loopback, and redirects are not followed [judgment: no plaintext events, no SSRF through redirects].
+- STD as a listener: `POST /api/v2/listener/{eventType}` is not offered in v0.1; STD subscribes to nothing (13.3).
+
+### 12.3 TMF688 Event (pre-production v4.0.0)
+
+- `topic` resources: one read-only topic per mapped resource type (`troubleTicket`, `individual`, `service`, …) and per table (`record:<table>`), plus topics clients create for their own events (`core.event_topic` records: `name`, `header_query`, `content_query`).
+- `GET /topic/{id}/event`: the events of that topic visible to the caller, rendered from change entries (12.1) for resource topics and from `core.event` records for client topics, newest first, with 10.3 paging.
+- `POST /topic/{id}/event` on a client topic stores a `core.event` record (data, so it gets history and deliveries); on a resource topic it is `405` [judgment: those events come only from saves].
+- `POST /topic/{id}/hub` registers a subscription as 12.2, on the topic's class, or on `core.event` with the condition `topic = id` for client topics.
+- No CTK exists for TMF688 [checked: the directory lists no kit], so its gate is `tmf-oas-contract` against the pinned swagger plus `tmf688-topics`.
+
+### Acceptance tests
+
+- `hub-delivery`: Alice registers on TMF621 and on `/api/v2` with `eventType` and attribute queries; creates, updates and deletes produce exactly the expected event types with the 12.1 envelope, in version order per record.
+- `hub-payload-filter`: Bob's hub never receives an event for Alice's tickets, never an attribute he cannot read, and no AttributeValueChange for a change only to a field hidden from him; a query naming `internalCost` is refused at registration.
+- `hub-soak`: 8 workers, a listener that fails 20% of calls and a worker killed mid-delivery: every committed change arrives at least once, duplicates share `eventId`, per-record order holds, and rolled-back saves never arrive.
+- `hub-unregister`: after `DELETE /hub/{id}` no new deliveries are created; a registration without `events.subscribe` is `NotAllowed`.
+- `tmf688-topics`: a client topic's posted event reaches its hub; a resource topic lists the same events a hub receives; `POST` on a resource topic is `405`.
+
+## 13. ODA Component (Step 5; Canvas probe in Step 3)
+
+### 13.1 Specification and packaging
+
+- STD ships as one ODA Component per install, `apiVersion: oda.tmforum.org/v1`, `kind: Component` [checked: v1 is the Canvas CRD's storage version, generally available since December 2024]. It is a custom component, not one of TM Forum's golden components: no golden component exposes TMF621, and STD's APIs share one database [checked: the 35 published golden specifications; decision 0021, open question 10].
+- Packaging: a Helm chart in `deploy/oda/std/` with the Component resource, the STD server and worker Deployments from the release image, their Services, a Postgres 18 StatefulSet or an external database URL, and `std upgrade` as a pre-install and pre-upgrade hook Job (1.9: migrations never run at server start). `std bootstrap-admin` is not run; the first administrator comes from the identity provider (13.4).
+- `componentMetadata`: `id` `STD`, `name` `std`, `version` = the STD release, `functionalBlock` `Production` [judgment], `description`, `maintainers`, `owners`.
+
+### 13.2 Exposed and dependent APIs
+
+- `coreFunction.exposedAPIs`: one entry per row of 11.1, each with `id` (`TMF621`, …), `name`, `specification` (the pinned OpenAPI URL and version), `apiType: openapi`, `apiSDO: TMForum`, `implementation` (the server Service), `path` (the 11.1 base path), `port`; plus STD's own API (`id` `STD-API`, `apiSDO` `STD`, path `/api/v2`, its `openapi.json`).
+- `coreFunction.dependentAPIs`: none in v0.1 [judgment: STD masters parties, CIs and orders itself; an external party master through TMF632 is later].
+- `managementFunction.exposedAPIs`: the metrics endpoint (`apiType: prometheus`).
+- `securityFunction`: `canvasSystemRole` `canvas_system`, an STD role holding `events.subscribe` and read on `core.role` and the TMF672 projections; `exposedAPIs`: TMF672 `permissionSpecificationSet` (the Canvas identity operator's preferred dynamic-role API [checked: TMFOP003 README]).
+- `eventNotification.publishedEvents`: every event type of 11.2 to 11.5 with its API's hub; `subscribedEvents`: none.
+
+### 13.3 What the Canvas does with it
+
+- The component operator splits the Component into `ExposedAPI`, `DependentAPI`, `PublishedNotification`, `SubscribedNotification`, `SecretsManagement` and `IdentityConfig` resources; the API operator (Istio by default) publishes each exposed API through the gateway; the identity operator creates one Keycloak client for the component, adds `canvas_system` as a client role, registers a listener on STD's TMF672 hub and mirrors every `PermissionSpecificationSet` (STD role) into a Keycloak client role [checked: TMFOP001 and TMFOP003 READMEs].
+
+### 13.4 Security: STD stays the policy decision point
+
+- With `STD_OIDC_ISSUER` set, the server accepts `Authorization: Bearer <JWT>` from that issuer: signature by the issuer's JWKS, `iss`, `aud` = the component's client, `exp`, `nbf`. The subject is mapped to a `core.user` through the external identity mapping (7.1, source system = the issuer), and a missing user is created by the system user through the save pipeline with its individual (just-in-time provisioning). Password sessions keep working beside it.
+- Roles: the token's client roles for the component's client that name live STD roles join the user's effective roles for that request (11.3); unknown names grant nothing; the role names are logged, never the token.
+- Every record, field and permission decision is still STD's access rules on those roles (3.2). Keycloak decides who the caller is and which STD roles they hold, never what a role may do [judgment: ODA security puts authentication and role assignment in the Canvas; the decision rule stays in one place, so the Contracts 3 tests keep meaning].
+- The Canvas system role reaches only what `canvas_system` allows.
+
+### 13.5 Versions
+
+- The Canvas chart is pinned (`canvas-oda` 1.2.5 [checked: the chart index, 2026-10-22]) with Kubernetes 1.30 on kind and Istio as the Canvas CI pins it; Vault is disabled [judgment]. A Canvas upgrade is its own PR.
+
+### 13.6 CI
+
+- **Step 3 probe (`oda-canvas-probe`)**: a workflow that creates a kind cluster, installs Istio and the pinned Canvas, deploys a stub component (one exposed API, static roles), and records bring-up time, disk use, the component's time to `Complete` and failures; 10 runs, results committed with the decision note. Expected from TM Forum's own workflow: about 30 minutes per full run on `ubuntu-latest`, frequent failures [checked: the oda-canvas `trigger_tests` runs].
+- **Step 5 gate (`oda-canvas-deploy`)**: nightly, on release candidates and by hand, not on every PR. It installs the Canvas, then STD's chart, and asserts 13.3: the component `Complete`, every exposed API published, the Keycloak client with exactly STD's roles and a role created afterwards mirrored; then it runs every CTK of 11.1 through the gateway with Keycloak-issued tokens, the OIDC versions of the Contracts 3 tests, and the Canvas BDD features UC002, UC003 and UC005 with STD's chart as the component under test [judgment on the feature list, confirmed by the probe]. Infrastructure steps (cluster, Istio, Canvas install) retry twice; test steps never retry.
+- **Every PR (`oda-component-schema`)**: the rendered chart validates against the pinned Component CRD's v1 schema, and every exposed API's path and spec URL match 11.1.
+
+### Acceptance tests
+
+- `oda-component-schema`, `oda-canvas-deploy` and the probe as above.
+- `oidc-roles`: a token with role `agent` gets exactly what a local `agent` session gets through `/api/v2` and TMF621 (the Contracts 3 hidden-field tests repeated); a token naming an unknown role gets what `authenticated` gets; an expired token, a wrong audience and a wrong issuer are `Unauthenticated`.
+- `oidc-jit`: the first request of a new subject creates one user and one individual, with change entries, and a concurrent second request does not create another.
+
+## 14. ITIL practices (Steps 3 and 4)
+
+### 14.1 Edition and wording
+
+- STD follows the ITIL 4 practice guides for incident management, problem management, change enablement, service request management and service configuration management [judgment: ITIL 4 is the edition most organizations certify against and runs until the end of 2027; ITIL (Version 5), launched in 2026, keeps the 34 practices; open question 8]. Service level management is not in v0.1 (plan, "Deliberately later"); TMF fields such as `expectedResolutionDate` are plain fields.
+- ITIL defines practices and outcomes, not tool states [unverified: the practice guides are behind PeopleCert's paywall]. The state models below are STD's, chosen to match common practice (ServiceNow's models, decision 0021) and the TMF state sets (11). STD's docs describe ITIL concepts in their own words, quote nothing beyond short attributed phrases, and carry "ITIL® is a registered trademark of the PeopleCert group".
+- Every behavior here is shipped configuration (record rules, choices, access rules in the helpdesk and cmdb sets), so admins can change it through overrides and local rules, and every test runs through the generic API, the TMF API and, where a form exists, the browser.
+- Record rule actions these behaviors need, which workstream 3A adds to 4.1 [judgment]: set values on the proposed record (before-write); refuse with a typed error and a fixed message (before-write, `InvalidTransition` 422 and `RuleRefused` 422); update the records that reference this one and match a condition (after-write); create one record per record of a condition-selected set (after-write, at most 100 [judgment]). Each runs through the save pipeline as the acting user (4.1).
+
+### 14.2 Incident (helpdesk v3, Step 3)
+
+- `impact` and `urgency`: choices 1 (high), 2 (medium), 3 (low), both required; `urgency` defaults to 3, so a TMF621 create that names only `severity` is valid [judgment]. `priority` (1 critical to 5 planning) is read-only and set by nine shipped before-write rules, one per cell: (1,1)→1, (1,2)→2, (2,1)→2, (1,3)→3, (2,2)→3, (3,1)→3, (2,3)→4, (3,2)→4, (3,3)→5 [judgment: the common matrix; ITIL prescribes none]. An admin changes a cell by deactivating its rule and adding a local one.
+- States: `new`, `in_progress`, `on_hold` (with `hold_reason`: `awaiting_caller`, `awaiting_change`, `awaiting_problem`, `awaiting_vendor`, required exactly while on hold), `resolved`, `closed`, `canceled`. Allowed transitions: `new` → `in_progress`, `on_hold`, `resolved`, `canceled`; `in_progress` → `on_hold`, `resolved`, `canceled`; `on_hold` → `in_progress`, `resolved`, `canceled`; `resolved` → `in_progress` (reopen), `closed`; `closed` and `canceled` are final. One before-write rule per source state refuses every other change of `status` with `InvalidTransition` (422).
+- Entering `resolved` needs `resolution_code` and `resolution_notes` and sets `resolved_at`; leaving it clears `resolved_at`. Entering `closed` keeps them.
+- Major incident: `major_incident` (boolean) may be set only by the `major_incident_manager` role (an access rule on the field) and only while `priority` is 1 [judgment]; it is rendered in TMF621 as a characteristic, and a saved filter lists open major incidents. Child incidents name it through `parent_incident`; resolving a major incident resolves its open children with the same resolution (an after-write rule).
+
+### 14.3 Problem (helpdesk v3, Step 3)
+
+- States: `new`, `assess`, `root_cause_analysis`, `fix_in_progress`, `resolved`, `closed`, `canceled`, with transitions `new` → `assess`, `canceled`; `assess` → `root_cause_analysis`, `canceled`; `root_cause_analysis` → `fix_in_progress`, `resolved`, `canceled`; `fix_in_progress` → `resolved`, `root_cause_analysis`; `resolved` → `closed`, `root_cause_analysis`; final `closed`, `canceled`.
+- Known error: `known_error` (boolean) may be true only with a non-empty `workaround`; `root_cause` is required to enter `fix_in_progress` and `resolved`. A problem is a known error from the moment the flag is set, whatever its state [judgment: ITIL treats "known error" as a status of the analysis, not a lifecycle step].
+- Incidents name their problem through `problem`; when a problem enters `resolved`, its linked incidents that are `on_hold` with `awaiting_problem` return to `in_progress` (an after-write rule), and none is resolved automatically [judgment].
+
+### 14.4 Change enablement and service requests (helpdesk v4, Step 4)
+
+- Change types: `standard` (needs a `standard_change_template` reference, skips `assess` and `authorize`), `normal`, `emergency`. States: `new`, `assess`, `authorize`, `scheduled`, `implement`, `review`, `closed` (with `close_code`), `canceled`, `rejected`; transitions as in ServiceNow's normal model (decision 0021), with `standard` going `new` → `scheduled` and `emergency` going `new` → `authorize`.
+- Change authority: `helpdesk.approval` records (`change` or `request_item`, `approver` user or `approver_group`, `state` `requested`, `approved`, `rejected`, `cancelled`). Entering `authorize` creates one approval per approver of the change type's authority (a config record per type); `authorize` → `scheduled` is allowed only when every approval is `approved`; one `rejected` moves the change to `rejected`. Emergency changes use the emergency authority.
+- Closing a change with `close_code` `successful` applies its items to the CMDB in the same transaction: `add` creates the service from `service_value`, `modify` merges `service_value` into it, `delete` sets its state to `terminated` (never deletes) [judgment]. Each item ends `completed`.
+- Cancellation (`CancelServiceOrder`): accepted and done while the change is `new`, `assess`, `authorize` or `scheduled` (the change becomes `canceled`); otherwise `terminatedWithError` with a reason, change unchanged. A cancellation and an implement step on the same change serialize on the change's root lock (2.2), so exactly one wins.
+- Service requests: `draft`, `submitted`, `awaiting_approval` (only when an item's catalog item has `approval_required`), `in_fulfilment`, `on_hold`, `fulfilled`, `partially_fulfilled`, `failed`, `rejected`, `canceled`. Approvals as for changes, per request item; a rejected item rejects the request when it was the only item, else the request ends `partially_fulfilled` [judgment]. Fulfilment is item states set by the fulfilment group; the request's state follows its items.
+
+### 14.5 Service configuration management (cmdb, Step 4)
+
+- Configuration items are `cmdb.ci` records (11.4); incidents, problems and changes reference the affected CI. Relationship types are a choice list (`dependsOn`, `runsOn`, `contains`, `connectedTo`, `supportingService`, `supportingResource`, and TMF relationship types as given) [judgment]. A `contains` cycle is refused (a before-write rule walks at most 3 hops, the record-rule limit, 5.10) [judgment]; longer cycles are reported by a saved filter, not refused.
+- CI data can be loaded with imports (Contracts 7) keyed by an external identity per discovery source.
+
+### Acceptance tests
+
+- `itil-incident`: all nine matrix cells through `/api/v2`, TMF621 (as `severity` and the `urgency` characteristic) and the browser; a change of impact or urgency recomputes priority; every disallowed transition is `InvalidTransition` and writes nothing; resolve without code or notes is refused through `/api/v2/helpdesk.ticket`; reopen clears `resolved_at`; only the major incident manager sets `major_incident`, and only on priority 1; resolving a major incident resolves its open children.
+- `itil-problem`: every disallowed transition refused; `known_error` without a workaround refused; resolving a problem returns exactly its `awaiting_problem` incidents to `in_progress`.
+- `itil-change`, `change-updates-cmdb`, `itil-request` and the cancellation race as in the Step 4 gate.
+- `helpdesk-v3-upgrade`: helpdesk v2 with the Step 2 upgrade test's local overrides and 1,000 incidents upgrades to v3; every incident, its history and the overrides remain, `doctor` exits 0, and every incident is readable through TMF621.
+
 ## Open questions for Martin
 
 1. **Global pause on config commits.** Every config commit, including a label edit, briefly pauses all requests through the exclusive `CONFIG_KEY`. Per attempt the pause is bounded by the `CONFIG_KEY` wait (200 ms) plus the 2 s DDL lock budget (1.4 step 2) plus the main transaction's own work; index or catalog maintenance running at the same time can add up to the remaining budget per internal lock it contends. Default: accept for v0.1 and measure the pause in Stage 0; per-table locking only if measured pauses are a problem. Measured (decision 0007): a small change set pauses requests about 3 ms (p95 5 ms); a commit blocked by a long request costs 200 ms per attempt, 5 attempts; DDL waiting for a lock held outside STD costs up to the 2 s lock budget per attempt, which 1.4 now enforces per attempt by taking every table lock of a DDL statement explicitly under the remaining budget, from an inventory a CI guard keeps complete (`lock_timeout` alone is per lock); index and catalog locks taken inside the DDL are capped at the remaining budget each, and only direct index or catalog maintenance contends them. Recommendation: accept, and keep index and catalog maintenance out of schema-change windows.
@@ -1310,3 +1701,16 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 4. **One access-rule condition for both states.** Default: one condition is checked against the existing and the proposed record, for record and field rules alike, so handing a record to someone else needs a broader rule. The alternative is a separate proposed-state condition, like RLS `WITH CHECK`.
 5. **Dead-letter default.** Default: `block`, which keeps per-record order unconditional but holds one record's later deliveries for that subscription until an operator acts. The alternative is `skip`.
 6. **Benchmark gate.** Default: the budgets in 2.6 (Q5 at most 5 ms, list queries at most 50 ms, Q2 at most 250 ms, writes at most 20 ms, p95 at 10M records on 8 vCPU, 32 GB, NVMe) and the 2x rule against one table per hierarchy decide whether class-table storage is kept.
+7. **TMF630's text.** TM Forum publishes TMF630 to members only, so section 10 reads its rules from the public v5 OpenAPI documents and user guides; the rules marked [unverified for v5] need the text. Recommendation: join TM Forum, or have a member review section 10, before `v0.1.0` (decision 0021, open decision 1).
+8. **ITIL edition.** Default: ITIL 4 practice concepts, in STD's own words; review against ITIL (Version 5) before `v0.1.0` (14.1; decision 0021, open decision 5).
+9. **Attribute names in v2.** Default: lowerCamelCase API names derived from snake_case definition names, with clashes refused (10.2). The alternative is keeping snake_case in v2 as a marked deviation (decision 0021, open decision 7).
+10. **ODA packaging.** Default: one STD component per install, a custom component (13.1). The alternatives are components along TM Forum's golden boundaries sharing one database, or separate databases with federated references (decision 0021, open decision 8).
+11. **TMF672 writes.** Default: simple allow rules are writable through TMF672; denies, field rules and conditional rules are read-only there (11.3; decision 0021, open decision 10).
+12. **CTKs in public CI.** Default: download the pinned kits in CI and never commit them, plus OpenAPI contract tests; ask TM Forum to confirm the kits' licence (11.1; decision 0021, open decision 2).
+13. **TMF630 parts 5 and 6.** Default: no JSONPath `filter` and no JSON Patch Query in v0.1 (10.3, 10.5; decision 0021, open decision 11).
+14. **TMF API versions.** Default: the pins of 11.1, including TMF641 v4.2.0 and the pre-production TMF688 v4.0.0 (decision 0021, open decision 3).
+15. **Compatibility of the existing API.** Default: `/api/v1` frozen and deprecated from Step 3, removed in `v0.1.0` (10.1, 10.7; decision 0021, open decision 6).
+16. **Incident and problem API.** Default: TMF621 for both, as Martin decided, not TMF724 Incident or TMF656 Service Problem (decision 0021, open decision 4).
+17. **Canvas CI cadence.** Default: the Canvas deployment runs nightly and on release candidates, not on every PR (13.6; decision 0021, open decision 9).
+18. **Preconditions in v2.** Default: `If-Match` stays required on the generic API's `PATCH` and `DELETE`, and is optional on TMF APIs (10.5, 11.1; decision 0021, open decision 12).
+19. **Scope of v0.1.** Default: five steps; minimal approvals, the CMDB and OIDC bearer tokens move into v0.1; service level management stays later (plan; decision 0021, open decision 13).

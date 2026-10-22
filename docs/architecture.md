@@ -36,7 +36,8 @@ packages/
   server/        @std/server       Effect server: SQL layer, migrations, schema engine, config layers,
                                    record service, history, outbox, auth, HTTP, CLI (`std`), hooks, import
   testing/       @std/testing      test harness: databases, fixtures, HTTP helpers
-  codegen/       @std/codegen      plain: SDK code generation from schema snapshots (Step 4)
+  codegen/       @std/codegen      plain: SDK code generation from schema snapshots (Step 5)
+  tmf/           @std/tmf          plain: TMF Open API mappings, TMF630 query translation, event rendering; pinned TM Forum OpenAPI documents in specs/ (Steps 3 and 4)
 apps/
   web/           @std/web          Foldkit + Foldkit UI + Vite web app (Step 2; see AGENTS.md, "Frontend: Foldkit")
 examples/
@@ -44,8 +45,9 @@ examples/
   quickstart.sh  Step 1 runnable result, against `std serve` (decision 0016)
   quickstart/    `pnpm quickstart:ci`: runs quickstart.sh against a disposable database; `pnpm release-compat:ci`: the previous release upgraded to this branch
   helpdesk/      Step 2 and 3 example app definition set, import sample
-bench/           Stage 0 inheritance benchmark, Step 4 rerun
-docker/          the quickstart's development image (the release image is Step 4)
+bench/           Stage 0 inheritance benchmark, Step 5 rerun
+docker/          the quickstart's development image (the release image is Step 5)
+deploy/oda/      the ODA Component Helm chart and Canvas workflow inputs (Step 5)
 docs/            plan, contracts, architecture, decisions/, servicenow-mapping.md, runbooks
 repos/           read-only upstream source: effect/ (effect@<lockfile version>), foldkit/ (foldkit@<pinned tag>)
 FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from repos/foldkit
@@ -53,10 +55,10 @@ FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from r
 
 ### Dependency rules
 
-- Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), their own `src/` files, other plain packages, and npm libraries listed with a reason in `tooling/plain-allowed-deps.json` whose dependency graph has no Effect. No I/O: no Node built-ins and no host globals. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
+- Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`, and `tmf` from Step 3) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), their own `src/` files, other plain packages, and npm libraries listed with a reason in `tooling/plain-allowed-deps.json` whose dependency graph has no Effect. No I/O: no Node built-ins and no host globals. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
 - `api` may import `effect` stable modules, `effect/http-api` and `effect/http`.
 - `server` may use the server allow list (Contracts 9).
-- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`.
+- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `tmf` depends on `values`, `conditions` and `definitions`, and `server` on it; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`.
 
 ### Package conventions
 
@@ -74,7 +76,7 @@ TypeScript's `extends` replaces the whole `plugins` array, so every package's `t
 
 | Profile | For | `src/` may use (unstable) | Template |
 | --- | --- | --- | --- |
-| `plain` | `values`, `conditions`, `definitions`, `access`, `codegen` | nothing | `tooling/tsconfig/plain.json` |
+| `plain` | `values`, `conditions`, `definitions`, `access`, `codegen`, `tmf` (Step 3) | nothing | `tooling/tsconfig/plain.json` |
 | `api` | `api` | `effect/http-api`, `effect/http` | `tooling/tsconfig/api.json` |
 | `web` | `apps/web` | `effect/http-api`, `effect/http`, `@effect/platform-browser` | `tooling/tsconfig/web.json` |
 | `server` | `server`, `testing`, `examples`, `bench` | `effect/sql`, `effect/http`, `effect/http-api`, `effect/observability`, `@effect/sql-pg`, `@effect/platform-node`, `@effect/opentelemetry` | `tooling/tsconfig/server.json` |
@@ -97,7 +99,7 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 
-**Release compatibility** (CI step "Release compatibility", `examples/quickstart/src/release-compat.ts`). Step 4 upgrades installs from real releases, so every branch proves that the latest release's databases and clients keep working. The step extracts the tree of the previous release's tag with `git archive` (without `repos/`) into a temporary directory and installs it; on a disposable empty database it runs that release's own `std upgrade`, `std bootstrap-admin`, `std serve` and `examples/quickstart.sh`, then this branch's `std upgrade` on the same database, `std doctor` (must exit 0), this branch's `std serve`, the release's quickstart again, unchanged, and this branch's quickstart. On a second empty database it installs this branch and runs the release's quickstart first, so the release's change-set, user and record requests reach this branch's API in the release's wire format. It needs the tag in the clone (CI checks out with `fetch-depth: 0` and `fetch-tags: true`) and takes about 15 s. The previous release is one setting, `PREVIOUS_RELEASE` in `examples/quickstart/src/previous-release.ts`: each release moves it to the tag it publishes. What it implies for code (decision 0017): a property added to a definition or request schema decodes an absent key as its documented default (`nullWhenAbsent` in `@std/definitions/definition`); stored JSON from a release is compared after `withAddedDefaults`; the catalog load reads the definition tables in the shape the database has, so `std upgrade` and `--plan` can read a database before its pending migrations run.
+**Release compatibility** (CI step "Release compatibility", `examples/quickstart/src/release-compat.ts`). Step 5 upgrades installs from real releases, so every branch proves that the latest release's databases and clients keep working. The step extracts the tree of the previous release's tag with `git archive` (without `repos/`) into a temporary directory and installs it; on a disposable empty database it runs that release's own `std upgrade`, `std bootstrap-admin`, `std serve` and `examples/quickstart.sh`, then this branch's `std upgrade` on the same database, `std doctor` (must exit 0), this branch's `std serve`, the release's quickstart again, unchanged, and this branch's quickstart. On a second empty database it installs this branch and runs the release's quickstart first, so the release's change-set, user and record requests reach this branch's API in the release's wire format. It needs the tag in the clone (CI checks out with `fetch-depth: 0` and `fetch-tags: true`) and takes about 15 s. The previous release is one setting, `PREVIOUS_RELEASE` in `examples/quickstart/src/previous-release.ts`: each release moves it to the tag it publishes. What it implies for code (decision 0017): a property added to a definition or request schema decodes an absent key as its documented default (`nullWhenAbsent` in `@std/definitions/definition`); stored JSON from a release is compared after `withAddedDefaults`; the catalog load reads the definition tables in the shape the database has, so `std upgrade` and `--plan` can read a database before its pending migrations run.
 
 ### Vendored source (`repos/`)
 
@@ -112,14 +114,14 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `catalog/` | load the effective config snapshot at `(revision, change_set_id)`, per-process cache, reload on NOTIFY, definition revisions | 1.2, 1.3, 4.4 |
 | `schema/` | change sets, `SCHEMA_KEY`/`CONFIG_KEY`, DDL generation for class-table storage, journal and follow-up steps, coordinator, resume, abandon, retire and purge, dependency index, protected definitions | 1, 2 |
 | `config/` | owner layers, definition sets, base and overrides, conflicts, the config service, `std upgrade` plan and apply | 8 |
-| `auth/` | users, password hashing, sessions, roles and permissions, acting-user service, API tokens (Step 3) | 3.1 |
+| `auth/` | users, password hashing, sessions, roles and permissions, acting-user service, API tokens (Step 4) | 3.1 |
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, `saveBatch` (Step 3) | 2, 3, 4 |
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
 | `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
 | `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |
-| `import/` | import jobs (Step 3) | 7 |
+| `import/` | import jobs (Step 4) | 7 |
 | `definitions/` (directory at package root, not in `src`) | the shipped `core` definition set files | 1.8, 3.1 |
 
 ## Cross-cutting decisions
@@ -129,7 +131,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 - **Definitions are records.** Definition and other config tables are platform tables created by migrations, laid out like root classes (`id`, `class_id`, `version`, audit fields, typed columns) and described by the `core` definition set, so admins reach them through the generic record API, where writes become one-operation change sets (Contracts 1.4).
 - **Generated SQL** never uses `SELECT *`, binds every value as a parameter (text with casts for numeric, int8, date, timestamptz), and quotes identifiers that come from definitions.
 - **Acting user.** Every record-service operation requires the `Actor` service in its Effect environment; there is no default actor in the HTTP layer.
-- **HTTP shape.** Generic records live under `/api/v1/tables/{table}/records[/{id}[/history]]`, metadata under `/api/v1/meta/tables/{table}`, fixed endpoints under `/api/v1/...` from the `@std/api` definition. Every response carries `STD-Schema-Revision`.
+- **HTTP shape.** Generic records live under `/api/v1/tables/{table}/records[/{id}[/history]]`, metadata under `/api/v1/meta/tables/{table}`, fixed endpoints under `/api/v1/...` from the `@std/api` definition. Every response carries `STD-Schema-Revision`. From Step 3, `/api/v2` is the TMF630 version of the same API (Contracts 10) and `/api/v1` is frozen until `v0.1.0`; TM Forum Open APIs live under `/tmf-api/{apiName}/v{major}` (Contracts 11). Every one of them is an adapter over the record service (decision 0021).
 - **Text filter syntax.** The `filter` query parameter uses the condition text syntax defined in `@std/conditions` (names resolved against the visible schema); `parse(print(a)) = a`.
 - **Sessions.** `POST /api/v1/auth/sign-in` returns a session token, sent back as `Authorization: Bearer <token>`. The web app signs in with `POST /api/v1/auth/cookie-sign-in` instead: the same kind of session, its token in an `HttpOnly`, `SameSite=Strict` cookie (`std_session`, path `/api/v1`, `Secure` unless the request's host is loopback, `STD_SESSION_COOKIE_SECURE`), never in a response body or anything a script can read. The server accepts the cookie wherever it accepts the bearer token (the bearer token first); a cookie-authenticated request that is not GET, HEAD or OPTIONS must carry `STD-Client: web` (CSRF), or it is `Unauthenticated`. Sign-out clears the cookie it ended. Only a hash of the token is stored (decision 0018).
 - **Web app.** `std serve` serves the built app (`apps/web/dist`, `STD_WEB_ROOT`) at `/`, with `index.html` for client routes and a strict Content-Security-Policy; the API stays under `/api/v1`, only `/api/` responses carry `STD-Schema-Revision`, and every one of them `Cache-Control: no-store`. Only files whose real path lies inside the real web root are served, and the web root must not be writable by the server process. In development Vite proxies `/api` to a running `std serve`. Browser state never holds a session token, and the sign-in password only as `Redacted` (AGENTS.md, "Frontend: Foldkit").

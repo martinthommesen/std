@@ -33,12 +33,20 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 5 | `ws/2b-web-foundation` | 2B (foundation) | `apps/web` on Foldkit and Foldkit UI over Effect 4.0.5, cookie sessions with CSRF protection, app shell, serving from `std serve`, story, scene and browser test harness | merged |
 | 5 | `ws/2b-web-pages` | 2B, 2C | table navigation, lists, forms, filter builder, picker, related lists, history panel, stale forms, admin pages, browser tests | in progress |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set v1 and v2, upgrade test, rename test, saved filters, compose runnable result, browser-test fixture | merged |
-| 5 | `ws/plan-tmf-oda-itil` | re-plan | Martin's hard requirement (2026-10-22): strict TM Forum (TMF630 on the generic API, TMF621/632/669/672/688/638/639/641/622 with conformance kits), ODA Components on the ODA Canvas, ITIL practices; rework of the plan, contracts and Steps 3–4 | in progress |
-| 6 | `ws/3a-hooks` | 3A | hooks and record rules | planned |
+| 5 | `ws/plan-tmf-oda-itil` | re-plan | Martin's hard requirement (2026-10-22): strict TM Forum (TMF630 on the generic API, TMF621/632/669/672/688/638/639/641/622 with conformance kits), ODA Components on the ODA Canvas, ITIL practices; rework of the plan, contracts and Steps 3–4 | in review |
+| 6 | `ws/3a-hooks` | 3A | hooks and record rules, with the four rule action kinds of Contracts 14.1 | planned |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker, leases, dead letters | planned |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
-| 6 | `ws/3d-identity` | 3D | groups, nested roles, tokens, explain, rule editor | planned |
-| 6 | `ws/3e-import` | 3E, 3F | import reconciliation, `saveBatch`, `v0.0.3` | planned |
-| 7 | `ws/4a-performance` | 4A | import measurement, benchmark through the record service | planned |
-| 7 | `ws/4b-upgrade-recovery` | 4B, 4C | release upgrade, backup and restore, runbooks in CI | planned |
-| 7 | `ws/4d-release` | 4D | image, telemetry, docs site, snapshot and SDK codegen, `v0.1.0` | planned |
+| 6 | `ws/3g-tmf630-api` | 3G | `/api/v2` per Contracts 10, `/api/v1` frozen, web app, quickstart and typed client on v2 | planned |
+| 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
+| 6 | `ws/3t-tmf-framework` | 3T | `@std/tmf`, mapping rules, pinned specs, CTK runner and OpenAPI contract tests in CI (Contracts 11.1) | planned |
+| 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
+| 6 | `ws/3k-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6) | planned |
+| 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party model; TMF632, TMF669, TMF672 | planned |
+| 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
+| 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |
+| 7 | `ws/4e-import` | 4E, 4F | import reconciliation, `saveBatch`, `v0.0.4` | planned |
+| 8 | `ws/5a-performance` | 5A | import measurement, benchmark through the record service, TMF list counts | planned |
+| 8 | `ws/5b-upgrade-recovery` | 5B, 5C | release upgrade, backup and restore, runbooks in CI | planned |
+| 8 | `ws/5o-oda` | 5O, 5S | ODA Component chart, OIDC bearer tokens, Canvas deployment workflow (Contracts 13) | planned |
+| 8 | `ws/5d-release` | 5D | image, telemetry, docs site, snapshot and SDK codegen, removal of `/api/v1`, `v0.1.0` | planned |
