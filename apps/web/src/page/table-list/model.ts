@@ -133,10 +133,17 @@ export type Address = typeof Address.Type;
  * - `filterLoad`: an applied filter waiting for target tables.
  * - `builder`: the filter builder's draft.
  * - `records`: the current page.
- * - `cursors`: the cursor of every page up to the current one (`None` for
- *   the first), so "Previous" can go back with keyset paging.
+ * - `cursors`: the cursor of every page up to the one on screen (`None`
+ *   for the first), so "Previous" can go back with keyset paging. A new
+ *   filter, sort or page size starts again from `[None]`.
+ * - `maybePendingCursors`: the stack of the page "Next" or "Previous"
+ *   asked for; it becomes `cursors` only when that page loads, and is
+ *   dropped when it fails, so the position always matches the rows shown.
  * - `generation`: the number of the latest list request; an older answer
  *   is ignored.
+ * - `isReloadDue`: a refreshed definition changed the applied sort (a
+ *   field went away or can no longer be sorted by); the list asks again
+ *   from the first page once the metadata and target tables have settled.
  * - `id`: the page's number, unique among the pages the app opened; the
  *   app delivers a Command's answer only to the page that sent it.
  * - `maybeNotice`: something the user should know about the applied state,
@@ -150,8 +157,12 @@ export const Model = Schema.Struct({
   filterLoad: FilterLoad,
   generation: Schema.Int,
   id: Schema.Int,
+  isReloadDue: Schema.Boolean,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeNotice: Schema.Option(Schema.String),
+  maybePendingCursors: Schema.Option(
+    Schema.Array(Schema.Option(Schema.String))
+  ),
   metadata: Metadata.schema,
   query: ListQuery,
   records: Records.schema,

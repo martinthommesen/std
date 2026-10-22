@@ -13,7 +13,7 @@ import { Match, Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { cellOf, listColumns } from "../../domain/list-columns.ts";
+import { ID_FIELD, cellOf, listColumns } from "../../domain/list-columns.ts";
 import type { Cell } from "../../domain/list-columns.ts";
 import { PAGE_SIZES, isSortable } from "../../domain/list-query.ts";
 import type { SortKey } from "../../domain/list-query.ts";
@@ -160,6 +160,36 @@ const cellView = (
   );
 };
 
+const ID_LABEL = "ID";
+
+/**
+ * The cell of the ID column, the list's only column when the table has no
+ * other to show: the record's ID, linking to its form.
+ *
+ * @param table - The table.
+ * @param record - The record.
+ * @param h - The builder.
+ * @returns The cell.
+ */
+const idCellView = (
+  table: MetaTable,
+  record: RecordJson,
+  h: HtmlBuilder<Message>
+): Html =>
+  h.keyed("td")(
+    ID_FIELD,
+    [h.DataAttribute("cell", CELL_STATE.Shown)],
+    [
+      h.a(
+        [
+          h.Href(recordRouter({ id: record.id, table: table.name })),
+          h.Class("link"),
+        ],
+        [record.id]
+      ),
+    ]
+  );
+
 const sortOf = (
   sort: readonly SortKey[],
   field: MetaField
@@ -230,7 +260,9 @@ const recordsTable = (
         [
           h.tr(
             [],
-            columns.map((field) => headerView(field, model.query.sort, h))
+            columns.length === 0
+              ? [h.keyed("th")(ID_FIELD, [h.Scope("col")], [ID_LABEL])]
+              : columns.map((field) => headerView(field, model.query.sort, h))
           ),
         ]
       ),
@@ -240,9 +272,11 @@ const recordsTable = (
           h.keyed("tr")(
             record.id,
             [h.DataAttribute("record-id", record.id)],
-            columns.map((field, index) =>
-              cellView(meta.table, record, field, index === 0, h)
-            )
+            columns.length === 0
+              ? [idCellView(meta.table, record, h)]
+              : columns.map((field, index) =>
+                  cellView(meta.table, record, field, index === 0, h)
+                )
           )
         )
       ),

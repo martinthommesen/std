@@ -19,7 +19,7 @@ import { Equal, Option, Record, Result, Schema, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { listColumns } from "../../domain/list-columns.ts";
+import { listFieldsParameter } from "../../domain/list-columns.ts";
 import {
   addressOf,
   conditionOf,
@@ -27,6 +27,7 @@ import {
   isSameAddress,
   nextSort,
   pageSizeOf,
+  reconcileSort,
   sortKeysOf,
   sortParameter,
 } from "../../domain/list-query.ts";
@@ -119,8 +120,10 @@ export const init = (config: InitConfig): UpdateReturn => ({
     filterLoad: FilterLoad.Settled(),
     generation: 0,
     id: config.id,
+    isReloadDue: false,
     maybeAppRevision: config.maybeAppRevision,
     maybeNotice: Option.none(),
+    maybePendingCursors: Option.none(),
     metadata: Metadata.Loading(),
     query: {
       maybeCondition: Option.none(),
@@ -191,49 +194,91 @@ const clearBuilder =
       () => builder
     );
 
+const withCondition = (
+  query: ListQuery,
+  maybeCondition: Option.Option<Expr>
+): ListQuery => modifyFields(query, { maybeCondition: () => maybeCondition });
+
 /**
- * Asks for the current page of records with the applied state, printed
- * with the names of the page's metadata and sent at its revision. A filter
- * naming a field the metadata no longer has is dropped from the list and
- * the builder, with a notice.
+ * The applied filter in the API's text syntax, printed with the names of
+ * the page's metadata and target tables.
  *
  * @param model - The page.
+ * @param scope - The tables the page holds.
+ * @returns The text (none without a filter), or the printer's message when
+ *   the filter names a field the metadata no longer has.
+ */
+const printFilter = (
+  model: Model,
+  scope: ConditionScope
+): Result.Result<Option.Option<string>, string> =>
+  Option.match(model.query.maybeCondition, {
+    onNone: () => Result.succeed(Option.none<string>()),
+    onSome: (condition) =>
+      Result.map(
+        filterParameter(condition, scope.table, scope.tables),
+        Option.some
+      ),
+  });
+
+/**
+ * The page without its applied filter, when that filter names a field the
+ * metadata no longer has: the filter leaves the list, the builder and the
+ * address, with a notice, and the list starts again from its first page.
+ *
+ * @param model - The page.
+ * @returns The page without the filter, or none when the filter prints.
+ */
+const withoutLostFilter = (model: Model): Option.Option<Model> =>
+  pipe(
+    scopeOf(model),
+    Option.filter((scope) => Result.isFailure(printFilter(model, scope))),
+    Option.map((scope) => {
+      const query = withCondition(model.query, Option.none());
+
+      return modifyFields(model, {
+        address: () => addressOf(query),
+        builder: clearBuilder(scope),
+        cursors: () => [Option.none()],
+        maybeNotice: () => Option.some(DROPPED_NOTICE),
+        maybePendingCursors: () => Option.none(),
+        query: () => query,
+      });
+    })
+  );
+
+/**
+ * The cursor stack a request asks for: the page "Next" or "Previous" asked
+ * for, else the page on screen.
+ *
+ * @param model - The page.
+ * @returns The stack.
+ */
+const requestedCursors = (model: Model): readonly Option.Option<string>[] =>
+  Option.getOrElse(model.maybePendingCursors, () => model.cursors);
+
+/**
+ * Sends the list request for the applied state at the metadata's revision.
+ *
+ * @param model - The page, its filter known to print.
  * @returns The page, loading, and the request.
  */
-const requestRecords: Step = (model) =>
+const sendRequest: Step = (model) =>
   Option.match(Option.all([tableMetaOf(model), scopeOf(model)]), {
     onNone: () => ({ model }),
     onSome: ([meta, scope]) => {
-      const printed = Option.match(model.query.maybeCondition, {
-        onNone: () => Result.succeed(Option.none<string>()),
-        onSome: (condition) =>
-          Result.map(
-            filterParameter(condition, meta.table.name, scope.tables),
-            Option.some
-          ),
-      });
-
-      if (Result.isFailure(printed)) {
-        return requestRecords(
-          modifyFields(model, {
-            builder: clearBuilder(scope),
-            maybeNotice: () => Option.some(DROPPED_NOTICE),
-            query: (query) =>
-              modifyFields(query, { maybeCondition: () => Option.none() }),
-          })
-        );
-      }
-
       const generation = model.generation + 1;
 
       return {
         commands: [
           LoadRecords({
-            cursor: Option.flatten(Option.fromNullishOr(model.cursors.at(-1))),
-            fields: listColumns(meta.table)
-              .map((field) => field.name)
-              .join(","),
-            filter: printed.success,
+            cursor: Option.flatten(
+              Option.fromNullishOr(requestedCursors(model).at(-1))
+            ),
+            fields: listFieldsParameter(meta.table),
+            filter: Result.getOrElse(printFilter(model, scope), () =>
+              Option.none<string>()
+            ),
             generation,
             limit: model.query.pageSize,
             revision: meta.revision,
@@ -243,6 +288,7 @@ const requestRecords: Step = (model) =>
         ],
         model: modifyFields(model, {
           generation: () => generation,
+          isReloadDue: () => false,
           records: reloading,
         }),
       };
@@ -265,6 +311,21 @@ const replaceAddress: Step = (model) => ({
 });
 
 /**
+ * Asks for the current page of records with the applied state, printed
+ * with the names of the page's metadata and sent at its revision. A filter
+ * naming a field the metadata no longer has is dropped from the list, the
+ * builder and the address, with a notice.
+ *
+ * @param model - The page.
+ * @returns The page, loading, and the request.
+ */
+const requestRecords: Step = (model) =>
+  Option.match(withoutLostFilter(model), {
+    onNone: () => sendRequest(model),
+    onSome: (dropped) => Update.combine(dropped, [sendRequest, replaceAddress]),
+  });
+
+/**
  * Applies a new list state from the first page, writes it into the
  * address and asks for the records. A filter still waiting for its target
  * tables is abandoned: the newer state wins.
@@ -274,24 +335,23 @@ const replaceAddress: Step = (model) => ({
  */
 const showQuery =
   (query: ListQuery): Step =>
-  (model) =>
-    Update.combine(
-      modifyFields(model, {
-        address: () => addressOf(query),
-        cursors: () => [Option.none()],
-        filterLoad: () => FilterLoad.Settled(),
-        query: () => query,
-      }),
-      [requestRecords, replaceAddress]
+  (model) => {
+    const shown = modifyFields(model, {
+      address: () => addressOf(query),
+      cursors: () => [Option.none()],
+      filterLoad: () => FilterLoad.Settled(),
+      maybePendingCursors: () => Option.none(),
+      query: () => query,
+    });
+
+    return Update.combine(
+      Option.getOrElse(withoutLostFilter(shown), () => shown),
+      [sendRequest, replaceAddress]
     );
+  };
 
 const LOAD_NOTICE =
   "The filter in the address cannot be shown here (it names fields you cannot read, or uses a form the builder does not show), so the list is not filtered.";
-
-const withCondition = (
-  query: ListQuery,
-  maybeCondition: Option.Option<Expr>
-): ListQuery => modifyFields(query, { maybeCondition: () => maybeCondition });
 
 const settleFilterIn = (
   model: Model,
@@ -523,24 +583,71 @@ const refreshIfNewer =
           : { model },
     });
 
+const isRefreshSettled = (model: Model): boolean =>
+  AsyncData.isSuccess(model.metadata) && !isTargetPending(model);
+
 /**
- * Asks again for records the server refused with `SchemaChanged`, once
- * the page's metadata and every target table's have been reloaded, so the
- * filter prints with the current names.
+ * Asks again, once the page's metadata and every target table's have
+ * been reloaded (so the filter prints with the current names): for
+ * records the server refused with `SchemaChanged`, at the same page; for
+ * a list the refreshed definition changed (its sort lost a key, or its
+ * filter names a field that is gone), from the first page, with the
+ * address rewritten.
  *
  * @param model - The page.
  * @returns The page, and the request when it is time.
  */
 const retryAfterRefresh: Step = (model) => {
+  if (!isRefreshSettled(model)) {
+    return { model };
+  }
+
+  const isChanged =
+    model.isReloadDue || Option.isSome(withoutLostFilter(model));
+
+  if (isChanged) {
+    return showQuery(model.query)(model);
+  }
+
   const isRefused = Option.match(AsyncData.getError(model.records), {
     onNone: () => false,
     onSome: (error) => error === "SchemaChanged",
   });
 
-  const isSettled =
-    AsyncData.isSuccess(model.metadata) && !isTargetPending(model);
+  return isRefused ? requestRecords(model) : { model };
+};
 
-  return isRefused && isSettled ? requestRecords(model) : { model };
+/**
+ * After a refresh changed the applied sort: the old position means
+ * nothing in the new order (its cursors would be refused), so paging
+ * starts again from the first page. Answers to requests in the old order
+ * are ignored from now on; the list asks again once the refresh settles
+ * (a filter still waiting for its tables does that when it is applied).
+ *
+ * @param model - The page, with the reconciled sort.
+ * @returns The page, and the request when it is time.
+ */
+const restartForSort: Step = (model) => {
+  const restarted = modifyFields(model, {
+    cursors: () => [Option.none()],
+    maybePendingCursors: () => Option.none(),
+  });
+
+  if (FilterLoad.guards.WaitingForTables(model.filterLoad)) {
+    return { model: restarted };
+  }
+
+  if (isRefreshSettled(restarted)) {
+    return showQuery(restarted.query)(restarted);
+  }
+
+  return {
+    model: modifyFields(restarted, {
+      generation: (generation) => generation + 1,
+      isReloadDue: () => true,
+      records: reloading,
+    }),
+  };
 };
 
 // UPDATE
@@ -555,22 +662,23 @@ const receiveMetadata = (
   }
 
   const isFirstLoad = Option.isNone(tableMetaOf(model));
-  const fieldIds = new Set(table.fields.map((field) => field.id));
+  const sort = reconcileSort(model.query.sort, table);
+  const isSortChanged = sort.length !== model.query.sort.length;
 
   const loaded = modifyFields(model, {
     metadata: () => Metadata.Success({ data: { revision, table } }),
-    query: (query) =>
-      modifyFields(query, {
-        sort: (sort) => sort.filter((key) => fieldIds.has(key.fieldId)),
-      }),
+    query: (query) => modifyFields(query, { sort: () => sort }),
   });
 
-  return Update.withOutMessage(
-    isFirstLoad
-      ? applyAddress(model.address)(loaded)
-      : retryAfterRefresh(loaded),
-    OutMessage.SawRevision({ revision })
-  );
+  const settled = (): PlainReturn => {
+    if (isFirstLoad) {
+      return applyAddress(model.address)(loaded);
+    }
+
+    return isSortChanged ? restartForSort(loaded) : retryAfterRefresh(loaded);
+  };
+
+  return Update.withOutMessage(settled(), OutMessage.SawRevision({ revision }));
 };
 
 const failMetadata = (model: Model, error: MetaError): UpdateReturn => ({
@@ -630,6 +738,8 @@ const receiveRecords = (
   }
 
   const shown = modifyFields(model, {
+    cursors: () => requestedCursors(model),
+    maybePendingCursors: () => Option.none(),
     records: () => Records.Success({ data: page }),
   });
 
@@ -659,7 +769,10 @@ const failRecords = (
     return { model };
   }
 
+  // NOTE: a page "Next" or "Previous" asked for that did not load leaves
+  // the position at the page on screen.
   const refused = modifyFields(model, {
+    maybePendingCursors: () => Option.none(),
     records: (records) => failed(records, error),
   });
 
@@ -683,8 +796,17 @@ const failRecords = (
 const isPaging = (model: Model): boolean =>
   AsyncData.isPending(model.records) || !AsyncData.hasData(model.records);
 
+/**
+ * Asks for another page; the position moves only when it loads.
+ *
+ * @param model - The page.
+ * @param cursors - The cursor stack of the page asked for.
+ * @returns The page, loading, and the request.
+ */
 const pageTo = (model: Model, cursors: readonly Option.Option<string>[]) =>
-  requestRecords(modifyFields(model, { cursors: () => cursors }));
+  requestRecords(
+    modifyFields(model, { maybePendingCursors: () => Option.some(cursors) })
+  );
 
 const nextPage = (model: Model): UpdateReturn =>
   Option.match(

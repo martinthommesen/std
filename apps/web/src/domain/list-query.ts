@@ -125,6 +125,23 @@ export const sortKeysOf = (
         }),
   });
 
+/**
+ * The sort keys that still name sortable fields of the table, after its
+ * definition changed; others are dropped, as {@link sortKeysOf} drops them
+ * from an address.
+ *
+ * @param sort - The applied keys.
+ * @param table - The table's current metadata.
+ * @returns The keys kept, in order.
+ */
+export const reconcileSort = (
+  sort: readonly SortKey[],
+  table: MetaTable
+): readonly SortKey[] =>
+  sort.filter((key) =>
+    Option.exists(fieldById(table, key.fieldId), isSortable)
+  );
+
 const decodeCondition = Schema.decodeUnknownOption(
   Schema.fromJsonString(ExprSchema)
 );

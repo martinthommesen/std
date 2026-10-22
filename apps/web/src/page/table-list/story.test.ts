@@ -12,6 +12,7 @@ import {
 } from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
+import { listFieldsParameter } from "../../domain/list-columns.ts";
 import { fakeStdApi } from "../../fake-std-api.ts";
 import {
   ASSET_FIELDS,
@@ -724,10 +725,10 @@ describe("review fixes", () => {
       described([listRequest({ cursor: Option.some("c2"), generation: 2 })])
     );
     expect(twice.commands ?? []).toStrictEqual([]);
-    expect(twice.model.cursors).toStrictEqual([
-      Option.none(),
-      Option.some("c2"),
-    ]);
+    expect(twice.model.cursors).toStrictEqual([Option.none()]);
+    expect(twice.model.maybePendingCursors).toStrictEqual(
+      Option.some([Option.none(), Option.some("c2")])
+    );
     expect(back.commands ?? []).toStrictEqual([]);
   });
 
@@ -1011,14 +1012,19 @@ describe("review fixes", () => {
           expect.objectContaining({ _tag: "Group", children: [] })
         );
         expect(Option.isSome(page.maybeNotice)).toBeTruthy();
+        expect(page.address.filter).toStrictEqual(Option.none());
       }),
-      Command.resolve(
-        LoadRecords,
-        Message.SucceededLoadRecords({
-          generation: 3,
-          maybeRevision: Option.some(REVISION_4),
-          page: firstPage,
-        })
+      Command.expectHas(ReplaceListUrl({ url: listUrl })),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 3,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
       )
     );
   });
@@ -1155,6 +1161,473 @@ describe("saved filters", () => {
       model((page) => {
         expect(page).toStrictEqual(showingSaved);
       })
+    );
+  });
+});
+
+/**
+ * The page after a series of Messages.
+ *
+ * @param start - The page to start from.
+ * @param messages - The Messages, in order.
+ * @returns The page.
+ */
+const after = (start: Model, messages: readonly Message[]): Model => {
+  let page = start;
+
+  for (const next of messages) {
+    page = update(page, next).model;
+  }
+
+  return page;
+};
+
+/**
+ * A list request that found the server unavailable.
+ *
+ * @param generation - The request's generation.
+ * @returns The answer.
+ */
+const unavailable = (generation: number) =>
+  Message.FailedLoadRecords({
+    error: "Unavailable",
+    generation,
+    maybeRevision: Option.none(),
+  });
+
+describe("positions, sorts and addresses after failures and refreshes", () => {
+  const showing = after(opened.model, [
+    Message.SucceededLoadTableMetadata({
+      revision: REVISION_3,
+      table: assetTable,
+    }),
+    Message.SucceededLoadRecords({
+      generation: 1,
+      maybeRevision: Option.some(REVISION_3),
+      page: firstPage,
+    }),
+  ]);
+
+  const secondPage: RecordPage = {
+    maybeCount: Option.some(4),
+    maybeNextCursor: Option.some("c3"),
+    records: [record("019a0000-0000-7000-8000-00000000000d", { name: "N" })],
+  };
+
+  const withoutCost = {
+    ...assetTable,
+    fields: assetTable.fields.filter((field) => field.id !== ASSET_FIELDS.cost),
+  };
+
+  const fieldsWithoutCost = listFieldsParameter(withoutCost);
+
+  /**
+   * The list sorted by cost, on its second page.
+   *
+   * @param secondRevision - The revision the second page's answer states.
+   * @returns The page.
+   */
+  const byCostOnSecond = (secondRevision: typeof REVISION_3) =>
+    after(showing, [
+      Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.cost }),
+      Message.SucceededLoadRecords({
+        generation: 2,
+        maybeRevision: Option.some(REVISION_3),
+        page: firstPage,
+      }),
+      Message.ClickedNextPage(),
+      Message.SucceededLoadRecords({
+        generation: 3,
+        maybeRevision: Option.some(secondRevision),
+        page: secondPage,
+      }),
+    ]);
+
+  it("a page that does not load leaves the position at the page on screen", () => {
+    const onSecond = after(showing, [
+      Message.ClickedNextPage(),
+      Message.SucceededLoadRecords({
+        generation: 2,
+        maybeRevision: Option.some(REVISION_3),
+        page: secondPage,
+      }),
+    ]);
+
+    expect(onSecond.cursors).toStrictEqual([Option.none(), Option.some("c2")]);
+
+    story(
+      update,
+      given(onSecond),
+      message(Message.ClickedNextPage()),
+      Command.expectExact(
+        listRequest({ cursor: Option.some("c3"), generation: 3 })
+      ),
+      Command.resolve(LoadRecords, unavailable(3)),
+      model((page) => {
+        expect(page.cursors).toStrictEqual([Option.none(), Option.some("c2")]);
+        expect(page.maybePendingCursors).toStrictEqual(Option.none());
+        expect(recordsOf(page)).toStrictEqual(
+          Option.some(secondPage.records.map((entry) => entry.id))
+        );
+      }),
+      message(Message.ClickedRetry()),
+      Command.expectExact(
+        listRequest({ cursor: Option.some("c2"), generation: 4 })
+      ),
+      Command.resolve(LoadRecords, unavailable(4)),
+      message(Message.ClickedPreviousPage()),
+      Command.expectExact(listRequest({ generation: 5 })),
+      Command.resolve(LoadRecords, unavailable(5)),
+      model((page) => {
+        expect(page.cursors).toStrictEqual([Option.none(), Option.some("c2")]);
+      }),
+      message(Message.ClickedNextPage()),
+      Command.expectExact(
+        listRequest({ cursor: Option.some("c3"), generation: 6 })
+      ),
+      Command.resolve(
+        LoadRecords,
+        Message.SucceededLoadRecords({
+          generation: 6,
+          maybeRevision: Option.some(REVISION_3),
+          page: lastPage,
+        })
+      ),
+      model((page) => {
+        expect(page.cursors).toStrictEqual([
+          Option.none(),
+          Option.some("c2"),
+          Option.some("c3"),
+        ]);
+      })
+    );
+  });
+
+  it("after SchemaChanged, a refresh that drops the sort's field asks again from the first page and rewrites the address", () => {
+    const sorted = byCostOnSecond(REVISION_3);
+
+    expect(sorted.address.sort).toStrictEqual(Option.some(ASSET_FIELDS.cost));
+
+    story(
+      update,
+      given(sorted),
+      message(Message.ClickedNextPage()),
+      Command.expectExact(
+        listRequest({
+          cursor: Option.some("c3"),
+          generation: 4,
+          sort: Option.some("cost"),
+        })
+      ),
+      Command.resolve(
+        LoadRecords,
+        Message.FailedLoadRecords({
+          error: "SchemaChanged",
+          generation: 4,
+          maybeRevision: Option.some(REVISION_4),
+        })
+      ),
+      expectOutMessage(OutMessage.SawCurrentRevision({ revision: REVISION_4 })),
+      Command.resolve(
+        LoadTableMetadata,
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        })
+      ),
+      model((page) => {
+        expect(page.query.sort).toStrictEqual([]);
+        expect(page.cursors).toStrictEqual([Option.none()]);
+        expect(page.address.sort).toStrictEqual(Option.none());
+      }),
+      Command.expectExact(
+        listRequest({
+          fields: fieldsWithoutCost,
+          generation: 5,
+          revision: REVISION_4,
+        }),
+        ReplaceListUrl({ url: listUrl })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 5,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("a background refresh that drops the sort's field reloads the list from the first page and rewrites the address", () => {
+    story(
+      update,
+      given(byCostOnSecond(REVISION_4)),
+      message(
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        })
+      ),
+      model((page) => {
+        expect(page.cursors).toStrictEqual([Option.none()]);
+        expect(page.isReloadDue).toBeFalsy();
+      }),
+      Command.expectExact(
+        listRequest({
+          fields: fieldsWithoutCost,
+          generation: 4,
+          revision: REVISION_4,
+        }),
+        ReplaceListUrl({ url: listUrl })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 4,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("when the refresh still waits for a target table, asks again only once it is reloaded, ignoring answers in the old order", () => {
+    const ownerIsBob: Expr = {
+      left: { path: [ASSET_FIELDS.owner, USER_FIELDS.name] },
+      op: "eq",
+      right: { value: "Bob" },
+    };
+
+    const filtered = after(
+      applyStoredFilter(showing, Option.some(ownerIsBob)).model,
+      [
+        Message.SucceededLoadTargetTable({ table: userTable }),
+        Message.ClickedSortColumn({ fieldId: ASSET_FIELDS.cost }),
+        Message.SucceededLoadRecords({
+          generation: 4,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        }),
+      ]
+    );
+
+    expect(filtered.query.sort).toHaveLength(1);
+    expect(AsyncData.isRefreshing(filtered.metadata)).toBeTruthy();
+
+    story(
+      update,
+      given(filtered),
+      message(
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        })
+      ),
+      Command.expectNone(),
+      model((page) => {
+        expect(page.isReloadDue).toBeTruthy();
+        expect(page.cursors).toStrictEqual([Option.none()]);
+        expect(AsyncData.isPending(page.records)).toBeTruthy();
+      }),
+      message(
+        Message.SucceededLoadRecords({
+          generation: 4,
+          maybeRevision: Option.some(REVISION_4),
+          page: lastPage,
+        })
+      ),
+      model((page) => {
+        expect(AsyncData.isPending(page.records)).toBeTruthy();
+      }),
+      message(Message.SucceededLoadTargetTable({ table: userTable })),
+      model((page) => {
+        expect(page.isReloadDue).toBeFalsy();
+        expect(page.address.sort).toStrictEqual(Option.none());
+        expect(page.address.filter).toStrictEqual(
+          Option.some(JSON.stringify(ownerIsBob))
+        );
+      }),
+      Command.expectExact(
+        listRequest({
+          fields: fieldsWithoutCost,
+          filter: Option.some('owner.name = "Bob"'),
+          generation: 6,
+          revision: REVISION_4,
+        }),
+        ReplaceListUrl({
+          url: `${listUrl}?filter=${encodeURIComponent(JSON.stringify(ownerIsBob))}`,
+        })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 6,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("a background refresh that removes the filter's field drops the filter from the list and the address", () => {
+    const costEmpty: Expr = { arg: { path: [ASSET_FIELDS.cost] }, op: "empty" };
+
+    const filtered = after(
+      applyStoredFilter(showing, Option.some(costEmpty)).model,
+      [
+        Message.SucceededLoadRecords({
+          generation: 2,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        }),
+      ]
+    );
+
+    expect(filtered.address.filter).toStrictEqual(
+      Option.some(JSON.stringify(costEmpty))
+    );
+
+    story(
+      update,
+      given(filtered),
+      message(
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        })
+      ),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(page.address.filter).toStrictEqual(Option.none());
+        expect(Option.isSome(page.maybeNotice)).toBeTruthy();
+      }),
+      Command.expectExact(
+        listRequest({
+          fields: fieldsWithoutCost,
+          generation: 3,
+          revision: REVISION_4,
+        }),
+        ReplaceListUrl({ url: listUrl })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 3,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("paging with a filter whose field is gone, while the refresh still waits for a target table, drops it and starts from the first page", () => {
+    const costEmptyAndBob: Expr = {
+      args: [
+        { arg: { path: [ASSET_FIELDS.cost] }, op: "empty" },
+        {
+          left: { path: [ASSET_FIELDS.owner, USER_FIELDS.name] },
+          op: "eq",
+          right: { value: "Bob" },
+        },
+      ],
+      op: "and",
+    };
+
+    const refreshing = after(
+      applyStoredFilter(showing, Option.some(costEmptyAndBob)).model,
+      [
+        Message.SucceededLoadTargetTable({ table: userTable }),
+        Message.SucceededLoadRecords({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_4),
+          page: firstPage,
+        }),
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: withoutCost,
+        }),
+      ]
+    );
+
+    expect(Option.isSome(refreshing.query.maybeCondition)).toBeTruthy();
+    expect(AsyncData.isSuccess(refreshing.records)).toBeTruthy();
+
+    story(
+      update,
+      given(refreshing),
+      message(Message.ClickedNextPage()),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(page.address.filter).toStrictEqual(Option.none());
+        expect(page.maybePendingCursors).toStrictEqual(Option.none());
+      }),
+      Command.expectExact(
+        listRequest({
+          fields: fieldsWithoutCost,
+          generation: 4,
+          revision: REVISION_4,
+        }),
+        ReplaceListUrl({ url: listUrl })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 4,
+            maybeRevision: Option.some(REVISION_4),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("a table with no column to show asks for the ID only", () => {
+    const vault = {
+      ...assetTable,
+      displayField: null,
+      fields: assetTable.fields.filter((field) =>
+        ["longText", "json", "password"].includes(field.type.kind)
+      ),
+    };
+
+    expect(listFieldsParameter(vault)).toBe("id");
+
+    story(
+      update,
+      given(opened.model),
+      message(
+        Message.SucceededLoadTableMetadata({
+          revision: REVISION_3,
+          table: vault,
+        })
+      ),
+      Command.expectHas(listRequest({ fields: "id" })),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 1,
+            maybeRevision: Option.some(REVISION_3),
+            page: firstPage,
+          }),
+        ]
+      )
     );
   });
 });

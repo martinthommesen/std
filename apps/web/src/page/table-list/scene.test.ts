@@ -195,6 +195,58 @@ describe("list page", () => {
     );
   });
 
+  it("a table with no column to show lists each record's ID, linking to its form", () => {
+    const vault = {
+      ...assetTable,
+      displayField: null,
+      fields: assetTable.fields.filter((field) =>
+        ["longText", "json", "password"].includes(field.type.kind)
+      ),
+    };
+
+    const vaultRecord = "019a0000-0000-7000-8000-0000000000f1";
+
+    const opened = init({
+      address: {
+        filter: Option.none(),
+        limit: Option.none(),
+        sort: Option.none(),
+      },
+      id: 1,
+      maybeAppRevision: Option.none(),
+      table: ASSETS,
+    }).model;
+
+    const described = update(
+      opened,
+      Message.SucceededLoadTableMetadata({ revision: REVISION_3, table: vault })
+    ).model;
+
+    const listed = update(
+      described,
+      Message.SucceededLoadRecords({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_3),
+        page: {
+          maybeCount: Option.some(1),
+          maybeNextCursor: Option.none(),
+          records: [record(vaultRecord, {})],
+        },
+      })
+    ).model;
+
+    scene(
+      { update, view },
+      given(listed),
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
+      expect(role("columnheader", { name: "ID" })).toExist(),
+      expect(role("link", { name: vaultRecord })).toHaveAttr(
+        "href",
+        `/tables/acme.asset/records/${vaultRecord}`
+      )
+    );
+  });
+
   it("does not offer to sort by a field the server cannot sort", () => {
     scene(
       { update, view },

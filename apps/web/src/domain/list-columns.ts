@@ -70,6 +70,27 @@ export const listColumns = (table: MetaTable): readonly MetaField[] => {
   return fromLayout.length > 0 ? fromLayout : defaultColumns(table);
 };
 
+/**
+ * The envelope member a list asks for when it has no column, so `fields`
+ * is never empty (the server refuses `fields=`); the list then shows the
+ * record's ID as its only column, linking to the record.
+ */
+export const ID_FIELD = "id";
+
+/**
+ * The list request's `fields` parameter: the columns' names, or `id` when
+ * the table has no column to show (no display field, and only fields that
+ * do not fit a cell) [judgment, decision 0020].
+ *
+ * @param table - The table's metadata.
+ * @returns The parameter.
+ */
+export const listFieldsParameter = (table: MetaTable): string => {
+  const names = listColumns(table).map((field) => field.name);
+
+  return names.length > 0 ? names.join(",") : ID_FIELD;
+};
+
 /** What one cell shows. */
 export type Cell =
   | { readonly _tag: "Shown"; readonly text: string }
