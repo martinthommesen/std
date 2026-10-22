@@ -953,7 +953,7 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 - A layout (`core.layout`) is a config record: table, type (`form` or `list`) and an ordered element list; form layouts hold field and section elements, list layouts field elements only, each field once. One live layout per table and type. Elements name fields of the table or its ancestors by ID, so renames never break them. [decision 0017]
 - A table without its own layout uses its nearest ancestor's; a layout is replaced as a whole, by a child table's own layout or by a local override of its element list (8.2). [judgment]
 - Metadata serves the effective layout for the caller: only active fields the caller can read, sections without fields dropped. Retiring a field a layout uses is allowed and reported (1.7); a purged field's entry stays in the stored layout (it does not block the purge) and is skipped when served; a table purge takes its layouts along. [judgment]
-- Without a list layout (or when the caller can read none of its fields), the web app's list shows the display field, then the other active fields in metadata order, leaving out long text, json, condition, password and secret, at most six [judgment, decision 0020].
+- Without a list layout (or when the caller can read none of its fields), the web app's list shows the display field, then the other active fields in metadata order, leaving out long text, json, condition, password and secret, at most six [judgment, decision 0020]. When that leaves no column (no display field, and only such fields), the list asks for `fields=id` (never an empty `fields`, which the API refuses) and shows each record's ID as its only column, linking to the record's form [judgment, decision 0020].
 
 ### 6.3b Saved filters
 
