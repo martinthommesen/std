@@ -303,7 +303,29 @@ const bringUpSeconds = (result: ProbeResult): number | undefined => {
 const usable = (attempt: ProbeAttempt): ProbeResult | undefined =>
   attempt.problem === undefined ? attempt.result : undefined;
 
-const succeeded = (attempt: ProbeAttempt): boolean =>
+// Conclusions of an attempt that ran to its end: GitHub's, or a local file.
+const cleanConclusions = new Set(["success", "local"]);
+
+/**
+ * An attempt succeeded when its deployment reached `Complete`, its complete
+ * result was published, and the run attempt itself succeeded. A partial
+ * result means the complete one could not be written (the probe then exits
+ * 3), so it is a failure, whatever the deployment did.
+ *
+ * @param attempt - The attempt.
+ * @returns True for a success.
+ */
+const succeeded = (attempt: ProbeAttempt): boolean => {
+  const result = usable(attempt);
+
+  return (
+    result?.outcome === "success" &&
+    result.stage === "complete" &&
+    cleanConclusions.has(attempt.conclusion)
+  );
+};
+
+const deployed = (attempt: ProbeAttempt): boolean =>
   usable(attempt)?.outcome === "success";
 
 /**
@@ -319,7 +341,19 @@ const failureReason = (attempt: ProbeAttempt): string => {
       : "no usable result";
   }
 
-  return attempt.result?.failedPhase ?? "unknown";
+  const { result } = attempt;
+
+  if (result?.failedPhase !== undefined && result.failedPhase !== null) {
+    return result.failedPhase;
+  }
+
+  if (result?.stage === "partial") {
+    return "result not published (stage partial)";
+  }
+
+  return result?.outcome === "success"
+    ? `run attempt concluded ${attempt.conclusion}`
+    : "unknown";
 };
 
 const outcomeCell = (attempt: ProbeAttempt): string => {
@@ -327,7 +361,13 @@ const outcomeCell = (attempt: ProbeAttempt): string => {
     return `no usable result (${attempt.conclusion})`;
   }
 
-  return attempt.result?.outcome ?? `no result (${attempt.conclusion})`;
+  if (attempt.result === undefined) {
+    return `no result (${attempt.conclusion})`;
+  }
+
+  return succeeded(attempt)
+    ? "success"
+    : `failure (deployment ${attempt.result.outcome}, ${attempt.result.stage} result, conclusion ${attempt.conclusion})`;
 };
 
 const excerptTail = (excerpt: string | null, lines: number): string =>
@@ -359,6 +399,7 @@ const outcomeLines = (attempts: readonly ProbeAttempt[]): string[] => {
   return [
     `- Attempts: ${attempts.length} in ${runs} run${runs === 1 ? "" : "s"}; succeeded ${attempts.length - failures.length}, failed ${failures.length} (failure rate ${percent(failures.length, attempts.length)}).`,
     `- Failing phases: ${reasons === "" ? "none" : reasons}.`,
+    `- Deployments that reached \`Complete\` by their results, publication aside: ${attempts.filter(deployed).length} of ${attempts.length}.`,
   ];
 };
 
@@ -460,8 +501,17 @@ const runsTable = (
   ),
 ];
 
-const failureHeading = (attempt: ProbeAttempt): string =>
-  attempt.problem ?? `phase ${attempt.result?.failedPhase ?? "unknown"}`;
+const failureHeading = (attempt: ProbeAttempt): string => {
+  if (attempt.problem !== undefined) {
+    return attempt.problem;
+  }
+
+  const phase = attempt.result?.failedPhase;
+
+  return phase === undefined || phase === null
+    ? failureReason(attempt)
+    : `phase ${phase}`;
+};
 
 const failureSection = (attempts: readonly ProbeAttempt[]): string[] => {
   const failures = attempts.filter((attempt) => !succeeded(attempt));

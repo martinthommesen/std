@@ -164,6 +164,27 @@ describe("oda-probe-summary", () => {
     expect(Result.isFailure(decoded)).toBeTruthy();
   });
 
+  it("fails an attempt whose complete result was not published, or whose run failed", () => {
+    const text = summarize([
+      attempt("1", result()),
+      {
+        ...attempt("2", { ...result(), stage: "partial" }),
+        conclusion: "failure",
+      },
+      { ...attempt("3", result()), conclusion: "failure" },
+    ]);
+
+    expect(text).toContain(
+      "- Attempts: 3 in 3 runs; succeeded 1, failed 2 (failure rate 67%)."
+    );
+    expect(text).toContain(
+      "- Failing phases: result not published (stage partial) 1, run attempt concluded failure 1."
+    );
+    expect(text).toContain(
+      "- Deployments that reached `Complete` by their results, publication aside: 3 of 3."
+    );
+  });
+
   it("warns when the attempts ran different pins", () => {
     const text = summarize([
       attempt("1", result()),
