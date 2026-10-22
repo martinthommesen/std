@@ -51,6 +51,7 @@ import type { PlatformMigration } from "@std/server/platform/migration";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { runPlatformMigrations } from "@std/server/platform/runner";
 import type { UpgradeError } from "@std/server/platform/runner";
+import type { DatabaseConfigError } from "@std/server/sql/database-config";
 import {
   DatabaseConfig,
   databaseUrlConfig,
@@ -866,7 +867,7 @@ export const testDatabaseService = (
   options: TestDatabaseOptions = {}
 ): Layer.Layer<
   TestDatabase,
-  DatabaseError | UpgradeError | Config.ConfigError
+  DatabaseError | UpgradeError | DatabaseConfigError
 > =>
   Layer.effect(
     TestDatabase,
@@ -915,7 +916,7 @@ export const testDatabaseLayer = (
   options: TestDatabaseOptions = {}
 ): Layer.Layer<
   TestDatabaseServices,
-  DatabaseError | UpgradeError | Config.ConfigError
+  DatabaseError | UpgradeError | DatabaseConfigError
 > => {
   const config = Layer.effect(
     DatabaseConfig,

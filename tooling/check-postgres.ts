@@ -6,6 +6,14 @@
  *
  * Usage: `node tooling/check-postgres.ts`.
  */
+import {
+  databaseTransport,
+  databaseTlsConfig,
+  loadDatabaseTls,
+  warnInsecureTransport,
+} from "@std/postgres/transport";
+import { Effect, Redacted } from "effect";
+
 import { parsePgUrl, queryOnce } from "./lib/pg-wire.ts";
 import { report, runCheck } from "./lib/report.ts";
 
@@ -28,7 +36,20 @@ await runCheck(checkName, async () => {
   let rows: (string | null)[][];
 
   try {
-    rows = await queryOnce(settings, facts);
+    const transport = await Effect.runPromise(
+      Effect.gen(function* resolveTransport() {
+        const resolved = yield* databaseTransport(
+          Redacted.make(settings.url),
+          yield* loadDatabaseTls(yield* databaseTlsConfig)
+        );
+
+        yield* warnInsecureTransport([resolved]);
+
+        return resolved;
+      })
+    );
+
+    rows = await queryOnce(settings, facts, transport);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 

@@ -11,6 +11,8 @@
  */
 import { PgClient, PgTypes } from "@effect/sql-pg";
 import {
+  DEFAULT_DATABASE_URL,
+  databaseSslOptions,
   databaseTransport,
   databaseTlsConfig,
   loadDatabaseTls,
@@ -238,12 +240,10 @@ export const PostgresTest: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* PostgresTest() {
     const url = yield* Config.Redacted("STD_DATABASE_URL").pipe(
-      Config.withDefault(
-        Redacted.make("postgres://std:std@127.0.0.1:54329/std")
-      )
+      Config.withDefault(Redacted.make(DEFAULT_DATABASE_URL))
     );
 
-    const { ssl } = yield* databaseTransport(
+    const transport = yield* databaseTransport(
       url,
       yield* loadDatabaseTls(yield* databaseTlsConfig)
     );
@@ -251,7 +251,7 @@ export const PostgresTest: Layer.Layer<
     return PgClient.layer({
       applicationName: "std-values-tests",
       maxConnections: 4,
-      ssl,
+      ssl: databaseSslOptions(transport),
       startupParameters: { DateStyle: "ISO", TimeZone: "UTC" },
       types: makeTextRegistry(),
       url,

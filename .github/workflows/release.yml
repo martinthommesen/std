@@ -19,6 +19,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dispatch-guard:
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Reject publication from a branch
+        run: |
+          echo 'Publishing requires a v* tag. Use dry_run=true to build from a branch.' >&2
+          exit 1
+
   dry-run:
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run
     runs-on: ubuntu-24.04
@@ -28,26 +38,12 @@ jobs:
       id-token: write
     env:
       IMAGE: ghcr.io/martinthommesen/std
-      DRY_RUN: "true"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - name: Release gate
-        id: gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          if [ "$DRY_RUN" = true ]; then
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-            echo 'tag=dry-run' >> "$GITHUB_OUTPUT"
-          else
-            test "$GITHUB_REF_TYPE" = tag
-            [[ "$GITHUB_REF_NAME" =~ ^v[0-9][A-Za-z0-9_.-]*$ ]]
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Prepare deliverables
+        run: mkdir -p dist
       - name: Install checksum-pinned tools
         shell: bash
         run: |
@@ -64,9 +60,9 @@ jobs:
           # Step 3 signs the working server image; Step 5 replaces its packaging.
           file: docker/quickstart.Dockerfile
           platforms: linux/amd64
-          tags: ${{ env.IMAGE }}:${{ steps.gate.outputs.tag }}
-          push: ${{ steps.gate.outputs.publish == 'true' }}
-          outputs: ${{ steps.gate.outputs.publish != 'true' && 'type=oci,dest=dist/std-image.tar' || '' }}
+          tags: ${{ env.IMAGE }}:dry-run
+          push: false
+          outputs: type=oci,dest=dist/std-image.tar
           provenance: mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -77,14 +73,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$DRY_RUN" = true ]; then
-            syft oci-archive:dist/std-image.tar -o spdx-json=dist/sbom.spdx.json
-          else
-            syft "registry:$IMAGE@$DIGEST" -o spdx-json=dist/sbom.spdx.json
-          fi
+          syft oci-archive:dist/std-image.tar -o spdx-json=dist/sbom.spdx.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > dist/image-digest.txt
       - name: Sign dry-run image archive and SBOM
-        if: steps.gate.outputs.publish != 'true'
         run: cosign sign-blob --yes --bundle dist/std-image.sigstore.json dist/std-image.tar && cosign sign-blob --yes --bundle dist/sbom.sigstore.json dist/sbom.spdx.json
       # STEP 5 HOOK: automatically enabled when deploy/oda/std/Chart.yaml exists.
       # Sign the exact packaged chart, retain its Sigstore bundle, and push only
@@ -120,7 +111,6 @@ jobs:
       attestations: write
     env:
       IMAGE: ghcr.io/martinthommesen/std
-      DRY_RUN: "false"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -131,15 +121,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          if [ "$DRY_RUN" = true ]; then
-            echo 'publish=false' >> "$GITHUB_OUTPUT"
-            echo 'tag=dry-run' >> "$GITHUB_OUTPUT"
-          else
-            test "$GITHUB_REF_TYPE" = tag
-            [[ "$GITHUB_REF_NAME" =~ ^v[0-9][A-Za-z0-9_.-]*$ ]]
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          fi
+          test "$GITHUB_REF_TYPE" = tag
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9][A-Za-z0-9_.-]*$ ]]
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
       - name: Install checksum-pinned tools
         shell: bash
         run: |
@@ -149,7 +133,6 @@ jobs:
         # BuildKit v0.26.3, pinned by OCI index digest as well as version.
         run: docker buildx create --use --driver docker-container --driver-opt image=moby/buildkit:v0.26.3@sha256:5601811fde88bb9e8a577bfe804af82bccb712e1cd07ff94663bded5e628cf75
       - name: Log in to GHCR
-        if: steps.gate.outputs.publish == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
@@ -164,8 +147,7 @@ jobs:
           file: docker/quickstart.Dockerfile
           platforms: linux/amd64
           tags: ${{ env.IMAGE }}:${{ steps.gate.outputs.tag }}
-          push: ${{ steps.gate.outputs.publish == 'true' }}
-          outputs: ${{ steps.gate.outputs.publish != 'true' && 'type=oci,dest=dist/std-image.tar' || '' }}
+          push: true
           provenance: mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -176,14 +158,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$DRY_RUN" = true ]; then
-            syft oci-archive:dist/std-image.tar -o spdx-json=dist/sbom.spdx.json
-          else
-            syft "registry:$IMAGE@$DIGEST" -o spdx-json=dist/sbom.spdx.json
-          fi
+          syft "registry:$IMAGE@$DIGEST" -o spdx-json=dist/sbom.spdx.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > dist/image-digest.txt
       - name: Sign published image and attach SBOM
-        if: steps.gate.outputs.publish == 'true'
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST" && cosign attest --yes --type spdxjson --predicate dist/sbom.spdx.json "$IMAGE@$DIGEST"
@@ -193,7 +170,7 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: ${{ steps.gate.outputs.publish == 'true' }}
+          push-to-registry: true
           create-storage-record: false
       - name: Attest image SBOM
         id: sbom
@@ -202,7 +179,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.image.outputs.digest }}
           sbom-path: dist/sbom.spdx.json
-          push-to-registry: ${{ steps.gate.outputs.publish == 'true' }}
+          push-to-registry: true
           create-storage-record: false
       # STEP 5 HOOK: automatically enabled when deploy/oda/std/Chart.yaml exists.
       # Sign the exact packaged chart, retain its Sigstore bundle, and push only
@@ -211,7 +188,6 @@ jobs:
         id: chart
         if: hashFiles('deploy/oda/std/Chart.yaml') != ''
         env:
-          PUBLISH: ${{ steps.gate.outputs.publish }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
@@ -221,10 +197,8 @@ jobs:
           helm package deploy/oda/std --destination dist
           for chart in dist/*.tgz; do
             cosign sign-blob --yes --bundle "$chart.sigstore.json" "$chart"
-            if [ "$PUBLISH" = true ]; then
-              printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-              helm push "$chart" oci://ghcr.io/martinthommesen/charts
-            fi
+            printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+            helm push "$chart" oci://ghcr.io/martinthommesen/charts
           done
       - name: Retain verification bundles
         env:

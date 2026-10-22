@@ -10,18 +10,8 @@ import type { Socket } from "node:net";
 import { connect, isIP } from "node:net";
 import { connect as connectTls } from "node:tls";
 
-import {
-  databaseTransport,
-  databaseTlsConfig,
-  loadDatabaseTls,
-  warnInsecureTransport,
-} from "@std/postgres/transport";
+import { databaseSslOptions } from "@std/postgres/transport";
 import type { DatabaseTransport } from "@std/postgres/transport";
-import { Context, Effect, Layer, Redacted } from "effect";
-
-const ToolTransport = Context.Service<DatabaseTransport>(
-  "std/tooling/ToolTransport"
-);
 
 /** Connection settings, as in a `postgres://` URL. */
 export interface PgSettings {
@@ -340,36 +330,14 @@ const dataRow = (body: Buffer): (string | null)[] => {
  *
  * @param settings - Where and as whom to connect.
  * @param sql - One SQL statement.
+ * @param transport - Transport resolved once at startup.
  * @returns The rows, every value as text (`null` for SQL NULL).
  */
 export const queryOnce = async (
   settings: PgSettings,
-  sql: string
+  sql: string,
+  transport: DatabaseTransport
 ): Promise<(string | null)[][]> => {
-  const transport = await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* transportConfig() {
-        const context = yield* Layer.build(
-          Layer.effect(
-            ToolTransport,
-            Effect.gen(function* resolveTransport() {
-              const resolved = yield* databaseTransport(
-                Redacted.make(settings.url),
-                yield* loadDatabaseTls(yield* databaseTlsConfig)
-              );
-
-              yield* warnInsecureTransport([resolved]);
-
-              return resolved;
-            })
-          )
-        );
-
-        return Context.get(context, ToolTransport);
-      })
-    )
-  );
-
   let socket = connect(
     transport.host.startsWith("/")
       ? { path: `${transport.host}/.s.PGSQL.${settings.port}` }
@@ -405,7 +373,7 @@ export const queryOnce = async (
       }
 
       socket = connectTls({
-        ...transport.ssl,
+        ...databaseSslOptions(transport),
         servername: isIP(transport.host) === 0 ? transport.host : undefined,
         socket,
       });

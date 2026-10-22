@@ -152,7 +152,7 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Upgrade conflicts with a customer-created record of the same name | Name clash refused at plan time, naming the local definition | The admin renames the local definition (by ID, nothing that refers to it breaks) and reruns. |
 | Instance upgrade applies platform changes online, node by node | Offline `std upgrade`: servers stopped, refused while a `std-server` session is connected (8.5) | Rolling upgrades need expand-and-contract rules and come later. |
 | Instance clone, backup and restore (ServiceNow-operated) | `pg_dump` of the one STD database, restore, `std upgrade`, `std doctor` (8.6) | `docs/runbooks/upgrade-and-recovery.md`. |
-| Instance Scan, health checks | `std doctor [--json]` (1.10): 16 read-only checks, exit 0, 1 or 2 | Checks the catalog against the definitions, config layers, journal, dependency index, protected core definitions and server settings; repairs are separate commands. |
+| Instance Scan, health checks | `std doctor [--json]` (1.10): 17 read-only checks, exit 0, 1 or 2 | Checks the catalog against the definitions, config layers, journal, dependency index, protected core definitions, server settings and observed Postgres TLS; repairs are separate commands. |
 | Dictionary entries that do not match the database ("dictionary out of sync") | `doctor` checks 2 to 5 | Missing, extra or mistyped columns, invalid indexes and constraints, orphans (reported, never dropped). |
 
 ## Installing an instance (Step 1 quickstart; decision 0016)

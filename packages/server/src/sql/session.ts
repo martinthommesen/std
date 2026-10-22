@@ -6,6 +6,7 @@ import { connect } from "node:net";
 import { Duplex } from "node:stream";
 
 import type { PgConnection } from "@effect/sql-pg";
+import { databaseSslOptions } from "@std/postgres/transport";
 import type { DatabaseTransport } from "@std/postgres/transport";
 import { Duration, Effect, Redacted } from "effect";
 import type { Types } from "effect";
@@ -168,7 +169,7 @@ export const connectionConfig = (
 
     const config: Types.Mutable<PgConnection.Config> = {
       applicationName: setup.applicationName,
-      ssl: transport.ssl,
+      ssl: databaseSslOptions(transport),
       startupParameters: {
         ...SESSION_PARAMETERS,
         ...setup.startupParameters,

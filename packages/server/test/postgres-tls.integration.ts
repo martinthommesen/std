@@ -1,7 +1,11 @@
 import { PgClient, PgConnection } from "@effect/sql-pg";
 import { assert, describe, it } from "@effect/vitest";
+import {
+  databaseSslOptions,
+  databaseTransport,
+  loadDatabaseTls,
+} from "@std/postgres/transport";
 import type { SslMode } from "@std/postgres/transport";
-import { databaseTransport, loadDatabaseTls } from "@std/postgres/transport";
 import {
   Config,
   ConfigProvider,
@@ -49,7 +53,7 @@ const connect = Effect.fn("TlsTest.connect")(function* connect(
   );
 
   return yield* PgConnection.make({
-    ssl: transport.ssl,
+    ssl: databaseSslOptions(transport),
     url: Redacted.make(url),
   });
 });
@@ -169,9 +173,15 @@ describe("postgres-tls", () => {
       );
 
       const { transport } = settings;
+      assert.notStrictEqual(transport.ssl, false);
+
+      if (transport.ssl !== false) {
+        assert.isTrue(Redacted.isRedacted(transport.ssl.key));
+        assert.notInclude(JSON.stringify(settings), "PRIVATE KEY");
+      }
 
       const client = yield* PgConnection.make({
-        ssl: transport.ssl,
+        ssl: databaseSslOptions(transport),
         url: Redacted.make(url),
       });
 

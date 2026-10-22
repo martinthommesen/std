@@ -4,6 +4,5 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     name: "@std/postgres",
-    passWithNoTests: true,
   },
 });

@@ -1,20 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"],
     "plugins": [
       {
         "name": "@effect/language-service",
         "allowedExperimentalApis": [],
-        "allowedUnstableApis": [
-          "effect/sql",
-          "effect/http",
-          "effect/http-api",
-          "effect/observability",
-          "@effect/sql-pg",
-          "@effect/platform-node",
-          "@effect/opentelemetry"
-        ],
+        "allowedUnstableApis": ["effect/http-api", "effect/http"],
         "diagnosticSeverity": {
           "unstableApiUsage": "error",
           "experimentalApiUsage": "error",
@@ -42,7 +33,8 @@
           }
         ]
       }
-    ]
+    ],
+    "types": ["node"]
   },
   "include": ["src", "test", "vitest.config.ts"]
 }

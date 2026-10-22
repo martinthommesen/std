@@ -36,6 +36,8 @@ Every profile sets `unstableApiUsage`, `experimentalApiUsage`, `outdatedApi`, `o
 
 Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`) have an empty list. Test files (`test/**/*`) of every profile, plain included, get the server entries plus `@effect/vitest`, so any package's tests can use Postgres; overrides replace the base list, so the entries are repeated.
 
+`@std/postgres` uses the `api` profile, the narrowest existing profile that permits its stable Effect config, error and redaction APIs and Node certificate-file I/O. The `plain` profile forbids both Effect effects and Node built-ins. Its source needs no unstable module; the wider `server` profile would grant unnecessary SQL and platform access. No profile allow list changes.
+
 Every Effect upgrade PR re-reads the API reference of the allowed modules and removes entries for modules promoted to stable.
 
 ## "Schema only" in plain packages

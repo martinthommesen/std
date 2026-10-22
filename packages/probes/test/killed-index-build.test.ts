@@ -6,8 +6,11 @@
  * notices the lost client and gives up early.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Effect } from "effect";
+import { DatabaseConfig } from "@std/server/sql/database-config";
+import { ConfigProvider, Effect, Layer, Redacted } from "effect";
 
+import { childDatabaseConfig } from "../src/index-build-config.ts";
+import { INDEX_BUILD_APPLICATION_NAME } from "../src/index-build-names.ts";
 import { runKilledBuildScenario } from "../src/killed-index-build.ts";
 import type { KilledBuildScenario } from "../src/killed-index-build.ts";
 import { probeDatabaseLayer } from "../src/probe-database.ts";
@@ -25,6 +28,39 @@ const base: KilledBuildScenario = {
 };
 
 describe("probe-killed-index-build", () => {
+  it.effect(
+    "uses the probe URL for dedicated connections despite an inherited direct URL",
+    () =>
+      Effect.gen(function* probeTarget() {
+        const url = "postgres://std@localhost/probe_database";
+
+        const settings = yield* DatabaseConfig.pipe(
+          Effect.provide(
+            childDatabaseConfig.pipe(
+              Layer.provide(
+                ConfigProvider.layer(
+                  ConfigProvider.fromUnknown({
+                    STD_DATABASE_DIRECT_URL:
+                      "postgres://std@localhost/unrelated_database",
+                    STD_DATABASE_URL: url,
+                  })
+                )
+              )
+            )
+          )
+        );
+
+        assert.strictEqual(Redacted.value(settings.url), url);
+        assert.strictEqual(Redacted.value(settings.directUrl), url);
+        assert.strictEqual(settings.directTransport, settings.transport);
+        assert.strictEqual(
+          settings.applicationName,
+          INDEX_BUILD_APPLICATION_NAME
+        );
+        assert.strictEqual(settings.maxConnections, 1);
+      })
+  );
+
   it("kills the client while the build waits for an open writer", () => {
     assert.strictEqual(base.busy, "writer");
     assert.strictEqual(base.checkInterval, "0");

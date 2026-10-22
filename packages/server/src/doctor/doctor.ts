@@ -23,6 +23,7 @@
  * | 14 | fold table Unicode version equals `unicode_version()` | `check-server` |
  * | 15 | UTF8 encoding, `client_connection_check_interval` 0 | `check-server` |
  * | 16 | latest definition revision equals the effective record | `check-config` |
+ * | 17 | observed Postgres TLS protocol and cipher (informational) | `check-server` |
  */
 import type { DefinitionInvalid } from "@std/definitions/problems";
 import { Effect, Schema } from "effect";

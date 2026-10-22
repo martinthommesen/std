@@ -60,7 +60,7 @@ FOLDKIT.md       Foldkit's agent guide, owned by Foldkit, copied verbatim from r
 - Plain packages (`values`, `conditions`, `definitions`, `access`, `codegen`, and `tmf` from Step 3) may import only `Schema`, `SchemaAST`, `SchemaGetter`, `SchemaIssue`, `SchemaParser`, `SchemaTransformation`, `Option` and `Result` from Effect (reasons in `docs/decisions/0001-effect.md`), their own `src/` files, other plain packages, and npm libraries listed with a reason in `tooling/plain-allowed-deps.json` whose dependency graph has no Effect. No I/O: no Node built-ins and no host globals. `tooling/check-imports.ts` enforces it for `src/`. Their tests may use anything their profile's test override allows.
 - `api` may import `effect` stable modules, `effect/http-api` and `effect/http`.
 - `server` may use the server allow list (Contracts 9).
-- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `tmf` depends on `values`, `conditions` and `definitions`, and `server` on it; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`. The independent `postgres` package uses the server profile and depends only on Effect; values tests, server, testing, benchmarks and tooling share its transport policy.
+- Direction: `values` <- `conditions` <- `definitions` <- `access` <- `server`; `tmf` depends on `values`, `conditions` and `definitions`, and `server` on it; `api` depends on `values` and `definitions` only; `web` depends on `api`, `values`, `conditions`, `definitions`; nothing depends on `server` except `testing`, `examples`, `bench`. The independent `postgres` package uses the api profile and depends only on Effect; values tests, server, testing, benchmarks and tooling share its transport policy.
 
 ### Package conventions
 
@@ -79,7 +79,7 @@ TypeScript's `extends` replaces the whole `plugins` array, so every package's `t
 | Profile | For | `src/` may use (unstable) | Template |
 | --- | --- | --- | --- |
 | `plain` | `values`, `conditions`, `definitions`, `access`, `codegen`, `tmf` (Step 3) | nothing | `tooling/tsconfig/plain.json` |
-| `api` | `api` | `effect/http-api`, `effect/http` | `tooling/tsconfig/api.json` |
+| `api` | `api`, `postgres` | `effect/http-api`, `effect/http` | `tooling/tsconfig/api.json` |
 | `web` | `apps/web` | `effect/http-api`, `effect/http`, `@effect/platform-browser` | `tooling/tsconfig/web.json` |
 | `server` | `server`, `testing`, `examples`, `bench` | `effect/sql`, `effect/http`, `effect/http-api`, `effect/observability`, `@effect/sql-pg`, `@effect/platform-node`, `@effect/opentelemetry` | `tooling/tsconfig/server.json` |
 
@@ -120,7 +120,7 @@ The fixture packages in `tooling/canaries/` are not workspace packages and are e
 | `records/` | read compiler (visibility, masking, projection, cursors, references, counts), save pipeline, history, outbox producer, `saveBatch` (Step 3) | 2, 3, 4 |
 | `http/` | generic record routes, `HttpApi` handlers, error mapping, schema-revision header, stale-request checks | 3.8, 6 |
 | `cli/` | the `std` command: `serve`, `worker` (Step 3), `wait-upgraded` (Step 5), `upgrade`, `doctor`, `schema status | resume | abandon`, `bootstrap-admin`(decision 0016),`schema pull`, `codegen` | 1.10, 8.5, 8.7 |
-| `doctor/` | `runDoctor`: the 16 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
+| `doctor/` | `runDoctor`: the 17 read-only checks of `std doctor`, as a library function returning typed findings and the exit code | 1.10 |
 | `hooks/` | hook phases and record rules (Step 3) | 4.1 |
 | `outbox/` | claim, fenced `done` and failure updates, backoff (1E); delivery worker (Step 3) | 4.6 |
 | `import/` | import jobs (Step 4) | 7 |

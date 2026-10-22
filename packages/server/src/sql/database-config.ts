@@ -7,19 +7,21 @@
  * which must reach Postgres directly rather than through a pooler.
  */
 import {
+  DEFAULT_DATABASE_URL,
   databaseTransport,
   databaseTlsConfig,
   loadDatabaseTls,
   warnInsecureTransport,
 } from "@std/postgres/transport";
 import type {
+  DatabaseTlsError,
   DatabaseTlsSettings,
   DatabaseTransport,
 } from "@std/postgres/transport";
 import { Config, Context, Effect, Layer, Redacted } from "effect";
 
 /** The connection URL used when `STD_DATABASE_URL` is not set. */
-export const DEFAULT_DATABASE_URL = "postgres://std:std@127.0.0.1:54329/std";
+export { DEFAULT_DATABASE_URL } from "@std/postgres/transport";
 
 /** `STD_DATABASE_URL`, or `DEFAULT_DATABASE_URL` when it is not set. */
 export const databaseUrlConfig: Config.Config<Redacted.Redacted> =
@@ -55,6 +57,9 @@ export interface DatabaseSettings {
   readonly maxConnections: number;
 }
 
+/** Expected failures while loading database connection settings. */
+export type DatabaseConfigError = Config.ConfigError | DatabaseTlsError;
+
 /** The connection settings service. */
 export class DatabaseConfig extends Context.Service<
   DatabaseConfig,
@@ -69,7 +74,7 @@ export class DatabaseConfig extends Context.Service<
    */
   static readonly fromEnv = (
     applicationName: string
-  ): Layer.Layer<DatabaseConfig, Config.ConfigError> =>
+  ): Layer.Layer<DatabaseConfig, DatabaseConfigError> =>
     Layer.effect(
       DatabaseConfig,
       Effect.gen(function* fromEnv() {
@@ -79,16 +84,14 @@ export class DatabaseConfig extends Context.Service<
           "STD_DATABASE_DIRECT_URL"
         ).pipe(Config.withDefault(url));
 
-        const tls = yield* loadDatabaseTls(yield* databaseTlsConfig).pipe(
-          Effect.orDie
-        );
+        const tls = yield* loadDatabaseTls(yield* databaseTlsConfig);
 
-        const transport = yield* databaseTransport(url, tls).pipe(Effect.orDie);
+        const transport = yield* databaseTransport(url, tls);
 
         const directTransport =
           Redacted.value(url) === Redacted.value(directUrl)
             ? transport
-            : yield* databaseTransport(directUrl, tls).pipe(Effect.orDie);
+            : yield* databaseTransport(directUrl, tls);
 
         yield* warnInsecureTransport([transport, directTransport]);
 
@@ -117,15 +120,13 @@ export class DatabaseConfig extends Context.Service<
     readonly applicationName: string;
     readonly maxConnections?: number;
     readonly tls?: DatabaseTlsSettings;
-  }): Layer.Layer<DatabaseConfig> =>
+  }): Layer.Layer<DatabaseConfig, DatabaseTlsError> =>
     Layer.effect(
       DatabaseConfig,
       Effect.gen(function* fromUrl() {
         const url = Redacted.make(settings.url);
 
-        const transport = yield* databaseTransport(url, settings.tls).pipe(
-          Effect.orDie
-        );
+        const transport = yield* databaseTransport(url, settings.tls);
 
         yield* warnInsecureTransport([transport]);
 

@@ -12,11 +12,13 @@ import {
   PgClient as PgClientService,
 } from "@effect/sql-pg/PgClient";
 import {
+  databaseSslOptions,
   databaseTransport,
   databaseTlsConfig,
   loadDatabaseTls,
   warnInsecureTransport,
 } from "@std/postgres/transport";
+import type { DatabaseTlsError } from "@std/postgres/transport";
 import { Config, Effect, Layer, Redacted, Schema } from "effect";
 import type { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
@@ -24,13 +26,15 @@ import type { SqlError } from "effect/sql/SqlError";
 import { BenchError } from "./errors.ts";
 import { query } from "./execute.ts";
 
+/** Expected configuration, TLS and driver failures for a benchmark connection. */
+export type DatabaseClientError =
+  | SqlError
+  | Config.ConfigError
+  | DatabaseTlsError;
+
 /** Where the bench server is. */
 export interface ServerConfig {
   readonly url: string;
-  readonly host: string;
-  readonly port: number;
-  readonly user: string;
-  readonly password: string;
   /** The maintenance database used to create and drop benchmark databases. */
   readonly adminDatabase: string;
 }
@@ -38,7 +42,6 @@ export interface ServerConfig {
 /** The default bench server URL (the container from `bench/docker-compose.yml`). */
 export const defaultServerUrl = "postgres://bench:bench@127.0.0.1:54330/bench";
 
-const defaultPort = 5432;
 const outputLimit = 16 * 1024 * 1024;
 const leadingSlash = /^\//u;
 const databaseNamePattern = /^[a-z][a-z0-9_]{0,62}$/u;
@@ -55,11 +58,7 @@ export const parseServerUrl = (url: string): ServerConfig => {
 
   return {
     adminDatabase: database === "" ? "bench" : database,
-    host: parsed.hostname,
-    password: decodeURIComponent(parsed.password),
-    port: parsed.port === "" ? defaultPort : Number(parsed.port),
     url,
-    user: decodeURIComponent(parsed.username),
   };
 };
 
@@ -87,7 +86,7 @@ export const clientLayer = (
   server: ServerConfig,
   database: string,
   options: ClientOptions
-): Layer.Layer<PgClient | SqlClient, SqlError> =>
+): Layer.Layer<PgClient | SqlClient, DatabaseClientError> =>
   Layer.unwrap(
     Effect.gen(function* benchClientLayer() {
       const parsed = new URL(server.url);
@@ -98,7 +97,7 @@ export const clientLayer = (
       const transport = yield* databaseTransport(
         url,
         yield* loadDatabaseTls(yield* databaseTlsConfig)
-      ).pipe(Effect.orDie);
+      );
 
       yield* warnInsecureTransport([transport]);
 
@@ -106,11 +105,11 @@ export const clientLayer = (
         applicationName: "std-bench",
         maxConnections: options.maxConnections,
         minConnections: 1,
-        ssl: transport.ssl,
+        ssl: databaseSslOptions(transport),
         startupParameters: { TimeZone: "UTC", ...options.settings },
         url,
       });
-    }).pipe(Effect.orDie)
+    })
   );
 
 /**
@@ -148,19 +147,18 @@ export const containerName = "std-bench-postgres";
 
 const adminLayer = (
   server: ServerConfig
-): Layer.Layer<PgClient | SqlClient, SqlError> =>
+): Layer.Layer<PgClient | SqlClient, DatabaseClientError> =>
   clientLayer(server, server.adminDatabase, { maxConnections: 1 });
 
-const ping: (server: ServerConfig) => Effect.Effect<void, SqlError> = Effect.fn(
-  "bench.ping"
-)(
-  function* pingServer(_server: ServerConfig) {
-    const sql = yield* PgClientService;
+const ping: (server: ServerConfig) => Effect.Effect<void, DatabaseClientError> =
+  Effect.fn("bench.ping")(
+    function* pingServer(_server: ServerConfig) {
+      const sql = yield* PgClientService;
 
-    yield* sql.unsafe("SELECT 1");
-  },
-  (effect, server) => effect.pipe(Effect.provide(adminLayer(server)))
-);
+      yield* sql.unsafe("SELECT 1");
+    },
+    (effect, server) => effect.pipe(Effect.provide(adminLayer(server)))
+  );
 
 const startContainer: (
   server: ServerConfig
@@ -197,13 +195,15 @@ const startContainer: (
  */
 export const ensureServer = (
   server: ServerConfig
-): Effect.Effect<void, BenchError> =>
+): Effect.Effect<void, BenchError | Config.ConfigError | DatabaseTlsError> =>
   ping(server).pipe(Effect.catchTag("SqlError", () => startContainer(server)));
 
 const adminStatement: (
   server: ServerConfig,
   text: string
-) => Effect.Effect<void, SqlError> = Effect.fn("bench.adminStatement")(
+) => Effect.Effect<void, DatabaseClientError> = Effect.fn(
+  "bench.adminStatement"
+)(
   function* runAdminStatement(_server: ServerConfig, text: string) {
     const sql = yield* PgClientService;
 
@@ -230,15 +230,15 @@ const databaseName = (name: string): string => {
 export const recreateDatabase: (
   server: ServerConfig,
   name: string
-) => Effect.Effect<void, SqlError> = Effect.fn("bench.recreateDatabase")(
-  function* recreate(server: ServerConfig, name: string) {
-    yield* adminStatement(
-      server,
-      `DROP DATABASE IF EXISTS ${databaseName(name)} WITH (FORCE)`
-    );
-    yield* adminStatement(server, `CREATE DATABASE ${databaseName(name)}`);
-  }
-);
+) => Effect.Effect<void, DatabaseClientError> = Effect.fn(
+  "bench.recreateDatabase"
+)(function* recreate(server: ServerConfig, name: string) {
+  yield* adminStatement(
+    server,
+    `DROP DATABASE IF EXISTS ${databaseName(name)} WITH (FORCE)`
+  );
+  yield* adminStatement(server, `CREATE DATABASE ${databaseName(name)}`);
+});
 
 /**
  * Drops a database.
@@ -250,7 +250,7 @@ export const recreateDatabase: (
 export const dropDatabase = (
   server: ServerConfig,
   name: string
-): Effect.Effect<void, SqlError> =>
+): Effect.Effect<void, DatabaseClientError> =>
   adminStatement(
     server,
     `DROP DATABASE IF EXISTS ${databaseName(name)} WITH (FORCE)`
@@ -268,7 +268,7 @@ const FoundRow = Schema.Struct({ found: Schema.Boolean });
 export const databaseExists: (
   server: ServerConfig,
   name: string
-) => Effect.Effect<boolean, SqlError | BenchError> = Effect.fn(
+) => Effect.Effect<boolean, DatabaseClientError | BenchError> = Effect.fn(
   "bench.databaseExists"
 )(
   function* findDatabase(_server: ServerConfig, name: string) {

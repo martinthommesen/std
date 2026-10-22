@@ -7,6 +7,9 @@ import type { ConnectionOptions } from "node:tls";
 import type { Types } from "effect";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
 
+/** Default local development and test database. */
+export const DEFAULT_DATABASE_URL = "postgres://std:std@127.0.0.1:54329/std";
+
 const BRACKETED_HOST = /^\[|\]$/gu;
 
 const VERIFY_FULL = "verify-full";
@@ -23,17 +26,39 @@ export type SslMode = typeof SslModeSchema.Type;
 
 /** A safe startup diagnostic: never contains a URL, key or driver error. */
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory
-export class DatabaseTlsError extends Schema.TaggedError<DatabaseTlsError>()(
-  "DatabaseTlsError",
-  { message: Schema.String }
-) {}
+export class DatabaseTlsError extends Schema.TaggedError<
+  DatabaseTlsError,
+  { readonly brand: unique symbol }
+>()("DatabaseTlsError", { message: Schema.String }) {}
 
 /** Host and mandatory TLS options, overriding the driver's URL SSL settings. */
 export interface DatabaseTransport {
   readonly host: string;
   readonly mode: SslMode;
-  readonly ssl: false | ConnectionOptions;
+  readonly ssl: false | DatabaseSslOptions;
 }
+
+/** TLS options retained in configuration; private keys stay redacted. */
+export interface DatabaseSslOptions extends Omit<ConnectionOptions, "key"> {
+  readonly key?: Redacted.Redacted;
+}
+
+/**
+ * Builds the driver's TLS options at the connection boundary.
+ * @param transport - Resolved transport with redacted private key material.
+ * @returns Driver options, or false for a plaintext connection.
+ */
+export const databaseSslOptions = (
+  transport: DatabaseTransport
+): false | ConnectionOptions => {
+  if (transport.ssl === false) {
+    return false;
+  }
+
+  const { key, ...options } = transport.ssl;
+
+  return key === undefined ? options : { ...options, key: Redacted.value(key) };
+};
 
 const loopback = (host: string): boolean => {
   if (host.startsWith("/") || host === "localhost" || host === "::1") {
@@ -107,7 +132,7 @@ export interface DatabaseTlsSettings {
   readonly mode?: SslMode;
   readonly ca?: string;
   readonly cert?: string;
-  readonly key?: string;
+  readonly key?: Redacted.Redacted;
   readonly systemRoots?: boolean;
   readonly allowInsecureRemote?: boolean;
 }
@@ -129,17 +154,12 @@ export const databaseTlsConfig = Config.all({
 /**
  * Loads TLS material once at the owning configuration layer boundary.
  * @param files - Decoded settings and file paths.
- * @returns Explicit transport inputs; private key contents remain internal.
+ * @returns Explicit transport inputs with private key contents wrapped in Redacted.
  */
 export const loadDatabaseTls = Effect.fn("DatabaseTls.load")(
-  function* loadDatabaseTls(files: {
-    readonly mode: Option.Option<SslMode>;
-    readonly caFile: Option.Option<string>;
-    readonly certFile: Option.Option<string>;
-    readonly keyFile: Option.Option<string>;
-    readonly systemRoots: boolean;
-    readonly allowInsecureRemote: boolean;
-  }): Effect.fn.Return<DatabaseTlsSettings, DatabaseTlsError> {
+  function* loadDatabaseTls(
+    files: Config.Success<typeof databaseTlsConfig>
+  ): Effect.fn.Return<DatabaseTlsSettings, DatabaseTlsError> {
     if (Option.isSome(files.certFile) !== Option.isSome(files.keyFile)) {
       return yield* new DatabaseTlsError({
         message:
@@ -165,7 +185,7 @@ export const loadDatabaseTls = Effect.fn("DatabaseTls.load")(
     }
 
     if (Option.isSome(files.keyFile)) {
-      settings.key = yield* readCertificate(files.keyFile.value);
+      settings.key = Redacted.make(yield* readCertificate(files.keyFile.value));
     }
 
     return settings;
@@ -208,7 +228,7 @@ const sslOptions = Effect.fn("DatabaseTls.sslOptions")(function* sslOptions(
     });
   }
 
-  const ssl: ConnectionOptions = {
+  const ssl: Types.Mutable<DatabaseSslOptions> = {
     checkServerIdentity:
       mode === VERIFY_FULL
         ? (_name, certificate) => checkServerIdentity(host, certificate)

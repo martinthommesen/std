@@ -1,6 +1,6 @@
 import { PgConnection } from "@effect/sql-pg";
 import { assert, describe, it } from "@effect/vitest";
-import { databaseTransport } from "@std/postgres/transport";
+import { databaseSslOptions, databaseTransport } from "@std/postgres/transport";
 import { Config, Effect, Redacted, Result, Schema } from "effect";
 
 const DriverFailure = Schema.Struct({ message: Schema.String });
@@ -11,9 +11,10 @@ describe("postgres-with-ssl-off", () => {
       const url = Redacted.make(yield* Config.String("STD_TLS_TEST_URL"));
       const transport = yield* databaseTransport(url, { mode: "require" });
 
-      const result = yield* PgConnection.make({ ssl: transport.ssl, url }).pipe(
-        Effect.result
-      );
+      const result = yield* PgConnection.make({
+        ssl: databaseSslOptions(transport),
+        url,
+      }).pipe(Effect.result);
 
       assert.isTrue(Result.isFailure(result));
 

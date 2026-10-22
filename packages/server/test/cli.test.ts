@@ -37,6 +37,26 @@ const decodePlan = Schema.decodeUnknownSync(PlanJson);
 const decodeDoctor = Schema.decodeUnknownSync(DoctorJson);
 
 describe("cli", () => {
+  it.effect("reports invalid TLS configuration as a startup failure", () =>
+    Effect.gen(function* invalidTlsStartup() {
+      const result = yield* runCli(
+        "postgres://std:disposable-secret@db.example/std",
+        ["doctor"],
+        {
+          STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE: "false",
+          STD_DATABASE_SSL_MODE: "disable",
+        }
+      );
+
+      assert.strictEqual(result.code, 1);
+      assert.include(
+        result.output,
+        "Refusing plaintext Postgres on a non-loopback host"
+      );
+      assert.notInclude(result.output, "disposable-secret");
+    })
+  );
+
   it("decodes the plan's JSON form", () => {
     assert.deepStrictEqual(
       decodePlan('{"hash": "h", "refusals": [], "sets": [{"name": "core"}]}'),

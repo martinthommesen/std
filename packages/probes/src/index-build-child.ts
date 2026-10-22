@@ -9,26 +9,15 @@
  * `STD_DATABASE_URL` naming the database.
  */
 import { NodeRuntime } from "@effect/platform-node";
-import { DatabaseConfig } from "@std/server/sql/database-config";
 import { makeDedicatedConnection } from "@std/server/sql/dedicated";
 import { SqlLayer } from "@std/server/sql/layer";
 import { SCHEMA_KEY } from "@std/server/sql/locks";
 import { Effect, Layer } from "effect";
 
+import { childDatabaseConfig } from "./index-build-config.ts";
 import { INDEX_BUILD_APPLICATION_NAME } from "./index-build-names.ts";
 
 const [statement] = process.argv.slice(2);
-
-/** One connection to the database the parent probe names, with startup TLS policy. */
-const childDatabaseConfig = Layer.effect(
-  DatabaseConfig,
-  DatabaseConfig.pipe(
-    Effect.map((settings) =>
-      DatabaseConfig.of({ ...settings, maxConnections: 1 })
-    ),
-    Effect.provide(DatabaseConfig.fromEnv(INDEX_BUILD_APPLICATION_NAME))
-  )
-);
 
 const services = SqlLayer.pipe(Layer.provideMerge(childDatabaseConfig));
 
