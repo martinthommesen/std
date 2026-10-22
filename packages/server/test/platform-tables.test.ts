@@ -316,8 +316,8 @@ describe("platform-tables", () => {
               "POST",
               listPath("core.access_rule"),
               { body: { description: "forged" } },
-              400,
-              "InvalidRequest",
+              422,
+              "ValidationFailed",
             ],
             [
               "PATCH",
@@ -360,17 +360,18 @@ describe("platform-tables", () => {
             });
 
             // Definition tables take the change-set path, where an empty
-            // body is no definition; every other platform table is refused.
+            // body is no definition: its required columns are missing
+            // (decision 0020); every other platform table is refused.
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
 
             assert.strictEqual(
               response.status,
-              definitionTable ? 400 : 403,
+              definitionTable ? 422 : 403,
               `POST ${table}`
             );
             assert.strictEqual(
               yield* tagOf(response),
-              definitionTable ? "InvalidRequest" : "NotAllowed"
+              definitionTable ? "ValidationFailed" : "NotAllowed"
             );
           }
 
