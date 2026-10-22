@@ -1,5 +1,5 @@
 /**
- * Migration 0011: record rules (plan Step 3, workstream 3A, Contracts
+ * Migration 0013: record rules (plan Step 3, workstream 3A, Contracts
  * 4.10, decision 0022).
  *
  * - `core.record_rule`: one config record per record rule (stable ID,
@@ -73,9 +73,9 @@ const liveUnique = (
 ): string =>
   `CREATE UNIQUE INDEX ${name} ON core."${table}" (${columns}) WHERE state <> 'purged'`;
 
-/** Migration 0011. Never edit it: the ledger records its checksum. */
-export const migration0011: TxMigration = {
-  id: 11,
+/** Migration 0013. Never edit it: the ledger records its checksum. */
+export const migration0013: TxMigration = {
+  id: 13,
   kind: "tx",
   name: "record-rules",
   statements: [

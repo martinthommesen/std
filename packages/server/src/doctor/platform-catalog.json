@@ -7044,6 +7044,18 @@
         "name": "applied_at",
         "notNull": true,
         "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": "'applied'::text",
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "progress",
+        "notNull": false,
+        "type": "jsonb"
       }
     ],
     "constraints": [
@@ -7109,6 +7121,32 @@
         "referencedColumns": [],
         "references": null,
         "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = ANY (ARRAY['running'::text, 'applied'::text])))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "platform_migration_state",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "platform_migration_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
         "updateAction": " ",
         "validated": true
       },

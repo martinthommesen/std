@@ -844,6 +844,15 @@ export const deleteDefinition = (work: Work, operation: Op<"delete">): void => {
     return;
   }
 
+  // The guard first (Contracts 1.8): a protected override is refused as
+  // protected, like every other protected definition.
+  if (
+    current.kind === "override" &&
+    guardChange(work, current, "delete") === undefined
+  ) {
+    return;
+  }
+
   if (current.kind === "override" || current.state === "purged") {
     unsupported(
       work,

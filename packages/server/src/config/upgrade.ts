@@ -17,10 +17,14 @@
  * 5. `--plan` stops here and changes nothing. The real run refuses when the
  *    plan has refusals, or when `--expect <hash>` differs from the plan's
  *    hash (the database changed since the reviewed plan).
- * 6. Run platform migrations, resume interrupted change sets, then load
- *    each set as one change set. Before each set the run plans it again
- *    against the database and stops if its diff differs from the plan; its
- *    main transaction also stops if another config commit came first.
+ * 6. Run `tx` and `concurrent_index` platform migrations, resume
+ *    interrupted change sets, then load each set as one change set. Before
+ *    each set the run plans it again against the database and stops if its
+ *    diff differs from the plan; its main transaction also stops if another
+ *    config commit came first.
+ * 7. Run the `data` migrations that are pending or `running`
+ *    (`platform/data-migrations.ts`): they change records of the classes
+ *    the sets just loaded.
  *
  * Every step commits on its own, so after a failure a rerun continues from
  * the last committed migration or change set: committed sets plan nothing.
@@ -41,9 +45,21 @@ import { Effect } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
+import {
+  dataBatchSize,
+  runDataMigrations,
+} from "../platform/data-migrations.ts";
+import type {
+  DataBatchSizeInvalid,
+  DataMigrationOutcome,
+  DataMigrationServices,
+} from "../platform/data-migrations.ts";
 import { compareLedger, readLedger, refusalOf } from "../platform/ledger.ts";
 import type { MigrationStateRefused } from "../platform/ledger.ts";
-import type { PlatformMigration } from "../platform/migration.ts";
+import type {
+  DataMigrationFailed,
+  PlatformMigration,
+} from "../platform/migration.ts";
 import { PLATFORM_MIGRATIONS } from "../platform/migrations.ts";
 import {
   applyPendingMigrations,
@@ -96,13 +112,17 @@ export interface UpgradeOptions extends ChangeSetOptions {
   readonly expectedPlanHash?: string;
   /** Lifecycle operations of the schema engine (default: `SCHEMA_LIFECYCLE`). */
   readonly lifecycle?: LifecycleOperations;
+  /** Records per `data` migration batch (default `DATA_BATCH_SIZE`). */
+  readonly dataBatchSize?: number;
 }
 
-/** A pending platform migration. */
+/** A platform migration the upgrade runs. */
 export interface PlannedMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: PlatformMigration["kind"];
+  /** `pending`, or `running`: a `data` migration an earlier run left incomplete. */
+  readonly state: "pending" | "running";
 }
 
 /** A security change and the set making it. */
@@ -147,6 +167,8 @@ export interface UpgradeReport {
   readonly migrations: readonly MigrationOutcome[];
   readonly resumed: readonly ResumedChangeSet[];
   readonly sets: readonly UpgradedSet[];
+  /** The `data` migrations this run applied or completed. */
+  readonly dataMigrations: readonly DataMigrationOutcome[];
 }
 
 /** Errors of `std upgrade --plan`. */
@@ -161,6 +183,8 @@ type PlanServices = ChangeSetServices | Scope.Scope;
 
 /** Errors of `std upgrade`. */
 export type UpgradeError =
+  | DataBatchSizeInvalid
+  | DataMigrationFailed
   | UpgradeIncomplete
   | UpgradeRefused
   | MigrationStateRefused
@@ -376,11 +400,22 @@ const pendingMigrations = Effect.fn("Config.pendingMigrations")(
       return yield* refusal;
     }
 
-    return comparison.pending.map((migration) => ({
-      id: migration.id,
-      kind: migration.kind,
-      name: migration.name,
-    }));
+    const planned: PlannedMigration[] = [
+      ...comparison.pending.map((migration) => ({
+        id: migration.id,
+        kind: migration.kind,
+        name: migration.name,
+        state: "pending" as const,
+      })),
+      ...comparison.incomplete.map(({ migration }) => ({
+        id: migration.id,
+        kind: migration.kind,
+        name: migration.name,
+        state: "running" as const,
+      })),
+    ];
+
+    return planned.toSorted((left, right) => left.id - right.id);
   }
 );
 
@@ -644,17 +679,22 @@ const applySets = Effect.fn("Config.applySets")(function* applySets(
  */
 export const runUpgrade: (
   options?: UpgradeOptions
-) => Effect.Effect<UpgradeReport, UpgradeError, ChangeSetServices> = Effect.fn(
-  "Config.runUpgrade"
-)(
+) => Effect.Effect<
+  UpgradeReport,
+  UpgradeError,
+  ChangeSetServices | DataMigrationServices
+> = Effect.fn("Config.runUpgrade")(
   function* runUpgrade(
     options: UpgradeOptions = {}
   ): Effect.fn.Return<
     UpgradeReport,
     UpgradeError,
-    ChangeSetServices | Scope.Scope
+    ChangeSetServices | DataMigrationServices | Scope.Scope
   > {
     const pool = yield* SqlClient.SqlClient;
+
+    // Before anything runs: a bad batch size must not leave a half-run upgrade.
+    const batchSize = yield* dataBatchSize(options.dataBatchSize);
 
     yield* checkUpgradePreconditions(pool);
     const connection = yield* openUpgradeConnection;
@@ -697,7 +737,12 @@ export const runUpgrade: (
 
     const sets = yield* applySets(connection, computed, options);
 
-    return { migrations, plan, resumed, sets };
+    const dataMigrations = yield* runDataMigrations({
+      batchSize,
+      migrations: options.migrations ?? PLATFORM_MIGRATIONS,
+    });
+
+    return { dataMigrations, migrations, plan, resumed, sets };
   },
   (effect) => Effect.scoped(effect)
 );
