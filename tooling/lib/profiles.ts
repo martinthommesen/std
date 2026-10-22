@@ -40,7 +40,9 @@ export const allowedUnstableApis: Readonly<
   api: httpApiEntries,
   plain: [],
   server: serverEntries,
-  web: httpApiEntries,
+  // Foldkit's runtime and its browser services (key-value storage, crypto)
+  // come from @effect/platform-browser (docs/decisions/0001-effect.md).
+  web: [...httpApiEntries, "@effect/platform-browser"],
 };
 
 /**

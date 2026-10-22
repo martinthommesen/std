@@ -24,9 +24,8 @@ export interface VendoredSource {
   /** The repository named by the package's npm metadata (without `.git`). */
   readonly repository: string;
   /**
-   * Whether the lockfile must resolve the package. Effect is installed from
-   * the start; Foldkit arrives with the web app, and until then the vendored
-   * tag stands alone.
+   * Whether the lockfile must resolve the package. Both are installed now:
+   * Effect from the start, Foldkit with the web app (`apps/web`).
    */
   readonly requiredInLockfile: boolean;
 }
@@ -50,7 +49,7 @@ export const foldkitSource: VendoredSource = {
   prefix: "repos/foldkit",
   recordPath: "repos/foldkit-version.json",
   repository: "https://github.com/foldkit/foldkit",
-  requiredInLockfile: false,
+  requiredInLockfile: true,
 };
 
 /** Every vendored source, in the order the checks report them. */

@@ -23,4 +23,8 @@ WORKDIR /std
 COPY . .
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
+# The web app (apps/web), built into apps/web/dist, which `std serve` serves
+# at / by default (STD_WEB_ROOT; decision 0018). Open http://localhost:8080.
+RUN pnpm --filter @std/web build
+
 CMD ["pnpm", "--silent", "std", "serve"]

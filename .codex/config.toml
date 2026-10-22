@@ -1,0 +1,7 @@
+# Codex project config. Foldkit DevTools MCP for the web app (apps/web),
+# run through pnpm so the pinned Node and the locked package are used. It
+# finds the running Vite dev server through the default per-user relay
+# registry; never set a fixed devToolsMcpPort (AGENTS.md, "Frontend: Foldkit").
+[mcp_servers.foldkit-devtools]
+command = "pnpm"
+args = ["--silent", "--dir", "apps/web", "exec", "foldkit-devtools-mcp"]

@@ -1,0 +1,130 @@
+import {
+  Command,
+  expect,
+  expectOutMessage,
+  given,
+  label,
+  role,
+  scene,
+  submit,
+  text,
+  type,
+  within,
+} from "foldkit/scene";
+import { describe, it } from "vitest";
+
+import { ada } from "../../fixture.ts";
+import {
+  FocusField,
+  Message,
+  OutMessage,
+  RequestSession,
+  init,
+  update,
+  view,
+} from "./sign-in.ts";
+
+const heading = role("heading", { name: "Sign in to STD" });
+
+const form = role("form", { name: "Sign in to STD" });
+
+const loginField = label("Login");
+
+const passwordField = label("Password");
+
+const signInButton = role("button", { name: "Sign in" });
+
+const signingInButton = role("button", { name: "Signing in…" });
+
+describe("sign-in", () => {
+  it("shows a labelled form with the login focused first", () => {
+    scene(
+      { update, view },
+      given(init()),
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
+      expect(heading).toExist(),
+      expect(form).toExist(),
+      expect(loginField).toHaveAttr("autocomplete", "username"),
+      expect(loginField).toHaveAttr("autofocus"),
+      expect(passwordField).toHaveAttr("type", "password"),
+      expect(passwordField).toHaveAttr("autocomplete", "current-password"),
+      expect(signInButton).toBeEnabled()
+    );
+  });
+
+  it("an empty submission explains each missing field", () => {
+    scene(
+      { update, view },
+      given(init()),
+      submit(form),
+      expect(loginField).toHaveAttr("aria-invalid", "true"),
+      expect(loginField).toHaveAccessibleDescription("Enter your login."),
+      expect(passwordField).toHaveAccessibleDescription("Enter your password."),
+      Command.resolve(FocusField, Message.CompletedFocusField())
+    );
+  });
+
+  it("the password never reaches the DOM's value attribute", () => {
+    scene(
+      { update, view },
+      given(init()),
+      type(passwordField, "s3cret-value"),
+      expect(passwordField).not.toHaveAttr("value"),
+      expect(text("s3cret-value")).not.toExist()
+    );
+  });
+
+  it("signing in shows progress, then reports the user", () => {
+    scene(
+      { update, view },
+      given(init()),
+      type(loginField, "ada"),
+      type(passwordField, "ada-password"),
+      submit(form),
+      expect(signingInButton).toBeDisabled(),
+      expect(form).toHaveAttr("aria-busy", "true"),
+      Command.expectExact(RequestSession),
+      Command.resolve(
+        RequestSession,
+        Message.SucceededRequestSession({ user: ada })
+      ),
+      expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
+    );
+  });
+
+  it("refused credentials are announced in the form", () => {
+    scene(
+      { update, view },
+      given(init()),
+      type(loginField, "ada"),
+      type(passwordField, "wrong"),
+      submit(form),
+      Command.resolve(
+        RequestSession,
+        Message.FailedRequestSession({ error: "InvalidCredentials" })
+      ),
+      expect(within(form, role("alert"))).toHaveText(
+        "The login or password is not correct."
+      ),
+      expect(signInButton).toBeEnabled(),
+      expect(loginField).toHaveValue("ada")
+    );
+  });
+
+  it("an unreachable server is announced too", () => {
+    scene(
+      { update, view },
+      given(init()),
+      type(loginField, "ada"),
+      type(passwordField, "ada-password"),
+      submit(form),
+      Command.resolve(
+        RequestSession,
+        Message.FailedRequestSession({ error: "Unavailable" })
+      ),
+      expect(role("alert")).toHaveText(
+        "STD could not be reached. Try again in a moment."
+      )
+    );
+  });
+});

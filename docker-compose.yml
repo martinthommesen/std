@@ -51,7 +51,10 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # `std serve`: the HTTP API on 127.0.0.1:${STD_HTTP_PORT:-8080}.
+  # `std serve`: the web app at http://localhost:${STD_HTTP_PORT:-8080}/ and
+  # the HTTP API under /api/v1. The image builds the app (apps/web/dist, the
+  # default STD_WEB_ROOT). Over plain HTTP on localhost the session cookie
+  # leaves out Secure (STD_SESSION_COOKIE_SECURE=auto; decision 0018).
   server:
     build:
       context: .

@@ -12,12 +12,33 @@ catalog:
   "@effect/platform-node": 4.0.5
   "@effect/opentelemetry": 4.0.5
   "@effect/vitest": 4.0.5
+  "@effect/platform-browser": 4.0.5
   "@effect/tsgo": 0.54.1
   typescript: 7.0.2
   vitest: 5.0.5
   fast-check: 4.10.2
   oxc-parser: 0.148.0
   "@types/node": 26.6.5
+
+# Foldkit 0.169.0 pins Effect 4.0.0 exactly: as a peer of foldkit, @foldkit/ui,
+# @foldkit/devtools and @foldkit/devtools-mcp, and as hard dependencies of
+# @foldkit/vite-plugin. STD keeps one Effect, 4.0.5: these rules accept 4.0.5
+# for those peers and resolve the vite plugin's Node packages to 4.0.5. Drop
+# both once Foldkit releases on Effect 4.0.5 or later
+# (docs/decisions/0018-web-foundation.md).
+peerDependencyRules:
+  allowedVersions:
+    "foldkit>effect": 4.0.5
+    "foldkit>@effect/platform-browser": 4.0.5
+    "@foldkit/ui>effect": 4.0.5
+    "@foldkit/devtools>effect": 4.0.5
+    "@foldkit/devtools>@effect/platform-browser": 4.0.5
+    "@foldkit/devtools-mcp>effect": 4.0.5
+    "@foldkit/vite-plugin>effect": 4.0.5
+
+overrides:
+  "@foldkit/vite-plugin>@effect/platform-node": 4.0.5
+  "@foldkit/vite-plugin>@effect/platform-node-shared": 4.0.5
 
 allowBuilds:
   lefthook: true
@@ -31,3 +52,10 @@ minimumReleaseAgeExclude:
   - "@effect/tsgo-win32-arm64@0.54.1"
   - "@effect/tsgo-win32-x64@0.54.1"
   - "@effect/tsgo@0.54.1"
+
+# Effect 4.0.1 turned Crypto.randomUUIDv4 into a function; the vite plugin,
+# built on 4.0.0, reads it as an Effect, so its DevTools MCP relay died at
+# start under 4.0.5. The patch adds the call (docs/decisions/0018-web-foundation.md).
+# Drop it with the Effect rules above.
+patchedDependencies:
+  "@foldkit/vite-plugin@0.28.0": patches/@foldkit__vite-plugin@0.28.0.patch
