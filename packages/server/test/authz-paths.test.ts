@@ -1168,6 +1168,107 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
   },
 ];
 
+const byName = (left: JsonValue, right: JsonValue): number => {
+  const a = textOf(objectOf(left).name);
+  const b = textOf(objectOf(right).name);
+
+  if (a === b) {
+    return 0;
+  }
+
+  return a < b ? -1 : 1;
+};
+
+/**
+ * One caller's table list against the metadata of every candidate table:
+ * the list holds exactly the tables whose metadata answers 200, with that
+ * metadata's name, label and `creatable`; every other table is
+ * `UnknownTable`. Every related list of those tables accepts the filter
+ * the web app lists related records with.
+ *
+ * @param callers - The callers.
+ * @param who - The caller.
+ * @param candidates - Every table name, hidden ones included.
+ */
+const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
+  function* checkTableList(
+    callers: Callers,
+    who: Who,
+    candidates: readonly string[]
+  ) {
+    const where = `${callers.transport} ${who}`;
+    const listed = yield* send(callers, who, "GET", "/api/v1/meta/tables");
+
+    assert.strictEqual(listed.status, 200, where);
+
+    const opened: JsonValue[] = [];
+    const related: { table: string; field: string }[] = [];
+
+    for (const name of candidates) {
+      const meta = yield* send(
+        callers,
+        who,
+        "GET",
+        `/api/v1/meta/tables/${name}`
+      );
+
+      const table = objectOf(objectOf(meta.json).table);
+
+      if (meta.status === 200) {
+        opened.push({
+          creatable: table.creatable ?? null,
+          label: table.label ?? null,
+          name: table.name ?? null,
+        });
+        related.push(
+          ...arrayOf(table.relatedLists).map((entry) => ({
+            field: textOf(objectOf(entry).field),
+            table: textOf(objectOf(entry).table),
+          }))
+        );
+      } else {
+        assert.deepStrictEqual(
+          observe(meta),
+          refused(404, "UnknownTable"),
+          `${where}: ${name}`
+        );
+      }
+    }
+
+    const { tables } = objectOf(listed.json);
+
+    assert.deepStrictEqual(tables, opened.toSorted(byName), where);
+
+    const names = arrayOf(tables).map((entry) => textOf(objectOf(entry).name));
+
+    assert.include(names, ASSET, where);
+
+    if (who !== "admin") {
+      assert.notInclude(names, "core.access_rule", where);
+      assert.notInclude(names, "core.change", where);
+    }
+
+    assert.isAbove(related.length, 0, where);
+
+    // The web app lists related records with this filter; every related
+    // list the caller is shown must accept it.
+    for (const entry of related) {
+      const page = yield* send(
+        callers,
+        who,
+        "GET",
+        listPath(entry.table, { filter: `${entry.field} = "${randomUUID()}"` })
+      );
+
+      assert.strictEqual(
+        page.status,
+        200,
+        `${where}: ${entry.table}.${entry.field} ${page.text}`
+      );
+    }
+  }
+);
+
 describe("authz-paths", () => {
   it("covers every Contracts 3.3 caller on every row", () => {
     for (const row of [...READ_ROWS, ...WRITE_ROWS]) {
@@ -1232,6 +1333,42 @@ describe("authz-paths", () => {
                 refused(404, "UnknownTable"),
                 `${transport} ${who}`
               );
+            }
+
+            assert.deepStrictEqual(yield* committedState, before, transport);
+          }
+        })
+    );
+
+    dbTest.effect(
+      "the table list holds exactly the tables whose metadata each caller gets, and every related list filters, by bearer token and by session cookie",
+      () =>
+        Effect.gen(function* tableListPaths() {
+          const http = yield* TestHttpClient;
+          const snapshot = yield* (yield* Catalog).refresh;
+
+          // Every table name the database has, hidden and platform ones
+          // included, and one that does not exist.
+          const candidates = [
+            ...snapshot.all("class").flatMap((entry) => {
+              const name = snapshot.qualifiedNameOf(entry.id);
+
+              return name === undefined ? [] : [name];
+            }),
+            "acme.nosuch",
+          ];
+
+          assert.strictEqual(
+            (yield* http.get("/api/v1/meta/tables")).status,
+            401
+          );
+
+          for (const transport of TRANSPORTS) {
+            const callers = yield* signInAllBy(transport);
+            const before = yield* committedState;
+
+            for (const who of ["alice", "bob", "admin"] as const) {
+              yield* checkTableList(callers, who, candidates);
             }
 
             assert.deepStrictEqual(yield* committedState, before, transport);

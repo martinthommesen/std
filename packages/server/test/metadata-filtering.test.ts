@@ -29,6 +29,7 @@ import { committedState } from "./committed-state.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import {
   ACME,
+  addAccessRule,
   addField,
   change,
   createClass,
@@ -36,6 +37,7 @@ import {
 } from "./schema-support.ts";
 
 const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
+const ASSET_MANAGER = "081e3ce8-26a8-43a2-bc58-838d40b4c22d";
 const local = { owner: { layer: "local" }, protected: false } as const;
 
 const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
@@ -269,6 +271,31 @@ describe("metadata filtering", () => {
             target: "site.vault",
           });
 
+          // Related lists: references that can point at assets, on tables
+          // the caller can open and where it can read them.
+          const docked = {
+            field: "docked_to",
+            fieldLabel: fieldOf(bob.table, "docked_to").label,
+            label: "Asset",
+            table: "acme.asset",
+          };
+
+          assert.deepStrictEqual(bob.table.relatedLists, [docked]);
+          assert.deepStrictEqual(alice.table.relatedLists, [docked]);
+          assert.deepStrictEqual(admin.table.relatedLists, [docked]);
+
+          const adminVault = (yield* metadataOf(tokens.admin, "site.vault"))
+            .body;
+
+          assert.deepStrictEqual(adminVault.table.relatedLists, [
+            {
+              field: "vault",
+              fieldLabel: "vault",
+              label: "Asset",
+              table: "acme.asset",
+            },
+          ]);
+
           // Layouts keep only fields the caller can read.
           assert.deepStrictEqual(bob.table.layouts.form, [
             { kind: "section", label: "Main" },
@@ -299,6 +326,9 @@ describe("metadata filtering", () => {
               "serial",
             ].toSorted()
           );
+          // A laptop is an asset, so `docked_to` can point at one; the
+          // field is listed once, on the most general table.
+          assert.deepStrictEqual(bobLaptop.table.relatedLists, [docked]);
           assert.include(names(aliceLaptop.table), "color");
           assert.include(names(aliceLaptop.table), "disk_key");
           assert.deepStrictEqual(fieldOf(aliceLaptop.table, "color").choices, [
@@ -394,14 +424,23 @@ describe("metadata filtering", () => {
           const { tokens } = yield* signInAll;
           const catalog = yield* Catalog;
 
+          const http = yield* TestHttpClient;
+
           const read = Effect.gen(function* readBob() {
             const asset = yield* metadataOf(tokens.bob, "acme.asset");
             const laptop = yield* metadataOf(tokens.bob, "acme.laptop");
+
+            const tables = yield* http.get("/api/v1/meta/tables", {
+              token: tokens.bob,
+            });
+
+            assert.strictEqual(tables.status, 200, tables.text);
 
             return {
               asset: tableText(asset.response),
               laptop: tableText(laptop.response),
               revision: asset.body.schemaRevision,
+              tables: tableText(tables),
             };
           });
 
@@ -458,11 +497,73 @@ describe("metadata filtering", () => {
             choice(color.id, "black", 2),
           ]);
 
+          // A hidden table gains a reference to assets, a new hidden table
+          // has one too, and the hidden table is relabeled and renamed;
+          // Alice (not Bob) may now open the first one.
+          const assetRef = addField(vaultClass.id, "asset_ref", {
+            kind: "reference",
+            targetClassId: ACME.asset,
+          });
+
+          const depot = createClass("depot");
+
+          const depotRef = addField(depot.id, "stored", {
+            kind: "reference",
+            targetClassId: ACME.asset,
+          });
+
+          yield* change([assetRef.op, depot.op, depotRef.op]);
+
+          const vaultNow = (yield* catalog.refresh).class(vaultClass.id);
+
+          yield* change([
+            addAccessRule(vaultClass.id, [ASSET_MANAGER]).op,
+            addAccessRule(vaultClass.id, [ASSET_MANAGER], {
+              fields: [assetRef.id],
+            }).op,
+            {
+              changes: { label: "Strong room" },
+              id: vaultClass.id,
+              op: "update",
+              version: vaultNow?.version ?? 0,
+            },
+          ]);
+          yield* change([
+            {
+              id: vaultClass.id,
+              name: "strongroom",
+              op: "rename",
+              version: (vaultNow?.version ?? 0) + 1,
+            },
+          ]);
+
           const after = yield* read;
 
           assert.isAbove(after.revision, before.revision);
           assert.strictEqual(after.asset, before.asset);
           assert.strictEqual(after.laptop, before.laptop);
+          assert.strictEqual(after.tables, before.tables);
+
+          // Alice can open the renamed table and sees its reference.
+          const aliceAsset = (yield* metadataOf(tokens.alice, "acme.asset"))
+            .body;
+
+          assert.deepStrictEqual(
+            aliceAsset.table.relatedLists.map(
+              (entry) => `${entry.table}.${entry.field}:${entry.label}`
+            ),
+            [
+              "acme.asset.docked_to:Asset",
+              "site.strongroom.asset_ref:Strong room",
+            ]
+          );
+
+          const aliceTables = yield* http.get("/api/v1/meta/tables", {
+            token: tokens.alice,
+          });
+
+          assert.include(aliceTables.text, '"name":"site.strongroom"');
+          assert.notInclude(aliceTables.text, "site.depot");
 
           // A visible change does show: the control.
           const grade = (yield* catalog.refresh)

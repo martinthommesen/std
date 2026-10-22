@@ -168,6 +168,28 @@ export const MetaTableRefSchema = Struct({
   name: SchemaString,
 });
 
+/**
+ * A related list of the table (decision 0020): the records of `table`
+ * whose reference field `field` points at a record of this table. The web
+ * app lists them with `GET /tables/{table}/records?filter=<field> = "<id>"`.
+ * Only tables the caller can open and active reference fields it can read
+ * there appear; an inherited field appears once, on the most general table
+ * that has it and that the caller can open.
+ */
+export const MetaRelatedListSchema = Struct({
+  /** The reference field's name on `table`. */
+  field: SchemaString,
+  /** The reference field's label on `table`, as `table`'s metadata shows it. */
+  fieldLabel: SchemaString,
+  /** The listed table's label. */
+  label: SchemaString,
+  /** The listed table's qualified name. */
+  table: SchemaString,
+});
+
+/** One related list. */
+export type MetaRelatedList = typeof MetaRelatedListSchema.Type;
+
 /** The description of one table for the caller. */
 export const MetaTableSchema = Struct({
   /** The ancestors, root first. */
@@ -189,6 +211,8 @@ export const MetaTableSchema = Struct({
   }),
   /** The qualified name, `namespace.table`. */
   name: SchemaString,
+  /** The related lists, by table name, then field name. */
+  relatedLists: SchemaArray(MetaRelatedListSchema),
 });
 
 /** The description of one table. */
@@ -202,3 +226,26 @@ export const TableMetadataSchema = Struct({
 
 /** The metadata response. */
 export type TableMetadata = typeof TableMetadataSchema.Type;
+
+/**
+ * One table the caller can open: exactly the tables whose metadata the
+ * caller gets (not `UnknownTable`), with that metadata's `name`, `label`
+ * and `creatable`.
+ */
+export const MetaTableSummarySchema = Struct({
+  creatable: SchemaBoolean,
+  label: SchemaString,
+  name: SchemaString,
+});
+
+/** One table of the list. */
+export type MetaTableSummary = typeof MetaTableSummarySchema.Type;
+
+/** `GET /api/v1/meta/tables`: the tables the caller can open, by name. */
+export const TableListSchema = Struct({
+  schemaRevision: Int,
+  tables: SchemaArray(MetaTableSummarySchema),
+});
+
+/** The table list response. */
+export type TableList = typeof TableListSchema.Type;

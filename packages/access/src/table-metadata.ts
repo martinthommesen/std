@@ -33,10 +33,12 @@ import type {
 import {
   effectiveChoices,
   effectiveClass,
+  effectiveField,
   effectiveFields,
   effectiveLayout,
 } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
+import { compareIds } from "@std/definitions/ids";
 import type { DefinitionId } from "@std/definitions/ids";
 import { fieldRulesOf } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -45,7 +47,9 @@ import type {
   MetaField,
   MetaFieldType,
   MetaLayoutElement,
+  MetaRelatedList,
   MetaTable,
+  MetaTableSummary,
 } from "@std/definitions/table-metadata";
 import type { FieldType } from "@std/values/field-type";
 
@@ -53,7 +57,7 @@ import type { Decision } from "./decision.ts";
 import { fieldDecision, knowsTable, recordDecision } from "./rules.ts";
 import type { Caller, FieldAction } from "./rules.ts";
 import { visibleSchema } from "./visible-schema.ts";
-import type { VisibleField } from "./visible-schema.ts";
+import type { VisibleField, VisibleSchema } from "./visible-schema.ts";
 
 /** A field's write states, before or after a limit. */
 export interface WriteStates {
@@ -177,7 +181,19 @@ const knownName = (
     : null;
 };
 
-const metaTypeOf = (
+/**
+ * A field type as metadata shows it to a caller: a reference names its
+ * target, and a condition field its class, by qualified name only when the
+ * caller knows that table (otherwise null); a reference's allowed-records
+ * condition is left out, since it may read fields the caller cannot read
+ * (decision 0020).
+ *
+ * @param snapshot - The configuration.
+ * @param caller - The caller's roles.
+ * @param type - The field type with its settings.
+ * @returns The type for metadata.
+ */
+export const metaTypeOf = (
   snapshot: ConfigSnapshot,
   caller: Caller,
   type: FieldType
@@ -302,6 +318,140 @@ const layoutOf = (
 };
 
 /**
+ * What the table list and the metadata of one table share: the name the
+ * caller knows the table by, its label and whether the caller may create
+ * records of exactly this table. One function for both, so the list holds a
+ * table exactly when its metadata is served, with the same values.
+ *
+ * @param snapshot - The configuration.
+ * @param caller - The caller's roles.
+ * @param classId - A class.
+ * @param limits - What the server's write paths allow at all.
+ * @returns The summary, or undefined when the caller does not know the
+ *   table (its metadata is `UnknownTable`).
+ */
+const summaryOf = (
+  snapshot: ConfigSnapshot,
+  caller: Caller,
+  classId: DefinitionId,
+  limits: WriteLimits
+): MetaTableSummary | undefined => {
+  const definition = snapshot.class(classId);
+  const name = knownName(snapshot, caller, classId);
+
+  if (definition === undefined || name === null) {
+    return undefined;
+  }
+
+  const acceptsWrites =
+    effectiveClass(snapshot, classId)?.acceptsWrites ?? false;
+
+  const creatable =
+    acceptsWrites &&
+    limits.creatable(classId) &&
+    recordDecision(snapshot, caller, "create", classId).kind !== "never";
+
+  return { creatable, label: definition.label, name };
+};
+
+/**
+ * The tables a caller can open (`GET /api/v1/meta/tables`): every table
+ * whose metadata the caller gets, with that metadata's name, label and
+ * `creatable`, sorted by name. A table the caller does not know is left
+ * out, so the list is the same whatever hidden tables exist.
+ *
+ * @param snapshot - The configuration at the request's revision.
+ * @param caller - The caller's roles.
+ * @param limits - What the server's write paths allow at all.
+ * @returns The tables.
+ */
+export const tableList = (
+  snapshot: ConfigSnapshot,
+  caller: Caller,
+  limits: WriteLimits = NO_WRITE_LIMITS
+): readonly MetaTableSummary[] =>
+  snapshot
+    .all("class")
+    .flatMap((definition) => {
+      const summary = summaryOf(snapshot, caller, definition.id, limits);
+
+      return summary === undefined ? [] : [summary];
+    })
+    .toSorted((left, right) => compareIds(left.name, right.name));
+
+/**
+ * The related lists of endpoint E (decision 0020): per active reference
+ * field whose target is E or one of its ancestors (so it can point at E's
+ * records), the tables having it that the caller can open and where the
+ * caller can read it. A field is listed once per most general such table:
+ * a table is left out when one of its ancestors that also has the field
+ * qualifies, since that ancestor's endpoint lists its records too.
+ *
+ * @param snapshot - The configuration.
+ * @param caller - The caller's roles.
+ * @param classId - The endpoint's class E.
+ * @returns The related lists, by table name, then field name.
+ */
+const relatedListsOf = (
+  snapshot: ConfigSnapshot,
+  caller: Caller,
+  classId: DefinitionId
+): MetaRelatedList[] => {
+  const targets = new Set(snapshot.lineage(classId).map((level) => level.id));
+  const schemas = new Map<DefinitionId, VisibleSchema>();
+
+  const readableAt = (tableId: DefinitionId, fieldId: DefinitionId) => {
+    let schema = schemas.get(tableId);
+
+    if (schema === undefined) {
+      schema = visibleSchema(snapshot, caller, tableId);
+      schemas.set(tableId, schema);
+    }
+
+    return schema.byId(fieldId) !== undefined;
+  };
+
+  const lists: MetaRelatedList[] = [];
+
+  for (const field of snapshot.all("field")) {
+    if (
+      field.state === "active" &&
+      field.type.kind === "reference" &&
+      targets.has(field.type.targetClassId)
+    ) {
+      const qualifies = (tableId: DefinitionId) =>
+        knownName(snapshot, caller, tableId) !== null &&
+        readableAt(tableId, field.id);
+
+      for (const table of snapshot.subtree(field.classId)) {
+        const lineage = snapshot.lineage(table.id);
+        const from = lineage.findIndex((level) => level.id === field.classId);
+        const above = lineage.slice(from, -1);
+        const name = knownName(snapshot, caller, table.id);
+
+        if (
+          name !== null &&
+          qualifies(table.id) &&
+          !above.some((level) => qualifies(level.id))
+        ) {
+          lists.push({
+            field: field.name,
+            fieldLabel: effectiveField(snapshot, table.id, field).label,
+            label: table.label,
+            table: name,
+          });
+        }
+      }
+    }
+  }
+
+  return lists.toSorted(
+    (left, right) =>
+      compareIds(left.table, right.table) || compareIds(left.field, right.field)
+  );
+};
+
+/**
  * The metadata of an endpoint table for a caller.
  *
  * @param snapshot - The configuration at the request's revision.
@@ -318,19 +468,16 @@ export const tableMetadata = (
   limits: WriteLimits = NO_WRITE_LIMITS
 ): MetaTable | undefined => {
   const definition = snapshot.class(classId);
-  const name = knownName(snapshot, caller, classId);
+  const summary = summaryOf(snapshot, caller, classId, limits);
 
-  if (definition === undefined || name === null) {
+  if (definition === undefined || summary === undefined) {
     return undefined;
   }
 
   const view = visibleSchema(snapshot, caller, classId);
 
-  const acceptsWrites =
-    effectiveClass(snapshot, classId)?.acceptsWrites ?? false;
-
   const context: FieldContext = {
-    acceptsWrites,
+    acceptsWrites: effectiveClass(snapshot, classId)?.acceptsWrites ?? false,
     caller,
     classId,
     limits,
@@ -355,18 +502,13 @@ export const tableMetadata = (
     .toReversed()
     .find((level) => level.displayFieldId !== null)?.displayFieldId;
 
-  const creatable =
-    acceptsWrites &&
-    limits.creatable(classId) &&
-    recordDecision(snapshot, caller, "create", classId).kind !== "never";
-
   return {
     ancestors: snapshot.ancestors(classId).map((ancestor) => ({
       id: ancestor.id,
       label: ancestor.label,
       name: snapshot.qualifiedNameOf(ancestor.id) ?? ancestor.name,
     })),
-    creatable,
+    creatable: summary.creatable,
     displayField:
       displayFieldId === undefined || displayFieldId === null
         ? null
@@ -375,11 +517,12 @@ export const tableMetadata = (
     formRules: [],
     helpText: definition.helpText,
     id: definition.id,
-    label: definition.label,
+    label: summary.label,
     layouts: {
       form: layoutOf(snapshot, classId, "form", byId),
       list: layoutOf(snapshot, classId, "list", byId),
     },
-    name,
+    name: summary.name,
+    relatedLists: relatedListsOf(snapshot, caller, classId),
   };
 };

@@ -67,6 +67,7 @@ const PATHS = [
   "openapi",
   "metadata",
   "metadata openapi",
+  "metadata tables",
   "change-set apply",
   "change-set read",
   "definition create",
@@ -289,6 +290,8 @@ const take = (
           headers,
           ...as(token),
         }),
+      "metadata tables": () =>
+        http.get("/api/v1/meta/tables", { headers, ...as(token) }),
       openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
       // The web app signs in with the cookie form.
       "sign-in": () =>
@@ -355,6 +358,7 @@ const success: Readonly<Record<PathName, number>> = {
   me: 200,
   metadata: 200,
   "metadata openapi": 200,
+  "metadata tables": 200,
   openapi: 200,
   "sign-in": 200,
   "sign-out": 204,
