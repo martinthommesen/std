@@ -46,7 +46,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3i-itil-helpdesk` | 3I | helpdesk v3: ITIL incident and problem, TMF621, upgrade test, `v0.0.3` | planned |
 | 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6): 10 of 10 runs succeeded | merged |
 | 6 | `ws/ci-pin-actions` | CI follow-up | `ci.yml` and `quickstart-compose.yml` pin every action by commit SHA | merged |
-| 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | approved, merging |
+| 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | merged |
 | 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party roles; config subscriptions; TMF632, TMF669, TMF672 | planned |
 | 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
 | 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |
