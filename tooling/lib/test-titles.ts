@@ -5,19 +5,34 @@ import { Predicate } from "effect";
  *
  * - the call is `describe(...)`, `it(...)` or `it.effect(...)`, where
  *   `describe` and `it` are imported from `vitest` or `@effect/vitest` (under
- *   any local name) and the file declares no other binding of that name;
+ *   any local name). A file that binds such a local name anywhere else (a
+ *   variable, a destructured name, a parameter, a function or class name, a
+ *   catch binding or another import) is refused, because a shadowed `it`
+ *   could make any title look like a test;
  * - its title is a string literal or a template literal without expressions;
  * - it has a callback (a function argument after the title), so `it("x")`
  *   without a body does not count;
- * - neither it nor any enclosing call is modified by `skip`, `todo`,
- *   `skipIf`, `runIf`, `fails`, `each` or `for`.
+ * - neither it nor any enclosing `describe` is modified by `skip`, `todo`,
+ *   `skipIf`, `runIf`, `fails`, `each` or `for`, written as a property or as a
+ *   computed member with a string literal; any other computed member on
+ *   `describe` or `it` refuses the file;
+ * - it is a statement of the file's top level or of a counted `describe`'s
+ *   callback, so a test inside a helper function, a condition or a loop does
+ *   not count (conservatively: the reader cannot tell whether it runs).
  */
 import type {
+  ArrowFunctionExpression,
+  BindingPattern,
+  BindingProperty,
+  BindingRestElement,
   CallExpression,
   Expression,
+  Function as FunctionNode,
   ImportDeclaration,
-  Node,
+  ParamPattern,
+  Program,
   SpreadElement,
+  Statement,
 } from "oxc-parser";
 import { parseSync, Visitor } from "oxc-parser";
 
@@ -44,25 +59,32 @@ const notRunModifiers: ReadonlySet<string> = new Set([
   "todo",
 ]);
 
-/** A call node with its position. */
-interface Span {
-  readonly end: number;
-  readonly start: number;
-}
-
 /** The call chain under a callee: `describe.skipIf(x)` → root and names. */
 interface CalleeChain {
   readonly properties: readonly string[];
   readonly root: string | undefined;
+  /** A computed member whose key is not a string literal. */
+  readonly unsupported: boolean;
 }
 
 const calleeChain = (callee: Expression): CalleeChain => {
   const properties: string[] = [];
+  let unsupported = false;
   let node: Expression = callee;
 
   for (;;) {
     if (node.type === "MemberExpression" && !node.computed) {
       properties.unshift(node.property.name);
+      node = node.object;
+    } else if (node.type === "MemberExpression") {
+      const key = node.property;
+
+      if (key.type === "Literal" && Predicate.isString(key.value)) {
+        properties.unshift(key.value);
+      } else {
+        unsupported = true;
+      }
+
       node = node.object;
     } else if (node.type === "CallExpression") {
       node = node.callee;
@@ -74,6 +96,7 @@ const calleeChain = (callee: Expression): CalleeChain => {
   return {
     properties,
     root: node.type === "Identifier" ? node.name : undefined,
+    unsupported,
   };
 };
 
@@ -92,17 +115,25 @@ const literalTitle = (
   return undefined;
 };
 
-const isFunctionNode = (node: Expression | SpreadElement): boolean =>
-  node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression";
+type TestBody = ArrowFunctionExpression | FunctionNode;
 
-const hasCallback = (node: CallExpression): boolean =>
-  node.arguments.slice(1).some(isFunctionNode);
+const testBodyOf = (node: CallExpression): TestBody | undefined => {
+  for (const argument of node.arguments.slice(1)) {
+    if (
+      argument.type === "ArrowFunctionExpression" ||
+      argument.type === "FunctionExpression"
+    ) {
+      return argument;
+    }
+  }
 
-const inside = (spans: readonly Span[], node: Node): boolean =>
-  spans.some((span) => node.start >= span.start && node.end <= span.end);
+  return undefined;
+};
 
 // The local names under which `describe` and `it` are imported.
-const testImports = (declarations: readonly ImportDeclaration[]) => {
+const testImports = (
+  declarations: readonly ImportDeclaration[]
+): Map<string, string> => {
   const locals = new Map<string, string>();
 
   for (const declaration of declarations) {
@@ -124,6 +155,159 @@ const testImports = (declarations: readonly ImportDeclaration[]) => {
   return locals;
 };
 
+type PatternNode =
+  | BindingPattern
+  | BindingProperty
+  | BindingRestElement
+  | ParamPattern;
+
+// Every name a binding pattern declares, destructuring included.
+const patternNames = (node: PatternNode | null | undefined): string[] => {
+  if (node === null || node === undefined) {
+    return [];
+  }
+
+  switch (node.type) {
+    case "Identifier": {
+      return [node.name];
+    }
+
+    case "ObjectPattern": {
+      return node.properties.flatMap(patternNames);
+    }
+
+    case "ArrayPattern": {
+      return node.elements.flatMap(patternNames);
+    }
+
+    case "AssignmentPattern": {
+      return patternNames(node.left);
+    }
+
+    case "RestElement": {
+      return patternNames(node.argument);
+    }
+
+    case "Property": {
+      return patternNames(node.value);
+    }
+
+    case "TSParameterProperty": {
+      return patternNames(node.parameter);
+    }
+
+    default: {
+      return [];
+    }
+  }
+};
+
+/** What the first pass over a file collects. */
+interface FileFacts {
+  readonly calls: CallExpression[];
+  /** Every bound name except those of imports from the test modules. */
+  readonly declared: string[];
+  readonly imports: ImportDeclaration[];
+}
+
+const collectFacts = (program: Program): FileFacts => {
+  const facts: FileFacts = { calls: [], declared: [], imports: [] };
+
+  const declareId = (node: { readonly id?: PatternNode | null }): void => {
+    facts.declared.push(...patternNames(node.id));
+  };
+
+  const declareFunction = (node: FunctionNode | ArrowFunctionExpression) => {
+    if (node.type !== "ArrowFunctionExpression") {
+      declareId(node);
+    }
+
+    facts.declared.push(...node.params.flatMap(patternNames));
+  };
+
+  const onCall = (node: CallExpression): void => {
+    facts.calls.push(node);
+  };
+
+  const onImport = (node: ImportDeclaration): void => {
+    facts.imports.push(node);
+
+    if (!testModules.has(node.source.value)) {
+      facts.declared.push(...node.specifiers.map((item) => item.local.name));
+    }
+  };
+
+  const onCatch = (node: { readonly param: BindingPattern | null }): void => {
+    facts.declared.push(...patternNames(node.param));
+  };
+
+  new Visitor({
+    ArrowFunctionExpression: declareFunction,
+    CallExpression: onCall,
+    CatchClause: onCatch,
+    ClassDeclaration: declareId,
+    ClassExpression: declareId,
+    FunctionDeclaration: declareFunction,
+    FunctionExpression: declareFunction,
+    ImportDeclaration: onImport,
+    VariableDeclarator: declareId,
+  }).visit(program);
+
+  return facts;
+};
+
+// Imports from the test modules under a non-test name, such as
+// `import { test as it }`, also bind a local name.
+const nonTestImportNames = (imports: readonly ImportDeclaration[]): string[] =>
+  imports.flatMap((declaration) =>
+    testModules.has(declaration.source.value)
+      ? declaration.specifiers.flatMap((specifier) => {
+          const imported =
+            specifier.type === "ImportSpecifier" &&
+            specifier.imported.type === "Identifier"
+              ? specifier.imported.name
+              : undefined;
+
+          return imported !== undefined && testExports.has(imported)
+            ? []
+            : [specifier.local.name];
+        })
+      : []
+  );
+
+/** A test call with its resolved chain. */
+interface TestCall {
+  readonly chain: CalleeChain;
+  readonly export: string | undefined;
+  readonly node: CallExpression;
+}
+
+// The expression statements a counted test may be: the file's top level,
+// and the statements (or expression body) of counted `describe` callbacks.
+const statementCalls = (statements: readonly Statement[]): Set<number> =>
+  new Set(
+    statements.flatMap((statement) =>
+      statement.type === "ExpressionStatement" &&
+      statement.expression.type === "CallExpression"
+        ? [statement.expression.start]
+        : []
+    )
+  );
+
+const bodyCalls = (fn: TestBody): Set<number> => {
+  const { body } = fn;
+
+  if (body === null) {
+    return new Set();
+  }
+
+  if (body.type === "BlockStatement") {
+    return statementCalls(body.body);
+  }
+
+  return body.type === "CallExpression" ? new Set([body.start]) : new Set();
+};
+
 /**
  * Reads the titles of the tests in a file that run (see the module comment).
  *
@@ -136,36 +320,12 @@ export const readTestTitles = (
   source: string
 ): TestTitles => {
   const parsed = parseSync(fileName, source, { sourceType: "module" });
-  const imports: ImportDeclaration[] = [];
-  const calls: CallExpression[] = [];
-  const declared: string[] = [];
-
-  const declare = (node: { readonly id?: Node | null }): void => {
-    if (node.id?.type === "Identifier") {
-      declared.push(node.id.name);
-    }
-  };
-
-  const onCall = (node: CallExpression): void => {
-    calls.push(node);
-  };
-
-  const onImport = (node: ImportDeclaration): void => {
-    imports.push(node);
-  };
-
-  new Visitor({
-    CallExpression: onCall,
-    ClassDeclaration: declare,
-    FunctionDeclaration: declare,
-    ImportDeclaration: onImport,
-    VariableDeclarator: declare,
-  }).visit(parsed.program);
-
-  const locals = testImports(imports);
+  const facts = collectFacts(parsed.program);
+  const locals = testImports(facts.imports);
   const errors = parsed.errors.map((error) => error.message);
+  const bound = [...facts.declared, ...nonTestImportNames(facts.imports)];
 
-  for (const name of declared) {
+  for (const name of new Set(bound)) {
     if (locals.has(name)) {
       errors.push(
         `declares its own ${name}, which shadows the imported ${locals.get(name) ?? name}`
@@ -173,7 +333,7 @@ export const readTestTitles = (
     }
   }
 
-  const testCalls = calls.flatMap((node) => {
+  const testCalls: TestCall[] = facts.calls.flatMap((node) => {
     const chain = calleeChain(node.callee);
 
     return chain.root !== undefined && locals.has(chain.root)
@@ -181,15 +341,22 @@ export const readTestTitles = (
       : [];
   });
 
-  const notRun: Span[] = testCalls.flatMap(({ chain, node }) =>
-    chain.properties.some((property) => notRunModifiers.has(property))
-      ? [node]
-      : []
-  );
+  for (const call of testCalls) {
+    if (call.chain.unsupported) {
+      errors.push(
+        `uses a computed member on ${call.chain.root ?? "a test function"} that is not a string literal`
+      );
+    }
+  }
 
+  // Outer calls start first, so a describe's callback is admitted before the
+  // calls inside it are looked at.
+  const admitted = statementCalls(parsed.program.body);
   const titles = new Set<string>();
 
-  for (const call of testCalls) {
+  for (const call of testCalls.toSorted(
+    (left, right) => left.node.start - right.node.start
+  )) {
     const { properties } = call.chain;
     const plain = properties.length === 0;
 
@@ -199,12 +366,23 @@ export const readTestTitles = (
       properties[0] === "effect" &&
       call.node.callee.type === "MemberExpression";
 
-    const title = literalTitle(call.node.arguments[0]);
-    const isTestCall = plain || effect;
-    const runs = hasCallback(call.node) && !inside(notRun, call.node);
+    const modified = properties.some((property) =>
+      notRunModifiers.has(property)
+    );
 
-    if (isTestCall && runs && title !== undefined) {
+    const testBody = testBodyOf(call.node);
+    const title = literalTitle(call.node.arguments[0]);
+    const placed = admitted.has(call.node.start);
+    const runs = (plain || effect) && !modified && testBody !== undefined;
+
+    if (placed && runs && title !== undefined) {
       titles.add(title);
+
+      if (call.export === "describe") {
+        for (const start of bodyCalls(testBody)) {
+          admitted.add(start);
+        }
+      }
     }
   }
 

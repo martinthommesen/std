@@ -121,6 +121,28 @@ describe("conformance-matrix-check", () => {
       to: 'describe("effect-rows", () => {\n  const it = { effect: (title: string): string => title };\n',
     },
     {
+      case: "a test file that shadows it with a destructured name",
+      file: "sample-tests.ts",
+      from: 'describe("effect-rows", () => {',
+      problem: "test file sample-tests.ts cannot be read: declares its own it",
+      to: 'describe("effect-rows", () => {\n  const { noop: it } = { noop: (title: string): string => title };\n',
+    },
+    {
+      case: "a test file that shadows it with a parameter",
+      file: "sample-tests.ts",
+      from: 'describe("effect-rows", () => {',
+      problem: "test file sample-tests.ts cannot be read: declares its own it",
+      to: 'describe("effect-rows", () => {\n  const run = (it: (title: string) => string): string => it("phantom");\n',
+    },
+    {
+      case: "a test file that uses a computed member that is not a string literal",
+      file: "sample-tests.ts",
+      from: 'describe("effect-rows", () => {',
+      problem:
+        "test file sample-tests.ts cannot be read: uses a computed member on describe",
+      to: 'const key = "skip";\ndescribe[key]("dynamic", () => {});\ndescribe("effect-rows", () => {',
+    },
+    {
       case: "a JSON pointer that does not resolve in the pinned OpenAPI document",
       file: "matrix/DEMO-A@1.0.0.yaml",
       from: "#/components/schemas/Thing/required",
@@ -189,6 +211,36 @@ describe("conformance-matrix-check", () => {
   it("fails titles of tests that do not run or are not vitest's", async () => {
     const dir = copyFixture();
 
+    // Written here, not committed: lint would rewrite the computed member.
+    writeFileSync(
+      path.join(dir, "structures.ts"),
+      [
+        'import { describe, expect, it } from "vitest";',
+        'describe["skip"]("a computed skipped block", () => {',
+        '  it("a case in a computed skipped block", () => {',
+        "    expect([1]).toHaveLength(1);",
+        "  });",
+        "});",
+        "if (process.env.FLAG) {",
+        '  it("a conditional case", () => {',
+        "    expect([1]).toHaveLength(1);",
+        "  });",
+        "}",
+        "const helper = () => {",
+        '  it("a case in a helper", () => {',
+        "    expect([1]).toHaveLength(1);",
+        "  });",
+        "};",
+        "helper();",
+        'describe("a counted block", () => {',
+        '  it("a counted case", () => {',
+        "    expect([1]).toHaveLength(1);",
+        "  });",
+        "});",
+        "",
+      ].join("\n")
+    );
+
     edit(
       dir,
       "matrix/DEMO-B@2.0.yaml",
@@ -199,6 +251,11 @@ describe("conformance-matrix-check", () => {
         "      - sample-tests.ts#a skipped block",
         "      - sample-tests.ts#a case in a skipped block",
         "      - local-it.ts#a local case",
+        "      - structures.ts#a computed skipped block",
+        "      - structures.ts#a case in a computed skipped block",
+        "      - structures.ts#a conditional case",
+        "      - structures.ts#a case in a helper",
+        "      - structures.ts#a counted case",
         "",
       ].join("\n")
     );
@@ -212,11 +269,16 @@ describe("conformance-matrix-check", () => {
       "a skipped block",
       "a case in a skipped block",
       "a local case",
+      "a computed skipped block",
+      "a case in a computed skipped block",
+      "a conditional case",
+      "a case in a helper",
     ]) {
       expect(result.output).toContain(`has the title "${title}"`);
     }
 
     expect(result.output).not.toContain('has the title "reads rows"');
+    expect(result.output).not.toContain('has the title "a counted case"');
   });
 
   it("fails a pending row in gate mode only", async () => {
