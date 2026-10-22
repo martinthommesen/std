@@ -729,7 +729,15 @@ const planRemoval = (
     }
   }
 
-  if (current.state !== "retired") {
+  // A field of a table the set removes too goes with its table: the
+  // table's retirement leaves its fields unwritable and unselected
+  // (decision 0011), while retiring the field alone is refused as long as
+  // the table names it as its display field (Contracts 1.7), so a removed
+  // table with a display field could never be removed.
+  const goesWithItsTable =
+    current.kind === "field" && removedIds.has(current.classId);
+
+  if (current.state !== "retired" && !goesWithItsTable) {
     const retire = planning.lifecycle.retire?.(current);
 
     if (retire === undefined) {

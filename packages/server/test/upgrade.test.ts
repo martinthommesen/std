@@ -40,6 +40,9 @@ import {
 } from "./config-support.ts";
 import {
   addField,
+  addIndex,
+  createClass,
+  ensureSite,
   change,
   createRole,
   currentRevision,
@@ -744,6 +747,139 @@ describe("upgrade", () => {
         assert.strictEqual(refused?._tag, "UpgradeRefused");
         assert.include(refused?.message ?? "", "SQL_ASCII");
       })
+    );
+  });
+});
+
+describe("upgrade-retire-refusals", () => {
+  it("names the fixture's fields", () => {
+    assert.notStrictEqual(FX.x, FX.w);
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a field a local multi-field unique index holds refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* fieldInUniqueIndex() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* change([addIndex(FX.item, [FX.x, FX.w], true).op]);
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+            const withoutW = variantOf(v2, { dropFields: ["w"], version: 3 });
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutW);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            const index = yield* values(
+              `SELECT id::text AS value FROM core."index" WHERE table_id = $1::uuid AND is_unique`,
+              [FX.item]
+            );
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [
+                entry.code,
+                entry.definitionId,
+                entry.details,
+              ]),
+              [["lifecycleRefused", FX.w, { error: "DependencyConflict" }]]
+            );
+            assert.include(plan.refusals[0]?.message ?? "", index[0] ?? "-");
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
+            assert.strictEqual(yield* fieldState(FX.w), "w active");
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a table a local reference field points at refuses the set, state unchanged",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* referencedTable() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+            yield* ensureSite;
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const shelf = createClass("fx_shelf");
+
+            const onItem = addField(shelf.id, "item", {
+              kind: "reference",
+              targetClassId: FX.item,
+            });
+
+            yield* change([shelf.op, onItem.op]);
+
+            // The local reference is the only thing keeping the table: the
+            // set's own rules on it go in the same version.
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const before = yield* databaseState;
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              plan.refusals.map((entry) => [
+                entry.code,
+                entry.definitionId,
+                entry.details,
+              ]),
+              [["lifecycleRefused", FX.item, { error: "DependencyConflict" }]]
+            );
+            assert.include(plan.refusals[0]?.message ?? "", onItem.id);
+
+            const run = yield* Effect.exit(runUpgrade({ sets: [directory] }));
+
+            assert.strictEqual(errorOf(run)?._tag, "SetRefused");
+            assert.deepStrictEqual(yield* databaseState, before);
+          })
+        )
+    );
+  });
+
+  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "removed upstream: a whole table is retired, its display field with it",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* wholeTable() {
+            yield* runUpgrade({ sets: [FIXTURE.v2] });
+            yield* insertAdmin;
+
+            const v2 = yield* readSetDirectory(FIXTURE.v2);
+
+            const withoutItem = variantOf(v2, {
+              replace: { accessRules: [], tables: [] },
+              version: 3,
+            });
+
+            const directory = yield* writeSetDirectory(withoutItem);
+            const plan = yield* planUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(plan.refusals, []);
+
+            yield* runUpgrade({ sets: [directory] });
+
+            assert.deepStrictEqual(
+              yield* values(
+                "SELECT state AS value FROM core.class WHERE id = $1::uuid",
+                [FX.item]
+              ),
+              ["retired"]
+            );
+          })
+        )
     );
   });
 });

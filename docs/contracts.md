@@ -1201,7 +1201,7 @@ Each set load is one change set (plus a `complete` revision if it has follow-up 
 | Changed, incoming equals the local value | converged: override dropped, `converged` entry recorded |
 | Changed, local value differs | conflict: base updated, local value stays effective, conflict opened with old shipped, new shipped and local values |
 | Renamed (any kind, roles included) | applied by ID; everything that refers to it by ID keeps working |
-| Removed upstream | tables and fields retired (never purged), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
+| Removed upstream | tables and fields retired (never purged; a removed table's fields go with it), choices hidden, rules deactivated, roles retired; local dependents reported; a role that an active local access rule names is refused at plan time (`rule_role`); admin may purge or `adopt` |
 | Type changed | refused in v0.1; author adds a field and retires the old one |
 | Tightened constraint violated by data | refused at plan time with counts |
 
