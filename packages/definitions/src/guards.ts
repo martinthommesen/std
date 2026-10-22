@@ -271,8 +271,8 @@ const storageProblem = (
 };
 
 /**
- * Whether the origin may create a table in its namespace: one it owns, and
- * a platform namespace only for the core set.
+ * Whether the origin may create a table in a namespace: only one it owns
+ * (the `core` and app namespaces are reserved for their sets).
  *
  * @param work - The application.
  * @param definition - The new definition.
@@ -288,33 +288,20 @@ const namespaceProblem = (
 
   const namespace = currentOf(work, definition.namespaceId);
 
-  if (namespace === undefined) {
-    return undefined;
-  }
-
-  const { origin } = work.context;
-
-  if (!originOwns(origin, namespace.owner)) {
-    return "reserved";
-  }
-
-  // An origin's own namespace with platform storage cannot be made by
-  // anyone but the core set (`storageProblem`); this keeps a table out of
-  // one should it exist.
-  return namespace.kind === "namespace" &&
-    namespace.storage === "platform" &&
-    !isCoreOrigin(origin)
-    ? "platform"
-    : undefined;
+  return namespace === undefined ||
+    originOwns(work.context.origin, namespace.owner)
+    ? undefined
+    : "reserved";
 };
 
 /**
  * Checks a new definition, whatever operation adds it (every create and a
  * new override; there is no other way to add one): it belongs to the
- * origin's layer; only the core set adds platform storage or anything to a
- * platform namespace or table; a new table lives in a namespace the origin
- * owns; fields, indexes, overrides and child classes go only onto classes
- * the origin owns, app classes or extensible core classes.
+ * origin's layer; only the core set creates a table or namespace with
+ * platform storage or attaches anything to a platform table; a new table
+ * lives in a namespace the origin owns; fields, indexes, overrides and
+ * child classes go only onto classes the origin owns, app classes or
+ * extensible core classes.
  *
  * @param work - The application; a refusal is recorded there.
  * @param operation - The operation's tag.
