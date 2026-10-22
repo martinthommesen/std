@@ -350,11 +350,14 @@ interface Recorder {
   readonly unread: { readonly index: number; readonly reason: string }[];
   /** The responses paused now, until their body is held. */
   readonly reading: Set<Promise<void>>;
+  /** The URLs of the responses paused now, by CDP `Fetch` request ID. */
+  readonly paused: Map<string, string>;
 }
 
 /**
- * Waits until every response paused now has its body held (or recorded as
- * unreadable). Responses still paused have not reached the page.
+ * Waits until every response paused now has its body held, recorded as
+ * unreadable, or given up because its request failed or was cancelled
+ * (or the page closed). Responses still paused have not reached the page.
  *
  * @param recorder - The recorder.
  * @returns Nothing.
@@ -366,6 +369,8 @@ const settledReads = async (recorder: Recorder): Promise<void> => {
 /** The parts of `Fetch.requestPaused` the recorder uses. */
 interface PausedResponse {
   readonly requestId: string;
+  /** The request's `Network` ID, which `Network.loadingFailed` names. */
+  readonly networkId?: string;
   readonly request: { readonly url: string; readonly method: string };
   readonly responseStatusCode?: number;
   readonly responseErrorReason?: string;
@@ -419,17 +424,95 @@ const bodyText = (body: string, isBase64: boolean): string =>
  */
 const startRecorder = async (page: Page): Promise<Recorder> => {
   const session = await page.context().newCDPSession(page);
-  const recorder: Recorder = { held: [], reading: new Set(), unread: [] };
+
+  const recorder: Recorder = {
+    held: [],
+    paused: new Map(),
+    reading: new Set(),
+    unread: [],
+  };
+
+  // NOTE: a request that fails or is cancelled while its response is
+  // paused never delivers its body, and `Fetch.getResponseBody` would
+  // wait for it until the page closes. Its read is given up when
+  // `Network.loadingFailed` names it (by `networkId`), or when the page
+  // closes.
+  const failed = new Set<string>();
+  const giveUps = new Map<string, () => void>();
+  let isClosed = false;
+
+  const giveUpOn = (networkId: string) => {
+    failed.add(networkId);
+    giveUps.get(networkId)?.();
+  };
+
+  session.on("Network.loadingFailed", (event) => {
+    giveUpOn(event.requestId);
+  });
+
+  page.once("close", () => {
+    isClosed = true;
+
+    for (const giveUp of giveUps.values()) {
+      giveUp();
+    }
+  });
+
+  /**
+   * Resolves once the paused request has failed, been cancelled, or the
+   * page closed; never for a request that goes on.
+   *
+   * @param paused - The paused response.
+   * @returns The promise and how to forget it.
+   */
+  const gaveUp = (paused: PausedResponse) => {
+    const { networkId } = paused;
+    const over = Promise.withResolvers<"gave up">();
+
+    const giveUp = () => {
+      over.resolve("gave up");
+    };
+
+    const isOver =
+      isClosed || (networkId !== undefined && failed.has(networkId));
+
+    if (isOver) {
+      giveUp();
+    } else if (networkId !== undefined) {
+      giveUps.set(networkId, giveUp);
+    }
+
+    return {
+      forget: () => {
+        if (networkId !== undefined) {
+          giveUps.delete(networkId);
+        }
+      },
+      promise: over.promise,
+    };
+  };
 
   const readBody = async (paused: PausedResponse): Promise<void> => {
     const hasBody =
       paused.responseErrorReason === undefined && !isRedirect(paused);
 
     if (hasBody) {
+      const over = gaveUp(paused);
+
       try {
-        const answer = await session.send("Fetch.getResponseBody", {
-          requestId: paused.requestId,
-        });
+        // NOTE: `Promise.race` also handles the body read's rejection
+        // when the page closes after the read was given up.
+        const answer = await Promise.race([
+          session.send("Fetch.getResponseBody", {
+            requestId: paused.requestId,
+          }),
+          over.promise,
+        ]);
+
+        if (answer === "gave up") {
+          // The body never reached the page: nothing to hold or check.
+          return;
+        }
 
         recorder.held.push({
           body: bodyText(answer.body, answer.base64Encoded),
@@ -442,6 +525,8 @@ const startRecorder = async (page: Page): Promise<Recorder> => {
           index: recorder.held.length,
           reason: `${paused.request.url}: ${String(error)}`,
         });
+      } finally {
+        over.forget();
       }
     }
   };
@@ -449,9 +534,11 @@ const startRecorder = async (page: Page): Promise<Recorder> => {
   const hold = async (paused: PausedResponse): Promise<void> => {
     const reading = readBody(paused);
 
+    recorder.paused.set(paused.requestId, paused.request.url);
     recorder.reading.add(reading);
     await reading;
     recorder.reading.delete(reading);
+    recorder.paused.delete(paused.requestId);
 
     try {
       await session.send("Fetch.continueRequest", {
@@ -488,6 +575,19 @@ const recorderOf = async (page: Page): Promise<Recorder> => {
   recorders.set(page, started);
 
   return await started;
+};
+
+/**
+ * The URLs of the page's responses the recorder holds paused now, while
+ * it reads their bodies (for the recorder's own tests).
+ *
+ * @param page - The page.
+ * @returns The URLs.
+ */
+export const pausedResponseUrls = async (page: Page): Promise<string[]> => {
+  const recorder = await recorderOf(page);
+
+  return [...recorder.paused.values()];
 };
 
 /**
