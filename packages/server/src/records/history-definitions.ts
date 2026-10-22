@@ -7,7 +7,7 @@
  *
  * - Definitions at R come from `core.definition_revision`, the same lookup
  *   stale requests use (`stale-scope.ts`): per definition, the latest row
- *   at R or earlier. The field, the classes of the record's concrete
+ *   at R or earlier, in numeric revision order. The field, the classes of the record's concrete
  *   lineage, the field's overrides and its choices are read in one
  *   statement and assembled into a snapshot of just those definitions, so
  *   the label and type are the effective ones on the record's class
@@ -63,6 +63,8 @@ const readRevisions = Effect.fn("History.readRevisions")(
     fieldIds: readonly DefinitionId[],
     latest: number
   ) {
+    // The order names the bigint columns: a bare "revision" would be the
+    // text alias, and "10" sorts before "9".
     const rows = yield* readRows(
       sql`SELECT "definition_id"::text AS "id", "revision"::text AS "revision",
   "effective"::text AS "effective"
@@ -71,7 +73,7 @@ WHERE "revision" <= ${textParameter(String(latest), "int8")}
   AND ("definition_id" = ANY(${arrayParameter(definitionIds, "uuid")})
     OR ("kind" = ANY('{override,choice}'::text[])
       AND "effective" ->> 'fieldId' = ANY(${arrayParameter(fieldIds, "text")})))
-ORDER BY "definition_id", "revision"`
+ORDER BY "definition_revision"."definition_id", "definition_revision"."revision"`
     );
 
     const byId = new Map<

@@ -74,7 +74,7 @@ export const definitionAt = Effect.fn("Catalog.definitionAt")(
       .unsafe(
         `SELECT effective::text AS effective, revision::text AS revision FROM core.definition_revision
          WHERE definition_id = $1::uuid AND revision <= $2::int8
-         ORDER BY revision DESC LIMIT 1`,
+         ORDER BY definition_revision.revision DESC LIMIT 1`,
         [definitionId, String(revision)]
       )
       .pipe(Effect.flatMap(decodeEffective));

@@ -21,13 +21,17 @@ import { Effect } from "effect";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { definitionAt } from "../src/catalog/definition-revisions.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
+import { ACME, addField, change, currentRevision } from "./schema-support.ts";
 import type { BuiltOperation } from "./schema-support.ts";
 
 const local = { owner: { layer: "local" }, protected: false } as const;
+
+/** The last revision whose number has one digit. */
+const MAX_SINGLE_DIGIT = 9;
 
 const PURGER: Requester = {
   roleIds: [BUILT_IN_ROLE_IDS.schema_purger],
@@ -242,6 +246,99 @@ describe("history-definitions", () => {
           assert.notProperty(
             objectOf((yield* historyOf(tokens.alice, id))[0]?.fields),
             "memo"
+          );
+        })
+    );
+  });
+
+  // Revisions are numbers: 10 comes after 9, though "10" sorts before "9".
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "an entry at revision 10 or later shows its own revision's definitions, not revision 9's",
+      () =>
+        Effect.gen(function* acrossRevisionTen() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const fixture = yield* AcmeFixture;
+
+          const tier = addField(ACME.asset, "tier", { kind: "choice" });
+
+          yield* change([tier.op]);
+
+          const gold = choice(tier.id, "gold", "Gold", 1);
+
+          yield* change([gold.op, choice(tier.id, "iron", "Iron", 2).op]);
+          assert.isBelow(yield* currentRevision, MAX_SINGLE_DIGIT);
+
+          const created = yield* http.request("POST", listPath("acme.asset"), {
+            body: { name: "T1", owner: fixture.bob.id, tier: "gold" },
+            token: tokens.alice,
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const id = textOf(objectOf(objectOf(created.json).record).id);
+
+          // Relabel the field and a choice once per revision, up to 10.
+          while ((yield* currentRevision) <= MAX_SINGLE_DIGIT) {
+            const next = (yield* currentRevision) + 1;
+
+            yield* change([
+              {
+                changes: { label: `Tier ${next}` },
+                id: tier.id,
+                op: "update",
+                version: yield* versionOf(tier.id),
+              },
+              {
+                changes: { label: `Gold ${next}` },
+                id: gold.id,
+                op: "update",
+                version: yield* versionOf(gold.id),
+              },
+            ]);
+          }
+
+          const revision = yield* currentRevision;
+
+          assert.strictEqual(revision, MAX_SINGLE_DIGIT + 1);
+
+          const updated = yield* http.request(
+            "PATCH",
+            recordPath("acme.asset", id),
+            {
+              body: { tier: "iron" },
+              headers: { "if-match": '"1"' },
+              token: tokens.alice,
+            }
+          );
+
+          assert.strictEqual(updated.status, 200, updated.text);
+
+          const [first, second] = yield* historyOf(tokens.alice, id);
+
+          assert.deepStrictEqual(objectOf(first?.fields).tier, {
+            choices: [
+              { key: "gold", label: "Gold" },
+              { key: "iron", label: "Iron" },
+            ],
+            label: "tier",
+            type: { kind: "choice" },
+          });
+          assert.strictEqual(second?.schemaRevision, revision);
+          assert.deepStrictEqual(objectOf(second?.fields).tier, {
+            choices: [
+              { key: "gold", label: `Gold ${revision}` },
+              { key: "iron", label: "Iron" },
+            ],
+            label: `Tier ${revision}`,
+            type: { kind: "choice" },
+          });
+
+          // The catalog's single-definition lookup orders the same way.
+          assert.strictEqual(
+            (yield* definitionAt(tier.id, revision))?.revision,
+            revision
           );
         })
     );
