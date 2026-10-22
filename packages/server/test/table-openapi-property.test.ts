@@ -375,7 +375,11 @@ const checkCandidate = (
       observed.nonAscii.add(field.type.kind);
     }
 
-    if (isString(json) && FAR_OFFSET.test(json)) {
+    if (
+      field.type.kind === "dateTime" &&
+      isString(json) &&
+      FAR_OFFSET.test(json)
+    ) {
       observed.farOffset += 1;
     }
 
