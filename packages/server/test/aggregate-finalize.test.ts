@@ -9,9 +9,11 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
 import { RuleRefused } from "@std/api/errors/rule-refused";
+import { SYSTEM_USER_ID } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 
+import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
 import { ChangeCauseSchema } from "../src/records/change-entry.ts";
 import type { ChangeCause } from "../src/records/change-entry.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
@@ -43,7 +45,7 @@ import {
 } from "./aggregates-support.ts";
 import type { Entry } from "./aggregates-support.ts";
 import { USERS } from "./records-support.ts";
-import { values } from "./schema-support.ts";
+import { addRecordRule, change, freshId, values } from "./schema-support.ts";
 
 const WRITE_STATEMENT = /^\s*(?:insert|update|delete)\b/iu;
 
@@ -788,6 +790,101 @@ describe("aggregate-finalize", () => {
           assert.deepStrictEqual(
             aggregateOf(yield* lastEntry(request.id))?.rules,
             [REQUEST_RULES.deriveApproved.id]
+          );
+        })
+    );
+
+    dbTest.effect(
+      "an after-commit effect's writes into an aggregate are finalized in its delivery transaction",
+      () =>
+        Effect.gen(function* afterCommit() {
+          const carrier = freshId();
+
+          yield* change([
+            {
+              definition: {
+                classId: C.ticket.id,
+                condition: null,
+                deadLetter: "block",
+                enabled: true,
+                id: carrier,
+                identityId: SYSTEM_USER_ID,
+                kind: "subscription",
+                maxAttempts: 10,
+                name: "ag_ticket_closed",
+                operations: ["update"],
+                owner: { layer: "local" },
+                protected: false,
+              },
+              op: "createSubscription",
+            },
+            addRecordRule(C.ticket.id, {
+              actions: [
+                {
+                  classId: C.note.id,
+                  forEach: {
+                    classId: C.ticket.id,
+                    where: {
+                      left: { path: [F.ticketName.id] },
+                      op: "eq",
+                      right: { path: [F.ticketName.id], scope: "record" },
+                    },
+                  },
+                  type: "createEach",
+                  values: [
+                    {
+                      fieldId: F.noteTicket.id,
+                      value: { copy: { fieldId: null, from: "source" } },
+                    },
+                    { fieldId: F.noteBody.id, value: { value: "closing" } },
+                  ],
+                },
+              ],
+              condition: {
+                args: [
+                  { arg: { path: [F.ticketStatus.id] }, op: "changed" },
+                  {
+                    left: { path: [F.ticketStatus.id] },
+                    op: "eq",
+                    right: { value: "closed" },
+                  },
+                ],
+                op: "and",
+              },
+              operations: ["update"],
+              phase: "afterCommit",
+              ruleKind: null,
+              subscriptionId: carrier,
+            }).op,
+          ]);
+
+          const ticket = yield* create(C.ticket.id, { name: "t-closing" });
+
+          const closed = yield* update(C.ticket.id, TABLE.ticket, ticket.id, {
+            status: "closed",
+          });
+
+          const { request } = yield* Transactions;
+
+          const outcome = yield* request(
+            runAfterCommitRule({
+              changeId: closed.changeId ?? "",
+              subscriptionId: carrier,
+            })
+          );
+
+          assert.strictEqual(outcome, "ran");
+
+          const [note] = yield* values(
+            `SELECT id::text AS value FROM ${TABLE.note} WHERE ticket = $1::uuid`,
+            [ticket.id]
+          );
+
+          // create, the user's close, one aggregate version for the note.
+          assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 3);
+          assert.deepStrictEqual(
+            aggregateOf(yield* lastEntry(ticket.id))?.parts,
+            [(yield* lastEntry(note ?? ""))?.changeId ?? ""]
           );
         })
     );

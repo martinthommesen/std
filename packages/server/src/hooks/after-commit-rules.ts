@@ -323,10 +323,12 @@ export const runAfterCommitRule = Effect.fn("Rules.afterCommit")(
 
     // Its saves start below the cause chain's depth, so none of them is an
     // outermost save: the aggregates they touched are finalized here, in
-    // the delivery transaction (4.9).
+    // the delivery transaction (4.9), at the same depth, so the cap on
+    // nesting still counts the cause chain.
     yield* finalizeTouchedAggregates.pipe(
       Effect.provideService(Actor, identity),
-      Effect.provideService(WriteAccess, access)
+      Effect.provideService(WriteAccess, access),
+      Effect.provideService(SaveStack, { depth, recordIds: new Set<string>() })
     );
 
     const outcome: AfterCommitOutcome = "ran";
