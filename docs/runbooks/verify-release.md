@@ -63,7 +63,7 @@ cosign verify-blob --bundle sbom.sigstore.json \
   sbom.spdx.json
 ```
 
-The archive is an OCI archive, not a pushed image. Its file hash differs from the image manifest digest to which `provenance.sigstore.json` and `sbom-attestation.sigstore.json` refer. A dry run signs real artifacts and records transparency evidence but does not publish anything to the container registry. Workflow artifacts expire after 30 days; retain copies if needed.
+The archive is an OCI archive. Dry runs create blob signatures only; they do not create GitHub image provenance or SBOM attestations and have no package or attestation write permission. A dry run signs real artifacts and records transparency evidence but does not publish anything to the container registry. Workflow artifacts expire after 30 days; retain copies if needed.
 
 ## Verify the Step 5 chart
 
@@ -77,3 +77,15 @@ cosign verify-blob --bundle "$CHART.sigstore.json" \
 ```
 
 Only install the verified archive. `helm verify` expects an OpenPGP `.prov` file and does not verify this keyless Sigstore bundle. Step 5 will define durable chart/bundle distribution alongside the OCI chart push.
+
+## Protect release tags
+
+Configure a repository tag ruleset for `v*` that restricts tag creation, updates and deletion to release maintainers, with tightly controlled bypass actors. The exact tag identity checked above is meaningful only when the project controls who can establish that tag. Publishing runs only in the tag-only job; branch dry runs have no GHCR or GitHub attestation write permission.
+
+## Configure Postgres TLS
+
+Use `STD_DATABASE_SSL_MODE=verify-full` and `STD_DATABASE_SSL_CA_FILE=/path/to/ca.pem`. To intentionally use Node's public root store instead, set `STD_DATABASE_SSL_SYSTEM_ROOTS=true`; `verify-full` refuses implicit public roots. `verify-ca` always requires an explicit, nonempty CA file, and checks the chain without matching the hostname.
+
+With a CA file, `require` verifies the chain without a hostname check, matching libpq. Plain `require` without a CA can be intercepted by anyone on the path: it encrypts but does not authenticate the server. Prefer `verify-full` for production. Modes never fall back to plaintext if Postgres refuses TLS. Unix sockets ignore the mode and use socket transport.
+
+Optional client authentication needs both `STD_DATABASE_SSL_CERT_FILE` and `STD_DATABASE_SSL_KEY_FILE`. Keep private keys mode 0600. STD reads files at configuration-layer startup; restart application processes after rotation. The bundled compose identity renews at startup when either certificate has fewer than 30 days remaining; restart application containers afterwards. External `STD_COMPOSE_DATABASE_URL` targets receive no bundled CA or mode: supply TLS settings and file mounts explicitly.
