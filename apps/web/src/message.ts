@@ -6,29 +6,21 @@ import { Url } from "foldkit/url";
 
 import { Message as SignInMessage } from "./page/sign-in/sign-in.ts";
 
-/**
- * Why `auth/me` gave no user: no session (no cookie, or an ended one), or
- * no answer from the server.
- */
-export const LoadCurrentUserError = Schema.Literals([
-  "NoSession",
-  "Unavailable",
-]);
-
 /** What happens in the app. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Message = defineMessageUnion({
   ChangedUrl: { url: Url },
   ClickedLink: { request: UrlRequest },
-  ClickedRetry: {},
+  ClickedRetrySessionCheck: {},
   ClickedSignOut: {},
+  CompletedFocusMain: {},
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},
-  FailedLoadCurrentUser: { error: LoadCurrentUserError },
+  FailedLoadCurrentUser: {},
   FailedSignOut: {},
   GotSignInMessage: { message: SignInMessage },
-  SucceededLoadCurrentUser: { user: CurrentUserSchema },
+  SucceededLoadCurrentUser: { maybeUser: Schema.Option(CurrentUserSchema) },
   SucceededSignOut: {},
 });
 

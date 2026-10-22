@@ -1,192 +1,318 @@
-import { Option } from "effect";
+import { Effect, Option } from "effect";
+import { Valid } from "foldkit/fieldValidation";
+import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
 import { modifyFields } from "foldkit/struct";
-import type { Url } from "foldkit/url";
 import { describe, expect, it } from "vitest";
 
 import {
+  FocusMain,
   LoadCurrentUser,
+  LoadExternal,
   NavigateInternal,
   ReplaceUrl,
   SignOut,
 } from "./command.ts";
-import { ada, adaAtHome, signInFromHome } from "./fixture.ts";
+import { fakeStdApi } from "./fake-std-api.ts";
+import {
+  ada,
+  adaAtHome,
+  signInOpenedDirectly,
+  signInRedirectedFromHome,
+  urlOf,
+} from "./fixture.ts";
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model, SignOutRequest } from "./model.ts";
 import {
   Message as SignInMessage,
-  RequestSession,
+  SignIn,
   toMaybePassword,
 } from "./page/sign-in/sign-in.ts";
-import { AppRoute } from "./route.ts";
+import { AppRoute, homeRouter, signInRouter } from "./route.ts";
+import type { SignedOutRoute } from "./route.ts";
 import { update } from "./update.ts";
-
-const urlOf = (pathname: string): Url => ({
-  hash: Option.none(),
-  host: "localhost:5173",
-  pathname,
-  port: Option.none(),
-  protocol: "http:",
-  search: Option.none(),
-});
 
 const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
 
-describe("app", () => {
-  it("starts by asking the server for the session", () => {
-    const start = init(urlOf("/"));
+const signedOutAt = (route: SignedOutRoute) =>
+  modifyFields(signInOpenedDirectly, { route: () => route });
 
-    expect(start.model).toStrictEqual(
+const typeAndSubmit = (password: string) => [
+  message(
+    Message.GotSignInMessage({
+      message: SignInMessage.UpdatedLogin({ value: "ada" }),
+    })
+  ),
+  message(
+    Message.GotSignInMessage({
+      message: SignInMessage.UpdatedPassword({
+        maybePassword: toMaybePassword(password),
+      }),
+    })
+  ),
+  message(Message.GotSignInMessage({ message: SignInMessage.SubmittedForm() })),
+];
+
+describe("start-up", () => {
+  it("asks the server for the session", () => {
+    const initial = init(urlOf("/"));
+
+    expect(initial.model).toStrictEqual(
       Model.CheckingSession({ route: AppRoute.Home() })
     );
-    expect(start.commands?.map((command) => command.name)).toStrictEqual([
-      "LoadCurrentUser",
-    ]);
+    expect(initial.commands).toStrictEqual([LoadCurrentUser()]);
   });
 
   it("a session lands on the page asked for", () => {
     story(
       update,
       given(checkingAt("/")),
-      message(Message.SucceededLoadCurrentUser({ user: ada })),
-      model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
-      }),
-      Command.expectNone()
-    );
-  });
-
-  it("a session on the sign-in page redirects home", () => {
-    story(
-      update,
-      given(checkingAt("/sign-in")),
-      message(Message.SucceededLoadCurrentUser({ user: ada })),
-      model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
-      }),
-      Command.expectExact(ReplaceUrl({ url: "/" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
-    );
-  });
-
-  it("no session on a signed-in page redirects to sign-in and remembers the page", () => {
-    story(
-      update,
-      given(checkingAt("/")),
-      message(Message.FailedLoadCurrentUser({ error: "NoSession" })),
-      model((app) => {
-        expect(app).toStrictEqual(signInFromHome);
-      }),
-      Command.expectExact(ReplaceUrl({ url: "/sign-in" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
-    );
-  });
-
-  it("an unknown path stays not found whether or not signed in", () => {
-    story(
-      update,
-      given(checkingAt("/no/such/page")),
-      message(Message.FailedLoadCurrentUser({ error: "NoSession" })),
-      model((app) => {
-        expect(app._tag).toBe("SignedOut");
-        expect(app.route).toStrictEqual(
-          AppRoute.NotFound({ path: "/no/such/page" })
-        );
-      }),
-      Command.expectNone()
-    );
-  });
-
-  it("an unreachable server can be retried", () => {
-    story(
-      update,
-      given(checkingAt("/")),
-      message(Message.FailedLoadCurrentUser({ error: "Unavailable" })),
-      model((app) => {
-        expect(app).toStrictEqual(
-          Model.SessionUnavailable({ route: AppRoute.Home() })
-        );
-      }),
-      message(Message.ClickedRetry()),
-      model((app) => {
-        expect(app._tag).toBe("CheckingSession");
-      }),
-      Command.resolve(
-        LoadCurrentUser,
-        Message.SucceededLoadCurrentUser({ user: ada })
+      message(
+        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
       ),
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("a session on the sign-in page redirects home, and the redirect's echo changes nothing", () => {
+    story(
+      update,
+      given(checkingAt("/sign-in")),
+      message(
+        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+      ),
+      Command.expectExact(ReplaceUrl({ url: homeRouter() })),
+      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      message(Message.ChangedUrl({ url: urlOf(homeRouter()) })),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("no session on a signed-in page redirects to sign-in and still remembers the page after the echo", () => {
+    story(
+      update,
+      given(checkingAt("/")),
+      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      Command.expectExact(ReplaceUrl({ url: signInRouter() })),
+      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      message(Message.ChangedUrl({ url: urlOf(signInRouter()) })),
+      model((app) => {
+        expect(app).toStrictEqual(signInRedirectedFromHome);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("no session on the sign-in page needs no redirect", () => {
+    story(
+      update,
+      given(checkingAt("/sign-in")),
+      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      model((app) => {
+        expect(app).toStrictEqual(signInOpenedDirectly);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("an unknown path stays not found without a session", () => {
+    story(
+      update,
+      given(checkingAt("/no/such/page")),
+      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      model((app) => {
+        expect(app).toStrictEqual(
+          signedOutAt(AppRoute.NotFound({ path: "/no/such/page" }))
+        );
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("a route change while checking is where the session lands", () => {
+    story(
+      update,
+      given(checkingAt("/sign-in")),
+      message(Message.ChangedUrl({ url: urlOf("/elsewhere") })),
+      Command.expectNone(),
+      message(
+        Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+      ),
+      model((app) => {
+        expect(app).toStrictEqual(
+          modifyFields(adaAtHome, {
+            route: () => AppRoute.NotFound({ path: "/elsewhere" }),
+          })
+        );
       })
     );
   });
 
-  it("signing in returns to the page asked for, with the user's name and no token", () => {
+  it("an unreachable server can be retried, and fail again", () => {
+    const unavailable = Model.SessionUnavailable({ route: AppRoute.Home() });
+
     story(
       update,
-      given(signInFromHome),
-      message(
-        Message.GotSignInMessage({
-          message: SignInMessage.UpdatedLogin({ value: "ada" }),
-        })
-      ),
-      message(
-        Message.GotSignInMessage({
-          message: SignInMessage.UpdatedPassword({
-            maybePassword: toMaybePassword("ada-password"),
-          }),
-        })
-      ),
-      message(
-        Message.GotSignInMessage({ message: SignInMessage.SubmittedForm() })
-      ),
-      Command.resolve(
-        RequestSession,
-        SignInMessage.SucceededRequestSession({ user: ada })
-      ),
+      given(checkingAt("/")),
+      message(Message.FailedLoadCurrentUser()),
       model((app) => {
-        expect(app).toStrictEqual(adaAtHome);
-        expect(JSON.stringify(app)).not.toContain("ada-password");
-        expect(Object.keys(app).toSorted()).toStrictEqual([
-          "_tag",
-          "route",
-          "signOut",
-          "user",
-        ]);
+        expect(app).toStrictEqual(unavailable);
       }),
-      Command.expectExact(ReplaceUrl({ url: "/" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
+      message(Message.ClickedRetrySessionCheck()),
+      model((app) => {
+        expect(app).toStrictEqual(
+          Model.CheckingSession({ route: AppRoute.Home() })
+        );
+      }),
+      Command.expectExact(LoadCurrentUser()),
+      Command.resolve(LoadCurrentUser, Message.FailedLoadCurrentUser()),
+      model((app) => {
+        expect(app).toStrictEqual(unavailable);
+      })
     );
   });
 
-  it("signing out ends on the sign-in page", () => {
+  it("late answers and retries outside their state change nothing", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })),
+      message(Message.FailedLoadCurrentUser()),
+      message(Message.ClickedRetrySessionCheck()),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      }),
+      Command.expectNone()
+    );
+  });
+});
+
+describe("signing in", () => {
+  it("returns to the page asked for, with the user's name and no token or password", () => {
+    story(
+      update,
+      given(signInRedirectedFromHome),
+      ...typeAndSubmit("ada-password"),
+      model((app) => {
+        expect(JSON.stringify(app)).not.toContain("ada-password");
+        expect(JSON.stringify(app)).toContain("<redacted:password>");
+      }),
+      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+        expect(Object.keys(app).toSorted()).toStrictEqual([
+          "_tag",
+          "route",
+          "signOutRequest",
+          "user",
+        ]);
+      }),
+      Command.expectExact(ReplaceUrl({ url: homeRouter() }), FocusMain()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
+    );
+  });
+
+  it("from the sign-in page opened directly lands home", () => {
+    story(
+      update,
+      given(signInOpenedDirectly),
+      ...typeAndSubmit("ada-password"),
+      Command.resolve(SignIn, SignInMessage.SucceededSignIn({ user: ada })),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      }),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
+    );
+  });
+
+  it("a late sign-in answer after the session started changes nothing", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(
+        Message.GotSignInMessage({
+          message: SignInMessage.SucceededSignIn({ user: ada }),
+        })
+      ),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      }),
+      Command.expectNone()
+    );
+  });
+
+  it("leaving the sign-in page forgets the typed password, not the login", () => {
+    story(
+      update,
+      given(signInOpenedDirectly),
+      ...typeAndSubmit("ada-password").slice(0, 2),
+      message(Message.ChangedUrl({ url: urlOf("/nope") })),
+      Command.resolve(FocusMain, Message.CompletedFocusMain()),
+      message(Message.ChangedUrl({ url: urlOf(signInRouter()) })),
+      Command.resolve(FocusMain, Message.CompletedFocusMain()),
+      model((app) => {
+        const form = Model.guards.SignedOut(app) ? app.signIn : undefined;
+
+        expect(form?.login).toStrictEqual(Valid({ value: "ada" }));
+        expect(form?.password.value).toStrictEqual(Option.none());
+      })
+    );
+  });
+
+  it("a signed-out visitor sent home is redirected to sign-in", () => {
+    story(
+      update,
+      given(signInOpenedDirectly),
+      message(Message.ChangedUrl({ url: urlOf(homeRouter()) })),
+      model((app) => {
+        expect(app).toStrictEqual(signInRedirectedFromHome);
+      }),
+      Command.expectExact(ReplaceUrl({ url: signInRouter() })),
+      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
+    );
+  });
+});
+
+describe("signing out", () => {
+  it("ends on the sign-in page, with focus moved to it", () => {
     story(
       update,
       given(adaAtHome),
       message(Message.ClickedSignOut()),
       model((app) => {
         expect(app).toStrictEqual(
-          modifyFields(adaAtHome, { signOut: () => SignOutRequest.Pending() })
-        );
-      }),
-      Command.expectExact(SignOut),
-      Command.resolve(SignOut, Message.SucceededSignOut()),
-      model((app) => {
-        expect(app).toStrictEqual(
-          Model.SignedOut({
-            maybeReturnRoute: Option.none(),
-            route: AppRoute.SignIn(),
-            signIn: signInFromHome.signIn,
+          modifyFields(adaAtHome, {
+            signOutRequest: () => SignOutRequest.Pending(),
           })
         );
       }),
-      Command.expectExact(ReplaceUrl({ url: "/sign-in" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
+      Command.expectExact(SignOut()),
+      Command.resolve(SignOut, Message.SucceededSignOut()),
+      model((app) => {
+        expect(app).toStrictEqual(signInOpenedDirectly);
+      }),
+      Command.expectExact(ReplaceUrl({ url: signInRouter() }), FocusMain()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
     );
   });
 
-  it("a failed sign-out keeps the session and can be retried", () => {
+  it("a failure keeps the session and can be retried", () => {
     story(
       update,
       given(adaAtHome),
@@ -194,36 +320,57 @@ describe("app", () => {
       Command.resolve(SignOut, Message.FailedSignOut()),
       model((app) => {
         expect(app).toStrictEqual(
-          modifyFields(adaAtHome, { signOut: () => SignOutRequest.Failed() })
+          modifyFields(adaAtHome, {
+            signOutRequest: () => SignOutRequest.Failed(),
+          })
         );
       }),
       message(Message.ClickedSignOut()),
-      Command.expectExact(SignOut),
+      Command.expectExact(SignOut()),
       Command.resolve(SignOut, Message.SucceededSignOut()),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      ),
       model((app) => {
-        expect(app._tag).toBe("SignedOut");
+        expect(app).toStrictEqual(signInOpenedDirectly);
       })
     );
   });
 
   it("a second click while signing out does nothing", () => {
+    const pending = modifyFields(adaAtHome, {
+      signOutRequest: () => SignOutRequest.Pending(),
+    });
+
     story(
       update,
-      given(
-        modifyFields(adaAtHome, { signOut: () => SignOutRequest.Pending() })
-      ),
+      given(pending),
       message(Message.ClickedSignOut()),
       Command.expectNone(),
       model((app) => {
-        expect(app).toStrictEqual(
-          modifyFields(adaAtHome, { signOut: () => SignOutRequest.Pending() })
-        );
+        expect(app).toStrictEqual(pending);
       })
     );
   });
 
-  it("following a link while signed in moves through the address bar", () => {
+  it("sign-out answers after the session ended change nothing", () => {
+    story(
+      update,
+      given(signInOpenedDirectly),
+      message(Message.ClickedSignOut()),
+      message(Message.SucceededSignOut()),
+      message(Message.FailedSignOut()),
+      Command.expectNone(),
+      model((app) => {
+        expect(app).toStrictEqual(signInOpenedDirectly);
+      })
+    );
+  });
+});
+
+describe("navigation", () => {
+  it("another page moves focus to it; the sign-in page redirects a signed-in user home", () => {
     story(
       update,
       given(adaAtHome),
@@ -233,58 +380,98 @@ describe("app", () => {
           AppRoute.NotFound({ path: "/elsewhere" })
         );
       }),
-      message(Message.ChangedUrl({ url: urlOf("/sign-in") })),
+      Command.expectExact(FocusMain()),
+      Command.resolve(FocusMain, Message.CompletedFocusMain()),
+      message(Message.ChangedUrl({ url: urlOf(signInRouter()) })),
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
       }),
-      Command.expectExact(ReplaceUrl({ url: "/" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
+      Command.expectExact(ReplaceUrl({ url: homeRouter() }), FocusMain()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
     );
   });
 
-  it("a signed-out visitor sent home is redirected to sign-in", () => {
-    story(
-      update,
-      given(
-        Model.SignedOut({
-          maybeReturnRoute: Option.none(),
-          route: AppRoute.SignIn(),
-          signIn: signInFromHome.signIn,
-        })
-      ),
-      message(Message.ChangedUrl({ url: urlOf("/") })),
-      model((app) => {
-        expect(app).toStrictEqual(signInFromHome);
-      }),
-      Command.expectExact(ReplaceUrl({ url: "/sign-in" })),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
-    );
-  });
-
-  it("an internal link navigates; late answers from earlier states change nothing", () => {
+  it("an internal link pushes the address, an external one loads it", () => {
     story(
       update,
       given(adaAtHome),
       message(
         Message.ClickedLink({
-          request: { _tag: "Internal", url: urlOf("/") },
+          request: UrlRequest.Internal({ url: urlOf(homeRouter()) }),
         })
       ),
       Command.expectExact(NavigateInternal({ url: "http://localhost:5173/" })),
       Command.resolve(NavigateInternal, Message.CompletedNavigateInternal()),
-      message(Message.SucceededLoadCurrentUser({ user: ada })),
-      message(Message.FailedLoadCurrentUser({ error: "NoSession" })),
-      message(Message.SucceededSignOut()),
+      message(
+        Message.ClickedLink({
+          request: UrlRequest.External({ href: "https://example.com/" }),
+        })
+      ),
+      Command.expectExact(LoadExternal({ href: "https://example.com/" })),
+      Command.resolve(LoadExternal, Message.CompletedLoadExternal()),
       model((app) => {
-        expect(app).toStrictEqual(
-          Model.SignedOut({
-            maybeReturnRoute: Option.none(),
-            route: AppRoute.SignIn(),
-            signIn: signInFromHome.signIn,
-          })
-        );
-      }),
-      Command.resolve(ReplaceUrl, Message.CompletedReplaceUrl())
+        expect(app).toStrictEqual(adaAtHome);
+      })
     );
+  });
+});
+
+describe("the session requests", () => {
+  const ME = "/api/v1/auth/me";
+
+  const SIGN_OUT = "/api/v1/auth/sign-out";
+
+  it("auth/me: a user, no session, or an unreachable server", async () => {
+    const withUser = fakeStdApi({ [ME]: { body: ada, status: 200 } });
+
+    const withoutSession = fakeStdApi({
+      [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
+    });
+
+    const down = fakeStdApi({});
+
+    const load = async (layer: typeof down.layer) =>
+      await Effect.runPromise(
+        LoadCurrentUser().effect.pipe(Effect.provide(layer))
+      );
+
+    await expect(load(withUser.layer)).resolves.toStrictEqual(
+      Message.SucceededLoadCurrentUser({ maybeUser: Option.some(ada) })
+    );
+    await expect(load(withoutSession.layer)).resolves.toStrictEqual(
+      Message.SucceededLoadCurrentUser({ maybeUser: Option.none() })
+    );
+    await expect(load(down.layer)).resolves.toStrictEqual(
+      Message.FailedLoadCurrentUser()
+    );
+    expect(withUser.seen[0]?.headers["std-client"]).toBe("web");
+  });
+
+  it("sign-out: ended, already ended, or not reached", async () => {
+    const ended = fakeStdApi({ [SIGN_OUT]: { status: 204 } });
+
+    const alreadyEnded = fakeStdApi({
+      [SIGN_OUT]: { body: { _tag: "Unauthenticated" }, status: 401 },
+    });
+
+    const down = fakeStdApi({});
+
+    const signOut = async (layer: typeof down.layer) =>
+      await Effect.runPromise(SignOut().effect.pipe(Effect.provide(layer)));
+
+    await expect(signOut(ended.layer)).resolves.toStrictEqual(
+      Message.SucceededSignOut()
+    );
+    await expect(signOut(alreadyEnded.layer)).resolves.toStrictEqual(
+      Message.SucceededSignOut()
+    );
+    await expect(signOut(down.layer)).resolves.toStrictEqual(
+      Message.FailedSignOut()
+    );
+    expect(ended.seen[0]?.headers["std-client"]).toBe("web");
+    expect(ended.seen[0]?.method).toBe("POST");
   });
 });

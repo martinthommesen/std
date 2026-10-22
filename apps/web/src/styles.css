@@ -13,6 +13,7 @@
   --color-text: #1b1f24;
   --color-text-muted: #59636e;
   --color-border: #c8ced6;
+  --color-border-control: #7d8793;
   --color-accent: #1f5fbf;
   --color-accent-strong: #174a96;
   --color-accent-text: #ffffff;
@@ -49,6 +50,7 @@
     --color-text: #e6e9ed;
     --color-text-muted: #a3adb8;
     --color-border: #3a434d;
+    --color-border-control: #727d89;
     --color-accent: #6ea8ff;
     --color-accent-strong: #9cc3ff;
     --color-accent-text: #0b1420;
@@ -186,9 +188,9 @@ code {
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 
-/* The signed-in user ("me") */
+/* The signed-in user */
 
-.me {
+.account {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -196,15 +198,15 @@ code {
   margin-left: auto;
 }
 
-.me-user {
+.account-user {
   margin: 0;
 }
 
-.me-label {
+.account-label {
   color: var(--color-text-muted);
 }
 
-.me-alert {
+.account-alert {
   flex-basis: 100%;
   margin: 0;
   color: var(--color-danger);
@@ -231,17 +233,17 @@ code {
   background: var(--color-accent);
 }
 
-.button-primary:hover {
+.button-primary:hover:not([data-disabled]) {
   background: var(--color-accent-strong);
 }
 
 .button-quiet {
   color: var(--color-text);
   background: transparent;
-  border-color: var(--color-border);
+  border-color: var(--color-border-control);
 }
 
-.button-quiet:hover {
+.button-quiet:hover:not([data-disabled]) {
   border-color: var(--color-text-muted);
 }
 
@@ -282,7 +284,7 @@ code {
   font: inherit;
   color: var(--color-text);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-control);
   border-radius: var(--radius);
 }
 
@@ -313,5 +315,17 @@ code {
       background-color 120ms ease,
       border-color 120ms ease,
       color 120ms ease;
+  }
+}
+
+/* Forced colors drop box shadows: keep the current page and invalid
+   fields visible. */
+@media (forced-colors: active) {
+  .nav-link[data-current] {
+    text-decoration: underline;
+  }
+
+  .field-input[data-invalid] {
+    border-width: 2px;
   }
 }

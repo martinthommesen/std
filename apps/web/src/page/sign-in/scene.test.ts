@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import {
   Command,
   expect,
@@ -18,8 +19,9 @@ import {
   FocusField,
   Message,
   OutMessage,
-  RequestSession,
+  SignIn,
   init,
+  toMaybePassword,
   update,
   view,
 } from "./sign-in.ts";
@@ -37,7 +39,7 @@ const signInButton = role("button", { name: "Sign in" });
 const signingInButton = role("button", { name: "Signing in…" });
 
 describe("sign-in", () => {
-  it("shows a labelled form with the login focused first", () => {
+  it("shows a labelled form with required fields and the login focused first", () => {
     scene(
       { update, view },
       given(init()),
@@ -46,8 +48,10 @@ describe("sign-in", () => {
       expect(form).toExist(),
       expect(loginField).toHaveAttr("autocomplete", "username"),
       expect(loginField).toHaveAttr("autofocus"),
+      expect(loginField).toHaveAttr("aria-required", "true"),
       expect(passwordField).toHaveAttr("type", "password"),
       expect(passwordField).toHaveAttr("autocomplete", "current-password"),
+      expect(passwordField).toHaveAttr("aria-required", "true"),
       expect(signInButton).toBeEnabled()
     );
   });
@@ -64,6 +68,16 @@ describe("sign-in", () => {
     );
   });
 
+  it("clearing the login shows its error at once", () => {
+    scene(
+      { update, view },
+      given(init()),
+      type(loginField, "ada"),
+      type(loginField, ""),
+      expect(loginField).toHaveAccessibleDescription("Enter your login.")
+    );
+  });
+
   it("the password never reaches the DOM's value attribute", () => {
     scene(
       { update, view },
@@ -74,7 +88,7 @@ describe("sign-in", () => {
     );
   });
 
-  it("signing in shows progress, then reports the user", () => {
+  it("signing in sends what was typed, shows progress, then reports the user", () => {
     scene(
       { update, view },
       given(init()),
@@ -82,17 +96,20 @@ describe("sign-in", () => {
       type(passwordField, "ada-password"),
       submit(form),
       expect(signingInButton).toBeDisabled(),
+      expect(signingInButton).toHaveAttr("aria-live", "polite"),
       expect(form).toHaveAttr("aria-busy", "true"),
-      Command.expectExact(RequestSession),
-      Command.resolve(
-        RequestSession,
-        Message.SucceededRequestSession({ user: ada })
+      Command.expectExact(
+        SignIn({
+          login: "ada",
+          password: Option.getOrThrow(toMaybePassword("ada-password")),
+        })
       ),
+      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
       expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
     );
   });
 
-  it("refused credentials are announced in the form", () => {
+  it("refused credentials are announced in the form, until the user edits", () => {
     scene(
       { update, view },
       given(init()),
@@ -100,31 +117,36 @@ describe("sign-in", () => {
       type(passwordField, "wrong"),
       submit(form),
       Command.resolve(
-        RequestSession,
-        Message.FailedRequestSession({ error: "InvalidCredentials" })
+        SignIn,
+        Message.FailedSignIn({ error: "InvalidCredentials" })
       ),
       expect(within(form, role("alert"))).toHaveText(
         "The login or password is not correct."
       ),
       expect(signInButton).toBeEnabled(),
-      expect(loginField).toHaveValue("ada")
+      expect(loginField).toHaveValue("ada"),
+      type(passwordField, "right"),
+      expect(role("alert")).not.toExist()
     );
   });
 
-  it("an unreachable server is announced too", () => {
+  it("an unreachable server and a session the browser did not keep are announced too", () => {
     scene(
       { update, view },
       given(init()),
       type(loginField, "ada"),
       type(passwordField, "ada-password"),
       submit(form),
-      Command.resolve(
-        RequestSession,
-        Message.FailedRequestSession({ error: "Unavailable" })
-      ),
+      Command.resolve(SignIn, Message.FailedSignIn({ error: "Unavailable" })),
       expect(role("alert")).toHaveText(
         "STD could not be reached. Try again in a moment."
-      )
+      ),
+      submit(form),
+      Command.resolve(
+        SignIn,
+        Message.FailedSignIn({ error: "SessionNotKept" })
+      ),
+      expect(role("alert")).toContainText("did not keep the session")
     );
   });
 });

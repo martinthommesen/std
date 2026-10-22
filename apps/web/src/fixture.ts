@@ -1,8 +1,9 @@
 import type { CurrentUser } from "@std/api/session";
 import { Option } from "effect";
+import type { Url } from "foldkit/url";
 
 import { Model, SignOutRequest } from "./model.ts";
-import { init as initSignIn } from "./page/sign-in/sign-in.ts";
+import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
 
 /** A signed-in user, as `auth/me` describes her. */
@@ -22,13 +23,35 @@ export const ada: CurrentUser = {
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
   route: AppRoute.Home(),
-  signOut: SignOutRequest.Idle(),
+  signOutRequest: SignOutRequest.Idle(),
   user: ada,
 });
 
-/** The sign-in page, after a redirect from the home page. */
-export const signInFromHome = Model.SignedOut({
+/** The sign-in page after a redirect from the home page. */
+export const signInRedirectedFromHome = Model.SignedOut({
   maybeReturnRoute: Option.some(AppRoute.Home()),
   route: AppRoute.SignIn(),
-  signIn: initSignIn(),
+  signIn: signInInit(),
+});
+
+/** The sign-in page, opened directly. */
+export const signInOpenedDirectly = Model.SignedOut({
+  maybeReturnRoute: Option.none(),
+  route: AppRoute.SignIn(),
+  signIn: signInInit(),
+});
+
+/**
+ * An address of the app, as the runtime parses it.
+ *
+ * @param pathname - The path.
+ * @returns The URL.
+ */
+export const urlOf = (pathname: string): Url => ({
+  hash: Option.none(),
+  host: "localhost:5173",
+  pathname,
+  port: Option.none(),
+  protocol: "http:",
+  search: Option.none(),
 });

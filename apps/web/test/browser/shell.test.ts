@@ -117,6 +117,17 @@ const sessionInTheBrowser = async (
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  // A wrong password first: the real server's refusal reaches the form.
+  await page.goto(`${origin}/sign-in`);
+  await page.getByLabel("Login").fill(visitor.login);
+  await page.getByLabel("Password").fill("not-the-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "The login or password is not correct." })
+    .waitFor({ state: "attached" });
+  assert.isUndefined(await sessionCookie(context));
+
   await signIn(page, origin, visitor);
 
   assert.strictEqual(await page.title(), "Home · STD");

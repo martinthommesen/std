@@ -6,11 +6,15 @@ import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
 
 /** Where a sign-out request stands. */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const SignOutRequest = defineTaggedUnion({
   Failed: {},
   Idle: {},
   Pending: {},
 });
+
+/** Where a sign-out request stands. */
+export type SignOutRequest = typeof SignOutRequest.Type;
 
 /**
  * The app: whether there is a session, and the page.
@@ -31,7 +35,7 @@ export const Model = defineTaggedUnion({
   SessionUnavailable: { route: AppRoute },
   SignedIn: {
     route: SignedInRoute,
-    signOut: SignOutRequest,
+    signOutRequest: SignOutRequest,
     user: CurrentUserSchema,
   },
   SignedOut: {

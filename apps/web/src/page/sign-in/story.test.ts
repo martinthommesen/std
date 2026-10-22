@@ -1,5 +1,5 @@
-import { Option, Redacted } from "effect";
-import { Valid } from "foldkit/fieldValidation";
+import { Effect, Option, Redacted, Schema } from "effect";
+import { Invalid, NotValidated, Valid } from "foldkit/fieldValidation";
 import {
   Command,
   expectNoOutMessage,
@@ -12,15 +12,18 @@ import {
 import { modifyFields } from "foldkit/struct";
 import { describe, expect, it } from "vitest";
 
+import { fakeStdApi } from "../../fake-std-api.ts";
 import { ada } from "../../fixture.ts";
 import {
   FocusField,
   LOGIN_INPUT_ID,
   Message,
+  Model,
   OutMessage,
   PASSWORD_INPUT_ID,
-  RequestSession,
+  SignIn,
   Submission,
+  forgetPassword,
   init,
   toMaybePassword,
   update,
@@ -28,13 +31,19 @@ import {
 
 const PASSWORD = "correct horse battery staple";
 
-const filled = modifyFields(init(), {
+const password = Option.getOrThrow(toMaybePassword(PASSWORD));
+
+const filled: Model = modifyFields(init(), {
   login: () => Valid({ value: "ada" }),
-  password: () => Valid({ value: toMaybePassword(PASSWORD) }),
+  password: () => Valid({ value: Option.some(password) }),
+});
+
+const failed: Model = modifyFields(filled, {
+  submission: () => Submission.Failed({ error: "InvalidCredentials" }),
 });
 
 describe("sign-in", () => {
-  it("holds the password only redacted", () => {
+  it("holds the password only redacted, and JSON encoding refuses it", () => {
     story(
       update,
       given(init()),
@@ -42,13 +51,19 @@ describe("sign-in", () => {
         Message.UpdatedPassword({ maybePassword: toMaybePassword(PASSWORD) })
       ),
       model((form) => {
-        const password = Option.getOrThrow(form.password.value);
-
-        expect(form.password._tag).toBe("Valid");
-        expect(Redacted.isRedacted(password)).toBeTruthy();
+        expect(form.password).toStrictEqual(
+          Valid({ value: Option.some(password) })
+        );
         expect(JSON.stringify(form)).not.toContain(PASSWORD);
-        expect(JSON.stringify(password)).toBe('"<redacted:password>"');
-        expect(Redacted.value(password)).toBe(PASSWORD);
+        expect(JSON.stringify(form)).toContain("<redacted:password>");
+        expect(() =>
+          Schema.encodeSync(Schema.toCodecJson(Model))(form)
+        ).toThrow("Cannot serialize Redacted");
+        expect(() =>
+          Schema.encodeSync(Schema.toCodecJson(Message))(
+            Message.UpdatedPassword({ maybePassword: Option.some(password) })
+          )
+        ).toThrow("Cannot serialize Redacted");
       })
     );
   });
@@ -59,15 +74,26 @@ describe("sign-in", () => {
       given(init()),
       message(Message.UpdatedLogin({ value: "ada" })),
       model((form) => {
-        expect(form.login._tag).toBe("Valid");
+        expect(form.login).toStrictEqual(Valid({ value: "ada" }));
       }),
       message(Message.UpdatedLogin({ value: "" })),
       model((form) => {
-        expect(form.login).toStrictEqual({
-          _tag: "Invalid",
-          errors: ["Enter your login."],
-          value: "",
-        });
+        expect(form.login).toStrictEqual(
+          Invalid({ errors: ["Enter your login."], value: "" })
+        );
+      })
+    );
+  });
+
+  it("clearing the password asks for it", () => {
+    story(
+      update,
+      given(filled),
+      message(Message.UpdatedPassword({ maybePassword: toMaybePassword("") })),
+      model((form) => {
+        expect(form.password).toStrictEqual(
+          Invalid({ errors: ["Enter your password."], value: Option.none() })
+        );
       })
     );
   });
@@ -80,7 +106,7 @@ describe("sign-in", () => {
       model((form) => {
         expect(form.login._tag).toBe("Invalid");
         expect(form.password._tag).toBe("Invalid");
-        expect(form.submission._tag).toBe("Idle");
+        expect(form.submission).toStrictEqual(Submission.Idle());
       }),
       Command.expectExact(FocusField({ id: LOGIN_INPUT_ID })),
       Command.resolve(FocusField, Message.CompletedFocusField())
@@ -94,95 +120,166 @@ describe("sign-in", () => {
       message(Message.UpdatedLogin({ value: "ada" })),
       message(Message.SubmittedForm()),
       model((form) => {
-        expect(form.password).toStrictEqual({
-          _tag: "Invalid",
-          errors: ["Enter your password."],
-          value: Option.none(),
-        });
+        expect(form.password).toStrictEqual(
+          Invalid({ errors: ["Enter your password."], value: Option.none() })
+        );
       }),
       Command.expectExact(FocusField({ id: PASSWORD_INPUT_ID })),
       Command.resolve(FocusField, Message.CompletedFocusField())
     );
   });
 
-  it("a filled form requests a session and reports the user", () => {
+  it("a filled form signs in with the login and the still redacted password, then reports the user", () => {
     story(
       update,
       given(filled),
       message(Message.SubmittedForm()),
       model((form) => {
-        expect(form.submission._tag).toBe("Submitting");
+        expect(form.submission).toStrictEqual(Submission.Pending());
       }),
-      Command.expectExact(RequestSession),
-      Command.resolve(
-        RequestSession,
-        Message.SucceededRequestSession({ user: ada })
-      ),
-      model((form) => {
-        expect(form.submission._tag).toBe("Idle");
-      }),
+      Command.expectExact(SignIn({ login: "ada", password })),
+      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
       expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
     );
   });
 
-  it("the request carries the login and the password still redacted", () => {
-    const password = Option.getOrThrow(filled.password.value);
-
-    story(
-      update,
-      given(filled),
-      message(Message.SubmittedForm()),
-      Command.expectExact(RequestSession({ login: "ada", password })),
-      model((form) => {
-        expect(Redacted.isRedacted(password)).toBeTruthy();
-        expect(form.submission._tag).toBe("Submitting");
-      }),
-      Command.resolve(
-        RequestSession,
-        Message.FailedRequestSession({ error: "Unavailable" })
-      )
-    );
-  });
-
-  it("refused credentials keep the form and can be retried", () => {
+  it("refused credentials keep the form, and a retry can succeed", () => {
     story(
       update,
       given(filled),
       message(Message.SubmittedForm()),
       Command.resolve(
-        RequestSession,
-        Message.FailedRequestSession({ error: "InvalidCredentials" })
+        SignIn,
+        Message.FailedSignIn({ error: "InvalidCredentials" })
       ),
       model((form) => {
-        expect(form.submission).toStrictEqual({
-          _tag: "Failed",
-          error: "InvalidCredentials",
-        });
-        expect(form.login.value).toBe("ada");
+        expect(form).toStrictEqual(failed);
       }),
       expectNoOutMessage(),
       message(Message.SubmittedForm()),
-      Command.expectExact(RequestSession),
-      Command.resolve(
-        RequestSession,
-        Message.SucceededRequestSession({ user: ada })
-      ),
+      Command.expectExact(SignIn({ login: "ada", password })),
+      Command.resolve(SignIn, Message.SucceededSignIn({ user: ada })),
       expectOutMessage(OutMessage.SucceededSignIn({ user: ada }))
     );
   });
 
-  it("a submission while one runs does nothing", () => {
+  it("an unreachable server or a session not kept is reported", () => {
+    for (const error of ["Unavailable", "SessionNotKept"] as const) {
+      story(
+        update,
+        given(filled),
+        message(Message.SubmittedForm()),
+        Command.resolve(SignIn, Message.FailedSignIn({ error })),
+        model((form) => {
+          expect(form.submission).toStrictEqual(Submission.Failed({ error }));
+        }),
+        expectNoOutMessage()
+      );
+    }
+  });
+
+  it("editing a field takes back the failure's alert", () => {
     story(
       update,
-      given(
-        modifyFields(filled, { submission: () => Submission.Submitting() })
-      ),
+      given(failed),
+      message(Message.UpdatedLogin({ value: "ada2" })),
+      model((form) => {
+        expect(form.submission).toStrictEqual(Submission.Idle());
+      })
+    );
+  });
+
+  it("a submission while one is pending does nothing", () => {
+    story(
+      update,
+      given(modifyFields(filled, { submission: () => Submission.Pending() })),
       message(Message.SubmittedForm()),
       Command.expectNone(),
       model((form) => {
-        expect(form.submission._tag).toBe("Submitting");
+        expect(form.submission).toStrictEqual(Submission.Pending());
       }),
       expectNoOutMessage()
     );
+  });
+
+  it("forgetting the password keeps the login", () => {
+    expect(forgetPassword(filled)).toStrictEqual(
+      modifyFields(filled, {
+        password: () => NotValidated({ value: Option.none() }),
+      })
+    );
+  });
+});
+
+const ME = "/api/v1/auth/me";
+
+const COOKIE_SIGN_IN = "/api/v1/auth/cookie-sign-in";
+
+const signedIn = {
+  body: { expiresAt: "2026-10-22T12:00:00.000Z", userId: ada.userId },
+  status: 200,
+};
+
+const run = (answers: Parameters<typeof fakeStdApi>[0]) => {
+  const fake = fakeStdApi(answers);
+
+  return {
+    result: Effect.runPromise(
+      SignIn({ login: "ada", password }).effect.pipe(Effect.provide(fake.layer))
+    ),
+    seen: fake.seen,
+  };
+};
+
+describe("the sign-in request", () => {
+  it("sends the password in plain text only in the request body, with STD-Client: web", async () => {
+    const { result, seen } = run({
+      [COOKIE_SIGN_IN]: signedIn,
+      [ME]: { body: ada, status: 200 },
+    });
+
+    await expect(result).resolves.toStrictEqual(
+      Message.SucceededSignIn({ user: ada })
+    );
+    expect(seen.map((request) => request.path)).toStrictEqual([
+      COOKIE_SIGN_IN,
+      ME,
+    ]);
+    expect(JSON.parse(seen[0]?.body ?? "{}")).toStrictEqual({
+      login: "ada",
+      password: PASSWORD,
+    });
+    expect(seen[0]?.headers["std-client"]).toBe("web");
+    expect(seen[0]?.headers.authorization).toBeUndefined();
+  });
+
+  it("maps refused credentials, a session not kept and anything else", async () => {
+    const refused = run({
+      [COOKIE_SIGN_IN]: { body: { _tag: "InvalidCredentials" }, status: 401 },
+    });
+
+    const notKept = run({
+      [COOKIE_SIGN_IN]: signedIn,
+      [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
+    });
+
+    const unreachable = run({});
+
+    await expect(refused.result).resolves.toStrictEqual(
+      Message.FailedSignIn({ error: "InvalidCredentials" })
+    );
+    await expect(notKept.result).resolves.toStrictEqual(
+      Message.FailedSignIn({ error: "SessionNotKept" })
+    );
+    await expect(unreachable.result).resolves.toStrictEqual(
+      Message.FailedSignIn({ error: "Unavailable" })
+    );
+  });
+
+  it("keeps a redacted password redacted in its arguments", () => {
+    const command = SignIn({ login: "ada", password });
+
+    expect(Redacted.isRedacted(command.args.password)).toBeTruthy();
+    expect(JSON.stringify(command.args)).not.toContain(PASSWORD);
   });
 });

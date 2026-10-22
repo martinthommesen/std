@@ -5,6 +5,7 @@ import { modifyFields } from "foldkit/struct";
 import { toString as urlToString } from "foldkit/url";
 
 import {
+  FocusMain,
   LoadCurrentUser,
   LoadExternal,
   NavigateInternal,
@@ -12,13 +13,13 @@ import {
   SignOut,
 } from "./command.ts";
 import { Message } from "./message.ts";
-import type { LoadCurrentUserError } from "./message.ts";
 import { Model, SignOutRequest } from "./model.ts";
-import type { SignedInModel } from "./model.ts";
+import type { SignedInModel, SignedOutModel } from "./model.ts";
 import {
   OutMessage as SignInOutMessage,
-  init as initSignIn,
-  update as updateSignIn,
+  forgetPassword,
+  init as signInInit,
+  update as signInUpdate,
 } from "./page/sign-in/sign-in.ts";
 import {
   AppRoute,
@@ -82,52 +83,64 @@ const landSignedOut = (
     }))
   );
 
-/**
- * A fresh signed-out state.
- *
- * @param route - The page.
- * @param maybeReturnRoute - The page to go to after sign-in.
- * @returns The state.
- */
-const signedOut = (
+const initSignedOut = (
   route: SignedOutRoute,
   maybeReturnRoute: Option.Option<SignedInRoute>
-): Model => Model.SignedOut({ maybeReturnRoute, route, signIn: initSignIn() });
+): Model => Model.SignedOut({ maybeReturnRoute, route, signIn: signInInit() });
 
-/**
- * A fresh signed-in state.
- *
- * @param user - Who is signed in.
- * @returns The state on a route.
- */
-const signedIn =
+const initSignedIn =
   (user: CurrentUser) =>
   (route: SignedInRoute): Model =>
-    Model.SignedIn({ route, signOut: SignOutRequest.Idle(), user });
+    Model.SignedIn({ route, signOutRequest: SignOutRequest.Idle(), user });
 
 /**
- * Settles start-up: `auth/me` answered with no user.
+ * Adds the move of focus to the new page's `main` to a result.
  *
- * @param route - The route the app started on.
- * @param error - Why there is no user.
- * @returns The signed-out or unavailable state.
+ * @param result - A result that shows another page.
+ * @returns It, with `FocusMain`.
  */
-const settleWithoutUser = (
-  route: AppRoute,
-  error: typeof LoadCurrentUserError.Type
-): UpdateReturn =>
-  error === "NoSession"
-    ? landSignedOut(route, signedOut)
-    : { model: Model.SessionUnavailable({ route }) };
+const focusingMain = (result: UpdateReturn): UpdateReturn => ({
+  commands: [...(result.commands ?? []), FocusMain()],
+  model: result.model,
+});
 
 /**
- * Applies a new address to the state the app is in.
+ * Moves the signed-out state to another page. The redirect to sign-in
+ * comes back as a `ChangedUrl` of its own, so a page to return to is never
+ * forgotten here.
+ *
+ * NOTE: the password input is uncontrolled; leaving or entering the
+ * sign-in page remounts it empty, so the Model forgets the password too.
+ *
+ * @param signedOutModel - The state.
+ * @returns The state on the page landed on.
+ */
+const moveSignedOut =
+  (signedOutModel: SignedOutModel) =>
+  (
+    nextRoute: SignedOutRoute,
+    maybeReturnRoute: Option.Option<SignedInRoute>
+  ): Model => {
+    const isSamePage = nextRoute._tag === signedOutModel.route._tag;
+
+    return modifyFields(signedOutModel, {
+      maybeReturnRoute: (current) =>
+        Option.isSome(maybeReturnRoute) ? maybeReturnRoute : current,
+      route: () => nextRoute,
+      signIn: isSamePage ? (form) => form : forgetPassword,
+    });
+  };
+
+/**
+ * Applies a new address to the signed-in or signed-out state. The
+ * redirects this app makes come back as a `ChangedUrl` of their own, so
+ * landing on the same page again changes nothing.
  *
  * @param model - The state.
  * @param route - The new address's route.
  * @returns The next state and any redirect.
  */
-const changeRoute = (model: Model, route: AppRoute): UpdateReturn =>
+const landOnRoute = (model: Model, route: AppRoute): UpdateReturn =>
   Match.value(model).pipe(
     withUpdateReturn,
     Match.tag("SignedIn", (signedInModel) =>
@@ -136,18 +149,47 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn =>
       )
     ),
     Match.tag("SignedOut", (signedOutModel) =>
-      landSignedOut(route, (nextRoute, maybeReturnRoute) =>
-        modifyFields(signedOutModel, {
-          maybeReturnRoute: () => maybeReturnRoute,
-          route: () => nextRoute,
-        })
-      )
+      landSignedOut(route, moveSignedOut(signedOutModel))
     ),
     Match.tag("CheckingSession", "SessionUnavailable", (waiting) => ({
       model: modifyFields(waiting, { route: () => route }),
     })),
     Match.exhaustive
   );
+
+/**
+ * Applies a new address, and moves focus when another page appears.
+ *
+ * @param model - The state.
+ * @param route - The new address's route.
+ * @returns The next state, any redirect, and the focus move.
+ */
+const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
+  const landed = landOnRoute(model, route);
+
+  const showsAnotherPage =
+    (Model.guards.SignedIn(landed.model) ||
+      Model.guards.SignedOut(landed.model)) &&
+    landed.model.route._tag !== model.route._tag;
+
+  return showsAnotherPage ? focusingMain(landed) : landed;
+};
+
+/**
+ * Settles start-up with `auth/me`'s answer: signed in or signed out.
+ *
+ * @param route - The route the app started on.
+ * @param maybeUser - The session's user, if there is a session.
+ * @returns The state and any redirect.
+ */
+const settleSession = (
+  route: AppRoute,
+  maybeUser: Option.Option<CurrentUser>
+): UpdateReturn =>
+  Option.match(maybeUser, {
+    onNone: () => landSignedOut(route, initSignedOut),
+    onSome: (user) => landSignedIn(route, initSignedIn(user)),
+  });
 
 /**
  * Runs an update only in the signed-in state; elsewhere the Message
@@ -161,28 +203,23 @@ const inSignedIn = (
   model: Model,
   whenSignedIn: (signedInModel: SignedInModel) => UpdateReturn
 ): UpdateReturn =>
-  Match.value(model).pipe(
-    withUpdateReturn,
-    Match.tag("SignedIn", whenSignedIn),
-    Match.orElse(() => ({ model }))
-  );
+  Model.guards.SignedIn(model) ? whenSignedIn(model) : { model };
 
 /**
- * Runs an update only while start-up asks for the session.
+ * Runs an update only while start-up asks for the session; a late answer
+ * changes nothing.
  *
  * @param model - The state.
- * @param whenChecking - The update for the start-up state, given its route.
+ * @param whenCheckingSession - The update for that state, given its route.
  * @returns Its result, or the unchanged state.
  */
 const inCheckingSession = (
   model: Model,
-  whenChecking: (route: AppRoute) => UpdateReturn
+  whenCheckingSession: (route: AppRoute) => UpdateReturn
 ): UpdateReturn =>
-  Match.value(model).pipe(
-    withUpdateReturn,
-    Match.tag("CheckingSession", ({ route }) => whenChecking(route)),
-    Match.orElse(() => ({ model }))
-  );
+  Model.guards.CheckingSession(model)
+    ? whenCheckingSession(model.route)
+    : { model };
 
 /**
  * After sign-in: the signed-in state, on the page asked for before
@@ -194,38 +231,35 @@ const inCheckingSession = (
 const enterAfterSignIn =
   (user: CurrentUser): Step =>
   (model) => {
-    const route = Match.value(model).pipe(
-      Match.tag("SignedOut", ({ maybeReturnRoute }): SignedInRoute =>
-        Option.getOrElse(maybeReturnRoute, () => AppRoute.Home())
-      ),
-      Match.orElse((): SignedInRoute => AppRoute.Home())
+    if (!Model.guards.SignedOut(model)) {
+      return { model };
+    }
+
+    const route = Option.getOrElse(model.maybeReturnRoute, (): SignedInRoute =>
+      AppRoute.Home()
     );
 
-    return {
+    return focusingMain({
       commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
-      model: signedIn(user)(route),
-    };
+      model: initSignedIn(user)(route),
+    });
   };
 
+const foldSignInOutMessage = SignInOutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+  SucceededSignIn: ({ user }) => enterAfterSignIn(user),
+});
+
 const foldSignIn = Update.foldChild({
-  foldOutMessage: SignInOutMessage.match<Step>({
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededSignIn: ({ user }) => enterAfterSignIn(user),
-  }),
+  foldOutMessage: foldSignInOutMessage,
   read: (model: Model) =>
-    Match.value(model).pipe(
-      Match.tag("SignedOut", ({ signIn }) => Option.some(signIn)),
-      Match.orElse(() => Option.none())
-    ),
+    Model.guards.SignedOut(model) ? Option.some(model.signIn) : Option.none(),
   toParentMessage: (message) => Message.GotSignInMessage({ message }),
-  update: updateSignIn,
-  write: (model, nextSignIn) =>
-    Match.value(model).pipe(
-      Match.tag("SignedOut", (signedOutModel): Model =>
-        modifyFields(signedOutModel, { signIn: () => nextSignIn })
-      ),
-      Match.orElse((): Model => model)
-    ),
+  update: signInUpdate,
+  write: (model, nextSignIn): Model =>
+    Model.guards.SignedOut(model)
+      ? modifyFields(model, { signIn: () => nextSignIn })
+      : model,
 });
 
 /**
@@ -254,27 +288,27 @@ export const update = (model: Model, message: Message) =>
         Match.exhaustive
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ClickedRetry: () =>
-      Match.value(model).pipe(
-        withUpdateReturn,
-        Match.tag("SessionUnavailable", ({ route }) => ({
-          commands: [LoadCurrentUser()],
-          model: Model.CheckingSession({ route }),
-        })),
-        Match.orElse(() => ({ model }))
-      ),
+    ClickedRetrySessionCheck: () =>
+      Model.guards.SessionUnavailable(model)
+        ? {
+            commands: [LoadCurrentUser()],
+            model: Model.CheckingSession({ route: model.route }),
+          }
+        : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSignOut: () =>
       inSignedIn(model, (signedInModel) =>
-        SignOutRequest.guards.Pending(signedInModel.signOut)
+        SignOutRequest.guards.Pending(signedInModel.signOutRequest)
           ? { model }
           : {
               commands: [SignOut()],
               model: modifyFields(signedInModel, {
-                signOut: () => SignOutRequest.Pending(),
+                signOutRequest: () => SignOutRequest.Pending(),
               }),
             }
       ),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    CompletedFocusMain: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedLoadExternal: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -282,25 +316,29 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedReplaceUrl: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadCurrentUser: ({ error }) =>
-      inCheckingSession(model, (route) => settleWithoutUser(route, error)),
+    FailedLoadCurrentUser: () =>
+      inCheckingSession(model, (route) => ({
+        model: Model.SessionUnavailable({ route }),
+      })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedSignOut: () =>
       inSignedIn(model, (signedInModel) => ({
         model: modifyFields(signedInModel, {
-          signOut: () => SignOutRequest.Failed(),
+          signOutRequest: () => SignOutRequest.Failed(),
         }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotSignInMessage: ({ message: signInMessage }) =>
       foldSignIn(model, signInMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadCurrentUser: ({ user }) =>
-      inCheckingSession(model, (route) => landSignedIn(route, signedIn(user))),
+    SucceededLoadCurrentUser: ({ maybeUser }) =>
+      inCheckingSession(model, (route) => settleSession(route, maybeUser)),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededSignOut: () =>
-      inSignedIn(model, () => ({
-        commands: [ReplaceUrl({ url: signInRouter() })],
-        model: signedOut(AppRoute.SignIn(), Option.none()),
-      })),
+      inSignedIn(model, () =>
+        focusingMain({
+          commands: [ReplaceUrl({ url: signInRouter() })],
+          model: initSignedOut(AppRoute.SignIn(), Option.none()),
+        })
+      ),
   });
