@@ -5,7 +5,12 @@
  * resolver turns them into literals, with `eq(f, g)` semantics for an
  * empty value.
  */
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, layer } from "@effect/vitest";
+import { testDatabaseLayer } from "@std/testing/test-database";
+import { parseDecimal } from "@std/values/decimal";
+import { getOrThrow } from "@std/values/field-error";
+import { Effect } from "effect";
+import { SqlClient } from "effect/sql";
 
 import type { Expr, Path } from "../src/ast.ts";
 import { checkCondition } from "../src/check.ts";
@@ -14,6 +19,8 @@ import type { RecordImage } from "../src/evaluate-core.ts";
 import { evaluateCondition } from "../src/evaluate.ts";
 import { resolveCondition } from "../src/resolve.ts";
 import type { ConditionContext } from "../src/resolve.ts";
+import { identSql, renderSql, sql } from "../src/sql-fragment.ts";
+import { compileCondition } from "../src/sql.ts";
 import { printCondition } from "../src/syntax-print.ts";
 import {
   ASSET,
@@ -156,3 +163,133 @@ describe("record-scope", () => {
     assert.isFalse(printed.ok);
   });
 });
+
+/**
+ * One row of the cross-type table: an integer, a big integer beyond the
+ * int4 range, and a decimal, any of them empty.
+ */
+interface NumericRow {
+  readonly id: number;
+  readonly count: number | null;
+  readonly serial: bigint | null;
+  readonly cost: string | null;
+}
+
+const NUMERIC_ROWS: readonly NumericRow[] = [
+  { cost: "2.500000", count: 2, id: 1, serial: 2n },
+  { cost: "-1.000000", count: -1, id: 2, serial: 3_000_000_000n },
+  { cost: null, count: 2_147_483_647, id: 3, serial: -3_000_000_000n },
+  { cost: "3.000000", count: 3, id: 4, serial: null },
+  { cost: "0.000000", count: null, id: 5, serial: 0n },
+];
+
+const numericImage = (row: NumericRow): RecordImage =>
+  asset({
+    [A.cost.id]: row.cost === null ? null : getOrThrow(parseDecimal(row.cost)),
+    [A.count.id]: row.count,
+    [A.serial.id]: row.serial,
+  });
+
+/** Comparisons of one numeric field with another kind on the rule's record. */
+const CROSS_TYPE: readonly Expr[] = (["eq", "lt", "ge"] as const).flatMap(
+  (op) =>
+    [
+      [A.count.id, A.serial.id],
+      [A.serial.id, A.count.id],
+      [A.count.id, A.cost.id],
+      [A.cost.id, A.count.id],
+      [A.serial.id, A.cost.id],
+    ].map(([left = "", right = ""]): Expr => ({
+      left: field(left),
+      op,
+      right: recordField(right),
+    }))
+);
+
+const ASSET_RECORD_OPTIONS: CheckOptions = {
+  ...WITHOUT_RECORD,
+  recordClassId: ASSET,
+};
+
+layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
+  "record-scope-sql",
+  (pg) => {
+    pg.effect(
+      "scoped cross-type numeric comparisons give the same rows in SQL and TypeScript",
+      () =>
+        Effect.gen(function* crossType() {
+          const client = yield* SqlClient.SqlClient;
+
+          yield* client.unsafe(
+            'CREATE TABLE scoped_numbers (id int PRIMARY KEY, "count" int4, serial int8, cost numeric(38, 6))'
+          );
+
+          for (const row of NUMERIC_ROWS) {
+            yield* client.unsafe(
+              "INSERT INTO scoped_numbers VALUES ($1::int, $2::int4, $3::int8, $4::numeric)",
+              [
+                String(row.id),
+                row.count === null ? null : String(row.count),
+                row.serial === null ? null : row.serial.toString(),
+                row.cost,
+              ]
+            );
+          }
+
+          for (const expr of CROSS_TYPE) {
+            const checked = checkCondition(expr, ASSET_RECORD_OPTIONS);
+
+            if (!checked.ok) {
+              throw checked.error;
+            }
+
+            for (const ruleRecord of NUMERIC_ROWS) {
+              const resolved = resolveCondition(checked.value, {
+                now: Date.UTC(2026, 9, 22),
+                record: { id: PERSON_ID, values: numericImage(ruleRecord) },
+                timeZone: "UTC",
+              });
+
+              if (!resolved.ok) {
+                throw resolved.error;
+              }
+
+              const typescript = NUMERIC_ROWS.flatMap((row) =>
+                evaluateCondition(resolved.value, {
+                  record: numericImage(row),
+                })
+                  ? [row.id]
+                  : []
+              );
+
+              const compiled = compileCondition(resolved.value, {
+                alias: "r",
+                hooks: {
+                  column: (source, column) =>
+                    identSql(source.alias, column.name),
+                  join: () => {
+                    throw new Error("No references here.");
+                  },
+                },
+              });
+
+              const query = renderSql(
+                sql`SELECT r.id FROM scoped_numbers AS "r" WHERE ${compiled.predicate} ORDER BY r.id`
+              );
+
+              const rows = yield* client.unsafe<{ readonly id: number }>(
+                query.text,
+                query.values
+              );
+
+              assert.deepStrictEqual(
+                rows.map((row) => row.id),
+                typescript,
+                `${JSON.stringify(expr)} with record ${ruleRecord.id}`
+              );
+            }
+          }
+        })
+    );
+  }
+);
