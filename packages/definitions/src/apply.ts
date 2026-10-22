@@ -43,7 +43,8 @@ import {
   rename,
   retire,
 } from "./lifecycle.ts";
-import { UPDATABLE } from "./operation.ts";
+import { idInUseRefusal } from "./occupancy.ts";
+import { OPERATION_FORMS, UPDATABLE } from "./operation.ts";
 import type {
   CreateOperation,
   Operation,
@@ -97,18 +98,6 @@ const KINDS_WITH_ENFORCEMENT: ReadonlySet<DefinitionKind> = new Set([
   "override",
   "index",
 ]);
-
-const CREATED_KIND: Readonly<Record<CreateOperation["op"], DefinitionKind>> = {
-  addField: "field",
-  addIndex: "index",
-  createAccessRule: "accessRule",
-  createClass: "class",
-  createGrant: "grant",
-  createNamespace: "namespace",
-  createPermission: "permission",
-  createRole: "role",
-  createSubscription: "subscription",
-};
 
 /** A definition being built from a draft, before it is decoded. */
 interface DefinitionCandidate {
@@ -174,7 +163,11 @@ const checkActiveReferences = (
 
 const create = (work: Work, operation: CreateOperation): void => {
   const { definition } = operation;
-  const kind = CREATED_KIND[operation.op];
+  const kind = OPERATION_FORMS[operation.op].creates;
+
+  if (kind === null) {
+    return;
+  }
 
   if (currentOf(work, definition.id) !== undefined) {
     work.problems.push(
@@ -616,6 +609,17 @@ export const applyOperations = (
   key: SnapshotKey,
   context: ApplyContext = LOCAL_CONTEXT
 ): Result<AppliedChangeSet, ApplyError> => {
+  // A create whose ID something stored already holds stops the change set
+  // before any operation looks at the occupant (Contracts 1.1, 3.6).
+  const taken = idInUseRefusal(
+    (id) => snapshot.get(id) !== undefined,
+    operations
+  );
+
+  if (taken !== undefined) {
+    return fail(taken);
+  }
+
   const work = startWork(snapshot, key, context);
 
   for (const operation of operations) {

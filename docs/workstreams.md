@@ -15,7 +15,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 3 | `ws/0c-reads` | 0C | `@std/access`, read compiler (visibility, masks, cursors, references, counts), auth, generic read routes, acme fixture | merged |
 | 3 | `ws/0c-writes` | 0B, 0C, 1E (history) | save pipeline, deletes, history and history endpoint, two-user write scenario, `spike:demo` | merged |
 | 3 | `ws/0a-foldkit-tooling` | 0A (web toolchain) | Foldkit source vendored at `repos/foldkit`, Foldkit agent skills for Claude Code and Codex, `@foldkit/oxlint-plugin` (all preset) on `apps/web`, vendor checks and canaries; vendored Effect moved to `repos/effect` | merged |
-| 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | in review |
+| 4 | `ws/1a-schema-lifecycle` | 1A | rename, retire, purge, dependency index, protected definitions, indexes, follow-up steps, coordinator, resume, abandon | merged |
 | 4 | `ws/1b-config-layers` | 1B | owner layers, sets, overrides, conflicts, `std upgrade --plan`, `doctor` | merged |
 | 4 | `ws/0a-lock-holder-sampling` | 0A follow-up | `SchemaLockTimeout` names the sessions that held the waited lock, sampled while waiting | merged |
 | 4 | `ws/0a-test-isolation` | 0A follow-up | Postgres-backed suites stay reliable when several CI runs share one cluster; conditions tests use `@std/testing` | merged |
@@ -23,7 +23,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | merged |
 | 4 | `ws/1c-authz-complete` | 1C | every read and write path, stale requests, `@std/api`, error fuzz, users, no-bypass | merged |
 | 4 | `ws/1c-schema-paths` | 1C follow-up | the "Waiting on 1A" items of decision 0014 and gate gaps 1.4 to 1.9: change-set endpoints and definition-table generic writes in `authz-paths`, `stale-paths`, `built-ins`, `no-bypass` and `error-fuzz`; retire, purge and role-dependency refusals over HTTP; the protected-definition matrix through both HTTP paths | planned |
-| 4 | `ws/1-gate-gaps` | Step 1 gate | gaps from the gate map: two-user filters, sorts and labels through child endpoints; the last [spike] item; cross-process invalidation with two processes; `secret` and `condition` codecs | in review |
+| 4 | `ws/1-gate-gaps` | Step 1 gate | gaps from the gate map: two-user filters, sorts and labels through child endpoints; the last [spike] item; cross-process invalidation with two processes; `secret` and `condition` codecs | merged |
 | 4 | `ws/1d-condition-fields` | 1D follow-up | a `condition` field's value is checked against its profile and class on save (Contracts 6.5); the field definition names the class its conditions apply to; cross-process test commits through A's change-set endpoint | planned |
 | 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | in review |
 | 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, OpenAPI, typed client | planned |

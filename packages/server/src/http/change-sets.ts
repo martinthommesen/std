@@ -26,8 +26,18 @@ import { SchemaLockTimeout } from "@std/api/errors/schema-lock-timeout";
 import { SchemaNeedsAttention } from "@std/api/errors/schema-needs-attention";
 import type { SchemaChange } from "@std/api/errors/schemas";
 import {
+  AccessRuleDraftSchema,
+  ClassDraftSchema,
   DEFINITION_KINDS,
   DefinitionSchema,
+  FieldDraftSchema,
+  GrantDraftSchema,
+  IndexDraftSchema,
+  NamespaceDraftSchema,
+  OverrideDraftSchema,
+  PermissionDraftSchema,
+  RoleDraftSchema,
+  SubscriptionDraftSchema,
 } from "@std/definitions/definition";
 import type {
   AccessAction,
@@ -35,7 +45,10 @@ import type {
   Definition,
 } from "@std/definitions/definition";
 import { referencedIds } from "@std/definitions/dependencies";
+import type { Referencing } from "@std/definitions/dependencies";
 import type { DefinitionId } from "@std/definitions/ids";
+import { idInUseRefusal } from "@std/definitions/occupancy";
+import { storedTargetId } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { DefinitionInvalid, problem } from "@std/definitions/problems";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -113,13 +126,61 @@ const actionOf = (operation: Operation): AccessAction => {
 const targetIdOf = (operation: Operation): DefinitionId =>
   "definition" in operation ? operation.definition.id : operation.id;
 
-const kindOf = (
+/**
+ * What an operation of a batch may read about the IDs it names (Contracts
+ * 3.8): a definition an earlier operation of the same batch creates is its
+ * payload, never the stored record with that ID; any other ID is read
+ * from storage, and only once the request's check has found it visible
+ * (callers skip hidden and missing targets before reading them).
+ */
+interface BatchView {
+  readonly snapshot: ConfigSnapshot;
+  /** Payloads of definitions earlier operations of the batch create. */
+  readonly created: ReadonlyMap<DefinitionId, Referencing>;
+}
+
+/**
+ * The view of each operation of a batch, in order.
+ *
+ * @param snapshot - The stored configuration.
+ * @param operations - The operations.
+ * @returns One view per operation.
+ */
+const batchViews = (
   snapshot: ConfigSnapshot,
+  operations: readonly Operation[]
+): readonly BatchView[] => {
+  const created = new Map<DefinitionId, Referencing>();
+
+  return operations.map((operation) => {
+    const view: BatchView = { created: new Map(created), snapshot };
+
+    if ("definition" in operation) {
+      created.set(operation.definition.id, operation.definition);
+    }
+
+    return view;
+  });
+};
+
+/**
+ * What an ID names in a batch: the payload of an earlier create, or the
+ * stored definition.
+ *
+ * @param view - The operation's view.
+ * @param id - The ID.
+ * @returns The payload or the stored definition, if any.
+ */
+const lookup = (view: BatchView, id: DefinitionId): Referencing | undefined =>
+  view.created.get(id) ?? view.snapshot.get(id);
+
+const kindOf = (
+  view: BatchView,
   operation: Operation
 ): DefinitionKind | undefined =>
   "definition" in operation
     ? operation.definition.kind
-    : snapshot.get(operation.id)?.kind;
+    : lookup(view, operation.id)?.kind;
 
 const columnsOf = (
   kind: DefinitionKind,
@@ -151,13 +212,13 @@ const NOT_WRITTEN: ReadonlySet<string> = new Set([
 /**
  * The definition-table columns an operation writes.
  *
- * @param snapshot - The configuration before it.
+ * @param view - What the operation may read (`BatchView`).
  * @param operation - The operation.
  * @param kind - The definition's kind.
  * @returns Column names.
  */
-export const writtenColumns = (
-  snapshot: ConfigSnapshot,
+const writtenColumns = (
+  view: BatchView,
   operation: Operation,
   kind: DefinitionKind
 ): readonly string[] => {
@@ -184,10 +245,18 @@ export const writtenColumns = (
     properties = Object.keys(operation.changes);
   } else {
     const draft: JsonObject = operation.definition;
-    const stored = snapshot.get(operation.definition.id);
-    const before: JsonObject | undefined = stored;
 
-    // A replaced override writes only what differs from the stored one.
+    // Only a replaced override is compared with what it replaces: the
+    // payload of an earlier create in the batch, or the stored record once
+    // checked visible. A create's columns come from its payload alone, so
+    // a stored definition with the same ID never shapes them (3.8).
+    const replaced =
+      operation.op === "setOverride" && operation.version !== null;
+
+    const before: JsonObject | undefined = replaced
+      ? lookup(view, operation.definition.id)
+      : undefined;
+
     properties = Object.keys(draft).filter(
       (key) =>
         before === undefined ||
@@ -200,22 +269,37 @@ export const writtenColumns = (
   );
 };
 
-const decodeDefinition = Schema.decodeUnknownOption(DefinitionSchema);
+const decodeReferencing = Schema.decodeUnknownOption(
+  Schema.Union([
+    DefinitionSchema,
+    NamespaceDraftSchema,
+    ClassDraftSchema,
+    FieldDraftSchema,
+    OverrideDraftSchema,
+    IndexDraftSchema,
+    RoleDraftSchema,
+    PermissionDraftSchema,
+    GrantDraftSchema,
+    AccessRuleDraftSchema,
+    SubscriptionDraftSchema,
+  ])
+);
 
 /**
  * A definition as an `update` would leave it, for its references: the
- * stored one with the changes over it, or the stored one when that does
- * not decode (the engine refuses the update then).
+ * current one (stored, or an earlier create's payload) with the changes
+ * over it, or the current one when that does not decode (the engine
+ * refuses the update then).
  *
- * @param current - The stored definition.
+ * @param current - The current definition or payload.
  * @param changes - The update's changes.
  * @returns The definition after the update.
  */
-const updated = (current: Definition, changes: JsonObject): Definition => {
-  const stored: JsonObject = current;
+const updated = (current: Referencing, changes: JsonObject): Referencing => {
+  const before: JsonObject = current;
 
   return Option.getOrElse(
-    decodeDefinition({ ...stored, ...changes }),
+    decodeReferencing({ ...before, ...changes }),
     () => current
   );
 };
@@ -226,23 +310,24 @@ const updated = (current: Definition, changes: JsonObject): Definition => {
  * (`referencedIds`): a create's references, and the references an update
  * introduces or keeps.
  *
- * @param snapshot - The configuration the operation applies to.
+ * @param view - What the operation may read (`BatchView`).
  * @param operation - The operation.
  * @returns Their IDs.
  */
 const neededIds = (
-  snapshot: ConfigSnapshot,
+  view: BatchView,
   operation: Operation
 ): readonly DefinitionId[] => {
   if ("definition" in operation) {
     const references = referencedIds(operation.definition);
+    const target = storedTargetId(operation);
 
-    return operation.op === "setOverride" && operation.version !== null
-      ? [operation.definition.id, ...references]
-      : references;
+    return target === undefined ? references : [target, ...references];
   }
 
-  const current = snapshot.get(operation.id);
+  // An earlier create's payload, or a stored target: its references are
+  // read only after the target itself passed the visibility check.
+  const current = lookup(view, operation.id);
 
   return operation.op === "update" && current !== undefined
     ? [operation.id, ...referencedIds(updated(current, operation.changes))]
@@ -285,25 +370,40 @@ const hiddenTargets = Effect.fn("Http.hiddenTargets")(function* hiddenTargets(
   operations: readonly Operation[]
 ) {
   const scope = yield* currentReadScope();
-  const created = new Set<DefinitionId>();
   const hidden: DefinitionId[] = [];
+  const views = batchViews(scope.snapshot, operations);
 
-  for (const operation of operations) {
-    for (const id of neededIds(scope.snapshot, operation)) {
-      const target = scope.snapshot.get(id);
+  const visibleStored = Effect.fnUntraced(function* visibleStored(
+    view: BatchView,
+    id: DefinitionId
+  ) {
+    if (view.created.has(id)) {
+      return true;
+    }
 
-      if (!created.has(id)) {
-        const visible =
-          target !== undefined && (yield* definitionVisible(scope, target));
+    const stored = scope.snapshot.get(id);
 
-        if (!visible) {
+    return stored !== undefined && (yield* definitionVisible(scope, stored));
+  });
+
+  for (const [index, operation] of operations.entries()) {
+    const view = views[index] ?? {
+      created: new Map(),
+      snapshot: scope.snapshot,
+    };
+
+    const target = storedTargetId(operation);
+
+    // The target first: nothing stored about it (its references included)
+    // is read until it has proved visible.
+    if (target !== undefined && !(yield* visibleStored(view, target))) {
+      hidden.push(target);
+    } else {
+      for (const id of neededIds(view, operation)) {
+        if (!(yield* visibleStored(view, id))) {
           hidden.push(id);
         }
       }
-    }
-
-    if ("definition" in operation) {
-      created.add(operation.definition.id);
     }
   }
 
@@ -336,20 +436,20 @@ export const checkTargetsVisible = Effect.fn("Http.checkTargetsVisible")(
  * scope: nothing about it is looked up.
  *
  * @param stated - The revision the request stated, if any.
- * @param snapshot - The configuration the request runs at.
+ * @param view - What the operation may read (`BatchView`).
  * @param operation - The operation.
  * @param hidden - Definitions hidden from the caller or missing.
  * @returns Fails with `SchemaChanged`.
  */
 const operationScopeCheck = (
   stated: Option.Option<ConfigState>,
-  snapshot: ConfigSnapshot,
+  view: BatchView,
   operation: Operation,
   hidden: ReadonlySet<DefinitionId>
 ) => {
   const kind = hidden.has(targetIdOf(operation))
     ? undefined
-    : kindOf(snapshot, operation);
+    : kindOf(view, operation);
 
   if (kind === undefined) {
     return Effect.void;
@@ -363,7 +463,7 @@ const operationScopeCheck = (
     : checkRequestRevision(
         stated,
         table,
-        { fields: writtenColumns(snapshot, operation, kind).join(",") },
+        { fields: writtenColumns(view, operation, kind).join(",") },
         { action: action === "create" ? "create" : "update" }
       );
 };
@@ -386,10 +486,14 @@ export const checkChangeSetRevision = Effect.fn("Http.checkChangeSetRevision")(
     stated: Option.Option<ConfigState>,
     operations: readonly Operation[]
   ) {
-    const snapshot = yield* (yield* Catalog).current;
+    const views = batchViews(yield* (yield* Catalog).current, operations);
 
-    for (const operation of operations) {
-      yield* operationScopeCheck(stated, snapshot, operation, new Set());
+    for (const [index, operation] of operations.entries()) {
+      const view = views[index];
+
+      if (view !== undefined) {
+        yield* operationScopeCheck(stated, view, operation, new Set());
+      }
     }
 
     return yield* Effect.void;
@@ -413,15 +517,16 @@ const refuseUnknownRevision = Effect.fn("Http.refuseUnknownRevision")(
     operations: readonly Operation[],
     hidden: ReadonlySet<DefinitionId>
   ) {
-    const snapshot = yield* (yield* Catalog).current;
+    const views = batchViews(yield* (yield* Catalog).current, operations);
     const changes = new Map<string, SchemaChange>();
 
-    for (const operation of operations) {
-      const found = yield* operationScopeCheck(
-        Option.some(stated),
-        snapshot,
-        operation,
-        hidden
+    for (const [index, operation] of operations.entries()) {
+      const view = views[index];
+
+      const found = yield* (
+        view === undefined
+          ? Effect.void
+          : operationScopeCheck(Option.some(stated), view, operation, hidden)
       ).pipe(
         Effect.as([]),
         Effect.catchTag("SchemaChanged", (failure) =>
@@ -448,18 +553,19 @@ const refuseUnknownRevision = Effect.fn("Http.refuseUnknownRevision")(
  * decision counts as refused: the proposed state of a definition record is
  * not evaluated against conditions here.
  *
- * @param snapshot - The configuration.
+ * @param view - What the operation may read (`BatchView`).
  * @param actor - The acting user.
  * @param operation - The operation.
  * @param kind - The kind of definition it writes.
  * @returns True when allowed.
  */
 const mayWrite = (
-  snapshot: ConfigSnapshot,
+  view: BatchView,
   actor: ActingUser,
   operation: Operation,
   kind: DefinitionKind
 ): boolean => {
+  const { snapshot } = view;
   const classId = PLATFORM_CLASS_IDS[DEFINITION_TABLE[kind]];
   const action = actionOf(operation);
 
@@ -471,7 +577,7 @@ const mayWrite = (
     return true;
   }
 
-  return writtenColumns(snapshot, operation, kind).every((column) => {
+  return writtenColumns(view, operation, kind).every((column) => {
     const field = snapshot.fieldByName(classId, column);
 
     return (
@@ -499,14 +605,18 @@ export const authorizeOperations = Effect.fn("Http.authorizeOperations")(
     operations: readonly Operation[],
     hidden: ReadonlySet<DefinitionId> = new Set()
   ) {
-    for (const operation of operations) {
+    const views = batchViews(snapshot, operations);
+
+    for (const [index, operation] of operations.entries()) {
+      const view = views[index] ?? { created: new Map(), snapshot };
+
       // A target the caller cannot see is treated like a missing one.
       const kind = hidden.has(targetIdOf(operation))
         ? undefined
-        : kindOf(snapshot, operation);
+        : kindOf(view, operation);
 
       // An unknown target is reported by the change set (`unknownDefinition`).
-      if (kind !== undefined && !mayWrite(snapshot, actor, operation, kind)) {
+      if (kind !== undefined && !mayWrite(view, actor, operation, kind)) {
         return yield* new NotAllowed();
       }
     }
@@ -556,6 +666,19 @@ export const checkChangeSetRequest = Effect.fn("Http.checkChangeSetRequest")(
       operations,
       new Set(hidden)
     );
+
+    // A create's ID in use: one refusal that depends on occupancy alone,
+    // before any target, plan or engine looks at the batch (1.1, 3.6).
+    const snapshot = yield* (yield* Catalog).current;
+
+    const taken = idInUseRefusal(
+      (id) => snapshot.get(id) !== undefined,
+      operations
+    );
+
+    if (taken !== undefined) {
+      return yield* taken;
+    }
 
     const [first] = hidden;
 

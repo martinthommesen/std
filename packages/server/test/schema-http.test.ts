@@ -6,10 +6,16 @@
  * and retired fields through the read compiler and the save pipeline.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { DEPENDENCY_KINDS } from "@std/definitions/dependencies";
+import type { Definition, OverrideDraft } from "@std/definitions/definition";
+import {
+  DEPENDENCY_KINDS,
+  REFERENCING_KINDS,
+} from "@std/definitions/dependencies";
 import type { DependencyKind } from "@std/definitions/dependencies";
+import { OPERATION_FORMS, OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
   CORE_NAMESPACE_ID,
@@ -22,7 +28,7 @@ import {
 import type { PlatformTable } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import { isJsonArray, isJsonObject } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   Context,
   Deferred,
@@ -31,17 +37,32 @@ import {
   Layer,
   Option,
   Ref,
+  Result,
   Schema,
 } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
+import type {
+  TestHttpClientApi,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import {
+  DEFINITION_TABLES,
+  tableOf,
+} from "../src/catalog/definition-tables.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
+import {
+  createOperation,
+  deleteOperation,
+  PATCH_FIELD_OPERATIONS,
+  PATCH_OTHER_OPERATIONS,
+  updateOperations,
+} from "../src/http/definition-writes.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
@@ -68,6 +89,7 @@ import {
   createRole,
   ensureSite,
   freshId,
+  SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
 import { errorOf, waitUntil } from "./support.ts";
@@ -509,8 +531,8 @@ const REFERENCE_CASES: Readonly<
 };
 
 /**
- * The distinct `changes` of a `SchemaChanged` body, each as JSON text,
- * sorted.
+ * The `changes` of a `SchemaChanged` body, each as JSON text, sorted;
+ * duplicates are kept, so a test comparing lists sees them.
  * @param response - The response.
  * @returns The entries.
  */
@@ -521,9 +543,7 @@ const changesOf = (response: TestResponse): readonly string[] => {
   const listed = body.changes ?? null;
   const changes: readonly JsonValue[] = isJsonArray(listed) ? listed : [];
 
-  // As a set: the generic path may list a field twice (written, and
-  // required without a default).
-  return [...new Set(changes.map((entry) => JSON.stringify(entry)))].toSorted();
+  return changes.map((entry) => JSON.stringify(entry)).toSorted();
 };
 
 /** Visible local definitions the generic walk patches, by role. */
@@ -683,6 +703,746 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     (id) => ({ table_id: id }),
   ],
 };
+
+/** The revisions a request of the hidden-versus-missing matrix states. */
+const MATRIX_REVISIONS = ["current", "past", "future", "unknown"] as const;
+
+/** A revision of the matrix. */
+type MatrixRevision = (typeof MATRIX_REVISIONS)[number];
+
+/** The definitions an operation of the matrix refers to, by kind. */
+interface MatrixRefs {
+  readonly namespace: string;
+  readonly class: string;
+  readonly field: string;
+  readonly role: string;
+  readonly permission: string;
+}
+
+/** An operation that creates a definition with `id` referring to `refs`. */
+type CreateCase = (id: string, refs: MatrixRefs) => Operation;
+
+/** An operation on the stored definition `id`. */
+type TargetCase = (id: string) => Operation;
+
+/** The hidden fixtures a targeted operation names. */
+type HiddenTarget = "role" | "field" | "override";
+
+/** A create: its own ID and its references vary. */
+interface CreateSpec {
+  readonly build: CreateCase;
+  /**
+   * Whether it names references (checked against `build` at run time).
+   * Its generic POST goes to its definition kind's table.
+   */
+  readonly references: boolean;
+}
+
+/** The generic request standing for a targeted operation. */
+type GenericTarget =
+  | readonly [
+      "PATCH" | "DELETE",
+      string,
+      Readonly<Record<string, JsonValue>> | null,
+    ]
+  | "unreachable";
+
+/** An operation on a stored definition: the target varies. */
+interface TargetSpec {
+  readonly build: TargetCase;
+  readonly hidden: HiddenTarget;
+  readonly generic: GenericTarget;
+}
+
+/**
+ * How the matrix exercises one operation kind: every branch is required
+ * (`"none"` says a kind has no such form), so an empty case fails to
+ * compile.
+ */
+type OperationCase =
+  | { readonly create: CreateSpec; readonly target: "none" }
+  | { readonly create: "none"; readonly target: TargetSpec }
+  | { readonly create: CreateSpec; readonly target: TargetSpec };
+
+const LOCAL = { owner: { layer: "local" }, protected: false } as const;
+
+/** The label of the hidden override the matrix replaces. */
+const HIDDEN_OVERRIDE_LABEL = "Matrix hidden override";
+
+/**
+ * The override draft the matrix stores hidden and later replaces with the
+ * same values (the round 8 reproduction).
+ * @param id - Its ID.
+ * @returns The draft.
+ */
+const matrixOverride = (id: string): OverrideDraft => ({
+  ...LOCAL,
+  classId: ACME.laptop,
+  default: null,
+  fieldId: ACME.cost,
+  helpText: null,
+  id,
+  kind: "override",
+  label: HIDDEN_OVERRIDE_LABEL,
+  max: null,
+  maxLength: null,
+  min: null,
+  readOnly: null,
+  required: null,
+});
+
+/**
+ * An update that makes an access rule name one role.
+ * @param ruleId - The rule, at version 1.
+ * @param roleId - The role.
+ * @returns The operation.
+ */
+const roleUpdate = (ruleId: string, roleId: string): Operation => ({
+  changes: { roleIds: [roleId] },
+  id: ruleId,
+  op: "update",
+  version: 1,
+});
+
+/**
+ * The IDs of a set of references, in a fixed order.
+ * @param refs - The references.
+ * @returns Their IDs.
+ */
+const refIdsOf = (refs: MatrixRefs): readonly string[] => [
+  refs.namespace,
+  refs.class,
+  refs.field,
+  refs.role,
+  refs.permission,
+];
+
+/**
+ * Every operation kind the change-set endpoint accepts. The record is
+ * keyed by the operation schema's tags, so a new kind fails to compile
+ * until it has a case; the test also checks the keys against the schema
+ * at run time.
+ */
+const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
+  addField: {
+    create: {
+      build: (id, refs) =>
+        addField(refs.class, "m_fld", { kind: "text" }, { id }).op,
+      references: true,
+    },
+    target: "none",
+  },
+  addIndex: {
+    create: {
+      build: (id, refs) => addIndex(refs.class, [refs.field], false, id).op,
+      references: true,
+    },
+    target: "none",
+  },
+  adopt: {
+    create: "none",
+    target: {
+      build: (id) => ({ id, op: "adopt", version: 1 }),
+      generic: "unreachable",
+      hidden: "role",
+    },
+  },
+  createAccessRule: {
+    create: {
+      build: (id, refs) => {
+        const built = addAccessRule(refs.class, [refs.role], {
+          fields: [refs.field],
+        }).op;
+
+        return built.op === "createAccessRule"
+          ? { ...built, definition: { ...built.definition, id } }
+          : built;
+      },
+      references: true,
+    },
+    target: "none",
+  },
+  createClass: {
+    create: {
+      build: (id, refs) => {
+        const built = createClass("m_cls", {
+          namespaceId: refs.namespace,
+          parentId: refs.class,
+        }).op;
+
+        return built.op === "createClass"
+          ? { ...built, definition: { ...built.definition, id } }
+          : built;
+      },
+      references: true,
+    },
+    target: "none",
+  },
+  createGrant: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          id,
+          kind: "grant",
+          permissionId: refs.permission,
+          roleId: refs.role,
+        },
+        op: "createGrant",
+      }),
+      references: true,
+    },
+    target: "none",
+  },
+  createNamespace: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          extensible: false,
+          helpText: null,
+          id,
+          kind: "namespace",
+          label: "Matrix",
+          name: "m_ns",
+          storage: "standard",
+        },
+        op: "createNamespace",
+      }),
+      references: false,
+    },
+    target: "none",
+  },
+  createPermission: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          helpText: null,
+          id,
+          kind: "permission",
+          label: "Matrix",
+          name: "m.p",
+        },
+        op: "createPermission",
+      }),
+      references: false,
+    },
+    target: "none",
+  },
+  createRole: {
+    create: {
+      build: (id) => ({
+        definition: {
+          ...LOCAL,
+          helpText: null,
+          id,
+          kind: "role",
+          label: "Matrix",
+          name: "m_role",
+        },
+        op: "createRole",
+      }),
+      references: false,
+    },
+    target: "none",
+  },
+  createSubscription: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          classId: refs.class,
+          condition: null,
+          deadLetter: "block",
+          enabled: true,
+          id,
+          identityId: SYSTEM_USER_ID,
+          kind: "subscription",
+          maxAttempts: 10,
+          name: "m_sub",
+          operations: ["create"],
+        },
+        op: "createSubscription",
+      }),
+      references: true,
+    },
+    target: "none",
+  },
+  delete: {
+    create: "none",
+    target: {
+      build: (id) => ({ id, op: "delete", version: 1 }),
+      generic: ["DELETE", "core.role", null],
+      hidden: "role",
+    },
+  },
+  purge: {
+    create: "none",
+    target: {
+      build: (id) => ({
+        confirm: { id, version: 1 },
+        id,
+        op: "purge",
+        version: 1,
+      }),
+      generic: "unreachable",
+      hidden: "field",
+    },
+  },
+  reactivate: {
+    create: "none",
+    target: {
+      build: (id) => ({ id, op: "reactivate", version: 1 }),
+      generic: ["PATCH", "core.role", { state: "active" }],
+      hidden: "role",
+    },
+  },
+  rename: {
+    create: "none",
+    target: {
+      build: (id) => ({ id, name: "m_renamed", op: "rename", version: 1 }),
+      generic: ["PATCH", "core.role", { name: "m_renamed" }],
+      hidden: "role",
+    },
+  },
+  retire: {
+    create: "none",
+    target: {
+      build: (id) => ({ id, op: "retire", version: 1 }),
+      generic: ["PATCH", "core.role", { state: "retired" }],
+      hidden: "role",
+    },
+  },
+  setOverride: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...matrixOverride(id),
+          classId: refs.class,
+          fieldId: refs.field,
+        },
+        op: "setOverride",
+        version: null,
+      }),
+      references: true,
+    },
+    target: {
+      build: (id) => ({
+        definition: matrixOverride(id),
+        op: "setOverride",
+        version: 1,
+      }),
+      generic: ["PATCH", "core.field_override", { label: "Replaced" }],
+      hidden: "override",
+    },
+  },
+  update: {
+    create: "none",
+    target: {
+      build: (id) => ({
+        changes: { label: "x" },
+        id,
+        op: "update",
+        version: 1,
+      }),
+      generic: ["PATCH", "core.role", { label: "x" }],
+      hidden: "role",
+    },
+  },
+};
+
+/**
+ * A generic POST body for a create: the definition table's writable
+ * columns from the operation's draft.
+ * @param operation - A create.
+ * @returns The body.
+ */
+const genericBody = (operation: Operation) => {
+  const body: Record<string, JsonValue> = {};
+
+  if (!("definition" in operation)) {
+    return body;
+  }
+
+  const draft: JsonObject = operation.definition;
+
+  for (const spec of tableOf(operation.definition.kind).columns) {
+    const value = draft[spec.property];
+
+    if (!spec.column.startsWith("enforcement") && value !== undefined) {
+      body[spec.column] = value;
+    }
+  }
+
+  if (operation.definition.kind === "accessRule") {
+    const { target } = operation.definition;
+
+    body.target = target.kind;
+    body.fields =
+      target.kind === "fields" && target.fields !== "*"
+        ? [...target.fields]
+        : null;
+  }
+
+  return body;
+};
+
+/**
+ * A response body with IDs replaced by placeholders, for comparing the
+ * hidden and the missing case.
+ * @param response - The response.
+ * @param ids - The IDs the case named.
+ * @returns Status and body text.
+ */
+const normalized = (response: TestResponse, ids: readonly string[]): string => {
+  let { text } = response;
+
+  for (const [index, id] of ids.entries()) {
+    text = text.replaceAll(id, `<id${index}>`);
+  }
+
+  return `${response.status} ${text}`;
+};
+
+/**
+ * A role create under a given ID.
+ * @param id - The ID.
+ * @returns The operation.
+ */
+const matrixRole = (id: string): Operation => ({
+  definition: {
+    ...LOCAL,
+    helpText: null,
+    id,
+    kind: "role",
+    label: "Matrix",
+    name: "m_role",
+  },
+  op: "createRole",
+});
+
+/**
+ * The requests of the occupied-ID test, each naming one ID: a create, a
+ * create followed by an operation on it (the round 8 and round 9
+ * batches), and an override created without a version.
+ */
+const OCCUPIED_REQUESTS = {
+  createRole: (id: string): Operation[] => [matrixRole(id)],
+  "createRole, delete": (id: string): Operation[] => [
+    matrixRole(id),
+    { id, op: "delete", version: 1 },
+  ],
+  "createRole, setOverride": (id: string): Operation[] => [
+    matrixRole(id),
+    { definition: matrixOverride(id), op: "setOverride", version: 1 },
+  ],
+  "setOverride without a version": (id: string): Operation[] => [
+    { definition: matrixOverride(id), op: "setOverride", version: null },
+  ],
+} satisfies Readonly<Record<string, (id: string) => Operation[]>>;
+
+/** The references the matrix names when they must be visible. */
+const VISIBLE_REFS: MatrixRefs = {
+  class: ACME.asset,
+  field: ACME.cost,
+  namespace: SITE_NAMESPACE_ID,
+  permission: PERMISSION_IDS["schema.purge"],
+  role: BUILT_IN_ROLE_IDS.admin,
+};
+
+/** One case the matrix runs: tag, ID state, references, revision, path. */
+type Coverage = readonly [
+  Operation["op"],
+  string,
+  string,
+  MatrixRevision,
+  "change-set" | "generic",
+];
+
+const coverageKey = (tuple: Coverage): string => tuple.join(" ");
+
+/** What the product says one operation tag supports. */
+interface ProductFacts {
+  /** A create form (`OPERATION_FORMS`). */
+  readonly create: boolean;
+  /** A targeted form (`OPERATION_FORMS`). */
+  readonly target: boolean;
+  /** Its created kind refers to others (`REFERENCING_KINDS`). */
+  readonly references: boolean;
+  /** Generic POST reaches it (`createOperation`). */
+  readonly genericCreate: boolean;
+  /** Generic PATCH or DELETE reaches it (`updateOperations`, `deleteOperation`). */
+  readonly genericTarget: boolean;
+}
+
+/**
+ * Every case the matrix must run, from the product's facts and the
+ * dimensions alone (never from `OPERATION_CASES`): for each operation tag
+ * and revision, a create's references (the change-set path, and the
+ * generic path when it reaches the tag) and its own ID; a target (both
+ * paths when generic writes reach the tag) and a target created earlier
+ * in the batch; and an update's references.
+ * @param facts - The product's facts per tag.
+ * @returns The coverage keys.
+ */
+const expectedCoverage = (
+  facts: ReadonlyMap<Operation["op"], ProductFacts>
+): string[] =>
+  MATRIX_REVISIONS.flatMap((revision) => [
+    ...[...facts].flatMap(([tag, fact]): Coverage[] => [
+      ...(fact.create && fact.references
+        ? [[tag, "new", "hidden|missing", revision, "change-set"] as const]
+        : []),
+      ...(fact.create && fact.references && fact.genericCreate
+        ? [[tag, "new", "hidden|missing", revision, "generic"] as const]
+        : []),
+      ...(fact.create
+        ? [
+            [
+              tag,
+              "own:hidden|missing",
+              "visible",
+              revision,
+              "change-set",
+            ] as const,
+          ]
+        : []),
+      ...(fact.target
+        ? [
+            [
+              tag,
+              "target:hidden|missing",
+              "none",
+              revision,
+              "change-set",
+            ] as const,
+            [
+              tag,
+              "created-earlier:hidden|missing",
+              "none",
+              revision,
+              "change-set",
+            ] as const,
+          ]
+        : []),
+      ...(fact.target && fact.genericTarget
+        ? [[tag, "target:hidden|missing", "none", revision, "generic"] as const]
+        : []),
+    ]),
+    ["update", "visible", "hidden|missing", revision, "change-set"] as const,
+    ["update", "visible", "hidden|missing", revision, "generic"] as const,
+  ]).map(coverageKey);
+
+/**
+ * The probe bodies of a generic PATCH, from the routing inventory: one per
+ * `PATCH_FIELD_OPERATIONS` entry, and one other field of the stored
+ * definition's table (its own value) for `PATCH_OTHER_OPERATIONS`.
+ * @param stored - A stored definition.
+ * @returns The bodies.
+ */
+const patchProbes = (
+  stored: Definition
+): readonly Readonly<Record<string, JsonValue>>[] => {
+  const dispatched = new Set<string>(
+    PATCH_FIELD_OPERATIONS.map((entry) => entry.field)
+  );
+
+  const json: JsonObject = stored;
+
+  const other = tableOf(stored.kind).columns.find(
+    (spec) =>
+      !dispatched.has(spec.property) &&
+      !spec.column.startsWith("enforcement") &&
+      json[spec.property] !== undefined
+  );
+
+  return [
+    ...PATCH_FIELD_OPERATIONS.map((entry) => ({
+      [entry.field]: entry.value === "any" ? "probe_value" : entry.value,
+    })),
+    ...(other === undefined
+      ? []
+      : [{ [other.column]: json[other.property] ?? null }]),
+  ];
+};
+
+/**
+ * The tags a generic POST reaches, from `createOperation` on every
+ * definition table, with a body from the create case of the table's kind
+ * (the tag that creates that kind, `OPERATION_FORMS`).
+ * @param tags - The operation schema's tags.
+ * @returns The reached tags.
+ */
+const postReach = Effect.fn("Matrix.postReach")(function* postReach(
+  tags: readonly Operation["op"][]
+) {
+  const reached = new Set<Operation["op"]>();
+
+  for (const entry of DEFINITION_TABLES) {
+    const tag = tags.find(
+      (candidate) => OPERATION_FORMS[candidate].creates === entry.kind
+    );
+
+    const spec = tag === undefined ? "none" : OPERATION_CASES[tag].create;
+
+    assert.notStrictEqual(spec, "none", `no create case for ${entry.kind}`);
+
+    if (spec !== "none") {
+      const sample = genericBody(spec.build(freshId(), VISIBLE_REFS));
+      const created = yield* createOperation(entry.kind, freshId(), sample);
+
+      reached.add(created.op);
+    }
+  }
+
+  return reached;
+});
+
+/**
+ * The tags a generic PATCH or DELETE reaches, from `updateOperations` on a
+ * stored definition of every kind (active and retired) for every probe
+ * body, and `deleteOperation`.
+ * @param snapshot - A configuration with a stored definition of every kind.
+ * @returns The reached tags.
+ */
+const targetReach = Effect.fn("Matrix.targetReach")(function* targetReach(
+  snapshot: ConfigSnapshot
+) {
+  const reached = new Set<Operation["op"]>();
+
+  for (const entry of DEFINITION_TABLES) {
+    const [stored] = snapshot.all(entry.kind);
+
+    assert.isDefined(stored, `no stored ${entry.kind}`);
+
+    const variants =
+      stored === undefined
+        ? []
+        : [stored, { ...stored, state: "retired" as const }];
+
+    for (const current of variants) {
+      reached.add(deleteOperation(current.id, current.version).op);
+
+      for (const body of patchProbes(current)) {
+        const result = yield* Effect.result(
+          updateOperations(current, current.version, body)
+        );
+
+        for (const operation of Result.isSuccess(result)
+          ? result.success
+          : []) {
+          reached.add(operation.op);
+        }
+      }
+    }
+  }
+
+  // The probes reach every tag the inventory can emit.
+  for (const tag of [
+    ...PATCH_FIELD_OPERATIONS.map((entry) => entry.op),
+    ...Object.values(PATCH_OTHER_OPERATIONS),
+  ]) {
+    assert.isTrue(reached.has(tag), `the PATCH probes never reach ${tag}`);
+  }
+
+  return reached;
+});
+
+/**
+ * The definition table a create's generic POST goes to.
+ * @param operation - A create.
+ * @returns The qualified table name.
+ */
+const createdTable = (operation: Operation): string =>
+  "definition" in operation
+    ? `core.${tableOf(operation.definition.kind).table}`
+    : "";
+
+/**
+ * The matrix's two request forms, with the revision header of each case.
+ * @param http - The test client.
+ * @param token - The admin's session.
+ * @param past - An older revision the journal reaches.
+ * @param current - The current revision.
+ * @returns The change-set POST and the generic write.
+ */
+const matrixRequests = (
+  http: TestHttpClientApi,
+  token: string,
+  past: { readonly revision: number; readonly changeSetId: string },
+  current: { readonly revision: number; readonly changeSetId: string }
+) => {
+  const unknownChangeSet = freshId();
+
+  const headers: Readonly<Record<MatrixRevision, string>> = {
+    current: `${current.revision}.${current.changeSetId}`,
+    future: `${current.revision + 5}.${current.changeSetId}`,
+    past: `${past.revision}.${past.changeSetId}`,
+    unknown: `${current.revision}.${unknownChangeSet}`,
+  };
+
+  const post = (revision: MatrixRevision, operations: Operation[]) => {
+    const parsed = parseJson(JSON.stringify({ operations }));
+
+    return http.request("POST", CHANGE_SETS, {
+      body: parsed.ok ? parsed.value : null,
+      headers: { "std-schema-revision": headers[revision] },
+      token,
+    });
+  };
+
+  const generic = (
+    revision: MatrixRevision,
+    method: "POST" | "PATCH" | "DELETE",
+    path: string,
+    body: Readonly<Record<string, JsonValue>> | null
+  ) => {
+    const sent = {
+      "if-match": '"1"',
+      "std-schema-revision": headers[revision],
+    };
+
+    return body === null
+      ? http.request(method, path, { headers: sent, token })
+      : http.request(method, path, { body, headers: sent, token });
+  };
+
+  return { generic, post };
+};
+
+/** The committed configuration revision. */
+const committedRevision = values(
+  "SELECT revision::text AS value FROM core.config_state"
+);
+
+/**
+ * Compares the two responses of a case: identical after IDs are replaced,
+ * never a success, nothing committed; and records the case.
+ * @param coverage - The cases run so far.
+ * @returns The comparison.
+ */
+const pairRunner = (coverage: Set<string>) =>
+  Effect.fn("Matrix.pair")(function* comparePair(
+    tuple: Coverage,
+    onHidden: Effect.Effect<TestResponse>,
+    onMissing: Effect.Effect<TestResponse>,
+    ids: readonly [readonly string[], readonly string[]]
+  ) {
+    const label = coverageKey(tuple);
+    const before = yield* committedRevision;
+    const hiddenResponse = yield* onHidden;
+    const missingResponse = yield* onMissing;
+
+    assert.strictEqual(
+      normalized(hiddenResponse, ids[0]),
+      normalized(missingResponse, ids[1]),
+      label
+    );
+    assert.notStrictEqual(hiddenResponse.status, 201, label);
+    assert.deepStrictEqual(yield* committedRevision, before, label);
+    coverage.add(label);
+  });
 
 describe("schema-http", () => {
   it("change sets live under /api/v1/schema", () => {
@@ -1371,6 +2131,46 @@ describe("schema-http", () => {
 
             assert.strictEqual(update.status, 409, update.text);
             assert.include(update.text, '"field":"label"');
+
+            // A create's scope comes from its payload alone: an ID that
+            // collides with a hidden definition looks like a fresh one.
+            const snapshot = yield* (yield* Catalog).refresh;
+            const name = snapshot.fieldByName(PLATFORM_CLASS_IDS.role, "name");
+            const collided = addRole("collided_hidden");
+
+            yield* change([collided.op]);
+            yield* asCoreSet([hideRole(name?.id ?? "", "collided_hidden")]);
+
+            const createWithId = (id: string) => {
+              const created = createRole("collision");
+
+              return http.request("POST", CHANGE_SETS, {
+                body: {
+                  operations: [
+                    created.op === "createRole"
+                      ? {
+                          ...created,
+                          definition: { ...created.definition, id },
+                        }
+                      : created,
+                  ],
+                },
+                headers: {
+                  "std-schema-revision": `${current.revision + 9}.${current.changeSetId}`,
+                },
+                token: admin,
+              });
+            };
+
+            const onHidden = yield* createWithId(collided.id);
+            const onMissing = yield* createWithId(MISSING_ID);
+
+            assert.strictEqual(onHidden.status, 409, onHidden.text);
+            assert.include(onHidden.text, '"field":"help_text"');
+            assert.strictEqual(
+              asMissing(onHidden, collided.id),
+              asMissing(onMissing, MISSING_ID)
+            );
           })
       );
 
@@ -2286,4 +3086,422 @@ describe("schema-http", () => {
         })
     );
   });
+
+  layer(readsTestLayer(), { excludeTestServices: true, timeout: 600_000 })(
+    (dbTest) => {
+      dbTest.effect(
+        "hidden and missing look alike for every operation kind, ID state, reference state, stated revision and HTTP path",
+        () =>
+          Effect.gen(function* hiddenMissingMatrix() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const catalog = yield* Catalog;
+
+            const tags = OperationSchema.members.map(
+              (member) => member.fields.op.literal
+            );
+
+            assert.sameMembers(Object.keys(OPERATION_CASES), tags);
+            assert.sameMembers(Object.keys(OPERATION_FORMS), tags);
+
+            // Hidden fixtures: one definition of every referenced kind, and
+            // an override that the round 8 batch replaces with its own values.
+            const hidden = yield* createHidden;
+            const overrideId = freshId();
+
+            yield* change([
+              {
+                definition: matrixOverride(overrideId),
+                op: "setOverride",
+                version: null,
+              },
+            ]);
+
+            const labelField = (yield* catalog.refresh).fieldByName(
+              PLATFORM_CLASS_IDS.field_override,
+              "label"
+            );
+
+            yield* asCoreSet([
+              hideByName(
+                PLATFORM_CLASS_IDS.field_override,
+                labelField?.id ?? "",
+                HIDDEN_OVERRIDE_LABEL
+              ),
+            ]);
+
+            const past = (yield* catalog.refresh).key;
+            const rule = addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin]);
+
+            // A stored subscription, so the generic routes are probed on
+            // every definition kind.
+            yield* change([
+              rule.op,
+              ...(OPERATION_CASES.createSubscription.create === "none"
+                ? []
+                : [
+                    OPERATION_CASES.createSubscription.create.build(
+                      freshId(),
+                      VISIBLE_REFS
+                    ),
+                  ]),
+            ]);
+
+            // What the product supports, per tag; every case must say the
+            // same, and the expected coverage comes from these facts.
+            const postTags = yield* postReach(tags);
+            const targetTags = yield* targetReach(yield* catalog.refresh);
+
+            const facts = new Map(
+              tags.map((tag) => {
+                const form = OPERATION_FORMS[tag];
+
+                return [
+                  tag,
+                  {
+                    create: form.create !== "never",
+                    genericCreate: postTags.has(tag),
+                    genericTarget: targetTags.has(tag),
+                    references:
+                      form.creates !== null &&
+                      REFERENCING_KINDS.has(form.creates),
+                    target: form.target,
+                  } satisfies ProductFacts,
+                ] as const;
+              })
+            );
+
+            for (const [tag, fact] of facts) {
+              const spec = OPERATION_CASES[tag];
+
+              assert.strictEqual(
+                spec.create !== "none",
+                fact.create,
+                `${tag}: create form`
+              );
+              assert.strictEqual(
+                spec.target !== "none",
+                fact.target,
+                `${tag}: target form`
+              );
+              assert.strictEqual(
+                spec.create !== "none" && spec.create.references,
+                fact.create && fact.references,
+                `${tag}: references`
+              );
+              assert.strictEqual(
+                spec.target !== "none" && spec.target.generic !== "unreachable",
+                fact.target && fact.genericTarget,
+                `${tag}: generic target`
+              );
+            }
+
+            const requests = matrixRequests(
+              http,
+              admin,
+              past,
+              (yield* catalog.refresh).key
+            );
+
+            const { generic, post } = requests;
+
+            const hiddenRefs: MatrixRefs = hidden;
+
+            const missingRefs: MatrixRefs = {
+              class: freshId(),
+              field: freshId(),
+              namespace: freshId(),
+              permission: freshId(),
+              role: freshId(),
+            };
+
+            const hiddenTargets: Readonly<Record<HiddenTarget, string>> = {
+              field: hidden.field,
+              override: overrideId,
+              role: hidden.role,
+            };
+
+            const coverage = new Set<string>();
+            const pair = pairRunner(coverage);
+
+            // An occupied create ID: the response depends on occupancy
+            // alone, so a hidden occupant answers exactly like a visible
+            // one (the admin role); a free ID goes ahead instead.
+            const visibleOccupant = BUILT_IN_ROLE_IDS.admin;
+
+            /** The three batches of an occupied-ID case. */
+            interface Occupancy {
+              readonly hidden: readonly [string, Operation[]];
+              readonly free: readonly [string, Operation[]];
+              readonly visible: readonly [string, Operation[]];
+            }
+
+            const occupied = (tuple: Coverage, cases: Occupancy) => {
+              const other =
+                tuple[3] === "future" || tuple[3] === "unknown"
+                  ? cases.free
+                  : cases.visible;
+
+              return pair(
+                tuple,
+                post(tuple[3], cases.hidden[1]),
+                post(tuple[3], other[1]),
+                [[cases.hidden[0]], [other[0]]]
+              );
+            };
+
+            const runCreate = Effect.fn("Matrix.create")(function* runCreate(
+              tag: Operation["op"],
+              creates: CreateSpec,
+              revision: MatrixRevision
+            ) {
+              const fresh = freshId();
+              const withHidden = creates.build(fresh, hiddenRefs);
+              const withMissing = creates.build(fresh, missingRefs);
+
+              assert.strictEqual(
+                JSON.stringify(withHidden) !== JSON.stringify(withMissing),
+                creates.references,
+                `${tag}: references`
+              );
+
+              const refs = [
+                refIdsOf(hiddenRefs),
+                refIdsOf(missingRefs),
+              ] as const;
+
+              if (creates.references) {
+                const path = listPath(createdTable(withHidden));
+
+                yield* pair(
+                  [tag, "new", "hidden|missing", revision, "change-set"],
+                  post(revision, [withHidden]),
+                  post(revision, [withMissing]),
+                  refs
+                );
+                yield* pair(
+                  [tag, "new", "hidden|missing", revision, "generic"],
+                  generic(revision, "POST", path, genericBody(withHidden)),
+                  generic(revision, "POST", path, genericBody(withMissing)),
+                  refs
+                );
+              }
+
+              const free = freshId();
+
+              yield* occupied(
+                [tag, "own:hidden|missing", "visible", revision, "change-set"],
+                {
+                  free: [free, [creates.build(free, VISIBLE_REFS)]],
+                  hidden: [
+                    hidden.role,
+                    [creates.build(hidden.role, VISIBLE_REFS)],
+                  ],
+                  visible: [
+                    visibleOccupant,
+                    [creates.build(visibleOccupant, VISIBLE_REFS)],
+                  ],
+                }
+              );
+            });
+
+            const runTarget = Effect.fn("Matrix.target")(function* runTarget(
+              tag: Operation["op"],
+              target: TargetSpec,
+              revision: MatrixRevision
+            ) {
+              const hiddenId = hiddenTargets[target.hidden];
+              const missingId = freshId();
+              const ids = [[hiddenId], [missingId]] as const;
+
+              yield* pair(
+                [tag, "target:hidden|missing", "none", revision, "change-set"],
+                post(revision, [target.build(hiddenId)]),
+                post(revision, [target.build(missingId)]),
+                ids
+              );
+
+              if (target.generic !== "unreachable") {
+                const [method, table, body] = target.generic;
+
+                yield* pair(
+                  [tag, "target:hidden|missing", "none", revision, "generic"],
+                  generic(revision, method, recordPath(table, hiddenId), body),
+                  generic(revision, method, recordPath(table, missingId), body),
+                  ids
+                );
+              }
+
+              // Created earlier in the batch, under an occupied or a free ID.
+              yield* occupied(
+                [
+                  tag,
+                  "created-earlier:hidden|missing",
+                  "none",
+                  revision,
+                  "change-set",
+                ],
+                {
+                  free: [
+                    missingId,
+                    [matrixRole(missingId), target.build(missingId)],
+                  ],
+                  hidden: [
+                    hiddenId,
+                    [matrixRole(hiddenId), target.build(hiddenId)],
+                  ],
+                  visible: [
+                    visibleOccupant,
+                    [
+                      matrixRole(visibleOccupant),
+                      target.build(visibleOccupant),
+                    ],
+                  ],
+                }
+              );
+            });
+
+            const runUpdateReferences = Effect.fn("Matrix.updateReferences")(
+              function* runUpdateReferences(revision: MatrixRevision) {
+                const ids = [[hidden.role], [missingRefs.role]] as const;
+                const path = recordPath("core.access_rule", rule.id);
+
+                yield* pair(
+                  [
+                    "update",
+                    "visible",
+                    "hidden|missing",
+                    revision,
+                    "change-set",
+                  ],
+                  post(revision, [roleUpdate(rule.id, hidden.role)]),
+                  post(revision, [roleUpdate(rule.id, missingRefs.role)]),
+                  ids
+                );
+                yield* pair(
+                  ["update", "visible", "hidden|missing", revision, "generic"],
+                  generic(revision, "PATCH", path, { role_ids: [hidden.role] }),
+                  generic(revision, "PATCH", path, {
+                    role_ids: [missingRefs.role],
+                  }),
+                  ids
+                );
+              }
+            );
+
+            for (const revision of MATRIX_REVISIONS) {
+              for (const tag of tags) {
+                const spec = OPERATION_CASES[tag];
+
+                if (spec.create !== "none") {
+                  yield* runCreate(tag, spec.create, revision);
+                }
+
+                if (spec.target !== "none") {
+                  yield* runTarget(tag, spec.target, revision);
+                }
+              }
+
+              yield* runUpdateReferences(revision);
+            }
+
+            assert.sameMembers([...coverage], expectedCoverage(facts));
+          })
+      );
+
+      dbTest.effect(
+        "a create's occupied ID gets one refusal, whatever holds it: a hidden field, a hidden role at version 2, a hidden shipped override, a tombstone or a visible definition",
+        () =>
+          Effect.gen(function* occupiedIds() {
+            const http = yield* TestHttpClient;
+            const admin = yield* adminToken;
+            const catalog = yield* Catalog;
+            const snapshot = yield* catalog.refresh;
+
+            const nameOf = (table: PlatformTable, field: string) =>
+              snapshot.fieldByName(PLATFORM_CLASS_IDS[table], field)?.id ?? "";
+
+            const field = addField(ACME.asset, "occ_fld", { kind: "text" });
+            const role = addRole("occ_role");
+            const tombstone = addRole("occ_tomb");
+            const shipped = ACME.purchasedOnOverride;
+
+            yield* change([field.op, role.op, tombstone.op]);
+            yield* change([
+              {
+                changes: { label: "Occupied" },
+                id: role.id,
+                op: "update",
+                version: 1,
+              },
+              { id: tombstone.id, op: "delete", version: 1 },
+            ]);
+            const past = (yield* catalog.refresh).key;
+
+            yield* asCoreSet([
+              hideByName(
+                PLATFORM_CLASS_IDS.field,
+                nameOf("field", "name"),
+                "occ_fld"
+              ),
+              hideByName(
+                PLATFORM_CLASS_IDS.role,
+                nameOf("role", "name"),
+                "occ_role"
+              ),
+              hideByName(
+                PLATFORM_CLASS_IDS.field_override,
+                nameOf("field_override", "field_id"),
+                ACME.purchasedOn
+              ),
+            ]);
+
+            const { post } = matrixRequests(
+              http,
+              admin,
+              past,
+              (yield* catalog.refresh).key
+            );
+
+            const occupants = [
+              field.id,
+              role.id,
+              shipped,
+              tombstone.id,
+              BUILT_IN_ROLE_IDS.admin,
+            ];
+
+            const committed = values(
+              "SELECT revision::text AS value FROM core.config_state"
+            );
+
+            for (const revision of ["current", "past"] as const) {
+              for (const [form, build] of Object.entries(OCCUPIED_REQUESTS)) {
+                const before = yield* committed;
+                const seen = new Set<string>();
+
+                for (const occupant of occupants) {
+                  const response = yield* post(revision, build(occupant));
+
+                  assert.strictEqual(
+                    response.status,
+                    422,
+                    `${form} ${revision}: ${response.text}`
+                  );
+                  seen.add(normalized(response, [occupant]));
+                }
+
+                assert.lengthOf(
+                  [...seen],
+                  1,
+                  `${form} ${revision}: ${[...seen].join(" | ")}`
+                );
+                assert.include([...seen][0] ?? "", "idInUse");
+                assert.deepStrictEqual(yield* committed, before);
+              }
+            }
+          })
+      );
+    }
+  );
 });
