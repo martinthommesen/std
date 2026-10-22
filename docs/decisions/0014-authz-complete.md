@@ -101,7 +101,31 @@ The `no-bypass` source scan (`packages/server/test/name-scan.ts`) checks mention
 - **Discovery.** The scan reads every workspace package from `pnpm-workspace.yaml` and every source extension the compiler accepts (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`). Two packages are skipped, each with a reason: `bench`, which models callers with its own role kinds and never runs STD's authorization, and `packages/testing`, whose fixtures assign the built-in roles to test users by name, as set files do. A listed package that no longer exists fails the scan. Probe: a directory with one file per extension plus non-source files yields exactly the eight source files, each scanned.
 - **Uniqueness.** Every binding of an approved name counts: variables, destructuring, parameters, catch bindings, imports, function declarations and expressions, overload signatures, and class declarations and expressions. Probes: each of those next to an approved `localClash`, and an overloaded `localClash`, make it unapproved.
 
-## Waiting on 1A
+## Schema paths (workstream `ws/1c-schema-paths`, after 1A)
 
-- The change-set endpoints and generic writes on definition tables routed to one-operation change sets: their rows in `authz-paths` (marked `1A:`), their stale checks in `stale-paths`, and protected-definition refusals through them in `built-ins`.
-- `hasPermission` (by ID) for `schema.purge`, with a test that admin without `schema_purger` is refused a purge.
+1A (decision 0011) added the change-set endpoints and routes generic writes on definition tables to one-operation change sets before the platform-table guard. Its own `schema-http.test.ts` holds the combinatorial hidden-versus-missing matrix over every operation tag and both HTTP paths; the suites here build on it rather than repeat it. Gate rows 1.4 to 1.9 now have:
+
+| Gate | Tests | What they assert |
+| --- | --- | --- |
+| 1.4 retire refusals | `schema-refusals-http` "retire refusals through both HTTP paths" | `UseRetireOrPurge` for deleting a field and a table, and retire `DependencyConflict` (a field in a multi-field unique index, a table an active reference points at), through generic `DELETE`/`PATCH {state}` and the change-set endpoint |
+| 1.5 purge refusals | `schema-refusals-http` "purge refusals through the change-set endpoint" | `PurgeRefused` (`notRetired`, `retiredInThisChangeSet`, `confirmation`), `PermissionRequired` (an admin without `schema_purger`), purge `DependencyConflict` for an access rule and an index. Purge has no generic form: `PATCH {"state": "purged"}` is `ValidationFailed` `ReadOnlyField` |
+| 1.6 role dependencies | `schema-refusals-http` "deleting or retiring a role an active access rule names" | `DependencyConflict` naming the rule through `PATCH` and `DELETE /core.role/{id}` and the endpoint's `delete` and `retire` |
+| 1.7 protected definitions | `built-ins` "every protected definition refuses every operation but label and help text through both HTTP paths" | every live protected definition × every operation the engine matrix refuses, through the endpoint and every generic form (checked against the product's `updateOperations`/`deleteOperation`); `DefinitionProtected` or `UseRetireOrPurge`; a label and a help-text change succeed |
+| 1.8 every path | `authz-paths` "every definition and change-set path, for Alice, Bob and the admin"; `no-bypass`; `stale-paths` | applying and reading change sets and generic create, update, retire and delete on definition tables, per caller; with the allow-all rules removed the admin is refused on all of them; stale and malformed revisions on all of them |
+| 1.9 error hygiene | `schema-fuzz` (50 runs, targeted phase, 23 targeted steps) | fuzzed change sets and generic definition writes as two admins, Alice and Bob: documented statuses, no Postgres wording, constraint name, SQLSTATE or stored value, IDs and names only where the contract names them, documented members only |
+
+Every refusal in these suites is checked to commit nothing: the catalog fingerprint where DDL could follow, the revision, definition and config-layer rows, `core.change` entries, the journal and outbox deliveries.
+
+Can-fail evidence (each product check removed by hand, the test run, the change reverted):
+
+- 1.4: `deleteDefinition` without its `NEVER_DELETED` refusal: the generic `DELETE` of a field is no longer `UseRetireOrPurge`.
+- 1.5: `purge` without the not-retired check: a purge of an active field is no longer `PurgeRefused`.
+- 1.6: `roleRuleBlockers` returning nothing: the role delete is no longer `DependencyConflict`.
+- 1.7: the guard's refusal made a no-op: a purge of the core namespace through the endpoint succeeds.
+- 1.8: `authorizeOperations` without its rule check: Alice's change set creating a role succeeds instead of `403 NotAllowed`.
+- 1.9: the request check without its hidden-target refusal: the fuzz finds an admin renaming a hidden role, and its targeted step fails.
+- Stale requests: before the fix below, `stale-paths` found a malformed header served on `GET /schema/change-sets/{id}`.
+
+**Bug fixed.** `GET /api/v1/schema/change-sets/{id}` ignored `STD-Schema-Revision`. It now checks it like the other endpoints that name no table or field, before the journal entry is looked up: malformed is `400 InvalidSchemaRevision`, a revision the database never had `409 SchemaChanged` with no changes. `stale-paths` is its regression test.
+
+Definition writes have no relevant 6.4 change in practice: their scope is the definition table's own columns (platform classes, protected), so an older known revision never refuses them; only a malformed header or a revision the database never had does.
