@@ -23,6 +23,7 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
+  maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
   nextPageId: 1,
@@ -36,6 +37,7 @@ export const adaAtHome = Model.SignedIn({
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
+  maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
   nextPageId: 1,

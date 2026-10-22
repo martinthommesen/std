@@ -27,7 +27,7 @@ const requireRevision = (maybeRevision: Option.Option<Revision>) =>
 
 /**
  * Fetches one table's metadata (`GET meta/tables/{table}`) at the given
- * revision. A revision the server says the database never had (after a
+ * revision, for the list page and the form page. A revision the server says the database never had (after a
  * restore, Contracts 6.4) is dropped and the metadata asked for again
  * without one.
  *
@@ -35,7 +35,7 @@ const requireRevision = (maybeRevision: Option.Option<Revision>) =>
  * @param maybeRevision - The revision to send.
  * @returns The metadata and the revision the response stated.
  */
-const fetchTableMetadata = (
+export const fetchTableMetadata = (
   table: string,
   maybeRevision: Option.Option<Revision>
 ) => {

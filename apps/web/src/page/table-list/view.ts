@@ -18,16 +18,78 @@ import type { Cell } from "../../domain/list-columns.ts";
 import { PAGE_SIZES, isSortable } from "../../domain/list-query.ts";
 import type { SortKey } from "../../domain/list-query.ts";
 import { view as filterBuilderView } from "../../filter-builder/view.ts";
-import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
+import {
+  homeRouter,
+  newRecordRouter,
+  recordRouter,
+  tableListRouter,
+} from "../../route.ts";
 import { buttonView, selectField } from "../../view/controls.ts";
 import { view as notFoundView } from "../not-found.ts";
 import { Message } from "./message.ts";
 import type { ListError, Model, RecordPage, TableMeta } from "./model.ts";
-import { scopeOf } from "./update.ts";
+import { appliedSavedFilter, savedFiltersOf, scopeOf } from "./update.ts";
 
 const HEADING_ID = "table-list-heading";
 
 const RECORDS_HEADING_ID = "table-list-records-heading";
+
+/** The element ID of the saved filter select. */
+export const SAVED_FILTER_ID = "table-list-saved-filter";
+
+const CUSTOM_FILTER = "custom";
+
+/**
+ * The saved filters of the table, as a select: choosing one applies it;
+ * "No filter" clears the filter. The select shows the saved filter the
+ * list applies, or "Your own filter" for any other.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The select, or nothing when the table has none.
+ */
+const savedFilterView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const saved = savedFiltersOf(model);
+
+  if (saved.length === 0) {
+    return h.empty;
+  }
+
+  const value = Option.match(appliedSavedFilter(model), {
+    onNone: () =>
+      Option.isSome(model.query.maybeCondition) ? CUSTOM_FILTER : "",
+    onSome: (filter) => filter.id,
+  });
+
+  return h.div(
+    [h.Class("saved-filters")],
+    [
+      selectField(
+        {
+          id: SAVED_FILTER_ID,
+          label: "Saved filter",
+          onChange: (savedFilterId) =>
+            Message.SelectedSavedFilter({
+              savedFilterId:
+                savedFilterId === CUSTOM_FILTER ? "" : savedFilterId,
+            }),
+          options: [
+            { label: "No filter", value: "" },
+            ...(value === CUSTOM_FILTER
+              ? [{ label: "Your own filter", value: CUSTOM_FILTER }]
+              : []),
+            ...saved.map((filter) => ({
+              label: filter.label,
+              value: filter.id,
+            })),
+          ],
+          value,
+        },
+        h
+      ),
+    ]
+  );
+};
 
 /** The element ID of the page size select. */
 export const PAGE_SIZE_ID = "table-list-page-size";
@@ -375,13 +437,28 @@ const tableView = (
   h.div(
     [h.Class("page")],
     [
-      h.h1([h.Id(HEADING_ID)], [meta.table.label]),
+      h.div(
+        [h.Class("page-heading")],
+        [
+          h.h1([h.Id(HEADING_ID)], [meta.table.label]),
+          meta.table.creatable
+            ? h.a(
+                [
+                  h.Href(newRecordRouter({ table: meta.table.name })),
+                  h.Class("button button-primary"),
+                ],
+                [`New ${meta.table.label}`]
+              )
+            : h.empty,
+        ]
+      ),
       Option.match(model.maybeNotice, {
         onNone: () => h.empty,
         onSome: (notice) =>
           h.p([h.Role("status"), h.Class("notice")], [notice]),
       }),
       staleMetadataView(model, h),
+      savedFilterView(model, h),
       Option.match(scopeOf(model), {
         onNone: () => h.empty,
         onSome: (scope) =>

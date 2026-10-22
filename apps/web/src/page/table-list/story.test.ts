@@ -31,7 +31,13 @@ import {
 import { Message, OutMessage } from "./message.ts";
 import { FilterLoad } from "./model.ts";
 import type { Model, RecordPage } from "./model.ts";
-import { applyStoredFilter, init, update } from "./update.ts";
+import {
+  appliedSavedFilter,
+  applyStoredFilter,
+  init,
+  savedFiltersOf,
+  update,
+} from "./update.ts";
 
 const ASSETS = "acme.asset";
 
@@ -956,6 +962,141 @@ describe("review fixes", () => {
           page: firstPage,
         })
       )
+    );
+  });
+});
+
+describe("saved filters", () => {
+  const MY_LOST = "00000000-0000-4000-8000-0000000005f1";
+
+  const UNREADABLE = "00000000-0000-4000-8000-0000000005f2";
+
+  const myLost: Expr = {
+    args: [
+      { left: { path: [ASSET_FIELDS.owner] }, op: "eq", right: { ctx: "me" } },
+      {
+        left: { path: [ASSET_FIELDS.status] },
+        op: "eq",
+        right: { value: "lost" },
+      },
+    ],
+    op: "and",
+  };
+
+  const withSavedFilters = {
+    ...assetTable,
+    savedFilters: [
+      {
+        condition: myLost,
+        filter: 'owner = me and status = "lost"',
+        id: MY_LOST,
+        label: "My lost assets",
+        name: "my_lost",
+        table: ASSETS,
+      },
+      {
+        condition: { op: "bogus" },
+        filter: "bogus",
+        id: UNREADABLE,
+        label: "Unreadable",
+        name: "unreadable",
+        table: ASSETS,
+      },
+    ],
+  };
+
+  const showingSaved = (() => {
+    const withMetadata = update(
+      opened.model,
+      Message.SucceededLoadTableMetadata({
+        revision: REVISION_3,
+        table: withSavedFilters,
+      })
+    );
+
+    return update(
+      withMetadata.model,
+      Message.SucceededLoadRecords({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_3),
+        page: firstPage,
+      })
+    ).model;
+  })();
+
+  it("applies a saved filter: its AST goes into the builder and the list asks with the metadata's filter text", () => {
+    story(
+      update,
+      given(showingSaved),
+      message(Message.SelectedSavedFilter({ savedFilterId: MY_LOST })),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.some(myLost));
+        expect(page.builder.root).toStrictEqual(
+          expect.objectContaining({ _tag: "Group", junction: "and" })
+        );
+        expect(
+          Option.map(appliedSavedFilter(page), (saved) => saved.id)
+        ).toStrictEqual(Option.some(MY_LOST));
+      }),
+      Command.expectHas(
+        listRequest({
+          filter: Option.some('owner = me and status = "lost"'),
+          generation: 2,
+        })
+      ),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 2,
+            maybeRevision: Option.some(REVISION_3),
+            page: lastPage,
+          }),
+        ]
+      ),
+      message(Message.SelectedSavedFilter({ savedFilterId: "" })),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(appliedSavedFilter(page)).toStrictEqual(Option.none());
+      }),
+      Command.resolveAll(
+        [ReplaceListUrl, Message.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          Message.SucceededLoadRecords({
+            generation: 3,
+            maybeRevision: Option.some(REVISION_3),
+            page: firstPage,
+          }),
+        ]
+      )
+    );
+  });
+
+  it("a saved filter whose condition does not decode is not applied, with a notice", () => {
+    story(
+      update,
+      given(showingSaved),
+      message(Message.SelectedSavedFilter({ savedFilterId: UNREADABLE })),
+      Command.expectNone(),
+      model((page) => {
+        expect(page.query.maybeCondition).toStrictEqual(Option.none());
+        expect(Option.isSome(page.maybeNotice)).toBeTruthy();
+      })
+    );
+  });
+
+  it("offers no saved filters before the metadata loads, and an unknown ID changes nothing", () => {
+    expect(savedFiltersOf(opened.model)).toStrictEqual([]);
+    story(
+      update,
+      given(showingSaved),
+      message(Message.SelectedSavedFilter({ savedFilterId: "missing" })),
+      Command.expectNone(),
+      model((page) => {
+        expect(page).toStrictEqual(showingSaved);
+      })
     );
   });
 });

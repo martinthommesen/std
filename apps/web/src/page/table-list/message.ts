@@ -26,6 +26,7 @@ export const Message = defineMessageUnion({
   FailedLoadTargetTable: { error: MetaError, table: Schema.String },
   GotFilterBuilderMessage: { message: FilterBuilderMessage },
   SelectedPageSize: { pageSize: Schema.String },
+  SelectedSavedFilter: { savedFilterId: Schema.String },
   SucceededLoadRecords: {
     generation: Schema.Int,
     maybeRevision: Schema.Option(SchemaRevision),

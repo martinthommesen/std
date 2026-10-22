@@ -10,7 +10,10 @@ import { SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";
 import { tableHref, view as homeView } from "./page/home.ts";
 import { view as notFoundView } from "./page/not-found.ts";
-import { view as recordView } from "./page/record.ts";
+import {
+  title as recordFormTitle,
+  view as recordFormView,
+} from "./page/record-form/view.ts";
 import { view as signInView } from "./page/sign-in/sign-in.ts";
 import {
   title as tableListTitle,
@@ -102,7 +105,9 @@ const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
 
 const currentTable = (route: AppRoute): Option.Option<string> =>
   Match.value(route).pipe(
-    Match.tag("TableList", "Record", ({ table }) => Option.some(table)),
+    Match.tag("TableList", "Record", "NewRecord", ({ table }) =>
+      Option.some(table)
+    ),
     Match.orElse(() => Option.none())
   );
 
@@ -210,7 +215,19 @@ const signedInPageView = (
     Match.tag("NotFound", ({ path }) =>
       notFoundView(path, { href: homeRouter(), text: "Go to the home page" }, h)
     ),
-    Match.tag("Record", ({ id, table }) => recordView(table, id, h)),
+    Match.tag("Record", "NewRecord", () =>
+      Option.match(model.maybeRecordForm, {
+        onNone: () => h.empty,
+        onSome: (page) =>
+          h.submodel({
+            model: page,
+            slotId: "record-form",
+            toParentMessage: (message) =>
+              Message.GotRecordFormMessage({ message, pageId: page.id }),
+            view: recordFormView,
+          }),
+      })
+    ),
     Match.tag("TableList", () =>
       Option.match(model.maybeTableList, {
         onNone: () => h.empty,
@@ -323,12 +340,18 @@ const sessionUnavailableView = (h: HtmlBuilder<Message>): Html =>
 
 const routeTitle = (
   route: AppRoute,
-  maybeTableList: Option.Option<Parameters<typeof tableListTitle>[0]>
+  maybeTableList: Option.Option<Parameters<typeof tableListTitle>[0]>,
+  maybeRecordForm: Option.Option<Parameters<typeof recordFormTitle>[0]>
 ): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => "Home"),
     Match.tag("NotFound", () => "Page not found"),
-    Match.tag("Record", () => "Record"),
+    Match.tag("Record", "NewRecord", ({ table }) =>
+      Option.match(maybeRecordForm, {
+        onNone: () => table,
+        onSome: recordFormTitle,
+      })
+    ),
     Match.tag("SignIn", () => "Sign in"),
     Match.tag("TableList", ({ table }) =>
       Option.match(maybeTableList, {
@@ -345,12 +368,13 @@ const documentTitle = (model: Model): string =>
     Match.tag("SessionUnavailable", () => `Not reachable · ${APP_NAME}`),
     Match.tag(
       "SignedIn",
-      ({ maybeTableList, route }) =>
-        `${routeTitle(route, maybeTableList)} · ${APP_NAME}`
+      ({ maybeRecordForm, maybeTableList, route }) =>
+        `${routeTitle(route, maybeTableList, maybeRecordForm)} · ${APP_NAME}`
     ),
     Match.tag(
       "SignedOut",
-      ({ route }) => `${routeTitle(route, Option.none())} · ${APP_NAME}`
+      ({ route }) =>
+        `${routeTitle(route, Option.none(), Option.none())} · ${APP_NAME}`
     ),
     Match.exhaustive
   );

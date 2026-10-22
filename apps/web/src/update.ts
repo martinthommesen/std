@@ -22,6 +22,14 @@ import type {
   SignedInModel,
   SignedOutModel,
 } from "./model.ts";
+import { OutMessage as RecordFormOutMessage } from "./page/record-form/message.ts";
+import type { Message as RecordFormMessage } from "./page/record-form/message.ts";
+import { FormMode } from "./page/record-form/model.ts";
+import type { Model as RecordFormModel } from "./page/record-form/model.ts";
+import {
+  init as recordFormInit,
+  update as recordFormUpdate,
+} from "./page/record-form/update.ts";
 import {
   OutMessage as SignInOutMessage,
   forgetPassword,
@@ -89,7 +97,7 @@ const landSignedOut = (
 ): UpdateReturn =>
   Match.value(route).pipe(
     withUpdateReturn,
-    Match.tag("Home", "Record", "TableList", (signedInRoute) => ({
+    Match.tag("Home", "NewRecord", "Record", "TableList", (signedInRoute) => ({
       commands: [ReplaceUrl({ url: signInRouter() })],
       model: toModel(AppRoute.SignIn(), Option.some(signedInRoute)),
     })),
@@ -107,6 +115,7 @@ const initSignedIn =
   (user: CurrentUser, maybeRevision: Option.Option<SchemaRevision>) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
+      maybeRecordForm: Option.none(),
       maybeRevision,
       maybeTableList: Option.none(),
       nextPageId: 1,
@@ -348,15 +357,126 @@ const syncTableList: Step = (model) => {
   );
 };
 
+// THE FORM PAGE
+
+/**
+ * The open form page, if it is the one with this number: an answer to a
+ * Command of a page the user has left reaches no page.
+ *
+ * @param pageId - The page's number.
+ * @returns The reader.
+ */
+const readRecordFormPage =
+  (pageId: number) =>
+  (model: Model): Option.Option<RecordFormModel> =>
+    Model.guards.SignedIn(model)
+      ? pipe(
+          model.maybeRecordForm,
+          Option.filter((page) => page.id === pageId)
+        )
+      : Option.none();
+
+const writeRecordForm = (model: Model, nextForm: RecordFormModel): Model =>
+  Model.guards.SignedIn(model)
+    ? modifyFields(model, { maybeRecordForm: () => Option.some(nextForm) })
+    : model;
+
+const toGotRecordFormMessage =
+  (pageId: number) =>
+  (message: RecordFormMessage): Message =>
+    Message.GotRecordFormMessage({ message, pageId });
+
+const foldRecordFormOutMessage = RecordFormOutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  SawCurrentRevision: ({ revision }) => replaceRevision(revision),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  SawRevision: ({ revision }) => noteRevision(revision),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  SessionEnded: () => endSession,
+});
+
+const foldRecordForm = (pageId: number) =>
+  Update.foldChild({
+    foldOutMessage: foldRecordFormOutMessage,
+    read: readRecordFormPage(pageId),
+    toParentMessage: toGotRecordFormMessage(pageId),
+    update: recordFormUpdate,
+    write: writeRecordForm,
+  });
+
+/** The form a route asks for: its table and mode. */
+interface FormSpec {
+  readonly table: string;
+  readonly mode: FormMode;
+}
+
+const formSpecOf = (route: SignedInRoute): Option.Option<FormSpec> =>
+  Match.value(route).pipe(
+    Match.tag("Record", ({ id, table }) =>
+      Option.some({ mode: FormMode.Edit({ recordId: id }), table })
+    ),
+    Match.tag("NewRecord", ({ table }) =>
+      Option.some({ mode: FormMode.Create(), table })
+    ),
+    Match.orElse(() => Option.none<FormSpec>())
+  );
+
+const isSameForm = (page: RecordFormModel, spec: FormSpec): boolean =>
+  page.table === spec.table &&
+  (FormMode.guards.Create(page.mode)
+    ? FormMode.guards.Create(spec.mode)
+    : FormMode.guards.Edit(spec.mode) &&
+      spec.mode.recordId === page.mode.recordId);
+
+/**
+ * Brings the form page in line with the route: a record's route or the
+ * new-record route opens its form (a new page for another record, table
+ * or mode); any other route closes it.
+ *
+ * @param model - The state after a route change.
+ * @returns The state and the page's Commands.
+ */
+const syncRecordForm: Step = (model) => {
+  if (!Model.guards.SignedIn(model)) {
+    return { model };
+  }
+
+  return Option.match(formSpecOf(model.route), {
+    onNone: () => ({
+      model: modifyFields(model, { maybeRecordForm: () => Option.none() }),
+    }),
+    onSome: (spec) =>
+      Option.exists(model.maybeRecordForm, (page) => isSameForm(page, spec))
+        ? { model }
+        : Update.foldChildInit(
+            recordFormInit({
+              id: model.nextPageId,
+              maybeAppRevision: model.maybeRevision,
+              mode: spec.mode,
+              table: spec.table,
+            }),
+            {
+              foldOutMessage: foldRecordFormOutMessage,
+              toParentMessage: toGotRecordFormMessage(model.nextPageId),
+              toParentModel: (page: RecordFormModel) =>
+                writeRecordForm(
+                  modifyFields(model, { nextPageId: (next) => next + 1 }),
+                  page
+                ),
+            }
+          ),
+  });
+};
+
 /**
  * What a newly signed-in state starts: loading the tables the user can
- * open, and the list page when the route is one.
+ * open, and the list or form page when the route is one.
  *
  * @param model - The signed-in state.
  * @returns It, with those Commands.
  */
 const enterSignedIn: Step = (model) =>
-  Update.combine(model, [reloadTableList, syncTableList]);
+  Update.combine(model, [reloadTableList, syncTableList, syncRecordForm]);
 
 /**
  * Moves the signed-out state to another page. The redirect to sign-in
@@ -412,14 +532,15 @@ const landOnRoute = (model: Model, route: AppRoute): UpdateReturn =>
   );
 
 /**
- * The table a route shows, if any.
+ * What a route shows besides its kind of page: the table, and the record.
  *
  * @param route - The route.
- * @returns The table's name.
+ * @returns Such as `acme.asset/<id>`.
  */
-const tableOf = (route: AppRoute): Option.Option<string> =>
+const pageKeyOf = (route: AppRoute): Option.Option<string> =>
   Match.value(route).pipe(
-    Match.tag("TableList", "Record", ({ table }) => Option.some(table)),
+    Match.tag("TableList", "NewRecord", ({ table }) => Option.some(table)),
+    Match.tag("Record", ({ id, table }) => Option.some(`${table}/${id}`)),
     Match.orElse(() => Option.none())
   );
 
@@ -434,6 +555,7 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
   const landed = Update.combine(model, [
     (stepModel) => landOnRoute(stepModel, route),
     syncTableList,
+    syncRecordForm,
   ]);
 
   const showsAnotherPage =
@@ -441,8 +563,8 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
       Model.guards.SignedOut(landed.model)) &&
     (landed.model.route._tag !== model.route._tag ||
       !Option.makeEquivalence((a: string, b: string) => a === b)(
-        tableOf(landed.model.route),
-        tableOf(model.route)
+        pageKeyOf(landed.model.route),
+        pageKeyOf(model.route)
       ));
 
   return showsAnotherPage ? focusingMain(landed) : landed;
@@ -622,6 +744,9 @@ export const update = (model: Model, message: Message) =>
           signOutRequest: () => SignOutRequest.Failed(),
         }),
       })),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    GotRecordFormMessage: ({ message: recordFormMessage, pageId }) =>
+      foldRecordForm(pageId)(model, recordFormMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotSignInMessage: ({ message: signInMessage }) =>
       foldSignIn(model, signInMessage),

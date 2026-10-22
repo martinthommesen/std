@@ -5,6 +5,7 @@ import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { SchemaRevision } from "./domain/schema-revision.ts";
+import { Model as RecordFormModel } from "./page/record-form/model.ts";
 import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { Model as TableListModel } from "./page/table-list/model.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
@@ -56,7 +57,8 @@ export type Tables = typeof Tables.schema.Type;
  * - `SignedIn`: the user, the page and any sign-out in progress; the
  *   tables the user can open; the latest schema revision a response
  *   stated (Contracts 6.2), seeded from `auth/me` or sign-in; the list
- *   page's state on a list route, and the number the next list page gets.
+ *   page's state on a list route, the form page's on a record's or the
+ *   new-record route, and the number the next page gets.
  *   The
  *   session token is never here: it lives in the HTTP-only cookie.
  */
@@ -65,6 +67,7 @@ export const Model = defineTaggedUnion({
   CheckingSession: { route: AppRoute },
   SessionUnavailable: { route: AppRoute },
   SignedIn: {
+    maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),
     nextPageId: Schema.Int,

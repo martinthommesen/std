@@ -9,9 +9,13 @@
  * `SchemaChanged` refusal refreshes it and asks again, since a read is
  * safe to repeat; the app hears of every revision through `SawRevision`.
  */
+import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
-import type { MetaTable } from "@std/definitions/table-metadata";
-import { Option, Record, Result, pipe } from "effect";
+import type {
+  MetaSavedFilter,
+  MetaTable,
+} from "@std/definitions/table-metadata";
+import { Equal, Option, Record, Result, Schema, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
@@ -722,6 +726,95 @@ const foldFilterBuilder = (scope: ConditionScope) =>
       modifyFields(model, { builder: () => nextBuilder }),
   });
 
+const decodeSavedCondition = Schema.decodeUnknownOption(ExprSchema);
+
+/**
+ * The saved filters the page offers (decision 0019): the metadata serves
+ * only those the list API accepts from the caller.
+ *
+ * @param model - The page.
+ * @returns The table's saved filters, none before the metadata loads.
+ */
+export const savedFiltersOf = (model: Model): readonly MetaSavedFilter[] =>
+  Option.match(tableMetaOf(model), {
+    onNone: () => [],
+    onSome: (meta) => meta.table.savedFilters ?? [],
+  });
+
+/**
+ * The saved filter the list applies now, if its condition is one: the
+ * applied condition equals the saved filter's AST (structurally, so a
+ * condition built by hand to the same AST counts too).
+ *
+ * @param model - The page.
+ * @returns The saved filter.
+ */
+export const appliedSavedFilter = (
+  model: Model
+): Option.Option<MetaSavedFilter> =>
+  pipe(
+    model.query.maybeCondition,
+    Option.flatMap((condition) =>
+      Option.fromNullishOr(
+        savedFiltersOf(model).find((saved) =>
+          Option.exists(decodeSavedCondition(saved.condition), (stored) =>
+            Equal.equals(stored, condition)
+          )
+        )
+      )
+    )
+  );
+
+const SAVED_FILTER_NOTICE =
+  "This saved filter cannot be shown in the filter builder, so the list is not filtered.";
+
+/**
+ * Applies a saved filter through {@link applyStoredFilter}: its AST goes
+ * into the builder and the list, which prints it with the current names
+ * exactly as the metadata's `filter` text names them. An empty ID clears
+ * the filter.
+ *
+ * @param model - The page.
+ * @param savedFilterId - The saved filter's ID, or `""` for none.
+ * @returns The page and its Commands.
+ */
+const applySavedFilter = (
+  model: Model,
+  savedFilterId: string
+): UpdateReturn => {
+  if (savedFilterId === "") {
+    return applyStoredFilter(
+      modifyFields(model, { maybeNotice: () => Option.none() }),
+      Option.none()
+    );
+  }
+
+  const maybeSaved = Option.fromNullishOr(
+    savedFiltersOf(model).find((saved) => saved.id === savedFilterId)
+  );
+
+  return Option.match(
+    pipe(
+      maybeSaved,
+      Option.flatMap((saved) => decodeSavedCondition(saved.condition))
+    ),
+    {
+      onNone: () => ({
+        model: Option.isSome(maybeSaved)
+          ? modifyFields(model, {
+              maybeNotice: () => Option.some(SAVED_FILTER_NOTICE),
+            })
+          : model,
+      }),
+      onSome: (condition) =>
+        applyStoredFilter(
+          modifyFields(model, { maybeNotice: () => Option.none() }),
+          Option.some(condition)
+        ),
+    }
+  );
+};
+
 /**
  * "Try again": the metadata when the page has none, a refresh when it is
  * stale or the records wait for one, else the records.
@@ -798,6 +891,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SelectedPageSize: ({ pageSize }) => resize(model, pageSize),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    SelectedSavedFilter: ({ savedFilterId }) =>
+      applySavedFilter(model, savedFilterId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadRecords: ({ generation, maybeRevision, page }) =>
       receiveRecords(model, generation, page, maybeRevision),

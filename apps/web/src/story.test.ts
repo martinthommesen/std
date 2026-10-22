@@ -283,6 +283,7 @@ describe("signing in", () => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "maybeRecordForm",
           "maybeRevision",
           "maybeTableList",
           "nextPageId",

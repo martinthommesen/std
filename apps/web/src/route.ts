@@ -11,12 +11,13 @@ import { defineRouteUnion, literal, slash, string } from "foldkit/route";
  *   so it survives renames), `sort` the sort keys as field IDs (`-` for
  *   descending, comma-separated), `limit` the page size. The page decodes
  *   them against the table's metadata; the route keeps them as text.
- * - `Record`: `/tables/:table/records/:id`, one record's form (the form
- *   page is workstream 2B's next part; until then a placeholder).
+ * - `Record`: `/tables/:table/records/:id`, one record's form.
+ * - `NewRecord`: `/tables/:table/new`, the form that creates a record.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const AppRoute = defineRouteUnion({
   Home: {},
+  NewRecord: { table: Schema.String },
   NotFound: { path: Schema.String },
   Record: { id: Schema.String, table: Schema.String },
   SignIn: {},
@@ -38,6 +39,7 @@ export type TableListRoute = typeof AppRoute.TableList.Type;
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const SignedInRoute = AppRoute.subset([
   "Home",
+  "NewRecord",
   "NotFound",
   "Record",
   "TableList",
@@ -85,9 +87,23 @@ export const recordRouter = pipe(
   Route.mapTo(AppRoute.Record)
 );
 
+/** `/tables/:table/new`: the form that creates a record. */
+export const newRecordRouter = pipe(
+  literal("tables"),
+  slash(string("table")),
+  slash(literal("new")),
+  Route.mapTo(AppRoute.NewRecord)
+);
+
 /** The route of a URL; an unknown path is `NotFound`. */
 export const urlToAppRoute = Route.parseUrlWithFallback(
-  Route.oneOf(recordRouter, tableListRouter, signInRouter, homeRouter),
+  Route.oneOf(
+    newRecordRouter,
+    recordRouter,
+    tableListRouter,
+    signInRouter,
+    homeRouter
+  ),
   AppRoute.NotFound
 );
 
@@ -100,6 +116,7 @@ export const urlToAppRoute = Route.parseUrlWithFallback(
 export const signedInRouteToUrl = (route: SignedInRoute): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => homeRouter()),
+    Match.tag("NewRecord", ({ table }) => newRecordRouter({ table })),
     Match.tag("NotFound", ({ path }) => path),
     Match.tag("Record", ({ id, table }) => recordRouter({ id, table })),
     Match.tag("TableList", ({ filter, limit, sort, table }) =>
