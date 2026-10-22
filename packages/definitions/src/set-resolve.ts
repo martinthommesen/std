@@ -31,6 +31,7 @@ import { DefinitionInvalid, problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import { SetFileSchema } from "./set-file.ts";
 import type {
+  ConditionEntrySchema,
   ReferenceEntrySchema,
   SimpleKindSchema,
   AccessRuleEntry,
@@ -310,6 +311,8 @@ type SimpleKind = typeof SimpleKindSchema.Type;
 
 type ReferenceEntry = typeof ReferenceEntrySchema.Type;
 
+type ConditionEntry = typeof ConditionEntrySchema.Type;
+
 /**
  * Whether a type entry is a bare kind name.
  *
@@ -327,6 +330,15 @@ const isSimpleKind = (type: TypeEntry): type is SimpleKind =>
  */
 const isReferenceEntry = (type: TypeEntry): type is ReferenceEntry =>
   !isSimpleKind(type) && "target" in type;
+
+/**
+ * Whether a type entry is a condition naming its table.
+ *
+ * @param type - A type entry.
+ * @returns True for a condition entry.
+ */
+const isConditionEntry = (type: TypeEntry): type is ConditionEntry =>
+  !isSimpleKind(type) && "class" in type;
 
 /** The field type of each bare kind name. */
 const SIMPLE_TYPES: Readonly<Record<SimpleKind, FieldType>> = {
@@ -357,6 +369,14 @@ const resolveType = (
     return targetClassId === undefined
       ? undefined
       : { kind: "reference", targetClassId };
+  }
+
+  if (isConditionEntry(type)) {
+    const classId = tableId(resolution, field.id, type.class);
+
+    return classId === undefined
+      ? undefined
+      : { classId, kind: "condition", profile: type.profile };
   }
 
   return type;

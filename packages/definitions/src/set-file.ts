@@ -21,6 +21,8 @@
  *     fields:
  *       - { id: <uuid>, name: serial, type: { kind: text, maxLength: 64 } }
  *       - { id: <uuid>, name: owner, type: { kind: reference, target: core.user } }
+ *       - { id: <uuid>, name: due_when,
+ *           type: { kind: condition, class: acme.asset, profile: filter } }
  *     overrides:
  *       - { id: <uuid>, field: purchased_on, required: true }
  *     indexes:
@@ -34,7 +36,10 @@
  * subscriptions: []
  * ```
  */
-import { FieldTypeSchema } from "@std/values/field-type";
+import {
+  ConditionProfileSchema,
+  FieldTypeSchema,
+} from "@std/values/field-type";
 import {
   Array as SchemaArray,
   Boolean as SchemaBoolean,
@@ -109,12 +114,24 @@ export const ReferenceEntrySchema = Struct({
 });
 
 /**
+ * A condition type in a file names the table whose fields its conditions
+ * may name, and their profile.
+ */
+export const ConditionEntrySchema = Struct({
+  class: SchemaString,
+  kind: Literal("condition"),
+  profile: ConditionProfileSchema,
+});
+
+/**
  * A field type in a file: a bare kind name, a reference naming its target
- * table, or any `@std/values` field type object.
+ * table, a condition naming its table, or any `@std/values` field type
+ * object.
  */
 export const TypeEntrySchema = Union([
   SimpleKindSchema,
   ReferenceEntrySchema,
+  ConditionEntrySchema,
   FieldTypeSchema,
 ]);
 

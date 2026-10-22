@@ -22,10 +22,10 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 4 | `ws/1d-differential-coverage` | 1D follow-up | the differential test's coverage gate holds independently of machine speed | merged |
 | 4 | `ws/1e-outbox-producer` | 1E | subscriptions, delivery rows, claim query tests, version invariant property test | merged |
 | 4 | `ws/1c-authz-complete` | 1C | every read and write path, stale requests, `@std/api`, error fuzz, users, no-bypass | merged |
-| 4 | `ws/1c-schema-paths` | 1C follow-up | the "Waiting on 1A" items of decision 0014 and gate gaps 1.4 to 1.9: change-set endpoints and definition-table generic writes in `authz-paths`, `stale-paths`, `built-ins`, `no-bypass` and `error-fuzz`; retire, purge and role-dependency refusals over HTTP; the protected-definition matrix through both HTTP paths | planned |
+| 4 | `ws/1c-schema-paths` | 1C follow-up | the "Waiting on 1A" items of decision 0014 and gate gaps 1.4 to 1.9: change-set endpoints and definition-table generic writes in `authz-paths`, `stale-paths`, `built-ins`, `no-bypass` and `error-fuzz`; retire, purge and role-dependency refusals over HTTP; the protected-definition matrix through both HTTP paths | in progress |
 | 4 | `ws/1-gate-gaps` | Step 1 gate | gaps from the gate map: two-user filters, sorts and labels through child endpoints; the last [spike] item; cross-process invalidation with two processes; `secret` and `condition` codecs | merged |
-| 4 | `ws/1d-condition-fields` | 1D follow-up | a `condition` field's value is checked against its profile and class on save (Contracts 6.5); the field definition names the class its conditions apply to; cross-process test commits through A's change-set endpoint | planned |
-| 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | in review |
+| 4 | `ws/1d-condition-fields` | 1D follow-up | a `condition` field's value is checked against its profile and class on save (Contracts 6.5); the field definition names the class its conditions apply to; cross-process test commits through A's change-set endpoint | merged |
+| 4 | `ws/1-quickstart` | Step 1 gate | quickstart, ServiceNow mapping, gate map (`docs/gates.md`), `v0.0.1` | merged (tag pending the gate) |
 | 5 | `ws/2a-metadata` | 2A, 2D | metadata endpoint, `recordSchema`, choices, layouts, auto-numbers, OpenAPI, typed client | planned |
 | 5 | `ws/2b-web` | 2B, 2C | Foldkit web app, lists, forms, filter builder, picker, history panel, stale forms, browser tests | planned |
 | 5 | `ws/2d-helpdesk` | 2D | helpdesk set, upgrade test, rename test, `v0.0.2` | planned |

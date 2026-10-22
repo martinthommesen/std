@@ -24,13 +24,17 @@ import type { FieldError } from "@std/api/errors/field-errors";
  * value, the hooks' included, under the effective type, and
  * `validateProposal` checks required fields over the whole record.
  */
+import { checkConditionJson } from "@std/conditions/check";
+import type { ClassView } from "@std/conditions/class-view";
+import type { ConditionIssue } from "@std/conditions/issue";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import { decodeIn, encodeOut } from "@std/values/codec";
 import type { StoredOrPlaintext } from "@std/values/compare";
-import { refuse } from "@std/values/field-error";
-import type { Decoded, InvalidValue } from "@std/values/field-error";
+import { InvalidValue, refuse } from "@std/values/field-error";
+import type { Decoded } from "@std/values/field-error";
 import type { DecodedInput } from "@std/values/field-value";
+import { isJsonValue } from "@std/values/json-value";
 import { planCreate, planUpdate } from "@std/values/write";
 import type { PayloadEntry } from "@std/values/write";
 import { isPlaintext } from "@std/values/write-only";
@@ -270,6 +274,70 @@ export const finalizeUpdate = (
   fields: ReadonlyMap<DefinitionId, EffectiveField>,
   proposal: Proposal
 ): Proposal => recheckAll(fields, proposal, proposal.values);
+
+const invalidCondition = (issues: readonly ConditionIssue[]): InvalidValue =>
+  new InvalidValue({
+    hint: issues
+      .map((issue) => `${issue.reason} at ${issue.path.join(".") || "root"}`)
+      .join("; "),
+    message:
+      "The condition does not check against this field's table and profile.",
+    reason: "invalidCondition",
+  });
+
+/**
+ * Checks every condition value a write sets (Contracts 5.2, 6.5): a
+ * non-null value of a written condition field is checked as being stored
+ * against the field's class and profile, in the caller's view. Field IDs
+ * must exist there and not be retired, operators must fit the type and
+ * profile, literals must convert.
+ *
+ * The view is the caller's (the filter profile reads the caller's readable
+ * fields, 3.4, 5.10), so a field the caller can never read is unknown,
+ * exactly like an ID that names nothing; the hint lists only issue reasons
+ * and AST positions, never a field (decision 0005, "Condition fields").
+ * Only written fields are checked: a stored condition that a later retire
+ * made invalid stays as it is until the field itself is written again.
+ *
+ * @param fields - The effective fields of the record's class, by ID.
+ * @param values - The final proposed values.
+ * @param written - The fields the write changes (Contracts 3.9).
+ * @param view - What the caller may name in a condition.
+ * @returns The refusals, by field ID.
+ */
+export const conditionRefusals = (
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  values: ReadonlyMap<DefinitionId, DecodedInput>,
+  written: ReadonlySet<DefinitionId>,
+  view: ClassView
+): ReadonlyMap<DefinitionId, InvalidValue> => {
+  const refusals = new Map<DefinitionId, InvalidValue>();
+
+  for (const fieldId of written) {
+    const type = fields.get(fieldId)?.type;
+    const value = values.get(fieldId);
+
+    if (
+      type?.kind === "condition" &&
+      value !== undefined &&
+      value !== null &&
+      isJsonValue(value)
+    ) {
+      const checked = checkConditionJson(value, {
+        classId: type.classId,
+        profile: type.profile,
+        purpose: "store",
+        view,
+      });
+
+      if (!checked.ok) {
+        refusals.set(fieldId, invalidCondition(checked.error.issues));
+      }
+    }
+  }
+
+  return refusals;
+};
 
 /** What validation needs besides the proposal. */
 export interface ValidationInput {

@@ -31,7 +31,12 @@ const BOOLEAN: FieldType = { kind: "boolean" };
 const JSON_TYPE: FieldType = { kind: "json" };
 const PASSWORD: FieldType = { kind: "password" };
 const SECRET: FieldType = { kind: "secret" };
-const CONDITION: FieldType = { kind: "condition", profile: "filter" };
+
+const CONDITION: FieldType = {
+  classId: "00000000-0000-7000-8000-000000000100",
+  kind: "condition",
+  profile: "filter",
+};
 
 const TIME_ZONES = [
   "UTC",
@@ -461,10 +466,7 @@ describe("json", () => {
 
       assert.deepStrictEqual(roundTrip(JSON_TYPE, value), value);
       assert.deepStrictEqual(
-        roundTrip(
-          { kind: "condition", profile: "filter" },
-          { args: [], op: "and", set: true }
-        ),
+        roundTrip(CONDITION, { args: [], op: "and", set: true }),
         { args: [], op: "and", set: true }
       );
     }

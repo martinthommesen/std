@@ -3,11 +3,14 @@
  * records, as `(from_id, to_id, kind)` rows in `core.config_dependency`.
  *
  * Kinds registered so far: `extends`, `field_of`, `references_table`,
+ * `condition_on` (a condition field to the class its conditions apply to),
  * `index_on`, `display_field`, `access_rule_on`, `rule_role`, `overrides`,
  * `condition_reads`, `subscription_on` (a subscription to its class) and
  * `grant_of` (a grant to its role and its permission). Later features add
  * `layout_uses`, `rule_writes` and `choice_of`.
  */
+import type { FieldType } from "@std/values/field-type";
+
 import { conditionFieldIds } from "./condition.ts";
 import type { Condition } from "./condition.ts";
 import type {
@@ -33,6 +36,7 @@ export const DEPENDENCY_KINDS = [
   "extends",
   "field_of",
   "references_table",
+  "condition_on",
   "index_on",
   "display_field",
   "access_rule_on",
@@ -102,6 +106,34 @@ const conditionEdges = (
         edge(id, fieldId, "condition_reads")
       );
 
+/**
+ * The class a field's type names: a reference's target, or the class a
+ * condition field's conditions apply to.
+ *
+ * @param type - The field type.
+ * @returns The class ID, or null for other types.
+ */
+export const typeClassOf = (type: FieldType): DefinitionId | null => {
+  if (type.kind === "reference") {
+    return type.targetClassId;
+  }
+
+  return type.kind === "condition" ? type.classId : null;
+};
+
+const typeEdges = (
+  id: DefinitionId,
+  type: FieldType
+): readonly Dependency[] => {
+  if (type.kind === "reference") {
+    return [edge(id, type.targetClassId, "references_table")];
+  }
+
+  return type.kind === "condition"
+    ? [edge(id, type.classId, "condition_on")]
+    : [];
+};
+
 // Fields an access rule targets explicitly are references too (`*` names none).
 const targetEdges = (
   id: DefinitionId,
@@ -126,12 +158,10 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
   }
 
   if (definition.kind === "field") {
-    return definition.type.kind === "reference"
-      ? [
-          edge(id, definition.classId, "field_of"),
-          edge(id, definition.type.targetClassId, "references_table"),
-        ]
-      : [edge(id, definition.classId, "field_of")];
+    return [
+      edge(id, definition.classId, "field_of"),
+      ...typeEdges(id, definition.type),
+    ];
   }
 
   if (definition.kind === "override") {
@@ -178,7 +208,8 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
  * The dependencies of one definition. Purged definitions have none.
  *
  * - class: `extends` its parent, `display_field` its display field;
- * - field: `field_of` its class, `references_table` a reference's target;
+ * - field: `field_of` its class, `references_table` a reference's target,
+ *   `condition_on` a condition field's class;
  * - override: `overrides` its field and its class;
  * - index: `index_on` its class and each of its fields;
  * - access rule: `access_rule_on` its class and each field it targets by

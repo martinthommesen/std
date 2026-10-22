@@ -1,0 +1,48 @@
+# The quickstart exactly as README.md describes it: `docker compose up`
+# (Postgres, the one-shot `upgrade` service, then `server`), then
+# examples/quickstart.sh against it, twice. The `ci.yml` step "Quickstart"
+# runs the same script without Docker.
+#
+# This job skips the credential check (the execve trace of decision 0016):
+# the check is a TypeScript program that would need Node and the workspace
+# here, and the doctor runs inside the container, outside the script's
+# process tree. The `ci.yml` step runs the check on the same script.
+#
+# This workflow is deliberately NOT part of `pnpm ci:local`, which reads only
+# ci.yml: locally, `docker compose up` for the project `std` would recreate
+# the Postgres container that every checkout shares. To try the compose path
+# on a shared machine, use another project name and ports, for example
+#   STD_POSTGRES_PORT=55432 STD_HTTP_PORT=58080 docker compose -p std-try up --build -d --wait
+# and remove it afterwards with `docker compose -p std-try down --volumes`.
+name: Quickstart (docker compose)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-compose-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: docker compose up (Postgres, std upgrade once, std serve)
+        run: docker compose up --build --detach --wait
+      - name: Quickstart
+        run: examples/quickstart.sh
+      - name: Quickstart again (a rerun against the same database)
+        run: examples/quickstart.sh
+      - name: Logs
+        if: failure()
+        run: docker compose logs
+      - name: docker compose down
+        if: always()
+        run: docker compose down --volumes

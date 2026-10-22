@@ -452,6 +452,16 @@ const REFERENCE_CASES: Readonly<
       addAccessRule(ACME.asset, [BUILT_IN_ROLE_IDS.admin], { fields: [id] }).op,
     ],
   ],
+  condition_on: [
+    "class",
+    (id) => [
+      addField(ACME.asset, "k_cond", {
+        classId: id,
+        kind: "condition",
+        profile: "filter",
+      }).op,
+    ],
+  ],
   condition_reads: [
     "field",
     (id) => [
@@ -661,6 +671,12 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     "core.access_rule",
     "rule",
     (id) => ({ fields: [id], target: "fields" }),
+  ],
+  condition_on: [
+    "class",
+    "core.field",
+    "refField",
+    (id) => ({ type: { classId: id, kind: "condition", profile: "filter" } }),
   ],
   condition_reads: [
     "field",

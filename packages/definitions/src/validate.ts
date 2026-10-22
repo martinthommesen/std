@@ -9,7 +9,11 @@
  */
 import { decodeIn } from "@std/values/codec";
 import { FieldTypeSchema, maxLengthOf } from "@std/values/field-type";
-import type { FieldKind, FieldType } from "@std/values/field-type";
+import type {
+  ConditionProfile,
+  FieldKind,
+  FieldType,
+} from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 import { isFailure } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
@@ -93,6 +97,18 @@ export const INDEXABLE_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>([
   "uuid",
   "reference",
 ]);
+
+/**
+ * The profiles a condition field may hold (Contracts 5.10, 6.5; decision
+ * 0005, "Condition fields"): only `filter`. Its conditions name the
+ * caller's readable fields and are evaluated in SQL for the caller, so a
+ * value a user stores on a record can be checked against what that user
+ * may name. Access-rule, form-rule, record-rule and subscription
+ * conditions read fields as the system (or a form's preloaded image) and
+ * belong to their own definitions, which the dependency index tracks.
+ */
+export const STORED_CONDITION_PROFILES: ReadonlySet<ConditionProfile> =
+  new Set<ConditionProfile>(["filter"]);
 
 /** Postgres's limit on index columns (`INDEX_MAX_KEYS`). */
 export const INDEX_MAX_FIELDS = 32;
@@ -440,6 +456,27 @@ const checkField = (
       "class",
       "reference target"
     );
+  }
+
+  if (field.type.kind === "condition") {
+    refersTo(
+      problems,
+      snapshot,
+      field,
+      field.type.classId,
+      "class",
+      "condition class"
+    );
+
+    if (!STORED_CONDITION_PROFILES.has(field.type.profile)) {
+      problems.push(
+        problem(
+          "invalidType",
+          field.id,
+          `Condition fields hold ${[...STORED_CONDITION_PROFILES].join(", ")} conditions; ${field.type.profile} conditions belong to their own definitions.`
+        )
+      );
+    }
   }
 
   if (field.default !== null) {
