@@ -90,6 +90,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { tableOf } from "../src/catalog/definition-tables.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   addAccessRule,
@@ -426,13 +427,6 @@ const checkResponse = (
 
   checkMembers(response);
 };
-
-/** The state a refusal must leave as it was. */
-const committedState = values(
-  `SELECT (SELECT revision::text FROM core.config_state) || '/' ||
-          (SELECT count(*)::text FROM core."change") || '/' ||
-          (SELECT count(*)::text FROM core."schema_change") AS value`
-);
 
 /**
  * The client options of a request.

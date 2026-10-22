@@ -16,8 +16,6 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { tableOf } from "../src/catalog/definition-tables.ts";
 import { PATCH_FIELD_OPERATIONS } from "../src/http/definition-writes.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { deliveryCount } from "./outbox-support.ts";
-import { values } from "./schema-support.ts";
 import { patch, remove } from "./writes-support.ts";
 
 /** The change-set endpoint. */
@@ -42,82 +40,14 @@ export const postChangeSet = (
     return yield* http.request("POST", CHANGE_SETS, { body, token });
   });
 
-const SCHEMAS = "('pg_catalog', 'information_schema', 'pg_toast')";
-
 /** Body fields a generic `PATCH` dispatches to their own operations. */
 const DISPATCHED: ReadonlySet<string> = new Set(
   PATCH_FIELD_OPERATIONS.map((entry) => entry.field)
 );
 
-/**
- * A fingerprint of every relation, column, constraint, index, trigger and
- * schema outside the system schemas.
- */
-export const catalogFingerprint = values(
-  `SELECT md5(string_agg(x, ',' ORDER BY x)) AS value FROM (
-     SELECT n.nspname || '.' || c.relname || ':' || c.relkind::text || ':' || c.relfilenode::text AS x
-       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname NOT IN ${SCHEMAS}
-     UNION ALL SELECT a.attrelid::regclass::text || '.' || a.attname || ':' || a.atttypid::text || ':' || a.attnotnull::text || ':' || a.attisdropped::text
-       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname NOT IN ${SCHEMAS} AND a.attnum > 0
-     UNION ALL SELECT n.nspname || '.' || con.conname || ':' || con.convalidated::text
-       FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace WHERE n.nspname NOT IN ${SCHEMAS}
-     UNION ALL SELECT i.indexrelid::regclass::text || ':' || i.indisvalid::text
-       FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname NOT IN ${SCHEMAS}
-     UNION ALL SELECT t.tgrelid::regclass::text || '.' || t.tgname FROM pg_trigger t WHERE NOT t.tgisinternal
-     UNION ALL SELECT nspname FROM pg_namespace
-   ) AS f`
-).pipe(Effect.map(([value]) => value ?? ""));
+export { catalogFingerprint, committedState } from "./committed-state.ts";
 
-/** What a refused change set must leave as it was. */
-export interface CommittedState {
-  readonly catalog: string;
-  readonly revision: string;
-  readonly changeEntries: string;
-  readonly deliveries: number;
-  /** The definition tables' rows, as one digest. */
-  readonly definitions: string;
-}
-
-/** A digest of every definition table's rows, as table owner. */
-const definitionsDigest = values(
-  `SELECT md5(string_agg(t.row, ',' ORDER BY t.row)) AS value FROM (
-     SELECT row_to_json(x)::text AS row FROM core."namespace" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."class" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."field" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."field_override" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."index" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."role" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."permission" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."role_permission" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."access_rule" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."subscription" x
-     UNION ALL SELECT row_to_json(x)::text FROM core."config_override" x
-   ) AS t`
-).pipe(Effect.map(([value]) => value ?? ""));
-
-/**
- * The committed state a refusal must not change: the catalog, the
- * revision, the change entries, the delivery rows and the definitions.
- */
-export const committedState = Effect.gen(function* readCommittedState() {
-  const [revision = ""] = yield* values(
-    "SELECT revision::text || '.' || change_set_id::text AS value FROM core.config_state"
-  );
-
-  const [changeEntries = ""] = yield* values(
-    `SELECT count(*)::text AS value FROM core."change"`
-  );
-
-  return {
-    catalog: yield* catalogFingerprint,
-    changeEntries,
-    definitions: yield* definitionsDigest,
-    deliveries: yield* deliveryCount,
-    revision,
-  } satisfies CommittedState;
-});
+export type { CommittedState } from "./committed-state.ts";
 
 /**
  * The qualified table of a definition kind.

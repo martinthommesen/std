@@ -17,7 +17,6 @@ import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { deliveryCount, subscribe } from "./outbox-support.ts";
-import { values } from "./schema-support.ts";
 
 /** The callers of the two-user example, plus the administrator. */
 export type Who = "alice" | "bob" | "admin";
@@ -87,43 +86,6 @@ export const subscribeToEverySave = (
  * @returns The count.
  */
 export const deliveries = () => deliveryCount;
-
-/** The definition tables and config-layer tables a change set writes. */
-export const DEFINITION_STATE_TABLES = [
-  "namespace",
-  "class",
-  "field",
-  "field_override",
-  "index",
-  "role",
-  "permission",
-  "role_permission",
-  "access_rule",
-  "subscription",
-  "config_base",
-  "config_override",
-  "schema_change",
-  "schema_change_step",
-] as const;
-
-/**
- * What a committed change would leave behind: the revision, the change
- * entries, the delivery rows and every definition and config-layer row,
- * as table owner.
- *
- * @returns A fingerprint.
- */
-export const committedState = () =>
-  values(
-    `SELECT (SELECT revision::text FROM core.config_state) || ':' ||
-            (SELECT count(*)::text FROM core."change") || ':' ||
-            (SELECT count(*)::text FROM core.delivery) || ':' ||
-            md5(coalesce((SELECT string_agg(r, ',' ORDER BY r) FROM (
-              ${DEFINITION_STATE_TABLES.map(
-                (table) =>
-                  `SELECT row_to_json(t)::text AS r FROM core."${table}" AS t`
-              ).join(" UNION ALL ")}) AS rows), '')) AS value`
-  ).pipe(Effect.map(([state]) => state ?? ""));
 
 /** What a table of expected outcomes compares. */
 export interface Observation {

@@ -42,7 +42,6 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   arrayOf,
-  committedState,
   deliveries,
   freshAsset,
   listNames,
@@ -57,6 +56,7 @@ import {
   userOf,
 } from "./authz-support.ts";
 import type { Callers, Observation, Who } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
 import {
   allPages,
   listPath,
@@ -803,11 +803,12 @@ const measuredWrite = (
   writing: Effect.Effect<TestResponse, unknown, Services>
 ) =>
   Effect.gen(function* measureWrite() {
-    const before = yield* committedState();
+    const before = JSON.stringify(yield* committedState);
     const response = yield* writing;
     const seen = writeStatus(response);
 
-    return response.status >= 400 && (yield* committedState()) !== before
+    return response.status >= 400 &&
+      JSON.stringify(yield* committedState) !== before
       ? { ...seen, detail: "committed" }
       : seen;
   });

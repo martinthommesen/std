@@ -33,7 +33,6 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
-  committedState,
   freshAsset,
   objectOf,
   observe,
@@ -41,6 +40,7 @@ import {
   textOf,
 } from "./authz-support.ts";
 import type { Observation } from "./authz-support.ts";
+import { committedState } from "./committed-state.ts";
 import {
   NAME_LOOKUP_SITES,
   nameChecksIn,
@@ -614,7 +614,7 @@ describe("no-bypass", () => {
           // Definitions: the change-set endpoint (apply and read) and
           // generic writes on definition tables are refused too, and commit
           // nothing.
-          const committedBefore = yield* committedState();
+          const committedBefore = yield* committedState;
           const role = createRole(`no_bypass_${freshId().slice(0, 8)}`);
 
           const [costVersion] = yield* values(
@@ -687,7 +687,7 @@ describe("no-bypass", () => {
             );
           }
 
-          assert.strictEqual(yield* committedState(), committedBefore);
+          assert.deepStrictEqual(yield* committedState, committedBefore);
 
           assert.strictEqual(
             (yield* values(
