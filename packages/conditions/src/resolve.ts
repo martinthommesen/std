@@ -22,14 +22,17 @@
  * Time comes from Temporal: the global `Temporal` (Node 26), or an injected
  * implementation such as a pinned polyfill in browsers that lack it.
  */
-import type { ComparableValue } from "@std/values/compare";
+import { comparableValue } from "@std/values/compare";
+import type { ComparableValue, StoredOrPlaintext } from "@std/values/compare";
 import { dateFromCivil } from "@std/values/date";
 import type { IsoDate } from "@std/values/date";
 import { MAX_DATE_TIME, MIN_DATE_TIME } from "@std/values/date-time";
 import type { ConditionProfile } from "@std/values/field-type";
 import { parseUuid } from "@std/values/uuid";
+import { isPlaintext } from "@std/values/write-only";
 
 import type { NowUnit, PeriodUnit, TodayUnit } from "./ast.ts";
+import type { FieldInfo } from "./class-view.ts";
 import { ConditionDefectError } from "./defect.ts";
 import { invalid, issue, valid } from "./issue.ts";
 import type { ConditionResult } from "./issue.ts";
@@ -67,6 +70,15 @@ export interface ConditionContext {
   readonly me?: string;
   /** The acting user's group IDs (Step 3). Omitted: unavailable. */
   readonly myGroups?: readonly string[];
+  /**
+   * The rule's own record, for `scope: "record"` paths (Contracts 4.10):
+   * its ID and its values by field ID. Omitted: those atoms are
+   * unavailable.
+   */
+  readonly record?: {
+    readonly id: string;
+    readonly values: Readonly<Record<string, StoredOrPlaintext>>;
+  };
 }
 
 /** Resolver options. */
@@ -350,7 +362,8 @@ const boundOf = (
     case "path":
     case "literal":
     case "me":
-    case "myGroups": {
+    case "myGroups":
+    case "record": {
       return undefined;
     }
 
@@ -360,11 +373,61 @@ const boundOf = (
   }
 };
 
+type CompareNode = Extract<CheckedNode, { readonly op: "compare" }>;
+
+/**
+ * A comparison with a field (or the ID) of the rule's own record: the
+ * value becomes a literal. An empty value follows `eq(f, g)` (5.4):
+ * `f = record.g` is `empty(f)`, and an ordering is false.
+ *
+ * @param context - The context holding the rule's record.
+ * @param node - The comparison.
+ * @param field - The record's field, or null for its ID.
+ * @returns The resolved atom.
+ */
+const resolveRecordCompare = (
+  context: ConditionContext,
+  node: CompareNode,
+  field: FieldInfo | null
+): ResolvedNode => {
+  const { record } = context;
+
+  if (record === undefined) {
+    return { ...node, right: { kind: "unavailable" } };
+  }
+
+  const value = field === null ? record.id : record.values[field.id];
+
+  if (value === undefined) {
+    throw new ConditionDefectError("The rule's record misses a field.");
+  }
+
+  if (value === null) {
+    return node.compare === "eq" ? { arg: node.left, op: "empty" } : FALSE;
+  }
+
+  const comparable = isPlaintext(value)
+    ? undefined
+    : comparableValue((field ?? node.left.field).type, value);
+
+  if (comparable === undefined) {
+    throw new ConditionDefectError(
+      "A value of the rule's record does not have its field's type."
+    );
+  }
+
+  return { ...node, right: { kind: "literal", value: comparable } };
+};
+
 const resolveCompare = (
   resolver: Resolver,
-  node: Extract<CheckedNode, { readonly op: "compare" }>
+  node: CompareNode
 ): ResolvedNode => {
   const { right } = node;
+
+  if (right.kind === "record") {
+    return resolveRecordCompare(resolver.clock.context, node, right.field);
+  }
 
   if (right.kind === "path" || right.kind === "literal") {
     return { ...node, right };

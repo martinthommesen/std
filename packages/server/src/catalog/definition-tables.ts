@@ -182,6 +182,21 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("label", "label", "text"),
     column("condition", "condition", "json"),
   ]),
+  table("recordRule", "record_rule", [
+    column("classId", "table_id", "uuid"),
+    column("name", "name", "text"),
+    column("description", "description", "nullableText"),
+    column("phase", "phase", "text"),
+    column("ruleKind", "rule_kind", "nullableText"),
+    column("order", "sort_order", "int4"),
+    column("operations", "operations", "json"),
+    column("condition", "condition", "nullableJson"),
+    column("once", "once", "boolean"),
+    column("runAsId", "run_as_id", "nullableUuid"),
+    column("subscriptionId", "subscription_id", "nullableUuid"),
+    column("actions", "actions", "json"),
+    column("active", "active", "boolean"),
+  ]),
 ];
 
 /** The table of a definition kind. */

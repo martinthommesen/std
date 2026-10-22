@@ -23,6 +23,7 @@ import { migration0009 } from "@std/server/platform/migrations/0009-saved-filter
 import { migration0010 } from "@std/server/platform/migrations/0010-definition-revision-field";
 import { migration0011 } from "@std/server/platform/migrations/0011-ledger-state";
 import { migration0012 } from "@std/server/platform/migrations/0012-user-individuals";
+import { migration0013 } from "@std/server/platform/migrations/0013-record-rules";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { decodeRows } from "@std/server/sql/rows";
 import { StatementLog } from "@std/server/sql/statement-log";
@@ -246,6 +247,7 @@ describe("test-database", () => {
         migration0010,
         migration0011,
         migration0012,
+        migration0013,
       ])
     );
     assert.notStrictEqual(

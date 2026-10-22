@@ -143,6 +143,7 @@ const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "choice",
   "layout",
   "savedFilter",
+  "recordRule",
 ]);
 
 const isDefinitionKind = (kind: string): kind is DefinitionKind =>

@@ -7177,6 +7177,571 @@
     ],
     "triggers": []
   },
+  "core.record_rule": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "owner_layer",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "owner_set_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "protected",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "table_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "name",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "description",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "phase",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "rule_kind",
+        "notNull": false,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "sort_order",
+        "notNull": true,
+        "type": "integer"
+      },
+      {
+        "default": null,
+        "name": "operations",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "condition",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "once",
+        "notNull": true,
+        "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "run_as_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "subscription_id",
+        "notNull": false,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "actions",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "active",
+        "notNull": true,
+        "type": "boolean"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["actions"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_actions_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["active"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_active_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK (((owner_layer = 'app'::text) = (owner_set_id IS NOT NULL)))",
+        "columns": ["owner_layer", "owner_set_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_class_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_created_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_created_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["name"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_name_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["once"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_once_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["operations"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_operations_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((owner_layer = ANY (ARRAY['core'::text, 'app'::text, 'local'::text])))",
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_owner_layer_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["owner_layer"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_owner_layer_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((phase = ANY (ARRAY['before'::text, 'after'::text, 'afterCommit'::text, 'aggregate'::text])))",
+        "columns": ["phase"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_phase_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["phase"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_phase_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["protected"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_protected_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((rule_kind = ANY (ARRAY['derive'::text, 'guard'::text, 'invariant'::text])))",
+        "columns": ["rule_kind"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_rule_kind_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["sort_order"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_sort_order_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = ANY (ARRAY['active'::text, 'retired'::text, 'purged'::text])))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_state_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id"],
+        "deferrable": true,
+        "deferred": true,
+        "deleteAction": "a",
+        "name": "record_rule_subscription_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.subscription",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["table_id"],
+        "deferrable": true,
+        "deferred": true,
+        "deleteAction": "a",
+        "name": "record_rule_table_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.class",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["table_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_table_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_updated_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_updated_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((version > 0))",
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "record_rule_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_pk_72bd1370a1dd4a67b8edefc66b50fe43",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((class_id = '72bd1370-a1dd-4a67-b8ed-efc66b50fe43'::uuid))",
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_sc_72bd1370a1dd4a67b8edefc66b50fe43",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id", "class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_uq_72bd1370a1dd4a67b8edefc66b50fe43",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["table_id", "name"],
+        "method": "btree",
+        "name": "record_rule_name_live",
+        "predicate": "state <> 'purged'::text",
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "std_pk_72bd1370a1dd4a67b8edefc66b50fe43",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id", "class_id"],
+        "method": "btree",
+        "name": "std_uq_72bd1370a1dd4a67b8edefc66b50fe43",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "function": "core.refuse_class_change",
+        "name": "std_tg_72bd1370a1dd4a67b8edefc66b50fe43",
+        "type": 19,
+        "when": "old.class_id IS DISTINCT FROM new.class_id"
+      }
+    ]
+  },
   "core.role": {
     "columns": [
       {

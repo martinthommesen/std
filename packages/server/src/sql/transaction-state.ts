@@ -305,6 +305,15 @@ export class TransactionState implements TransactionHandle {
       )
     );
 
+  readonly refuseCommit = (reason: string): Effect.Effect<void> =>
+    this.enter("refuseCommit").pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          this.poison(reason);
+        })
+      )
+    );
+
   readonly markWrite: Effect.Effect<void> = Effect.suspend(() =>
     this.enter("markWrite").pipe(
       Effect.andThen(

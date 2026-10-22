@@ -56,6 +56,7 @@ import { DefinitionInvalid, problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import type { ChangeSetRefusal } from "./refusals.ts";
 import { LOCAL_ORIGIN, SYSTEM_REQUESTER } from "./requester.ts";
+import { runAsRefusal } from "./rule-validation.ts";
 import { ConfigSnapshot } from "./snapshot.ts";
 import type { SnapshotKey } from "./snapshot.ts";
 import { validateSnapshot } from "./validate.ts";
@@ -549,6 +550,11 @@ const conditionText = (definition: Definition | undefined): string => {
     return JSON.stringify(definition.condition);
   }
 
+  // A rule's actions name fields and hold `where` conditions too.
+  if (definition?.kind === "recordRule") {
+    return JSON.stringify([definition.condition, definition.actions]);
+  }
+
   return definition?.kind === "field" && definition.type.kind === "reference"
     ? JSON.stringify(definition.type.allowedRecords ?? null)
     : "";
@@ -660,6 +666,18 @@ export const applyOperations = (
     key,
     changes.map((change) => change.after)
   );
+
+  const runAs = runAsRefusal({
+    after,
+    before: snapshot,
+    changed: new Set(changes.map((change) => change.after.id)),
+    local: context.origin.kind === "local",
+    requester: context.requester,
+  });
+
+  if (runAs !== undefined) {
+    return fail(runAs);
+  }
 
   const problems = [
     ...work.problems,

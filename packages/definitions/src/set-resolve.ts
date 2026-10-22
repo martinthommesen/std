@@ -26,6 +26,7 @@ import type {
   OverrideDraft,
   Owner,
   PermissionDraft,
+  RecordRuleDraft,
   RoleDraft,
   SubscriptionDraft,
 } from "./definition.ts";
@@ -42,6 +43,7 @@ import type {
   FieldEntry,
   NamedSetFile,
   OverrideEntry,
+  RecordRuleEntry,
   SetFile,
   SetHeader,
   SubscriptionEntry,
@@ -64,7 +66,8 @@ export type Draft =
   | SubscriptionDraft
   | ChoiceDraft
   | LayoutDraft
-  | SavedFilterDraft;
+  | SavedFilterDraft
+  | RecordRuleDraft;
 
 /** A set with every name resolved. */
 export interface ResolvedSet {
@@ -750,6 +753,33 @@ const resolveSubscription = (
   }
 };
 
+const resolveRecordRule = (
+  resolution: Resolution,
+  rule: RecordRuleEntry
+): void => {
+  const classId = tableId(resolution, rule.id, rule.table);
+
+  if (classId !== undefined) {
+    resolution.drafts.push({
+      ...flagsOf(resolution, rule),
+      actions: rule.actions,
+      active: rule.active ?? true,
+      classId,
+      condition: rule.condition ?? null,
+      description: rule.description ?? null,
+      kind: "recordRule",
+      name: rule.name,
+      once: rule.once ?? false,
+      operations: rule.operations ?? [],
+      order: rule.order ?? 0,
+      phase: rule.phase,
+      ruleKind: rule.kind ?? null,
+      runAsId: rule.runAs ?? null,
+      subscriptionId: rule.subscription ?? null,
+    });
+  }
+};
+
 const resolveAccess = (resolution: Resolution, file: SetFile): void => {
   for (const entry of file.roles ?? []) {
     resolution.drafts.push({
@@ -800,6 +830,10 @@ const resolveAccess = (resolution: Resolution, file: SetFile): void => {
   for (const entry of file.subscriptions ?? []) {
     resolveSubscription(resolution, entry);
   }
+
+  for (const entry of file.recordRules ?? []) {
+    resolveRecordRule(resolution, entry);
+  }
 };
 
 const resolveFile = (resolution: Resolution, file: SetFile): void => {
@@ -842,6 +876,7 @@ const allIds = (file: SetFile): readonly DefinitionId[] => [
   ...(file.grants ?? []).map((entry) => entry.id),
   ...(file.accessRules ?? []).map((entry) => entry.id),
   ...(file.subscriptions ?? []).map((entry) => entry.id),
+  ...(file.recordRules ?? []).map((entry) => entry.id),
 ];
 
 const checkIds = (resolution: Resolution, files: readonly SetFile[]): void => {

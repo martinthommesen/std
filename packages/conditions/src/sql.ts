@@ -310,9 +310,14 @@ const compileCompare = (
   }
 
   if (right.kind === "literal") {
+    // Cast by the literal's own type: a checked literal has the left
+    // field's type, but a value of the rule's record (`scope: "record"`)
+    // keeps its field's, which may be another kind of the same comparison
+    // class (an int8 compared with an int4 column). Postgres compares
+    // integer, big integer and numeric across types exactly.
     const parameter = textParameter(
       literalText(right.value),
-      parameterCast(atom.left.field.type.kind)
+      parameterCast(right.value.kind)
     );
 
     if (atom.compare === "eq") {

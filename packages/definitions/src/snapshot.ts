@@ -22,6 +22,7 @@ import type {
   NamespaceDefinition,
   OverrideDefinition,
   PermissionDefinition,
+  RecordRuleDefinition,
   RoleDefinition,
   SubscriptionDefinition,
 } from "./definition.ts";
@@ -95,6 +96,10 @@ export class ConfigSnapshot implements SnapshotKey {
   readonly #savedFiltersByClass = new Map<
     DefinitionId,
     SavedFilterDefinition[]
+  >();
+  readonly #recordRulesByClass = new Map<
+    DefinitionId,
+    RecordRuleDefinition[]
   >();
   readonly #classesByNamespace = new Map<DefinitionId, ClassDefinition[]>();
 
@@ -217,6 +222,17 @@ export class ConfigSnapshot implements SnapshotKey {
 
     for (const filter of this.all("savedFilter").filter(isLive)) {
       appendTo(this.#savedFiltersByClass, filter.classId, filter);
+    }
+
+    for (const rule of this.all("recordRule").filter(isLive)) {
+      appendTo(this.#recordRulesByClass, rule.classId, rule);
+    }
+
+    for (const list of this.#recordRulesByClass.values()) {
+      list.sort(
+        (left, right) =>
+          left.order - right.order || compareIds(left.id, right.id)
+      );
     }
   }
 
@@ -566,6 +582,25 @@ export class ConfigSnapshot implements SnapshotKey {
    */
   savedFiltersOf(classId: DefinitionId): readonly SavedFilterDefinition[] {
     return this.#savedFiltersByClass.get(classId) ?? [];
+  }
+
+  /**
+   * The live record rules attached to a class itself, in rule order:
+   * order number, then stable ID (Contracts 4.1). Rules of ancestors are
+   * not included; selection by concrete class walks the lineage.
+   *
+   * @param classId - A class ID.
+   * @returns The rules.
+   */
+  recordRulesOf(classId: DefinitionId): readonly RecordRuleDefinition[] {
+    return this.#recordRulesByClass.get(classId) ?? [];
+  }
+
+  /**
+   * @returns Every live record rule.
+   */
+  recordRules(): readonly RecordRuleDefinition[] {
+    return this.all("recordRule").filter(isLive);
   }
 
   /**

@@ -62,7 +62,16 @@ export type CheckedOperand =
       readonly unit: TodayUnit;
       readonly offset: number;
     }
-  | { readonly kind: "myGroups" };
+  | { readonly kind: "myGroups" }
+  | {
+      /**
+       * A field of the rule's own record (`scope: "record"`), or its ID
+       * when `field` is null (Contracts 4.10). The resolver turns it into a
+       * literal from the context's record.
+       */
+      readonly kind: "record";
+      readonly field: FieldInfo | null;
+    };
 
 /** A right-hand side in a resolved condition. */
 export type ResolvedOperand =
