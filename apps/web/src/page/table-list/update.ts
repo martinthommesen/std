@@ -494,7 +494,9 @@ const noteRevision = (
         onSome: (meta) => isNewerRevision(revision, meta.revision),
       });
 
-      const refreshed = isNewer ? refreshMetadata(result.model) : result;
+      const refreshed = isNewer
+        ? refreshMetadata(result.model)
+        : { model: result.model };
 
       return {
         commands: [...(result.commands ?? []), ...(refreshed.commands ?? [])],

@@ -379,6 +379,7 @@ describe("filter builder and the condition AST", () => {
       property(condition, (expr) => {
         const built = toCondition(builderStateOf(expr), scope);
 
+        expect(Result.isSuccess(built)).toBeTruthy();
         expect(Result.flatMap(printAndParse)(built)).toStrictEqual(built);
       }),
       { numRuns: 500 }

@@ -1,4 +1,6 @@
 import { Effect, Option } from "effect";
+import { AsyncData } from "foldkit";
+import { make as makeDate } from "foldkit/calendar";
 import { Valid } from "foldkit/fieldValidation";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
@@ -26,14 +28,27 @@ import {
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model, SignOutRequest } from "./model.ts";
+import type { SignedInModel } from "./model.ts";
 import {
   Message as SignInMessage,
   SignIn,
   toMaybePassword,
 } from "./page/sign-in/sign-in.ts";
+import {
+  LoadRecords,
+  LoadTableMetadata,
+  ReadToday,
+  ReplaceListUrl,
+} from "./page/table-list/command.ts";
+import { Message as TableListMessage } from "./page/table-list/message.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
-import { REVISION_3, adaTables } from "./table-fixture.ts";
+import {
+  REVISION_3,
+  REVISION_4,
+  adaTables,
+  assetTable,
+} from "./table-fixture.ts";
 import { update } from "./update.ts";
 
 const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
@@ -510,5 +525,182 @@ describe("the session requests", () => {
     );
     expect(ended.seen[0]?.headers["std-client"]).toBe("web");
     expect(ended.seen[0]?.method).toBe("POST");
+  });
+});
+
+const ASSETS = "acme.asset";
+
+/**
+ * The signed-in state, or a failure naming the state found instead.
+ *
+ * @param app - The app's state.
+ * @returns It, signed in.
+ */
+const signedIn = (app: Model): SignedInModel => {
+  if (!Model.guards.SignedIn(app)) {
+    throw new Error(`expected a signed-in state, found ${app._tag}`);
+  }
+
+  return app;
+};
+
+const assetsRoute = AppRoute.TableList({
+  filter: Option.none(),
+  limit: Option.none(),
+  sort: Option.none(),
+  table: ASSETS,
+});
+
+/** Ada opens the asset list from the home page. */
+const openAssets = [
+  message(Message.ChangedUrl({ url: urlOf("/tables/acme.asset") })),
+  Command.expectExact(
+    LoadTableMetadata({
+      maybeRevision: Option.some(REVISION_3),
+      table: ASSETS,
+    }),
+    ReadToday(),
+    FocusMain()
+  ),
+  Command.resolveAll(
+    [FocusMain, Message.CompletedFocusMain()],
+    [
+      ReadToday,
+      TableListMessage.CompletedReadToday({
+        today: makeDate(2026, 10, 22),
+      }),
+    ]
+  ),
+] as const;
+
+describe("tables and revisions", () => {
+  it("a list route opens the table's list page with the app's revision", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      model((app) => {
+        expect(Option.isSome(signedIn(app).maybeTableList)).toBeTruthy();
+      }),
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.FailedLoadTableMetadata({ error: "Unavailable" })
+      )
+    );
+  });
+
+  it("a newer revision a page saw reloads the table list in the background", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.SucceededLoadTableMetadata({
+          revision: REVISION_4,
+          table: assetTable,
+        })
+      ),
+      Command.expectHas(LoadTables({ maybeRevision: Option.some(REVISION_4) })),
+      model((app) => {
+        expect(AsyncData.isRefreshing(signedIn(app).tables)).toBeTruthy();
+        expect(signedIn(app).maybeRevision).toStrictEqual(
+          Option.some(REVISION_4)
+        );
+      }),
+      Command.resolveAll(
+        [
+          LoadTables,
+          Message.SucceededLoadTables({
+            revision: REVISION_4,
+            tables: adaTables.tables,
+          }),
+        ],
+        [ReplaceListUrl, TableListMessage.CompletedReplaceListUrl()],
+        [
+          LoadRecords,
+          TableListMessage.FailedLoadRecords({
+            error: "Unavailable",
+            generation: 1,
+            maybeRevision: Option.none(),
+          }),
+        ]
+      ),
+      model((app) => {
+        expect(AsyncData.isSuccess(signedIn(app).tables)).toBeTruthy();
+      })
+    );
+  });
+
+  it("a page whose session ended sends the user to sign in, and back afterwards", () => {
+    story(
+      update,
+      given(adaAtHome),
+      ...openAssets,
+      Command.resolve(
+        LoadTableMetadata,
+        TableListMessage.FailedAuthentication()
+      ),
+      model((app) => {
+        expect(Model.guards.SignedOut(app)).toBeTruthy();
+        expect(
+          Model.guards.SignedOut(app) ? app.maybeReturnRoute : Option.none()
+        ).toStrictEqual(Option.some(assetsRoute));
+      }),
+      Command.expectExact(ReplaceUrl({ url: signInRouter() }), FocusMain()),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
+    );
+  });
+
+  it("the table list comes with the revision its response states, and a revision the database never had is dropped", async () => {
+    const PATH = "/api/v1/meta/tables";
+
+    const listed = fakeStdApi({
+      [PATH]: {
+        body: adaTables,
+        headers: { "std-schema-revision": REVISION_3 },
+        status: 200,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        LoadTables({ maybeRevision: Option.some(REVISION_4) }).effect.pipe(
+          Effect.provide(listed.layer)
+        )
+      )
+    ).resolves.toStrictEqual(
+      Message.SucceededLoadTables({
+        revision: REVISION_3,
+        tables: adaTables.tables,
+      })
+    );
+    expect(listed.seen[0]?.headers["std-schema-revision"]).toBe(REVISION_4);
+
+    const unknownRevision = fakeStdApi({
+      [PATH]: {
+        body: {
+          _tag: "SchemaChanged",
+          changes: [],
+          currentRevision: REVISION_3,
+          requestRevision: REVISION_4,
+        },
+        status: 409,
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        LoadTables({ maybeRevision: Option.some(REVISION_4) }).effect.pipe(
+          Effect.provide(unknownRevision.layer)
+        )
+      )
+    ).resolves.toStrictEqual(Message.FailedLoadTables());
+    expect(
+      unknownRevision.seen.map((seen) => seen.headers["std-schema-revision"])
+    ).toStrictEqual([REVISION_4, undefined]);
   });
 });
