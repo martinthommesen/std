@@ -521,9 +521,10 @@ type CreateServices =
   | InTransaction;
 
 /**
- * A create in a running request transaction. Typed explicitly: a user's
- * create nests its individual's create (`createIndividual`), so the type
- * cannot be inferred from the body.
+ * A create in a running request transaction. Typed explicitly (the
+ * generator's return type below): a user's create nests its individual's
+ * create (`createIndividual`), so the type cannot be inferred from the
+ * body.
  */
 type CreateInTransaction = (
   input: CreateInput,
@@ -554,135 +555,138 @@ const createIndividual = (
   ).pipe(Effect.map((created) => created.id));
 };
 
-const createInTransaction: CreateInTransaction = Effect.fn(
-  "Records.createInTransaction"
-)(function* createInRequest(input: CreateInput, body: JsonObject) {
-  const snapshot = yield* (yield* Catalog).current;
-  const access = yield* WriteAccess;
-  const hooks = yield* SaveHooks;
-  const classId = input.endpointClassId;
+const createInTransaction = Effect.fn("Records.createInTransaction")(
+  function* createInRequest(
+    input: CreateInput,
+    body: JsonObject
+  ): Effect.fn.Return<SaveResult, CreateFailure, CreateServices> {
+    const snapshot = yield* (yield* Catalog).current;
+    const access = yield* WriteAccess;
+    const hooks = yield* SaveHooks;
+    const classId = input.endpointClassId;
 
-  yield* refuseRetiredClass(snapshot, classId);
+    yield* refuseRetiredClass(snapshot, classId);
 
-  const resolved = yield* resolveBody(snapshot, input, body, "create");
+    const resolved = yield* resolveBody(snapshot, input, body, "create");
 
-  yield* refusePlatformTable(snapshot, classId);
+    yield* refusePlatformTable(snapshot, classId);
 
-  const fields = effectiveById(snapshot, classId);
-  const rules = rulesById(snapshot, fields);
-  const proposed = proposeCreate(rules, resolved);
+    const fields = effectiveById(snapshot, classId);
+    const rules = rulesById(snapshot, fields);
+    const proposed = proposeCreate(rules, resolved);
 
-  const values = deriveIndividualName(
-    snapshot,
-    classId,
-    yield* hooks.beforeWrite({
+    const values = deriveIndividualName(
+      snapshot,
+      classId,
+      yield* hooks.beforeWrite({
+        classId,
+        existing: null,
+        kind: "create",
+        snapshot,
+        values: proposed.values,
+      }),
+      null
+    );
+
+    const proposal = finalizeCreate(rules, {
+      invalid: proposed.invalid,
+      values,
+    });
+
+    // The fields the create sets: those the body supplied and those the
+    // hooks changed. Read-only and retired ones count as written for
+    // validation when their value differs from what the create stores
+    // without them.
+    const supplied = new Set([
+      ...resolved.entries.keys(),
+      ...hookChanges(fields, proposed.values, proposal.values),
+    ]);
+
+    const written = new Set(
+      [...supplied].filter((fieldId) => {
+        const field = rules.get(fieldId);
+        const value = proposal.values.get(fieldId);
+
+        return (
+          field === undefined ||
+          value === undefined ||
+          writtenOnCreate(field, value)
+        );
+      })
+    );
+
+    yield* failIfInvalid(snapshot, {
       classId,
       existing: null,
-      kind: "create",
+      proposal,
+      rules,
+      supplied: new Set(resolved.entries.keys()),
+      written,
+    });
+    yield* checkReferences(snapshot, fields, proposal.values, supplied);
+
+    // Auto-numbered fields get their number last, in this transaction; a
+    // user gets its individual then too (`party-rules.ts`).
+    const numbered = yield* assignNumbers(fields, proposal.values);
+
+    const assigned = needsIndividual(snapshot, classId)
+      ? new Map([
+          ...numbered,
+          [
+            USER_FIELD_IDS.individual,
+            yield* createIndividual(
+              createInTransaction,
+              snapshot,
+              numbered.get(USER_FIELD_IDS.name),
+              input.cause ?? API_CAUSE
+            ),
+          ],
+        ])
+      : numbered;
+
+    const writes = yield* columnWrites(fields, assigned);
+
+    const id = yield* insertRecord(
       snapshot,
-      values: proposed.values,
-    }),
-    null
-  );
+      classId,
+      (yield* Actor).userId,
+      writes
+    ).pipe(mapConstraints(snapshot, "write"));
 
-  const proposal = finalizeCreate(rules, {
-    invalid: proposed.invalid,
-    values,
-  });
+    const after = yield* reload(snapshot, classId, id);
 
-  // The fields the create sets: those the body supplied and those the
-  // hooks changed. Read-only and retired ones count as written for
-  // validation when their value differs from what the create stores
-  // without them.
-  const supplied = new Set([
-    ...resolved.entries.keys(),
-    ...hookChanges(fields, proposed.values, proposal.values),
-  ]);
+    yield* access.checkProposed({
+      action: "create",
+      classId,
+      endpointClassId: classId,
+      id,
+      snapshot,
+      written: supplied,
+    });
 
-  const written = new Set(
-    [...supplied].filter((fieldId) => {
-      const field = rules.get(fieldId);
-      const value = proposal.values.get(fieldId);
+    const entry = yield* recordChange(snapshot, {
+      after,
+      before: null,
+      classId,
+      input,
+      kind: "create",
+      recordId: id,
+      version: after.version,
+      writeOnly: writeOnlySet(fields, proposal.values, null),
+    });
 
-      return (
-        field === undefined ||
-        value === undefined ||
-        writtenOnCreate(field, value)
-      );
-    })
-  );
+    const result: SaveResult = {
+      changeId: entry.changeId,
+      classId,
+      id,
+      outcome: "created",
+      record: yield* project(snapshot, classId, after),
+      version: after.version,
+    };
 
-  yield* failIfInvalid(snapshot, {
-    classId,
-    existing: null,
-    proposal,
-    rules,
-    supplied: new Set(resolved.entries.keys()),
-    written,
-  });
-  yield* checkReferences(snapshot, fields, proposal.values, supplied);
-
-  // Auto-numbered fields get their number last, in this transaction; a
-  // user gets its individual then too (`party-rules.ts`).
-  const numbered = yield* assignNumbers(fields, proposal.values);
-
-  const assigned = needsIndividual(snapshot, classId)
-    ? new Map([
-        ...numbered,
-        [
-          USER_FIELD_IDS.individual,
-          yield* createIndividual(
-            createInTransaction,
-            snapshot,
-            numbered.get(USER_FIELD_IDS.name),
-            input.cause ?? API_CAUSE
-          ),
-        ],
-      ])
-    : numbered;
-
-  const writes = yield* columnWrites(fields, assigned);
-
-  const id = yield* insertRecord(
-    snapshot,
-    classId,
-    (yield* Actor).userId,
-    writes
-  ).pipe(mapConstraints(snapshot, "write"));
-
-  const after = yield* reload(snapshot, classId, id);
-
-  yield* access.checkProposed({
-    action: "create",
-    classId,
-    endpointClassId: classId,
-    id,
-    snapshot,
-    written: supplied,
-  });
-
-  const entry = yield* recordChange(snapshot, {
-    after,
-    before: null,
-    classId,
-    input,
-    kind: "create",
-    recordId: id,
-    version: after.version,
-    writeOnly: writeOnlySet(fields, proposal.values, null),
-  });
-
-  const result: SaveResult = {
-    changeId: entry.changeId,
-    classId,
-    id,
-    outcome: "created",
-    record: yield* project(snapshot, classId, after),
-    version: after.version,
-  };
-
-  return result;
-});
+    return result;
+  }
+);
 
 /**
  * Creates a record of exactly the endpoint's class.
