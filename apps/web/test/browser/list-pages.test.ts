@@ -26,9 +26,13 @@ import {
   addCondition,
   apiPages,
   applyFilter,
+  assertHiddenValuesAbsent,
+  bearerToken,
   buildCondition,
   captureApiBodies,
+  captureResponses,
   clickSort,
+  isListResponse,
   inOrder,
   listColumnCells,
   listedPages,
@@ -37,6 +41,7 @@ import {
   setMatch,
   setPageSize,
   signIn,
+  valuesHiddenFrom,
 } from "./app.ts";
 import type { ConditionStep, Visitor } from "./app.ts";
 import { launchBrowser, stdServe } from "./support.ts";
@@ -467,8 +472,10 @@ const decodeTableList = Schema.decodeUnknownSync(
 );
 
 /**
- * As Bob, the list shows his withheld fields as restricted, and no API
- * response the browser received holds their values.
+ * As Bob, the list shows his withheld fields as restricted, and no
+ * response the browser received, nor the page, holds a value of the asset
+ * table he may not read (derived through the API from what Ada and Bob
+ * each list).
  *
  * @param browser - The browser.
  * @param origin - The server.
@@ -480,14 +487,23 @@ const restrictedStaysHidden = async (
   origin: string,
   fixture: AcmeData
 ) => {
+  const hidden = await valuesHiddenFrom(origin, [ASSETS], {
+    reader: await bearerToken(origin, ADA),
+    viewer: await bearerToken(origin, BOB),
+  });
+
+  assert.includeMembers(hidden, [HIDDEN_PURCHASE_DATE, S_PURCHASE_DATE]);
+
   const context = await browser.newContext();
   const page = await context.newPage();
+  const everything = captureResponses(page);
   const bodies = captureApiBodies(page);
   const { L, M, S } = fixture.records;
 
   await signIn(page, origin, BOB);
   await openTableList(page, origin, ASSETS);
   await setPageSize(page, 25);
+  await assertHiddenValuesAbsent(page, everything, hidden, "the asset list");
 
   const purchased = await listColumnCells(page, "Purchased on");
   const docked = await listColumnCells(page, "Docked to");
@@ -548,6 +564,144 @@ const navigationMatchesTheApi = async (browser: Browser, origin: string) => {
   });
 };
 
+/** The table of `idOnlyTable`: no display field, one json field. */
+const BLOBS = "site.blobs";
+
+const decodeCreated = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({ record: Schema.Struct({ id: Schema.String }) })
+  )
+);
+
+/**
+ * Adds a local namespace `site` with a table `blobs` that has no display
+ * field and only a json field (a type no list cell shows), and three
+ * records, as the administrator.
+ *
+ * @param origin - The server.
+ * @returns The records' IDs.
+ */
+const idOnlyTable = async (origin: string): Promise<readonly string[]> => {
+  const token = await tokenOf(origin, ADA);
+  const namespaceId = randomUUID();
+  const classId = randomUUID();
+
+  await post(origin, token, "/schema/change-sets", {
+    operations: [
+      {
+        definition: {
+          ...local,
+          extensible: false,
+          helpText: null,
+          id: namespaceId,
+          kind: "namespace",
+          label: "Site",
+          name: "site",
+          storage: "standard",
+        },
+        op: "createNamespace",
+      },
+      {
+        definition: {
+          ...local,
+          displayFieldId: null,
+          extensible: false,
+          helpText: null,
+          id: classId,
+          kind: "class",
+          label: "Blobs",
+          name: "blobs",
+          namespaceId,
+          parentId: null,
+          storage: "standard",
+        },
+        op: "createClass",
+      },
+      {
+        definition: {
+          ...local,
+          classId,
+          default: null,
+          helpText: null,
+          id: randomUUID(),
+          kind: "field",
+          label: "Payload",
+          name: "payload",
+          numberPrefix: null,
+          readOnly: false,
+          required: false,
+          type: { kind: "json" },
+        },
+        op: "addField",
+      },
+    ],
+  });
+
+  const created = await Promise.all(
+    [1, 2, 3].map(
+      async (n) =>
+        decodeCreated(
+          await post(origin, token, `/tables/${BLOBS}/records`, {
+            payload: { n },
+          })
+        ).record.id
+    )
+  );
+
+  return created.toSorted();
+};
+
+/**
+ * As Ada, the list of a table without a column to show asks for
+ * `fields=id`, gets its records, and shows each one's ID linking to its
+ * form (decision 0020, review B12).
+ *
+ * @param browser - The browser.
+ * @param origin - The server.
+ * @returns Nothing; fails on the first difference.
+ */
+const idOnlyListLinksEachRecord = async (browser: Browser, origin: string) => {
+  const ids = await idOnlyTable(origin);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await signIn(page, origin, ADA);
+
+  const answered = page.waitForResponse(isListResponse);
+
+  await openTableList(page, origin, BLOBS);
+
+  const response = await answered;
+
+  assert.strictEqual(new URL(response.url()).searchParams.get("fields"), "id");
+  assert.strictEqual(response.status(), 200);
+
+  const headers = await page
+    .locator("table.records thead th")
+    .allTextContents();
+
+  assert.deepStrictEqual(headers, ["ID"]);
+
+  const links = await page
+    .locator("table.records tbody tr")
+    .evaluateAll((rows) =>
+      rows.map((row) => ({
+        href: row.querySelector("a")?.getAttribute("href") ?? "",
+        id: row.dataset.recordId ?? "",
+        text: (row.textContent ?? "").trim(),
+      }))
+    );
+
+  assert.deepStrictEqual(links.map((link) => link.id).toSorted(), ids);
+
+  for (const link of links) {
+    assert.strictEqual(link.href, `/tables/${BLOBS}/records/${link.id}`);
+    assert.strictEqual(link.text, link.id);
+  }
+
+  await context.close();
+};
+
 describe("list pages", () => {
   it("every filtered scenario gives the API the same filter as text", () => {
     const scenarios = [...ADMIN_SCENARIOS, ...BOB_SCENARIOS];
@@ -591,6 +745,20 @@ describe("list pages", () => {
           yield* Effect.promise(async () => {
             await seed(server.origin, fixture);
             await restrictedStaysHidden(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "a table without a column to show lists its records by ID, each linking to its form",
+      () =>
+        Effect.gen(function* idOnlyTest() {
+          const database = yield* TestDatabase;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+
+          yield* Effect.promise(async () => {
+            await idOnlyListLinksEachRecord(browser, server.origin);
           });
         }).pipe(Effect.scoped)
     );

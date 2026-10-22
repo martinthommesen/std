@@ -435,3 +435,100 @@ export const callWhenConnected = (
     Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 40 }),
     Effect.orDie
   );
+
+const decodeRuntimeState = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({ currentIndex: Schema.Int, startIndex: Schema.Int })
+  )
+);
+
+/** The largest page of Message history the MCP server lists. */
+const LARGEST_HISTORY_PAGE = 500;
+
+// NOTE: the MCP server writes the runtime's response as JSON, an Option
+// as Effect's own JSON (`{ "_tag": "Some", "value": 7 }`).
+const decodeMessagesPage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      maybeNextIndex: Schema.Union([
+        Schema.Struct({ _tag: Schema.Literal("None") }),
+        Schema.Struct({ _tag: Schema.Literal("Some"), value: Schema.Int }),
+      ]),
+    })
+  )
+);
+
+/**
+ * Every Message history entry from an index on, page by page.
+ *
+ * @param mcp - The client.
+ * @param fromIndex - The first absolute history index.
+ * @returns The text of each page.
+ */
+const historyFrom = (
+  mcp: DevToolsMcp,
+  fromIndex: number
+): Effect.Effect<readonly string[]> =>
+  callWhenConnected(mcp, "foldkit_list_messages", {
+    limit: LARGEST_HISTORY_PAGE,
+    since_index: fromIndex,
+  }).pipe(
+    Effect.flatMap((text) => {
+      const next = decodeMessagesPage(text).maybeNextIndex;
+
+      return next._tag === "Some" && next.value > fromIndex
+        ? historyFrom(mcp, next.value).pipe(
+            Effect.map((rest) => [text, ...rest])
+          )
+        : Effect.succeed([text]);
+    })
+  );
+
+/** What the DevTools of the connected runtime recorded. */
+export interface DevToolsRecord {
+  /** The Model now, the initial Model and the Messages, as JSON text. */
+  readonly text: string;
+  /** The history index after the last Message read. */
+  readonly nextIndex: number;
+}
+
+/**
+ * Reads what DevTools holds for the connected runtime: the current Model
+ * in full, the initial Model with its Commands, and every Message history
+ * entry (payloads, Commands and their arguments) from an index on. Fails
+ * when the rolling history already dropped an entry from that index on,
+ * which would then go unread.
+ *
+ * @param mcp - The client.
+ * @param fromIndex - The first history index not read before (0 at first).
+ * @returns The text and where the next read starts.
+ */
+export const devToolsRecord = Effect.fn("BrowserSupport.devToolsRecord")(
+  function* devToolsRecord(mcp: DevToolsMcp, fromIndex: number) {
+    const state = decodeRuntimeState(
+      yield* callWhenConnected(mcp, "foldkit_get_runtime_state", {})
+    );
+
+    if (state.startIndex > fromIndex) {
+      return yield* Effect.die(
+        new Error(
+          `DevTools dropped history entries ${fromIndex} to ${state.startIndex - 1} before they were read`
+        )
+      );
+    }
+
+    const model = yield* callWhenConnected(mcp, "foldkit_get_model", {
+      expand: true,
+    });
+
+    const init = yield* callWhenConnected(mcp, "foldkit_get_init", {});
+
+    const history =
+      fromIndex > state.currentIndex ? [] : yield* historyFrom(mcp, fromIndex);
+
+    return {
+      nextIndex: state.currentIndex + 1,
+      text: [model, init, ...history].join("\n"),
+    } satisfies DevToolsRecord;
+  }
+);

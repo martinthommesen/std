@@ -45,20 +45,27 @@ import {
   apiRecord,
   applyFilter,
   applySavedFilter,
+  assertHiddenValuesAbsent,
   bearerToken,
   buildCondition,
   captureApiBodies,
+  captureResponses,
   chooseOption,
   clickSort,
   countRecordWrites,
   fillField,
   formControl,
+  hiddenValuesIn,
+  historyEntryTexts,
   inOrder,
   listColumnCells,
   listedPages,
   openRecordForm,
+  openRelatedList,
   openTableList,
   receivedRecords,
+  relatedListNames,
+  reloadingList,
   rendered,
   revisionNumber,
   saveRecordForm,
@@ -66,11 +73,23 @@ import {
   setMatch,
   setPageSize,
   signIn,
+  valuesHiddenFrom,
+  waitForForm,
 } from "./app.ts";
 import type { ConditionStep, Visitor } from "./app.ts";
-import { launchBrowser, stdServe } from "./support.ts";
+import {
+  devToolsMcp,
+  devToolsRecord,
+  launchBrowser,
+  stdServe,
+  viteDevServer,
+} from "./support.ts";
+import type { DevToolsMcp } from "./support.ts";
 
 const INCIDENTS = "helpdesk.incident";
+
+/** Tickets: the incidents' parent table, with the demo's other ticket. */
+const TICKETS = "helpdesk.ticket";
 
 const PAGE_SIZE = 5;
 
@@ -658,6 +677,40 @@ const sameListsForBothUsers = async (
 };
 
 /**
+ * Every value of the helpdesk's tickets and incidents the agent may not
+ * read, derived through the API from what the administrator and the agent
+ * each list (`valuesHiddenFrom`). It must cover what the seed put out of
+ * the agent's reach: every internal cost, and the customer emails of
+ * incidents not assigned to the agent.
+ *
+ * @param origin - The server.
+ * @param fixture - The helpdesk fixture, seeded.
+ * @returns The values.
+ */
+const hiddenFromTheAgent = async (
+  origin: string,
+  fixture: HelpdeskData
+): Promise<readonly string[]> => {
+  const hidden = await valuesHiddenFrom(origin, [TICKETS, INCIDENTS], {
+    reader: await bearerToken(origin, visitorOf(fixture.admin)),
+    viewer: await bearerToken(origin, visitorOf(fixture.agent)),
+  });
+
+  const seededHidden = SEEDED.flatMap(([, who], index) =>
+    who === "agent" ? [costOf(index)] : [costOf(index), emailOf(index)]
+  );
+
+  const seededReadable = SEEDED.flatMap(([, who], index) =>
+    who === "agent" ? [emailOf(index)] : []
+  );
+
+  assert.includeMembers(hidden, seededHidden);
+  assert.notIncludeMembers(hidden, seededReadable);
+
+  return hidden;
+};
+
+/**
  * As the agent: the customer email of another agent's incidents shows as
  * restricted in the list, never as empty; the agent's own show their
  * value; the internal cost is no column at all. No response the browser
@@ -676,13 +729,21 @@ const restrictedFieldsStayHidden = async (
 ) => {
   await seed(origin, fixture);
 
+  const hidden = await hiddenFromTheAgent(origin, fixture);
   const context = await browser.newContext();
   const page = await context.newPage();
+  const everything = captureResponses(page);
   const bodies = captureApiBodies(page);
 
+  const nothingHiddenAfter = async (step: string) => {
+    await assertHiddenValuesAbsent(page, everything, hidden, step);
+  };
+
   await signIn(page, origin, visitorOf(fixture.agent));
+  await nothingHiddenAfter("sign-in");
   await openTableList(page, origin, INCIDENTS);
   await setPageSize(page, 50);
+  await nothingHiddenAfter("the incident list");
 
   const assignees = await listColumnCells(page, "Assignee");
   const emails = await listColumnCells(page, "Customer email");
@@ -722,6 +783,7 @@ const restrictedFieldsStayHidden = async (
     { kind: "value", text: "gate" },
   ]);
   await applyFilter(page);
+  await nothingHiddenAfter("a filter on the restricted field");
 
   const [othersIncident] = others;
 
@@ -729,6 +791,15 @@ const restrictedFieldsStayHidden = async (
     id: othersIncident?.[0] ?? "",
     table: INCIDENTS,
   });
+  await nothingHiddenAfter("another agent's incident");
+
+  await inOrder(await relatedListNames(page), async (name) => {
+    await openRelatedList(page, name);
+    await nothingHiddenAfter(`the related list ${name}`);
+  });
+
+  assert.isNotEmpty(await historyEntryTexts(page));
+  await nothingHiddenAfter("the incident's history");
 
   const received = await bodies();
   const records = received.flatMap(receivedRecords);
@@ -757,6 +828,126 @@ const restrictedFieldsStayHidden = async (
   assert.notInclude(text, "internal_cost");
   await context.close();
 };
+
+/**
+ * Fails when DevTools recorded a hidden value since the last read.
+ *
+ * @param mcp - The DevTools MCP client.
+ * @param fromIndex - The first history index not read before.
+ * @param hidden - The values the agent may not read.
+ * @param step - What the test just did.
+ * @returns Where the next read starts.
+ */
+const devToolsHoldNoHiddenValue = Effect.fn("Gate.devToolsHoldNoHiddenValue")(
+  function* devToolsHoldNoHiddenValue(
+    mcp: DevToolsMcp,
+    fromIndex: number,
+    hidden: readonly string[],
+    step: string
+  ) {
+    const record = yield* devToolsRecord(mcp, fromIndex);
+
+    assert.deepStrictEqual(
+      hiddenValuesIn(record.text, hidden),
+      [],
+      `${step}: hidden values in the DevTools Model or Message history`
+    );
+
+    return record;
+  }
+);
+
+/**
+ * As the agent, on the development server: lists the incidents, opens
+ * another agent's incident and its history, goes back to the list and
+ * filters on the restricted field, leaving the page open so DevTools keeps the runtime. After
+ * each step the DevTools Model (in full), the initial Model and every
+ * Message history entry hold none of the values the agent may not read.
+ *
+ * @param mcp - The DevTools MCP client.
+ * @param page - A page of the development server's browser context.
+ * @param devOrigin - The development server.
+ * @param hidden - The values the agent may not read.
+ * @param fixture - The helpdesk fixture.
+ * @returns Nothing.
+ */
+const devToolsNeverHoldRestrictedValues = Effect.fn(
+  "Gate.devToolsNeverHoldRestrictedValues"
+)(function* devToolsNeverHoldRestrictedValues(
+  mcp: DevToolsMcp,
+  page: Page,
+  devOrigin: string,
+  hidden: readonly string[],
+  fixture: HelpdeskData
+) {
+  yield* Effect.promise(async () => {
+    await signIn(page, devOrigin, visitorOf(fixture.agent));
+    await openTableList(page, devOrigin, INCIDENTS);
+    await setPageSize(page, 50);
+  });
+
+  const listed = yield* devToolsHoldNoHiddenValue(
+    mcp,
+    0,
+    hidden,
+    "the incident list"
+  );
+
+  // The record is real: it holds the list and a value the agent reads.
+  assert.include(listed.text, '"maybeTableList"');
+  assert.include(
+    listed.text,
+    emailOf(SEEDED.findIndex(([, who]) => who === "agent"))
+  );
+
+  // NOTE: through the list's links, not the address: loading a page anew
+  // would start a new runtime with a new history.
+  const othersIncident = yield* Effect.promise(async () => {
+    const assignees = await listColumnCells(page, "Assignee");
+
+    const [id] =
+      [...assignees].find(([, cell]) => cell.text !== fixture.agent.name) ?? [];
+
+    await page
+      .locator(`tr[data-record-id="${id ?? ""}"] a`)
+      .first()
+      .click();
+    await waitForForm(page);
+    assert.isNotEmpty(await historyEntryTexts(page));
+
+    return id ?? "";
+  });
+
+  const opened = yield* devToolsHoldNoHiddenValue(
+    mcp,
+    listed.nextIndex,
+    hidden,
+    "another agent's incident and its history"
+  );
+
+  assert.include(opened.text, '"maybeRecordForm"');
+  assert.include(opened.text, othersIncident);
+
+  yield* Effect.promise(async () => {
+    await reloadingList(page, async () => {
+      await page.getByRole("link", { name: "Back to the list" }).click();
+    });
+    await addCondition(page);
+    await buildCondition(page, 1, [
+      { kind: "field", label: "Customer email" },
+      { kind: "operator", label: "contains" },
+      { kind: "value", text: "gate" },
+    ]);
+    await applyFilter(page);
+  });
+
+  yield* devToolsHoldNoHiddenValue(
+    mcp,
+    opened.nextIndex,
+    hidden,
+    "a filter on the restricted field"
+  );
+});
 
 // STALE FORMS
 
@@ -1055,6 +1246,41 @@ describe("step 2 gate (helpdesk)", () => {
           yield* Effect.promise(async () => {
             await sameListsForBothUsers(browser, server.origin, fixture);
           });
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
+      () =>
+        Effect.gen(function* devToolsTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const devOrigin = yield* viteDevServer(server.origin);
+          const browser = yield* launchBrowser;
+          const mcp = yield* devToolsMcp;
+
+          const hidden = yield* Effect.promise(async () => {
+            await seed(server.origin, fixture);
+
+            return await hiddenFromTheAgent(server.origin, fixture);
+          });
+
+          // NOTE: the context stays open until the scope ends, so DevTools
+          // keeps the page's runtime.
+          const page = yield* Effect.promise(async () => {
+            const context = await browser.newContext();
+
+            return await context.newPage();
+          });
+
+          yield* devToolsNeverHoldRestrictedValues(
+            mcp,
+            page,
+            devOrigin,
+            hidden,
+            fixture
+          );
         }).pipe(Effect.scoped)
     );
 

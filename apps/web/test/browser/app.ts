@@ -9,7 +9,7 @@
  * Text is waited for as attached, not visible: without system fonts,
  * headless Chromium gives text no height (decision 0018).
  */
-import { Option, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 import type { Locator, Page, Response } from "playwright";
 
 /** Who signs in. */
@@ -72,7 +72,13 @@ export const rendered = async (page: Page): Promise<void> => {
 };
 
 /**
- * The list's records table, or its empty-list text.
+ * The list's records table once it is not busy, its empty-list text
+ * outside a busy section, or its alert that the records could not be
+ * loaded (a settled answer too, which the caller's checks then reject).
+ *
+ * NOTE: the empty-list text carries no busy state of its own; while an
+ * empty list reloads, only an `aria-busy` on an enclosing element tells
+ * the reload apart from the answer (decision 0020, review round 1).
  *
  * @param page - The page.
  * @returns The locator.
@@ -80,10 +86,20 @@ export const rendered = async (page: Page): Promise<void> => {
 const settledList = (page: Page): Locator =>
   page
     .locator('table.records[aria-busy="false"]')
-    .or(page.getByText("No records match."));
+    .or(
+      page
+        .locator('section:not([aria-busy="true"]) > .placeholder')
+        .getByText("No records match.", { exact: true })
+    )
+    .or(page.locator('.list-failure > [role="alert"]'));
 
 /**
  * Waits until the list shows the answer to its latest request.
+ *
+ * The response event only proves that the request went out, so that the
+ * page has marked the list busy: Playwright fires it on the response's
+ * headers, before the page has read the body. What settles the step is
+ * the page itself: the table no longer `aria-busy`.
  *
  * @param page - The page.
  * @param answered - The list response the step expects, if one.
@@ -97,8 +113,8 @@ export const waitForList = async (
     await answered;
   }
 
-  // NOTE: the answer may arrive before the page renders it; the table on
-  // screen until then is the previous one.
+  // NOTE: until the next render the table on screen may be the previous
+  // one, not yet marked busy.
   await rendered(page);
   await settledList(page).first().waitFor({ state: "attached" });
 };
@@ -314,13 +330,124 @@ export const apiPages = async (
   query: ApiListQuery
 ): Promise<string[][]> => await apiPagesFrom(page, origin, table, query, null);
 
-const bodyOf = async (response: Response): Promise<string> => {
+/** A response the page received, with its body. */
+export interface ReceivedResponse {
+  readonly url: string;
+  readonly body: string;
+}
+
+const isRedirect = (response: Response): boolean =>
+  response.status() >= 300 && response.status() < 400;
+
+/**
+ * Reads a response's body. A redirect has none, and a request that failed
+ * (aborted by a navigation) delivered none to the page; any other body
+ * that cannot be read fails the test, so no body goes unchecked.
+ *
+ * @param response - The response.
+ * @returns The URL and the body.
+ */
+const receivedOf = async (response: Response): Promise<ReceivedResponse> => {
   try {
-    return await response.text();
-  } catch {
-    // A redirect or an aborted request has no body to read.
-    return "";
+    return { body: await response.text(), url: response.url() };
+  } catch (error) {
+    if (isRedirect(response) || response.request().failure() !== null) {
+      return { body: "", url: response.url() };
+    }
+
+    throw new Error(`The body of ${response.url()} could not be read`, {
+      cause: error,
+    });
   }
+};
+
+/** A response being read, and the document that received it. */
+interface Reading {
+  /** The number of the main frame's document it arrived in. */
+  readonly document: number;
+  /** The response, or why its body could not be read. */
+  readonly received: Promise<ReceivedResponse | Error>;
+  /** Whether its body has been read (or found to have none). */
+  readonly isRead: () => boolean;
+}
+
+/**
+ * Reads a response's body, then says so.
+ *
+ * @param response - The response.
+ * @param read - Called once the body has been read or refused.
+ * @returns The URL and the body.
+ */
+const readingOf = async (
+  response: Response,
+  read: () => void
+): Promise<ReceivedResponse | Error> => {
+  try {
+    return await receivedOf(response);
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  } finally {
+    read();
+  }
+};
+
+/**
+ * Records every response the page receives from now on, of every kind
+ * (the HTML, scripts, styles, API answers), with its body. The body is
+ * read as the response arrives.
+ *
+ * A body the page had not finished reading when it went on to another
+ * document never reaches any script: Chromium drops it without a failure
+ * event, so Playwright would wait for it forever. Such a body is left
+ * out; every other body is waited for.
+ *
+ * @param page - The page.
+ * @returns The responses received so far.
+ */
+export const captureResponses = (
+  page: Page
+): (() => Promise<ReceivedResponse[]>) => {
+  const readings: Reading[] = [];
+  let documents = 0;
+
+  page.on("response", (response) => {
+    // NOTE: the main frame's navigation response starts a new document.
+    const startsDocument =
+      response.request().isNavigationRequest() &&
+      response.frame() === page.mainFrame();
+
+    if (startsDocument) {
+      documents += 1;
+    }
+
+    let isRead = false;
+
+    readings.push({
+      document: documents,
+      isRead: () => isRead,
+      received: readingOf(response, () => {
+        isRead = true;
+      }),
+    });
+  });
+
+  return async () => {
+    const received = await Promise.all(
+      readings.flatMap((reading) =>
+        reading.isRead() || reading.document === documents
+          ? [reading.received]
+          : []
+      )
+    );
+
+    return received.map((response) => {
+      if (response instanceof Error) {
+        throw response;
+      }
+
+      return response;
+    });
+  };
 };
 
 /**
@@ -330,18 +457,107 @@ const bodyOf = async (response: Response): Promise<string> => {
  * @returns The bodies received so far, by call.
  */
 export const captureApiBodies = (page: Page): (() => Promise<string[]>) => {
-  const bodies: Promise<string>[] = [];
+  const responses = captureResponses(page);
 
-  page.on("response", (response) => {
-    if (new URL(response.url()).pathname.startsWith("/api/")) {
-      bodies.push(bodyOf(response));
-    }
-  });
+  return async () => {
+    const received = await responses();
 
-  return async () => await Promise.all(bodies);
+    return received.flatMap((response) =>
+      new URL(response.url).pathname.startsWith("/api/") ? [response.body] : []
+    );
+  };
 };
 
-// FILTER BUILDER
+// NOTE: a script string, run in the page: everything the page holds as
+// text, which a value could have reached. The complete DOM, the current
+// values of form controls (a property, not in the markup) and both web
+// storages.
+const PAGE_STATE = `(() => [
+  document.documentElement.outerHTML,
+  ...[...document.querySelectorAll("input, textarea, select")].map((control) => control.value),
+  JSON.stringify(Object.entries(localStorage)),
+  JSON.stringify(Object.entries(sessionStorage)),
+].join("\\n"))()`;
+
+/**
+ * The ways a value can be spelled where it lands: as is, escaped in HTML
+ * and escaped in a JSON string.
+ *
+ * @param value - The value.
+ * @returns Its spellings.
+ */
+const spellingsOf = (value: string): readonly string[] => [
+  ...new Set([
+    value,
+    value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;"),
+    JSON.stringify(value).slice(1, -1),
+  ]),
+];
+
+/**
+ * The hidden values a text holds, in any of their spellings (as is,
+ * escaped in HTML or in a JSON string).
+ *
+ * @param text - The text, such as a body or a DevTools snapshot.
+ * @param hidden - The values to look for.
+ * @returns The values found.
+ */
+export const hiddenValuesIn = (
+  text: string,
+  hidden: readonly string[]
+): string[] =>
+  hidden.filter((value) =>
+    spellingsOf(value).some((spelling) => text.includes(spelling))
+  );
+
+/**
+ * Fails when any hidden value reached the browser: when any response the
+ * page received so far (of any kind) or the page's current state (its
+ * complete DOM, its form controls' values, its web storage) holds it.
+ * Fixture-agnostic: the caller derives the values, such as with
+ * `valuesHiddenFrom`.
+ *
+ * @param page - The page.
+ * @param responses - The responses so far (see `captureResponses`).
+ * @param hidden - Values the signed-in user must never receive.
+ * @param step - What the test just did, for the failure message.
+ * @returns Nothing; throws naming every value found and where.
+ */
+export const assertHiddenValuesAbsent = async (
+  page: Page,
+  responses: () => Promise<readonly ReceivedResponse[]>,
+  hidden: readonly string[],
+  step: string
+): Promise<void> => {
+  if (hidden.length === 0) {
+    throw new Error(`${step}: no hidden values to look for`);
+  }
+
+  const received = await responses();
+  const evaluated: unknown = await page.evaluate(PAGE_STATE);
+  const state = String(evaluated);
+
+  const found = [
+    ...received.flatMap((response) =>
+      hiddenValuesIn(response.body, hidden).map(
+        (value) => `${value} in the response of ${response.url}`
+      )
+    ),
+    ...hiddenValuesIn(state, hidden).map(
+      (value) => `${value} in the page (DOM, controls, storage)`
+    ),
+  ];
+
+  if (found.length > 0) {
+    throw new Error(
+      `${step}: hidden values reached the browser:\n${found.join("\n")}`
+    );
+  }
+};
 
 /** One step of building a condition in the filter builder. */
 export type ConditionStep =
@@ -676,6 +892,156 @@ export const apiCall = async (
   return { status: response.status, text: await response.text() };
 };
 
+// VALUES HIDDEN FROM A USER
+
+const RecordPageBody = Schema.Struct({
+  nextCursor: Schema.NullOr(Schema.String),
+  records: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      values: Schema.Record(Schema.String, Schema.Json),
+      withheld: Schema.optionalKey(Schema.Array(Schema.String)),
+    })
+  ),
+});
+
+const decodeRecordPage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(RecordPageBody)
+);
+
+type ListedRecord = (typeof RecordPageBody.Type)["records"][number];
+
+/** The largest page the list API serves (`limit`). */
+const LARGEST_PAGE = 1000;
+
+/**
+ * Every record of a table a session may list, page by page.
+ *
+ * @param origin - The server.
+ * @param token - The session.
+ * @param table - The table.
+ * @param cursor - Where to go on; null for the first page.
+ * @returns The records.
+ */
+const everyRecord = async (
+  origin: string,
+  token: string,
+  table: string,
+  cursor: string | null
+): Promise<readonly ListedRecord[]> => {
+  const query = listParameters({ limit: LARGEST_PAGE }, cursor);
+
+  const answered = await apiCall(origin, token, {
+    method: "GET",
+    path: `/tables/${table}/records?${query}`,
+  });
+
+  if (answered.status !== 200) {
+    throw new Error(
+      `GET ${table} records: ${answered.status} ${answered.text}`
+    );
+  }
+
+  const listed = decodeRecordPage(answered.text);
+
+  return listed.nextCursor === null
+    ? listed.records
+    : [
+        ...listed.records,
+        ...(await everyRecord(origin, token, table, listed.nextCursor)),
+      ];
+};
+
+/**
+ * The text leaves of a JSON value: strings, and numbers as text.
+ *
+ * @param value - The value.
+ * @returns Its leaves.
+ */
+const leavesOf = (value: Schema.Json): readonly string[] => {
+  if (Predicate.isString(value)) {
+    return [value];
+  }
+
+  if (Predicate.isNumber(value)) {
+    return [String(value)];
+  }
+
+  if (value === null || Predicate.isBoolean(value)) {
+    return [];
+  }
+
+  return Object.values(value).flatMap(leavesOf);
+};
+
+/**
+ * Shorter values would match unrelated text (a `1` in any page), so a
+ * check for them proves nothing.
+ */
+const SHORTEST_HIDDEN_VALUE = 4;
+
+/** The sessions `valuesHiddenFrom` compares. */
+export interface HiddenFrom {
+  /** A session that reads everything, such as an administrator's. */
+  readonly reader: string;
+  /** The session whose browser must never receive the values. */
+  readonly viewer: string;
+}
+
+/**
+ * The values of some tables the viewer may not read, derived through the
+ * API: every value the reader lists that the viewer's list leaves out
+ * (a field withheld on a record or never readable, a record the viewer
+ * cannot see), less any value the viewer does read somewhere in those
+ * tables (a shared choice, a record ID) and values too short to look for.
+ *
+ * @param origin - The server.
+ * @param tables - The tables.
+ * @param sessions - The reader's and the viewer's session tokens.
+ * @returns The values, sorted.
+ */
+export const valuesHiddenFrom = async (
+  origin: string,
+  tables: readonly string[],
+  sessions: HiddenFrom
+): Promise<string[]> => {
+  const listed = await Promise.all(
+    tables.map(async (table) => ({
+      read: await everyRecord(origin, sessions.reader, table, null),
+      seen: await everyRecord(origin, sessions.viewer, table, null),
+    }))
+  );
+
+  const seen = new Map(
+    listed.flatMap(({ seen: records }) =>
+      records.map((record) => [record.id, record] as const)
+    )
+  );
+
+  const readable = new Set(
+    [...seen.values()].flatMap((record) => [
+      record.id,
+      ...Object.values(record.values).flatMap(leavesOf),
+    ])
+  );
+
+  const unread = listed.flatMap(({ read }) =>
+    read.flatMap((record) => {
+      const viewed = seen.get(record.id);
+
+      return Object.entries(record.values).flatMap(([name, value]) =>
+        viewed === undefined || !(name in viewed.values) ? leavesOf(value) : []
+      );
+    })
+  );
+
+  return [...new Set(unread)]
+    .filter(
+      (value) => value.length >= SHORTEST_HIDDEN_VALUE && !readable.has(value)
+    )
+    .toSorted();
+};
+
 // SAVED FILTERS
 
 /**
@@ -856,8 +1222,16 @@ export const referenceOptions = async (
   const answered = page.waitForResponse(isSearchResponse);
 
   await input.fill(search);
+  // NOTE: the response proves the search went out, so the picker says
+  // "Searching…" from the next render on; its answer is shown once that
+  // hint is gone (the response event fires before the page read the body).
   await answered;
   await rendered(page);
+  await page
+    .locator(".form-reference")
+    .filter({ has: input })
+    .filter({ hasNotText: "Searching…" })
+    .waitFor({ state: "attached" });
 
   return await page
     .getByRole("listbox")
@@ -913,8 +1287,43 @@ export interface SaveOutcome {
 }
 
 /**
- * Clicks the form's "Save" (or "Create") and waits for the answer and for
- * the page to show it.
+ * What a form shows once a save is over: "Saved." (or that there was
+ * nothing to save, or that the saved record is no longer visible), or an
+ * alert (a refusal, or `Outdated` after a schema change, which follows
+ * the "Loading the new definition" status). "Saving…" and that status are
+ * not outcomes.
+ *
+ * @param page - A form page.
+ * @returns The locator.
+ */
+const saveOutcome = (page: Page): Locator => {
+  const form = page.getByRole("form");
+
+  return form
+    .getByRole("status")
+    .filter({
+      hasText: /^(?:Saved\.|There are no changes to save\.)$/u,
+    })
+    .or(form.getByRole("alert"))
+    .or(
+      page.getByRole("status").filter({
+        hasText: "Saved. You can no longer see this record.",
+      })
+    );
+};
+
+/** The address of a record's form. */
+const RECORD_PATH = /\/tables\/[^/]+\/records\/[\da-f-]+$/u;
+
+/**
+ * Clicks the form's "Save" (or "Create") and waits until the page shows
+ * the outcome, and after a create until the page is at the new record's
+ * address.
+ *
+ * The response event only proves that the save went out, so that the form
+ * says "Saving…" from the next render on: Playwright fires it on the
+ * response's headers, before the page has read the body. What settles the
+ * step is the page.
  *
  * @param page - A form page.
  * @returns The request's body and the response's status.
@@ -927,6 +1336,18 @@ export const saveRecordForm = async (page: Page): Promise<SaveOutcome> => {
     .click();
 
   const response = await answered;
+  const isCreated = response.request().method() === "POST" && response.ok();
+
+  // NOTE: until the next render the page may still show the previous
+  // save's outcome.
+  await rendered(page);
+
+  await saveOutcome(page).first().waitFor({ state: "attached" });
+
+  if (isCreated) {
+    // The create's page becomes the new record's form, at its address.
+    await page.waitForURL(RECORD_PATH);
+  }
 
   await rendered(page);
 
@@ -980,7 +1401,15 @@ export const countRecordWrites = (page: Page): (() => number) => {
 export const isNotFoundPage = async (page: Page): Promise<boolean> => {
   const heading = page.getByRole("heading", { level: 1 }).first();
 
+  // NOTE: a page shows its heading while it still loads what decides
+  // whether it exists; the answer is the heading once nothing loads.
   await heading.waitFor({ state: "attached" });
+  await rendered(page);
+  await page
+    .getByRole("status")
+    .filter({ hasText: /^(?:Loading|Checking)/u })
+    .first()
+    .waitFor({ state: "detached" });
   await rendered(page);
 
   return (await heading.textContent()) === "Page not found";
@@ -1156,19 +1585,29 @@ export const captureApiRequestBodies = (page: Page): (() => string[]) => {
 };
 
 /**
- * Opens the form's history panel and waits for its entries.
+ * Opens the form's history panel and waits until it shows what it loaded:
+ * its entries, "No history." or an alert.
  *
- * @param page - A record's form page.
- * @returns The text of each entry, newest first.
+ * @param page - A record's form page whose history panel was not opened
+ *   since the page loaded.
+ * @returns The text of each entry, newest first (none when the panel
+ *   shows no entries).
  */
 export const historyEntryTexts = async (page: Page): Promise<string[]> => {
-  const answered = page.waitForResponse((response) =>
-    new URL(response.url()).pathname.endsWith("/history")
-  );
+  const panel = page.locator(".history .disclosure-panel");
 
+  // NOTE: a panel never opened shows nothing, so whatever it shows after
+  // the click is the answer to this opening ("Loading…" is no outcome).
+  // Reopened, it would show the earlier entries while they reload, with
+  // no busy state to wait for.
   await page.getByRole("button", { exact: true, name: "History" }).click();
-  await answered;
-  await page.locator(".history-entry").first().waitFor({ state: "attached" });
+  await panel
+    .locator(".history-entry")
+    .first()
+    .or(panel.getByText("No history.", { exact: true }))
+    .or(panel.getByRole("alert"))
+    .first()
+    .waitFor({ state: "attached" });
   await rendered(page);
 
   return await page
@@ -1176,6 +1615,52 @@ export const historyEntryTexts = async (page: Page): Promise<string[]> => {
     .evaluateAll((entries) =>
       entries.map((entry) => (entry.textContent ?? "").replaceAll(/\s+/gu, " "))
     );
+};
+
+/**
+ * The names of the form's related lists (their disclosure buttons), in
+ * order.
+ *
+ * @param page - A record's form page.
+ * @returns The names, such as `Ticket by Assignee`.
+ */
+export const relatedListNames = async (page: Page): Promise<string[]> =>
+  await page
+    .locator(".related-list .disclosure-button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => (button.textContent ?? "").replace(/^\W+/u, ""))
+    );
+
+/**
+ * Opens a related list of the form and waits until it shows its first
+ * page: its table no longer `aria-busy`, "No records." or an alert.
+ *
+ * @param page - A record's form page whose list was not opened since the
+ *   page loaded.
+ * @param name - The list's name, such as `Ticket by Assignee`.
+ * @returns The IDs of the records it shows.
+ */
+export const openRelatedList = async (
+  page: Page,
+  name: string
+): Promise<string[]> => {
+  const button = page.getByRole("button", { exact: true, name });
+  const section = page.locator(".related-list").filter({ has: button });
+
+  // NOTE: a list never opened shows nothing, so whatever it shows after
+  // the click is the answer to this opening ("Loading…" is no outcome).
+  await button.click();
+  await section
+    .locator('table[aria-busy="false"]')
+    .or(section.getByText("No records.", { exact: true }))
+    .or(section.getByRole("alert"))
+    .first()
+    .waitFor({ state: "attached" });
+  await rendered(page);
+
+  return await section
+    .locator("table tbody tr")
+    .evaluateAll((rows) => rows.map((row) => row.dataset.recordId ?? ""));
 };
 
 const ReceivedRecordSchema = Schema.Struct({

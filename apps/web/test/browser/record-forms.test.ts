@@ -26,9 +26,11 @@ import {
   apiCall,
   apiPages,
   apiRecord,
+  assertHiddenValuesAbsent,
   bearerToken,
   captureApiBodies,
   captureApiRequestBodies,
+  captureResponses,
   chooseOption,
   fillField,
   formControl,
@@ -38,12 +40,14 @@ import {
   historyEntryTexts,
   openNewRecordForm,
   openRecordForm,
+  openRelatedList,
   openTableList,
   pickReference,
   referenceOptions,
   rendered,
   saveRecordForm,
   signIn,
+  valuesHiddenFrom,
   waitForForm,
 } from "./app.ts";
 import type { Visitor } from "./app.ts";
@@ -56,6 +60,12 @@ import {
 } from "./support.ts";
 
 const INCIDENTS = "helpdesk.incident";
+
+/** The helpdesk's record tables: tickets and their incidents. */
+const HELPDESK_TABLES = ["helpdesk.ticket", INCIDENTS];
+
+/** The internal costs of the demo records; agents never read them. */
+const HELPDESK_COSTS = ["950.00", "800.00", "600.00", "20.00", "120.00"];
 
 const visitorOf = (user: HelpdeskUser): Visitor => ({
   login: user.login,
@@ -229,15 +239,36 @@ const restrictedFieldNeverReachesTheBrowser = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
+  const hidden = await valuesHiddenFrom(origin, HELPDESK_TABLES, {
+    reader: await bearerToken(origin, visitorOf(fixture.admin)),
+    viewer: await bearerToken(origin, visitorOf(fixture.agent)),
+  });
+
+  // The derivation finds the other agent's customer emails and every
+  // internal cost.
+  assert.includeMembers(hidden, [
+    "kim@example.com",
+    "pat@example.com",
+    ...HELPDESK_COSTS,
+  ]);
+  assert.notInclude(hidden, "jo@example.com");
+
   const context = await browser.newContext();
   const page = await context.newPage();
+  const everything = captureResponses(page);
   const responses = captureApiBodies(page);
   const requests = captureApiRequestBodies(page);
 
+  const nothingHiddenAfter = async (step: string) => {
+    await assertHiddenValuesAbsent(page, everything, hidden, step);
+  };
+
   await signIn(page, origin, visitorOf(fixture.agent));
+  await nothingHiddenAfter("sign-in");
   // The password incident is the other agent's: its customer email is
   // withheld; the internal cost is never readable for agents.
   await openRecordForm(page, origin, incident(fixture.records.password));
+  await nothingHiddenAfter("open the other agent's incident");
 
   assert.strictEqual(
     await formFieldState(page, "customer_email"),
@@ -246,9 +277,14 @@ const restrictedFieldNeverReachesTheBrowser = async (
   assert.include(await formFieldText(page, "customer_email"), "Restricted");
   assert.isNull(await formFieldState(page, "internal_cost"));
 
+  await historyEntryTexts(page);
+  await nothingHiddenAfter("open its history");
+
   await fillField(page, "Description", "Payroll asks again.");
 
   const refused = await saveRecordForm(page);
+
+  await nothingHiddenAfter("a refused save");
 
   // The agent may not change another agent's incident.
   assert.strictEqual(refused.status, 403);
@@ -262,7 +298,9 @@ const restrictedFieldNeverReachesTheBrowser = async (
   );
 
   await openTableList(page, origin, INCIDENTS);
+  await nothingHiddenAfter("the incident list");
   await openRecordForm(page, origin, incident(fixture.records.password));
+  await nothingHiddenAfter("reopen the incident");
 
   const responseBodies = await responses();
   const received = responseBodies.join("\n");
@@ -314,16 +352,15 @@ const versionConflictKeepsTheInput = async (
     "Mine: the jam is in tray 2."
   );
 
-  const reloaded = page.waitForResponse(
-    (response) =>
-      response.request().method() === "GET" &&
-      new URL(response.url()).pathname.endsWith(printer.id)
-  );
-
   await page
     .getByRole("button", { name: "Reload the record, keeping my changes" })
     .click();
-  await reloaded;
+  // The reload is over once the form shows the other session's version
+  // (the response event fires before the page has read the body).
+  await page
+    .locator(".form-facts")
+    .filter({ hasText: "version 2" })
+    .waitFor({ state: "attached" });
   await rendered(page);
 
   assert.include(await facts(page), "version 2");
@@ -559,25 +596,7 @@ const relatedListMatchesTheApi = async (
     table: "core.user",
   });
 
-  const answered = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).searchParams.get("filter") ===
-      `assignee = "${fixture.agent.id}"`
-  );
-
-  await page
-    .getByRole("button", { exact: true, name: "Ticket by Assignee" })
-    .click();
-  await answered;
-  await page
-    .locator(".related-list table")
-    .first()
-    .waitFor({ state: "attached" });
-  await rendered(page);
-
-  const shown = await page
-    .locator(".related-list table tbody tr")
-    .evaluateAll((rows) => rows.map((row) => row.dataset.recordId ?? ""));
+  const shown = await openRelatedList(page, "Ticket by Assignee");
 
   const listed = await apiPages(page, origin, "helpdesk.ticket", {
     filter: `assignee = "${fixture.agent.id}"`,
