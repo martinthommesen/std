@@ -15,13 +15,20 @@ import type { ProtectionReason } from "./definition-protected.ts";
  *   an app are for its own set only. A retired app definition may be
  *   purged locally (an app removed it upstream, Contracts 8.4).
  * - Platform tables, their fields and their namespace are never renamed,
- *   retired, purged or deleted, and never extended.
+ *   retired, purged or deleted, and never extended; only the core set
+ *   creates a table or namespace with platform storage.
  * - New definitions belong to the origin's layer. Local additions may go
  *   onto app tables and `extensible` core tables (fields, indexes, child
  *   classes, overrides); the `core` namespace and app namespaces are
- *   reserved for their sets.
+ *   reserved for their sets. One check (`guardNewDefinition`) covers every
+ *   operation that adds a definition.
  */
-import type { ClassDefinition, Definition, Owner } from "./definition.ts";
+import type {
+  ClassDefinition,
+  Definition,
+  OverrideDraft,
+  Owner,
+} from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import type { CreateOperation } from "./operation.ts";
 import { isCoreOrigin, originOwns, ownerOfOrigin } from "./requester.ts";
@@ -158,8 +165,59 @@ const sameOwner = (left: Owner, right: Owner): boolean => {
 };
 
 /**
- * Whether the origin may attach a new definition to a class it does not
- * own: app classes and extensible core classes, never platform tables.
+ * A definition a change set adds: the draft of a create operation, or of
+ * an override added by `setOverride` without a version.
+ */
+export type NewDefinition = CreateOperation["definition"] | OverrideDraft;
+
+/**
+ * The class a new definition attaches to, if any: a child class's parent,
+ * or the class of a field, an index or an override. Every kind that
+ * extends an existing table is listed here, so the attachment rule below
+ * covers them all.
+ *
+ * @param work - The application.
+ * @param definition - The new definition.
+ * @returns The class, or undefined when it attaches to none.
+ */
+const hostOf = (
+  work: Work,
+  definition: NewDefinition
+): ClassDefinition | undefined => {
+  switch (definition.kind) {
+    case "class": {
+      return classOf(work, definition.parentId);
+    }
+
+    case "field":
+    case "index":
+    case "override": {
+      return classOf(work, definition.classId);
+    }
+
+    // These extend no table. A namespace is checked by `storageProblem`;
+    // an access rule or subscription on a platform table is refused by
+    // validation (`invalidAccessRule`, `invalidSubscription`).
+    case "namespace":
+    case "role":
+    case "permission":
+    case "grant":
+    case "accessRule":
+    case "subscription": {
+      return undefined;
+    }
+
+    // A new definition kind must be placed above before this compiles.
+    default: {
+      return definition satisfies never;
+    }
+  }
+};
+
+/**
+ * Whether the origin may attach a new definition to a class: a platform
+ * table only for the core set, which describes it; otherwise classes the
+ * origin owns, app classes and extensible core classes.
  *
  * @param work - The application.
  * @param host - The class.
@@ -169,12 +227,18 @@ const attachProblem = (
   work: Work,
   host: ClassDefinition | undefined
 ): ProtectionReason | undefined => {
-  if (host === undefined || originOwns(work.context.origin, host.owner)) {
+  const { origin } = work.context;
+
+  if (host === undefined) {
     return undefined;
   }
 
   if (host.storage === "platform") {
-    return "platform";
+    return isCoreOrigin(origin) ? undefined : "platform";
+  }
+
+  if (originOwns(origin, host.owner)) {
+    return undefined;
   }
 
   return host.owner.layer === "core" && !host.extensible
@@ -182,91 +246,94 @@ const attachProblem = (
     : undefined;
 };
 
-const hostOf = (
+/**
+ * Whether the origin may create a table or namespace with platform
+ * storage: only the core set, which describes what platform migrations
+ * own (Contracts 1.8, 1.9). For anyone else nothing would create the
+ * table or schema, so the change set could only fail.
+ *
+ * @param work - The application.
+ * @param definition - The new definition.
+ * @returns Why not, or undefined when it may.
+ */
+const storageProblem = (
   work: Work,
-  operation: CreateOperation
-): ClassDefinition | undefined => {
-  const { definition } = operation;
+  definition: NewDefinition
+): ProtectionReason | undefined => {
+  const hasStorage =
+    definition.kind === "class" || definition.kind === "namespace";
 
-  if (definition.kind === "class") {
-    return classOf(work, definition.parentId);
+  if (!hasStorage || definition.storage !== "platform") {
+    return undefined;
   }
 
-  return definition.kind === "field" || definition.kind === "index"
-    ? classOf(work, definition.classId)
-    : undefined;
+  return isCoreOrigin(work.context.origin) ? undefined : "platform";
 };
 
+/**
+ * Whether the origin may create a table in its namespace: one it owns, and
+ * a platform namespace only for the core set.
+ *
+ * @param work - The application.
+ * @param definition - The new definition.
+ * @returns Why not, or undefined when it may.
+ */
 const namespaceProblem = (
   work: Work,
-  operation: CreateOperation
+  definition: NewDefinition
 ): ProtectionReason | undefined => {
-  const { definition } = operation;
-
   if (definition.kind !== "class") {
     return undefined;
   }
 
   const namespace = currentOf(work, definition.namespaceId);
 
-  return namespace !== undefined &&
-    !originOwns(work.context.origin, namespace.owner)
-    ? "reserved"
+  if (namespace === undefined) {
+    return undefined;
+  }
+
+  const { origin } = work.context;
+
+  if (!originOwns(origin, namespace.owner)) {
+    return "reserved";
+  }
+
+  // An origin's own namespace with platform storage cannot be made by
+  // anyone but the core set (`storageProblem`); this keeps a table out of
+  // one should it exist.
+  return namespace.kind === "namespace" &&
+    namespace.storage === "platform" &&
+    !isCoreOrigin(origin)
+    ? "platform"
     : undefined;
 };
 
 /**
- * Checks a create operation: the new definition belongs to the origin's
- * layer, a new table lives in a namespace the origin owns, and fields,
- * indexes and child classes go only onto classes the origin owns, app
- * classes or extensible core classes.
+ * Checks a new definition, whatever operation adds it (every create and a
+ * new override; there is no other way to add one): it belongs to the
+ * origin's layer; only the core set adds platform storage or anything to a
+ * platform namespace or table; a new table lives in a namespace the origin
+ * owns; fields, indexes, overrides and child classes go only onto classes
+ * the origin owns, app classes or extensible core classes.
  *
  * @param work - The application; a refusal is recorded there.
- * @param operation - The create operation.
- * @returns True when the create may proceed.
+ * @param operation - The operation's tag.
+ * @param definition - The new definition.
+ * @returns True when the definition may be added.
  */
-export const guardCreate = (
+export const guardNewDefinition = (
   work: Work,
-  operation: CreateOperation
+  operation: CreateOperation["op"] | "setOverride",
+  definition: NewDefinition
 ): boolean => {
-  const { definition } = operation;
-
   const reason = sameOwner(definition.owner, ownerOfOrigin(work.context.origin))
-    ? (namespaceProblem(work, operation) ??
-      attachProblem(work, hostOf(work, operation)))
+    ? (storageProblem(work, definition) ??
+      namespaceProblem(work, definition) ??
+      attachProblem(work, hostOf(work, definition)))
     : "owner";
 
   if (reason !== undefined) {
-    refused(work, definition.id, operation.op, reason);
-
-    return false;
-  }
-
-  return true;
-};
-
-/**
- * Checks a new override: it goes onto a class the origin owns, an app
- * class or an extensible core class.
- *
- * @param work - The application; a refusal is recorded there.
- * @param id - The override's ID.
- * @param owner - The override's owner.
- * @param classId - The class it is attached to.
- * @returns True when the override may be created.
- */
-export const guardNewOverride = (
-  work: Work,
-  id: DefinitionId,
-  owner: Owner,
-  classId: DefinitionId
-): boolean => {
-  const reason = sameOwner(owner, ownerOfOrigin(work.context.origin))
-    ? attachProblem(work, classOf(work, classId))
-    : "owner";
-
-  if (reason !== undefined) {
-    refused(work, id, "setOverride", reason);
+    refused(work, definition.id, operation, reason);
 
     return false;
   }
