@@ -76,7 +76,12 @@ import {
   updateRecord as updateRecordRows,
 } from "./save-sql.ts";
 import type { ColumnWrite, RootLock } from "./save-sql.ts";
-import { checkDepth, SaveStack, withinSave } from "./save-stack.ts";
+import {
+  checkDepth,
+  refuseNestedSave,
+  SaveStack,
+  withinSave,
+} from "./save-stack.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
 import { WriteAccess } from "./write-access.ts";
@@ -637,7 +642,7 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   }
 
   if (stack.recordIds.has(input.id)) {
-    return yield* new RecordInSave();
+    return yield* refuseNestedSave(new RecordInSave());
   }
 
   const loaded = yield* loadRecord(snapshot, locked.value.classId, input.id);

@@ -162,6 +162,23 @@ const valuesOf = (saved: SaveResult): JsonObject => {
 const count = (sqlText: string, params: readonly unknown[] = []) =>
   values(sqlText, params).pipe(Effect.map(([value]) => Number(value)));
 
+/**
+ * Hooks whose after-write step catches one refusal of its nested saves,
+ * as hook code might, and returns success.
+ * @param hooks - The rule hooks.
+ * @param tag - The refusal to catch.
+ * @returns The catching hooks.
+ */
+const catchingAround = (
+  hooks: SaveHooksApi,
+  tag: "RecordInSave" | "HookDepthExceeded"
+): SaveHooksApi =>
+  SaveHooks.of({
+    ...hooks,
+    afterWrite: (input) =>
+      hooks.afterWrite(input).pipe(Effect.catchTag(tag, () => Effect.void)),
+  });
+
 const committedCounts = Effect.all({
   changes: count('SELECT count(*)::text AS value FROM core."change"'),
   deliveries: count('SELECT count(*)::text AS value FROM core."delivery"'),
@@ -630,6 +647,20 @@ describe("record-rules", () => {
           assert.isTrue(Exit.isFailure(caught));
           assert.strictEqual(refusalOf(caught)?.reason, "poisoned");
           assert.deepStrictEqual(yield* committedCounts, before);
+
+          // RecordInSave refuses before the refused save writes anything;
+          // catching it right around that save still never commits.
+          const caughtRightThere = yield* Effect.exit(
+            createParent({ name: "log-loop-3" }).pipe(
+              Effect.provideService(
+                SaveHooks,
+                catchingAround(hooks, "RecordInSave")
+              )
+            )
+          );
+
+          assert.strictEqual(refusalOf(caughtRightThere)?.reason, "poisoned");
+          assert.deepStrictEqual(yield* committedCounts, before);
         })
     );
 
@@ -675,6 +706,23 @@ describe("record-rules", () => {
           }).pipe(Effect.flip);
 
           assert.strictEqual(refused._tag, "HookDepthExceeded");
+          assert.deepStrictEqual(yield* committedCounts, before);
+
+          // Hook code that catches the refusal around the rejected save:
+          // the transaction is poisoned all the same.
+          const caught = yield* Effect.exit(
+            createRecord({
+              body: { counter: 0, name: "deep" },
+              endpointClassId: LOG.id,
+            }).pipe(
+              Effect.provideService(
+                SaveHooks,
+                catchingAround(yield* SaveHooks, "HookDepthExceeded")
+              )
+            )
+          );
+
+          assert.strictEqual(refusalOf(caught)?.reason, "poisoned");
           assert.deepStrictEqual(yield* committedCounts, before);
         })
     );

@@ -7,7 +7,10 @@
  * `change-entry.ts`).
  */
 import { HookDepthExceeded } from "@std/api/errors/hook-depth-exceeded";
+import type { RecordInSave } from "@std/api/errors/record-in-save";
 import { Context, Effect } from "effect";
+
+import { CurrentTransaction } from "../sql/transaction-context.ts";
 
 /**
  * The deepest nesting of saves: an outermost save and at most this many
@@ -58,14 +61,34 @@ export const withinSave = <A, E, R>(
   });
 
 /**
- * Refuses a save nested deeper than {@link MAX_HOOK_DEPTH}.
+ * Refuses a nested save of hooks or rules: poisons the running
+ * transaction first, so the refusal rolls everything back even when hook
+ * code catches it. The refused save has written nothing yet, so the
+ * nested unit's write counter alone would not poison (Contracts 4.1).
+ *
+ * @param refusal - `RecordInSave` or `HookDepthExceeded`.
+ * @returns Fails with the error.
+ */
+export const refuseNestedSave = Effect.fn("Records.refuseNestedSave")(
+  function* refuseNestedSave(refusal: HookDepthExceeded | RecordInSave) {
+    const transaction = yield* CurrentTransaction;
+
+    yield* transaction.refuseCommit(
+      `a nested save was refused (${refusal._tag})`
+    );
+
+    return yield* refusal;
+  }
+);
+
+/**
+ * Refuses a save nested deeper than {@link MAX_HOOK_DEPTH}, poisoning the
+ * transaction.
  *
  * @param stack - The stack the save starts with.
  * @returns Fails with `HookDepthExceeded`.
  */
-export const checkDepth = (
-  stack: SaveStackValue
-): Effect.Effect<void, HookDepthExceeded> =>
+export const checkDepth = (stack: SaveStackValue) =>
   stack.depth > MAX_HOOK_DEPTH
-    ? Effect.fail(new HookDepthExceeded())
+    ? refuseNestedSave(new HookDepthExceeded())
     : Effect.void;
