@@ -1,0 +1,38 @@
+{
+  "name": "@std/web",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest-browser.config.ts"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "catalog:",
+    "@foldkit/ui": "0.169.0",
+    "@std/api": "workspace:*",
+    "effect": "catalog:",
+    "foldkit": "0.169.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@foldkit/devtools": "0.169.0",
+    "@foldkit/devtools-mcp": "0.25.0",
+    "@foldkit/vite-plugin": "0.28.0",
+    "@std/testing": "workspace:*",
+    "@types/node": "catalog:",
+    "happy-dom": "20.14.6",
+    "playwright": "1.64.1",
+    "typescript": "catalog:",
+    "vite": "8.3.4",
+    "vitest": "catalog:"
+  },
+  "std": {
+    "profile": "web"
+  }
+}

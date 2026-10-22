@@ -416,7 +416,7 @@ Alternatives on their own trade-offs (the same list as the plan's storage decisi
 - Permissions are protected built-in config records (`core.permission`, with stable IDs), granted to roles through `core.role_permission` (config, covered by the revision) and checked by permission ID [judgment]. v0.1 permissions: `schema.purge` (1.6), `schema.snapshot` (6.8), `rules.run_as` (4.1).
 - `core.access_rule`: `effect` (allow or deny), `roles`, `class` (one class or `*`), `target` (records, or fields as a list or `*`), `actions` (read, create, update, delete; field rules cannot use delete), optional `condition`.
 - Built-in roles: `admin`; `authenticated`, held implicitly by every active user [judgment]; `schema_purger`, which holds `schema.purge`. Built-in roles, permissions and rules are protected definitions.
-- Password sign-in for every active user (Stage 0: the demo users). The first administrator of an install is created by `std bootstrap-admin`, as the system user through the save pipeline, once per login (decision 0016). API tokens, explain mode and the rule editor come in Step 3.
+- Password sign-in for every active user (Stage 0: the demo users). The first administrator of an install is created by `std bootstrap-admin`, as the system user through the save pipeline, once per login (decision 0016). API tokens, explain mode and the rule editor come in Step 3. The web app holds its session in an HTTP-only, `SameSite=Strict` cookie set by `POST /api/v1/auth/cookie-sign-in`; an unsafe request authenticated by it needs `STD-Client: web` (decision 0018).
 - The acting user is a required Effect service of every record-service operation, so a code path with no actor does not type-check. The HTTP layer has no default actor. The system user acts only for bootstrap and definition loading: it never signs in and no session authenticates as it, even if it is activated and given a password (decision 0014).
 
 ### 3.2 Decision rule
@@ -522,7 +522,7 @@ All API errors are tagged errors with a PascalCase `_tag`.
 | `DependencyConflict`, `UseRetireOrPurge`, `PurgeRefused`, `ExistingDataViolates`, `SchemaNeedsAttention` | 409 | change-set refusals (1.4 to 1.7) |
 | `DefinitionProtected`, `PermissionRequired` | 403 | 1.8, and a missing permission such as `schema.purge` |
 | `SchemaBusy`, `SchemaLockTimeout` | 503 with `Retry-After` | another schema change holds `SCHEMA_KEY`; locks not obtained in 5 attempts (names no session) |
-| `Unauthenticated` | 401 | no bearer token, an unknown or expired one, or an inactive user |
+| `Unauthenticated` | 401 | no session token (bearer or the web app's session cookie), an unknown or expired one, an inactive user, or the session cookie on an unsafe request without `STD-Client: web` (decision 0018) |
 | `InvalidCredentials` | 401 | sign-in refused; unknown login, wrong password and deactivated user alike |
 | `InvalidRequest`, `InvalidFilter`, `InvalidCursor` | 400 | a malformed query parameter, a filter that does not parse or check (after names resolve), a cursor not issued for this sort |
 
@@ -923,7 +923,7 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 | Application SDK | app code for known tables | types generated from a versioned schema snapshot (6.8) | generated code in the app's repo |
 
 - `HttpApiClient.make` exists in Effect v4 [checked: [v4 API docs](https://effect.website/docs/v4/api)]; import paths follow the vendored source. It is tagged unstable, so the shared API-definition package and the web app allow `effect/http-api` and `effect/http` (9).
-- Fixed endpoints: sign-in, sign-out, the current session (`GET /api/v1/auth/me`: user ID and effective roles), metadata, snapshot, form-state, schema-change operations. Generic record routes (`/api/v1/tables/{table}/records`) have a fixed envelope (6.6); `values` are typed only at run time.
+- Fixed endpoints: sign-in (bearer and cookie forms), sign-out, the current session (`GET /api/v1/auth/me`: user ID, display name and effective roles), metadata, snapshot, form-state, schema-change operations. Generic record routes (`/api/v1/tables/{table}/records`) have a fixed envelope (6.6); `values` are typed only at run time.
 - Decision: table types are static only in generated SDK code. Reason: a deployed browser cannot gain compile-time types for a table created at run time.
 
 ### 6.2 Schema revision on the wire

@@ -1,0 +1,55 @@
+import { CurrentUserSchema } from "@std/api/session";
+import { Schema } from "effect";
+import { defineTaggedUnion } from "foldkit/schema";
+
+import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
+import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
+
+/** Where a sign-out request stands. */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const SignOutRequest = defineTaggedUnion({
+  Failed: {},
+  Idle: {},
+  Pending: {},
+});
+
+/** Where a sign-out request stands. */
+export type SignOutRequest = typeof SignOutRequest.Type;
+
+/**
+ * The app: whether there is a session, and the page.
+ *
+ * - `CheckingSession`: at start-up, while `auth/me` says whether the
+ *   browser holds a session cookie (scripts cannot read it).
+ * - `SessionUnavailable`: the server could not be asked; the user can
+ *   retry.
+ * - `SignedOut`: the sign-in page or a not-found page. A signed-in page
+ *   asked for while signed out is kept as `maybeReturnRoute`, to go to
+ *   after sign-in.
+ * - `SignedIn`: the user, the page and any sign-out in progress. The
+ *   session token is never here: it lives in the HTTP-only cookie.
+ */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const Model = defineTaggedUnion({
+  CheckingSession: { route: AppRoute },
+  SessionUnavailable: { route: AppRoute },
+  SignedIn: {
+    route: SignedInRoute,
+    signOutRequest: SignOutRequest,
+    user: CurrentUserSchema,
+  },
+  SignedOut: {
+    maybeReturnRoute: Schema.Option(SignedInRoute),
+    route: SignedOutRoute,
+    signIn: SignInModel,
+  },
+});
+
+/** The app's state. */
+export type Model = typeof Model.Type;
+
+/** The signed-in state. */
+export type SignedInModel = typeof Model.SignedIn.Type;
+
+/** The signed-out state. */
+export type SignedOutModel = typeof Model.SignedOut.Type;

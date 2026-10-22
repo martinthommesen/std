@@ -14,6 +14,7 @@ import { HttpApiBuilder } from "effect/http-api";
 
 import { OutboxSaveHooks } from "../records/outbox-producer.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
+import { ApiNoStoreLayer } from "./api-cache.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
 import { MetaHandlers } from "./meta-handlers.ts";
@@ -51,8 +52,9 @@ export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
   Layer.provide(Layer.merge(AuthenticationLayer, RequestDecodingLayer))
 );
 
-/** The routes plus the global revision header. */
+/** The routes plus the global revision header and `Cache-Control: no-store`. */
 export const HttpAppLayer = Layer.mergeAll(
   ApiRoutes,
-  SchemaRevisionHeaderLayer
+  SchemaRevisionHeaderLayer,
+  ApiNoStoreLayer
 );

@@ -23,4 +23,17 @@ WORKDIR /std
 COPY . .
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
+# The web app (apps/web), built into apps/web/dist, which `std serve` serves
+# at / by default (STD_WEB_ROOT; decision 0018). Open http://localhost:8080.
+RUN pnpm --filter @std/web build
+
+# Run as the base image's unprivileged `node` user. The workspace, the web
+# build included, stays owned by root, so the server can read the web root
+# but not write to it: a process that could write there could swap a file
+# for a symlink between the server's check and its read (decision 0018).
+# `COPY` keeps the build host's file modes, so make everything readable,
+# and writable by root only, whatever they were.
+RUN chmod -R a+rX,go-w /std
+USER node
+
 CMD ["pnpm", "--silent", "std", "serve"]

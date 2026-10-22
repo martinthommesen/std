@@ -21,36 +21,69 @@ import { HttpApiClient, HttpApiMiddleware } from "effect/http-api";
 
 import { SCHEMA_REVISION_HEADER, StdApi } from "./api.ts";
 import { Authentication } from "./authentication.ts";
+import { WEB_CLIENT, WEB_CLIENT_HEADER } from "./session-cookie.ts";
 
 /** The typed client of the STD API. */
 export type StdClient = HttpApiClient.ForApi<typeof StdApi>;
 
 /** Where the client sends requests, and the revision it was built at. */
 export interface StdClientOptions {
-  /** The server's origin, such as `http://127.0.0.1:8080`. */
-  readonly baseUrl: string | URL;
+  /**
+   * The server's origin, such as `http://127.0.0.1:8080`. In a browser it
+   * may be omitted: requests then go to the page's own origin.
+   */
+  readonly baseUrl?: string | URL;
   /**
    * `<revision>.<change_set_id>`, sent as `STD-Schema-Revision` on every
    * request so the server can refuse stale requests (6.2, 6.4).
    */
   readonly schemaRevision?: string;
+  /**
+   * Sends `STD-Client: web` on every request: STD's web app, whose session
+   * is the HTTP-only cookie, which the server accepts on an unsafe request
+   * only with this header (`session-cookie.ts`).
+   */
+  readonly webClient?: boolean;
 }
+
+/**
+ * The headers every request of a client carries, as name and value pairs.
+ *
+ * @param options - The client's options.
+ * @returns The headers.
+ */
+const fixedHeaders = (
+  options: StdClientOptions
+): (readonly [string, string])[] => {
+  const headers: (readonly [string, string])[] = [];
+
+  if (options.schemaRevision !== undefined) {
+    headers.push([SCHEMA_REVISION_HEADER, options.schemaRevision]);
+  }
+
+  if (options.webClient === true) {
+    headers.push([WEB_CLIENT_HEADER, WEB_CLIENT]);
+  }
+
+  return headers;
+};
 
 /**
  * Builds the typed client over the `HttpClient` in context. Endpoints that
  * need a session also need {@link authenticationClient}.
  *
- * @param options - Base URL and, optionally, the schema revision to send.
+ * @param options - Base URL and, optionally, the schema revision to send
+ *   and whether this is the web app.
  * @returns The client.
  */
 export const makeStdClient = (options: StdClientOptions) => {
-  const { schemaRevision } = options;
+  const headers = fixedHeaders(options);
 
   const transformClient =
-    schemaRevision === undefined
+    headers.length === 0
       ? undefined
       : HttpClient.mapRequest(
-          HttpClientRequest.setHeader(SCHEMA_REVISION_HEADER, schemaRevision)
+          HttpClientRequest.setHeaders(Object.fromEntries(headers))
         );
 
   return HttpApiClient.make(StdApi, {

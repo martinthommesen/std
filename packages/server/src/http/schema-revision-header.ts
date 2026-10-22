@@ -1,6 +1,7 @@
 /**
- * The `STD-Schema-Revision` response header (Contracts 6.2): every
- * response, errors included, carries `<revision>.<change_set_id>`.
+ * The `STD-Schema-Revision` response header (Contracts 6.2): every API
+ * response (every path under `/api/`), errors included, carries
+ * `<revision>.<change_set_id>`.
  *
  * A handler records the revision its request transaction ran at
  * (`recordServedRevision`), so the header equals the body's
@@ -17,6 +18,9 @@ import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { Transactions } from "../sql/transactions.ts";
+
+/** Where the API's routes start; other paths are the web app's files. */
+const API_PATH_PREFIX = "/api/";
 
 /** The revisions served, by the request they were served for. */
 const served = new WeakMap<object, ConfigState>();
@@ -56,19 +60,23 @@ export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
 
     return (httpEffect) =>
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
-        Effect.map(
-          Effect.suspend(() => {
-            const state = served.get(request.source);
+        // The web app's files (`web-app.ts`) are not API responses: no
+        // header, and no transaction per file.
+        request.url.startsWith(API_PATH_PREFIX)
+          ? Effect.map(
+              Effect.suspend(() => {
+                const state = served.get(request.source);
 
-            return state === undefined ? current : Effect.succeed(state);
-          }),
-          (state) =>
-            HttpServerResponse.setHeader(
-              response,
-              SCHEMA_REVISION_HEADER,
-              revisionHeaderValue(state)
+                return state === undefined ? current : Effect.succeed(state);
+              }),
+              (state) =>
+                HttpServerResponse.setHeader(
+                  response,
+                  SCHEMA_REVISION_HEADER,
+                  revisionHeaderValue(state)
+                )
             )
-        )
+          : Effect.succeed(response)
       );
   }),
   { global: true }

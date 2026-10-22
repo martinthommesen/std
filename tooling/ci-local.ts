@@ -6,6 +6,11 @@
  * Postgres is not started here: the workflow uses a service container, and
  * locally `pnpm db:up` provides the same server. The `Postgres` step fails
  * with a hint when it is not running.
+ *
+ * Neither is a browser installed: the workflow's Chromium step runs only on
+ * GitHub Actions (it needs sudo for system libraries). The browser tests
+ * step fails with the install command when Playwright's Chromium is missing
+ * from the user cache.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";

@@ -68,6 +68,17 @@ jobs:
         run: pnpm typecheck
       - name: Test
         run: pnpm test
+      # Chromium for the browser tests, with its system libraries. A no-op
+      # outside GitHub Actions: `pnpm ci:local` runs this step too and must not
+      # call sudo; locally, install it once into your user cache with
+      # `pnpm --filter @std/web exec playwright install chromium` (the browser
+      # tests fail with that hint when it is missing).
+      - name: Chromium (for the browser tests)
+        run: if [ -n "${GITHUB_ACTIONS:-}" ]; then pnpm --filter @std/web exec playwright install --with-deps chromium; fi
+      # The web app built and served by a real `std serve` on a disposable
+      # database, in Chromium (decision 0018).
+      - name: Browser tests (the web app in Chromium against std serve)
+        run: pnpm --filter @std/web test:browser
       - name: Toolchain canaries
         run: pnpm test:canaries
       # The Step 1 runnable result: `std upgrade`, `std bootstrap-admin` and

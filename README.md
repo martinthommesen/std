@@ -2,7 +2,7 @@
 
 # STD
 
-STD (a code name) is an open source alternative to ServiceNow: a platform core of generic tables, records, forms, access rules and history that apps sit on. It is at Step 1, the platform core: tables, records, access rules and history work through the HTTP API, with no web app yet. The plan is in [docs/plan.md](docs/plan.md), the contracts in [docs/contracts.md](docs/contracts.md), and the engineering conventions in [docs/architecture.md](docs/architecture.md).
+STD (a code name) is an open source alternative to ServiceNow: a platform core of generic tables, records, forms, access rules and history that apps sit on. It is at Step 1, the platform core: tables, records, access rules and history work through the HTTP API, and the web app (Step 2) has its foundation: sign-in, the signed-in shell and sign-out. The plan is in [docs/plan.md](docs/plan.md), the contracts in [docs/contracts.md](docs/contracts.md), and the engineering conventions in [docs/architecture.md](docs/architecture.md).
 
 Stack: TypeScript 7 and Effect 4 on Node 26, a pnpm 12 workspace, Postgres 18.
 
@@ -15,7 +15,7 @@ docker compose up --build                  # Postgres 18, then `std upgrade` onc
 examples/quickstart.sh                     # in a second terminal, from the repository root
 ```
 
-`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade`, which applies the platform migrations and loads the core definition set, then `std bootstrap-admin`, which creates the first administrator), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> once the upgrade has exited 0.
+`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade`, which applies the platform migrations and loads the core definition set, then `std bootstrap-admin`, which creates the first administrator), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator (or, after the script below, as `alice` or `bob`); the web app keeps its session in an HTTP-only cookie.
 
 `examples/quickstart.sh` then works through the HTTP API only:
 
@@ -35,7 +35,7 @@ Each step prints a heading. Every refusal it shows is checked for its exact stat
 | `STD_URL` | `http://127.0.0.1:8080` | the script |
 | `STD_DOCTOR_COMMAND` | `docker compose exec -T server pnpm --silent std doctor` | the script |
 
-The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` (and `QUICKSTART_ALICE_PASSWORD`, `QUICKSTART_BOB_PASSWORD`) for anything but a demo. The script never puts a password or a session token into a command's arguments. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT` and `STD_TIME_ZONE` (UTC by default). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
+The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` (and `QUICKSTART_ALICE_PASSWORD`, `QUICKSTART_BOB_PASSWORD`) for anything but a demo. The script never puts a password or a session token into a command's arguments. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT`, `STD_TIME_ZONE` (UTC by default), `STD_WEB_ROOT` (the built web app; this checkout's `apps/web/dist` by default) and `STD_SESSION_COOKIE_SECURE` (`auto`, `always` or `never`; see docs/decisions/0018-web-foundation.md). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
 
 The compose image (`docker/quickstart.Dockerfile`) is a development image that runs the TypeScript sources; the release image comes in Step 4. Without Docker, `pnpm quickstart:ci` runs the same script against `std serve` on a disposable database, as CI does. It needs Linux and `strace`: it traces every program the script starts and fails if a password reaches any program's arguments.
 

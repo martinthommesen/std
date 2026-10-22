@@ -8,8 +8,13 @@
  * config commit by any process reloads the snapshot early; correctness
  * still comes from `core.begin_request()` in every request.
  *
+ * It also serves the built web app at `/` (`web-app.ts`), and the API's
+ * session cookie for it (`session-cookie.ts`).
+ *
  * Settings: `STD_HTTP_HOST` (default `127.0.0.1`), `STD_HTTP_PORT`
- * (default `8080`), plus the database and instance settings.
+ * (default `8080`), `STD_WEB_ROOT` (default: this checkout's
+ * `apps/web/dist`), `STD_SESSION_COOKIE_SECURE` (`auto`, `always` or
+ * `never`; default `auto`), plus the database and instance settings.
  */
 import { createServer } from "node:http";
 
@@ -27,7 +32,10 @@ import {
   SERVER_APPLICATION_NAME,
 } from "../sql/database-config.ts";
 import { SqlLayer } from "../sql/layer.ts";
+import { answerApiFailures } from "./api-cache.ts";
 import { HttpAppLayer } from "./app.ts";
+import { sessionCookieSecureFromEnv } from "./session-cookie.ts";
+import { WebAppLayer } from "./web-app.ts";
 
 const DEFAULT_PORT = 8080;
 const MAX_PORT = 65_535;
@@ -69,8 +77,15 @@ const StartupCheckLayer = Layer.effectDiscard(checkPlatformMigrations());
  */
 const ResumerLayer = SchemaResumer.pipe(Layer.provide(recoverySettingsFromEnv));
 
-/** The whole server: launch it with `Layer.launch`. */
-export const ServerLayer = HttpRouter.serve(HttpAppLayer).pipe(
+/**
+ * The whole server: the API, the web app's files when they are built, and
+ * the session cookie's `Secure` setting. Launch it with `Layer.launch`.
+ */
+export const ServerLayer = HttpRouter.serve(
+  Layer.mergeAll(HttpAppLayer, WebAppLayer),
+  { middleware: (httpApp) => answerApiFailures(httpApp) }
+).pipe(
+  Layer.provide(sessionCookieSecureFromEnv),
   Layer.provide(NodeServerLayer),
   Layer.provide(ResumerLayer),
   Layer.provide(StartupCheckLayer),
