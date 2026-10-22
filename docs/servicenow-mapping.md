@@ -173,3 +173,16 @@ ServiceNow is STD's feature checklist, not its spec (plan, "Direction"). This fi
 | Dictionary attributes and the UI's client-side metadata (`g_form`, `GlideForm` mandatory and read-only states) | `GET /api/v1/meta/tables/{table}`: the caller's effective metadata | Filtered by access: fields, choices and tables the caller cannot read are absent, and a hidden table answers like a missing one. Per field `read` and `write` (`yes`, `no`, `perRecord`). |
 | Client-side mandatory and type checks versus server-side validation | `recordSchema` (`@std/definitions/record-schema`), the same field rules the save pipeline runs | Browser and server give the same per-field verdict; uniqueness, references, access rules, condition values and staleness stay server-only. |
 | Table API's OpenAPI spec per table (REST API Explorer) | `GET /api/v1/meta/tables/{table}/openapi.json` | Built from the caller's metadata and stating its schema revision. |
+| Saved list filters (`sys_filter`) and list favourites | Saved filter (`core.saved_filter`): table, `name`, `label`, a `filter`-profile condition AST (decision 0019) | Config records with an owner layer, shipped in sets or created by admins, served in the metadata (`savedFilters`) with the condition in the text syntax the list API's `filter` takes. Conditions name fields by ID, so renames never break them. A caller gets only the filters whose every field they can read. ServiceNow's per-user filters and favourites are data and not in v0.1. |
+
+## The helpdesk example (Step 2; decision 0019)
+
+| ServiceNow | STD | Notes |
+| --- | --- | --- |
+| Task (`task`) and Incident (`incident`, extends `task`) | `helpdesk.ticket` and `helpdesk.incident` (extends it), an app set in `examples/helpdesk` | Class-table inheritance, as ServiceNow's table extension: an incident is a ticket, and lists of tickets include incidents. |
+| `number` with `TASK`/`INC` prefixes (`sys_number`) | `number`, auto-numbered with `TKT`, and `INC` through an override on the incident | One counter per field and prefix, so numbers never repeat across the hierarchy. |
+| `assigned_to` (reference to `sys_user`) | `assigned_to` in v1, renamed to `assignee` in v2 | The rename goes by ID: layouts, saved filters and access-rule conditions keep working. |
+| `state` and `priority` choice lists; `incident_state` restricting `task.state` | `status` and `priority` choices on the ticket; a status subset on the incident | The incident cannot use `awaiting_approval`. |
+| `itil` role with ACLs | `agent` role with access rules | Agents read every ticket, change only tickets assigned to them or to no one, never read `internal_cost`, and from v2 see `customer_email` only on their own tickets. |
+| "My open incidents" and other list filters | Saved filters `my_open`, `unassigned`, `critical_open` (incident) and `costly` (ticket) | `costly` reads `internal_cost`, so agents never get it. |
+| Application upgrade with customer updates (skipped records, "Retain customization") | `std upgrade --set examples/helpdesk/v2` over local overrides: conflicts keep the local value, equal values converge, untouched shipped changes apply | A local layout override is one property and stays whole. |

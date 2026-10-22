@@ -552,6 +552,24 @@ const REFERENCE_CASES: Readonly<
     ],
   ],
   rule_role: ["role", (id) => [addAccessRule(ACME.asset, [id]).op]],
+  saved_filter_on: [
+    "class",
+    (id) => [
+      {
+        definition: {
+          classId: id,
+          condition: { op: "true" },
+          id: freshId(),
+          kind: "savedFilter",
+          label: "K",
+          name: "k_filter",
+          owner: { layer: "local" },
+          protected: false,
+        },
+        op: "createSavedFilter",
+      },
+    ],
+  ],
   subscription_on: [
     "class",
     (id) => [
@@ -596,6 +614,7 @@ const changesOf = (response: TestResponse): readonly string[] => {
 interface WalkRecords {
   readonly choice: string;
   readonly layout: string;
+  readonly savedFilter: string;
   readonly class: string;
   readonly field: string;
   readonly refField: string;
@@ -632,6 +651,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
   const choiceField = addField(walkClass.id, "walk_choice", { kind: "choice" });
   const choice = freshId();
   const layout = freshId();
+  const savedFilter = freshId();
   const local = { owner: { layer: "local" }, protected: false } as const;
 
   yield* change([
@@ -667,6 +687,18 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
         type: "list",
       },
       op: "createLayout",
+    },
+    {
+      definition: {
+        ...local,
+        classId: walkClass.id,
+        condition: { arg: { path: [field.id] }, op: "notEmpty" },
+        id: savedFilter,
+        kind: "savedFilter",
+        label: "Walk",
+        name: "walk_filter",
+      },
+      op: "createSavedFilter",
     },
     {
       definition: {
@@ -717,6 +749,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     override: override.id,
     refField: refField.id,
     rule: rule.id,
+    savedFilter,
     subscription,
   } satisfies WalkRecords;
 });
@@ -787,6 +820,12 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     (id) => ({ type: { kind: "reference", targetClassId: id } }),
   ],
   rule_role: ["role", "core.access_rule", "rule", (id) => ({ role_ids: [id] })],
+  saved_filter_on: [
+    "class",
+    "core.saved_filter",
+    "savedFilter",
+    (id) => ({ table_id: id }),
+  ],
   subscription_on: [
     "class",
     "core.subscription",
@@ -1073,6 +1112,24 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
         op: "createRole",
       }),
       references: false,
+    },
+    target: "none",
+  },
+  createSavedFilter: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          ...LOCAL,
+          classId: refs.class,
+          condition: { arg: { path: [refs.field] }, op: "notEmpty" },
+          id,
+          kind: "savedFilter",
+          label: "Matrix",
+          name: "m_filter",
+        },
+        op: "createSavedFilter",
+      }),
+      references: true,
     },
     target: "none",
   },
@@ -3266,7 +3323,7 @@ describe("schema-http", () => {
               kind: "choice",
             });
 
-            // A stored subscription, choice and layout, so the generic
+            // A stored subscription, choice, layout and saved filter, so the generic
             // routes are probed on every definition kind.
             yield* change([
               rule.op,
@@ -3294,6 +3351,18 @@ describe("schema-http", () => {
                   type: "form",
                 },
                 op: "createLayout",
+              },
+              {
+                definition: {
+                  ...LOCAL,
+                  classId: ACME.laptop,
+                  condition: { arg: { path: [ACME.cost] }, op: "notEmpty" },
+                  id: freshId(),
+                  kind: "savedFilter",
+                  label: "Stored",
+                  name: "stored_filter",
+                },
+                op: "createSavedFilter",
               },
               ...(OPERATION_CASES.createSubscription.create === "none"
                 ? []

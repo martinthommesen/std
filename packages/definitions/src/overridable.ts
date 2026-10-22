@@ -15,6 +15,8 @@
  * - choice: label, order and hidden (shipped choices are never deleted);
  * - layout: its element list, as one property (a layout is overridden as a
  *   whole);
+ * - saved filter: its label, and its condition as one property (decision
+ *   0019), so a local edit replaces the whole condition;
  * - field: also an auto-numbered field's prefix;
  * - protected definitions: label and help text only (Contracts 1.8), so a
  *   protected access rule cannot be disabled.
@@ -48,6 +50,7 @@ export const OVERRIDABLE: Readonly<Record<DefinitionKind, readonly string[]>> =
     override: [],
     permission: [],
     role: ["label"],
+    savedFilter: ["condition", "label"],
     subscription: [],
   };
 

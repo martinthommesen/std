@@ -31,6 +31,7 @@ export const PLATFORM_CLASS_IDS = {
   permission: "0d6333e6-d241-4da7-a456-5cafd70db0a4",
   role: "a425953f-b934-47d6-8ff1-4bbeca1b9370",
   role_permission: "b16789cc-353b-4f92-9f9a-3683a7f8ec0e",
+  saved_filter: "b3ac8bad-2b77-4610-9d09-816af6d2c8d4",
   schema_change: "b176d598-bd9d-4b4d-8dd9-87b52eaf992e",
   schema_change_step: "3d49bff3-7640-48b7-9030-d37b68f8b639",
   subscription: "31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e",

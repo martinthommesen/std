@@ -27,9 +27,13 @@ services:
   # Postgres, as before.
   #
   # `upgrade` applies platform migrations and loads the core definition set
-  # (`std upgrade`), then creates the first administrator unless that login
-  # exists (`std bootstrap-admin`). Contracts 1.9: migrations never run at
-  # server start, so the server waits for it to exit 0.
+  # and the helpdesk example (`std upgrade --set examples/helpdesk/v2`),
+  # then creates the first administrator unless that login exists
+  # (`std bootstrap-admin`), then the helpdesk's demo users `admin`, `agent`
+  # and `agent2` and, on an empty helpdesk, its demo incidents
+  # (`pnpm helpdesk:seed`; README.md, "Helpdesk"). STD_HELPDESK=0 leaves
+  # the helpdesk out. Contracts 1.9: migrations never run at server start,
+  # so the server waits for it to exit 0.
   upgrade:
     build:
       context: .
@@ -39,13 +43,21 @@ services:
       [
         "sh",
         "-c",
-        "pnpm --silent std upgrade && pnpm --silent std bootstrap-admin",
+        'if [ "$$STD_HELPDESK" = 0 ]; then pnpm --silent std upgrade && pnpm --silent std bootstrap-admin; else pnpm --silent std upgrade --set examples/helpdesk/v2 && pnpm --silent std bootstrap-admin && pnpm --silent helpdesk:seed; fi',
       ]
     environment:
       STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
       STD_ADMIN_LOGIN: ${STD_ADMIN_LOGIN:-administrator}
       # A disposable demo credential; set your own for anything but a demo.
       STD_ADMIN_PASSWORD: ${STD_ADMIN_PASSWORD:-quickstart-admin-password}
+      # The helpdesk example: 0 leaves it out. Its demo users' passwords
+      # default to the disposable demo credentials of
+      # packages/testing/src/helpdesk-fixture.ts; set your own for anything
+      # but a local demo.
+      STD_HELPDESK: ${STD_HELPDESK:-1}
+      HELPDESK_ADMIN_PASSWORD: ${HELPDESK_ADMIN_PASSWORD:-helpdesk-admin-demo-password}
+      HELPDESK_AGENT_PASSWORD: ${HELPDESK_AGENT_PASSWORD:-helpdesk-agent-demo-password}
+      HELPDESK_AGENT2_PASSWORD: ${HELPDESK_AGENT2_PASSWORD:-helpdesk-agent2-demo-password}
     depends_on:
       postgres:
         condition: service_healthy

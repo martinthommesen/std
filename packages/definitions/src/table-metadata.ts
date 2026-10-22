@@ -9,7 +9,8 @@
  * are left out): the effective label, help text, type with overridden
  * settings, required, read-only, static default, choices (key, label,
  * order, retired), the auto-number prefix, and `read` and `write` as `yes`,
- * `no` or `perRecord`. Layouts list only fields the metadata contains.
+ * `no` or `perRecord`. Layouts list only fields the metadata contains;
+ * saved filters only those whose every field the caller can read.
  *
  * It never holds anything the caller cannot read: no never-readable field,
  * no access-rule or record-rule condition, no computed default, no secret
@@ -33,6 +34,7 @@ import {
   Literal,
   Literals,
   NullOr,
+  optionalKey,
   String as SchemaString,
   Struct,
   Union,
@@ -161,6 +163,29 @@ export const MetaLayoutElementSchema = Union([
 /** One layout element. */
 export type MetaLayoutElement = typeof MetaLayoutElementSchema.Type;
 
+/**
+ * A saved list filter the caller may use (decision 0019): served only when
+ * the list API would accept its condition from this caller, so it names no
+ * field the caller cannot read.
+ */
+export const MetaSavedFilterSchema = Struct({
+  /** The condition AST (Contracts 5.2), naming fields by stable ID. */
+  condition: Json,
+  /**
+   * The same condition in the text syntax with the current field names, as
+   * the list API's `filter` parameter takes it.
+   */
+  filter: SchemaString,
+  id: SchemaString,
+  label: SchemaString,
+  name: SchemaString,
+  /** The qualified name of the table that defines it: E or an ancestor. */
+  table: SchemaString,
+});
+
+/** One saved filter. */
+export type MetaSavedFilter = typeof MetaSavedFilterSchema.Type;
+
 /** A table as `ancestors` lists it. */
 export const MetaTableRefSchema = Struct({
   id: SchemaString,
@@ -189,6 +214,12 @@ export const MetaTableSchema = Struct({
   }),
   /** The qualified name, `namespace.table`. */
   name: SchemaString,
+  /**
+   * The saved filters of E and its ancestors the caller may use, by table
+   * (root first), then name. Added in Step 2 (decision 0019): optional, so
+   * a metadata body without it still decodes; the server always sends it.
+   */
+  savedFilters: optionalKey(SchemaArray(MetaSavedFilterSchema)),
 });
 
 /** The description of one table. */

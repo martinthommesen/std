@@ -540,7 +540,9 @@ const applyOne = (work: Work, operation: Operation): void => {
 };
 
 const conditionText = (definition: Definition | undefined): string =>
-  definition?.kind === "accessRule" || definition?.kind === "subscription"
+  definition?.kind === "accessRule" ||
+  definition?.kind === "subscription" ||
+  definition?.kind === "savedFilter"
     ? JSON.stringify(definition.condition)
     : "";
 

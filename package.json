@@ -19,6 +19,7 @@
     "std": "node packages/server/src/cli/main.ts",
     "probes": "node packages/probes/src/main.ts",
     "spike:demo": "node examples/acme/src/main.ts",
+    "helpdesk:seed": "node examples/helpdesk/src/seed.ts",
     "quickstart:ci": "node examples/quickstart/src/ci.ts",
     "release-compat:ci": "node examples/quickstart/src/release-compat.ts"
   },

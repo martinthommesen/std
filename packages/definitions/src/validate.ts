@@ -4,8 +4,8 @@
  * `validateSnapshot` checks every live definition against the others: names
  * and their uniqueness scopes, references between definitions, the
  * `extends` graph, field types and constant defaults, tighten-only
- * overrides, indexes, grants, access rules, subscriptions, choices and
- * layouts. It returns
+ * overrides, indexes, grants, access rules, subscriptions, choices,
+ * layouts and saved filters. It returns
  * every problem it finds; an empty list means the configuration is valid.
  */
 import { isChoiceKey } from "@std/values/choice";
@@ -36,6 +36,7 @@ import type {
   OverrideDefinition,
   PermissionDefinition,
   RoleDefinition,
+  SavedFilterDefinition,
   SubscriptionDefinition,
 } from "./definition.ts";
 import { isActive, isLive } from "./definition.ts";
@@ -1205,6 +1206,12 @@ const checkUniqueness = (
     (layout) => `${layout.classId}/${layout.type}`,
     (layout) => `A ${layout.type} layout of ${layout.classId}`
   );
+  duplicates(
+    problems,
+    snapshot.all("savedFilter").filter(isLive),
+    (filter) => `${filter.classId}/${filter.name}`,
+    (filter) => `The saved filter name "${filter.name}" on its table`
+  );
 };
 
 const checkChoice = (
@@ -1299,6 +1306,47 @@ const checkLayout = (
   }
 };
 
+/**
+ * A saved filter (decision 0019): an identifier name, a label, a live
+ * class, and a condition that the `filter` profile accepts on that class
+ * (Contracts 5.10), checked with full access as it is stored; who may see
+ * it is decided where metadata serves it.
+ *
+ * @param problems - Where problems go.
+ * @param snapshot - The configuration.
+ * @param filter - The saved filter.
+ * @param purpose - Whether its condition is being stored now.
+ */
+const checkSavedFilter = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  filter: SavedFilterDefinition,
+  purpose: ConditionPurpose
+): void => {
+  nameProblem(
+    problems,
+    filter,
+    "saved filter",
+    filter.name,
+    identifierProblem(filter.name)
+  );
+  checkLabel(problems, filter, filter.label);
+
+  if (!refersTo(problems, snapshot, filter, filter.classId, "class", "class")) {
+    return;
+  }
+
+  for (const message of conditionProblems(
+    snapshot,
+    filter.classId,
+    filter.condition,
+    "filter",
+    purpose
+  )) {
+    problems.push(problem("invalidCondition", filter.id, message));
+  }
+};
+
 const checkNamed = (
   problems: Problems,
   definition: RoleDefinition | PermissionDefinition
@@ -1333,6 +1381,8 @@ const checkAccessDefinition = (
     checkChoice(problems, snapshot, definition);
   } else if (definition.kind === "layout") {
     checkLayout(problems, snapshot, definition);
+  } else if (definition.kind === "savedFilter") {
+    checkSavedFilter(problems, snapshot, definition, purpose);
   }
 };
 

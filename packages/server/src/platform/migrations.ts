@@ -13,6 +13,7 @@ import { migration0005 } from "./migrations/0005-config-layers.ts";
 import { migration0006 } from "./migrations/0006-definition-names.ts";
 import { migration0007 } from "./migrations/0007-outbox.ts";
 import { migration0008 } from "./migrations/0008-ui-config.ts";
+import { migration0009 } from "./migrations/0009-saved-filters.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -25,4 +26,5 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0006,
     migration0007,
     migration0008,
+    migration0009,
   ]);

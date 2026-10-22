@@ -788,3 +788,39 @@ tables:
         name: elements
         type: json
         required: true
+  - id: b3ac8bad-2b77-4610-9d09-816af6d2c8d4
+    name: core.saved_filter
+    label: Saved filter
+    storage: platform
+    displayField: label
+    fields:
+      - id: 6394adaa-57d4-4b84-a74a-7c016d1a9b84
+        name: owner_layer
+        type: text
+        required: true
+      - id: c641fd5e-acfd-4790-9be7-6b619f6672ef
+        name: owner_set_id
+        type: uuid
+      - id: 863e778b-54b4-4237-9c29-c26bd291d4b5
+        name: state
+        type: text
+        required: true
+      - id: f8bb6c95-6d71-467f-8f17-5a303c6cc0de
+        name: protected
+        type: boolean
+      - id: 5ea29f94-7414-44a0-a402-644dff1d5940
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 94430080-d2c9-49d7-bcf6-544f00c55556
+        name: name
+        type: text
+        required: true
+      - id: e7d86468-ebe9-46ec-a26f-b9bc305f5267
+        name: label
+        type: text
+        required: true
+      - id: e94d0b99-09ac-4681-a23f-c021899e4b29
+        name: condition
+        type: json
+        required: true
