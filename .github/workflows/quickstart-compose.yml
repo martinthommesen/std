@@ -3,6 +3,15 @@
 # examples/quickstart.sh against it, twice. The `ci.yml` step "Quickstart"
 # runs the same script without Docker.
 #
+# It then checks the Step 2 runnable result (docs/plan.md: "`docker compose
+# up`, open the browser, sign in as `admin` or `agent` from
+# `examples/helpdesk`") over HTTP with examples/helpdesk-sign-in.sh: the
+# stack serves the built web app at `/`; `admin` and `agent` sign in with
+# the README's demo passwords the way the web app does (cookie sign-in) and
+# list `helpdesk.incident`; the admin sees `internal_cost`, the agent sees
+# neither the key nor its values. It does not drive a browser; the browser
+# tests (`ci.yml`) do, against `std serve` on a test database.
+#
 # This job skips the credential check (the execve trace of decision 0016):
 # the check is a TypeScript program that would need Node and the workspace
 # here, and the doctor runs inside the container, outside the script's
@@ -14,6 +23,9 @@
 # on a shared machine, use another project name and ports, for example
 #   STD_POSTGRES_PORT=55432 STD_HTTP_PORT=58080 docker compose -p std-try up --build -d --wait
 # and remove it afterwards with `docker compose -p std-try down --volumes`.
+# Point the scripts at it with STD_URL=http://127.0.0.1:58080 (and, for
+# quickstart.sh, STD_DOCTOR_COMMAND='docker compose -p std-try exec -T
+# server pnpm --silent std doctor').
 name: Quickstart (docker compose)
 
 on:
@@ -40,6 +52,8 @@ jobs:
         run: examples/quickstart.sh
       - name: Quickstart again (a rerun against the same database)
         run: examples/quickstart.sh
+      - name: "Step 2 runnable result: the web app at /, admin and agent sign in and list incidents"
+        run: examples/helpdesk-sign-in.sh
       - name: Logs
         if: failure()
         run: docker compose logs
