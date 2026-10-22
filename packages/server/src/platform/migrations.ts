@@ -19,6 +19,7 @@ import { migration0011 } from "./migrations/0011-ledger-state.ts";
 import { migration0012 } from "./migrations/0012-user-individuals.ts";
 import { migration0013 } from "./migrations/0013-outbox-worker.ts";
 import { migration0014 } from "./migrations/0014-delivery-done.ts";
+import { migration0015 } from "./migrations/0015-system-user-history.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -37,4 +38,5 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0012,
     migration0013,
     migration0014,
+    migration0015,
   ]);

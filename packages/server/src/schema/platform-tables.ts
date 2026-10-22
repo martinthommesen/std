@@ -9,12 +9,18 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { SYSTEM_USER_ID, USER_CLASS_ID } from "@std/definitions/well-known";
 import { postgresColumn } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
+import type { StoredValue } from "@std/values/field-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
+import { changedFields, writeChangeEntry } from "../records/change-entry.ts";
+import type { StoredRecord } from "../records/stored-record.ts";
+import type { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { quoteIdent, tableName } from "./sql-text.ts";
 
@@ -151,17 +157,74 @@ const SYSTEM_USER_VALUES: ReadonlyMap<string, string> = new Map([
   ["active", "false"],
 ]);
 
+/** The system user's stored values, by field name; every other field is empty. */
+const SYSTEM_USER_STORED: ReadonlyMap<string, StoredValue> = new Map<
+  string,
+  StoredValue
+>([
+  ["name", "System"],
+  ["login", "system"],
+  ["active", false],
+]);
+
 /**
- * Inserts the system user into a `core.user` table created in this change
- * set, so audit columns and reference FKs to `core.user` have a target.
+ * The system user as a stored record of version 1, for its create entry.
  *
  * @param snapshot - The configuration after the change set.
+ * @returns The record.
+ */
+const systemUserRecord = (snapshot: ConfigSnapshot): StoredRecord => ({
+  classId: USER_CLASS_ID,
+  createdAt: 0,
+  createdBy: SYSTEM_USER_ID,
+  id: SYSTEM_USER_ID,
+  updatedAt: 0,
+  updatedBy: SYSTEM_USER_ID,
+  values: new Map(
+    snapshot
+      .fields(USER_CLASS_ID)
+      .map((field) => [field.id, SYSTEM_USER_STORED.get(field.name) ?? null])
+  ),
+  version: 1,
+});
+
+/**
+ * The `fields` of the system user's version-1 create entry: its fixed
+ * values as a save of them would record them (`changedFields`).
+ *
+ * @param snapshot - The configuration.
+ * @returns Field ID to `{ before, after }`.
+ */
+export const systemUserCreateFields = (snapshot: ConfigSnapshot): JsonObject =>
+  changedFields({
+    after: systemUserRecord(snapshot),
+    before: null,
+    classId: USER_CLASS_ID,
+    snapshot,
+    writeOnlySet: new Set(),
+  });
+
+/**
+ * Inserts the system user into a `core.user` table created in this change
+ * set, so audit columns and reference FKs to `core.user` have a target, and
+ * writes its version-1 create entry with it, as a save would (Contracts
+ * 4.2: one entry per version; review round 3 of decision 0023), so its
+ * history starts with a complete create. Data migration 0015 writes the same
+ * entry on installations whose system user predates this.
+ *
+ * @param snapshot - The configuration after the change set.
+ * @param revision - The revision the main transaction commits.
  * @returns An effect in the main transaction.
  */
 export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
   function* insertSystemUser(
-    snapshot: ConfigSnapshot
-  ): Effect.fn.Return<void, SqlError, SqlClient.SqlClient> {
+    snapshot: ConfigSnapshot,
+    revision: number
+  ): Effect.fn.Return<
+    void,
+    SqlError,
+    SqlClient.SqlClient | CurrentTransaction | RequestRevision
+  > {
     const sql = yield* SqlClient.SqlClient;
 
     const values = snapshot.ownFields(USER_CLASS_ID).flatMap((field) => {
@@ -185,6 +248,19 @@ export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
     yield* sql.unsafe(
       `INSERT INTO ${tableName(snapshot, USER_CLASS_ID)} (${columns}) VALUES (${literals})`,
       [SYSTEM_USER_ID, USER_CLASS_ID]
+    );
+
+    yield* writeChangeEntry(
+      {
+        actorId: SYSTEM_USER_ID,
+        cause: { kind: "system" },
+        fields: systemUserCreateFields(snapshot),
+        kind: "create",
+        recordClassId: USER_CLASS_ID,
+        recordId: SYSTEM_USER_ID,
+        recordVersion: 1,
+      },
+      revision
     );
   }
 );

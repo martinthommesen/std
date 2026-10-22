@@ -530,7 +530,7 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     yield* runDdl(plan.tables, budget);
 
     if (plan.seedSystemUser) {
-      yield* insertSystemUser(applied.after);
+      yield* insertSystemUser(applied.after, revision);
       yield* installSessionRevocation(applied.after);
     }
 
