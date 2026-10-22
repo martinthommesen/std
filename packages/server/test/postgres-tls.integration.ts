@@ -25,6 +25,7 @@ import { checkDatabaseTls } from "../src/doctor/check-server.ts";
 import { PgLive } from "../src/sql/client.ts";
 import { DatabaseConfig } from "../src/sql/database-config.ts";
 import { makeDedicatedConnection } from "../src/sql/dedicated.ts";
+import { runCli } from "./cli-support.ts";
 
 const fixture = Effect.gen(function* fixture() {
   return {
@@ -228,6 +229,46 @@ describe("postgres-tls", () => {
           )
         );
       })
+  );
+
+  it.effect("CLI upgrade runs data migrations and doctor over TLS", () =>
+    Effect.gen(function* upgradeOverTls() {
+      const { url, ca } = yield* fixture;
+
+      const env = {
+        STD_DATABASE_SSL_CA_FILE: ca,
+        STD_DATABASE_SSL_MODE: VERIFY_FULL,
+      };
+
+      const work = Effect.gen(function* upgradeDisposableDatabase() {
+        const database = yield* TestDatabase;
+        const upgrade = yield* runCli(database.url, ["upgrade"], env);
+        assert.strictEqual(upgrade.code, 0, upgrade.output);
+        const doctor = yield* runCli(database.url, ["doctor", "--json"], env);
+        assert.strictEqual(doctor.code, 0, doctor.output);
+        assert.include(doctor.stdout, '"databaseTls"');
+        assert.include(doctor.stdout, "TLSv1.");
+
+        const session = yield* database.session();
+
+        const migration = yield* session.query(
+          "SELECT state FROM core.platform_migration WHERE id = 12"
+        );
+
+        assert.strictEqual(migration.rows[0]?.state, "applied");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(testDatabaseLayer({ empty: true }))
+      );
+
+      yield* work.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({ ...env, STD_DATABASE_URL: url })
+          )
+        )
+      );
+    })
   );
 
   it.effect("pool, LISTEN, dedicated CLI connections and doctor use TLS", () =>

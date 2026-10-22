@@ -15,6 +15,9 @@ import { migration0007 } from "./migrations/0007-outbox.ts";
 import { migration0008 } from "./migrations/0008-ui-config.ts";
 import { migration0009 } from "./migrations/0009-saved-filters.ts";
 import { migration0010 } from "./migrations/0010-definition-revision-field.ts";
+import { migration0011 } from "./migrations/0011-ledger-state.ts";
+import { migration0012 } from "./migrations/0012-user-individuals.ts";
+import { migration0013 } from "./migrations/0013-record-rules.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -29,4 +32,7 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0008,
     migration0009,
     migration0010,
+    migration0011,
+    migration0012,
+    migration0013,
   ]);

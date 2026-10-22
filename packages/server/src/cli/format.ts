@@ -85,7 +85,7 @@ export const planLines = (plan: UpgradePlan): readonly string[] => [
     ? ["Platform migrations: up to date"]
     : plan.migrations.map(
         (migration) =>
-          `Platform migration ${String(migration.id).padStart(4, "0")} ${migration.name} (${migration.kind}): pending`
+          `Platform migration ${String(migration.id).padStart(4, "0")} ${migration.name} (${migration.kind}): ${migration.state === "running" ? "incomplete, resumed" : "pending"}`
       )),
   ...plan.resume.map(
     (changeSet) =>
@@ -127,6 +127,10 @@ export const reportLines = (report: UpgradeReport): readonly string[] => [
       ? `Set ${set.name} v${set.version}: ${set.result.state}`
       : `Set ${set.name} v${set.version}: ${set.result.state} at revision ${revision}`;
   }),
+  ...report.dataMigrations.map(
+    (outcome) =>
+      `Data migration ${String(outcome.id).padStart(4, "0")} ${outcome.name}: ${outcome.outcome}, ${outcome.changed} records changed in ${outcome.batches} batches`
+  ),
 ];
 
 /**

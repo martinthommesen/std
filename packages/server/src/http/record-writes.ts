@@ -115,9 +115,8 @@ export const expectedVersionOf = Effect.fn("Http.ifMatch")(
 
 /**
  * The failures a create or update cannot have at this edge become
- * defects: the body was parsed already (`InvalidBody`), only deletes are
- * `Referenced`, and no hook saves a record on the save stack yet
- * (`RecordInSave`).
+ * defects: the body was parsed already (`InvalidBody`), and only deletes
+ * are `Referenced` (record rules never delete).
  *
  * @param effect - A create or update.
  * @returns The same effect with those failures as defects.
@@ -126,7 +125,6 @@ const writeOnlyFailures = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.catchTags({
       InvalidBody: notAnObject,
-      RecordInSave: Effect.die,
       Referenced: Effect.die,
     })
   );
@@ -235,11 +233,8 @@ export const deleteInRequest = Effect.fn("Http.delete")(function* deleteIn(
     id: request.id.toLowerCase(),
   }).pipe(
     Effect.provide(RuleWriteAccess),
-    Effect.catchTags({
-      InvalidReference: Effect.die,
-      RecordInSave: Effect.die,
-      ValidationFailed: Effect.die,
-    })
+    // Record rules build their nested saves' bodies as objects.
+    Effect.catchTag("InvalidBody", Effect.die)
   );
 
   return jsonWithStatus(

@@ -13,6 +13,7 @@ import type {
   IndexDraft,
   NamespaceDraft,
   OverrideDraft,
+  RecordRuleDraft,
 } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import { SYSTEM_USER_ID } from "@std/definitions/well-known";
@@ -23,8 +24,10 @@ import { SqlClient } from "effect/sql";
 import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import type { TestDatabaseOptions } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { CORE_SET_DIRECTORY } from "../src/config/set-files.ts";
+import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import type { ChangeSetOptions } from "../src/schema/change-set.ts";
 import { decodeRows } from "../src/sql/rows.ts";
@@ -65,10 +68,18 @@ export const FAST_RETRIES: ChangeSetOptions = {
  * @returns The layer.
  */
 export const schemaTestLayer = (options: TestDatabaseOptions = {}) =>
-  Catalog.layer.pipe(Layer.provideMerge(testDatabaseLayer(options)));
+  Layer.merge(Catalog.layer, InstanceSettings.layer).pipe(
+    Layer.provideMerge(testDatabaseLayer(options))
+  );
 
-/** Loads the core set. */
-export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY);
+/**
+ * Loads the core set, then runs the `data` migrations that need it, as
+ * `std upgrade` does (so every user has its individual and `doctor`
+ * finds no pending migration).
+ */
+export const loadCore = loadSetDirectory(CORE_SET_DIRECTORY).pipe(
+  Effect.tap(() => runDataMigrations())
+);
 
 /** Loads the acme example set. */
 export const loadAcme = loadSetDirectory(ACME_SET_DIRECTORY);
@@ -354,6 +365,42 @@ export const addAccessRule = (
   };
 
   return { id: definition.id, op: { definition, op: "createAccessRule" } };
+};
+
+/**
+ * A local record rule: by default a `before` guard on `update` that
+ * refuses with `RuleRefused`; `rule` overrides any property.
+ * @param classId - The class it is attached to.
+ * @param rule - Properties that differ from the default.
+ * @returns The operation and the rule ID.
+ */
+export const addRecordRule = (
+  classId: string,
+  rule: Partial<Omit<RecordRuleDraft, "classId" | "kind">> = {}
+): BuiltOperation => {
+  const id = rule.id ?? freshId();
+
+  const definition: RecordRuleDraft = {
+    ...local,
+    actions: [{ code: "RuleRefused", message: "Refused", type: "refuse" }],
+    active: true,
+    condition: null,
+    description: null,
+    name: `r_${id.replaceAll("-", "").slice(-16)}`,
+    once: false,
+    operations: ["update"],
+    order: 0,
+    phase: "before",
+    ruleKind: "guard",
+    runAsId: null,
+    subscriptionId: null,
+    ...rule,
+    classId,
+    id,
+    kind: "recordRule",
+  };
+
+  return { id, op: { definition, op: "createRecordRule" } };
 };
 
 /**

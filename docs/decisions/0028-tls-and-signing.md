@@ -72,3 +72,9 @@ The concurrent-index child binds dedicated connections to the probe URL and tran
 A manual non-dry-run dispatch from a branch fails in a permissions-free guard job. Dry-run and publish jobs keep separate permissions and only their reachable build and sign steps.
 
 The shared development `postgres` service (`pnpm db:up`, 127.0.0.1:54329) is unchanged, so `pnpm db:up` does not recreate it; plain `docker compose up` starts it beside the quickstart stack, as the Stage 0 instructions expect. [judgment] A compose profile on that service was considered and rejected: it would make plain `docker compose up` skip the database the Stage 0 demo (`pnpm spike:demo`) connects to.
+
+## Integration with 3P, 3K and 3A
+
+The merge from main keeps the party foundation, data migrations, ODA Canvas probe and record rules. Doctor's incomplete-data-migration finding extends check 1, so the TLS observation stays check 17. The architecture table keeps all 17 checks and the record-rule hook details. Contracts 1.10 now includes check 17.
+
+The connection audit confirms that the CLI's data migration runner uses `SqlLayer` and `DatabaseConfig`, including the shared `@std/postgres/transport` policy. The ODA probe adds no direct Postgres client. The new party-foundation release-upgrade test binds `STD_DATABASE_DIRECT_URL` to its disposable database; the platform migration, schema interruption, schema recovery and tooling Postgres subprocess helpers now do the same. The migration and coordinator crash-test children read TLS settings through `DatabaseConfig.fromEnv`; they previously supplied only an explicit URL. An integration test runs CLI upgrade through the data migration and a clean doctor check on the TLS fixture. The browser helper's existing direct binding and the unprofiled shared compose service are preserved.

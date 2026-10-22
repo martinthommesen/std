@@ -11,7 +11,11 @@ const databaseUrl =
 const checkPostgres = async (url: string) =>
   await runCommand(process.execPath, ["tooling/check-postgres.ts"], {
     cwd: repoRoot,
-    env: { ...process.env, STD_DATABASE_URL: url },
+    env: {
+      ...process.env,
+      STD_DATABASE_DIRECT_URL: url,
+      STD_DATABASE_URL: url,
+    },
   });
 
 describe("postgres-check", () => {

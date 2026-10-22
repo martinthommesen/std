@@ -1,5 +1,26 @@
 -- core set on an empty install
 
+CREATE TABLE "core"."party" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  version bigint NOT NULL,
+  created_at timestamptz(3) NOT NULL,
+  created_by uuid NOT NULL,
+  updated_at timestamptz(3) NOT NULL,
+  updated_by uuid NOT NULL,
+  "contact_medium" jsonb,
+  "party_characteristic" jsonb,
+  "name" text,
+  "status" text DEFAULT 'initialized'::text,
+  "external_reference" jsonb,
+  CONSTRAINT std_pk_566904e772b9455a8ea15df797c43ae9 PRIMARY KEY (id),
+  CONSTRAINT std_uq_566904e772b9455a8ea15df797c43ae9 UNIQUE (id, class_id),
+  CONSTRAINT std_sc_566904e772b9455a8ea15df797c43ae9 CHECK (class_id IN ('566904e7-72b9-455a-8ea1-5df797c43ae9'::uuid, 'a1d5e868-1a22-4b6e-8a65-605e046f24ab'::uuid, 'f94b83bf-19a4-4793-b06f-d5b4b0727fac'::uuid)),
+  CONSTRAINT std_ck_7292e7395395415ea5b6138c247bad45 CHECK (char_length("name") <= 255)
+);
+
+CREATE TRIGGER std_tg_566904e772b9455a8ea15df797c43ae9 BEFORE UPDATE ON "core"."party" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
 CREATE TABLE "core"."user_role" (
   id uuid NOT NULL,
   class_id uuid NOT NULL,
@@ -29,6 +50,7 @@ CREATE TABLE "core"."user" (
   "login" text CONSTRAINT std_nn_b3cabaa477cb484592212105b21425eb NOT NULL,
   "active" boolean CONSTRAINT std_nn_df9bb372d557445ca17366ab4e7a9c7c NOT NULL DEFAULT false,
   "password" text,
+  "individual" uuid,
   CONSTRAINT std_pk_da385db7b2b74a1da1a942e8e0bb7992 PRIMARY KEY (id),
   CONSTRAINT std_uq_da385db7b2b74a1da1a942e8e0bb7992 UNIQUE (id, class_id),
   CONSTRAINT std_sc_da385db7b2b74a1da1a942e8e0bb7992 CHECK (class_id IN ('da385db7-b2b7-4a1d-a1a9-42e8e0bb7992'::uuid)),
@@ -38,9 +60,51 @@ CREATE TABLE "core"."user" (
 
 CREATE TRIGGER std_tg_da385db7b2b74a1da1a942e8e0bb7992 BEFORE UPDATE ON "core"."user" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
 
+CREATE TABLE "core"."individual" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  "birth_date" date,
+  "individual_identification" jsonb,
+  "family_name" text CONSTRAINT std_nn_bd4937968b5e49079e126a047dac62e7 NOT NULL,
+  "given_name" text CONSTRAINT std_nn_f41d3f02c469428e85cbc6f55a2902de NOT NULL,
+  CONSTRAINT std_pk_a1d5e8681a224b6e8a65605e046f24ab PRIMARY KEY (id),
+  CONSTRAINT std_uq_a1d5e8681a224b6e8a65605e046f24ab UNIQUE (id, class_id),
+  CONSTRAINT std_sc_a1d5e8681a224b6e8a65605e046f24ab CHECK (class_id IN ('a1d5e868-1a22-4b6e-8a65-605e046f24ab'::uuid)),
+  CONSTRAINT std_lv_a1d5e8681a224b6e8a65605e046f24ab FOREIGN KEY (id, class_id) REFERENCES "core"."party" (id, class_id) ON DELETE CASCADE,
+  CONSTRAINT std_ck_bd4937968b5e49079e126a047dac62e7 CHECK (char_length("family_name") <= 255),
+  CONSTRAINT std_ck_f41d3f02c469428e85cbc6f55a2902de CHECK (char_length("given_name") <= 255)
+);
+
+CREATE TRIGGER std_tg_a1d5e8681a224b6e8a65605e046f24ab BEFORE UPDATE ON "core"."individual" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
+CREATE TABLE "core"."organization" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  "trading_name" text,
+  "is_legal_entity" boolean CONSTRAINT std_nn_1d91aec4e2a14dd5bf69156a17223d03 NOT NULL DEFAULT false,
+  "organization_type" text,
+  "exists_from" timestamptz(3),
+  "exists_until" timestamptz(3),
+  "organization_identification" jsonb,
+  CONSTRAINT std_pk_f94b83bf19a44793b06fd5b4b0727fac PRIMARY KEY (id),
+  CONSTRAINT std_uq_f94b83bf19a44793b06fd5b4b0727fac UNIQUE (id, class_id),
+  CONSTRAINT std_sc_f94b83bf19a44793b06fd5b4b0727fac CHECK (class_id IN ('f94b83bf-19a4-4793-b06f-d5b4b0727fac'::uuid)),
+  CONSTRAINT std_lv_f94b83bf19a44793b06fd5b4b0727fac FOREIGN KEY (id, class_id) REFERENCES "core"."party" (id, class_id) ON DELETE CASCADE,
+  CONSTRAINT std_ck_0773cefc558a484686b329b188410a1c CHECK (char_length("trading_name") <= 255),
+  CONSTRAINT std_ck_433d4fe0c98846f2b97464a76d8a1cd0 CHECK (char_length("organization_type") <= 100)
+);
+
+CREATE TRIGGER std_tg_f94b83bf19a44793b06fd5b4b0727fac BEFORE UPDATE ON "core"."organization" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
 ALTER TABLE "core"."user_role" ADD CONSTRAINT std_fk_9640bd3ec66e4b438b4c31489d37dfc8 FOREIGN KEY ("role") REFERENCES "core"."role" (id);
 
+ALTER TABLE "core"."user" ADD CONSTRAINT std_fk_e8d96833a2564f3887523f7b5fde3afd FOREIGN KEY ("individual") REFERENCES "core"."individual" (id);
+
 ALTER TABLE "core"."user_role" ADD CONSTRAINT std_fk_f60c3043b96542f2b9eaa81c3f3ee84d FOREIGN KEY ("user") REFERENCES "core"."user" (id);
+
+ALTER TABLE "core"."party" ADD CONSTRAINT std_cb_566904e772b9455a8ea15df797c43ae9 FOREIGN KEY ("created_by") REFERENCES "core"."user" (id);
+
+ALTER TABLE "core"."party" ADD CONSTRAINT std_ub_566904e772b9455a8ea15df797c43ae9 FOREIGN KEY ("updated_by") REFERENCES "core"."user" (id);
 
 ALTER TABLE "core"."user_role" ADD CONSTRAINT std_cb_cc91a08ab8854878ad82dd4a806bc787 FOREIGN KEY ("created_by") REFERENCES "core"."user" (id);
 
@@ -53,6 +117,8 @@ ALTER TABLE "core"."user" ADD CONSTRAINT std_ub_da385db7b2b74a1da1a942e8e0bb7992
 CREATE UNIQUE INDEX std_ix_4941e6708c9b4a1aa75893854cef07bb ON "core"."user" (casefold("login" COLLATE pg_unicode_fast));
 
 CREATE UNIQUE INDEX std_ix_716293908e5a49909bf146e9c8abd338 ON "core"."user_role" ("user", "role");
+
+CREATE UNIQUE INDEX std_ix_ea3846ee82994428a276df9d66b5d5b3 ON "core"."user" ("individual");
 
 -- acme set
 

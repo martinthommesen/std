@@ -24,9 +24,20 @@ tables:
         name: active
         type: boolean
         helpText: Inactive users cannot sign in and hold no roles.
+      # The person the user is (Contracts 11.3): the record service creates
+      # it with the user and never lets it change; a `data` migration gave
+      # users created before it theirs (decision 0024).
+      - id: e8d96833-a256-4f38-8752-3f7b5fde3afd
+        name: individual
+        type: { kind: reference, target: core.individual }
+        readOnly: true
+        helpText: The person this user is. Created with the user.
     indexes:
       - id: 4941e670-8c9b-4a1a-a758-93854cef07bb
         fields: [login]
+        unique: true
+      - id: ea3846ee-8299-4428-a276-df9d66b5d5b3
+        fields: [individual]
         unique: true
 
   - id: cc91a08a-b885-4878-ad82-dd4a806bc787

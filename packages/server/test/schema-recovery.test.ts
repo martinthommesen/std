@@ -123,7 +123,11 @@ interface CliResult {
 const runCli = (url: string, args: readonly string[]) =>
   Effect.callback<CliResult>((resume) => {
     const child = spawn(process.execPath, [CLI_SCRIPT, ...args], {
-      env: { ...process.env, STD_DATABASE_URL: url },
+      env: {
+        ...process.env,
+        STD_DATABASE_DIRECT_URL: url,
+        STD_DATABASE_URL: url,
+      },
     });
 
     const chunks: string[] = [];

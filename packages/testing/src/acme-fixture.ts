@@ -30,6 +30,7 @@ import { Catalog } from "@std/server/catalog/catalog";
 import { InstanceSettings } from "@std/server/config/instance-settings";
 import { loadSetDirectory } from "@std/server/config/load-set";
 import { CORE_SET_DIRECTORY } from "@std/server/config/set-files";
+import { runDataMigrations } from "@std/server/platform/data-migrations";
 import { SaveHooks } from "@std/server/records/save-hooks";
 import { createRecord } from "@std/server/records/save-pipeline";
 import { WriteAccess } from "@std/server/records/write-access";
@@ -264,6 +265,8 @@ export class AcmeFixture extends Context.Service<AcmeFixture, AcmeData>()(
       yield* loadSetDirectory(ACME_SET_DIRECTORY, {
         required: new Map([[core.header.name, core.owner]]),
       });
+      // As `std upgrade` does after the sets (every user gets its individual).
+      yield* runDataMigrations();
 
       const { request } = yield* Transactions;
       const catalog = yield* Catalog;

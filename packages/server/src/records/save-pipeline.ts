@@ -1,6 +1,8 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import { RecordInSave } from "@std/api/errors/record-in-save";
+import type { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { allowedRecordsOf } from "@std/definitions/allowed-records";
@@ -49,6 +51,12 @@ import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import { fieldRulesOf, writtenOnCreate } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import {
+  PARTY_CLASS_IDS,
+  PARTY_FIELD_IDS,
+  USER_CLASS_ID,
+  USER_FIELD_IDS,
+} from "@std/definitions/well-known";
 import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
 import type { DecodedInput, StoredValue } from "@std/values/field-value";
@@ -56,16 +64,24 @@ import type { JsonObject } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Option, Result } from "effect";
+import type { SqlError } from "effect/sql/SqlError";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
-import { RecordInSave } from "./record-in-save.ts";
+import {
+  deriveIndividualName,
+  individualOf,
+  needsIndividual,
+} from "./party-rules.ts";
 import { mapConstraints } from "./save-constraints.ts";
+import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
+import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
 import {
   deleteRecordRows,
   insertRecord,
@@ -75,10 +91,18 @@ import {
   updateRecord as updateRecordRows,
 } from "./save-sql.ts";
 import type { ColumnWrite, RootLock } from "./save-sql.ts";
-import { SaveStack, withinSave } from "./save-stack.ts";
+import {
+  checkDepth,
+  poisonIfNested,
+  refuseNestedSave,
+  SaveStack,
+  withinSave,
+} from "./save-stack.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
+import { forgetSupplied, recordSupplied } from "./supplied-fields.ts";
 import { WriteAccess } from "./write-access.ts";
+import type { InTransaction } from "./write-access.ts";
 import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
 import { WriteOnlyValues } from "./write-only-values.ts";
@@ -106,6 +130,11 @@ export interface SaveInput {
   readonly endpointClassId: DefinitionId;
   /** What produced the save; `{ kind: "api" }` by default. */
   readonly cause?: ChangeCause;
+  /**
+   * Which `before` rules run (4.10): `user` by default; `settled` for the
+   * saves that settling persists (4.9), where only invariants run.
+   */
+  readonly mode?: SaveMode;
 }
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
@@ -369,6 +398,33 @@ const reload = Effect.fn("Records.reload")(function* reload(
     : yield* Effect.die(new Error("A saved record cannot be read back"));
 });
 
+/**
+ * Keeps the operation's supplied fields of a record for settling (4.9),
+ * once its save has passed every check: a user-mode create or update (an
+ * accepted no-op included) adds the fields its body named, a delete drops
+ * the record's entry. A refused save adds nothing.
+ *
+ * @param input - The save.
+ * @param recordId - The saved record.
+ * @param kind - What the save did.
+ * @param supplied - The fields the body named.
+ * @returns Nothing.
+ */
+const noteSupplied = (
+  input: SaveInput,
+  recordId: string,
+  kind: ChangeKind,
+  supplied: Iterable<DefinitionId>
+) => {
+  if (kind === "delete") {
+    return forgetSupplied(recordId);
+  }
+
+  return (input.mode ?? "user") === "user"
+    ? recordSupplied(recordId, supplied)
+    : Effect.void;
+};
+
 // Steps 9 and 10: the change entry, its deliveries, after-write hooks.
 const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   snapshot: ConfigSnapshot,
@@ -381,6 +437,8 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     readonly before: StoredRecord | null;
     readonly after: StoredRecord | null;
     readonly writeOnly: ReadonlySet<DefinitionId>;
+    /** The fields the caller's body named (none for a delete). */
+    readonly supplied: Iterable<DefinitionId>;
   }
 ) {
   const hooks = yield* SaveHooks;
@@ -410,6 +468,12 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
   };
 
   yield* hooks.deliveries(hookInput);
+  yield* noteSupplied(
+    change.input,
+    change.recordId,
+    change.kind,
+    change.supplied
+  );
   yield* withinSave(hooks.afterWrite(hookInput), stack, change.recordId);
 
   return entry;
@@ -460,8 +524,101 @@ const refuseRetiredClass = (
     ? Effect.fail(new NotAllowed())
     : Effect.void;
 
+/**
+ * The body of the individual a new user gets, by the fields' current
+ * names (`party-rules.ts`).
+ *
+ * @param snapshot - The configuration.
+ * @param userName - The user's validated `name`.
+ * @returns The body.
+ */
+const individualBody = (
+  snapshot: ConfigSnapshot,
+  userName: DecodedInput | undefined
+): JsonObject => {
+  const names = individualOf(isString(userName) ? userName : "");
+
+  const nameOf = (fieldId: DefinitionId): string => {
+    const field = snapshot.field(fieldId);
+
+    if (field === undefined) {
+      throw new RangeError(`The core set has no party field ${fieldId}`);
+    }
+
+    return field.name;
+  };
+
+  return {
+    [nameOf(PARTY_FIELD_IDS.familyName)]: names.familyName,
+    [nameOf(PARTY_FIELD_IDS.givenName)]: names.givenName,
+    [nameOf(PARTY_FIELD_IDS.name)]: names.name,
+  };
+};
+
+/** What a create in a running request transaction fails with. */
+type CreateFailure =
+  | NotAllowed
+  | UnknownField
+  | SqlError
+  | ConstraintFailure
+  | SaveFailure;
+
+/**
+ * What a create in a running request transaction needs: the record
+ * service, and what its hooks may use (a record rule's nested saves).
+ */
+type CreateServices =
+  | Actor
+  | Catalog
+  | CurrentTransaction
+  | SaveHooks
+  | WriteAccess
+  | WriteOnlyValues
+  | InTransaction
+  | HookEnvironment;
+
+/**
+ * A create in a running request transaction. Typed explicitly (the
+ * generator's return type below): a user's create nests its individual's
+ * create (`createIndividual`), so the type cannot be inferred from the
+ * body.
+ */
+type CreateInTransaction = (
+  input: CreateInput,
+  body: JsonObject
+) => Effect.Effect<SaveResult, CreateFailure, CreateServices>;
+
+/**
+ * Creates the individual of a new user, as the acting user, in the user's
+ * transaction (`party-rules.ts`).
+ *
+ * @param create - `createInTransaction` (passed in: it calls this).
+ * @param snapshot - The configuration.
+ * @param userName - The user's validated `name`.
+ * @param cause - The user's save's cause.
+ * @returns The individual's ID.
+ */
+const createIndividual = (
+  create: CreateInTransaction,
+  snapshot: ConfigSnapshot,
+  userName: DecodedInput | undefined,
+  cause: ChangeCause
+): Effect.Effect<string, CreateFailure, CreateServices> => {
+  const body = individualBody(snapshot, userName);
+
+  return create(
+    { body, cause, endpointClassId: PARTY_CLASS_IDS.individual },
+    body
+  ).pipe(Effect.map((created) => created.id));
+};
+
 const createInTransaction = Effect.fn("Records.createInTransaction")(
-  function* createInTransaction(input: CreateInput, body: JsonObject) {
+  function* createInRequest(
+    input: CreateInput,
+    body: JsonObject
+  ): Effect.fn.Return<SaveResult, CreateFailure, CreateServices> {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
@@ -477,13 +634,20 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const rules = rulesById(snapshot, fields);
     const proposed = proposeCreate(rules, resolved);
 
-    const values = yield* hooks.beforeWrite({
-      classId,
-      existing: null,
-      kind: "create",
+    const values = deriveIndividualName(
       snapshot,
-      values: proposed.values,
-    });
+      classId,
+      yield* hooks.beforeWrite({
+        classId,
+        existing: null,
+        kind: "create",
+        mode: input.mode ?? "user",
+        snapshot,
+        supplied: new Set(resolved.entries.keys()),
+        values: proposed.values,
+      }),
+      null
+    );
 
     const proposal = finalizeCreate(rules, {
       invalid: proposed.invalid,
@@ -491,9 +655,9 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     });
 
     // The fields the create sets: those the body supplied and those the
-    // hooks changed. Read-only and retired ones count as written for
-    // validation when their value differs from what the create stores
-    // without them.
+    // hooks changed (values rules set count as supplied, 3.9). Read-only
+    // and retired ones count as written for validation when their value
+    // differs from what the create stores without them.
     const supplied = new Set([
       ...resolved.entries.keys(),
       ...hookChanges(fields, proposed.values, proposal.values),
@@ -522,9 +686,26 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     });
     yield* checkReferences(snapshot, fields, proposal.values, supplied);
 
-    // Auto-numbered fields get their number last, in this transaction.
+    // Auto-numbered fields get their number last, in this transaction; a
+    // user gets its individual then too (`party-rules.ts`).
     const numbered = yield* assignNumbers(fields, proposal.values);
-    const writes = yield* columnWrites(fields, numbered);
+
+    const assigned = needsIndividual(snapshot, classId)
+      ? new Map([
+          ...numbered,
+          [
+            USER_FIELD_IDS.individual,
+            yield* createIndividual(
+              createInTransaction,
+              snapshot,
+              numbered.get(USER_FIELD_IDS.name),
+              input.cause ?? API_CAUSE
+            ),
+          ],
+        ])
+      : numbered;
+
+    const writes = yield* columnWrites(fields, assigned);
 
     const id = yield* insertRecord(
       snapshot,
@@ -551,6 +732,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       input,
       kind: "create",
       recordId: id,
+      supplied: resolved.entries.keys(),
       version: after.version,
       writeOnly: writeOnlySet(fields, proposal.values, null),
     });
@@ -581,7 +763,7 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
   const { request } = yield* Transactions;
 
   return yield* request(createInTransaction(input, body));
-});
+}, poisonIfNested);
 
 /**
  * Steps 2 of 4.1: lock the root row alone, then (next statements) load the
@@ -619,7 +801,7 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   }
 
   if (stack.recordIds.has(input.id)) {
-    return yield* new RecordInSave();
+    return yield* refuseNestedSave(new RecordInSave());
   }
 
   const loaded = yield* loadRecord(snapshot, locked.value.classId, input.id);
@@ -720,17 +902,25 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
   function* hookedProposal(
     snapshot: ConfigSnapshot,
     existing: StoredRecord,
-    proposal: Proposal
+    proposal: Proposal,
+    context: { readonly mode: SaveMode; readonly body: WriteBody }
   ) {
     const hooks = yield* SaveHooks;
 
-    const values = yield* hooks.beforeWrite({
-      classId: existing.classId,
-      existing,
-      kind: "update",
+    const values = deriveIndividualName(
       snapshot,
-      values: proposal.values,
-    });
+      existing.classId,
+      yield* hooks.beforeWrite({
+        classId: existing.classId,
+        existing,
+        kind: "update",
+        mode: context.mode,
+        snapshot,
+        supplied: new Set(context.body.entries.keys()),
+        values: proposal.values,
+      }),
+      existing.values
+    );
 
     const hooked: Proposal = { invalid: proposal.invalid, values };
 
@@ -738,8 +928,24 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
   }
 );
 
+/** No values assigned by the record service. */
+const NOTHING_ASSIGNED: ReadonlyMap<DefinitionId, DecodedInput> = new Map();
+
+/**
+ * An update in a running request transaction. `assigned` holds values the
+ * record service itself sets on the record (a user's individual,
+ * `ensureUserIndividual`): like auto-numbers on a create, they are added
+ * after validation, so a read-only field takes them; an update that
+ * assigns a changed value is never a no-op.
+ */
 const updateInTransaction = Effect.fn("Records.updateInTransaction")(
-  function* updateInTransaction(input: UpdateInput, body: JsonObject) {
+  function* updateInTransaction(
+    input: UpdateInput,
+    body: JsonObject,
+    assigned: ReadonlyMap<DefinitionId, DecodedInput> = NOTHING_ASSIGNED
+  ) {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
 
@@ -750,11 +956,10 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       "update"
     );
 
-    const lock = updateLock(
-      snapshot,
-      input.endpointClassId,
-      resolved.entries.keys()
-    );
+    const lock = updateLock(snapshot, input.endpointClassId, [
+      ...resolved.entries.keys(),
+      ...assigned.keys(),
+    ]);
 
     const { readable, record } = yield* lockExisting(snapshot, input, lock);
     const { classId } = record;
@@ -772,6 +977,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     };
 
     const bodyWritten = writtenFields(fields, proposed, record, readable);
+    const assignedChanges = changedValues(fields, assigned, record);
 
     yield* access.checkExisting({
       ...existingCheck,
@@ -779,15 +985,18 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       written: bodyWritten,
     });
 
-    if (bodyWritten.size === 0) {
+    if (bodyWritten.size === 0 && assignedChanges.size === 0) {
+      yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
+
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    const proposal = finalizeUpdate(
-      rules,
-      yield* hookedProposal(snapshot, record, proposed),
-      record
-    );
+    const hooked = yield* hookedProposal(snapshot, record, proposed, {
+      body: resolved,
+      mode: input.mode ?? "user",
+    });
+
+    const proposal = finalizeUpdate(rules, hooked, record);
 
     // Recomputed from the final candidate: a hook may restore a value
     // (no-op again) or add fields, which the existing state must allow too.
@@ -801,7 +1010,9 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       });
     }
 
-    if (written.size === 0) {
+    if (written.size === 0 && assignedChanges.size === 0) {
+      yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
+
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
@@ -815,7 +1026,11 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     });
     yield* checkReferences(snapshot, fields, proposal.values, written);
 
-    const changes = changedValues(fields, proposal.values, record);
+    const changes = new Map([
+      ...changedValues(fields, proposal.values, record),
+      ...assignedChanges,
+    ]);
+
     const writes = yield* columnWrites(fields, changes);
 
     const version = yield* updateRecordRows(
@@ -845,6 +1060,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       input,
       kind: "update",
       recordId: record.id,
+      supplied: resolved.entries.keys(),
       version,
       writeOnly: writeOnlySet(fields, changes, record),
     });
@@ -876,10 +1092,93 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
   const { request } = yield* Transactions;
 
   return yield* request(updateInTransaction(input, body));
-});
+}, poisonIfNested);
+
+/** What `ensureUserIndividual` did. */
+export type EnsuredIndividual = "assigned" | "present" | "missing";
+
+/**
+ * Gives an existing user its individual unless it has one (Contracts 11.3;
+ * the backfill of users created before the party foundation, decision
+ * 0024): locks the user's root row, then, if its `individual` is still
+ * empty, creates the individual as the acting user and assigns it in an
+ * update of the user, both through the save pipeline in the running
+ * request transaction (joined, or one of its own), with change entries and
+ * deliveries. A user that has one, or no longer exists, is left alone, so
+ * a rerun changes nothing.
+ *
+ * @param input - The user's ID and the cause both saves record.
+ * @returns `assigned`, `present` or `missing`.
+ */
+export const ensureUserIndividual = Effect.fn("Records.ensureUserIndividual")(
+  function* ensureUserIndividual(input: {
+    readonly id: string;
+    readonly cause: ChangeCause;
+  }) {
+    const { request } = yield* Transactions;
+
+    return yield* request(
+      Effect.gen(function* assignIndividual() {
+        const snapshot = yield* (yield* Catalog).current;
+
+        if (!needsIndividual(snapshot, USER_CLASS_ID)) {
+          return yield* Effect.die(
+            new Error("The core set has no party foundation yet")
+          );
+        }
+
+        const locked = yield* lockRoot(
+          snapshot,
+          USER_CLASS_ID,
+          input.id,
+          updateLock(snapshot, USER_CLASS_ID, [USER_FIELD_IDS.individual])
+        );
+
+        const record = Option.isSome(locked)
+          ? yield* loadRecord(snapshot, locked.value.classId, input.id)
+          : Option.none();
+
+        if (Option.isNone(record)) {
+          return "missing" satisfies EnsuredIndividual;
+        }
+
+        const user = record.value;
+
+        if ((user.values.get(USER_FIELD_IDS.individual) ?? null) !== null) {
+          return "present" satisfies EnsuredIndividual;
+        }
+
+        const name = user.values.get(USER_FIELD_IDS.name);
+
+        const individual = yield* createIndividual(
+          createInTransaction,
+          snapshot,
+          isString(name) ? name : undefined,
+          input.cause
+        );
+
+        yield* updateInTransaction(
+          {
+            body: {},
+            cause: input.cause,
+            endpointClassId: USER_CLASS_ID,
+            expectedVersion: user.version,
+            id: user.id,
+          },
+          {},
+          new Map([[USER_FIELD_IDS.individual, individual]])
+        );
+
+        return "assigned" satisfies EnsuredIndividual;
+      })
+    );
+  }
+);
 
 const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
   function* deleteInTransaction(input: DeleteInput) {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
@@ -899,7 +1198,9 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
       classId: record.classId,
       existing: record,
       kind: "delete",
+      mode: input.mode ?? "user",
       snapshot,
+      supplied: new Set(),
       values: new Map(),
     });
 
@@ -923,6 +1224,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
       input,
       kind: "delete",
       recordId: record.id,
+      supplied: [],
       version,
       writeOnly: new Set(),
     });
@@ -953,4 +1255,4 @@ export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
   const { request } = yield* Transactions;
 
   return yield* request(deleteInTransaction(input));
-});
+}, poisonIfNested);

@@ -13,15 +13,12 @@
  */
 import { NodeRuntime } from "@effect/platform-node";
 import { OperationSchema } from "@std/definitions/operation";
-import { Config, Console, Effect, Layer, Redacted, Schema } from "effect";
+import { Config, Console, Effect, Layer, Schema } from "effect";
 
 import { Catalog } from "../../src/catalog/catalog.ts";
 import { applyChangeSet } from "../../src/schema/change-set.ts";
 import { StepBoundary } from "../../src/schema/recovery-settings.ts";
-import {
-  DatabaseConfig,
-  databaseUrlConfig,
-} from "../../src/sql/database-config.ts";
+import { DatabaseConfig } from "../../src/sql/database-config.ts";
 import { SqlLayer } from "../../src/sql/layer.ts";
 
 /** `application_name` of the child's pooled connections. */
@@ -31,20 +28,9 @@ const decodeOperations = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(OperationSchema))
 );
 
-const services = Layer.unwrap(
-  Effect.gen(function* childServices() {
-    const url = yield* databaseUrlConfig;
-
-    return Catalog.layer.pipe(
-      Layer.provideMerge(SqlLayer),
-      Layer.provideMerge(
-        DatabaseConfig.fromUrl({
-          applicationName: CHILD_APPLICATION_NAME,
-          url: Redacted.value(url),
-        })
-      )
-    );
-  })
+const services = Catalog.layer.pipe(
+  Layer.provideMerge(SqlLayer),
+  Layer.provideMerge(DatabaseConfig.fromEnv(CHILD_APPLICATION_NAME))
 );
 
 /** Waits for one chunk on stdin. */

@@ -116,7 +116,11 @@ const startChild = (
   Effect.acquireRelease(
     Effect.sync(() =>
       spawn(process.execPath, [CHILD_SCRIPT, set], {
-        env: { ...process.env, STD_DATABASE_URL: url },
+        env: {
+          ...process.env,
+          STD_DATABASE_DIRECT_URL: url,
+          STD_DATABASE_URL: url,
+        },
         stdio: "ignore",
       })
     ),
@@ -127,7 +131,7 @@ describe("platform-migrations", () => {
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
     assert.deepStrictEqual(
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
@@ -160,7 +164,7 @@ describe("platform-migrations", () => {
             const empty = yield* Effect.exit(checkPlatformMigrations());
             assert.deepStrictEqual(
               stateRefusal(errorOf(empty))?.pending,
-              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
             );
 
             const applied = yield* runPlatformMigrations([migration0001]);

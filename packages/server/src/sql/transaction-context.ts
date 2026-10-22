@@ -26,6 +26,14 @@ export interface TransactionHandle {
   readonly markWrite: Effect.Effect<void>;
   /** Why the transaction is poisoned, if it is. */
   readonly poisonReason: Effect.Effect<string | undefined>;
+  /**
+   * Poisons the transaction: it will be rolled back, never committed,
+   * whatever the caller does with the failure that caused it. For refusals
+   * that fail before any write (a nested save's `RecordInSave` or
+   * `HookDepthExceeded`, Contracts 4.1), which the write counter alone
+   * would not catch.
+   */
+  readonly refuseCommit: (reason: string) => Effect.Effect<void>;
 }
 
 /** The running transaction, available to the code inside it. */

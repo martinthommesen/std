@@ -7,13 +7,10 @@
  * Usage: `node run-migrations.ts <set name>`.
  */
 import { NodeRuntime } from "@effect/platform-node";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer } from "effect";
 
 import { runPlatformMigrations } from "../../src/platform/runner.ts";
-import {
-  DatabaseConfig,
-  databaseUrlConfig,
-} from "../../src/sql/database-config.ts";
+import { DatabaseConfig } from "../../src/sql/database-config.ts";
 import { SqlLayer } from "../../src/sql/layer.ts";
 import { CHILD_APPLICATION_NAME, migrationSet } from "./test-migrations.ts";
 
@@ -21,19 +18,8 @@ const migrations = migrationSet(process.argv[2]);
 
 // The parent passes the test database as STD_DATABASE_URL; the child uses
 // it for pooled and dedicated connections alike.
-const services = Layer.unwrap(
-  Effect.gen(function* childServices() {
-    const url = yield* databaseUrlConfig;
-
-    return SqlLayer.pipe(
-      Layer.provideMerge(
-        DatabaseConfig.fromUrl({
-          applicationName: CHILD_APPLICATION_NAME,
-          url: Redacted.value(url),
-        })
-      )
-    );
-  })
+const services = SqlLayer.pipe(
+  Layer.provideMerge(DatabaseConfig.fromEnv(CHILD_APPLICATION_NAME))
 );
 
 NodeRuntime.runMain(
