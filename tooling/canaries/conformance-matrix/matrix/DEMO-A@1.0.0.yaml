@@ -16,7 +16,7 @@ rows:
       - sample-tests.ts#rows-count
       - sample-tests.ts#counts rows
   - id: DEMO-A@1.0.0/DOC/2/template
-    source: Demo document 1.0.0 §2 p.1
+    source: "Demo document 1.0.0 §2 p.1; #/components/schemas/Thing/required; #/paths/~1thing~1{id}/get"
     level: optional
     requirement: A title written as a template literal counts.
     status: tested

@@ -247,22 +247,22 @@ rows:
     status: excluded
     decision: E14-jsonpath-filter
   - id: TMF621@5.0.1/OAS/media/patch-json
-    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json"
+    source: "TMF621 OAS v5.0.1 #/components/requestBodies/TroubleTicket_MVO/content/application~1json"
     level: optional
     requirement: "PATCH accepts application/json with a TroubleTicket_MVO body, applied as merge-patch."
     status: pending
   - id: TMF621@5.0.1/OAS/media/patch-merge
-    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1merge-patch+json"
+    source: "TMF621 OAS v5.0.1 #/components/requestBodies/TroubleTicket_MVO/content/application~1merge-patch+json"
     level: mandatory
     requirement: "PATCH accepts application/merge-patch+json with a TroubleTicket_MVO body."
     status: pending
   - id: TMF621@5.0.1/OAS/media/patch-json-patch
-    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json-patch+json"
+    source: "TMF621 OAS v5.0.1 #/components/requestBodies/TroubleTicket_MVO/content/application~1json-patch+json"
     level: optional
     requirement: "PATCH accepts application/json-patch+json (JsonPatchOperations, op add, remove, replace, move, copy, test)."
     status: pending
   - id: TMF621@5.0.1/OAS/media/patch-json-patch-query
-    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json-patch-query+json"
+    source: "TMF621 OAS v5.0.1 #/components/requestBodies/TroubleTicket_MVO/content/application~1json-patch-query+json"
     level: optional
     requirement: "PATCH accepts application/json-patch-query+json."
     status: excluded

@@ -14,9 +14,9 @@ import path from "node:path";
 import type { PinsFile, Specification } from "@std/tmf/pins";
 import { decodePinsFile, matrixFileName } from "@std/tmf/pins";
 import { Predicate, Result, Schema } from "effect";
-import type { CallExpression, Expression, SpreadElement } from "oxc-parser";
-import { parseSync, Visitor } from "oxc-parser";
 import { parse as parseYaml } from "yaml";
+
+import { readTestTitles } from "./test-titles.ts";
 
 /** The name of the decision log inside the matrix directory. */
 export const decisionLogName = "decisions.yaml";
@@ -158,13 +158,6 @@ export interface MatrixReport {
   readonly summaries: readonly FileSummary[];
 }
 
-/** The titles found in one test file. */
-export interface TestTitles {
-  /** Parse errors; a file with any is refused. */
-  readonly errors: readonly string[];
-  readonly titles: ReadonlySet<string>;
-}
-
 /** A matrix file as loaded, with its pin. */
 interface LoadedFile {
   readonly file: MatrixFile;
@@ -205,73 +198,6 @@ const decodeYamlFile = <S extends Schema.ConstraintDecoder<unknown>>(
   return decoded.success;
 };
 
-const titleFunctions: ReadonlySet<string> = new Set(["describe", "it"]);
-
-// `describe(...)`, `it(...)` and `it.effect(...)`; not `it.skip` and the like.
-const isTitleCall = (node: CallExpression): boolean => {
-  const { callee } = node;
-
-  if (callee.type === "Identifier") {
-    return titleFunctions.has(callee.name);
-  }
-
-  if (callee.type !== "MemberExpression" || callee.computed) {
-    return false;
-  }
-
-  const isIt =
-    callee.object.type === "Identifier" && callee.object.name === "it";
-
-  return isIt && callee.property.name === "effect";
-};
-
-// A title written as a string literal or a template without expressions.
-const literalTitle = (
-  node: Expression | SpreadElement | undefined
-): string | undefined => {
-  if (node?.type === "Literal" && Predicate.isString(node.value)) {
-    return node.value;
-  }
-
-  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
-    return node.quasis[0]?.value.cooked ?? undefined;
-  }
-
-  return undefined;
-};
-
-/**
- * Reads the titles of a test file statically: the first argument of every
- * `describe`, `it` and `it.effect` call that is a string literal or a
- * template literal without expressions (Contracts 15.4). Modifiers such as
- * `it.skip` or `describe.only` do not count.
- *
- * @param fileName - The file's name, for the parser.
- * @param source - The file's text.
- * @returns The titles, and the parse errors.
- */
-export const readTestTitles = (
-  fileName: string,
-  source: string
-): TestTitles => {
-  const parsed = parseSync(fileName, source, { sourceType: "module" });
-  const titles = new Set<string>();
-
-  const onCall = (node: CallExpression): void => {
-    const title = isTitleCall(node)
-      ? literalTitle(node.arguments[0])
-      : undefined;
-
-    if (title !== undefined) {
-      titles.add(title);
-    }
-  };
-
-  new Visitor({ CallExpression: onCall }).visit(parsed.program);
-
-  return { errors: parsed.errors.map((error) => error.message), titles };
-};
-
 const loadPins = (file: string): PinsFile => {
   const decoded = decodePinsFile(JSON.parse(readFileSync(file, "utf-8")));
 
@@ -300,7 +226,7 @@ const readNamedTestFile = (
 
   if (read.errors.length > 0) {
     return Result.fail(
-      `test file ${relative} does not parse: ${read.errors.join("; ")}`
+      `test file ${relative} cannot be read: ${read.errors.join("; ")}`
     );
   }
 
@@ -616,6 +542,86 @@ const unwrittenPrefixes = (
   return prefixes;
 };
 
+// JSON pointers into OpenAPI documents: `#/components/schemas/Error`.
+const pointerPattern = /#\/[^\s;,()]+/gu;
+
+// A source segment naming another API's document: `TMF621 OAS v5.0.1 #/...`.
+const namedDocumentPattern = /\b(?<spec>TMF\d+) OAS\b/u;
+
+/** A parsed OpenAPI document. */
+type JsonDocument = Schema.Json;
+
+const decodeJson = Schema.decodeUnknownSync(Schema.Json);
+
+// Follows one JSON pointer (RFC 6901) through a parsed document.
+const resolvesPointer = (document: JsonDocument, pointer: string): boolean => {
+  let node: unknown = document;
+
+  for (const raw of pointer.slice(2).split("/")) {
+    const key = raw.replaceAll("~1", "/").replaceAll("~0", "~");
+
+    if (!Predicate.hasProperty(node, key)) {
+      return false;
+    }
+
+    node = node[key];
+  }
+
+  return true;
+};
+
+/** Resolves pointers against pinned OpenAPI documents, each parsed once. */
+type PointerResolver = (spec: string, pointer: string) => string | undefined;
+
+const makePointerResolver = (
+  specsDir: string,
+  pins: PinsFile
+): PointerResolver => {
+  const documents = new Map<string, JsonDocument>();
+
+  return (spec, pointer) => {
+    const file = pins.specifications.find((pin) => pin.spec === spec)?.openApi
+      ?.file;
+
+    if (file === undefined) {
+      return `cites ${pointer}, but ${spec} has no pinned OpenAPI document`;
+    }
+
+    const document =
+      documents.get(file) ??
+      decodeJson(parseYaml(readFileSync(path.join(specsDir, file), "utf-8")));
+
+    documents.set(file, document);
+
+    return resolvesPointer(document, pointer)
+      ? undefined
+      : `${pointer} does not resolve in ${file}`;
+  };
+};
+
+// Every `#/...` pointer in a row's source must resolve in the document it
+// names (`TMFnnn OAS` in the same `;`-separated part), else its own API's.
+const checkRowPointers = (
+  loaded: LoadedFile,
+  resolve: PointerResolver,
+  problems: string[]
+): void => {
+  for (const row of loaded.file.rows) {
+    for (const part of row.source.split(";")) {
+      const spec =
+        namedDocumentPattern.exec(part)?.groups?.spec ?? loaded.pin.spec;
+
+      for (const pointer of part.match(pointerPattern) ?? []) {
+        const problem = resolve(spec, pointer);
+
+        if (problem !== undefined) {
+          problems.push(`${loaded.name}: row ${row.id}: ${problem}`);
+        }
+      }
+    }
+  }
+};
+
 /**
  * Runs every check of Contracts 15.4 over the matrix.
  *
@@ -641,8 +647,11 @@ export const checkConformanceMatrix = (inputs: MatrixInputs): MatrixReport => {
 
   const resolveTest = makeTestResolver(path.resolve(inputs.root));
 
+  const resolvePointer = makePointerResolver(path.dirname(inputs.pins), pins);
+
   for (const loaded of files) {
     checkPinAgreement(loaded, problems);
+    checkRowPointers(loaded, resolvePointer, problems);
   }
 
   for (const id of duplicates(rows.map(({ row }) => row.id))) {

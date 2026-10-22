@@ -1973,7 +1973,8 @@ Every deliberate gap is an exclusion with a decision-log entry. Martin accepted 
 `check-conformance-matrix`, part of `pnpm check:tooling`, fails when:
 
 - a file does not parse against the row schema, an `id` repeats, a file's specification or version differs from its pin or no pin names it, or a pinned specification in `pins.json` has no file (outside gate mode, a pin with `awaitingMatrix` is reported as a note instead);
-- a `tested` row names a test file that does not exist or a title that no `describe`, `it` or `it.effect` in that file has (read statically);
+- a `tested` row names a test file that does not exist or a title that no `describe`, `it` or `it.effect` in that file has (read statically). A title counts only for a test that runs: `describe` and `it` imported from `vitest` or `@effect/vitest` and not redeclared in the file, a test callback present, and neither the call nor an enclosing one modified by `skip`, `todo`, `skipIf`, `runIf`, `fails`, `each` or `for`;
+- a row's `source` cites a JSON pointer (`#/...`) that does not resolve in the pinned OpenAPI document it names (`TMFnnn OAS`), or in its own specification's;
 - an `excluded` row names a decision that does not exist or whose `rows` do not list it, or a decision lists a row it does not exclude (rows of a file not yet written are not checked) [judgment: keeps the two directions of 15.1 consistent];
 - the decision log does not parse against its schema, so a `decided` entry without an `outcome` fails;
 - in gate mode (`--gate step3`, `step4`, `step5`, run by the release workflow of that step's tag), any row of that step's specifications is `pending`, or is `excluded` by a decision that is `proposed` or `rejected`; rows count for a step when their `step` (or their specification's) is at most that step, and a specification of the step whose file is missing or has no rows for it fails too.
@@ -1984,7 +1985,7 @@ Completeness against the sources cannot be checked mechanically: the gate review
 
 ### Acceptance tests
 
-- `conformance-matrix-check`: fixtures with a missing test file, a misspelt title, an unknown decision, a `pending` row, a `proposed` decision and a `rejected` decision in gate mode, a `decided` decision without an outcome, a pin that differs from `pins.json`, and a duplicate `id` each fail; a clean fixture with an `accepted` exclusion passes.
+- `conformance-matrix-check`: fixtures with a missing test file, a misspelt title, a title only a skipped, bodiless or non-vitest test has, a file that shadows `it`, a JSON pointer that does not resolve, an unknown decision, a `pending` row, a `proposed` decision and a `rejected` decision in gate mode, a `decided` decision without an outcome, a pin that differs from `pins.json`, and a duplicate `id` each fail; a clean fixture with an `accepted` exclusion passes.
 
 ## Open questions for Martin
 

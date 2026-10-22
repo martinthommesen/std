@@ -17,8 +17,18 @@ describe("rows-count", () => {
   it.skip("a skipped case", () => {
     expect([3]).toHaveLength(1);
   });
+
+  // A test without a body does not run.
+  it("a case without a body");
 });
 
 describe("effect-rows", () => {
   it.effect("reads rows", () => Effect.void);
+});
+
+// Nothing inside a skipped block runs.
+describe.skip("a skipped block", () => {
+  it("a case in a skipped block", () => {
+    expect([4]).toHaveLength(1);
+  });
 });

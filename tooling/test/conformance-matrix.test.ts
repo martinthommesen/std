@@ -104,20 +104,63 @@ describe("conformance-matrix-check", () => {
     expect(gated.output).toContain("gate step4 passed");
   });
 
-  it("fails a missing test file", async () => {
+  // One edit of the clean fixture each, and the problem it must report.
+  const singleEdits = [
+    {
+      case: "a missing test file",
+      file: "matrix/DEMO-B@2.0.yaml",
+      from: "sample-tests.ts#reads rows",
+      problem: "test file missing.test.ts does not exist",
+      to: "missing.test.ts#reads rows",
+    },
+    {
+      case: "a test file that shadows vitest's it",
+      file: "sample-tests.ts",
+      from: 'describe("effect-rows", () => {',
+      problem: "test file sample-tests.ts cannot be read: declares its own it",
+      to: 'describe("effect-rows", () => {\n  const it = { effect: (title: string): string => title };\n',
+    },
+    {
+      case: "a JSON pointer that does not resolve in the pinned OpenAPI document",
+      file: "matrix/DEMO-A@1.0.0.yaml",
+      from: "#/components/schemas/Thing/required",
+      problem:
+        "#/components/schemas/Thing_FVO/required does not resolve in demo.oas.json",
+      to: "#/components/schemas/Thing_FVO/required",
+    },
+    {
+      case: "an unknown decision",
+      file: "matrix/DEMO-A@1.0.0.yaml",
+      from: "decision: D1-accepted",
+      problem:
+        "names decision D9-unknown, which the decision log does not have",
+      to: "decision: D9-unknown",
+    },
+    {
+      case: "a decided decision without an outcome",
+      file: "matrix/decisions.yaml",
+      from: "    outcome: accepted\n",
+      problem: "decisions.yaml: does not match its schema",
+      to: "",
+    },
+    {
+      case: "a duplicate id",
+      file: "matrix/DEMO-A@1.0.0.yaml",
+      from: "id: DEMO-A@1.0.0/DOC/2/template",
+      problem: "row id DEMO-A@1.0.0/DOC/1/count appears more than once",
+      to: "id: DEMO-A@1.0.0/DOC/1/count",
+    },
+  ] as const;
+
+  it.each(singleEdits)("fails $case", async ({ file, from, problem, to }) => {
     const dir = copyFixture();
 
-    edit(
-      dir,
-      "matrix/DEMO-B@2.0.yaml",
-      "sample-tests.ts#reads rows",
-      "missing.test.ts#reads rows"
-    );
+    edit(dir, file, from, to);
 
     const result = await check(dir);
 
     expect(result.code).toBe(1);
-    expect(result.output).toContain("test file missing.test.ts does not exist");
+    expect(result.output).toContain(problem);
   });
 
   it("fails a misspelt title, and a title only an it.skip has", async () => {
@@ -143,22 +186,37 @@ describe("conformance-matrix-check", () => {
     expect(result.output).toContain('has the title "a skipped case"');
   });
 
-  it("fails an unknown decision", async () => {
+  it("fails titles of tests that do not run or are not vitest's", async () => {
     const dir = copyFixture();
 
     edit(
       dir,
-      "matrix/DEMO-A@1.0.0.yaml",
-      "decision: D1-accepted",
-      "decision: D9-unknown"
+      "matrix/DEMO-B@2.0.yaml",
+      "      - sample-tests.ts#reads rows\n",
+      [
+        "      - sample-tests.ts#reads rows",
+        "      - sample-tests.ts#a case without a body",
+        "      - sample-tests.ts#a skipped block",
+        "      - sample-tests.ts#a case in a skipped block",
+        "      - local-it.ts#a local case",
+        "",
+      ].join("\n")
     );
 
     const result = await check(dir);
 
     expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "names decision D9-unknown, which the decision log does not have"
-    );
+
+    for (const title of [
+      "a case without a body",
+      "a skipped block",
+      "a case in a skipped block",
+      "a local case",
+    ]) {
+      expect(result.output).toContain(`has the title "${title}"`);
+    }
+
+    expect(result.output).not.toContain('has the title "reads rows"');
   });
 
   it("fails a pending row in gate mode only", async () => {
@@ -202,19 +260,6 @@ describe("conformance-matrix-check", () => {
     );
   });
 
-  it("fails a decided decision without an outcome", async () => {
-    const dir = copyFixture();
-
-    edit(dir, "matrix/decisions.yaml", "    outcome: accepted\n", "");
-
-    const result = await check(dir);
-
-    expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "decisions.yaml: does not match its schema"
-    );
-  });
-
   it("fails a pin that differs from pins.json", async () => {
     const dir = copyFixture();
 
@@ -237,24 +282,6 @@ describe("conformance-matrix-check", () => {
     );
     expect(result.output).toContain(
       "DEMO-B@2.1.yaml: not a pinned specification"
-    );
-  });
-
-  it("fails a duplicate id", async () => {
-    const dir = copyFixture();
-
-    edit(
-      dir,
-      "matrix/DEMO-A@1.0.0.yaml",
-      "id: DEMO-A@1.0.0/DOC/2/template",
-      "id: DEMO-A@1.0.0/DOC/1/count"
-    );
-
-    const result = await check(dir);
-
-    expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      "row id DEMO-A@1.0.0/DOC/1/count appears more than once"
     );
   });
 
