@@ -15,6 +15,7 @@ import type { NotAllowed } from "@std/api/errors/not-allowed";
  * and projection with the caller's read rights.
  */
 import type { ClassView } from "@std/conditions/class-view";
+import type { Condition } from "@std/definitions/condition";
 import { classViewOf } from "@std/definitions/condition-view";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -67,6 +68,12 @@ export interface TargetCheck {
   readonly snapshot: ConfigSnapshot;
   readonly targetClassId: DefinitionId;
   readonly ids: readonly string[];
+  /**
+   * The reference field's allowed-records condition (decision 0020), which
+   * a target must also satisfy in the caller's view: null for none,
+   * undefined for one that does not decode (nothing is allowed).
+   */
+  readonly allowedRecords: Condition | null | undefined;
 }
 
 /** A record as a write proposes it, before any row is written. */
@@ -142,7 +149,8 @@ export interface WriteAccessApi {
     input: ProposedCheck
   ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
   /**
-   * The IDs among `ids` that exist and that the caller can see (3.6); a
+   * The IDs among `ids` that exist, that the caller can see (3.6) and that
+   * satisfy the allowed-records condition in the caller's view; a
    * missing ID becomes `InvalidReference`.
    */
   readonly visibleTargets: (
@@ -198,7 +206,9 @@ export class WriteAccess extends Context.Service<WriteAccess, WriteAccessApi>()(
   "std/server/WriteAccess"
 ) {
   /**
-   * Sees and allows everything; reference targets must exist. For phase 1
+   * Sees and allows everything; reference targets must exist (an
+   * allowed-records condition is not applied: these writes are the
+   * system's own). For phase 1
    * tests, bootstrap and the system user's definition loads only.
    */
   static readonly allowAll: Layer.Layer<WriteAccess> = Layer.succeed(

@@ -21,6 +21,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { isFailure } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
 
+import { allowedRecordsOf } from "./allowed-records.ts";
 import { conditionProblems } from "./condition-view.ts";
 import type { ConditionPurpose } from "./condition-view.ts";
 import type {
@@ -531,10 +532,60 @@ const choiceDefaultProblem = (
   return allowed ? undefined : "The default is not a choice this field offers.";
 };
 
+/**
+ * Checks a reference's allowed-records condition (decision 0020) as a
+ * filter over the target class: field IDs exist (and, when it is being
+ * stored, are not retired), operators fit, literals convert.
+ *
+ * @param problems - Where problems go.
+ * @param snapshot - The configuration.
+ * @param field - A reference field.
+ * @param targetClassId - Its target class.
+ * @param purpose - `store` when the condition is new or changed.
+ */
+const checkAllowedRecords = (
+  problems: Problems,
+  snapshot: ConfigSnapshot,
+  field: FieldDefinition,
+  targetClassId: DefinitionId,
+  purpose: ConditionPurpose
+): void => {
+  const condition = allowedRecordsOf(field.type);
+
+  if (condition === null) {
+    return;
+  }
+
+  if (condition === undefined) {
+    problems.push(
+      problem(
+        "invalidCondition",
+        field.id,
+        "allowedRecords is not a condition AST (Contracts 5.2)."
+      )
+    );
+
+    return;
+  }
+
+  for (const message of conditionProblems(
+    snapshot,
+    targetClassId,
+    condition,
+    "filter",
+    purpose
+  )) {
+    problems.push(
+      problem("invalidCondition", field.id, `allowedRecords: ${message}`)
+    );
+  }
+};
+
 const checkField = (
   problems: Problems,
   snapshot: ConfigSnapshot,
-  field: FieldDefinition
+  field: FieldDefinition,
+  purpose: ConditionPurpose
 ): void => {
   nameProblem(
     problems,
@@ -565,6 +616,16 @@ const checkField = (
       "class",
       "reference target"
     );
+
+    if (snapshot.class(field.type.targetClassId) !== undefined) {
+      checkAllowedRecords(
+        problems,
+        snapshot,
+        field,
+        field.type.targetClassId,
+        purpose
+      );
+    }
   }
 
   if (field.type.kind === "condition") {
@@ -1349,7 +1410,7 @@ const checkDefinition = (
   } else if (definition.kind === "class") {
     checkClass(problems, snapshot, definition);
   } else if (definition.kind === "field") {
-    checkField(problems, snapshot, definition);
+    checkField(problems, snapshot, definition, purpose);
   } else if (definition.kind === "override") {
     checkOverride(problems, snapshot, definition);
   } else if (definition.kind === "index") {

@@ -70,9 +70,14 @@ export type RecordList = typeof RecordListSchema.Type;
  * - `fields`: comma-separated names and one-hop paths (`docked_to.name`);
  * - `cursor`: a `nextCursor` from the previous page;
  * - `limit`: 1 to 1000 (default 100);
- * - `count`, `labels`: `true` or `false`.
+ * - `count`, `labels`: `true` or `false`;
+ * - `allowedFor`: `<table>/<field>`, the reference field a picker fills
+ *   (decision 0020): the field's allowed-records condition is ANDed to the
+ *   filter, evaluated in the caller's view; the endpoint must be the
+ *   field's target or one of its descendants.
  */
 export const ListQuery = {
+  allowedFor: Schema.optionalKey(Schema.String),
   count: Schema.optionalKey(Schema.String),
   cursor: Schema.optionalKey(Schema.String),
   fields: Schema.optionalKey(Schema.String),

@@ -94,6 +94,11 @@ const adminPaths = (records: {
     ["GET", "/api/v1/meta/tables/acme.laptop/openapi.json", {}],
     ["GET", "/api/v1/meta/tables/core.access_rule", {}],
     [
+      "GET",
+      listPath("acme.laptop", { allowedFor: "acme.asset/docked_to" }),
+      {},
+    ],
+    [
       "PATCH",
       recordPath("core.user", records.user),
       { body: { name: "z" }, headers: version },
@@ -132,7 +137,7 @@ const tableNames = (response: TestResponse): string[] =>
 
 /** What an admin gets on every path after the allow-all rules are gone. */
 const REFUSED: readonly Observation[] = [
-  ...Array.from({ length: 16 }, () => ({
+  ...Array.from({ length: 17 }, () => ({
     status: 404,
     tag: "UnknownTable",
   })),

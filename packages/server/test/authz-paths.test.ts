@@ -477,6 +477,24 @@ const READ_ROWS: readonly PathRow[] = [
     run: list(MONITOR),
   },
   {
+    alice: okNames(["K", "L"]),
+    bob: okNames(["L"]),
+    path: "GET /acme.laptop?allowedFor=acme.asset/docked_to (picker, no condition)",
+    run: list(LAPTOP, { allowedFor: "acme.asset/docked_to" }),
+  },
+  {
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "GET /acme.asset?allowedFor=core.access_rule/condition (platform table)",
+    run: list(ASSET, { allowedFor: "core.access_rule/condition" }),
+  },
+  {
+    alice: refused(400, "InvalidRequest"),
+    bob: refused(400, "UnknownField"),
+    path: "GET /acme.asset?allowedFor=acme.asset/cost (not a reference; never readable by Bob)",
+    run: list(ASSET, { allowedFor: "acme.asset/cost" }),
+  },
+  {
     alice: okDetail(5),
     bob: okDetail(3),
     path: "GET /acme.asset?count=true",

@@ -23,8 +23,11 @@
  * ```
  */
 import { knowsTable } from "@std/access/rules";
+import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
+import { UnknownField } from "@std/api/errors/unknown-field";
 import { UnknownTable } from "@std/api/errors/unknown-table";
+import type { CompiledCondition } from "@std/conditions/sql";
 import {
   identSql,
   joinSql,
@@ -33,6 +36,7 @@ import {
   textParameter,
 } from "@std/conditions/sql-fragment";
 import type { SqlFragment } from "@std/conditions/sql-fragment";
+import { allowedRecordsOf } from "@std/definitions/allowed-records";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -55,6 +59,7 @@ import type { CompiledKey } from "./read-cursor.ts";
 import type { ReadField } from "./read-field.ts";
 import {
   BASE_ALIAS,
+  compileAllowedRecords,
   compileFilter,
   defaultSelection,
   parseFields,
@@ -66,6 +71,7 @@ import type { SelectedValue } from "./read-query.ts";
 import { withBranchTuning } from "./read-tuning.ts";
 import { makeReadScope } from "./read-view.ts";
 import type { ReadScope, ReadView } from "./read-view.ts";
+import { isNameable } from "./record-access.ts";
 import { encodeTextValue, recordJson } from "./record-json.ts";
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
@@ -81,6 +87,11 @@ export interface ListRequest {
   readonly limit?: string;
   readonly count?: string;
   readonly labels?: string;
+  /**
+   * `<table>/<field>`: the reference field a picker fills; its
+   * allowed-records condition is ANDed to the filter (decision 0020).
+   */
+  readonly allowedFor?: string;
   /**
    * `plain` forces the plain form (tests compare it with the branch form);
    * by default a visibility with several top-level ORs uses the branch form.
@@ -541,6 +552,83 @@ ORDER BY ${orderBy(merged, identSql(outer, "oid"))}
 LIMIT ${textParameter(String(parts.limit), "int8")}`;
 };
 
+const allowedForProblem = (message: string) =>
+  new InvalidRequest({ message, parameter: "allowedFor" });
+
+const ALLOWED_FOR_USAGE =
+  "allowedFor is <table>/<field>: a reference field whose target is this table or one of its ancestors.";
+
+/**
+ * The `allowedFor` parameter of a list (decision 0020): the reference
+ * field a picker fills, as `<table>/<field>`. Its allowed-records
+ * condition, compiled in the caller's view over the endpoint's records, is
+ * ANDed to the request's filter; the response never shows the condition.
+ *
+ * - The table resolves like an endpoint (`UnknownTable` when the caller
+ *   cannot name it) and the field like a write body's name (readable or
+ *   writable there, else `UnknownField`), so nothing is revealed about a
+ *   table or field the caller cannot name.
+ * - The field must be a reference whose target is the endpoint's class or
+ *   one of its ancestors (a picker may narrow to a descendant); otherwise,
+ *   or when the text is not `<table>/<field>`, `InvalidRequest`.
+ * - A field without a condition adds nothing.
+ *
+ * @param scope - The caller's scope.
+ * @param endpointClassId - The listed class.
+ * @param text - The parameter, if given.
+ * @returns The compiled condition, or none.
+ */
+const compileAllowedFor = Effect.fn("Records.allowedFor")(
+  function* compileAllowedFor(
+    scope: ReadScope,
+    endpointClassId: DefinitionId,
+    text: string | undefined
+  ) {
+    if (text === undefined) {
+      return Option.none<CompiledCondition>();
+    }
+
+    const slash = text.indexOf("/");
+    const tableName = text.slice(0, slash);
+    const fieldName = text.slice(slash + 1);
+
+    if (slash <= 0 || fieldName === "" || fieldName.includes("/")) {
+      return yield* allowedForProblem(ALLOWED_FOR_USAGE);
+    }
+
+    const sourceClassId = yield* resolveTable(scope, tableName);
+    const field = scope.snapshot.fieldByName(sourceClassId, fieldName);
+
+    const nameable =
+      field !== undefined &&
+      (isNameable(scope, sourceClassId, "create", field.id) ||
+        isNameable(scope, sourceClassId, "update", field.id));
+
+    if (field === undefined || !nameable) {
+      return yield* new UnknownField({ field: fieldName });
+    }
+
+    const target =
+      field.type.kind === "reference" ? field.type.targetClassId : undefined;
+
+    const targets = scope.snapshot
+      .lineage(endpointClassId)
+      .some((level) => level.id === target);
+
+    if (!targets) {
+      return yield* allowedForProblem(ALLOWED_FOR_USAGE);
+    }
+
+    const condition = allowedRecordsOf(field.type);
+
+    return condition === null
+      ? Option.none<CompiledCondition>()
+      : Option.some(
+          compileAllowedRecords(scope, endpointClassId, condition, BASE_ALIAS)
+        );
+  }
+);
+
 /**
  * Lists records through endpoint E (Contracts 3.5, 6.6).
  *
@@ -557,6 +645,10 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
 
   const filter = Option.getOrUndefined(
     yield* compileFilter(scope, view, request.filter)
+  );
+
+  const allowed = Option.getOrUndefined(
+    yield* compileAllowedFor(scope, classId, request.allowedFor)
   );
 
   const sortKeys = yield* parseSort(view, request.sort);
@@ -584,11 +676,16 @@ export const listRecords = Effect.fn("Records.list")(function* listRecords(
       : yield* decodeCursor(sortKeys, request.cursor);
 
   const relation = recordRelation(scope.snapshot, classId);
-  const filterJoins = filter === undefined ? [] : [filter.joins];
+
+  const filterJoins = [filter, allowed].flatMap((compiled) =>
+    compiled === undefined ? [] : [compiled.joins]
+  );
 
   const conditions = [
     view.visibility(BASE_ALIAS),
-    ...(filter === undefined ? [] : [filter.predicate]),
+    ...[filter, allowed].flatMap((compiled) =>
+      compiled === undefined ? [] : [compiled.predicate]
+    ),
   ];
 
   const projection = project(scope, view, selection, withLabels);

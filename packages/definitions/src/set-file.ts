@@ -21,6 +21,9 @@
  *     fields:
  *       - { id: <uuid>, name: serial, type: { kind: text, maxLength: 64 } }
  *       - { id: <uuid>, name: owner, type: { kind: reference, target: core.user } }
+ *       - { id: <uuid>, name: docked_to,
+ *           type: { kind: reference, target: acme.asset,
+ *                   allowedRecords: { op: notEmpty, arg: { path: [<field id>] } } } }
  *       - { id: <uuid>, name: due_when,
  *           type: { kind: condition, class: acme.asset, profile: filter } }
  *     overrides:
@@ -109,8 +112,13 @@ export const SimpleKindSchema = Literals([
   "choice",
 ]);
 
-/** A reference type in a file names its target table. */
+/**
+ * A reference type in a file names its target table and, optionally, its
+ * allowed-records condition, a JSON AST over the target with field IDs, as
+ * access-rule conditions are written (decision 0020).
+ */
 export const ReferenceEntrySchema = Struct({
+  allowedRecords: optionalKey(ConditionSchema),
   kind: Literal("reference"),
   target: SchemaString,
 });

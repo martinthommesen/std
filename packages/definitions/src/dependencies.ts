@@ -12,6 +12,7 @@
  */
 import type { FieldType } from "@std/values/field-type";
 
+import { allowedRecordsOf } from "./allowed-records.ts";
 import { conditionFieldIds } from "./condition.ts";
 import type { Condition } from "./condition.ts";
 import type {
@@ -135,7 +136,10 @@ const typeEdges = (
   type: FieldType
 ): readonly Dependency[] => {
   if (type.kind === "reference") {
-    return [edge(id, type.targetClassId, "references_table")];
+    return [
+      edge(id, type.targetClassId, "references_table"),
+      ...conditionEdges(id, allowedRecordsOf(type) ?? null),
+    ];
   }
 
   return type.kind === "condition"
@@ -233,6 +237,8 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
  *
  * - class: `extends` its parent, `display_field` its display field;
  * - field: `field_of` its class, `references_table` a reference's target,
+ *   `condition_reads` each field a reference's allowed-records condition
+ *   reads,
  *   `condition_on` a condition field's class;
  * - override: `overrides` its field and its class;
  * - index: `index_on` its class and each of its fields;
