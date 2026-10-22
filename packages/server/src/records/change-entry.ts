@@ -50,6 +50,9 @@ export const ChangeCauseSchema = Schema.Union([
     subscriptionId: Schema.String,
   }),
   Schema.Struct({ kind: Schema.Literal("system") }),
+  // A role's version bump for the access-rule changes of a change set that
+  // name it (Contracts 4.6, config subscriptions).
+  Schema.Struct({ accessRules: Schema.Array(Schema.String) }),
 ]);
 
 /** The cause of a change. */
