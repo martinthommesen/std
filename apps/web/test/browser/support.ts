@@ -6,8 +6,11 @@
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -144,14 +147,66 @@ export const stdServe = Effect.fn("BrowserSupport.stdServe")(function* stdServe(
   return { log, origin } satisfies StdServer;
 });
 
-/** Chromium, headless, closed with the scope. */
-export const launchBrowser = Effect.acquireRelease(
-  Effect.promise(async () => await chromium.launch()),
-  (browser: Browser) =>
-    Effect.promise(async () => {
-      await browser.close();
-    })
+/** The DejaVu fonts of the `dejavu-fonts-ttf` dev dependency. */
+const TEST_FONTS = fileURLToPath(
+  new URL("../../node_modules/dejavu-fonts-ttf/ttf", import.meta.url)
 );
+
+/**
+ * A fontconfig file of its own for the browser: the system's configuration
+ * where there is one, plus the DejaVu fonts of a pinned dev dependency.
+ * Without any font (no `/etc/fonts` and no font files, as on minimal
+ * machines) Chromium's headless shell aborts (Skia's
+ * `SkFontMgr_FontConfigInterface` "Not implemented") as soon as a layout
+ * measures text, such as a flex row sized to its content. The file and the
+ * font cache live in a directory made for the run and removed with the
+ * scope, so nothing is set up by hand and nothing outlives the run.
+ *
+ * @param cacheDirectory - Where fontconfig may write its cache.
+ * @returns The file's text.
+ */
+const fontConfig = (cacheDirectory: string): string => `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <dir>${TEST_FONTS}</dir>
+  <cachedir>${cacheDirectory}</cachedir>
+</fontconfig>
+`;
+
+/** The browser's fontconfig file, in a directory removed with the scope. */
+const fontConfigFile = Effect.acquireRelease(
+  Effect.sync(() => {
+    const directory = mkdtempSync(path.join(tmpdir(), "std-browser-fonts-"));
+    const file = path.join(directory, "fonts.conf");
+
+    writeFileSync(file, fontConfig(path.join(directory, "cache")));
+
+    return { directory, file };
+  }),
+  ({ directory }) =>
+    Effect.sync(() => {
+      rmSync(directory, { force: true, recursive: true });
+    })
+).pipe(Effect.map(({ file }) => file));
+
+/** Chromium, headless, with its own fontconfig file, closed with the scope. */
+export const launchBrowser = Effect.gen(function* browserWithFonts() {
+  const file = yield* fontConfigFile;
+
+  return yield* Effect.acquireRelease(
+    Effect.promise(
+      async () =>
+        await chromium.launch({
+          env: { ...process.env, FONTCONFIG_FILE: file },
+        })
+    ),
+    (browser: Browser) =>
+      Effect.promise(async () => {
+        await browser.close();
+      })
+  );
+});
 
 /**
  * The loopback origin a listening server answers at.
