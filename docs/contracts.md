@@ -855,7 +855,7 @@ SQL forms: equality `casefold(col COLLATE pg_unicode_fast) = $1` with the litera
 | `empty(f)` | `f IS NULL` | `f IS NOT NULL` |
 | pattern ops | `k(f) LIKE $p` | `(k(f) NOT LIKE $p OR f IS NULL)` |
 
-- `IS [NOT] DISTINCT FROM` is null-safe [checked: [comparison functions](https://www.postgresql.org/docs/18/functions-comparison.html)] and used only field-to-field; literal comparisons use `=` to stay indexable [spike].
+- `IS [NOT] DISTINCT FROM` is null-safe [checked: [comparison functions](https://www.postgresql.org/docs/18/functions-comparison.html)] and used only field-to-field; literal comparisons use `=` to stay indexable [checked: `sql-postgres.test.ts` "[spike] literal eq and in use the field's index on every comparable kind": on 20,000 rows in Postgres 18, `eq` and `in` with bound literals use the field's B-tree index, with no sequential scan, for case-sensitive text and long text, integer, big integer, decimal, boolean (`eq` only), date, date-time, uuid, reference and choice, and the casefold index for case-insensitive text; the same literal under `IS NOT DISTINCT FROM` gives a sequential scan; decision 0005].
 - Paths compile to one `LEFT JOIN` per distinct reference prefix, so a null reference yields null, as in TypeScript. Paths may name fields of the declared target class and its ancestors only.
 - The compiler accepts a guard per joined path, which authorization uses to apply target visibility and masks (3.6).
 - Every value is a bound parameter; identifiers come only from definitions.
