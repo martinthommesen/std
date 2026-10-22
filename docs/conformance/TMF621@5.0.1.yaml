@@ -1,0 +1,457 @@
+# Requirements matrix (Contracts 15) for TMF621 Trouble Ticket at the pinned
+# version (packages/tmf/specs/pins.json). Rows paraphrase the conformance
+# profile (TM Forum member material: cited by section and printed page, never
+# copied) and the Apache-2.0 OpenAPI document (cited by JSON pointer).
+spec: TMF621
+version: 5.0.1
+title: Trouble Ticket
+sources:
+  - id: CP
+    document: TMF621 Trouble Ticket Conformance Profile (TMF621B)
+    version: 5.0.0
+    licence: TM Forum member material (RAND); cited, never copied
+    note: The cover says v5.0.0 and the published file name v5.0.1. Page numbers are the printed pages (printed p.1 is PDF page 4).
+  - id: OAS
+    document: TMF621-Trouble_Ticket-v5.0.1.oas.yaml
+    version: 5.0.1
+    licence: Apache-2.0
+    location: packages/tmf/specs/TMF621-Trouble_Ticket-v5.0.1.oas.yaml (tmforum-apis/TMF621_TroubleTicket at f5b8ffb5975f523b17d8d55c25537d5d3533ecdb, SHA-256 in pins.json)
+  - id: KIT
+    document: TMF621 Conformance Test Kit tmf621-v5.0.0-ctk-1.0.1
+    version: 5.0.0 ctk 1.0.1
+    licence: TM Forum kit; downloaded by URL and digest in CI, never committed
+kit:
+  name: tmf621-v5.0.0-ctk-1.0.1
+  note: >-
+    kitCases are empty. The kit zip holds only README.md, run.sh, run.bat, config.json, .env and docker-compose.yaml; the test cases are a Cypress suite inside the image tmforumorg/tmf621-v5.0.0-ctk:1.0.1, so their titles are not readable without the image. Two ways to get them, both for the CTK-runner workstream: run the kit once (against STD or TM Forum's reference implementation) and read the titles from reports/index.json (mochawesome), or pull the pinned image by digest and list its spec files without running it. Either way the result is one KIT row per mandatory case with its exact title in kitCases, replacing KIT/mandatory-cases.
+rows:
+  - id: TMF621@5.0.1/CP/resources/troubleTicket
+    source: "TMF621 CP v5.0.0 API Mandatory Resources p.2"
+    level: mandatory
+    requirement: "TroubleTicket is the API's one mandatory resource; STD serves it at /tmf-api/troubleTicket/v5/troubleTicket."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/output-non-blank
+    source: "TMF621 CP v5.0.0 General Notes on Resource Attribute Conformance p.2"
+    level: mandatory
+    requirement: "An attribute mandatory on output is present and non-blank in every response that has no fields selection; a mandatory array has at least one item; an indented attribute is mandatory only when its parent is present."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/at-type
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.2-3"
+    level: mandatory
+    requirement: "Every TroubleTicket carries @type (TroubleTicket, or a local class's own name, Contracts 11.1)."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/description
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.2-3"
+    level: mandatory
+    requirement: "Every TroubleTicket carries description."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/href
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.2-3"
+    level: mandatory
+    requirement: "Every TroubleTicket in a response carries href, the absolute URL of the resource."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/severity
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.2-3"
+    level: mandatory
+    requirement: "Every TroubleTicket carries severity."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/ticketType
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.2-3"
+    level: mandatory
+    requirement: "Every TroubleTicket carries ticketType."
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/attachment
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "An attachment item carries @type, attachmentType, id and mimeType. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/channel
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A channel carries @type and id. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/externalIdentifier
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "An externalIdentifier item carries @type and id. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/note
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A note item carries @type, and id in responses. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/relatedEntity
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A relatedEntity item carries @type, role and entity, whose @type and id are present. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/relatedParty
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A relatedParty item carries @type and role, and its partyOrPartyRole carries @type and id. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/statusChangeHistory
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A statusChangeHistory item carries @type. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/troubleTicketCharacteristic
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A troubleTicketCharacteristic item carries @type and name, and id in responses. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/characteristicRelationship
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A characteristicRelationship item of a characteristic carries @type, id and relationshipType. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/troubleTicketRelationship
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A troubleTicketRelationship item carries @type, id and relationshipType. (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/attributes/troubleTicketSpecification-ref
+    source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
+    level: mandatory
+    requirement: "A troubleTicketSpecification reference on a ticket carries @type and id (STD serves no specifications, so it never renders one). (Mandatory only when the parent is present.)"
+    status: pending
+  - id: TMF621@5.0.1/CP/notifications/none-mandatory
+    source: "TMF621 CP v5.0.0 Notification Model Conformance p.5"
+    level: optional
+    requirement: "The profile makes no notification mandatory; STD still produces the TroubleTicket events of Contracts 11.2 (rows OAS/events/*)."
+    status: pending
+  - id: TMF621@5.0.1/CP/operations/get-list
+    source: "TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6; API GET/POST/DELETE Operation Conformance pp.7-10"
+    level: mandatory
+    requirement: "GET /troubleTicket lists tickets: 200 on success."
+    status: pending
+  - id: TMF621@5.0.1/CP/operations/get-by-id
+    source: "TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6; API GET/POST/DELETE Operation Conformance pp.7-10"
+    level: mandatory
+    requirement: "GET /troubleTicket/{id} retrieves one ticket: 200, or 404 when it does not exist or the caller cannot see it."
+    status: pending
+  - id: TMF621@5.0.1/CP/operations/post
+    source: "TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6; API GET/POST/DELETE Operation Conformance pp.7-10"
+    level: mandatory
+    requirement: "POST /troubleTicket creates a ticket: 201."
+    status: pending
+  - id: TMF621@5.0.1/CP/operations/delete
+    source: "TMF621 CP v5.0.0 TroubleTicket Mandatory Operations p.6; API GET/POST/DELETE Operation Conformance pp.7-10"
+    level: mandatory
+    requirement: "DELETE /troubleTicket/{id} deletes a ticket: 204."
+    status: pending
+  - id: TMF621@5.0.1/CP/get/fields-first-level
+    source: "TMF621 CP v5.0.0 API GET Operation Conformance p.7"
+    level: mandatory
+    requirement: "fields selects any first-level attribute on list and retrieve (href always returned)."
+    status: pending
+  - id: TMF621@5.0.1/CP/get/filter-and
+    source: "TMF621 CP v5.0.0 Definitions for Filter p.7"
+    level: mandatory
+    requirement: "Attribute filters in the query string (for example severity and status together) combine with AND."
+    status: pending
+  - id: TMF621@5.0.1/CP/get/filter-sub-resources
+    source: "TMF621 CP v5.0.0 API GET Operation Conformance p.7"
+    level: optional
+    requirement: "Filtering on attributes of sub-resources (array items) is optional; STD refuses filters on array and json attributes with attributeNotFilterable."
+    status: excluded
+    decision: E16-array-json-filters
+  - id: TMF621@5.0.1/CP/post/required-attributes
+    source: "TMF621 CP v5.0.0 API POST Operation Conformance p.8"
+    level: mandatory
+    requirement: "POST requires description, severity, ticketType and @type; a body without any of them is refused."
+    status: pending
+  - id: TMF621@5.0.1/CP/patch/merge-patch
+    source: "TMF621 CP v5.0.0 API PATCH Operation Conformance p.9"
+    level: mandatory
+    requirement: "When PATCH is offered (STD offers it), application/merge-patch+json is supported and a successful PATCH answers 200."
+    status: pending
+  - id: TMF621@5.0.1/CP/patch/no-mandatory-operation
+    source: "TMF621 CP v5.0.0 API PATCH Operation Conformance p.9"
+    level: optional
+    requirement: "PATCH of TroubleTicket is not a mandatory operation; STD serves it (Contracts 11.2)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/listTroubleTicket
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket/get"
+    level: mandatory
+    requirement: "GET /troubleTicket answers 200 with an array of TroubleTicket and the X-Total-Count and X-Result-Count headers."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/createTroubleTicket
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket/post"
+    level: mandatory
+    requirement: "POST /troubleTicket takes application/json TroubleTicket_FVO and answers 201 with the created TroubleTicket."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/retrieveTroubleTicket
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/get"
+    level: mandatory
+    requirement: "GET /troubleTicket/{id} answers 200 with the TroubleTicket."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/patchTroubleTicket
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch"
+    level: mandatory
+    requirement: "PATCH /troubleTicket/{id} answers 200 with the updated TroubleTicket."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/deleteTroubleTicket
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/delete"
+    level: mandatory
+    requirement: "DELETE /troubleTicket/{id} answers 204."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/createHub
+    source: "TMF621 OAS v5.0.1 #/paths/~1hub/post"
+    level: mandatory
+    requirement: "POST /hub takes Hub_FVO (callback, query) and answers 201 with the Hub."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/hubGet
+    source: "TMF621 OAS v5.0.1 #/paths/~1hub~1{id}/get"
+    level: mandatory
+    requirement: "GET /hub/{id} answers 200 with the Hub."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/hubDelete
+    source: "TMF621 OAS v5.0.1 #/paths/~1hub~1{id}/delete"
+    level: mandatory
+    requirement: "DELETE /hub/{id} answers 204."
+    status: pending
+  - id: TMF621@5.0.1/OAS/operations/accepted-202
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket/post/responses/202 (also patch, delete)"
+    level: optional
+    requirement: "POST, PATCH and DELETE may answer 202 Accepted for asynchronous processing; STD always completes synchronously and never answers 202."
+    status: pending
+  - id: TMF621@5.0.1/OAS/errors/error-schema
+    source: "TMF621 OAS v5.0.1 #/components/responses/400 to 503"
+    level: mandatory
+    requirement: "Every error response (400, 401, 403, 404, 405, 409, 500, 501, 503) has an Error body."
+    status: pending
+  - id: TMF621@5.0.1/OAS/query/fields-offset-limit
+    source: "TMF621 OAS v5.0.1 #/components/parameters/Fields, Offset, Limit"
+    level: mandatory
+    requirement: "List accepts fields, offset and limit; retrieve, create and patch accept fields."
+    status: pending
+  - id: TMF621@5.0.1/OAS/query/before-after
+    source: "TMF621 OAS v5.0.1 #/components/parameters/Before, After"
+    level: optional
+    requirement: "List accepts the opaque cursors before and after."
+    status: pending
+  - id: TMF621@5.0.1/OAS/query/sort
+    source: "TMF621 OAS v5.0.1 #/components/parameters/Sort"
+    level: optional
+    requirement: "List accepts sort, with a leading - for descending order."
+    status: pending
+  - id: TMF621@5.0.1/OAS/query/filter-jsonpath
+    source: "TMF621 OAS v5.0.1 #/components/parameters/Filter"
+    level: optional
+    requirement: "List accepts filter, a JSONPath expression."
+    status: excluded
+    decision: E14-jsonpath-filter
+  - id: TMF621@5.0.1/OAS/media/patch-json
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json"
+    level: optional
+    requirement: "PATCH accepts application/json with a TroubleTicket_MVO body, applied as merge-patch."
+    status: pending
+  - id: TMF621@5.0.1/OAS/media/patch-merge
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1merge-patch+json"
+    level: mandatory
+    requirement: "PATCH accepts application/merge-patch+json with a TroubleTicket_MVO body."
+    status: pending
+  - id: TMF621@5.0.1/OAS/media/patch-json-patch
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json-patch+json"
+    level: optional
+    requirement: "PATCH accepts application/json-patch+json (JsonPatchOperations, op add, remove, replace, move, copy, test)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/media/patch-json-patch-query
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicket~1{id}/patch/requestBody/content/application~1json-patch-query+json"
+    level: optional
+    requirement: "PATCH accepts application/json-patch-query+json."
+    status: excluded
+    decision: E15-json-patch-query
+  - id: TMF621@5.0.1/OAS/media/responses-json
+    source: "TMF621 OAS v5.0.1 #/components/responses"
+    level: mandatory
+    requirement: "Every response body, errors included, is application/json."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Extensible
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Extensible/required"
+    level: mandatory
+    requirement: "Every object that extends Extensible (TroubleTicket and its parts, Hub, Error, events) carries @type."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/TroubleTicket_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicket_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A create body needs description, severity and ticketType (and @type)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/TroubleTicket_RES
+    source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicket_RES/required"
+    level: mandatory
+    requirement: "Every returned TroubleTicket carries id and href."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Hub_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Hub_FVO/required"
+    level: mandatory
+    requirement: "A hub registration needs callback."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Hub
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Hub/allOf/1/required"
+    level: mandatory
+    requirement: "A returned Hub carries callback (and id and href from Entity)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Error
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Error/allOf/1/required"
+    level: mandatory
+    requirement: "An Error carries code and reason; message, status (a string) and referenceError are optional."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/EntityRef
+    source: "TMF621 OAS v5.0.1 #/components/schemas/EntityRef/allOf/2/required"
+    level: mandatory
+    requirement: "A reference carries id."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Attachment_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Attachment_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "An attachment in a write carries attachmentType and mimeType."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/Characteristic_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Characteristic_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A characteristic in a write carries name, and value in its typed subtypes."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/CharacteristicRelationship_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/CharacteristicRelationship_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A characteristic relationship in a write carries id and relationshipType."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/ExternalIdentifier_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/ExternalIdentifier_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "An external identifier in a write carries id."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/RelatedEntity_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/RelatedEntity_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A related entity in a write carries role and entity."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/RelatedPartyRefOrPartyRoleRef_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/RelatedPartyRefOrPartyRoleRef_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A related party in a write carries role."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/TroubleTicketRelationship_FVO
+    source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicketRelationship_FVO/allOf/1/required"
+    level: mandatory
+    requirement: "A ticket relationship in a write carries id and relationshipType."
+    status: pending
+  - id: TMF621@5.0.1/OAS/required/JsonPatch
+    source: "TMF621 OAS v5.0.1 #/components/schemas/JsonPatch/required"
+    level: mandatory
+    requirement: "A JSON Patch operation carries op and path."
+    status: pending
+  - id: TMF621@5.0.1/OAS/enum/TroubleTicketStatusType
+    source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicketStatusType/enum"
+    level: mandatory
+    requirement: "status is one of acknowledged, rejected, pending, held, inProgress, cancelled, closed, resolved; STD's ITIL states map onto them (Contracts 11.2 status table) and a read never renders another value."
+    status: pending
+  - id: TMF621@5.0.1/OAS/enum/JsonPatch-op
+    source: "TMF621 OAS v5.0.1 #/components/schemas/JsonPatch/properties/op/enum"
+    level: mandatory
+    requirement: "JSON Patch op is one of add, remove, replace, move, copy, test."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketCreateEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketCreateEvent/post; #/components/schemas/TroubleTicketCreateEvent"
+    level: optional
+    requirement: "A TroubleTicketCreateEvent that STD delivers to a hub's callback is a valid TroubleTicketCreateEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketAttributeValueChangeEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketAttributeValueChangeEvent/post; #/components/schemas/TroubleTicketAttributeValueChangeEvent"
+    level: optional
+    requirement: "A TroubleTicketAttributeValueChangeEvent that STD delivers to a hub's callback is a valid TroubleTicketAttributeValueChangeEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketStatusChangeEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketStatusChangeEvent/post; #/components/schemas/TroubleTicketStatusChangeEvent"
+    level: optional
+    requirement: "A TroubleTicketStatusChangeEvent that STD delivers to a hub's callback is a valid TroubleTicketStatusChangeEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketResolvedEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketResolvedEvent/post; #/components/schemas/TroubleTicketResolvedEvent"
+    level: optional
+    requirement: "A TroubleTicketResolvedEvent that STD delivers to a hub's callback is a valid TroubleTicketResolvedEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketInformationRequiredEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketInformationRequiredEvent/post; #/components/schemas/TroubleTicketInformationRequiredEvent"
+    level: optional
+    requirement: "A TroubleTicketInformationRequiredEvent that STD delivers to a hub's callback is a valid TroubleTicketInformationRequiredEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketDeleteEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketDeleteEvent/post; #/components/schemas/TroubleTicketDeleteEvent"
+    level: optional
+    requirement: "A TroubleTicketDeleteEvent that STD delivers to a hub's callback is a valid TroubleTicketDeleteEvent body (an Event whose event holds the troubleTicket)."
+    status: pending
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationCreateEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationCreateEvent/post"
+    level: optional
+    requirement: "TroubleTicketSpecificationCreateEvent: STD serves no trouble ticket specifications, so it produces none."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationAttributeValueChangeEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationAttributeValueChangeEvent/post"
+    level: optional
+    requirement: "TroubleTicketSpecificationAttributeValueChangeEvent: STD serves no trouble ticket specifications, so it produces none."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationStatusChangeEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationStatusChangeEvent/post"
+    level: optional
+    requirement: "TroubleTicketSpecificationStatusChangeEvent: STD serves no trouble ticket specifications, so it produces none."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/events/TroubleTicketSpecificationDeleteEvent
+    source: "TMF621 OAS v5.0.1 #/paths/~1listener~1troubleTicketSpecificationDeleteEvent/post"
+    level: optional
+    requirement: "TroubleTicketSpecificationDeleteEvent: STD serves no trouble ticket specifications, so it produces none."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/operations/listTroubleTicketSpecification
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification/get; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
+    level: optional
+    requirement: "listTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/operations/createTroubleTicketSpecification
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification/post; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
+    level: optional
+    requirement: "createTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/operations/retrieveTroubleTicketSpecification
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/get; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
+    level: optional
+    requirement: "retrieveTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/operations/patchTroubleTicketSpecification
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/patch; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
+    level: optional
+    requirement: "patchTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/operations/deleteTroubleTicketSpecification
+    source: "TMF621 OAS v5.0.1 #/paths/~1troubleTicketSpecification~1{id}/delete; TMF621 CP v5.0.0 API Mandatory Resources p.2 (not mandatory)"
+    level: optional
+    requirement: "deleteTroubleTicketSpecification on troubleTicketSpecification; STD answers 404 with an Error (Contracts 11.1)."
+    status: excluded
+    decision: E20-resources-not-served
+  - id: TMF621@5.0.1/OAS/patch/note-replace
+    source: "TMF621 OAS v5.0.1 #/components/schemas/TroubleTicket_MVO (note); TMF621 UG v5.0.1 PATCH examples pp.74-81"
+    level: optional
+    requirement: "A PATCH may change or remove existing notes; STD keeps notes append-only and refuses that with ValidationFailed."
+    status: excluded
+    decision: E22-tmf621-notes-attachments
+  - id: TMF621@5.0.1/OAS/attachment/content
+    source: "TMF621 OAS v5.0.1 #/components/schemas/Attachment_FVO (content)"
+    level: optional
+    requirement: "An attachment may carry its content inline; STD keeps attachments as references and URLs only."
+    status: excluded
+    decision: E22-tmf621-notes-attachments
+  - id: TMF621@5.0.1/KIT/mandatory-cases
+    source: "tmf621-v5.0.0-ctk-1.0.1 (image tmforumorg/tmf621-v5.0.0-ctk:1.0.1)"
+    level: mandatory
+    requirement: "Every mandatory test case of the pinned kit passes under the CTK runner's criteria (Contracts 11.1); this row is replaced by one row per case, with kitCases, once the titles are known."
+    note: "The titles are not readable without the kit's image; see kit.note."
+    status: pending

@@ -4,7 +4,8 @@
 entries:
   - id: E14-jsonpath-filter
     decision0021: 14
-    rows: []
+    rows:
+      - TMF621@5.0.1/OAS/query/filter-jsonpath
     requirement: "TMF630 part 6: JSONPath `filter` query parameter"
     reason: "The condition AST has no array semantics; refused with `InvalidFilter` `jsonPathNotSupported` (Contracts 10.3)."
     recommendation: accept
@@ -15,7 +16,8 @@ entries:
     date: 2026-10-22
   - id: E15-json-patch-query
     decision0021: 15
-    rows: []
+    rows:
+      - TMF621@5.0.1/OAS/media/patch-json-patch-query
     requirement: "TMF630 part 5: `application/json-patch-query+json`"
     reason: "Refused with 415 (Contracts 10.5)."
     recommendation: accept
@@ -26,7 +28,9 @@ entries:
     date: 2026-10-22
   - id: E16-array-json-filters
     decision0021: 16
-    rows: []
+    rows:
+      - TMF621@5.0.1/CP/get/filter-sub-resources
+      - TMF688@4.0.0/CP/get/filter-sub-resources
     requirement: "Filters on array and json attributes of TMF resources"
     reason: "The condition AST has no any-element operator; refused with `attributeNotFilterable` (Contracts 11.1)."
     recommendation: accept
@@ -70,7 +74,16 @@ entries:
     date: 2026-10-22
   - id: E20-resources-not-served
     decision0021: 20
-    rows: []
+    rows:
+      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationCreateEvent
+      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationAttributeValueChangeEvent
+      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationStatusChangeEvent
+      - TMF621@5.0.1/OAS/events/TroubleTicketSpecificationDeleteEvent
+      - TMF621@5.0.1/OAS/operations/listTroubleTicketSpecification
+      - TMF621@5.0.1/OAS/operations/createTroubleTicketSpecification
+      - TMF621@5.0.1/OAS/operations/retrieveTroubleTicketSpecification
+      - TMF621@5.0.1/OAS/operations/patchTroubleTicketSpecification
+      - TMF621@5.0.1/OAS/operations/deleteTroubleTicketSpecification
     requirement: "`troubleTicketSpecification` (TMF621) and `serviceOrderSpecification` (TMF641)"
     reason: "Not served in v0.1 (Contracts 11.1)."
     recommendation: accept
@@ -92,7 +105,9 @@ entries:
     date: 2026-10-22
   - id: E22-tmf621-notes-attachments
     decision0021: 22
-    rows: []
+    rows:
+      - TMF621@5.0.1/OAS/patch/note-replace
+      - TMF621@5.0.1/OAS/attachment/content
     requirement: "TMF621 notes append-only; attachments as references only"
     reason: "ITIL work notes are a journal; attachments are a later field type (Contracts 11.2)."
     recommendation: accept
@@ -114,7 +129,8 @@ entries:
     date: 2026-10-22
   - id: E24-tmf688-resource-topic-post
     decision0021: 24
-    rows: []
+    rows:
+      - TMF688@4.0.0/CP/operations/event-post-resource-topic
     requirement: "POST of events on TMF688 resource topics"
     reason: "Those events come only from saves; `405` (Contracts 12.3)."
     recommendation: accept

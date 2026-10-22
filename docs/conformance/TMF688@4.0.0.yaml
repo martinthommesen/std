@@ -1,0 +1,264 @@
+# Requirements matrix (Contracts 15) for TMF688 Event Management at the pinned
+# version (packages/tmf/specs/pins.json). Pre-production; no CTK exists, so the
+# gate is the OpenAPI contract tests (Contracts 12.3). Rows paraphrase the
+# conformance profile (TM Forum member material: cited, never copied) and the
+# Apache-2.0 swagger document (cited by JSON pointer). The swagger defines no
+# enumerations.
+spec: TMF688
+version: 4.0.0
+title: Event Management (pre-production)
+sources:
+  - id: CP
+    document: TMF688 Event Management Conformance Profile (TMF688B)
+    version: 4.0.0 (pre-production)
+    licence: TM Forum member material; cited, never copied
+    note: Page numbers are the profile's own (Page N of 13).
+  - id: OAS
+    document: TMF688-Event-v4.0.0.swagger.json
+    version: 4.0.0
+    licence: Apache-2.0
+    location: packages/tmf/specs/TMF688-Event-v4.0.0.swagger.json (tmforum-apis/TMF688-Event at a88d5266404d6b1f38504a9bdc149d636ccf4ab2, SHA-256 in pins.json)
+rows:
+  - id: TMF688@4.0.0/CP/resources/Hub
+    source: "TMF688 CP v4.0.0 API Mandatory Resources p.5"
+    level: mandatory
+    requirement: "Hub is a mandatory resource of the API."
+    status: pending
+  - id: TMF688@4.0.0/CP/resources/Event
+    source: "TMF688 CP v4.0.0 API Mandatory Resources p.5"
+    level: mandatory
+    requirement: "Event is a mandatory resource of the API."
+    status: pending
+  - id: TMF688@4.0.0/CP/resources/Topic
+    source: "TMF688 CP v4.0.0 API Mandatory Resources p.5"
+    level: mandatory
+    requirement: "Topic is a mandatory resource of the API."
+    status: pending
+  - id: TMF688@4.0.0/CP/attributes/hub
+    source: "TMF688 CP v4.0.0 Hub Resource Mandatory Attributes p.6"
+    level: mandatory
+    requirement: "Every Hub carries id and callback."
+    status: pending
+  - id: TMF688@4.0.0/CP/attributes/event
+    source: "TMF688 CP v4.0.0 Event Resource Mandatory Attributes p.6"
+    level: mandatory
+    requirement: "Every Event carries @type, event, eventId, eventTime, eventType, href and id."
+    note: "The swagger's Event has no id or href and requires nothing; the profile wins for responses."
+    status: pending
+  - id: TMF688@4.0.0/CP/attributes/event-refs
+    source: "TMF688 CP v4.0.0 Event Resource Mandatory Attributes p.6"
+    level: mandatory
+    requirement: "When present, reportingSystem and source carry id, each analyticCharacteristic carries name and value, and each relatedParty carries id and @referredType."
+    status: pending
+  - id: TMF688@4.0.0/CP/attributes/topic
+    source: "TMF688 CP v4.0.0 Topic Resource Mandatory Attributes p.7"
+    level: mandatory
+    requirement: "Every Topic carries id, href and name."
+    status: pending
+  - id: TMF688@4.0.0/CP/operations/hub
+    source: "TMF688 CP v4.0.0 Hub Mandatory Operations p.8"
+    level: mandatory
+    requirement: "Hub supports GET and POST."
+    status: pending
+  - id: TMF688@4.0.0/CP/operations/event-post
+    source: "TMF688 CP v4.0.0 Event Mandatory Operations p.8; API POST Operation Conformance p.12"
+    level: mandatory
+    requirement: "POST /topic/{topicId}/event creates an event on a client topic (a core.event record): 201; event, eventId and eventType are required."
+    status: pending
+  - id: TMF688@4.0.0/CP/operations/event-post-resource-topic
+    source: "TMF688 CP v4.0.0 Event Mandatory Operations p.8"
+    level: mandatory
+    requirement: "POST /topic/{topicId}/event on a resource topic (one STD renders from saves); STD answers 405."
+    status: excluded
+    decision: E24-tmf688-resource-topic-post
+  - id: TMF688@4.0.0/CP/operations/topic-get
+    source: "TMF688 CP v4.0.0 Topic Mandatory Operations p.8"
+    level: mandatory
+    requirement: "Topic supports GET (list and retrieve)."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-id-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic/{id} answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-hub-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/hub answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-event-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/event answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-hub-id-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/hub/{id} answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/topic-event-id-fields
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/event/{id} answers 200 (404 when absent) and supports fields on every first-level attribute."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/filter-and
+    source: "TMF688 CP v4.0.0 Definitions for Filter p.9"
+    level: mandatory
+    requirement: "Attribute filters in the query string combine with AND."
+    status: pending
+  - id: TMF688@4.0.0/CP/get/filter-sub-resources
+    source: "TMF688 CP v4.0.0 API GET Operation Conformance pp.9-10"
+    level: optional
+    requirement: "Filtering on attributes of sub-resources is optional; STD refuses filters on array and json attributes."
+    status: excluded
+    decision: E16-array-json-filters
+  - id: TMF688@4.0.0/CP/post/hub
+    source: "TMF688 CP v4.0.0 API POST Operation Conformance p.11"
+    level: mandatory
+    requirement: "POST /hub answers 201 and requires callback."
+    status: pending
+  - id: TMF688@4.0.0/CP/post/topic
+    source: "TMF688 CP v4.0.0 API POST Operation Conformance p.11"
+    level: mandatory
+    requirement: "POST /topic answers 201 and requires name."
+    status: pending
+  - id: TMF688@4.0.0/CP/post/topic-hub
+    source: "TMF688 CP v4.0.0 API POST Operation Conformance p.11"
+    level: mandatory
+    requirement: "POST /topic/{topicId}/hub answers 201 and requires callback."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/listEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1event/get"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/event lists the topic's events (fields, offset, limit): 200."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/createEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1event/post"
+    level: mandatory
+    requirement: "POST /topic/{topicId}/event takes Event_Create: 201 with the Event."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/retrieveEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1event~1{id}/get"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/event/{id}: 200 with the Event."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/listTopic
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic/get"
+    level: mandatory
+    requirement: "GET /topic lists topics (fields, offset, limit): 200."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/createTopic
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic/post"
+    level: mandatory
+    requirement: "POST /topic takes Topic_Create: 201 with the Topic (a client topic, core.event_topic)."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/retrieveTopic
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{id}/get"
+    level: mandatory
+    requirement: "GET /topic/{id}: 200 with the Topic."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/deleteTopic
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{id}/delete"
+    level: mandatory
+    requirement: "DELETE /topic/{id}: 204 (client topics; resource topics are read-only)."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/listHub
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1hub/get"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/hub lists the caller's hubs on the topic: 200."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/createHub
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1hub/post"
+    level: mandatory
+    requirement: "POST /topic/{topicId}/hub takes Hub_Create: 201 with the Hub."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/retrieveHub
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1hub~1{id}/get"
+    level: mandatory
+    requirement: "GET /topic/{topicId}/hub/{id}: 200 with the Hub."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/deleteHub
+    source: "TMF688 OAS v4.0.0 #/paths/~1topic~1{topicId}~1hub~1{id}/delete"
+    level: mandatory
+    requirement: "DELETE /topic/{topicId}/hub/{id}: 204."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/registerListener
+    source: "TMF688 OAS v4.0.0 #/paths/~1hub/post"
+    level: mandatory
+    requirement: "POST /hub takes EventSubscriptionInput: 201 with the EventSubscription."
+    status: pending
+  - id: TMF688@4.0.0/OAS/operations/unregisterListener
+    source: "TMF688 OAS v4.0.0 #/paths/~1hub~1{id}/delete"
+    level: mandatory
+    requirement: "DELETE /hub/{id}: 204."
+    status: pending
+  - id: TMF688@4.0.0/OAS/errors/error-schema
+    source: "TMF688 OAS v4.0.0 #/definitions/Error; every operation's 400 to 500 responses"
+    level: mandatory
+    requirement: "Every error response has an Error body with code and reason (code and status are strings)."
+    status: pending
+  - id: TMF688@4.0.0/OAS/media/json
+    source: "TMF688 OAS v4.0.0 #/consumes, #/produces"
+    level: mandatory
+    requirement: "Requests and responses are application/json;charset=utf-8."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/Hub
+    source: "TMF688 OAS v4.0.0 #/definitions/Hub/required"
+    level: mandatory
+    requirement: "A returned Hub carries id and callback."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/Hub_Create
+    source: "TMF688 OAS v4.0.0 #/definitions/Hub_Create/required"
+    level: mandatory
+    requirement: "A hub registration on a topic needs callback."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/EventSubscription
+    source: "TMF688 OAS v4.0.0 #/definitions/EventSubscription/required"
+    level: mandatory
+    requirement: "A returned subscription carries id and callback."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/EventSubscriptionInput
+    source: "TMF688 OAS v4.0.0 #/definitions/EventSubscriptionInput/required"
+    level: mandatory
+    requirement: "A subscription request needs callback."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/EntityRef
+    source: "TMF688 OAS v4.0.0 #/definitions/EntityRef/required"
+    level: mandatory
+    requirement: "A reference carries id."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/RelatedParty
+    source: "TMF688 OAS v4.0.0 #/definitions/RelatedParty/required"
+    level: mandatory
+    requirement: "A related party carries id and @referredType."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/Characteristic
+    source: "TMF688 OAS v4.0.0 #/definitions/Characteristic/required"
+    level: mandatory
+    requirement: "A characteristic carries name and value."
+    status: pending
+  - id: TMF688@4.0.0/OAS/required/Error
+    source: "TMF688 OAS v4.0.0 #/definitions/Error/required"
+    level: mandatory
+    requirement: "An Error carries code and reason."
+    status: pending
+  - id: TMF688@4.0.0/OAS/events/TopicCreateEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicCreateEvent/post; #/definitions/TopicCreateEvent"
+    level: optional
+    requirement: "A TopicCreateEvent that STD delivers to a hub's callback is a valid TopicCreateEvent body."
+    status: pending
+  - id: TMF688@4.0.0/OAS/events/TopicChangeEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicChangeEvent/post; #/definitions/TopicChangeEvent"
+    level: optional
+    requirement: "A TopicChangeEvent that STD delivers to a hub's callback is a valid TopicChangeEvent body."
+    status: pending
+  - id: TMF688@4.0.0/OAS/events/TopicDeleteEvent
+    source: "TMF688 OAS v4.0.0 #/paths/~1listener~1topicDeleteEvent/post; #/definitions/TopicDeleteEvent"
+    level: optional
+    requirement: "A TopicDeleteEvent that STD delivers to a hub's callback is a valid TopicDeleteEvent body."
+    status: pending
