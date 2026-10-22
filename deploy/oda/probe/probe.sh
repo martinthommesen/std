@@ -378,15 +378,18 @@ pins_json() {
     '$ARGS.named'
 }
 
-# The kind node's own footprint, independent of whatever else uses the disk:
-# the node image and the node container's writable layer (pulled images,
-# etcd, logs), measured before the cluster is deleted.
+# The kind node's own footprint, independent of whatever else uses the disk,
+# measured before the cluster is deleted: the node image, the node
+# container's writable layer, and its /var, a Docker volume in kind that
+# holds the pulled and unpacked images, etcd and the logs.
 kind_node_json() {
-  local writable image
-  writable=$(docker inspect --size --format '{{.SizeRw}}' "$cluster-control-plane" 2>/dev/null || true)
+  local node="$cluster-control-plane" writable image var
+  writable=$(docker inspect --size --format '{{.SizeRw}}' "$node" 2>/dev/null || true)
   image=$(docker image inspect --format '{{.Size}}' "$KIND_NODE_IMAGE" 2>/dev/null || true)
+  var=$(docker exec "$node" du -sxb /var 2>/dev/null | cut -f1 || true)
   jq -cn --argjson writable "${writable:-null}" --argjson image "${image:-null}" \
-    '{nodeWritableBytes: $writable, nodeImageBytes: $image}'
+    --argjson var "${var:-null}" \
+    '{nodeWritableBytes: $writable, nodeImageBytes: $image, nodeVarBytes: $var}'
 }
 
 jsonl_array() {
@@ -447,22 +450,35 @@ write_result() {
 cleanup() {
   if [[ $cluster_created -eq 1 && $keep_cluster != 1 ]]; then
     say "deleting cluster $cluster"
-    if [[ -s $state_dir/cloud-provider-kind.pid ]]; then
-      kill "$(cat "$state_dir/cloud-provider-kind.pid")" 2>/dev/null || true
+    # Stop cloud-provider-kind and wait for it to exit, so it creates no
+    # load-balancer container after the ones below are removed.
+    local pid="" _
+    if [[ -s $state_dir/cloud-provider-kind.pid ]]; then pid=$(cat "$state_dir/cloud-provider-kind.pid"); fi
+    if [[ -n $pid ]]; then
+      kill "$pid" 2>/dev/null || true
+      for _ in $(seq 30); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+      done
+      kill -9 "$pid" 2>/dev/null || true
     fi
     kind delete cluster --name "$cluster" --kubeconfig "$KUBECONFIG" || true
-    # cloud-provider-kind's load-balancer containers are labelled with
-    # "<cluster>/<namespace>/<service>"; remove this cluster's only.
-    local container
-    for container in $(docker ps -aq --filter label=io.x-k8s.cloud-provider-kind.loadbalancer.name); do
-      if docker inspect --format '{{index .Config.Labels "io.x-k8s.cloud-provider-kind.loadbalancer.name"}}' \
-        "$container" | grep -q "^$cluster/"; then
-        docker rm -f "$container" >/dev/null || true
-      fi
-    done
-    if [[ $kind_network_existed -eq 0 ]] &&
-      [[ $(docker network inspect kind --format '{{len .Containers}}' 2>/dev/null || echo 1) == 0 ]]; then
-      docker network rm kind >/dev/null || true
+    # cloud-provider-kind labels its containers with their cluster; remove
+    # this cluster's only.
+    local containers
+    containers=$(docker ps -aq --filter "label=io.x-k8s.cloud-provider-kind.cluster=$cluster")
+    if [[ -n $containers ]]; then
+      # shellcheck disable=SC2086 # one argument per container
+      docker rm -f $containers >/dev/null || true
+    fi
+    # The `kind` network, when this run created it and nothing else uses it.
+    if [[ $kind_network_existed -eq 0 ]]; then
+      for _ in $(seq 10); do
+        if [[ $(docker network inspect kind --format '{{len .Containers}}' 2>/dev/null || echo gone) != 0 ]]; then break; fi
+        docker network rm kind >/dev/null 2>&1 && break
+        sleep 1
+      done
+      if docker network inspect kind >/dev/null 2>&1; then say "left the docker network kind in place (in use)"; fi
     fi
     jq --argjson disk "$(disk_json)" '.disk.afterCleanup = $disk' "$result" >"$result.tmp" &&
       mv "$result.tmp" "$result"

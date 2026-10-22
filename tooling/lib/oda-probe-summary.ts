@@ -18,6 +18,7 @@ export const ProbeResultSchema = Schema.Struct({
     kindNode: Schema.optionalKey(
       Schema.Struct({
         nodeImageBytes: Schema.NullOr(Schema.Finite),
+        nodeVarBytes: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
         nodeWritableBytes: Schema.NullOr(Schema.Finite),
       })
     ),
@@ -249,7 +250,11 @@ const diskTable = (results: readonly ProbeResult[]): string[] => [
     ),
     gigabytes
   )}`,
-  `| kind node: writable layer (pulled images, etcd) ${spreadCells(
+  `| kind node: /var (pulled images, etcd, logs) ${spreadCells(
+    defined(results.map((result) => result.disk.kindNode?.nodeVarBytes)),
+    gigabytes
+  )}`,
+  `| kind node: container's writable layer ${spreadCells(
     defined(results.map((result) => result.disk.kindNode?.nodeWritableBytes)),
     gigabytes
   )}`,

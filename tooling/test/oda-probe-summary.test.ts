@@ -11,7 +11,11 @@ const result = (
 ): ProbeResult => ({
   disk: {
     before: { availableBytes: 20 * gigabyte, usedBytes: 50 * gigabyte },
-    kindNode: { nodeImageBytes: gigabyte, nodeWritableBytes: 6 * gigabyte },
+    kindNode: {
+      nodeImageBytes: gigabyte,
+      nodeVarBytes: 6 * gigabyte,
+      nodeWritableBytes: 0.01 * gigabyte,
+    },
     peakUsedBytes: 58 * gigabyte,
   },
   failedPhase,
@@ -76,6 +80,9 @@ describe("oda-probe-summary", () => {
     );
     expect(text).toContain(
       "| peak use above the start (root file system) | 3 | 8.0 GB | 8.0 GB | 8.0 GB |"
+    );
+    expect(text).toContain(
+      "| kind node: /var (pulled images, etcd, logs) | 3 | 6.0 GB | 6.0 GB | 6.0 GB |"
     );
   });
 });
