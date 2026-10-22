@@ -186,7 +186,7 @@ export class SchemaChangesGroup extends HttpApiGroup.make("schemaChanges")
       success: AppliedChangeSetSchema.pipe(HttpApiSchema.status(201)),
     }),
     HttpApiEndpoint.get("getChangeSet", "/schema/change-sets/:id", {
-      error: [NotFound, InvalidRequest],
+      error: [NotFound, InvalidRequest, InvalidSchemaRevision, SchemaChanged],
       params: { id: Schema.String },
       success: ChangeSetJournalSchema,
     })
