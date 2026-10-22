@@ -23,7 +23,12 @@
  *   active fields the metadata holds; sections left without a field are
  *   dropped.
  * - Nothing of an access rule appears: no condition, no field a condition
- *   reads, no rule ID.
+ *   reads, no rule ID; nor a reference's allowed-records condition.
+ * - Related lists: the readable, active reference fields, on tables the
+ *   caller knows, that can point at the endpoint's records, each once on
+ *   its most general table (decision 0020).
+ * - `tableList` lists exactly the tables `tableMetadata` describes, with
+ *   the same name, label and `creatable` (one `summaryOf` for both).
  */
 import type {
   AccessAction,
