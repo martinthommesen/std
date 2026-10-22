@@ -94,5 +94,20 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # `std worker`: the outbox worker (Contracts 4.6; decision 0023). It runs
+  # the after-commit effects of saves and change sets, beside the server.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/quickstart.Dockerfile
+    init: true
+    command: ["pnpm", "--silent", "std", "worker"]
+    environment:
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
+      STD_TIME_ZONE: ${STD_TIME_ZONE:-UTC}
+    depends_on:
+      upgrade:
+        condition: service_completed_successfully
 volumes:
   std-pg:

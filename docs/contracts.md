@@ -670,6 +670,7 @@ Worker (Step 3):
 - Failure returns the row to `pending` with exponential backoff and jitter, 10 s doubling to 1 h, shortened by up to 20 % [judgment]. `attempts` counts claims; a failure after `max_attempts` claims (default 10 [judgment]), or the expiry of the last allowed claim's lease (dead-lettered by the next claim), makes it `dead`, shown in an admin view and a metric, for an operator to retry or discard.
 - Wake-ups (4.1 step 11) only wake workers; they also poll.
 - `done` rows are deleted after 7 days [judgment]; `dead` rows stay.
+- The worker is its own process, `std worker` (`application_name` `std-worker`). Deliveries of a subscription that is disabled, or that no effect handler serves, stay `pending` unclaimed. A missing or inactive identity fails the attempt. Payloads never carry a password or secret field, not even as a "changed" marker. Retry (attempts reset) and discard (`done` without the effect) of dead rows need an unconditional decision on `core.subscription`, so admins only. [judgment, decision 0023]
 - A new subscription receives changes committed after it is created; a change in flight at that moment may or may not get a row [judgment]. Backfill is later.
 
 Claim predicate:

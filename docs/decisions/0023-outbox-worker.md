@@ -1,0 +1,104 @@
+# 0023. Outbox worker: leases, effects, payloads, dead letters, config subscriptions
+
+Status: accepted, 2026-10-22 (workstream 3B, the outbox worker; plan Step 3). Builds on decisions 0013 (the producer, claims and fencing at SQL level), 0014 (access rules and platform tables), 0021 (config subscriptions, decision 27). Code: `packages/server/src/outbox/{worker,worker-process,delivery-effects,delivery-failed,delivery-payload,dead-letters,metrics,delivery-claims}.ts`, `packages/server/src/schema/config-deliveries.ts`, `packages/server/src/platform/migrations/0011-outbox-worker.ts`.
+
+## Decision
+
+The worker claims deliveries per subscription with the 4.6 claim predicate unchanged, runs one of two kinds of effect under a lease that outlasts the effect's timeout, records the outcome with the fenced updates of decision 0013, and runs as its own process, `std worker`. Payloads are built from history when a delivery runs and filtered for the subscription's identity on the version's own image. Change sets write the deliveries of subscriptions on the config kinds `role` and `accessRule`, and an access-rule change bumps the versions of the roles it names.
+
+## Modules
+
+| Module | What it provides |
+| --- | --- |
+| `outbox/delivery-effects` | the consumer seam: `Delivery`, `DeliveryEffect` (`record` or `external`), `DeliveryHandler`, `DeliveryHandlers` (service, `layerOf`), `effectFor`, `ProductionDeliveryHandlers` (empty until 3A and 3H add theirs), `RecordEffectServices` |
+| `outbox/delivery-failed` | `DeliveryFailed` (`reason`), the typed failure an effect reports |
+| `outbox/delivery-payload` | `DeliveryPayload`, `readEntries`, `versionImageJson`, `readabilityOf`, `decisionHolds`, `payloadOf`, `PayloadUnreadable` |
+| `outbox/worker` | `WorkerSettings` (`fromEnv`, `layerOf`), `leaseOf`, `runDelivery`, `workerPass`, `workerWakeups`, `runWorker`, `OutboxWorkerLayer`, `deleteOldDeliveries`, `DONE_RETENTION` |
+| `outbox/worker-process` | `WorkerProcessLayer`, launched by `std worker` |
+| `outbox/dead-letters` | `listDeadDeliveries`, `retryDeadDelivery`, `discardDeadDelivery` (admins only) |
+| `outbox/metrics` | the gauge `std_outbox_dead_deliveries`, counters for done, failed, dead and lease-lost attempts, `refreshDeadGauge` |
+| `schema/config-deliveries` | `writeConfigDeliveries`: role bumps and config deliveries in a change set's main transaction |
+| `platform/migrations/0011-outbox-worker` | `core.delivery.finished_at`, CHECK `delivery_finished`, partial index `delivery_done` |
+| `sql/database-config` | `WORKER_APPLICATION_NAME` (`std-worker`); `platform/runner` refuses `std upgrade` while one is connected |
+
+## The effect interface (for 3A and 3H)
+
+A consumer registers a `DeliveryHandler` whose `effectFor(subscription, snapshot)` returns the effect that serves a subscription, or `undefined`. The worker claims deliveries only for active, enabled subscriptions that some handler serves; the first handler that returns an effect wins. Deliveries of a subscription that no handler serves, or that is disabled, stay `pending` and are never claimed, so they count no attempts [judgment: disabling pauses a subscription instead of dropping its backlog; a subscription without a consumer is not a failure].
+
+- **`record`** effects write through the record service only. The worker runs one request transaction: it reads the payload, runs the effect as the subscription's identity (`Actor` with the identity's current roles, `RuleWriteAccess`), and ends with the fenced `done` update. The writes and `done` commit together or roll back together, so in-database effects happen exactly once (4.1 decision): a crash rolls back the open transaction, and a lost lease makes `markDone` fail with `LeaseLost` inside the transaction. The effect must give its saves `delivery.cause` (`after_commit` with the subscription and the parent change); its saves pass the full pipeline, deliveries and wake-ups included.
+- **`external`** effects call another system. The payload is read in its own transaction; the effect runs outside any transaction with `delivery.changeId` as its idempotency key; then `done` commits on its own. They are at least once: a crash or lost lease between the call and `done` repeats them with the same `change_id`.
+- A typed failure of either is recorded with backoff or as `dead`; `last_error` keeps only the error's `_tag`, plus the `reason` of `DeliveryFailed` and `PayloadUnreadable`, the SQLSTATE of `DatabaseError`, or a fixed timeout text, never a value (4.3). A defect is logged and recorded as "Defect: the attempt died; see the worker log."
+
+3A's `afterCommit` record rules plug in as a handler that recognizes the subscriptions backing its rules and returns a `record` effect; 3H's hub callbacks as one that returns an `external` effect which POSTs the rendered event. `std worker` lists the production handlers in `ProductionDeliveryHandlers`.
+
+## Leases and timeouts
+
+- One claim per subscription and pass, `batchSize` rows (default 16), committed before any effect starts. The claim holds at most one row per record (a record's later versions wait for the earlier one), so the claimed rows run concurrently.
+- The lease is `effectTimeout + leaseMargin` (defaults 60 s and 30 s) [judgment]. The worker starts its clock before the claim's transaction, so the database's `lease_until` is later than the worker's deadline by at least the margin. Each effect is interrupted at the deadline (`Effect.timeout`), which records a `TimeoutError` failure; a row whose deadline already passed before its effect could start is left to its lease.
+- An interrupted worker (shutdown, kill) records nothing; the lease expires and the next claim counts the attempt (decision 0013: `attempts` counts claims; the claim dead-letters a row whose last allowed lease expired).
+- A missing or inactive identity fails the attempt without running the effect (decision 0013's open item) [judgment: the operator sees it in `last_error` and, after `max_attempts`, among the dead rows].
+
+## Polling and wake-ups
+
+Each worker listens on `std_worker` with reconnect (the producer's after-commit, debounced wake-up of 4.1 step 11 already existed from Step 1) and polls every `pollInterval` (default 2 s). After a pass that claimed something it runs the next at once; otherwise it waits for a wake-up or the poll interval. A re-established LISTEN counts as a wake-up, because notifications sent while disconnected are lost. Wake-ups only wake; polling alone is correct.
+
+## Payloads (4.5)
+
+`payloadOf` builds the payload from history alone, so it never depends on the record's state when the delivery runs:
+
+- **The version's own image** is the fold of the record's change entries up to the delivery's version (the create records every non-empty value, each update its changed ones); for a delete, the entry's `before` values. Fields the current snapshot no longer describes are left out; a field no entry mentions holds its empty value [judgment: a value a schema backfill wrote without a change entry is not in the image until an entry records it].
+- **Filtered for the identity under current rules**: the identity's roles now and the current snapshot's access rules, their conditions checked, resolved (`me` = the identity, `now` = delivery time, instance time zone) and evaluated in TypeScript on that image. This is the evaluator the 1D differential test holds equal to the SQL compiler; a condition that no longer checks or resolves fails closed, as the SQL compiler's `FALSE` does. The record is visible when the record `read` decision holds; a field is readable when, in addition, its field `read` decision holds (3.2).
+- The payload carries `changeId`, `operationId`, `recordId`, the concrete `classId`, `recordVersion`, `kind`, `occurredAt`, `visible`, `actorId` (null when not visible), `image` (readable fields, canonical JSON by field ID) and `changes` (the entry's changes of readable fields). A delivery for a record the identity cannot see carries no field and no actor; handlers decide whether to act on it (3H sends nothing).
+- Password and secret fields never appear, not even as the entry's `{"changed": true}` marker [judgment: the marker reveals that a secret changed].
+
+## Dead letters
+
+- `listDeadDeliveries`, `retryDeadDelivery` and `discardDeadDelivery` are record-service operations with the `Actor` in the environment. "Admins only" is decided without naming a role (3.2): a delivery belongs to a subscription, and `core.subscription` is a platform table that only `core`-layer rules reach. Listing needs an unconditional record `read` decision on `core.subscription`, retry and discard an unconditional `update`; anything else is `NotAllowed` [judgment]. A row that is not `dead` is `NotFound`.
+- Retry: `pending`, due now, `attempts` 0 (the subscription's `max_attempts` applies afresh), `finished_at` cleared; workers are woken after commit. Under `skip`, a retried delivery arrives after newer versions (4.7).
+- Discard: `done` without running the effect, `last_error` kept; under `block` this releases the record's later versions. The row is deleted with the other `done` rows after 7 days [judgment: no new status, so the claim predicate and the `delivery_order` index stay as they are]. Retry and discard log the operator's user ID.
+- The gauge `std_outbox_dead_deliveries` is refreshed by housekeeping (every minute), whenever an attempt makes a row dead, and after every retry or discard. The process has no metrics exporter yet (Step 5, observability).
+- **What follows after workstream 3G merges** (`/api/v1` is frozen and `/api/v2` is being built, so this workstream adds no route and no page): `GET /api/v2/outbox/deadDelivery` (TMF630 list with `offset`/`limit` or `after`, filter by `subscriptionId`) calls `listDeadDeliveries`; `POST /api/v2/outbox/deadDelivery/{id}/retry` and `.../discard` (TMF630 task resources) call `retryDeadDelivery` and `discardDeadDelivery`; their errors map as Contracts 10.6 maps `NotAllowed` and `NotFound`. The Foldkit admin view lists dead deliveries per subscription with their `last_error`, attempts and time of death, and offers retry and discard. The exact paths follow 3G's naming.
+
+## Retention
+
+Migration 0011 adds `finished_at`, set exactly while a row is `done` or `dead` (CHECK `delivery_finished`; existing finished rows get the migration's time). Housekeeping deletes `done` rows whose `finished_at` is more than 7 days old, 1,000 per statement with `SKIP LOCKED`, through the partial index `delivery_done`; `dead` rows stay.
+
+## Where the worker runs
+
+`std worker` is a separate command and process, with `application_name` `std-worker`; `std serve` does not run deliveries. Reasons: Contracts 13.1 already gives the worker its own Deployment and 8.5 its own session name, which `std upgrade` must refuse (now implemented, `upgrade-refuses-worker`); one role per process keeps a slow external listener from competing with API requests for the pool; and any number of workers may run, since claims skip rows others hold. `docker compose up` starts a `worker` service beside `server`, so the quickstart's after-commit effects run. Settings: `STD_WORKER_BATCH_SIZE`, `STD_WORKER_EFFECT_TIMEOUT`, `STD_WORKER_POLL_INTERVAL`, `STD_WORKER_CONCURRENCY` (subscriptions served at once, default 4), plus the database and instance settings. It refuses to start with pending platform migrations, like `std serve`.
+
+## Config subscriptions (4.6, decision 0021 decision 27)
+
+- A subscription names a config kind by naming its definition table's class: `core.role` or `core.access_rule`. Validation still refuses every other platform table.
+- In the change set's main transaction, under `CONFIG_KEY`, right after its change entries: every role that an access rule created, changed or deleted by this change set names, before or after, gets its definition version bumped once (`UPDATE` of the definition row's `version`, `updated_at`, `updated_by`), with a change entry of kind `update`, empty `fields` and cause `{"accessRules": [<change IDs>]}` (a new member of `ChangeCauseSchema`), and no definition revision. This applies whether or not any subscription exists, so role versions do not depend on when one was created. Then one delivery per matching subscription for every entry of a role or access rule, the bumps included. The condition reads the effective record after the change set, or the one before it for a purged definition. A role that the change set itself changed and whose rules changed too gets both versions.
+- Definition deletes are tombstones, so their entries are of kind `update`; a subscription that wants them lists `update` (TMF672 turns a retire or delete into a Delete event from the state, 11.3).
+- The transaction sends `pg_notify('std_worker', '')` when it wrote a delivery [judgment]. A record save never notifies inside its transaction (4.1 step 11), but a config commit already notifies `std_config` and holds the commit-serializing lock, so this adds nothing.
+- Subscription conditions resolve `now` in the instance time zone when the process has `InstanceSettings`, and in UTC otherwise (the CLI's set loads) [judgment].
+- Consequence for clients: an access-rule change raises the version of the roles it names, so an admin edit of such a role must use the role's current version (`If-Match`), as for any concurrent change. `schema-http` now reads the built-in roles' versions, which the core set's own access rules bump at the first load.
+
+## Evidence
+
+| Test | What it shows |
+| --- | --- |
+| `outbox-worker`: lease fencing (three tests) | W1 claims version 2 and stalls; a claim then returns nothing (3 waits for 2); W1's lease expires; W2 claims 2 under a new token and a claim during W2's effect returns nothing (n+1 only after n is done); after W2's `done`, W1's late `done` or failure changes nothing (the row stays `done`, attempts 2, no `last_error`); only then is 3 claimed. The external variant shows W1's late call still happened (at least once); the record variant shows W1's write rolled back, so the delivery's write commits once, with cause `after_commit` |
+| `outbox-worker`: the first delivery failing twice | R@2 fails twice (backoff about 10 s, `last_error` with the reason, nothing due in between) while Q@2 and Q@3 arrive; then R@2 and R@3 arrive in order |
+| `outbox-worker`: dead letters | Under `block` a dead R@2 holds R@3 back while Q flows; Alice and Bob get `NotAllowed` for list and discard; the admin lists it (the gauge counts it), discards it, a second discard is `NotFound`, and R@3 is released. Under `skip` R@3 proceeds and the retried R@2 arrives after it |
+| `outbox-worker`: payloads | A delete delivery to Bob carries L's before image without `cost` and the disk key; Alice's monitor arrives invisible and empty. Three updates of S, delivered afterwards, carry each version's own image and readable fields. A user's password appears nowhere, not even as a marker |
+| `outbox-worker`: identity, timeout, retention, wake-up | An inactive identity fails without running the effect; an effect is interrupted at a 300 ms timeout with a 5 min lease and recorded; `done` rows older than 7 days are deleted and `dead` rows stay; a save's NOTIFY reaches `workerWakeups` and a worker polling once an hour delivers at once |
+| `outbox-soak` | 8 worker loops, 10,000 deliveries over 500 records written version by version while the workers run: all `done`, a 10 ms sampler never sees two `in_flight` rows of one record, no two effects of one record overlap, and every record's versions arrive 1 to 20 in order. It found that the payload reader sorted the text-cast `record_version`, so 10 came before 9 |
+| `outbox-crash` | A child worker process is SIGKILLed after a record effect's write and before `done`: the write is gone, and after the lease expires the rerun writes it once. Killed after an external call: the rerun calls again with the same `change_id` |
+| `config-events` | Role subscriptions get every version of a role, in order, from an admin change set, generic writes (relabel, retire, delete), three access-rule changes (bumps with cause `accessRules`), an override of the shipped `employee` role and the helpdesk set load (its `agent` role, bumped by its rules); a change set that dies after its role write delivers nothing; the access-rule subscription gets the rule's versions; the payload carries the role's name |
+| `platform-migrations`: `upgrade-refuses-worker` | `std upgrade` refuses while only a `std-worker` session is connected |
+| `subscription` (definitions) | Subscriptions on `core.role` and `core.access_rule` validate; one on another platform table is refused |
+
+## Deviations and precisions
+
+- The contracts' `config-events` test is written for workstream 4D's TMF672 hub. This workstream proves its outbox part (deliveries, order, bumps, rollback) with a test handler; 4D adds the TMF672 rendering on top.
+- The crash test uses a test effect; 3A's `afterCommit` rules reuse it.
+- The worker serves only subscriptions a handler claims, and `ProductionDeliveryHandlers` is empty until 3A and 3H land: until then `std worker` only deletes old rows and keeps the gauge.
+
+## Open items
+
+- The admin endpoint and Foldkit view after 3G (above).
+- A `doctor` check that reports subscriptions whose identity is missing or inactive.
+- Backfill for new subscriptions (4.6, later).
