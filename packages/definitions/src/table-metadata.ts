@@ -48,6 +48,11 @@ export type AccessState = typeof AccessStateSchema.Type;
 
 /** A reference field's type: its target as a table name the caller knows. */
 export const MetaReferenceTypeSchema = Struct({
+  /**
+   * `true` for an owner reference (Contracts 4.9, 6.5): required, and
+   * read-only after create. Absent otherwise.
+   */
+  aggregate: optionalKey(SchemaBoolean),
   kind: Literal("reference"),
   /** The qualified target table, or null when the caller cannot name it. */
   target: NullOr(SchemaString),

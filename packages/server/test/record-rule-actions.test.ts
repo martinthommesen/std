@@ -44,10 +44,44 @@ import {
   tagOf,
 } from "./reads-support.ts";
 import { ACME_FIELDS } from "./records-support.ts";
-import { ACME, addRecordRule, freshId, values } from "./schema-support.ts";
+import {
+  ACME,
+  addField,
+  addRecordRule,
+  createClass,
+  createNamespace,
+  freshId,
+  values,
+} from "./schema-support.ts";
 import { LAPTOP, MONITOR, patch, versionOf } from "./writes-support.ts";
 
 const SYSTEM: Requester = { roleIds: [], userId: SYSTEM_USER_ID };
+
+/**
+ * A part class of acme.asset (Contracts 4.9), created in the same change
+ * set as each rule: `setParts` and `createParts` name only part classes
+ * of the rule's class.
+ */
+const PART_NAMESPACE = createNamespace("rra_parts");
+const PART = createClass("rra_part", { namespaceId: PART_NAMESPACE.id });
+
+const PART_OWNER = addField(PART.id, "asset", {
+  aggregate: true,
+  kind: "reference",
+  targetClassId: ACME.asset,
+});
+
+const PART_STATUS = addField(PART.id, "status", {
+  kind: "text",
+  maxLength: 40,
+});
+
+const PART_OPS: readonly Operation[] = [
+  PART_NAMESPACE.op,
+  PART.op,
+  PART_OWNER.op,
+  PART_STATUS.op,
+];
 
 const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
   createEach: {
@@ -57,10 +91,10 @@ const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
     values: [{ fieldId: ACME.name, value: { value: "made" } }],
   },
   createParts: {
-    classId: ACME.laptop,
+    classId: PART.id,
     forEach: null,
     type: "createParts",
-    values: [{ fieldId: ACME.name, value: { value: "part" } }],
+    values: [{ fieldId: PART_STATUS.id, value: { value: "part" } }],
   },
   refuse: { code: "RuleRefused", message: "No.", type: "refuse" },
   set: {
@@ -68,9 +102,9 @@ const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
     values: [{ fieldId: ACME.status, value: { value: "set" } }],
   },
   setParts: {
-    classId: ACME.laptop,
+    classId: PART.id,
     type: "setParts",
-    values: [{ fieldId: ACME.status, value: { value: "part" } }],
+    values: [{ fieldId: PART_STATUS.id, value: { value: "part" } }],
     where: null,
   },
   updateEach: {
@@ -165,7 +199,9 @@ const ruleIn = (slot: Slot, actions: readonly RuleAction[]) => {
     subscriptionId: phase === "afterCommit" ? subscription : null,
   });
 
-  return phase === "afterCommit" ? [carrier(subscription), rule.op] : [rule.op];
+  return phase === "afterCommit"
+    ? [...PART_OPS, carrier(subscription), rule.op]
+    : [...PART_OPS, rule.op];
 };
 
 /**

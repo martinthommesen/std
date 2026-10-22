@@ -117,6 +117,13 @@ export interface CheckOptions {
    * Omitted: every scoped path is refused.
    */
   readonly recordClassId?: string;
+  /**
+   * The part conditions of an aggregate record rule (`anyPart`,
+   * `allParts`, `setParts`; Contracts 4.9, 5.10): the owner's class. Only
+   * then may a path have `scope: "owner"`, which reads the owner's fields.
+   * Omitted: every owner path is refused.
+   */
+  readonly ownerClassId?: string;
 }
 
 interface Checker {
@@ -235,19 +242,37 @@ const resolveHop = (
   return field;
 };
 
+const scopeIssue = (
+  checker: Checker,
+  path: Path,
+  at: Segments
+): ConditionIssue | undefined => {
+  if (path.scope === "record") {
+    return issue(
+      "scopeNotAllowed",
+      [...at, "scope"],
+      "A record-scoped path may stand only on the right of a comparison."
+    );
+  }
+
+  return path.scope === "owner" && checker.options.ownerClassId === undefined
+    ? issue(
+        "scopeNotAllowed",
+        [...at, "scope"],
+        `The ${checker.rules.profile} profile cannot read an owner here: owner paths stand only in the part conditions of aggregate record rules.`
+      )
+    : undefined;
+};
+
 const typePath = (
   checker: Checker,
   path: Path,
   at: Segments
 ): TypedPath | undefined => {
-  if (path.scope !== undefined) {
-    checker.issues.push(
-      issue(
-        "scopeNotAllowed",
-        [...at, "scope"],
-        "A record-scoped path may stand only on the right of a comparison."
-      )
-    );
+  const refused = scopeIssue(checker, path, at);
+
+  if (refused !== undefined) {
+    checker.issues.push(refused);
 
     return undefined;
   }
@@ -258,7 +283,11 @@ const typePath = (
 
   const fields: FieldInfo[] = [];
   const classes: string[] = [];
-  let classId: string = checker.options.classId;
+
+  const owner =
+    path.scope === "owner" ? checker.options.ownerClassId : undefined;
+
+  let classId: string = owner ?? checker.options.classId;
 
   for (const [index, fieldId] of path.path.entries()) {
     const field = resolveHop(checker, classId, fieldId, [...at, "path", index]);
@@ -289,15 +318,19 @@ const typePath = (
 
   const [field] = fields.slice(-1);
 
-  return field === undefined
-    ? undefined
-    : {
-        classes,
-        field,
-        fields,
-        ids: path.path,
-        image: path.image === "previous" ? "previous" : "current",
-      };
+  if (field === undefined) {
+    return undefined;
+  }
+
+  const typed: TypedPath = {
+    classes,
+    field,
+    fields,
+    ids: path.path,
+    image: path.image === "previous" ? "previous" : "current",
+  };
+
+  return owner === undefined ? typed : { ...typed, scope: "owner" };
 };
 
 const requireContext = (
@@ -817,7 +850,21 @@ const typeAtom = (
     return typeSingle(checker, expr, at);
   }
 
-  return expr.op === "inPeriod" ? typePeriod(checker, expr, at) : undefined;
+  if (expr.op === "inPeriod") {
+    return typePeriod(checker, expr, at);
+  }
+
+  // anyPart, allParts and partsChanged belong to aggregate record rules
+  // only (Contracts 5.10), which `checkAggregateCondition` checks.
+  checker.issues.push(
+    issue(
+      "operatorNotAllowed",
+      [...at, "op"],
+      `The ${checker.rules.profile} profile cannot use ${expr.op}; only aggregate record rules can.`
+    )
+  );
+
+  return undefined;
 };
 
 const typeExpr = (

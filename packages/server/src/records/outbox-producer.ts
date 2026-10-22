@@ -271,6 +271,7 @@ export const OutboxSaveHooks: Layer.Layer<
           Effect.provideService(WorkerWakeup, wakeup),
           Effect.provideService(InstanceSettings, settings)
         ),
+      settle: () => Effect.void,
     });
   })
 );

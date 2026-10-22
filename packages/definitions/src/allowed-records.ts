@@ -46,7 +46,9 @@ export const allowedRecordsOf = (
 
 /**
  * A field type's JSON without its allowed-records setting, for comparing
- * the parts of a type that never change (Contracts 6.5).
+ * the parts of a type that never change (Contracts 6.5). An explicit
+ * `aggregate: false` is the absent default and is dropped too, so the
+ * owner-reference setting compares by meaning (4.9: fixed at creation).
  *
  * @param type - A field type or its JSON.
  * @returns The JSON without `allowedRecords`.
@@ -54,7 +56,11 @@ export const allowedRecordsOf = (
 export const withoutAllowedRecords = (type: TypeJson): TypeJson =>
   type !== undefined && isJsonObject(type)
     ? Object.fromEntries(
-        Object.entries(type).filter(([key]) => key !== "allowedRecords")
+        Object.entries(type).filter(
+          ([key, value]) =>
+            key !== "allowedRecords" &&
+            !(key === "aggregate" && value === false)
+        )
       )
     : type;
 

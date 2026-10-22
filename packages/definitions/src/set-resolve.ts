@@ -4,7 +4,7 @@
  * within the set and the sets it requires. Any problem refuses the whole
  * set; nothing is applied.
  */
-import type { FieldType } from "@std/values/field-type";
+import type { FieldType, FieldTypeOf } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 import { fail, isFailure, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
@@ -351,6 +351,9 @@ const isConditionEntry = (type: TypeEntry): type is ConditionEntry =>
   !isSimpleKind(type) && "class" in type;
 
 /** The field type of each bare kind name. */
+/** A reference type. */
+type ReferenceType = FieldTypeOf<"reference">;
+
 const SIMPLE_TYPES: Readonly<Record<SimpleKind, FieldType>> = {
   bigInteger: { kind: "bigInteger" },
   boolean: { kind: "boolean" },
@@ -381,13 +384,14 @@ const resolveType = (
       return undefined;
     }
 
+    const plain: ReferenceType = { kind: "reference", targetClassId };
+
+    const owner: ReferenceType =
+      type.aggregate === true ? { ...plain, aggregate: true } : plain;
+
     return type.allowedRecords === undefined
-      ? { kind: "reference", targetClassId }
-      : {
-          allowedRecords: type.allowedRecords,
-          kind: "reference",
-          targetClassId,
-        };
+      ? owner
+      : { ...owner, allowedRecords: type.allowedRecords };
   }
 
   if (isConditionEntry(type)) {

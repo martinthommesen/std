@@ -11,6 +11,7 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
 import { Authentication } from "./authentication.ts";
+import { AggregateNotSettled } from "./errors/aggregate-not-settled.ts";
 import { HookDepthExceeded } from "./errors/hook-depth-exceeded.ts";
 import { InvalidCursor } from "./errors/invalid-cursor.ts";
 import { InvalidFilter } from "./errors/invalid-filter.ts";
@@ -200,14 +201,16 @@ const readErrors = [
 ] as const;
 
 /**
- * What record rules add to every write (Contracts 4.1, 4.10): a `refuse`
- * action's error, and the refusals of nested saves.
+ * What record rules add to every write (Contracts 4.1, 4.9, 4.10): a
+ * `refuse` action's error, the refusals of nested saves, and an aggregate
+ * that does not settle.
  */
 const ruleErrors = [
   RuleRefused,
   InvalidTransition,
   RecordInSave,
   HookDepthExceeded,
+  AggregateNotSettled,
 ] as const;
 
 /**

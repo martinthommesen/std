@@ -131,9 +131,11 @@ export const SimpleKindSchema = Literals([
 /**
  * A reference type in a file names its target table and, optionally, its
  * allowed-records condition, a JSON AST over the target with field IDs, as
- * access-rule conditions are written (decision 0020).
+ * access-rule conditions are written (decision 0020). `aggregate: true`
+ * makes it its table's owner reference (Contracts 4.9, 6.5).
  */
 export const ReferenceEntrySchema = Struct({
+  aggregate: optionalKey(SchemaBoolean),
   allowedRecords: optionalKey(ConditionSchema),
   kind: Literal("reference"),
   target: SchemaString,

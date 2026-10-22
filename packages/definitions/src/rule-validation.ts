@@ -25,10 +25,16 @@
  * it selects are not being saved.
  */
 import { decodeIn } from "@std/values/codec";
+import { isOwnerReferenceType } from "@std/values/field-type";
 import type { FieldKind, FieldType } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
 
-import { conditionProblems } from "./condition-view.ts";
+import { isPartClassOf, ownsParts } from "./aggregates.ts";
+import {
+  aggregateConditionProblems,
+  conditionProblems,
+  partConditionProblems,
+} from "./condition-view.ts";
 import type { ConditionPurpose } from "./condition-view.ts";
 import { conditionPaths } from "./condition.ts";
 import type { Condition } from "./condition.ts";
@@ -78,6 +84,12 @@ interface ValueScope {
    * body, or a `before` rule's `set` (its values count as supplied, 3.9).
    */
   readonly callerWrite: boolean;
+  /**
+   * Whether a nested save creates the record (`createEach`): only then may
+   * the values set an owner reference, which never changes after create
+   * (4.9). `createParts` sets its parts' owner reference itself.
+   */
+  readonly creates?: boolean;
   /** Where in the rule the action is, for messages. */
   readonly at: string;
 }
@@ -229,14 +241,14 @@ const copyProblem = (
 ): string | undefined => {
   const { from, fieldId } = value.copy;
 
-  if (from === "owner") {
-    return checking.rule.phase === "aggregate"
-      ? undefined
-      : "copies from the owner, which only aggregate rules read";
+  if (from === "owner" && checking.rule.phase !== "aggregate") {
+    return "copies from the owner, which only aggregate rules read";
   }
 
+  // In an aggregate rule the rule's record is the owner being settled, so
+  // `owner` and `record` read the same image (4.9). [judgment]
   const classId =
-    from === "record" ? checking.rule.classId : scope.sourceClassId;
+    from === "source" ? scope.sourceClassId : checking.rule.classId;
 
   if (classId === null) {
     return "copies from source, but its action has no forEach";
@@ -336,6 +348,11 @@ const checkAssignment = (
 
   if (field.numberPrefix !== null) {
     invalid(checking, `${where} sets an auto-numbered field.`);
+  } else if (isOwnerReferenceType(field.type) && scope.creates !== true) {
+    invalid(
+      checking,
+      `${where} sets an owner reference, which only a create names: a part never changes owner, and createParts names the owner itself.`
+    );
   } else if (scope.callerWrite && field.readOnly) {
     invalid(
       checking,
@@ -437,6 +454,68 @@ const checkSelection = (
   );
 };
 
+/**
+ * Whether an aggregate action's class is a usable part class of the
+ * rule's class (4.9: settling touches no other aggregate).
+ *
+ * @param checking - The rule being checked.
+ * @param classId - The action's class.
+ * @param at - Where the action is, for messages.
+ * @returns True when usable.
+ */
+const partClass = (
+  checking: Checking,
+  classId: DefinitionId,
+  at: string
+): boolean => {
+  if (!usableClass(checking, classId, `${at} class`)) {
+    return false;
+  }
+
+  if (!isPartClassOf(checking.snapshot, classId, checking.rule.classId)) {
+    invalid(
+      checking,
+      `${at} class ${classId} is not a part class of the rule's class: its owner reference does not name it.`
+    );
+
+    return false;
+  }
+
+  return true;
+};
+
+/**
+ * Checks a `setParts.where` (4.10, 5.10): a condition on each part,
+ * evaluated in memory, so its part paths may follow references, and
+ * `scope: "owner"` paths read the owner; it uses neither `changed` nor a
+ * part's `previous`.
+ *
+ * @param checking - The rule being checked.
+ * @param classId - The part class.
+ * @param condition - The condition, or null.
+ * @param at - Where it is, for messages.
+ */
+const checkPartSelection = (
+  checking: Checking,
+  classId: DefinitionId,
+  condition: Condition | null,
+  at: string
+): void => {
+  if (condition !== null) {
+    conditionAt(
+      checking,
+      `${at} where`,
+      partConditionProblems(
+        checking.snapshot,
+        classId,
+        checking.rule.classId,
+        condition,
+        checking.purpose
+      )
+    );
+  }
+};
+
 const checkForEach = (
   checking: Checking,
   forEach: RuleForEach,
@@ -490,10 +569,14 @@ const checkCreateParts = (
       ? (action.forEach?.classId ?? null)
       : undefined;
 
-  if (
-    source !== undefined &&
-    usableClass(checking, action.classId, `${at} class`)
-  ) {
+  if (source !== undefined && partClass(checking, action.classId, at)) {
+    if (ownsParts(checking.snapshot, action.classId)) {
+      invalid(
+        checking,
+        `${at} creates records of ${action.classId}, which own parts themselves: settling creates only parts that own none.`
+      );
+    }
+
     checkValues(
       checking,
       {
@@ -539,6 +622,7 @@ const checkNestedSave = (
       {
         at,
         callerWrite: true,
+        creates: action.type === "createEach",
         nestedSave: true,
         sourceClassId: action.forEach.classId,
         targetClassId: target,
@@ -593,8 +677,8 @@ const checkAction = (
     }
 
     case "setParts": {
-      if (usableClass(checking, action.classId, `${at} class`)) {
-        checkSelection(checking, action.classId, action.where, `${at} where`);
+      if (partClass(checking, action.classId, at)) {
+        checkPartSelection(checking, action.classId, action.where, at);
         checkValues(
           checking,
           {
@@ -887,13 +971,20 @@ export const recordRuleProblems = (
     conditionAt(
       checking,
       "condition",
-      conditionProblems(
-        snapshot,
-        rule.classId,
-        rule.condition,
-        "recordRule",
-        purpose
-      )
+      rule.phase === "aggregate"
+        ? aggregateConditionProblems(
+            snapshot,
+            rule.classId,
+            rule.condition,
+            purpose
+          )
+        : conditionProblems(
+            snapshot,
+            rule.classId,
+            rule.condition,
+            "recordRule",
+            purpose
+          )
     );
   }
 

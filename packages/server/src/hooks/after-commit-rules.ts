@@ -44,6 +44,7 @@ import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
 import type { AfterWriteInput } from "../records/save-hooks.ts";
+import { finalizeTouchedAggregates } from "../records/save-pipeline.ts";
 import { loadRecord } from "../records/save-sql.ts";
 import { SaveStack } from "../records/save-stack.ts";
 import { readRows } from "../records/sql-run.ts";
@@ -298,6 +299,8 @@ export const runAfterCommitRule = Effect.fn("Rules.afterCommit")(
     const { timeZone } = yield* InstanceSettings;
     const depth = (yield* chainDepth(delivery.changeId)) + 1;
 
+    const access = (yield* WriteAccess).forActor(identity);
+
     yield* runSaveActions({
       cause: {
         kind: "after_commit",
@@ -314,11 +317,16 @@ export const runAfterCommitRule = Effect.fn("Rules.afterCommit")(
       snapshot,
     }).pipe(
       Effect.provideService(Actor, identity),
-      Effect.provideService(
-        WriteAccess,
-        (yield* WriteAccess).forActor(identity)
-      ),
+      Effect.provideService(WriteAccess, access),
       Effect.provideService(SaveStack, { depth, recordIds: new Set<string>() })
+    );
+
+    // Its saves start below the cause chain's depth, so none of them is an
+    // outermost save: the aggregates they touched are finalized here, in
+    // the delivery transaction (4.9).
+    yield* finalizeTouchedAggregates.pipe(
+      Effect.provideService(Actor, identity),
+      Effect.provideService(WriteAccess, access)
     );
 
     const outcome: AfterCommitOutcome = "ran";

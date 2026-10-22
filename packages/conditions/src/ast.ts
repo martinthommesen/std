@@ -38,8 +38,13 @@ export type Json = JsonValue;
 export interface Path {
   readonly path: readonly string[];
   readonly image?: "previous";
-  /** `record`: read the rule's record (record-rule `where` only). */
-  readonly scope?: "record";
+  /**
+   * `record`: read the rule's record (record-rule `where` only). `owner`:
+   * read the owner (`owner.f` in the text syntax), only inside `anyPart`
+   * and `allParts` of an aggregate record rule, and in its `setParts`
+   * conditions (Contracts 4.9, 5.10).
+   */
+  readonly scope?: "record" | "owner";
 }
 
 /** The comparison operators. */
@@ -160,6 +165,32 @@ export interface Changed {
   readonly arg: Path;
 }
 
+/**
+ * A quantifier over the owner's parts of a class and its descendants
+ * (Contracts 4.9, 5.10; aggregate record rules only): `anyPart` holds when
+ * some part matches `where`, `allParts` when every part does (true over no
+ * parts). Inside `where`, paths read the part, and `scope: "owner"` paths
+ * read the owner.
+ */
+export interface Quantifier {
+  readonly op: "anyPart" | "allParts";
+  /** The part class (a class whose owner reference names the owner's). */
+  readonly class: string;
+  readonly where: Expr;
+}
+
+/**
+ * The synthetic boolean `partsChanged.C` (Contracts 5.10; aggregate record
+ * rules only): true when a part of class C, or of a descendant, was
+ * created, updated or deleted in this transaction. [judgment: 5.10 names
+ * it as a synthetic field; the AST spells it as its own operator, since a
+ * path holds field IDs only]
+ */
+export interface PartsChanged {
+  readonly op: "partsChanged";
+  readonly class: string;
+}
+
 /** A condition (Contracts 5.2). */
 export type Expr =
   | Junction
@@ -170,7 +201,9 @@ export type Expr =
   | Empty
   | Pattern
   | InPeriod
-  | Changed;
+  | Changed
+  | Quantifier
+  | PartsChanged;
 
 /** Every operator name, for coverage and error messages. */
 export const OPERATORS = [
@@ -195,6 +228,9 @@ export const OPERATORS = [
   "endsWith",
   "inPeriod",
   "changed",
+  "anyPart",
+  "allParts",
+  "partsChanged",
 ] as const;
 
 /** An operator name. */
@@ -240,7 +276,7 @@ export const isStableId = (text: string): boolean => UUID_TEXT.test(text);
 export const PathSchema = Struct({
   image: optionalKey(Literal("previous")),
   path: SchemaArray(StableIdSchema),
-  scope: optionalKey(Literal("record")),
+  scope: optionalKey(Literals(["record", "owner"])),
 });
 
 const LiteralValueSchema = Struct({ value: JsonSchema });
@@ -304,6 +340,12 @@ export const ExprSchema: Codec<Expr> = Union([
     }),
   }),
   Struct({ arg: PathSchema, op: Literal("changed") }),
+  Struct({
+    class: StableIdSchema,
+    op: Literals(["anyPart", "allParts"]),
+    where: suspend((): Codec<Expr> => ExprSchema),
+  }),
+  Struct({ class: StableIdSchema, op: Literal("partsChanged") }),
 ]);
 
 const decodeStrict = decodeUnknownResult(ExprSchema, {
@@ -352,6 +394,10 @@ export const jsonDepth = (json: JsonValue): number => {
 const childrenOf = (expr: Expr): readonly Expr[] => {
   if (expr.op === "and" || expr.op === "or") {
     return expr.args;
+  }
+
+  if (expr.op === "anyPart" || expr.op === "allParts") {
+    return [expr.where];
   }
 
   return expr.op === "not" ? [expr.arg] : [];
@@ -480,3 +526,12 @@ export const isEmptyTest = (expr: Expr): expr is Empty =>
  */
 export const isPatternTest = (expr: Expr): expr is Pattern =>
   PATTERN_OPERATORS.has(expr.op);
+
+/**
+ * Whether a condition is `anyPart` or `allParts`.
+ *
+ * @param expr - A condition.
+ * @returns True for quantifiers.
+ */
+export const isQuantifier = (expr: Expr): expr is Quantifier =>
+  expr.op === "anyPart" || expr.op === "allParts";
