@@ -11,11 +11,12 @@
  * cell of it is restricted, and the form does not show the internal cost
  * (no field, or a restricted one); the admin's form shows it. (The
  * shipped incident list layout has no internal cost column; its form
- * layout does.) Through the whole run
- * there must be no uncaught exception, no console error and no failed
- * same-origin request: none that fails to load, and no answer of 5xx, or
- * of 4xx outside the API (the API's own refusals, such as the `401` of
- * `GET /api/v1/auth/me` before sign-in, are the app's to handle).
+ * layout does.) Through the whole run there must be no uncaught
+ * exception, no console error and no failed same-origin request: none
+ * that fails to load and no 4xx or 5xx answer, under `/api/` too. The one
+ * allowed exception: the app's session check, `GET /api/v1/auth/me`,
+ * answered `401` before the sign-in form is submitted, and Chromium's
+ * console line for it.
  *
  * It starts nothing: run it with `vitest-compose-smoke.config.ts` after
  * `docker compose up` (`.github/workflows/quickstart-compose.yml`).
@@ -51,15 +52,20 @@ interface DemoUser {
   readonly password: Redacted.Redacted;
 }
 
-const API_PATH = "/api/";
-
 /** A console error Chromium logs for every 4xx or 5xx response. */
 const FAILED_RESOURCE =
   /^Failed to load resource: the server responded with a status of (?<status>\d{3})/u;
 
 const CLIENT_ERROR = 400;
 
-const SERVER_ERROR = 500;
+/**
+ * The app's session check (`GET /api/v1/auth/me`): before sign-in its
+ * `401 Unauthenticated` is the expected answer, which sends the app to the
+ * sign-in page (`apps/web/src/command.ts`).
+ */
+const SESSION_CHECK = "/api/v1/auth/me";
+
+const UNAUTHENTICATED = 401;
 
 /** The column agents may never read (`examples/helpdesk/v2/access.yaml`). */
 const INTERNAL_COST = "Internal cost";
@@ -70,33 +76,65 @@ const INTERNAL_COST_FIELD = "internal_cost";
 /** How a form shows a field the caller may not read. */
 const RESTRICTED = "restricted";
 
-/**
- * Whether a same-origin response status is a failure: any 5xx, and a 4xx
- * outside the API.
- *
- * @param path - The request's path.
- * @param status - The response status.
- * @returns True for a failure.
- */
-const isFailedStatus = (path: string, status: number): boolean =>
-  status >= SERVER_ERROR ||
-  (status >= CLIENT_ERROR && !path.startsWith(API_PATH));
+/** A same-origin answer the page received. */
+interface Answer {
+  readonly method: string;
+  readonly path: string;
+  readonly status: number;
+  /** Whether it came before the sign-in form was submitted. */
+  readonly beforeSignIn: boolean;
+}
 
 /**
- * Records what goes wrong on a page: uncaught exceptions, console errors,
- * same-origin requests that fail and same-origin failure statuses. The
- * console error Chromium logs for an API refusal the response check lets
- * through is left out, since the response check judges it.
+ * The only refusal the run allows: the session check's `401` before the
+ * sign-in form is submitted.
+ *
+ * @param answer - A same-origin answer.
+ * @returns True for exactly that answer.
+ */
+const isExpectedRefusal = (answer: Answer): boolean =>
+  answer.beforeSignIn &&
+  answer.method === "GET" &&
+  answer.path === SESSION_CHECK &&
+  answer.status === UNAUTHENTICATED;
+
+/**
+ * Whether a same-origin answer is a failure: every 4xx and 5xx, under
+ * `/api/` too, except the expected refusal.
+ *
+ * @param answer - A same-origin answer.
+ * @returns True for a failure.
+ */
+const isFailedAnswer = (answer: Answer): boolean =>
+  answer.status >= CLIENT_ERROR && !isExpectedRefusal(answer);
+
+/** What goes wrong on a page, and when the sign-in form is submitted. */
+interface ProblemWatch {
+  /** Marks the moment the sign-in form is submitted. */
+  readonly signInSubmitted: () => void;
+  /** Everything that went wrong so far. */
+  readonly problems: () => readonly string[];
+}
+
+/**
+ * Watches a page for uncaught exceptions, console errors, same-origin
+ * requests that fail and same-origin failure statuses. The expected
+ * refusal is no problem, and neither is the console line Chromium logs
+ * for it: one such line per expected refusal, logged before sign-in, for
+ * the session check's URL and `401`. Every other console error is.
  *
  * @param page - The page.
  * @param origin - The app's origin.
- * @returns The problems so far, read at the end.
+ * @returns The watch.
  */
-const watchProblems = (page: Page, origin: string): readonly string[] => {
+const watchProblems = (page: Page, origin: string): ProblemWatch => {
   const problems: string[] = [];
+  let beforeSignIn = true;
+  let expectedRefusals = 0;
+  let refusalLines = 0;
 
   const sameOrigin = (url: string): URL | undefined => {
-    const parsed = new URL(url);
+    const parsed = new URL(url, origin);
 
     return parsed.origin === origin ? parsed : undefined;
   };
@@ -110,18 +148,18 @@ const watchProblems = (page: Page, origin: string): readonly string[] => {
       return;
     }
 
-    const where = sameOrigin(message.location().url || "about:blank");
+    const { url } = message.location();
     const status = FAILED_RESOURCE.exec(message.text())?.groups?.status;
 
-    const judgedByResponse =
-      where !== undefined &&
-      status !== undefined &&
-      !isFailedStatus(where.pathname, Number(status));
+    const isRefusalLine =
+      beforeSignIn &&
+      sameOrigin(url || "about:blank")?.pathname === SESSION_CHECK &&
+      Number(status) === UNAUTHENTICATED;
 
-    if (!judgedByResponse) {
-      problems.push(
-        `console error: ${message.text()} (${message.location().url})`
-      );
+    if (isRefusalLine) {
+      refusalLines += 1;
+    } else {
+      problems.push(`console error: ${message.text()} (${url})`);
     }
   });
 
@@ -136,17 +174,38 @@ const watchProblems = (page: Page, origin: string): readonly string[] => {
   page.on("response", (response: Response) => {
     const where = sameOrigin(response.url());
 
-    if (
-      where !== undefined &&
-      isFailedStatus(where.pathname, response.status())
-    ) {
+    if (where === undefined) {
+      return;
+    }
+
+    const answer: Answer = {
+      beforeSignIn,
+      method: response.request().method(),
+      path: where.pathname,
+      status: response.status(),
+    };
+
+    if (isExpectedRefusal(answer)) {
+      expectedRefusals += 1;
+    } else if (isFailedAnswer(answer)) {
       problems.push(
-        `failed load: ${response.request().method()} ${response.url()} -> ${response.status()}`
+        `failed load: ${answer.method} ${response.url()} -> ${answer.status}`
       );
     }
   });
 
-  return problems;
+  return {
+    problems: () =>
+      refusalLines > expectedRefusals
+        ? [
+            ...problems,
+            `console error: ${refusalLines} "status of 401" lines for ${SESSION_CHECK}, but ${expectedRefusals} such refusals`,
+          ]
+        : [...problems],
+    signInSubmitted: () => {
+      beforeSignIn = false;
+    },
+  };
 };
 
 /**
@@ -168,7 +227,7 @@ const visitIncidents = async (
 ) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  const problems = watchProblems(page, origin);
+  const watch = watchProblems(page, origin);
   let step = "open / and land on the sign-in page";
 
   try {
@@ -178,6 +237,7 @@ const visitIncidents = async (
     step = "sign in through the form and reach the shell";
     await page.getByLabel("Login").fill(user.login);
     await page.getByLabel("Password").fill(Redacted.value(user.password));
+    watch.signInSubmitted();
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(`${origin}/`);
     await page
@@ -214,9 +274,10 @@ const visitIncidents = async (
 
     const formCost = await formFieldState(page, INTERNAL_COST_FIELD);
 
-    return { costs, formCost, problems: [...problems], rows };
+    return { costs, formCost, problems: watch.problems(), rows };
   } catch (error) {
     const [reason = ""] = String(error).split("\n");
+    const problems = watch.problems();
     const seen = problems.length === 0 ? "none" : problems.join("; ");
 
     throw new Error(
@@ -240,15 +301,36 @@ const settings = Config.all({
   ),
 });
 
+/**
+ * An answer, for the unit test of the rule.
+ *
+ * @param path - The path.
+ * @param status - The status.
+ * @param beforeSignIn - Before the sign-in form was submitted.
+ * @param method - The method.
+ * @returns The answer.
+ */
+const answer = (
+  path: string,
+  status: number,
+  beforeSignIn = false,
+  method = "GET"
+): Answer => ({ beforeSignIn, method, path, status });
+
 describe("compose smoke", () => {
-  it("counts any 5xx, and a 4xx outside the API, as a failed load", () => {
-    assert.isTrue(isFailedStatus("/assets/index-x.js", 404));
-    assert.isTrue(isFailedStatus("/", 500));
+  it("allows only the session check's 401 before sign-in; every other 4xx or 5xx fails", () => {
+    assert.isFalse(isFailedAnswer(answer(SESSION_CHECK, 401, true)));
+    assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 401)));
+    assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 401, true, "POST")));
+    assert.isTrue(isFailedAnswer(answer(SESSION_CHECK, 403, true)));
+    assert.isTrue(isFailedAnswer(answer("/api/v1/auth/me/", 401, true)));
     assert.isTrue(
-      isFailedStatus("/api/v1/tables/helpdesk.incident/records", 502)
+      isFailedAnswer(answer("/api/v1/tables/helpdesk.incident/records", 403))
     );
-    assert.isFalse(isFailedStatus("/api/v1/auth/me", 401));
-    assert.isFalse(isFailedStatus("/assets/index-x.js", 200));
+    assert.isTrue(isFailedAnswer(answer("/api/v1/meta/tables", 401, true)));
+    assert.isTrue(isFailedAnswer(answer("/assets/index-x.js", 404, true)));
+    assert.isTrue(isFailedAnswer(answer("/", 500)));
+    assert.isFalse(isFailedAnswer(answer("/assets/index-x.js", 200)));
   });
 
   it.effect(

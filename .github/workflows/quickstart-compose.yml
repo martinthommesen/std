@@ -14,8 +14,10 @@
 # apps/web/vitest-compose-smoke.config.ts): for `admin` and `agent`, open
 # `/`, sign in by typing into the rendered form and clicking "Sign in", open
 # "Incident" from the navigation and see at least one incident, with no
-# uncaught exception, console error or failed same-origin load; the agent's
-# list has no internal cost column, or only restricted cells. Node, pnpm
+# uncaught exception, console error or failed same-origin load (any 4xx or
+# 5xx, the API's too, except the session check's 401 before sign-in); the
+# agent's list has no internal cost column, or only restricted cells, and
+# its incident form no readable internal cost. Node, pnpm
 # and Chromium are set up as in `ci.yml`, after the stack is up.
 #
 # This job skips the credential check (the execve trace of decision 0016):
