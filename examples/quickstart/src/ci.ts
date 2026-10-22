@@ -13,11 +13,15 @@
  * `std doctor`, and any nonzero exit fails this command. The server's log
  * is printed only when a step fails.
  *
- * Credentials: each script run runs under `strace -f -e trace=execve`
- * (`exec-trace.ts`), which records every program the script and its
- * descendants start, whatever started them. The run fails if any argument
- * holds one of the run's random passwords or an authorization header, if
- * any execve failed, or if the trace lacks curl, jq or the doctor command.
+ * Credentials: each script run runs under
+ * `strace -f -e trace=execve,execveat` (`exec-trace.ts`), which records
+ * every program the script and its descendants start, whatever started
+ * them. The run fails if any argument or program path holds one of the
+ * run's random passwords or a session token, if any call failed, if the
+ * trace has a line or call it cannot read, or if it lacks curl, jq or the
+ * doctor command. This guards against accidental regressions in the
+ * script, not a deliberately adversarial one, and covers only the script's
+ * descendants (decision 0016, "Threat model").
  *
  * Every command runs in its own process group, ended and awaited when its
  * step ends, also on interruption (`process-group.ts`): a SIGTERM to this

@@ -1,15 +1,27 @@
 /**
- * Tracing every program a script runs, to prove that no password reaches a
- * process's arguments (`ps`, `/proc/<pid>/cmdline`).
+ * Tracing every program a script runs, to catch a password or a session
+ * token in a process's arguments (`ps`, `/proc/<pid>/cmdline`).
  *
- * The script runs under `strace -f -e trace=execve`: `-f` follows every
- * descendant, so each execve shows up, whatever shell construct, PATH
- * trick or interpreter started it. The log is parsed here, and
- * `checkTrace` refuses any argument that holds a password (as is or
- * JSON-escaped) or an `authorization: Bearer` header, any failed execve,
- * and a trace that lacks the programs the run must have started, so an
- * empty or broken trace cannot pass. Problems name the program and the
- * argument's index, never the secret.
+ * Threat model. This guards against accidental regressions in our own
+ * example script: someone adding `--arg password`, a token in a header or
+ * cookie argument, or a new tool that takes a secret as an argument. It
+ * does not stop a deliberately adversarial script author, who can leak a
+ * secret in many ways no tracer sees (a file, a socket, the environment, a
+ * FIFO to a process started earlier). Coverage is limited to the script and
+ * its descendants: a process that already runs outside that tree is not
+ * traced.
+ *
+ * The script runs under `strace -f -e trace=execve,execveat`: `-f` follows
+ * every descendant, so every program start shows up, whatever shell
+ * construct, PATH trick or interpreter caused it. `trace-parse.ts` reads
+ * the log and fails closed. `checkTrace` then refuses any argument that
+ * holds a password (as is or JSON-escaped) or a token-shaped value (the
+ * server's session-token format, `sessionTokensIn`), any failed call, any
+ * string or list strace shortened, any unreadable line, and a trace that
+ * lacks the programs the run must have started, so an empty or broken
+ * trace cannot pass. Every problem is redacted before it is reported: no
+ * password or token-shaped value reaches a diagnostic, program names
+ * included.
  *
  * Linux only (strace and ptrace). The log holds every argument, so it is
  * written to a private temporary directory, mode 0600, and removed when
@@ -26,29 +38,14 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { sessionTokensIn } from "@std/server/auth/sessions";
 import { Effect, Schema } from "effect";
 
 import { exitCode, spawnGroup } from "./process-group.ts";
-import { Cursor } from "./trace-cursor.ts";
+import type { Execve, Trace } from "./trace-parse.ts";
+import { parseTrace } from "./trace-parse.ts";
 
-/** One execve from the trace. */
-export interface Execve {
-  readonly pid: number;
-  /** The path passed to execve. */
-  readonly program: string;
-  readonly argv: readonly string[];
-  /** `0`, or the error, such as `-1 ENOENT (No such file or directory)`. */
-  readonly result: string;
-  /** Whether strace cut the argument list short. */
-  readonly truncated: boolean;
-}
-
-/** A parsed trace. */
-export interface Trace {
-  readonly calls: readonly Execve[];
-  /** Execve lines that did not parse. */
-  readonly unparsed: number;
-}
+export type { Execve, Trace } from "./trace-parse.ts";
 
 /** A program the trace must show, so an empty trace cannot pass. */
 export interface ExpectedProgram {
@@ -144,7 +141,7 @@ export const traceArguments = (
   "-f",
   "-qq",
   "-e",
-  "trace=execve",
+  "trace=execve,execveat",
   "-e",
   "signal=none",
   "-s",
@@ -156,150 +153,99 @@ export const traceArguments = (
   ...args,
 ];
 
-const EXECVE = /^(?<pid>\d+) +execve\((?<call>.*)$/u;
-const RESUMED = /^(?<pid>\d+) +<\.\.\. execve resumed>(?<rest>.*)$/u;
-const UNFINISHED = " <unfinished ...>";
-
 /**
- * Parses one complete execve call, from after `execve(`.
- * @param pid - The calling process.
- * @param call - `"<path>", [<argv>], <env>) = <result>`.
- * @returns The execve, or undefined when the text does not parse.
+ * Replaces every credential in a text: the passwords (as is and
+ * JSON-escaped) and every token-shaped value.
+ * @param text - A diagnostic.
+ * @param needles - The passwords and their escaped forms.
+ * @returns The text without them.
  */
-const parseCall = (pid: number, call: string): Execve | undefined => {
-  const cursor = new Cursor(call);
-  const program = cursor.string();
+const redact = (text: string, needles: readonly string[]): string => {
+  let redacted = text;
 
-  if (program === undefined || !cursor.skip(", [")) {
-    return undefined;
+  for (const needle of needles) {
+    redacted = redacted.replaceAll(needle, "<password>");
   }
 
-  const argv: string[] = [];
-  let truncated = false;
-
-  while (!cursor.skip("]")) {
-    cursor.skip(", ");
-
-    if (cursor.skip("...")) {
-      truncated = true;
-    } else {
-      const argument = cursor.string();
-
-      if (argument === undefined) {
-        return undefined;
-      }
-
-      argv.push(argument);
-    }
+  for (const token of sessionTokensIn(redacted)) {
+    redacted = redacted.replaceAll(token, "<token>");
   }
 
-  const { rest } = cursor;
-  const close = rest.indexOf(")");
-  const after = close === -1 ? "" : rest.slice(close + 1).trimStart();
-  const result = after.startsWith("=") ? after.slice(1).trim() : undefined;
-
-  return result === undefined
-    ? undefined
-    : { argv, pid, program, result, truncated };
+  return redacted;
 };
 
 /**
- * Every execve in a trace log, in order. A call strace split across lines
- * (`<unfinished ...>`, `<... execve resumed>`) is joined.
- * @param log - The log.
- * @returns The calls, and the execve lines that did not parse.
+ * The problems of one call.
+ * @param call - The call.
+ * @param number - Its position in the trace, from 1.
+ * @param needles - The passwords and their escaped forms.
+ * @returns Its problems, not yet redacted.
  */
-export const parseTrace = (log: string): Trace => {
-  const pending = new Map<number, string>();
-  const calls: Execve[] = [];
-  let unparsed = 0;
+const callProblems = (
+  call: Execve,
+  number: number,
+  needles: readonly string[]
+): readonly string[] => {
+  const shown = call.program === "" ? (call.argv[0] ?? "") : call.program;
+  const name = `${call.kind} ${number} (${path.basename(shown)})`;
 
-  const complete = (pid: number, call: string) => {
-    const parsed = parseCall(pid, call);
-
-    if (parsed === undefined) {
-      unparsed += 1;
-    } else {
-      calls.push(parsed);
+  const credentialIn = (text: string): string | undefined => {
+    if (needles.some((needle) => text.includes(needle))) {
+      return "a password";
     }
+
+    return sessionTokensIn(text).length > 0 ? "a session token" : undefined;
   };
 
-  for (const line of log.split("\n")) {
-    const started = EXECVE.exec(line)?.groups;
-    const resumed = RESUMED.exec(line)?.groups;
+  const inPath = credentialIn(call.program);
 
-    if (started !== undefined) {
-      const pid = Number(started.pid);
-      const call = started.call ?? "";
+  const pathLeak =
+    inPath === undefined ? [] : [`${name}: its path holds ${inPath}`];
 
-      if (call.endsWith(UNFINISHED)) {
-        pending.set(pid, call.slice(0, -UNFINISHED.length));
-      } else {
-        complete(pid, call);
-      }
-    } else if (resumed !== undefined) {
-      const pid = Number(resumed.pid);
+  const leaks = call.argv.flatMap((argument, index) => {
+    const found = credentialIn(argument);
 
-      complete(pid, `${pending.get(pid) ?? ""}${resumed.rest ?? ""}`);
-      pending.delete(pid);
-    }
-  }
+    return found === undefined
+      ? []
+      : [`${name}: argument ${index} holds ${found}`];
+  });
 
-  return { calls, unparsed: unparsed + pending.size };
+  const failed = call.result === "0" ? [] : [`${name} failed: ${call.result}`];
+  const cut = call.truncated ? [`${name}: strace shortened an argument`] : [];
+
+  return [...pathLeak, ...leaks, ...failed, ...cut];
 };
 
 /**
- * The problems in a parsed trace.
+ * The problems in a parsed trace, redacted.
  * @param trace - The parsed trace.
  * @param secrets - The run's passwords.
  * @param expected - Programs that must have run.
- * @returns One line per problem, naming programs and argument indexes but
- *   never a secret; empty when the trace is clean.
+ * @returns One line per problem, naming calls, programs and argument
+ *   indexes, with every credential replaced; empty when the trace is clean.
  */
 export const checkTrace = (
   trace: Trace,
   secrets: readonly string[],
   expected: readonly ExpectedProgram[]
 ): readonly string[] => {
-  const needles = secrets.flatMap((secret) => [
-    secret,
-    JSON.stringify(secret).slice(1, -1),
-  ]);
-
-  const perCall = trace.calls.flatMap((call, number) => {
-    const name = `execve ${number + 1} (${path.basename(call.program)})`;
-
-    const leaks = call.argv.flatMap((argument, index) => {
-      if (needles.some((needle) => argument.includes(needle))) {
-        return [`${name}: argument ${index} holds a password`];
-      }
-
-      return /bearer /iu.test(argument)
-        ? [`${name}: argument ${index} holds an authorization header`]
-        : [];
-    });
-
-    const failed = call.result.startsWith("0")
-      ? []
-      : [`${name} failed: ${call.result.split(" ")[1] ?? call.result}`];
-
-    const cut = call.truncated
-      ? [`${name}: strace shortened its arguments`]
-      : [];
-
-    return [...leaks, ...failed, ...cut];
-  });
-
-  const missing = expected.flatMap((program) =>
-    trace.calls.some((call) => program.ran(call))
-      ? []
-      : [`no execve of ${program.name} in the trace`]
+  const needles = secrets.flatMap((secret) =>
+    secret.length === 0 ? [] : [secret, JSON.stringify(secret).slice(1, -1)]
   );
 
-  const broken =
-    trace.unparsed > 0 ? [`${trace.unparsed} execve lines did not parse`] : [];
+  const missing = expected.flatMap((wanted) =>
+    trace.calls.some((call) => wanted.ran(call))
+      ? []
+      : [`no execve of ${wanted.name} in the trace`]
+  );
 
-  return [...perCall, ...missing, ...broken];
+  return [
+    ...trace.problems,
+    ...trace.calls.flatMap((call, index) =>
+      callProblems(call, index + 1, needles)
+    ),
+    ...missing,
+  ].map((problem) => redact(problem, needles));
 };
 
 /**

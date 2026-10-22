@@ -16,6 +16,13 @@ const ESCAPES = new Map([
   ["v", "\v"],
 ]);
 
+/** A string from the trace. */
+export interface TraceString {
+  readonly text: string;
+  /** strace printed `...` after it: the string is cut short. */
+  readonly truncated: boolean;
+}
+
 /** A cursor over one line of the trace. */
 export class Cursor {
   index = 0;
@@ -53,11 +60,12 @@ export class Cursor {
   }
 
   /**
-   * Reads a C string as strace prints it, `"..."` with escapes, and an
-   * optional `...` when strace shortened it.
-   * @returns Its bytes as a Latin-1 string, or undefined when there is none.
+   * Reads a C string as strace prints it, `"..."` with escapes, followed by
+   * `...` when strace shortened it.
+   * @returns Its text (the bytes decoded as UTF-8) and whether strace
+   *   shortened it; undefined when there is no complete string here.
    */
-  string(): string | undefined {
+  string(): TraceString | undefined {
     if (!this.skip('"')) {
       return undefined;
     }
@@ -68,10 +76,14 @@ export class Cursor {
       bytes.push(...this.#byte());
     }
 
-    this.index += 1;
-    this.skip("...");
+    if (!this.skip('"')) {
+      return undefined;
+    }
 
-    return Buffer.from(bytes).toString("utf-8");
+    return {
+      text: Buffer.from(bytes).toString("utf-8"),
+      truncated: this.skip("..."),
+    };
   }
 
   #byte(): readonly number[] {

@@ -330,6 +330,9 @@ importers:
       '@std/api':
         specifier: workspace:*
         version: link:../../packages/api
+      '@std/server':
+        specifier: workspace:*
+        version: link:../../packages/server
       '@std/testing':
         specifier: workspace:*
         version: link:../../packages/testing

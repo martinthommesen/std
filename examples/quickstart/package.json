@@ -15,6 +15,7 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@std/api": "workspace:*",
+    "@std/server": "workspace:*",
     "@std/testing": "workspace:*",
     "effect": "catalog:"
   },

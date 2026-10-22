@@ -3,9 +3,10 @@
  * (`src/exec-trace.ts`). Each probe plants a way of passing a password to a
  * program in a copy of `examples/quickstart.sh`, ahead of its first request,
  * and runs the copy under strace: whatever the shell construct, the trace
- * sees the execve and the check refuses it, naming the program and the
- * argument but never the password. Linux only, and strace must be
- * installed (the CI workflow installs it).
+ * sees the execve (or execveat) and the check refuses it, naming the
+ * program and the argument but never the password or the token. Linux
+ * only, and strace must be installed (the CI workflow installs it). The
+ * parser itself is tested in `trace-parse.test.ts`.
  */
 import { randomBytes } from "node:crypto";
 import {
@@ -20,12 +21,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assert, describe, it } from "@effect/vitest";
+import { newSessionToken } from "@std/server/auth/sessions";
 import { Effect } from "effect";
 
 import {
-  checkTrace,
   findStrace,
-  parseTrace,
   program,
   traceLog,
   traceScript,
@@ -83,6 +83,23 @@ const BYPASSES: readonly (readonly [string, string])[] = [
     `STD_DOCTOR_COMMAND="jq -n --arg p $STD_ADMIN_PASSWORD ."\nsh -c "$STD_DOCTOR_COMMAND" >/dev/null`,
   ],
   ["an unwrapped interpreter", `python3 -c 'pass' ${LEAK}`],
+  [
+    "execveat on a file descriptor",
+    `python3 -c 'import os; fd = os.open("/usr/bin/true", os.O_RDONLY); os.execve(fd, ["true", os.environ["STD_ADMIN_PASSWORD"]], {})'`,
+  ],
+];
+
+/** Ways to put a session token into some program's arguments. */
+const TOKEN_LEAKS: readonly (readonly [string, string])[] = [
+  ["a raw token argument", 'jq -n --arg t "$PROBE_TOKEN" . >/dev/null'],
+  [
+    "curl -b with a session cookie",
+    'curl -s -b "session=$PROBE_TOKEN" http://127.0.0.1:9/ || true',
+  ],
+  [
+    "a Cookie header argument",
+    'curl -s -H "Cookie: session=$PROBE_TOKEN" http://127.0.0.1:9/ || true',
+  ],
 ];
 
 /**
@@ -91,12 +108,14 @@ const BYPASSES: readonly (readonly [string, string])[] = [
  * @param planted - The planted lines.
  * @param secret - The administrator password the copy runs with.
  * @param expected - Programs the trace must show.
+ * @param env - Further environment variables.
  * @returns The traced run.
  */
 const traceProbe = (
   planted: string,
   secret: string,
-  expected: readonly ExpectedProgram[] = []
+  expected: readonly ExpectedProgram[] = [],
+  env: Readonly<Record<string, string>> = {}
 ) =>
   Effect.acquireRelease(
     Effect.sync(() => mkdtempSync(path.join(tmpdir(), "std-trace-probe-"))),
@@ -116,6 +135,7 @@ const traceProbe = (
       return traceScript({
         env: {
           ...process.env,
+          ...env,
           STD_ADMIN_PASSWORD: secret,
           STD_URL: "http://127.0.0.1:9",
         },
@@ -137,7 +157,11 @@ const permissions = (target: string): string =>
 
 const secret = (): string => `probe-${randomBytes(8).toString("hex")}`;
 
-const leakProblem = /^execve \d+ \([^)]+\): argument \d+ holds a password$/u;
+const leakProblem =
+  /^execve(?:at)? \d+ \([^)]*\): argument \d+ holds a password$/u;
+
+const tokenProblem =
+  /^execve(?:at)? \d+ \([^)]*\): argument \d+ holds a session token$/u;
 
 describe("exec-trace", () => {
   it("the anchor exists, so every probe is planted before the first request", () => {
@@ -152,29 +176,6 @@ describe("exec-trace", () => {
       assert.include(failure.message, "sudo apt-get install -y strace");
     })
   );
-
-  it("parses split calls, escapes and failures as strace prints them", () => {
-    const log = [
-      '10 execve("/usr/bin/jq", ["jq", "a\\"b\\nc", "\\303\\251"], 0x1 /* 3 vars */ <unfinished ...>',
-      '11 execve("/x", ["/x"], 0x1 /* 3 vars */) = -1 ENOENT (No such file or directory)',
-      "10 <... execve resumed>)           = 0",
-    ].join("\n");
-
-    const trace = parseTrace(log);
-
-    assert.strictEqual(trace.unparsed, 0);
-    assert.deepStrictEqual(
-      trace.calls.map((call) => [call.program, call.argv, call.result]),
-      [
-        ["/x", ["/x"], "-1 ENOENT (No such file or directory)"],
-        ["/usr/bin/jq", ["jq", 'a"b\nc', "é"], "0"],
-      ]
-    );
-    assert.deepStrictEqual(checkTrace(trace, [], [program("curl")]), [
-      "execve 1 (x) failed: ENOENT",
-      "no execve of curl in the trace",
-    ]);
-  });
 
   it.live("the trace log is private and removed afterwards", () =>
     Effect.gen(function* privateLog() {
@@ -230,7 +231,9 @@ describe("exec-trace", () => {
 
       assert.isTrue(
         run.problems.some((problem) =>
-          problem.endsWith("(quickstart-probe) failed: ENOENT")
+          problem.endsWith(
+            "(quickstart-probe) failed: -1 ENOENT (No such file or directory)"
+          )
         ),
         JSON.stringify(run.problems)
       );
@@ -249,6 +252,58 @@ describe("exec-trace", () => {
       assert.isTrue(run.problems.some((problem) => leakProblem.test(problem)));
       assert.isFalse(
         run.problems.some((problem) => problem.includes("probe\\"))
+      );
+    })
+  );
+
+  it.live("the execveat probe is seen as an execveat", () =>
+    Effect.gen(function* execveat() {
+      const [, planted] = BYPASSES.at(-1) ?? ["", ""];
+      const run = yield* traceProbe(planted, secret());
+
+      assert.isTrue(
+        run.problems.some((problem) =>
+          /^execveat \d+ \(true\): argument 1 holds a password$/u.test(problem)
+        ),
+        JSON.stringify(run.problems)
+      );
+    })
+  );
+
+  it.live.each(TOKEN_LEAKS)("refuses %s", ([, planted]) =>
+    Effect.gen(function* token() {
+      const value = newSessionToken();
+
+      const run = yield* traceProbe(planted, secret(), [], {
+        PROBE_TOKEN: value,
+      });
+
+      assert.isTrue(
+        run.problems.some((problem) => tokenProblem.test(problem)),
+        JSON.stringify(run.problems)
+      );
+      assert.isFalse(run.problems.some((problem) => problem.includes(value)));
+    })
+  );
+
+  it.live("a password in a program's name is redacted from every problem", () =>
+    Effect.gen(function* programName() {
+      const password = secret();
+
+      const run = yield* traceProbe(
+        `probe_dir=$(mktemp -d)\nln -s /usr/bin/true "$probe_dir/x-$STD_ADMIN_PASSWORD"\n"$probe_dir/x-$STD_ADMIN_PASSWORD"\nrm -rf "$probe_dir"`,
+        password
+      );
+
+      assert.isTrue(
+        run.problems.some(
+          (problem) =>
+            problem.startsWith("execve") && problem.includes("(x-<password>)")
+        ),
+        JSON.stringify(run.problems)
+      );
+      assert.isFalse(
+        run.problems.some((problem) => problem.includes(password))
       );
     })
   );

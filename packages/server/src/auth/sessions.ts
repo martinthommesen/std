@@ -42,10 +42,44 @@ import { userTables } from "./user-table.ts";
 /** How long a session lasts. [judgment] */
 export const SESSION_LIFETIME = Duration.hours(12);
 
-const TOKEN_BYTES = 32;
+/** Random bytes in a session token. */
+export const SESSION_TOKEN_BYTES = 32;
 
-/** A token as issued: 43 characters of unpadded base64url. */
-const TOKEN_FORMAT = /^[\w-]{43}$/u;
+/**
+ * The length of a token as issued: unpadded base64url of
+ * `SESSION_TOKEN_BYTES` bytes, 6 bits per character (43).
+ */
+export const SESSION_TOKEN_LENGTH = Math.ceil((SESSION_TOKEN_BYTES * 8) / 6);
+
+/** A token as issued: `SESSION_TOKEN_LENGTH` characters of base64url. */
+const TOKEN_FORMAT = new RegExp(`^[\\w-]{${SESSION_TOKEN_LENGTH}}$`, "u");
+
+/**
+ * A token-shaped run inside a longer text: exactly `SESSION_TOKEN_LENGTH`
+ * base64url characters, with none right before or after.
+ */
+const TOKEN_IN_TEXT = new RegExp(
+  `(?<![\\w-])[\\w-]{${SESSION_TOKEN_LENGTH}}(?![\\w-])`,
+  "gu"
+);
+
+/**
+ * A new session token: `SESSION_TOKEN_BYTES` random bytes as unpadded
+ * base64url. Sign-in issues these; tests and tools that look for tokens
+ * use `sessionTokensIn`, derived from the same constants.
+ * @returns The token text.
+ */
+export const newSessionToken = (): string =>
+  randomBytes(SESSION_TOKEN_BYTES).toString("base64url");
+
+/**
+ * The token-shaped runs in a text, for tools that must not leak tokens
+ * (the quickstart's execve trace).
+ * @param text - Any text.
+ * @returns Each run of exactly `SESSION_TOKEN_LENGTH` base64url characters.
+ */
+export const sessionTokensIn = (text: string): readonly string[] =>
+  text.match(TOKEN_IN_TEXT) ?? [];
 
 /** A new session. */
 export interface Session {
@@ -105,7 +139,7 @@ FOR SHARE OF "u"`
     return yield* new InvalidCredentials();
   }
 
-  const token = randomBytes(TOKEN_BYTES).toString("base64url");
+  const token = newSessionToken();
   const now = yield* Clock.currentTimeMillis;
   const expiresAt = now + Duration.toMillis(SESSION_LIFETIME);
 
