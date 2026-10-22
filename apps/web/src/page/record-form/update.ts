@@ -2236,27 +2236,28 @@ const receiveSave = (
     return { model };
   }
 
-  if (isCreating(model)) {
-    return sawRevision(
-      {
-        commands: [
-          NavigateAway({
-            url: recordRouter({ id: saved.id, table: model.table }),
-          }),
-        ],
-        model: modifyFields(model, {
-          edits: () => ({}),
-          submission: () => Submission.Saved({ isVisible: true }),
+  const wasCreating = isCreating(model);
+
+  // NOTE: after a create the page becomes the new record's form (decision
+  // 0020): the address it moves to names this record, so the app keeps
+  // the page, and the edits made while the create was in flight with it.
+  const navigation = wasCreating
+    ? [
+        NavigateAway({
+          url: recordRouter({ id: saved.id, table: model.table }),
         }),
-      },
-      maybeRevision
-    );
-  }
+      ]
+    : [];
+
+  const editing = modifyFields(model, {
+    mode: () => FormMode.Edit({ recordId: saved.id }),
+  });
 
   if (!isVisibleRecord(saved)) {
     return sawRevision(
       {
-        model: modifyFields(model, {
+        commands: navigation,
+        model: modifyFields(editing, {
           edits: () => ({}),
           record: () => StoredRecord.Failure({ error: "NotFound" }),
           submission: () => Submission.Saved({ isVisible: false }),
@@ -2274,7 +2275,7 @@ const receiveSave = (
     ),
   };
 
-  const stored = modifyFields(model, {
+  const stored = modifyFields(editing, {
     droppedEdits: () => [],
     edits: (edits) => editsAfterSave(edits, submission.sentEdits),
     maybeEditsFrom: () => Option.none(),
@@ -2285,18 +2286,41 @@ const receiveSave = (
     submission: () => Submission.Saved({ isVisible: true }),
   });
 
+  // NOTE: after a create, the later edits now judge by the update limits
+  // (a field writable only on create drops its edit with a note).
+  const asUpdate = wasCreating
+    ? withReconciled(
+        stored,
+        reconcileWithMetadata(
+          stored.edits,
+          fieldsOf(model),
+          fieldsOf(stored),
+          false
+        )
+      )
+    : stored;
+
   // NOTE: the later edits now apply to the saved record; one it withholds
   // or shows read-only is dropped with a note, as after any reread.
   const rebased = withReconciled(
-    stored,
-    reconcileWithRecord(stored.edits, fieldsOf(stored), (field) =>
+    asUpdate,
+    reconcileWithRecord(asUpdate.edits, fieldsOf(asUpdate), (field) =>
       fieldShowOf(field, Option.some(withLabels))
     )
   );
 
+  const shown = Option.match(metaOf(rebased), {
+    onNone: () => rebased,
+    onSome: (meta) =>
+      wasCreating ? syncRelatedLists(rebased, meta.table) : rebased,
+  });
+
   return sawRevision(
-    Update.combine(resetPickerInputs(rebased), [
+    Update.combine(resetPickerInputs(shown), [
+      (stepModel) => ({ commands: navigation, model: stepModel }),
       refreshHistory,
+      requestClassMetadata,
+      setUpControls,
       refreshIfNewer(maybeRevision),
     ]),
     maybeRevision

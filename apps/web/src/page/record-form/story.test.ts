@@ -850,6 +850,103 @@ describe("creating", () => {
     );
   });
 
+  it("keeps edits made while the create is in flight: the page becomes the new record's form with them, and the next save sends them", () => {
+    const NEW_ID = "019a0000-0000-7000-8000-0000000f1099";
+
+    const sending = update(
+      after(
+        readyToCreate,
+        Message.UpdatedText({
+          fieldId: TICKET_FIELDS.shortDescription,
+          text: "A",
+        })
+      ),
+      Message.ClickedSave()
+    );
+
+    expect(described(sending.commands)).toStrictEqual(
+      described([
+        CreateRecord({
+          generation: 1,
+          revision: REVISION_5,
+          secrets: {},
+          table: TICKET,
+          values: { short_description: "A" },
+        }),
+      ])
+    );
+
+    // Typed before the answer: the same field, and another one.
+    const typedWhileCreating = after(
+      sending.model,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "AB",
+      }),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "Later",
+      })
+    );
+
+    const created = {
+      ...ticketRecord,
+      id: NEW_ID,
+      labels: {},
+      values: {
+        ...ticketRecord.values,
+        description: null,
+        short_description: "A",
+      },
+      version: 1,
+    };
+
+    story(
+      update,
+      given(typedWhileCreating),
+      message(
+        Message.SucceededSaveRecord({
+          generation: 1,
+          maybeRevision: Option.some(REVISION_5),
+          saved: created,
+        })
+      ),
+      expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
+      Command.expectHas(
+        NavigateAway({ url: `/tables/${TICKET}/records/${NEW_ID}` })
+      ),
+      Command.resolve(NavigateAway, Message.CompletedNavigateAway()),
+      model((page) => {
+        expect(page.mode).toStrictEqual(FormMode.Edit({ recordId: NEW_ID }));
+        expect(page.edits).toStrictEqual({
+          [TICKET_FIELDS.description]: FieldInput.Text({ text: "Later" }),
+          [TICKET_FIELDS.shortDescription]: FieldInput.Text({ text: "AB" }),
+        });
+        expect(page.droppedEdits).toStrictEqual([]);
+      }),
+      message(Message.ClickedSave()),
+      Command.expectExact(
+        UpdateRecord({
+          generation: 2,
+          recordId: NEW_ID,
+          revision: REVISION_5,
+          secrets: {},
+          table: TICKET,
+          values: { description: "Later", short_description: "AB" },
+          version: 1,
+        })
+      ),
+      Command.resolve(
+        UpdateRecord,
+        Message.SucceededSaveRecord({
+          generation: 2,
+          maybeRevision: Option.none(),
+          saved: { ...created, version: 2 },
+        })
+      )
+    );
+  });
+
   it("requires the required fields without a default before sending", () => {
     story(
       update,

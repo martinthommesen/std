@@ -314,7 +314,8 @@ export type History = typeof History.Type;
  * - `id`: the page's number among the pages the app opened; the app
  *   delivers a Command's answer only to the page that sent it.
  * - `table`: the endpoint table, from the route.
- * - `mode`: create, or edit a record by ID.
+ * - `mode`: create, or edit a record by ID; a successful create makes
+ *   the page the new record's form (decision 0020).
  * - `maybeAppRevision`: the latest revision the app had seen when the page
  *   opened, sent with the first metadata request.
  * - `metadata`: the endpoint's metadata and the revision it was built at,

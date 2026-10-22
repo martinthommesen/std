@@ -17,6 +17,7 @@ import {
   ReplaceUrl,
   SignOut,
 } from "./command.ts";
+import { FieldInput } from "./domain/form-input.ts";
 import { fakeStdApi } from "./fake-std-api.ts";
 import {
   ada,
@@ -47,6 +48,7 @@ import { Message as TableListMessage } from "./page/table-list/message.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
 import {
+  ASSET_FIELDS,
   REVISION_3,
   REVISION_4,
   revision,
@@ -1070,6 +1072,30 @@ describe("review fixes: pages and revisions", () => {
 
 const formOf = (app: Model) => signedIn(app).maybeRecordForm;
 
+/**
+ * A Message of the form page with number 1.
+ *
+ * @param formMessage - The form's Message.
+ * @returns The app's Message.
+ */
+const toForm = (formMessage: RecordFormMessage): Message =>
+  Message.GotRecordFormMessage({ message: formMessage, pageId: 1 });
+
+/**
+ * Applies Messages one after the other, keeping only the Model.
+ *
+ * @param start - The first Model.
+ * @param messages - The Messages.
+ * @returns The last Model.
+ */
+const afterAll = (start: Model, ...messages: readonly Message[]): Model => {
+  const [first, ...rest] = messages;
+
+  return first === undefined
+    ? start
+    : afterAll(update(start, first).model, ...rest);
+};
+
 describe("the form pages", () => {
   const RECORD_A = "019a0000-0000-7000-8000-00000000000a";
 
@@ -1140,6 +1166,67 @@ describe("the form pages", () => {
 
     expect(again.model).toStrictEqual(atRecordA.model);
     expect(formOf(toList.model)).toStrictEqual(Option.none());
+  });
+
+  it("a create's success keeps its page as the new record's form, with the edits typed while it was in flight", () => {
+    const created = afterAll(
+      update(
+        adaAtHome,
+        Message.ChangedUrl({ url: urlOf("/tables/acme.asset/new") })
+      ).model,
+      toForm(
+        RecordFormMessage.SucceededLoadFormMetadata({
+          revision: REVISION_3,
+          table: assetTable,
+        })
+      ),
+      toForm(
+        RecordFormMessage.UpdatedText({ fieldId: ASSET_FIELDS.name, text: "A" })
+      ),
+      toForm(RecordFormMessage.ClickedSave()),
+      // Typed before the answer.
+      toForm(
+        RecordFormMessage.UpdatedText({
+          fieldId: ASSET_FIELDS.name,
+          text: "AB",
+        })
+      ),
+      toForm(
+        RecordFormMessage.SucceededSaveRecord({
+          generation: 1,
+          maybeRevision: Option.none(),
+          saved: {
+            class: ASSETS,
+            id: RECORD_A,
+            values: { name: "A" },
+            version: 1,
+          },
+        })
+      )
+    );
+
+    // The page's NavigateAway comes back as the new address.
+    const arrived = update(
+      created,
+      Message.ChangedUrl({
+        url: urlOf(`/tables/acme.asset/records/${RECORD_A}`),
+      })
+    );
+
+    expect(
+      formOf(arrived.model).pipe(
+        Option.map((page) => [page.id, page.mode, page.edits])
+      )
+    ).toStrictEqual(
+      Option.some([
+        1,
+        FormMode.Edit({ recordId: RECORD_A }),
+        { [ASSET_FIELDS.name]: FieldInput.Text({ text: "AB" }) },
+      ])
+    );
+    expect(
+      (arrived.commands ?? []).map((command) => command.name)
+    ).not.toContain("LoadFormMetadata");
   });
 
   it("a form page's ended session sends the user to sign in, and back afterwards", () => {
