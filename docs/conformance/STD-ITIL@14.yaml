@@ -91,7 +91,7 @@ rows:
   - id: STD-ITIL@14/C14/14.2/priority-explicit-wins
     source: "Contracts 14.2 (first bullet); decision 0021, decision 53"
     level: mandatory
-    requirement: "An explicit priority (1 critical to 5 planning) in the same write as an impact or urgency change wins over the derived one, through every API."
+    requirement: "A write that names priority (1 critical to 5 planning), even with its current value, keeps it when the same write changes impact or urgency (the matrix rules keep supplied fields), through every API."
     status: pending
   - id: STD-ITIL@14/C14/14.2/priority-form-read-only
     source: "Contracts 14.2 (first bullet)"
@@ -164,7 +164,12 @@ rows:
   - id: STD-ITIL@14/C14/14.2/major-incident-priority
     source: "Contracts 14.2 (fourth bullet); Contracts 14.1"
     level: mandatory
-    requirement: "The incident form offers major_incident only while priority is 1; the APIs accept it at any priority."
+    requirement: "The incident form offers major_incident only while priority is 1; when a form edit drops priority below 1 with the flag set, the form clears it for a user who may write it and otherwise keeps it with a notice and lists the incident in the shipped filter of major incidents not at priority 1; the APIs accept the flag at any priority and never clear it."
+    status: pending
+  - id: STD-ITIL@14/C14/14.2/form-vs-api
+    source: "Contracts 14.1; Contracts 5.10"
+    level: mandatory
+    requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v2 and TMF621."
     status: pending
   - id: STD-ITIL@14/C14/14.2/major-incident-tmf621
     source: "Contracts 14.2 (fourth bullet); Contracts 11.2 troubleTicketCharacteristic"
