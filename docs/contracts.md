@@ -190,17 +190,17 @@ Resume:
 
 ### 1.7 Dependency checks
 
-- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), `grant_of` (grant to its role and permission), each registered when its feature lands.
+- `core.config_dependency (from_id, to_id, kind)` records every reference between config records, maintained in the same transaction as each config write. Kinds: `extends`, `field_of`, `references_table`, `condition_on` (a condition field to the class its conditions apply to), `index_on`, `display_field`, `layout_uses`, `condition_reads`, `rule_writes`, `access_rule_on`, `rule_role` (access rule to role), `choice_of`, `overrides`, `subscription_on` (subscription to its class), `grant_of` (grant to its role and permission), each registered when its feature lands.
 - Dependency checks read only config tables and run in the main transaction under `CONFIG_KEY`, so no concurrent write can add a dependent. Data counts run before it (1.4).
 
 | Operation | Refused when | Reported but allowed |
 | --- | --- | --- |
 | Rename | target is protected, or owned by core or an app and the caller is not its set | nothing |
 | Retire field | protected; display field; an active rule writes it; part of a multi-field unique index | layouts, conditions, access rules that read it |
-| Retire table | protected; has a child class not retired; a non-retired reference field points at it (whatever its own table's state, self-references included) | other dependents |
-| Reactivate field or table | a reference field that would be active points at a retired table | nothing |
+| Retire table | protected; has a child class not retired; a non-retired reference field points at it, or a non-retired condition field names it (whatever its own table's state, self-references included) | other dependents |
+| Reactivate field or table | a reference or condition field that would be active names a retired table | nothing |
 | Purge field | not retired; any non-retired dependent except layout entries and single-field indexes | count of non-null values (counted under `SCHEMA_KEY`) |
-| Purge table | not retired; a child class or incoming reference not purged; an access rule or subscription on it | row count (counted under `SCHEMA_KEY`) |
+| Purge table | not retired; a child class, incoming reference or condition field naming it not purged; an access rule or subscription on it | row count (counted under `SCHEMA_KEY`) |
 | Delete or retire role | protected; an active access rule names it (`rule_role`); for a delete, any access rule | user-role assignments; a deleted role's grants are deleted with it |
 | Tighten required, unique, max length, override | existing rows violate it (preflight, 1.4) |  |
 | Change type | always, in v0.1 |  |
@@ -359,7 +359,7 @@ Rule: a child may tighten an inherited field, never loosen it. Reason: every chi
 | Read-only | make editable read-only, never the reverse | record service |
 | Max length, numeric min and max | narrow only | record service |
 | Choices (Step 2) | a subset of the parent's values | record service |
-| Not overridable | name, ID, type, column, database nullability, unique, indexes, reference target, delete behavior |  |
+| Not overridable | name, ID, type, column, database nullability, unique, indexes, reference target, a condition field's class and profile, delete behavior |  |
 
 - No database CHECK enforces overrides in v0.1: it would sit on the parent's table and be rewritten whenever the subtree grows. [judgment]
 - Adding or tightening an override follows the 1.4 tightening pattern: take `SCHEMA_KEY` and run a preflight count before `CONFIG_KEY` (refused with the count if any record in the subtree violates it); the record service enforces it from the main commit; a follow-up `validate_override` step rechecks and sets enforcement. `doctor` reports violations.
@@ -774,6 +774,7 @@ type Value =
 - No null literal: emptiness is `empty`. `ne`, `notIn`, `notContains`, `notEmpty` are exactly `not` of their positive form.
 - When a condition is stored or edited it is **checked** against a class and a profile: field IDs exist and are not retired, operators fit the type and profile, literals convert under the type's rules (not the field's settings: a decimal literal may exceed the field's scale; a retired but existing choice is allowed; an integer outside the type's range is refused).
 - The not-retired check applies only when a condition is stored or edited. Stored conditions keep evaluating retired fields, whose columns still exist. Reason: skipping a deny rule that reads a retired field would fail open. Purge stays refused while any non-retired condition reads the field (1.7).
+- A **condition field** (6.5) stores conditions as record values. Its definition names the class they apply to and their profile; the profile is `filter`, the only one a record can store (decision 0005, "Condition fields"). A write that changes the value checks it as stored, in the caller's view: a field the caller can never read is unknown, exactly like an ID that names nothing (3.4), and the refusal is `ValidationFailed` with `InvalidValue` reason `invalidCondition` on the condition field, naming no field the condition names. Values hold field IDs, so a rename changes none. A retire leaves stored values as they are, like stored rule conditions; the check applies again when the value is written. Unlike rule conditions, record values have no `condition_reads` edges: nothing keeps a field they name from being retired or purged, and a value naming a purged field fails the check when it is next written. [judgment]
 - A text literal that converts to null is refused with a hint to use `empty` [judgment]. `in` lists hold at most 1,000 non-null elements [judgment]. Number literals keep their digits as text and never pass through a JS `number`.
 
 ### 5.3 Null, missing and empty
@@ -972,7 +973,7 @@ The representation of every type is fixed in Step 1, including types implemented
 | password | `text`, one-way hash | `{"set": bool}` | plaintext, hashed by the service | not readable | `{"set": false}` |
 | secret | `bytea`, encrypted envelope, key outside the database | `{"set": bool}` | plaintext; `null` clears | not readable | `{"set": false}` |
 | json | `jsonb` | any JSON value, keys in jsonb's order | finite numbers exactly representable as a double, integers within ±(2^53 - 1), no duplicate keys, no U+0000, nesting at most 1,000 deep, at most 1 MiB of canonical UTF-8 text [judgment]; `null` is SQL NULL | `unknown` | null |
-| condition | `jsonb` | AST (5.2) | AST checked against the field's profile and class | `Expr` | null |
+| condition | `jsonb` | AST (5.2) | AST checked against the field's class and profile, in the caller's view (5.2) | `Expr` | null |
 
 - Big integer and decimal are strings because common JSON parsers lose precision; JSON numbers are refused, not converted [judgment].
 - Json: duplicate keys and numbers not exactly representable as a double are refused, because `jsonb` keeps the last duplicate and keeps digits that `JSON.parse` rounds. The canonical output is jsonb's key order (shorter UTF-8 byte length first, then bytewise), written by `stringifyJson` because JS objects put integer-like keys first. A number is exactly representable when its literal denotes the same decimal value as the shortest round-trip form of the double it parses to, so `0.1` is accepted and `0.1000000000000000055511151231257827` is refused; integral values beyond ±(2^53 - 1), such as `1e300`, are refused as well. `jsonb` refuses `\u0000` itself. Both engines compare json values by jsonb equality. [judgment]
@@ -980,6 +981,7 @@ The representation of every type is fixed in Step 1, including types implemented
 - Adding a boolean field relies on `ADD COLUMN ... NOT NULL DEFAULT false` being catalog-only with no verification scan [checked: 0F probe 5 on 1,000,000 rows: `relfilenode` unchanged, 0.4 ms for the statement and 4.1 ms for the config commit, `seq_scan` unchanged; a volatile default rewrote the table in 448 ms; checked: `change-sets.test.ts` on 1,000,000 rows, also for `integer NOT NULL DEFAULT 1`: `relfilenode` unchanged, `seq_scan` unchanged, main transaction 3 ms; decision 0006].
 - System date-times come from one clock reading per transaction, already in whole milliseconds.
 - Password and secret conditions may use only `empty` and `notEmpty`, server-side.
+- Type settings: text and long text take `maxLength` and `caseSensitive`; integer, big integer and decimal take `min` and `max`, decimal also `precision` and `scale`; a reference names its target class (`targetClassId`; `target: <table>` in set files); a condition names the class whose fields its conditions may name (`classId`; `class: <table>` in set files) and its profile, which must be `filter` (5.2). Both class settings are required, must name an active class when the field is created, and add a dependency edge (1.7). Neither can be overridden or changed later.
 - History stores canonical JSON with the schema revision (4.2).
 - Deliberately later: duration, time of day, currency, multi-choice, multi-reference, attachment, comment log, rich text, email, URL and phone formats.
 
