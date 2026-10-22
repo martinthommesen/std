@@ -29,7 +29,7 @@ import {
   targetOf,
 } from "./condition.ts";
 import type { ConditionScope } from "./condition.ts";
-import { Message } from "./filter-builder.ts";
+import { Message, nodeElementId } from "./filter-builder.ts";
 import { FilterOperator, Junction, ValueSource } from "./model.ts";
 import type { Condition, FilterNode, Group, Model, Operand } from "./model.ts";
 import {
@@ -70,8 +70,7 @@ interface NodeContext {
   readonly problems: ReadonlyMap<number, string>;
 }
 
-const elementId = (model: Model, nodeId: number, part: string): string =>
-  `${model.id}-node-${nodeId}-${part}`;
+const elementId = nodeElementId;
 
 const groupsOf = (node: FilterNode): readonly Group[] => {
   if (node._tag === "Group") {

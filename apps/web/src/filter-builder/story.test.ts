@@ -1,6 +1,13 @@
 import type { Expr } from "@std/conditions/ast";
 import { Option, Result } from "effect";
-import { expectOutMessage, given, message, model, story } from "foldkit/story";
+import {
+  Command,
+  expectOutMessage,
+  given,
+  message,
+  model,
+  story,
+} from "foldkit/story";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +18,7 @@ import {
 } from "../table-fixture.ts";
 import type { ConditionScope } from "./condition.ts";
 import {
+  FocusProblem,
   Message,
   OutMessage,
   currentCondition,
@@ -403,7 +411,7 @@ describe("filter builder", () => {
     );
   });
 
-  it("does not apply values that do not convert; it shows the problems", () => {
+  it("does not apply values that do not convert; it shows the problems and moves focus to the first", () => {
     story(
       updateIn(assetsOnly),
       given(empty),
@@ -411,6 +419,14 @@ describe("filter builder", () => {
       onField(ASSET_FIELDS.sizeInches),
       typed("1.5"),
       message(Message.ClickedApply()),
+      Command.expectExact(
+        FocusProblem({
+          elementIds: ["value", "offset", "time", "field", "junction"].map(
+            (part) => `filter-node-${FIRST}-${part}`
+          ),
+        })
+      ),
+      Command.resolve(FocusProblem, Message.CompletedFocusProblem()),
       model((builder) => {
         expect(builder.isShowingProblems).toBeTruthy();
       })

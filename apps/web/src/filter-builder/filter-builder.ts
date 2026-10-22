@@ -14,8 +14,8 @@ import { DatePicker } from "@foldkit/ui";
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import type { MetaField } from "@std/definitions/table-metadata";
-import { Option, Result, Schema } from "effect";
-import { Update } from "foldkit";
+import { Effect, Option, Result, Schema } from "effect";
+import { Command, Dom, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
 import { modifyFields } from "foldkit/struct";
@@ -68,6 +68,7 @@ export const Message = defineMessageUnion({
   ClickedApply: {},
   ClickedClear: {},
   ClickedRemoveNode: { nodeId: Schema.Int },
+  CompletedFocusProblem: {},
   GotDatePickerMessage: {
     conditionId: Schema.Int,
     message: DatePicker.Message,
@@ -200,6 +201,43 @@ export const currentCondition = (model: Model, scope: ConditionScope) =>
   isEmptyFilter(model.root)
     ? Result.succeed(Option.none<Expr>())
     : Result.map(toCondition(model.root, scope), Option.some);
+
+/**
+ * The element ID of one part of a node's controls, such as its `value`
+ * input or its `legend`.
+ *
+ * @param model - The builder.
+ * @param nodeId - The condition or group.
+ * @param part - The part.
+ * @returns The ID.
+ */
+export const nodeElementId = (
+  model: Model,
+  nodeId: number,
+  part: string
+): string => `${model.id}-node-${nodeId}-${part}`;
+
+/**
+ * The controls focus may move to for a node's problem, the most telling
+ * first: the value a condition holds (its text, offset or time), then its
+ * field; a group's "all"/"any" choice.
+ */
+const PROBLEM_PARTS = ["value", "offset", "time", "field", "junction"];
+
+// COMMAND
+
+/**
+ * Moves focus to the first control of a node with a problem, after an
+ * "Apply" that found one: the first of the given element IDs that exists.
+ */
+export const FocusProblem = Command.define("FocusProblem", {
+  args: { elementIds: Schema.Array(Schema.String) },
+  execute: ({ elementIds }) =>
+    Effect.firstSuccessOf(
+      elementIds.map((elementId) => Dom.focus(`#${elementId}`))
+    ).pipe(Effect.ignore, Effect.as(Message.CompletedFocusProblem())),
+  messages: [Message.CompletedFocusProblem],
+});
 
 // UPDATE
 
@@ -548,7 +586,14 @@ const foldDatePicker = Update.foldChildAt({
 
 const apply = (model: Model, scope: ConditionScope): UpdateReturn =>
   Result.match(currentCondition(model, scope), {
-    onFailure: () => ({
+    onFailure: (problems) => ({
+      commands: problems.slice(0, 1).map((problem) =>
+        FocusProblem({
+          elementIds: PROBLEM_PARTS.map((part) =>
+            nodeElementId(model, problem.conditionId, part)
+          ),
+        })
+      ),
       model: modifyFields(model, { isShowingProblems: () => true }),
     }),
     onSuccess: (maybeCondition) => ({
@@ -640,6 +685,8 @@ export const update = (
     ClickedRemoveNode: ({ nodeId }) => ({
       model: modifyFields(model, { root: (root) => removeNode(root, nodeId) }),
     }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    CompletedFocusProblem: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotDatePickerMessage: ({ conditionId, message: pickerMessage }) =>
       foldDatePicker(model, conditionId, pickerMessage),

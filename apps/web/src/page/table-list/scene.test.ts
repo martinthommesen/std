@@ -17,6 +17,10 @@ import {
 } from "foldkit/scene";
 import { describe, it } from "vitest";
 
+import {
+  FocusProblem,
+  Message as BuilderMessage,
+} from "../../filter-builder/filter-builder.ts";
 import { ASSET_FIELDS, REVISION_3, assetTable } from "../../table-fixture.ts";
 import {
   LoadRecords,
@@ -289,6 +293,7 @@ describe("list page", () => {
         type(label("Value"), "1.5")
       ),
       click(role("button", { name: "Apply filter" })),
+      Command.resolve(FocusProblem, BuilderMessage.CompletedFocusProblem()),
       expect(
         within(role("group", { name: "Condition 1" }), text(/whole number/u))
       ).toExist()
