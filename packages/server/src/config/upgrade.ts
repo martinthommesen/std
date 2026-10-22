@@ -45,8 +45,12 @@ import { Effect } from "effect";
 import type { Scope } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { runDataMigrations } from "../platform/data-migrations.ts";
+import {
+  dataBatchSize,
+  runDataMigrations,
+} from "../platform/data-migrations.ts";
 import type {
+  DataBatchSizeInvalid,
   DataMigrationOutcome,
   DataMigrationServices,
 } from "../platform/data-migrations.ts";
@@ -179,6 +183,7 @@ type PlanServices = ChangeSetServices | Scope.Scope;
 
 /** Errors of `std upgrade`. */
 export type UpgradeError =
+  | DataBatchSizeInvalid
   | DataMigrationFailed
   | UpgradeIncomplete
   | UpgradeRefused
@@ -688,6 +693,9 @@ export const runUpgrade: (
   > {
     const pool = yield* SqlClient.SqlClient;
 
+    // Before anything runs: a bad batch size must not leave a half-run upgrade.
+    const batchSize = yield* dataBatchSize(options.dataBatchSize);
+
     yield* checkUpgradePreconditions(pool);
     const connection = yield* openUpgradeConnection;
     const computed = yield* computePlan(connection, options, []);
@@ -729,14 +737,10 @@ export const runUpgrade: (
 
     const sets = yield* applySets(connection, computed, options);
 
-    const dataMigrations = yield* runDataMigrations(
-      options.dataBatchSize === undefined
-        ? { migrations: options.migrations ?? PLATFORM_MIGRATIONS }
-        : {
-            batchSize: options.dataBatchSize,
-            migrations: options.migrations ?? PLATFORM_MIGRATIONS,
-          }
-    );
+    const dataMigrations = yield* runDataMigrations({
+      batchSize,
+      migrations: options.migrations ?? PLATFORM_MIGRATIONS,
+    });
 
     return { dataMigrations, migrations, plan, resumed, sets };
   },

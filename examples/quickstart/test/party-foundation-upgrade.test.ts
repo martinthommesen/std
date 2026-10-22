@@ -3,7 +3,8 @@
  * plan Step 3, workstream 3P; decision 0024): `v0.0.2`'s own `std upgrade`,
  * `std bootstrap-admin` and `std serve` make a database with 1,000 users;
  * this branch's `std upgrade` is killed (SIGKILL) inside the `data`
- * migration while users are created concurrently, servers refuse to start
+ * migration, while it waits at a barrier the test holds in its eighth
+ * batch and users are created concurrently; servers refuse to start
  * and `doctor` reports it, a rerun completes it while more users are
  * created, and a second rerun changes nothing. Every user ends with
  * exactly one individual, the backfilled ones with change entries naming
@@ -17,6 +18,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { Transactions } from "@std/server/sql/transactions";
 import { TestDatabase, testDatabaseLayer } from "@std/testing/test-database";
 import { Deferred, Effect, Fiber, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/sql";
@@ -34,8 +36,26 @@ const CONCURRENT_USERS = 6;
 /** `std upgrade`'s batch size (`DATA_BATCH_SIZE`). */
 const BATCH = 100;
 
-/** The count of changed records in a ledger row's progress. */
-const CHANGED = /"changed": (?<changed>\d+)/u;
+/** The batch the run is stopped in (0-based): seven batches commit first. */
+const BARRIER_BATCH = 7;
+
+/** `core.change`'s platform class and `core.user`, by stable ID. */
+const CHANGE_CLASS_ID = "edde151d-f204-4639-bcbf-a4793f86a219";
+const USER_CLASS_ID = "da385db7-b2b7-4a1d-a1a9-42e8e0bb7992";
+const SYSTEM_USER_ID = "1970f1d9-a830-4414-ba8e-210e07952a85";
+
+/** A change entry for version 2 of the user `$1`, the backfill's key. */
+const BARRIER_ENTRY = `INSERT INTO core."change" (id, class_id, version, created_at, created_by, updated_at, updated_by,
+    operation_id, record_id, record_class_id, record_version, kind, actor_id, cause, schema_revision, occurred_at, fields)
+  VALUES (uuidv7(), '${CHANGE_CLASS_ID}', 1, now(), '${SYSTEM_USER_ID}', now(), '${SYSTEM_USER_ID}',
+    uuidv7(), $1::uuid, '${USER_CLASS_ID}', 2, 'update', '${SYSTEM_USER_ID}', '{"kind": "system"}', 0, now(), '{}')`;
+
+/** Ends the barrier transaction with a rollback. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+class BarrierReleased extends Schema.TaggedError<
+  BarrierReleased,
+  { readonly brand: unique symbol }
+>()("BarrierReleased", {}) {}
 
 const ADMIN_PASSWORD = `admin-${randomBytes(8).toString("hex")}`;
 
@@ -230,6 +250,13 @@ const ledger = values(
   "SELECT (to_jsonb(m) ->> 'state') || ' ' || COALESCE(to_jsonb(m) ->> 'progress', '') AS value FROM core.platform_migration AS m WHERE id = 12"
 ).pipe(Effect.map(([row]) => row ?? ""));
 
+/** Whether this branch's `std upgrade` waits for a lock. */
+const upgradeWaitsForLock = count(
+  `SELECT count(*)::text AS value FROM pg_stat_activity
+   WHERE datname = current_database() AND application_name = 'std-cli'
+     AND wait_event_type = 'Lock'`
+).pipe(Effect.map((waiting) => waiting > 0));
+
 const cliGone = count(
   `SELECT count(*)::text AS value FROM pg_stat_activity
    WHERE datname = current_database() AND application_name = 'std-cli'`
@@ -279,38 +306,62 @@ describe("party-foundation", () => {
               OLD_USERS
             );
 
-            // This branch's upgrade, stopped (SIGSTOP) once a batch of the
-            // data migration committed, then killed (SIGKILL): mid-migration.
-            const started = yield* Deferred.make<ChildProcess>();
+            // A barrier in the eighth batch: an uncommitted change entry
+            // with the key (user, version 2) that the backfill's update of
+            // that user will write, so the backfill waits for this
+            // transaction there. It touches no table the set load changes.
+            const [blocked] = yield* values(
+              `SELECT id::text AS value FROM core."user" ORDER BY id OFFSET ${BARRIER_BATCH * BATCH + BATCH / 2} LIMIT 1`
+            );
 
+            const holding = yield* Deferred.make<boolean>();
+            const unlock = yield* Deferred.make<boolean>();
+            const { maintenance } = yield* Transactions;
+
+            const barrier = yield* maintenance(
+              Effect.gen(function* holdBarrier() {
+                const sql = yield* SqlClient.SqlClient;
+
+                yield* sql.unsafe(BARRIER_ENTRY, [blocked ?? ""]);
+                yield* Deferred.succeed(holding, true);
+                yield* Deferred.await(unlock);
+
+                // Roll back: the entry was only ever a barrier.
+                return yield* Effect.fail(new BarrierReleased());
+              })
+            ).pipe(Effect.flip, Effect.forkChild);
+
+            yield* Deferred.await(holding);
+
+            // This branch's upgrade, killed (SIGKILL) once it waits at the
+            // barrier: seven batches committed, the eighth in flight.
             const upgrade = yield* Effect.forkChild(
               Effect.scoped(
-                startUpgrade(database.url).pipe(
-                  Effect.flatMap((child) => Deferred.succeed(started, child)),
-                  Effect.andThen(Effect.never)
-                )
+                startUpgrade(database.url).pipe(Effect.andThen(Effect.never))
               )
             );
 
-            const child = yield* Deferred.await(started);
-
             yield* waitUntil(
-              ledger.pipe(Effect.map((row) => row.startsWith("running {")))
+              Effect.all([ledger, upgradeWaitsForLock]).pipe(
+                Effect.map(
+                  ([row, waiting]) => row.startsWith("running {") && waiting
+                )
+              )
             );
-            child.kill("SIGSTOP");
 
             // Users created while the data migration is under way.
             yield* concurrentUsers(database.url, "during-run");
 
             yield* Fiber.interrupt(upgrade);
+            yield* Deferred.succeed(unlock, true);
+            yield* Fiber.join(barrier);
             yield* waitUntil(cliGone);
 
             const stopped = yield* ledger;
-            const done = Number(CHANGED.exec(stopped)?.groups?.changed);
+            const done = BARRIER_BATCH * BATCH;
 
             assert.isTrue(stopped.startsWith("running "), stopped);
-            assert.isAtLeast(done, BATCH);
-            assert.isBelow(done, OLD_USERS);
+            assert.include(stopped, `"changed": ${done}`);
             // Every committed batch's records, none of the killed one's.
             assert.deepStrictEqual(yield* partyCounts, [
               OLD_USERS + CONCURRENT_USERS,

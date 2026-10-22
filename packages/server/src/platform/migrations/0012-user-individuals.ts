@@ -83,6 +83,29 @@ LIMIT ${textParameter(String(size), "int4")}`
   (effect) => effect.pipe(Effect.mapError(failed))
 );
 
+/** Users whose individual is still empty. */
+const remaining = Effect.gen(function* usersWithoutIndividual() {
+  const snapshot = yield* (yield* Catalog).current;
+  const individual = snapshot.field(USER_FIELD_IDS.individual);
+
+  if (individual === undefined) {
+    return yield* new DataMigrationFailed({
+      id: ID,
+      migration: NAME,
+      reason:
+        "the core set has no core.user.individual; load core set version 2 first",
+    });
+  }
+
+  const [row] = yield* readRows(
+    sql`SELECT count(*)::text AS "left"
+FROM ${rawSql(tableName(snapshot, USER_CLASS_ID))} AS "u"
+WHERE "u".${rawSql(quoteIdent(individual.name))} IS NULL`
+  );
+
+  return Number(row?.left ?? "0");
+}).pipe(Effect.mapError(failed));
+
 /** Migration 0012. Never change its description without a reason. */
 export const migration0012: DataMigration = {
   batch,
@@ -91,4 +114,5 @@ export const migration0012: DataMigration = {
   id: ID,
   kind: "data",
   name: NAME,
+  remaining,
 };

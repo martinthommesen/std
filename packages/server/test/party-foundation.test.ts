@@ -21,6 +21,7 @@ import {
   BUILT_IN_ROLE_IDS,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
+  USER_FIELD_IDS,
 } from "@std/definitions/well-known";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Fiber, Redacted, Schema } from "effect";
@@ -30,12 +31,16 @@ import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { CORE_SET_DIRECTORY } from "../src/config/set-files.ts";
+import { runUpgrade } from "../src/config/upgrade.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
+import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
+import { migration0012 } from "../src/platform/migrations/0012-user-individuals.ts";
 import { individualOf } from "../src/records/party-rules.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { objectOf, recordIn, signInAll, textOf } from "./authz-support.ts";
 import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
 import {
+  addOverride,
   createClass,
   ensureSite,
   schemaTestLayer,
@@ -112,6 +117,38 @@ const operationOf = (recordId: string) =>
  */
 const valuesIn = (json: JsonValue | undefined): JsonObject =>
   objectOf(recordIn(json).values);
+
+/** The state of migration 12's ledger row, if it has one. */
+const ledgerRow12 = values(
+  "SELECT state AS value FROM core.platform_migration WHERE id = 12"
+);
+
+/**
+ * Users as an earlier release left them: without an individual.
+ * @param count - How many.
+ * @returns Their IDs.
+ */
+const insertOldUsers = (count: number) =>
+  values(
+    `INSERT INTO core."user" (id, class_id, version, created_at, created_by, updated_at, updated_by, name, login, active)
+     SELECT uuidv7(), $1::uuid, 1, now(), $2::uuid, now(), $2::uuid, 'Old User ' || g, 'old-' || g, true
+     FROM generate_series(1, ${count}) AS g
+     RETURNING id::text AS value`,
+    [USER_CLASS_ID, SYSTEM_USER_ID]
+  );
+
+/**
+ * The migrations with a defective 0012 whose batches claim to be done at
+ * once, with the real one's checksum.
+ */
+const ENDING_EARLY = PLATFORM_MIGRATIONS.map((migration) =>
+  migration.id === migration0012.id
+    ? {
+        ...migration0012,
+        batch: () => Effect.succeed({ changed: 0, next: null }),
+      }
+    : migration
+);
 
 const account = (login: string) => ({
   login,
@@ -197,6 +234,24 @@ describe("party-foundation", () => {
             });
 
             yield* applyChangeSet({ operations: [child.op] });
+
+            // The service assigns `individual`: a local child cannot make it
+            // required (every create would fail before the assignment).
+            const required = yield* applyChangeSet({
+              operations: [
+                addOverride(child.id, USER_FIELD_IDS.individual, {
+                  required: true,
+                }).op,
+              ],
+            }).pipe(Effect.flip);
+
+            assert.strictEqual(required._tag, "DefinitionInvalid");
+            assert.deepStrictEqual(
+              required._tag === "DefinitionInvalid"
+                ? required.problems.map((entry) => entry.code)
+                : [],
+              ["overrideInvalid"]
+            );
             yield* (yield* Catalog).refresh;
 
             const contractor = yield* http.request(
@@ -353,6 +408,21 @@ describe("party-foundation", () => {
             assert.strictEqual(renamed.status, 200, renamed.text);
             assert.strictEqual(valuesIn(renamed.json).name, "Ada King");
 
+            const cleared = yield* http.request(
+              "PATCH",
+              recordPath("core.individual", textOf(record.id)),
+              {
+                body: { name: null },
+                headers: {
+                  "if-match": `"${textOf(recordIn(renamed.json).version)}"`,
+                },
+                token: tokens.admin,
+              }
+            );
+
+            assert.strictEqual(cleared.status, 200, cleared.text);
+            assert.strictEqual(valuesIn(cleared.json).name, "Ada King");
+
             const named = yield* http.request(
               "POST",
               "/api/v1/tables/core.individual/records",
@@ -439,6 +509,70 @@ describe("party-foundation", () => {
               yield* values("SELECT count(*)::text AS value FROM core.change"),
               [changes]
             );
+          })
+      );
+    }
+  );
+
+  layer(schemaTestLayer(), { excludeTestServices: true, timeout: 120_000 })(
+    (dbTest) => {
+      dbTest.effect(
+        "an invalid batch size runs nothing and leaves the migration pending",
+        () =>
+          Effect.gen(function* invalidBatchSize() {
+            yield* loadSetDirectory(CORE_SET_DIRECTORY);
+            yield* insertOldUsers(5);
+
+            for (const batchSize of [0, -1, 1.5, Number.NaN, 10_001]) {
+              const refused = yield* runDataMigrations({ batchSize }).pipe(
+                Effect.flip
+              );
+
+              assert.strictEqual(refused._tag, "DataBatchSizeInvalid");
+
+              const upgrade = yield* runUpgrade({
+                dataBatchSize: batchSize,
+              }).pipe(Effect.flip);
+
+              assert.strictEqual(upgrade._tag, "DataBatchSizeInvalid");
+            }
+
+            assert.deepStrictEqual(yield* ledgerRow12, []);
+            assert.strictEqual((yield* partyCounts).usersWithIndividual, 0);
+
+            const [outcome] = yield* runDataMigrations({ batchSize: 1 });
+
+            assert.strictEqual(outcome?.changed, 6);
+            yield* assertOneEach(true);
+          })
+      );
+    }
+  );
+
+  layer(schemaTestLayer(), { excludeTestServices: true, timeout: 120_000 })(
+    (dbTest) => {
+      dbTest.effect(
+        "a migration is applied only when nothing still needs it: batches that end early leave it running",
+        () =>
+          Effect.gen(function* proofOfCompletion() {
+            yield* loadSetDirectory(CORE_SET_DIRECTORY);
+            yield* insertOldUsers(5);
+
+            const failed = yield* runDataMigrations({
+              migrations: ENDING_EARLY,
+            }).pipe(Effect.flip);
+
+            assert.strictEqual(failed._tag, "DataMigrationFailed");
+            assert.include(failed.message, "6 records still needing");
+            assert.deepStrictEqual(yield* ledgerRow12, ["running"]);
+
+            // The real migration resumes from the start and completes.
+            const [outcome] = yield* runDataMigrations();
+
+            assert.strictEqual(outcome?.outcome, "resumed");
+            assert.strictEqual(outcome?.changed, 6);
+            assert.deepStrictEqual(yield* ledgerRow12, ["applied"]);
+            yield* assertOneEach(true);
           })
       );
     }

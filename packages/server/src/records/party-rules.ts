@@ -4,9 +4,10 @@
  * turn them off:
  *
  * - **An individual's name.** A save of an individual that leaves `name`
- *   empty (a create without one, or an update that changes the given or
- *   family name and does not set `name`) gets `name` filled from the given
- *   and family names, as TMF632 describes `name` ("full name flatten").
+ *   empty (a create without one, an update that changes the given or
+ *   family name and does not set `name`, or an update that clears `name`)
+ *   gets `name` filled from the current given and family names, as
+ *   TMF632 describes `name` ("full name flatten").
  *   It runs after the before-write hooks, so it sees their values; the
  *   value counts as supplied by the save (Contracts 4.10, "`before`
  *   actions"). Record rules (4.10) cannot concatenate, so this is code.
@@ -109,12 +110,14 @@ export const deriveIndividualName = (
 
   const setsName = text(values.get(PARTY_FIELD_IDS.name)).length > 0;
 
-  const namesChanged =
+  // A create, a change of a name part, or an update that clears `name`.
+  const touched =
     existing === null ||
     values.has(PARTY_FIELD_IDS.givenName) ||
-    values.has(PARTY_FIELD_IDS.familyName);
+    values.has(PARTY_FIELD_IDS.familyName) ||
+    values.has(PARTY_FIELD_IDS.name);
 
-  if (setsName || !namesChanged) {
+  if (setsName || !touched) {
     return values;
   }
 

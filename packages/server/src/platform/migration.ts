@@ -127,6 +127,15 @@ export interface DataMigration {
     after: string | null,
     size: number
   ) => Effect.Effect<DataBatch, DataMigrationFailed, DataBatchServices>;
+  /**
+   * How many records still need the change, counted in the final batch's
+   * transaction: the row becomes `applied` only when it is 0.
+   */
+  readonly remaining: Effect.Effect<
+    number,
+    DataMigrationFailed,
+    DataBatchServices
+  >;
 }
 
 /** Any platform migration. */

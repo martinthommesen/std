@@ -37,12 +37,53 @@ import { Transactions } from "../sql/transactions.ts";
 import type { WorkerWakeup } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
 import { compareLedger, readLedger, refusalOf } from "./ledger.ts";
-import { isDataMigration, migrationChecksum } from "./migration.ts";
+import {
+  DataMigrationFailed,
+  isDataMigration,
+  migrationChecksum,
+} from "./migration.ts";
 import type { DataMigration, PlatformMigration } from "./migration.ts";
 import { PLATFORM_MIGRATIONS } from "./migrations.ts";
 
 /** Records a `data` migration batch changes at most [judgment]. */
 export const DATA_BATCH_SIZE = 100;
+
+/** The largest batch size accepted: a batch must finish within the request statement timeout [judgment]. */
+export const MAX_DATA_BATCH_SIZE = 10_000;
+
+/** A `data` migration batch size that is not a whole number from 1 to `MAX_DATA_BATCH_SIZE`. Nothing ran. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+export class DataBatchSizeInvalid extends Schema.TaggedError<
+  DataBatchSizeInvalid,
+  { readonly brand: unique symbol }
+>()("DataBatchSizeInvalid", { size: Schema.Number }) {
+  /**
+   * Names the size and the range.
+   * @returns The message.
+   */
+  override get message(): string {
+    return `The data migration batch size ${this.size} is not a whole number from 1 to ${MAX_DATA_BATCH_SIZE}; nothing ran`;
+  }
+}
+
+/**
+ * Checks a batch size before anything runs: a size of 0 would select
+ * nothing and mark a migration applied.
+ *
+ * @param size - The size, or undefined for the default.
+ * @returns The size to use.
+ */
+export const dataBatchSize = (
+  size: number | undefined
+): Effect.Effect<number, DataBatchSizeInvalid> => {
+  const chosen = size ?? DATA_BATCH_SIZE;
+
+  return Number.isSafeInteger(chosen) &&
+    chosen >= 1 &&
+    chosen <= MAX_DATA_BATCH_SIZE
+    ? Effect.succeed(chosen)
+    : Effect.fail(new DataBatchSizeInvalid({ size: chosen }));
+};
 
 /** Options of the `data` migration step. */
 export interface DataMigrationOptions {
@@ -86,8 +127,15 @@ const decodeRow = decodeRows(
 
 /** What one committed batch did. */
 interface BatchStep {
-  readonly done: boolean;
+  /**
+   * `more`: batches are left. `done`: the row is `applied`. `restart`: the
+   * batches ran out but records still need the change, so the cursor went
+   * back to the start.
+   */
+  readonly next: "more" | "done" | "restart";
   readonly changed: number;
+  /** Records still needing the change, for `restart`. */
+  readonly left: number;
 }
 
 /**
@@ -113,13 +161,30 @@ const runBatch = (migration: DataMigration, size: number) =>
           FOR UPDATE`.pipe(Effect.flatMap(decodeRow));
 
         if (row === undefined || row.state !== "running") {
-          return { changed: 0, done: true } satisfies BatchStep;
+          return { changed: 0, left: 0, next: "done" } satisfies BatchStep;
         }
 
         const result = yield* migration.batch(row.after, size);
         const changed = row.changed + result.changed;
 
-        yield* result.next === null
+        if (result.next !== null) {
+          yield* sql`
+            UPDATE core.platform_migration
+            SET progress = jsonb_build_object('after', ${result.next}::text, 'changed', ${changed}::int)
+            WHERE id = ${migration.id}`;
+
+          return {
+            changed: result.changed,
+            left: 0,
+            next: "more",
+          } satisfies BatchStep;
+        }
+
+        // `applied` needs proof: nothing may still need the change, in
+        // this transaction's view, whatever the batches selected.
+        const left = yield* migration.remaining;
+
+        yield* left === 0
           ? sql`
               UPDATE core.platform_migration
               SET state = 'applied', applied_at = now(),
@@ -127,12 +192,13 @@ const runBatch = (migration: DataMigration, size: number) =>
               WHERE id = ${migration.id}`
           : sql`
               UPDATE core.platform_migration
-              SET progress = jsonb_build_object('after', ${result.next}::text, 'changed', ${changed}::int)
+              SET progress = jsonb_build_object('changed', ${changed}::int)
               WHERE id = ${migration.id}`;
 
         return {
           changed: result.changed,
-          done: result.next === null,
+          left,
+          next: left === 0 ? "done" : "restart",
         } satisfies BatchStep;
       })
     );
@@ -163,6 +229,7 @@ const runOne = Effect.fn("Platform.runDataMigration")(function* runOne(
 
   let changed = 0;
   let batches = 0;
+  let restarted = false;
 
   for (;;) {
     const step = yield* runBatch(migration, size);
@@ -170,7 +237,21 @@ const runOne = Effect.fn("Platform.runDataMigration")(function* runOne(
     changed += step.changed;
     batches += 1;
 
-    if (step.done) {
+    if (step.next === "restart") {
+      // One more pass from the start; a second shortfall is a defect of
+      // the migration, reported with the row left `running`.
+      if (restarted) {
+        return yield* new DataMigrationFailed({
+          id: migration.id,
+          migration: migration.name,
+          reason: `its batches ended with ${step.left} records still needing the change`,
+        });
+      }
+
+      restarted = true;
+    }
+
+    if (step.next === "done") {
       const outcome: DataMigrationOutcome = {
         batches,
         changed,
@@ -195,6 +276,7 @@ const runOne = Effect.fn("Platform.runDataMigration")(function* runOne(
  */
 export const runDataMigrations = Effect.fn("Platform.runDataMigrations")(
   function* runDataMigrations(options: DataMigrationOptions = {}) {
+    const size = yield* dataBatchSize(options.batchSize);
     const migrations = options.migrations ?? PLATFORM_MIGRATIONS;
     const sql = yield* SqlClient.SqlClient;
     const ledger = yield* hygienic(readLedger(sql));
@@ -218,11 +300,9 @@ export const runDataMigrations = Effect.fn("Platform.runDataMigrations")(
     for (const migration of migrations.filter(isDataMigration)) {
       if (pending.has(migration.id) || running.has(migration.id)) {
         outcomes.push(
-          yield* runOne(
-            migration,
-            running.has(migration.id),
-            options.batchSize ?? DATA_BATCH_SIZE
-          ).pipe(Effect.provide(SystemSaveServices))
+          yield* runOne(migration, running.has(migration.id), size).pipe(
+            Effect.provide(SystemSaveServices)
+          )
         );
       }
     }
