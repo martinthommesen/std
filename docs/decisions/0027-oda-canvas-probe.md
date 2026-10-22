@@ -106,7 +106,7 @@ Outcome: 4 of 4 succeeded, failure rate 0%. In every run the component went from
 
 **Fifth run, current script** (`std-oda-probe-local-5`, 16:52 to 16:58 UTC, no other kind cluster on the host): succeeded. Phases: tools 3 s, cluster 27 s, istio 11 s, canvas 281 s, component 10 s; gateway 200. Disk, sampled 166 times at 2 s: peak 11.5 GB above the start, reached in the `component` phase (the `canvas` phase alone peaked at 11.2 GB); the node's `/var` held 10.1 GB at the end. Cleanup deleted the cluster, its load-balancer containers and the `kind` network. The same script also passed these local checks: it refused to start beside a container labelled as a kind node (exit 2, nothing created); with a 5 s budget it recorded `tools` as timed out (exit 1, complete result); with a 22 s budget it cut `kind create cluster` off after 20 s, recorded `cluster` as timed out, found the half-created node as this run's own and deleted it.
 
-**Sixth run, after review round 2** (`std-oda-probe-local-6`, 21:10 to 21:16 UTC, no other kind cluster on the host): succeeded the same way. Phases: tools 3 s, cluster 29 s, istio 14 s, canvas 281 s, component 11 s; gateway 200. Disk: peak 11.3 GB above the start over 170 samples; the node's `/var` 10.1 GB. Cleanup left nothing behind.
+**Sixth run, after review round 2** (`std-oda-probe-local-6`, 21:10 to 21:16 UTC, no other kind cluster on the host): succeeded the same way. Phases: tools 3 s, cluster 29 s, istio 15 s, canvas 281 s, component 11 s; gateway 200. Disk: peak 11.3 GB above the start over 170 samples; the node's `/var` 10.1 GB. Cleanup left nothing behind.
 
 Findings from the local runs:
 
