@@ -26,6 +26,8 @@ import type { Scope } from "effect";
 import { HttpEffect, HttpRouter, HttpServer } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { checkV2Exchange } from "./v2-contract.ts";
+
 /** A response as the client received it. */
 export interface TestResponse {
   readonly status: number;
@@ -182,10 +184,24 @@ export class TestHttpClient extends Context.Service<
         );
 
         const text = yield* Effect.promise(async () => await response.text());
+        const json = bodyJson(text);
+
+        // Every `/api/v2` answer must be what the shared definition (and so
+        // `/api/v2/openapi.json`) documents for it.
+        yield* checkV2Exchange({
+          json,
+          method,
+          path,
+          status: response.status,
+          text,
+        }).pipe(
+          Effect.mapError((problem) => new Error(problem)),
+          Effect.orDie
+        );
 
         return {
           headers: response.headers,
-          json: bodyJson(text),
+          json,
           status: response.status,
           text,
         } satisfies TestResponse;

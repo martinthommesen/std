@@ -58,6 +58,7 @@ import {
   writeFailures,
 } from "./records.ts";
 import type { RouteInput } from "./records.ts";
+import { checkedJsonPatch, checkedMergePatch } from "./request-schemas.ts";
 import { jsonBodyOf, mediaTypeOf } from "./request.ts";
 import { recordHref, typeAttributes } from "./resource.ts";
 import { collectionNameOf } from "./table-names.ts";
@@ -441,7 +442,12 @@ export const readPatch = Effect.fn("V2.readPatch")(function* readPatch(
     return yield* new UnsupportedMediaType({ accepted: PATCH_MEDIA_TYPES });
   }
 
-  const body = yield* jsonBodyOf(input.request);
+  const parsed = yield* jsonBodyOf(input.request);
+
+  const body =
+    mediaType === JSON_PATCH
+      ? yield* checkedJsonPatch(parsed)
+      : yield* checkedMergePatch(parsed);
 
   return { body, expectedVersion, mediaType } satisfies PatchRequest;
 });

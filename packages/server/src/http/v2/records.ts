@@ -22,13 +22,18 @@ import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import type { DefinitionId } from "@std/definitions/ids";
 import { stringifyJson } from "@std/values/json";
-import { isJsonString } from "@std/values/json-value";
+import {
+  isJsonArray,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Option } from "effect";
 import { HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Catalog } from "../../catalog/catalog.ts";
+import { recordHistory } from "../../records/history-endpoint.ts";
 import {
   compileFilterExpr,
   defaultSelection,
@@ -49,6 +54,7 @@ import { checkRequestRevision } from "../stale-request.ts";
 import type { parseRequestRevision } from "../stale-request.ts";
 import type { ScopeParameters } from "../stale-scope.ts";
 import { bodyNames, translateBody, TYPE_MEMBERS } from "./body.ts";
+import { allowOf } from "./methods.ts";
 import { parseListQuery, parseReadQuery, parseSelection } from "./query.ts";
 import { queryOf } from "./request.ts";
 import type { QueryParameters } from "./request.ts";
@@ -308,14 +314,25 @@ const linkHeader = (links: PageLinks): string => {
  * An explicit `fields` selection names the collection's attributes and is
  * kept as read.
  *
+ * Each concrete class's default selection is a scope of its own (Contracts
+ * 6.4): a request stated at an older revision is `SchemaChanged` when the
+ * selection changed since, as it is on the concrete collection. Only the
+ * classes of records the caller can see are checked, so the answer reveals
+ * nothing about records it cannot (3.4).
+ *
+ * @param stated - The request's stated revision.
  * @param scope - The caller's scope.
  * @param view - The collection's view.
  * @param records - The records as read through it.
  * @param fields - The request's `fields`, if any.
  * @returns The records, each in its concrete representation.
  */
+/** The stale-request scope of a concrete class's default selection. */
+const CONCRETE_SCOPE: ScopeParameters = { labels: "true", naming: "api" };
+
 const concreteRecords = Effect.fn("V2.concreteRecords")(
   function* concreteRecords(
+    stated: RouteInput["stated"],
     scope: ReadScope,
     view: ReadView,
     records: readonly DecodedRecord[],
@@ -335,6 +352,12 @@ const concreteRecords = Effect.fn("V2.concreteRecords")(
     const concrete = new Map<string, DecodedRecord>();
 
     for (const [classId, ids] of children) {
+      yield* checkRequestRevision(
+        stated,
+        scope.snapshot.qualifiedNameOf(classId) ?? classId,
+        CONCRETE_SCOPE
+      );
+
       const own = scope.view(classId, true);
 
       const read = yield* readByIds(scope, own, ids, {
@@ -412,9 +435,13 @@ export const listIn = Effect.fn("V2.list")(function* listIn(input: RouteInput) {
     page.count === undefined ? {} : { "x-total-count": String(page.count) };
 
   return jsonAnswer(
-    (yield* concreteRecords(scope, view, page.records, fieldsOf(query))).map(
-      (record) => resourceOf(scope, input.origin, record)
-    ),
+    (yield* concreteRecords(
+      input.stated,
+      scope,
+      view,
+      page.records,
+      fieldsOf(query)
+    )).map((record) => resourceOf(scope, input.origin, record)),
     200,
     {
       link: linkHeader({
@@ -453,6 +480,46 @@ export interface RouteInput {
   readonly collection: string;
 }
 
+/** What the record service answers for a record's history. */
+type HistoryAnswer = Effect.Success<ReturnType<typeof recordHistory>>;
+
+// A record or table the caller cannot see has no history to link.
+const noHistory = () => Effect.succeed(Option.none<HistoryAnswer>());
+
+/**
+ * The ID of the latest history entry of a record the caller may see
+ * (3.7), if there is one.
+ *
+ * @param scope - The read scope.
+ * @param record - The record, read with the caller's rights.
+ * @returns The change ID, or none.
+ */
+const latestChangeOf = Effect.fn("V2.latestChange")(function* latestChangeOf(
+  scope: ReadScope,
+  record: DecodedRecord
+) {
+  const table = scope.snapshot.qualifiedNameOf(record.classId);
+
+  if (table === undefined) {
+    return Option.none<string>();
+  }
+
+  const history = yield* recordHistory({ id: record.id, table }).pipe(
+    Effect.map((found): Option.Option<HistoryAnswer> => Option.some(found)),
+    Effect.catchTags({ NotFound: noHistory, UnknownTable: noHistory })
+  );
+
+  const entries = Option.isSome(history) ? history.value.body.entries : null;
+  const last = isJsonArray(entries) ? entries.at(-1) : undefined;
+
+  const changeId =
+    last !== undefined && isJsonObject(last) ? last.changeId : undefined;
+
+  return changeId !== undefined && isJsonString(changeId)
+    ? Option.some(changeId)
+    : Option.none<string>();
+});
+
 /**
  * A single resource's answer: the resource, its `ETag` and headers.
  *
@@ -464,14 +531,14 @@ export interface RouteInput {
  * @param requestUrl - The URI the request used, for its `self` link.
  * @returns The response.
  */
-const resourceAnswer = (
+const resourceAnswer = Effect.fn("V2.resourceAnswer")(function* resourceAnswer(
   scope: ReadScope,
   origin: string,
   record: DecodedRecord,
   status: number,
   endpointClassId: DefinitionId,
   requestUrl?: string
-): HttpServerResponse.HttpServerResponse => {
+) {
   const resource = resourceOf(scope, origin, record);
   const hrefValue = resource.href ?? null;
   const href = isJsonString(hrefValue) ? hrefValue : "";
@@ -489,13 +556,26 @@ const resourceAnswer = (
   const self =
     requestUrl === undefined || requestUrl === href ? href : requestUrl;
 
+  const links = [`<${self}>; rel="self"`, `<${href}>; rel="canonical"`];
+
+  // The history and its latest entry (TMF630 v5.0.0 Part 1 §12.3 p.210,
+  // §12.4 p.238), among the entries the caller may see (3.7).
+  const latest = yield* latestChangeOf(scope, record);
+
+  if (Option.isSome(latest)) {
+    links.push(
+      `<${href}/history>; rel="version-history"`,
+      `<${href}/history/${latest.value}>; rel="latest-version"`
+    );
+  }
+
   return jsonAnswer(resource, status, {
     etag: etagOf(record.version),
-    link: `<${self}>; rel="self", <${href}>; rel="canonical"`,
+    link: links.join(", "),
     ...located,
     ...created,
   });
-};
+});
 
 /**
  * `GET /api/v2/{table}/{id}`, inside the request transaction.
@@ -524,9 +604,15 @@ export const getIn = Effect.fn("V2.get")(function* getIn(
     withTargets: true,
   });
 
-  const [record = read] = yield* concreteRecords(scope, view, [read], fields);
+  const [record = read] = yield* concreteRecords(
+    input.stated,
+    scope,
+    view,
+    [read],
+    fields
+  );
 
-  return resourceAnswer(
+  return yield* resourceAnswer(
     scope,
     input.origin,
     record,
@@ -568,13 +654,20 @@ export const savedAnswer = Effect.fn("V2.savedAnswer")(function* savedAnswer(
 
   if (Option.isSome(reread)) {
     const [record = reread.value] = yield* concreteRecords(
+      input.stated,
       scope,
       view,
       [reread.value],
       fields
     );
 
-    return resourceAnswer(scope, input.origin, record, status, view.classId);
+    return yield* resourceAnswer(
+      scope,
+      input.origin,
+      record,
+      status,
+      view.classId
+    );
   }
 
   const collection = collectionNameOf(scope.snapshot, saved.classId);
@@ -600,7 +693,7 @@ export const savedAnswer = Effect.fn("V2.savedAnswer")(function* savedAnswer(
  */
 export const refuseDefinitionWrites = (table: string) =>
   DEFINITION_KIND_OF_TABLE.has(table)
-    ? Effect.fail(new MethodNotAllowed({ allow: "GET" }))
+    ? Effect.fail(new MethodNotAllowed({ allow: allowOf(["GET"]) }))
     : Effect.void;
 
 const locationPath = (url: string) => url.replace(/^[a-z]+:\/\/[^/]+/u, "");

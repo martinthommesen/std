@@ -25,7 +25,9 @@
  *   (`fields=assignedTo.email`) adds its value to the EntityRef.
  */
 import { knowsTable } from "@std/access/rules";
+import type { Caller } from "@std/access/rules";
 import type { DefinitionId } from "@std/definitions/ids";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Config, Effect } from "effect";
@@ -143,6 +145,26 @@ export interface ReferenceParts {
 }
 
 /**
+ * The `@type` of a reference to a declared target class: `<Type>Ref`
+ * (`CoreUserRef`) when the caller knows the class, the generic
+ * `EntityRef` otherwise (TMF630 v5.0.0 Part 7 §1.4.3 p.15). Resources and
+ * their `schema.json` both use it.
+ *
+ * @param snapshot - The configuration.
+ * @param caller - The caller's roles.
+ * @param declared - The field's declared target class.
+ * @returns The reference type name.
+ */
+export const refTypeOf = (
+  snapshot: ConfigSnapshot,
+  caller: Caller,
+  declared: DefinitionId
+): string =>
+  knowsTable(snapshot, caller, declared)
+    ? `${typeNameOf(snapshot, declared)}Ref`
+    : "EntityRef";
+
+/**
  * An EntityRef (Contracts 10.2).
  *
  * @param scope - The caller's scope.
@@ -159,12 +181,7 @@ export const entityRef = (
   const declared = reference.declaredClassId;
   const known = knowsTable(snapshot, caller, declared) ? declared : null;
   const referredId = reference.targetClassId ?? known;
-
-  // A typed reference (`CoreUserRef`) when the caller knows the field's
-  // declared target class; the generic `EntityRef` otherwise (TMF630
-  // v5.0.0 Part 7 §1.4.3 p.15).
-  const refType =
-    known === null ? "EntityRef" : `${typeNameOf(snapshot, known)}Ref`;
+  const refType = refTypeOf(snapshot, caller, declared);
 
   const ref = new Map<string, JsonValue>([
     ["@type", refType],

@@ -69,18 +69,21 @@ export const JsonPatchOperation = Schema.Struct({
   value: Schema.optionalKey(Schema.Json),
 }).annotate({ identifier: "JsonPatchOperation" });
 
-/** One entry of a record's history. */
+/**
+ * One entry of a record's history; `fields` may leave out every member but
+ * `id`, `href`, `@type` and `@baseType`.
+ */
 export const ChangeEntry = Schema.StructWithRest(
   Schema.Struct({
     "@baseType": Schema.Literal("History"),
     "@type": Schema.Literal("ChangeEntry"),
-    action: Schema.String,
+    action: Schema.optionalKey(Schema.String),
     actor: Schema.optionalKey(EntityRef),
     changes: Schema.optionalKey(Schema.Json),
     creationDate: Schema.optionalKey(Schema.Json),
     fields: Schema.optionalKey(Schema.Json),
     id: Schema.String,
-    kind: Schema.String,
+    kind: Schema.optionalKey(Schema.String),
     revision: Schema.optionalKey(Schema.Json),
   }),
   [extensionMembers]

@@ -1038,7 +1038,10 @@ describe("tmf630-conformance", () => {
         });
 
         assert.strictEqual(put.status, 405);
-        assert.strictEqual(put.headers.get("allow"), "GET, PATCH, DELETE");
+        assert.strictEqual(
+          put.headers.get("allow"),
+          "GET, HEAD, PATCH, DELETE, OPTIONS"
+        );
 
         const deleted = yield* http.request("DELETE", path, {
           ...callers.alice,

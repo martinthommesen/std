@@ -52,10 +52,18 @@ import {
   parseRequestRevision,
 } from "../stale-request.ts";
 import { answered } from "./answered.ts";
+import { getAndHead } from "./methods.ts";
 import { v2OpenApi } from "./openapi.ts";
 import { jsonAnswer } from "./records.ts";
+import { checkedSessionCreate } from "./request-schemas.ts";
 import { jsonBodyOf, withSession } from "./request.ts";
-import { entityRef, originOf, schemaLocation, V2_PREFIX } from "./resource.ts";
+import {
+  entityRef,
+  originOf,
+  refTypeOf,
+  schemaLocation,
+  V2_PREFIX,
+} from "./resource.ts";
 import {
   collectionNameOf,
   tableOfCollection,
@@ -119,15 +127,43 @@ const userRef = Effect.fn("V2.userRef")(function* userRef(
 });
 
 const STRING_TYPE = "string";
-const ENTITY_REF = "#/$defs/EntityRef";
+
+/** The reference `@type` a caller sees for a declared target. */
+export interface RefTypes {
+  /**
+   * The `@type` of a reference to a table metadata names (`<Type>Ref`),
+   * or `EntityRef` for null (a target the caller does not know).
+   */
+  readonly typeOf: (target: string | null) => string;
+  /** The `@type` of `createdBy` and `updatedBy`. */
+  readonly user: string;
+}
+
+const refSchema = (refType: string): JsonObject => ({
+  $ref: `#/$defs/${refType}`,
+});
+
+// One reference type's definition: an EntityRef whose `@type` is fixed.
+const refDefinition = (refType: string): JsonObject => ({
+  properties: {
+    "@referredType": { type: STRING_TYPE },
+    "@type": { const: refType },
+    href: { format: "uri", type: STRING_TYPE },
+    id: { type: STRING_TYPE },
+    name: { type: STRING_TYPE },
+  },
+  required: ["id"],
+  type: "object",
+});
 
 /**
  * The JSON Schema type of a field as metadata shows it.
  *
  * @param field - The field's metadata.
+ * @param refs - The reference types the caller sees.
  * @returns The JSON Schema of its values.
  */
-const typeSchema = (field: MetaField): JsonObject => {
+const typeSchema = (field: MetaField, refs: RefTypes): JsonObject => {
   const { type } = field;
 
   switch (type.kind) {
@@ -159,7 +195,7 @@ const typeSchema = (field: MetaField): JsonObject => {
     }
 
     case "reference": {
-      return { $ref: ENTITY_REF };
+      return refSchema(refs.typeOf(type.target));
     }
 
     case "password":
@@ -193,15 +229,22 @@ const typeSchema = (field: MetaField): JsonObject => {
  * `@schemaLocation`): built from the same metadata as 6.3, so it names no
  * field the caller cannot read.
  *
+ * A reference attribute is a `<Type>Ref` when the caller knows its
+ * declared target, else the generic `EntityRef`, as resources show them
+ * (Contracts 10.2); the schema defines each type it uses and no other, so
+ * it names no table the caller does not know.
+ *
  * @param table - The caller's metadata of the table.
  * @param type - The table's type name.
  * @param location - The schema's own URL.
+ * @param refs - The reference types the caller sees.
  * @returns The JSON Schema (2020-12).
  */
 export const resourceSchema = (
   table: MetaTable,
   type: string,
-  location: string
+  location: string,
+  refs: RefTypes
 ): JsonObject => {
   const readable = table.fields.filter((field) => field.read !== "no");
 
@@ -213,30 +256,28 @@ export const resourceSchema = (
     ["@schemaLocation", { format: "uri", type: STRING_TYPE }],
     ["revision", { type: "integer" }],
     ["creationDate", { format: "date-time", type: STRING_TYPE }],
-    ["createdBy", { $ref: ENTITY_REF }],
+    ["createdBy", refSchema(refs.user)],
     ["lastUpdate", { format: "date-time", type: STRING_TYPE }],
-    ["updatedBy", { $ref: ENTITY_REF }],
+    ["updatedBy", refSchema(refs.user)],
     ...readable.map((field): [string, JsonValue] => [
       apiAttributeNameOf(field.name),
-      { ...typeSchema(field), title: field.label },
+      { ...typeSchema(field, refs), title: field.label },
     ]),
     ["withheld", { items: { type: STRING_TYPE }, type: "array" }],
   ]);
 
+  const used = new Set([
+    "EntityRef",
+    refs.user,
+    ...readable.flatMap((field) =>
+      field.type.kind === "reference" ? [refs.typeOf(field.type.target)] : []
+    ),
+  ]);
+
   return {
-    $defs: {
-      EntityRef: {
-        properties: {
-          "@referredType": { type: STRING_TYPE },
-          "@type": { const: "EntityRef" },
-          href: { format: "uri", type: STRING_TYPE },
-          id: { type: STRING_TYPE },
-          name: { type: STRING_TYPE },
-        },
-        required: ["id"],
-        type: "object",
-      },
-    },
+    $defs: Object.fromEntries(
+      [...used].toSorted().map((refType) => [refType, refDefinition(refType)])
+    ),
     $id: location,
     $schema: "https://json-schema.org/draft/2020-12/schema",
     properties,
@@ -341,7 +382,10 @@ export const FixedRoutes = Layer.unwrap(
       Effect.gen(function* createSessionRoute() {
         const stated = yield* parseRequestRevision(request);
         const origin = yield* originOf(request);
-        const body = yield* sessionRequestOf(yield* jsonBodyOf(request));
+
+        const body = yield* sessionRequestOf(
+          yield* checkedSessionCreate(yield* jsonBodyOf(request))
+        );
 
         const session = yield* inRequest(
           request,
@@ -513,12 +557,27 @@ export const FixedRoutes = Layer.unwrap(
       Effect.gen(function* schemaRoute() {
         const { classId, described } = yield* metadataOf(collection);
         const snapshot = yield* (yield* Catalog).current;
+        const actor = yield* Actor;
+
+        // Metadata names a target only when the caller knows it.
+        const refs: RefTypes = {
+          typeOf: (target) => {
+            const found =
+              target === null ? undefined : snapshot.classByName(target);
+
+            return found === undefined
+              ? "EntityRef"
+              : refTypeOf(snapshot, actor, found.id);
+          },
+          user: refTypeOf(snapshot, actor, USER_CLASS_ID),
+        };
 
         return jsonAnswer(
           resourceSchema(
             described,
             typeNameOf(snapshot, classId),
-            schemaLocation(origin, collection)
+            schemaLocation(origin, collection),
+            refs
           ),
           200,
           { "content-type": "application/schema+json" }
@@ -551,16 +610,12 @@ export const FixedRoutes = Layer.unwrap(
 
     return HttpRouter.addAll([
       HttpRouter.route("POST", SESSION_PATH, provided(createSession)),
-      HttpRouter.route("GET", CURRENT_SESSION, provided(currentSession)),
+      ...getAndHead(CURRENT_SESSION, provided(currentSession)),
       HttpRouter.route("DELETE", CURRENT_SESSION, provided(endSession)),
-      HttpRouter.route("GET", METADATA_PATH, provided(tables)),
-      HttpRouter.route("GET", `${METADATA_PATH}/:table`, provided(table)),
-      HttpRouter.route(
-        "GET",
-        `${METADATA_PATH}/:table/schema.json`,
-        provided(schema)
-      ),
-      HttpRouter.route("GET", `${V2_PREFIX}/openapi.json`, provided(openApi)),
+      ...getAndHead(METADATA_PATH, provided(tables)),
+      ...getAndHead(`${METADATA_PATH}/:table`, provided(table)),
+      ...getAndHead(`${METADATA_PATH}/:table/schema.json`, provided(schema)),
+      ...getAndHead(`${V2_PREFIX}/openapi.json`, provided(openApi)),
     ]);
   })
 );

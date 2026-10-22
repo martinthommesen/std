@@ -126,6 +126,16 @@ export const ConflictError = Schema.Union([
   subtypes.UseRetireOrPurge,
 ]).pipe(HttpApiSchema.status(409));
 
+/**
+ * `409` on a read: `fields` both selects and excludes a name, or the
+ * request is stated at an older schema revision whose scope changed since
+ * (Contracts 6.4).
+ */
+export const ReadConflictError = Schema.Union([
+  subtypes.FieldsConflict,
+  subtypes.SchemaChanged,
+]).pipe(HttpApiSchema.status(409));
+
 /** `412`: a stale `If-Match`. */
 export const PreconditionFailedError = subtypes.VersionConflict.pipe(
   HttpApiSchema.status(412)
@@ -166,6 +176,7 @@ export const READ_ERRORS = [
   ForbiddenError,
   NotFoundError,
   MethodNotAllowedError,
+  ReadConflictError,
   NotImplementedError,
   UnavailableError,
 ] as const;

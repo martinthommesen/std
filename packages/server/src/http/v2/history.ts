@@ -438,7 +438,8 @@ const linkHeader = (
   input: RouteInput,
   offset: number,
   limit: number,
-  total: number
+  total: number,
+  latest: JsonObject | undefined
 ): string => {
   const lastOffset = Math.max(0, Math.floor((total - 1) / limit) * limit);
 
@@ -460,6 +461,43 @@ const linkHeader = (
   }
 
   links.push(`${linkTo(input, { offset: String(lastOffset) })}; rel="last"`);
+
+  if (latest !== undefined) {
+    links.push(`<${textOf(latest.href)}>; rel="latest-version"`);
+  }
+
+  return links.join(", ");
+};
+
+/**
+ * The `Link` header of one entry (TMF630 v5.0.0 Part 1 §12.3.3 pp.231-232,
+ * §12.4 p.238): `self`, `version-history`, `latest-version`, and
+ * `predecessor-version` and `successor-version` where they exist, each
+ * among the entries the caller may see (3.7), so no link names an entry
+ * the caller cannot read.
+ *
+ * @param entries - The visible entries, oldest first.
+ * @param index - The entry's position among them.
+ * @returns The header value.
+ */
+const entryLinks = (entries: readonly JsonObject[], index: number): string => {
+  const hrefAt = (at: number) => textOf(entries[at]?.href);
+  const self = hrefAt(index);
+  const history = self.slice(0, self.lastIndexOf("/"));
+
+  const links = [
+    `<${self}>; rel="self"`,
+    `<${history}>; rel="version-history"`,
+    `<${hrefAt(entries.length - 1)}>; rel="latest-version"`,
+  ];
+
+  if (index > 0) {
+    links.push(`<${hrefAt(index - 1)}>; rel="predecessor-version"`);
+  }
+
+  if (index < entries.length - 1) {
+    links.push(`<${hrefAt(index + 1)}>; rel="successor-version"`);
+  }
 
   return links.join(", ");
 };
@@ -486,7 +524,13 @@ export const historyIn = Effect.fn("V2.history")(function* historyIn(
     page.map((entry) => selected(query.fields, entry)),
     200,
     {
-      link: linkHeader(input, query.offset, query.limit, kept.length),
+      link: linkHeader(
+        input,
+        query.offset,
+        query.limit,
+        kept.length,
+        all.at(-1)
+      ),
       "x-result-count": String(page.length),
       "x-total-count": String(kept.length),
     }
@@ -508,12 +552,16 @@ export const historyEntryIn = Effect.fn("V2.historyEntry")(
     const all = yield* visibleEntries(input, id, {});
     const wanted = changeId.toLowerCase();
 
-    const found = all.find(
+    const index = all.findIndex(
       (entry) => textOf(entry.id).toLowerCase() === wanted
     );
 
+    const found = all[index];
+
     return found === undefined
       ? yield* new NotFound()
-      : jsonAnswer(selected(query.fields, found), 200);
+      : jsonAnswer(selected(query.fields, found), 200, {
+          link: entryLinks(all, index),
+        });
   }
 );

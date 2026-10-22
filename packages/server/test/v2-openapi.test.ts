@@ -65,7 +65,7 @@ describe("v2-openapi", () => {
         const http = yield* TestHttpClient;
         const callers = yield* v2Callers;
 
-        const body = Schema.decodeUnknownSync(ResourceCreate)({
+        const body = yield* Schema.decodeUnknownEffect(ResourceCreate)({
           name: "Doc",
           status: "spare",
         });
@@ -77,9 +77,11 @@ describe("v2-openapi", () => {
 
         assert.strictEqual(created.status, 201, created.text);
 
-        const resource = Schema.decodeUnknownSync(Resource)(created.json);
+        const resource = yield* Schema.decodeUnknownEffect(Resource)(
+          created.json
+        );
 
-        const patchBody = Schema.decodeUnknownSync(ResourcePatch)({
+        const patchBody = yield* Schema.decodeUnknownEffect(ResourcePatch)({
           name: "Doc 2",
         });
 
@@ -97,10 +99,12 @@ describe("v2-openapi", () => {
         );
 
         assert.strictEqual(patched.status, 200, patched.text);
-        assert.strictEqual(
-          Schema.decodeUnknownSync(Resource)(patched.json).id,
-          resource.id
+
+        const patchedResource = yield* Schema.decodeUnknownEffect(Resource)(
+          patched.json
         );
+
+        assert.strictEqual(patchedResource.id, resource.id);
         assert.strictEqual(textOf(asObject(patched.json).name), "Doc 2");
       })
     );
@@ -118,10 +122,12 @@ describe("v2-openapi", () => {
           );
 
           assert.strictEqual(missing.status, 404);
-          assert.strictEqual(
-            Schema.decodeUnknownSync(TmfError)(missing.json).code,
-            "NotFound"
+
+          const missingError = yield* Schema.decodeUnknownEffect(TmfError)(
+            missing.json
           );
+
+          assert.strictEqual(missingError.code, "NotFound");
 
           const invalid = yield* http.request("POST", V2.asset, {
             ...callers.alice,
@@ -129,10 +135,12 @@ describe("v2-openapi", () => {
           });
 
           assert.strictEqual(invalid.status, 422, invalid.text);
-          assert.strictEqual(
-            Schema.decodeUnknownSync(TmfError)(invalid.json).code,
-            "ValidationFailed"
+
+          const invalidError = yield* Schema.decodeUnknownEffect(TmfError)(
+            invalid.json
           );
+
+          assert.strictEqual(invalidError.code, "ValidationFailed");
         })
     );
   });

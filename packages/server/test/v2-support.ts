@@ -16,6 +16,11 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
+import { change } from "./schema-support.ts";
+
+const REVISION_HEADER = "std-schema-revision";
 
 /** The acme tables' v2 collections. */
 export const V2 = {
@@ -104,4 +109,56 @@ export const v2Callers = Effect.gen(function* signInCallers() {
     alice: { token: yield* http.signIn("alice", "alice-password") },
     bob: { token: yield* http.signIn("bob", "bob-password") },
   } satisfies V2Callers;
+});
+
+/**
+ * The current revision of the catalog, as a request header value.
+ *
+ * @returns The header value.
+ */
+export const statedRevision = Effect.gen(function* stated() {
+  const catalog = yield* Catalog;
+
+  return revisionHeaderValue(yield* catalog.refresh);
+});
+
+/**
+ * The current version of a definition.
+ *
+ * @param id - The field.
+ * @returns Its version.
+ */
+export const versionOf = (id: string) =>
+  Effect.gen(function* version() {
+    const catalog = yield* Catalog;
+    const built = yield* catalog.refresh;
+
+    return built.field(id)?.version ?? 1;
+  });
+
+/**
+ * Renames a field by change set.
+ *
+ * @param id - The field.
+ * @param name - The new definition name.
+ * @returns The renaming effect.
+ */
+export const rename = (id: string, name: string) =>
+  Effect.gen(function* renameField() {
+    yield* change([{ id, name, op: "rename", version: yield* versionOf(id) }]);
+  }).pipe(Effect.orDie);
+
+/**
+ * A caller's request options stating an older schema revision.
+ *
+ * @param revision - The stated revision header value.
+ * @param caller - The caller.
+ * @returns The options.
+ */
+export const stale = (
+  revision: string,
+  caller: TestRequestOptions
+): TestRequestOptions => ({
+  ...caller,
+  headers: { [REVISION_HEADER]: revision },
 });

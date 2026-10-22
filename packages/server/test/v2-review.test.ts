@@ -19,13 +19,15 @@ import type {
   TestResponse,
 } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { ACME, addAccessRule, addField, change } from "./schema-support.ts";
 import {
   asArray,
   asObject,
   idsOf,
+  rename,
+  stale,
+  statedRevision,
   textOf,
   V2,
   v2Callers,
@@ -36,7 +38,6 @@ import type { V2Callers } from "./v2-support.ts";
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const MERGE_PATCH = "application/merge-patch+json";
 const JSON_PATCH = "application/json-patch+json";
-const REVISION_HEADER = "std-schema-revision";
 
 const codeOf = (response: TestResponse): JsonValue | undefined =>
   asObject(response.json).code;
@@ -62,48 +63,6 @@ const changedKinds = (response: TestResponse): string[] =>
     (entry) =>
       `${textOf(asObject(entry).field)}:${textOf(asObject(entry).kind)}`
   );
-
-/**
- * The current revision of the catalog, as a request header value.
- *
- * @returns The header value.
- */
-const statedRevision = Effect.gen(function* stated() {
-  const catalog = yield* Catalog;
-
-  return revisionHeaderValue(yield* catalog.refresh);
-});
-
-/**
- * The current version of a definition.
- *
- * @param id - The field.
- * @returns Its version.
- */
-const versionOf = (id: string) =>
-  Effect.gen(function* version() {
-    const catalog = yield* Catalog;
-    const built = yield* catalog.refresh;
-
-    return built.field(id)?.version ?? 1;
-  });
-
-/**
- * Renames a field by change set.
- *
- * @param id - The field.
- * @param name - The new definition name.
- * @returns The renaming effect.
- */
-const rename = (id: string, name: string) =>
-  Effect.gen(function* renameField() {
-    yield* change([{ id, name, op: "rename", version: yield* versionOf(id) }]);
-  }).pipe(Effect.orDie);
-
-const stale = (revision: string, caller: TestRequestOptions) => ({
-  ...caller,
-  headers: { [REVISION_HEADER]: revision },
-});
 
 const allowOf = (response: TestResponse): string | null =>
   response.headers.get("allow");
@@ -412,7 +371,10 @@ describe("v2-review", () => {
           );
 
           assert.strictEqual(existing.status, 405, existing.text);
-          assert.strictEqual(allowOf(existing), "GET, PATCH, DELETE");
+          assert.strictEqual(
+            allowOf(existing),
+            "GET, HEAD, PATCH, DELETE, OPTIONS"
+          );
 
           const random = yield* http.request(
             "POST",
@@ -436,11 +398,14 @@ describe("v2-review", () => {
           assert.deepStrictEqual(withoutDate(existing), withoutDate(random));
 
           const expectations = [
-            ["PATCH", "/api/v2/session/current", "GET, DELETE"],
-            ["GET", "/api/v2/session", "POST"],
-            ["POST", "/api/v2/tableMetadata", "GET"],
-            ["PATCH", V2.asset, "GET, POST"],
-            ["POST", `${V2.asset}/${records.L}/history`, "GET"],
+            ["PATCH", "/api/v2/session/current", "GET, HEAD, DELETE, OPTIONS"],
+            ["GET", "/api/v2/session", "POST, OPTIONS"],
+            ["HEAD", "/api/v2/session", "POST, OPTIONS"],
+            ["POST", "/api/v2/tableMetadata", "GET, HEAD, OPTIONS"],
+            ["PATCH", V2.asset, "GET, HEAD, POST, OPTIONS"],
+            ["PUT", V2.asset, "GET, HEAD, POST, OPTIONS"],
+            ["PROPFIND", V2.asset, "GET, HEAD, POST, OPTIONS"],
+            ["POST", `${V2.asset}/${records.L}/history`, "GET, HEAD, OPTIONS"],
           ] as const;
 
           for (const [method, path, allow] of expectations) {

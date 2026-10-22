@@ -13,8 +13,7 @@ import { Effect, Layer } from "effect";
  * failure with an API tag is answered with a TMF `Error` (10.6); anything
  * else is a defect, a `500` without a body, as in v1 (3.8).
  */
-import type { HttpServerResponse } from "effect/http";
-import { HttpRouter } from "effect/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import type { Catalog } from "../../catalog/catalog.ts";
@@ -29,9 +28,20 @@ import { parseRequestRevision } from "../stale-request.ts";
 import { answered } from "./answered.ts";
 import { FixedRoutes } from "./fixed.ts";
 import { historyEntryIn, historyIn } from "./history.ts";
+import {
+  allowOf,
+  getAndHead,
+  RESOURCE_ROUTES,
+  ROUTED_METHODS,
+  serves,
+  resourceRouteOf,
+  withoutBody,
+} from "./methods.ts";
+import type { ResourceRoute } from "./methods.ts";
 import { deleteIn, patchIn, readDelete, readPatch } from "./record-changes.ts";
 import { collectionNamed, createIn, getIn, listIn } from "./records.ts";
 import type { RouteInput } from "./records.ts";
+import { checkedCreate } from "./request-schemas.ts";
 import { jsonBodyOf, withSession } from "./request.ts";
 import { originOf, V2_PREFIX } from "./resource.ts";
 import { tmfErrorResponse } from "./tmf-error.ts";
@@ -97,44 +107,66 @@ const inSession = <E, R>(
     );
   });
 
-const notAllowed = (allow: string) => (request: HttpServerRequest) =>
-  answered(withSession(request, Effect.fail(new MethodNotAllowed({ allow }))));
+/**
+ * The answer to a method a shape does not route: `OPTIONS` is `204` with
+ * `Allow`, any other `405` with `Allow` (`methods.ts`). Both come after the
+ * session, except on the public shapes, and before any table or record is
+ * looked up, so they reveal nothing (3.4). `HEAD` gets no body.
+ *
+ * @param resource - The request path's resource route.
+ * @param request - The request.
+ * @returns The response.
+ */
+const unroutedAnswer = (
+  resource: ResourceRoute,
+  request: HttpServerRequest
+) => {
+  const allow = allowOf(resource.offered);
 
-/** The methods a route may name. */
-const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+  const answer =
+    request.method === "OPTIONS"
+      ? Effect.succeed(
+          HttpServerResponse.empty({ headers: { allow }, status: 204 })
+        )
+      : Effect.fail(new MethodNotAllowed({ allow }));
+
+  const response = answered(
+    resource.public ? answer : withSession(request, answer)
+  );
+
+  return request.method === "HEAD"
+    ? response.pipe(Effect.map((sent) => withoutBody(sent)))
+    : response;
+};
+
+// The routed methods a resource route does not serve.
+const notServedRoutes = (resource: ResourceRoute) =>
+  ROUTED_METHODS.flatMap((method) =>
+    serves(resource, method)
+      ? []
+      : [
+          HttpRouter.route(
+            method,
+            resource.path,
+            (request: HttpServerRequest) => unroutedAnswer(resource, request)
+          ),
+        ]
+  );
 
 /**
- * Every resource shape of `/api/v2` with the methods it offers. Any other
- * method is `405` with an accurate `Allow` (TMF630 v5.0.0 Part 1 §3.3.3
- * p.31), decided by the path's shape alone, after the session and before
- * any table or record is looked up: a caller gets the same 405 whether the
- * record exists, is hidden or is missing, so 405 reveals nothing (3.4).
+ * Every method no route serves: by the path's resource route, or
+ * `NotFound` for a path of none.
+ *
+ * @param request - The request.
+ * @returns The response.
  */
-const RESOURCE_METHODS: readonly (readonly [
-  HttpRouter.PathInput,
-  readonly string[],
-])[] = [
-  [`${V2_PREFIX}/session`, ["POST"]],
-  [`${V2_PREFIX}/session/current`, ["GET", "DELETE"]],
-  [`${V2_PREFIX}/tableMetadata`, ["GET"]],
-  [`${V2_PREFIX}/tableMetadata/:table`, ["GET"]],
-  [`${V2_PREFIX}/tableMetadata/:table/schema.json`, ["GET"]],
-  [`${V2_PREFIX}/openapi.json`, ["GET"]],
-  [`${V2_PREFIX}/:collection`, ["GET", "POST"]],
-  [`${V2_PREFIX}/:collection/:id`, ["GET", "PATCH", "DELETE"]],
-  [`${V2_PREFIX}/:collection/:id/history`, ["GET"]],
-  [`${V2_PREFIX}/:collection/:id/history/:changeId`, ["GET"]],
-];
+const catchAll = (request: HttpServerRequest) => {
+  const resource = resourceRouteOf(request.url);
 
-const notAllowedRoutes = (
-  path: HttpRouter.PathInput,
-  offered: readonly string[]
-) =>
-  METHODS.flatMap((method) =>
-    new Set(offered).has(method)
-      ? []
-      : [HttpRouter.route(method, path, notAllowed(offered.join(", ")))]
-  );
+  return resource === undefined
+    ? Effect.succeed(tmfErrorResponse(new NotFound()))
+    : unroutedAnswer(resource, request);
+};
 
 /**
  * The record routes, with the services their work needs captured when the
@@ -162,8 +194,7 @@ const RecordRoutes = Layer.unwrap(
         ).pipe(Effect.provide(services));
 
     return HttpRouter.addAll([
-      HttpRouter.route(
-        "GET",
+      ...getAndHead(
         `${V2_PREFIX}/:collection`,
         route((input) => listIn(input))
       ),
@@ -172,7 +203,7 @@ const RecordRoutes = Layer.unwrap(
         `${V2_PREFIX}/:collection`,
         route((input) =>
           Effect.gen(function* createRoute() {
-            const body = yield* jsonBodyOf(input.request);
+            const body = yield* checkedCreate(yield* jsonBodyOf(input.request));
 
             return isJsonObject(body)
               ? yield* createIn(input, body)
@@ -183,8 +214,7 @@ const RecordRoutes = Layer.unwrap(
           })
         )
       ),
-      HttpRouter.route(
-        "GET",
+      ...getAndHead(
         `${V2_PREFIX}/:collection/:id`,
         route((input, { id }) => getIn(input, id))
       ),
@@ -204,22 +234,16 @@ const RecordRoutes = Layer.unwrap(
           )
         )
       ),
-      HttpRouter.route(
-        "GET",
+      ...getAndHead(
         `${V2_PREFIX}/:collection/:id/history`,
         route((input, { id }) => historyIn(input, id))
       ),
-      HttpRouter.route(
-        "GET",
+      ...getAndHead(
         `${V2_PREFIX}/:collection/:id/history/:changeId`,
         route((input, { changeId, id }) => historyEntryIn(input, id, changeId))
       ),
-      ...RESOURCE_METHODS.flatMap(([path, offered]) =>
-        notAllowedRoutes(path, offered)
-      ),
-      HttpRouter.route("*", `${V2_PREFIX}/*`, () =>
-        Effect.succeed(tmfErrorResponse(new NotFound()))
-      ),
+      ...RESOURCE_ROUTES.flatMap((resource) => notServedRoutes(resource)),
+      HttpRouter.route("*", `${V2_PREFIX}/*`, catchAll),
     ]);
   })
 );
