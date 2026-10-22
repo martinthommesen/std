@@ -538,12 +538,14 @@ export const coordinatorGone = values(
 );
 
 /**
- * The sequential scans of a table, from a fresh statistics snapshot.
+ * The sequential scans of a table, from a fresh statistics snapshot after
+ * flushing the current backend's statistics.
  * @param table - A quoted table.
  * @returns The `seq_scan` counter.
  */
 export const seqScans = (table: string) =>
-  values("SELECT pg_stat_clear_snapshot()::text AS value").pipe(
+  values("SELECT pg_stat_force_next_flush()::text AS value").pipe(
+    Effect.andThen(values("SELECT pg_stat_clear_snapshot()::text AS value")),
     Effect.andThen(
       values(
         `SELECT coalesce(seq_scan, 0)::text AS value FROM pg_stat_user_tables WHERE relid = to_regclass($1)`,

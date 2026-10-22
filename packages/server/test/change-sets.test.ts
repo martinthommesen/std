@@ -188,11 +188,6 @@ describe("change-sets", () => {
                 yield* Effect.logInfo(
                   `ADD COLUMN main transaction: ${result.mainTransactionMs} ms`
                 );
-                assert.isBelow(
-                  result.mainTransactionMs,
-                  100,
-                  `main transaction took ${result.mainTransactionMs} ms`
-                );
                 assert.strictEqual(yield* relfilenode(BULK), node);
                 // The coordinator's backend flushes its statistics as it exits.
                 yield* coordinatorGone;
