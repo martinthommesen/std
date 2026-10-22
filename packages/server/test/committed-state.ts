@@ -15,6 +15,9 @@
  *   schemas: relations, columns (type with typmod, nullability, default,
  *   identity, generation, position), constraints, indexes, triggers,
  *   policies, functions and schemas, so DDL that followed a refusal shows.
+ *   Storage identity and statistics (`relfilenode`, OIDs, `reltuples`) are
+ *   left out: `REINDEX`, `VACUUM` and `ANALYZE` change them, not a
+ *   definition.
  *
  * Compare two readings with `assert.deepStrictEqual`; the difference names
  * the table that changed, or the catalog.
@@ -41,7 +44,7 @@ const userSchema = (column: string): string =>
  */
 export const catalogFingerprint = values(
   `SELECT md5(string_agg(x, E'\\n' ORDER BY x)) AS value FROM (
-     SELECT 'relation ' || n.nspname || '.' || c.relname || ' ' || c.relkind::text || ' ' || c.relfilenode::text
+     SELECT 'relation ' || n.nspname || '.' || c.relname || ' ' || c.relkind::text
             || ' ' || c.relpersistence::text || ' ' || coalesce(array_to_string(c.reloptions, ','), '') AS x
        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE ${userSchema("n.nspname")}
      UNION ALL SELECT 'column ' || a.attrelid::regclass::text || ' ' || a.attnum::text || ' ' || a.attname

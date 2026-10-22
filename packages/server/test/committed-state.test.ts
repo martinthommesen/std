@@ -56,6 +56,14 @@ describe("committed-state", () => {
           const afterDefault = yield* committedState;
           assert.notStrictEqual(afterDefault.catalog, afterRow.catalog);
 
+          // Maintenance changes storage and statistics, not definitions.
+          yield* values("REINDEX INDEX cs_probe.cs_probe_t_x");
+          yield* values("REINDEX TABLE cs_probe.t");
+          yield* values("VACUUM cs_probe.t");
+          yield* values("VACUUM FULL cs_probe.t");
+          yield* values("ANALYZE cs_probe.t");
+          assert.deepStrictEqual(yield* committedState, afterDefault);
+
           // An index definition under the same name.
           yield* values("DROP INDEX cs_probe.cs_probe_t_x");
           yield* values("CREATE INDEX cs_probe_t_x ON cs_probe.t (x, n)");
