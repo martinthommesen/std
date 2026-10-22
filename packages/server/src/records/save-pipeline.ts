@@ -1,6 +1,7 @@
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import { RecordInSave } from "@std/api/errors/record-in-save";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { allowedRecordsOf } from "@std/definitions/allowed-records";
@@ -63,9 +64,9 @@ import { Transactions } from "../sql/transactions.ts";
 import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
-import { RecordInSave } from "./record-in-save.ts";
 import { mapConstraints } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
+import type { SaveMode } from "./save-hooks.ts";
 import {
   deleteRecordRows,
   insertRecord,
@@ -75,7 +76,7 @@ import {
   updateRecord as updateRecordRows,
 } from "./save-sql.ts";
 import type { ColumnWrite, RootLock } from "./save-sql.ts";
-import { SaveStack, withinSave } from "./save-stack.ts";
+import { checkDepth, SaveStack, withinSave } from "./save-stack.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
 import { WriteAccess } from "./write-access.ts";
@@ -106,6 +107,11 @@ export interface SaveInput {
   readonly endpointClassId: DefinitionId;
   /** What produced the save; `{ kind: "api" }` by default. */
   readonly cause?: ChangeCause;
+  /**
+   * Which `before` rules run (4.10): `user` by default; `settled` for the
+   * saves that settling persists (4.9), where only invariants run.
+   */
+  readonly mode?: SaveMode;
 }
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
@@ -425,6 +431,13 @@ const project = Effect.fn("Records.project")(function* project(
   return yield* access.project({ endpointClassId, record, snapshot });
 });
 
+// Fields only hooks set: changed by them and not named by the body.
+const hookOnlyFields = (
+  hooked: readonly DefinitionId[],
+  body: WriteBody
+): ReadonlySet<DefinitionId> =>
+  new Set(hooked.filter((fieldId) => !body.entries.has(fieldId)));
+
 // The fields whose value the before-write hooks set or changed.
 const hookChanges = (
   fields: ReadonlyMap<DefinitionId, EffectiveField>,
@@ -462,6 +475,8 @@ const refuseRetiredClass = (
 
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInTransaction(input: CreateInput, body: JsonObject) {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
@@ -481,6 +496,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       classId,
       existing: null,
       kind: "create",
+      mode: input.mode ?? "user",
       snapshot,
       values: proposed.values,
     });
@@ -491,13 +507,14 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     });
 
     // The fields the create sets: those the body supplied and those the
-    // hooks changed. Read-only and retired ones count as written for
-    // validation when their value differs from what the create stores
-    // without them.
-    const supplied = new Set([
-      ...resolved.entries.keys(),
-      ...hookChanges(fields, proposed.values, proposal.values),
-    ]);
+    // hooks changed (values rules set count as supplied, 3.9). Read-only
+    // and retired ones count as written for validation when their value
+    // differs from what the create stores without them; fields only hooks
+    // set are system-written and exempt (4.10: rules compute read-only
+    // fields such as a priority).
+    const hooked = hookChanges(fields, proposed.values, proposal.values);
+
+    const supplied = new Set([...resolved.entries.keys(), ...hooked]);
 
     const written = new Set(
       [...supplied].filter((fieldId) => {
@@ -515,6 +532,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: null,
+      hookOnly: hookOnlyFields(hooked, resolved),
       proposal,
       rules,
       supplied: new Set(resolved.entries.keys()),
@@ -720,7 +738,8 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
   function* hookedProposal(
     snapshot: ConfigSnapshot,
     existing: StoredRecord,
-    proposal: Proposal
+    proposal: Proposal,
+    mode: SaveMode
   ) {
     const hooks = yield* SaveHooks;
 
@@ -728,6 +747,7 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
       classId: existing.classId,
       existing,
       kind: "update",
+      mode,
       snapshot,
       values: proposal.values,
     });
@@ -740,6 +760,8 @@ const hookedProposal = Effect.fn("Records.hookedProposal")(
 
 const updateInTransaction = Effect.fn("Records.updateInTransaction")(
   function* updateInTransaction(input: UpdateInput, body: JsonObject) {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
 
@@ -783,11 +805,14 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       return yield* unchanged(snapshot, input.endpointClassId, record);
     }
 
-    const proposal = finalizeUpdate(
-      rules,
-      yield* hookedProposal(snapshot, record, proposed),
-      record
+    const hooked = yield* hookedProposal(
+      snapshot,
+      record,
+      proposed,
+      input.mode ?? "user"
     );
+
+    const proposal = finalizeUpdate(rules, hooked, record);
 
     // Recomputed from the final candidate: a hook may restore a value
     // (no-op again) or add fields, which the existing state must allow too.
@@ -808,6 +833,10 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: record,
+      hookOnly: hookOnlyFields(
+        hookChanges(fields, proposed.values, hooked.values),
+        resolved
+      ),
       proposal,
       rules,
       supplied: new Set(resolved.entries.keys()),
@@ -880,6 +909,8 @@ export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
 
 const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
   function* deleteInTransaction(input: DeleteInput) {
+    yield* checkDepth(yield* SaveStack);
+
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
@@ -899,6 +930,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
       classId: record.classId,
       existing: record,
       kind: "delete",
+      mode: input.mode ?? "user",
       snapshot,
       values: new Map(),
     });
