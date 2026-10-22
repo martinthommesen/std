@@ -94,20 +94,23 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.1 p.11
     level: recommended
     requirement: An API should encourage caching of its responses.
-    status: pending
-    note: "gap: STD forbids caching of every API response (C10.1) CONTRADICTION: TMF630 v5.0.0 P1 §1.5.1 p.11 says caching should be encouraged; Contracts 10.1 says every v2 response keeps `Cache-Control: no-store` (unchanged from v1)."
+    status: excluded
+    decision: X630-no-store
+    note: "exclusion X630-no-store (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P1/1.5.1/no-cache-only-when-necessary
     source: TMF630 v5.0.0 P1 §1.5.1 p.11
     level: recommended
     requirement: The server should not send the no-cache directive unless it is absolutely necessary.
-    status: pending
-    note: "gap: STD sends `no-store` (stronger than no-cache) on every API response (C10.1); the contract records no reason that it is necessary"
+    status: excluded
+    decision: X630-no-store
+    note: "exclusion X630-no-store (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P1/1.5.1/expiration-headers-on-get-200
     source: TMF630 v5.0.0 P1 §1.5.1 p.11
     level: recommended
     requirement: The server should send expiration caching headers on 200 responses to GET and HEAD.
-    status: pending
-    note: "gap: STD sends `Cache-Control: no-store` instead (C10.1) CONTRADICTION: TMF630 v5.0.0 P1 §1.5.1 p.11 says 200 responses to GET and HEAD should carry expiration caching headers; Contracts 10.1 says every v2 response carries `Cache-Control: no-store`."
+    status: excluded
+    decision: X630-no-store
+    note: "exclusion X630-no-store (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P1/1.5.1/expiration-headers-on-3xx-4xx
     source: TMF630 v5.0.0 P1 §1.5.1 p.11
     level: optional
@@ -252,9 +255,7 @@ rows:
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: recommended
     requirement: The server should send an ETag that changes whenever the representation changes; for a list response the ETag covers the whole response.
-    status: tested
-    tests:
-      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    status: pending
     note: 'C10.5: `ETag: "<version>"` on every single-resource response; gap: list responses (C10.4) carry no ETag'
   - id: TMF630@5.0.0/P1/1.5.2/location-on-create
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
@@ -836,8 +837,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: recommended
     requirement: When a client attempts an interaction outside the resources it is permitted to use, the API should answer 403.
-    status: pending
-    note: "C10.6: 403 `NotAllowed` only on a visible record; a table or record the caller cannot see is 404, identical to a missing one (Contracts 3.4, 3.8) CONTRADICTION: TMF630 v5.0.0 P1 §3.3.3 p.31 says an interaction outside the client's permitted scope should get 403; Contracts 3.8 (kept byte for byte by Contracts 10.6) says a table never readable is `404 UnknownTable` and an invisible record `404 NotFound`, identical to non-existent ones."
+    status: excluded
+    decision: X630-identical-404
+    note: "exclusion X630-identical-404 (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P1/3.3.3/status-404-not-found
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
     level: mandatory
@@ -872,8 +874,9 @@ rows:
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
     requirement: 410 should signal a resource that is no longer available, with no forwarding address.
-    status: pending
-    note: "gap: a deleted record is `404 NotFound`, identical to one never created or invisible (Contracts 3.8) CONTRADICTION: TMF630 v5.0.0 P1 §3.3.3 p.32 says a resource no longer available should get 410; Contracts 3.8 (kept by Contracts 10.6) says a record that does not exist is `404 NotFound`, identical whether it never existed, was deleted or is invisible."
+    status: excluded
+    decision: X630-identical-404
+    note: "exclusion X630-identical-404 (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P1/3.3.3/status-411-length-required
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: mandatory
@@ -1094,8 +1097,10 @@ rows:
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
     requirement: If the resource exists, the server returns its complete representation with all attributes.
-    status: pending
-    note: "C10.2: all attributes the caller can read, withheld ones listed in `withheld` (E19-generic-api-extensions); through a parent endpoint only the endpoint's lineage fields (Contracts 2.3) CONTRADICTION: TMF630 v5.0.0 P1 §4.1 p.39 says a GET by id returns the complete representation with all attributes; Contracts 10.2 (with 2.3) says a record read through a parent endpoint shows only that endpoint's lineage fields, and `@type` tells the client where to read the rest."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2 (Martin 2026-10-22, D1): a read returns the record's complete concrete representation, fields the caller may not read withheld."
   - id: TMF630@5.0.0/P1/4.1/no-null-or-empty-attributes
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
@@ -2291,7 +2296,7 @@ rows:
     level: mandatory
     requirement: In the History resource model, the revisedBy RelatedPartyRefOrPartyRoleRef has role and @type marked mandatory; the server fills it with the authenticated party that made the change.
     status: pending
-    note: "gap: ChangeEntry (C10.4) names the actor as an EntityRef `actor`, with no `revisedBy`, `role`, `revision`, `action` or `entity` snapshot CONTRADICTION: TMF630 v5.0.0 P1 §12.2 p.208 defines history entries as History resources (creationDate, revision, action created/updated/deleted, revisedBy with mandatory role and @type, entity snapshot, request/response); Contracts 10.4 says history lists are ChangeEntry resources (operationId, version, kind, actor EntityRef, occurredAt, changes, fields)."
+    note: "C10.4 (Martin 2026-10-22, D3): ChangeEntry has @baseType History, revision, action, creationDate and revisedBy (a typed reference); revisedBy carries no role (gap)."
   - id: TMF630@5.0.0/P1/12.2/history-revision-unique
     source: TMF630 v5.0.0 P1 §12.2 p.209
     level: mandatory
@@ -2316,8 +2321,10 @@ rows:
     source: TMF630 v5.0.0 P1 §12.3.1 p.214
     level: mandatory
     requirement: A server supports on the history collection the same selectors (filter, fields) as on every other collection.
-    status: pending
-    note: "gap: history filters are limited to time, actor, kind and readable field (3.7); `fields` on history is not stated; JSONPath `filter` is refused everywhere (E14) CONTRADICTION: TMF630 v5.0.0 P1 §12.3.1 p.214 says history collections support the same filter and fields selectors as other collections; Contracts 10.4 (through 3.7) says history lists are filtered only by time, actor, kind and readable field ID, never by value."
+    status: tested
+    tests:
+      - packages/server/test/v2-history.test.ts#v2-history
+    note: "C10.4 (Martin 2026-10-22, D3): history lists take paging, fields and filters on ChangeEntry attributes; filters on record values are refused (3.7)."
   - id: TMF630@5.0.0/P1/13.1.1/major-version-on-incompatible-change
     source: TMF630 v5.0.0 P1 §13.1.1 p.239
     level: mandatory
@@ -2402,8 +2409,11 @@ rows:
     source: TMF630 v5.0.0 P1 §13.2.3 p.242
     level: recommended
     requirement: Where filtering on a free-text attribute is supported, a server should compare the value directly, without modification.
-    status: pending
-    note: "C10.3: text equality compares the field's casefold key on case-insensitive fields (5.5), and filter literals get the write conversion CONTRADICTION: TMF630 v5.0.0 P1 §13.2.3 p.242 says filtering on a free-text attribute should match the value directly, without modification; Contracts 10.3 says text equality uses the field's key, so name=alice matches Alice on a case-insensitive field (its note 'TMF630 does not define case' is not accurate for v5)."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+      - packages/server/test/tmf-filter-equivalence.test.ts#tmf-filter-equivalence
+    note: "C10.3 (Martin 2026-10-22, D4): TMF attribute filters compare text unmodified; condition keeps each field's case behavior."
   - id: TMF630@5.0.0/P1/13.2.3/free-text-sort-default-collation
     source: TMF630 v5.0.0 P1 §13.2.3 p.242
     level: recommended
@@ -2478,13 +2488,16 @@ rows:
     level: optional
     requirement: An entity's @baseType may be used to denote the collection of all entities sharing that base type (e.g. a logicalResource collection holding both Tpe and Link).
     status: pending
-    note: "C10.2: @baseType is the parent class's qualified name, absent on a root's own records; the parent's collection lists subtree(parent) (C2.3) CONTRADICTION: TMF630 v4.0.0 P2 §1 p.3 says @baseType identifies the base type whose collection groups the entity (its §5 example even repeats @type as @baseType on a root-type record); Contracts 10.2 says @baseType is the immediate parent class and is absent on a root's own records, so for hierarchies deeper than two levels and for root records the two give different values."
+    note: "C10.2: @baseType is the direct parent's type name (TMF630 v5.0.0 P8 rules 3, 6-9); for a two-level hierarchy it names the base collection."
   - id: TMF630@5.0.0/v4.0.0-P2/1/base-query-returns-all-concrete-subtypes
     source: TMF630 v4.0.0 P2 §1 p.4
     level: recommended
     requirement: A query on a base collection returns the concrete representations of every resource compatible with the base type. (no keyword; stated as the pattern)
-    status: pending
-    note: "C2.3/C10.3: endpoint E lists records of subtree(E), each with its concrete @type CONTRADICTION: TMF630 v4.0.0 P2 §1 p.4 says a base-collection query returns the concrete resource representations; Contracts 2.3 and 10.2 say that through a parent endpoint a record shows only the endpoint's lineage fields (child-only attributes are left out and cannot be selected), with @type pointing to where the rest can be read."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+      - packages/server/test/v2-review.test.ts#v2-review
+    note: "C10.2 (Martin 2026-10-22, D1): reads and lists through a parent collection return each record's concrete representation under its access rules."
   - id: TMF630@5.0.0/v4.0.0-P2/1/abstract-types-never-returned
     source: TMF630 v4.0.0 P2 §1 p.4
     level: recommended
@@ -2495,8 +2508,10 @@ rows:
     source: TMF630 v4.0.0 P2 §1 p.5
     level: recommended
     requirement: All operations should be addressed relative to the base type's collection.
-    status: pending
-    note: "C10.1/C2.2 item 5: every operation works through the root or any ancestor collection for records of its subtree; but href points at the concrete class (C10.2) CONTRADICTION: TMF630 v4.0.0 P2 §1 p.5 says operations should be relative to the base types (its examples give href through the base collection, e.g. /logicalResource/42 for a Link); Contracts 10.2 says href is the record's absolute URL through its concrete class."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2: operations work through the base collection (reads, polymorphic creates, updates, deletes); href stays the canonical concrete URI and Content-Location plus Link self/canonical declare both (reviewer, decision 0025)."
   - id: TMF630@5.0.0/v4.0.0-P2/1/derived-collections-optional
     source: TMF630 v4.0.0 P2 §1 p.5
     level: optional
@@ -2582,8 +2597,9 @@ rows:
     source: TMF630 v4.0.0 P2 §2.1 p.11
     level: mandatory
     requirement: An extension (subtype) schema must include every attribute of its base schema.
-    status: pending
-    note: "spec-authoring: constrains the per-class schema.json and openapi.json STD serves; a child class inherits all fields (C2.1) CONTRADICTION: TMF630 v4.0.0 P2 §2.1 p.11 says an extension schema includes all base-schema attributes; Contracts 10.2 says the schema at @schemaLocation is the caller's and names no field the caller cannot read, so when a read deny is attached to the child class for an inherited field (C3, rules on C and its ancestors) the child's schema omits an attribute the parent's schema shows to the same caller."
+    status: excluded
+    decision: X630-hidden-base-fields
+    note: "exclusion X630-hidden-base-fields (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/v4.0.0-P2/2.1/polymorphic-attributes-optional-in-all-schemas
     source: TMF630 v4.0.0 P2 §2.1 p.12
     level: mandatory
@@ -2714,8 +2730,9 @@ rows:
     source: TMF630 v4.0.0 P2 §4 p.25
     level: mandatory
     requirement: An EntityRef (including the ref form of RefOrValue) must contain id and href; other attributes of the plain entity may be added.
-    status: pending
-    note: "C10.2: EntityRef {@type, id, href, @referredType, name}; in writes only id is read CONTRADICTION: TMF630 v4.0.0 P2 §4 p.25 says an EntityRef must contain both id and href; Contracts 10.2 says href (with @referredType) is absent when the target is not visible to the caller and the caller does not know the declared target class (Contracts relies on v5 EntityRef, which requires only id)."
+    status: excluded
+    decision: X630-referred-type-hidden
+    note: "exclusion X630-referred-type-hidden (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/v4.0.0-P2/4/value-requires-entity-mandatory-attributes
     source: TMF630 v4.0.0 P2 §4 p.25
     level: mandatory
@@ -2758,8 +2775,9 @@ rows:
     source: TMF630 v4.0.0 P2 §5 p.32
     level: mandatory
     requirement: An EntityRef must contain id and href.
-    status: pending
-    note: "C10.2: EntityRef with id always and href when the target class may be named CONTRADICTION: TMF630 v4.0.0 P2 §5 p.32 says an EntityRef must contain id and href; Contracts 10.2 says href is absent when the target is invisible and the caller does not know the declared target class, and that writes read only id."
+    status: excluded
+    decision: X630-referred-type-hidden
+    note: "exclusion X630-referred-type-hidden (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/v4.0.0-P2/5/entity-ref-optional-attributes
     source: TMF630 v4.0.0 P2 §5 p.32
     level: optional
@@ -3012,8 +3030,10 @@ rows:
     source: TMF630 v4.0.0 P3 §2.5 p.14
     level: mandatory
     requirement: Every resource must be identified by a URI; the URL used to request it counts as its identifier.
-    status: pending
-    note: "C10.1/C10.2: /api/v2/{table}/{id}, with href always present CONTRADICTION: TMF630 v4.0.0 P3 §2.5 p.14 says the URL used to request a resource is its identifier; Contracts 10.2 says href is the URL through the record's concrete class, so a record read through a parent endpoint reports an href different from the request URL."
+    status: tested
+    tests:
+      - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
+    note: "C10.2: a single resource answers Link rel=self with the URI requested and rel=canonical with its href."
   - id: TMF630@5.0.0/v4.0.0-P3/2.5/identifier-as-self-header-or-link
     source: TMF630 v4.0.0 P3 §2.5 p.14
     level: optional
@@ -3636,8 +3656,9 @@ rows:
     source: TMF630 v5.0.0 P7 §1.4.2 p.14
     level: mandatory
     requirement: An EntityRef always carries id and @referredType; href and name are optional. (definition and schema 'required' list; no upper-case keyword)
-    status: pending
-    note: "C10.2: `id` always present; `@referredType` is omitted when the caller can know neither the target's concrete class nor the declared target class CONTRADICTION: TMF630 v5.0.0 P7 §1.4.2 p.14 (schema p.16) makes `@referredType` a required EntityRef attribute; Contracts 10.2 says `@referredType` and `href` are both absent when the caller knows neither the target's concrete class nor the field's declared target class."
+    status: excluded
+    decision: X630-referred-type-hidden
+    note: "exclusion X630-referred-type-hidden (Martin 2026-10-22, D2): information hiding wins (Contracts 3.4)."
   - id: TMF630@5.0.0/P7/1.4.3/entityref-unchanged
     source: TMF630 v5.0.0 P7 §1.4.3 p.15
     level: mandatory

@@ -157,3 +157,52 @@ entries:
     decidedBy: Martin
     words: "All 33 open decisions of decision 0021 are accepted as recommended."
     date: 2026-10-22
+  - id: X630-hidden-base-fields
+    rows:
+      - TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base
+    requirement: "TMF630 v4.0.0 Part 2 §2.1 p.11: an extension schema includes every attribute of its base schema"
+    reason: "A table's schema.json is the caller's: it names no field the caller cannot read, so a child class's schema can leave out an inherited field the caller may not read there (Contracts 3.4, 10.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-referred-type-hidden
+    rows:
+      - TMF630@5.0.0/P7/1.4.2/entityref-id-referredtype-required
+      - TMF630@5.0.0/v4.0.0-P2/4/ref-requires-id-and-href
+      - TMF630@5.0.0/v4.0.0-P2/5/entity-ref-id-and-href
+    requirement: "TMF630 v5.0.0 Part 7 §1.4.2 p.14 (@referredType required) and v4.0.0 Part 2 §4 p.25, §5 p.32 (href required) on EntityRefs"
+    reason: "A reference to a target the caller cannot see, whose declared class the caller does not know, carries only id: @referredType and href would name a class the caller cannot know (Contracts 3.4, 10.2)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-identical-404
+    rows:
+      - TMF630@5.0.0/P1/3.3.3/status-403-outside-scope
+      - TMF630@5.0.0/P1/3.3.3/status-410-gone
+    requirement: "TMF630 v5.0.0 Part 1 §3.3.3 pp.31-32: 403 outside the permitted scope and 410 for a resource no longer available (SHOULD)"
+    reason: "A table or record the caller cannot see, one that never existed and a deleted one answer the same 404, so the answer reveals nothing (Contracts 3.4, 3.8)."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
+  - id: X630-no-store
+    rows:
+      - TMF630@5.0.0/P1/1.5.1/caching-encouraged
+      - TMF630@5.0.0/P1/1.5.1/expiration-headers-on-get-200
+      - TMF630@5.0.0/P1/1.5.1/no-cache-only-when-necessary
+    requirement: "TMF630 v5.0.0 Part 1 §1.5.1 p.11: caching should be encouraged and GET 200 responses carry expiration headers (SHOULD)"
+    reason: "Every API response carries Cache-Control: no-store (decision 0018): a cookie-authenticated response must never be stored by a shared cache; Part 1 §1.5.1 permits discouraging caching."
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: "Where TMF630 would reveal what a caller may not see, information hiding wins, each with a narrow recorded exclusion."
+    date: 2026-10-22
