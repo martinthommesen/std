@@ -160,6 +160,31 @@ const fieldName = (snapshot: ConfigSnapshot, id: DefinitionId): string => {
 };
 
 /**
+ * How a report names a choice, a layout or a saved filter: by what it
+ * belongs to, not by ID.
+ *
+ * @param snapshot - The configuration that resolves the names.
+ * @param definition - A definition or draft.
+ * @returns The name, or undefined for other kinds.
+ */
+const uiConfigName = (
+  snapshot: ConfigSnapshot,
+  definition: Definition | Draft
+): string | undefined => {
+  if (definition.kind === "choice") {
+    return `choice ${definition.key} of ${fieldName(snapshot, definition.fieldId)}`;
+  }
+
+  if (definition.kind === "layout") {
+    return `${definition.type} layout of ${snapshot.qualifiedNameOf(definition.classId) ?? definition.classId}`;
+  }
+
+  return definition.kind === "savedFilter"
+    ? `saved filter ${definition.name} of ${snapshot.qualifiedNameOf(definition.classId) ?? definition.classId}`
+    : undefined;
+};
+
+/**
  * A readable name of a definition for reports.
  *
  * @param snapshot - A snapshot holding the definitions it refers to.
@@ -201,5 +226,9 @@ export const displayName = (
     return definition.description ?? `access rule ${definition.id}`;
   }
 
-  return nameProperty(definition) ?? definition.id;
+  return (
+    uiConfigName(snapshot, definition) ??
+    nameProperty(definition) ??
+    definition.id
+  );
 };

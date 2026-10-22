@@ -27,6 +27,11 @@
  *       - { id: <uuid>, field: purchased_on, required: true }
  *     indexes:
  *       - { id: <uuid>, fields: [serial], unique: true }
+ *     layouts:
+ *       - { id: <uuid>, type: list, elements: [{ field: name }, { field: serial }] }
+ *     savedFilters:
+ *       - { id: <uuid>, name: mine, label: Mine,
+ *           condition: { op: eq, left: { path: [<owner field ID>] }, right: { ctx: me } } }
  * roles: [{ id: <uuid>, name: asset_manager, label: Asset manager }]
  * permissions: [{ id: <uuid>, name: schema.purge, label: Purge schema }]
  * grants: [{ id: <uuid>, role: schema_purger, permission: schema.purge }]
@@ -212,6 +217,9 @@ export const LayoutElementEntrySchema = Union([
   Struct({ section: SchemaString }),
 ]);
 
+/** A layout element entry. */
+export type LayoutElementEntry = typeof LayoutElementEntrySchema.Type;
+
 /** A form or list layout of a table. */
 export const LayoutEntrySchema = Struct({
   elements: SchemaArray(LayoutElementEntrySchema),
@@ -223,7 +231,26 @@ export const LayoutEntrySchema = Struct({
 /** One layout entry. */
 export type LayoutEntry = typeof LayoutEntrySchema.Type;
 
-/** A table entry with its fields, overrides, indexes and layouts. */
+/**
+ * A saved list filter of a table (decision 0019): a `filter`-profile
+ * condition AST whose paths hold field IDs, like every condition in a set
+ * file. `label` defaults to the name, as for fields.
+ */
+export const SavedFilterEntrySchema = Struct({
+  condition: ConditionSchema,
+  id: DefinitionIdSchema,
+  label: optionalKey(SchemaString),
+  name: SchemaString,
+  protected: optionalKey(SchemaBoolean),
+});
+
+/** One saved filter entry. */
+export type SavedFilterEntry = typeof SavedFilterEntrySchema.Type;
+
+/**
+ * A table entry with its fields, overrides, indexes, layouts and saved
+ * filters.
+ */
 export const TableEntrySchema = Struct({
   ...flags,
   displayField: optionalKey(SchemaString),
@@ -235,6 +262,7 @@ export const TableEntrySchema = Struct({
   /** The qualified name, `namespace.table`. */
   name: SchemaString,
   overrides: optionalKey(SchemaArray(OverrideEntrySchema)),
+  savedFilters: optionalKey(SchemaArray(SavedFilterEntrySchema)),
   storage: optionalKey(StorageSchema),
 });
 

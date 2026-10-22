@@ -21,6 +21,7 @@ import type {
   IndexDraft,
   LayoutDraft,
   LayoutElement,
+  SavedFilterDraft,
   NamespaceDraft,
   OverrideDraft,
   Owner,
@@ -62,7 +63,8 @@ export type Draft =
   | AccessRuleDraft
   | SubscriptionDraft
   | ChoiceDraft
-  | LayoutDraft;
+  | LayoutDraft
+  | SavedFilterDraft;
 
 /** A set with every name resolved. */
 export interface ResolvedSet {
@@ -517,6 +519,22 @@ const resolveLayouts = (resolution: Resolution, table: TableEntry): void => {
   }
 };
 
+const resolveSavedFilters = (
+  resolution: Resolution,
+  table: TableEntry
+): void => {
+  for (const filter of table.savedFilters ?? []) {
+    resolution.drafts.push({
+      ...flagsOf(resolution, filter),
+      classId: table.id,
+      condition: filter.condition,
+      kind: "savedFilter",
+      label: filter.label ?? labelFor(filter.name),
+      name: filter.name,
+    });
+  }
+};
+
 const optionalId = (
   resolution: Resolution,
   from: DefinitionId,
@@ -603,6 +621,7 @@ const resolveTable = (resolution: Resolution, table: TableEntry): void => {
 
   resolveIndexes(resolution, table);
   resolveLayouts(resolution, table);
+  resolveSavedFilters(resolution, table);
 };
 
 const roleId = (
@@ -802,6 +821,7 @@ const tableIds = (table: TableEntry): readonly DefinitionId[] => [
     (entry.choices ?? []).map((choice) => choice.id)
   ),
   ...(table.layouts ?? []).map((entry) => entry.id),
+  ...(table.savedFilters ?? []).map((entry) => entry.id),
   ...(table.overrides ?? []).map((entry) => entry.id),
   ...(table.indexes ?? []).map((entry) => entry.id),
 ];

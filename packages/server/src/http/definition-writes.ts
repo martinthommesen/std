@@ -98,6 +98,7 @@ const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
   override: "setOverride",
   permission: "createPermission",
   role: "createRole",
+  savedFilter: "createSavedFilter",
   subscription: "createSubscription",
 };
 

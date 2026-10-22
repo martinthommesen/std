@@ -95,6 +95,7 @@ export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
     override: "field_override",
     permission: "permission",
     role: "role",
+    savedFilter: "saved_filter",
     subscription: "subscription",
   };
 

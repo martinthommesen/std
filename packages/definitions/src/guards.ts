@@ -172,7 +172,8 @@ export type NewDefinition = CreateOperation["definition"] | OverrideDraft;
 
 /**
  * The class a new definition attaches to, if any: a child class's parent,
- * or the class of a field, an index, an override or a layout, or the
+ * or the class of a field, an index, an override, a layout or a saved
+ * filter, or the
  * class of a choice's field. Every kind that
  * extends an existing table is listed here, so the attachment rule below
  * covers them all.
@@ -193,7 +194,8 @@ const hostOf = (
     case "field":
     case "index":
     case "override":
-    case "layout": {
+    case "layout":
+    case "savedFilter": {
       return classOf(work, definition.classId);
     }
 
