@@ -174,6 +174,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Party foundation: every user has exactly one individual after the upgrade from `v0.0.2` (the `data` migration, rerun and kill-resume included), and every new user gets one; a server refuses to start while a `data` migration is incomplete, and `doctor` reports it (`party-foundation`, `data-migration-interrupted`).
 - ITIL: a change of impact or urgency sets incident priority from the impact × urgency matrix for every cell through the generic API, TMF621 and the browser, an explicit priority in the same write wins, and the browser form shows priority read-only by default (Martin, 2026-10-22: TM Forum takes priority over ITIL; decision 0021, decisions 34 and 53); the incident and problem state models accept every transition of TMF621's life cycle and refuse every other transition outside Contracts 14; the forms require resolution code and notes, and a known error's workaround; resolving a problem returns its waiting incidents to work (`itil-incident`, `itil-problem`).
 - The helpdesk set v2 to v3 upgrade (the ITIL rebuild) keeps every Step 2 incident, its history and the local overrides of the Step 2 upgrade test.
+- Release safety (Martin, 2026-10-22; decision 0021, decisions 50 and 51): the server, worker and CLI reach a remote Postgres only over TLS with full verification (`db-tls`); the `v0.0.3` release image is signed with cosign by the release workflow, which verifies the signature before it publishes (`release-signature`); every platform migration declares its phase and every `expand` migration keeps the previous release working, checked on every PR (`migration-phases`, Contracts 8.8).
 - ODA Canvas probe: a stub component is deployed on the pinned ODA Canvas on kind in GitHub Actions, and the measurements are committed (time, disk, failure rate over 10 runs). This step's gate needs the measurements, not a green deployment.
 
 **Includes.**
@@ -188,6 +189,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Aggregate parts (Contracts 6.5, 11.1) and the requirements matrix with its CI check (Contracts 15).
 - TMF621 Trouble Ticket over ITIL incident and problem management; the helpdesk set v3 rebuilt on it (Contracts 11.2, 14).
 - The ODA Canvas probe (Contracts 13.6).
+- TLS to Postgres and signed releases (Contracts 8.9), and the rolling-upgrade rules every migration follows from now on (Contracts 8.8, RU1 to RU10).
 
 **Workstreams.**
 
@@ -202,6 +204,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 | 3P Party foundation | Every user, old and new, has exactly one individual, so TMF621 names parties consistently; an interrupted backfill never goes unnoticed | `party-foundation` (backfill from `v0.0.2`, rerun, kill and resume, concurrent user creation); `data-migration-interrupted` |
 | 3I ITIL incident and problem on TMF621 | ITIL behaviors hold the same through the generic API, TMF621 and the browser | TMF621 CTK; `itil-incident`; `itil-problem`; `helpdesk-v3-upgrade`; browser test of the incident form |
 | 3K ODA Canvas probe | The Step 5 Canvas gate rests on measurements, not hope | Committed probe results: Canvas install time, disk use and failures over 10 runs on `ubuntu-latest` |
+| 3R Release safety (new) | Data in transit to a remote Postgres is encrypted and verified; every release image (and from Step 5 the chart) is signed and verified before it is published; every migration written now can run under Step 5's rolling upgrades | `db-tls`; `release-signature`; `migration-phases` |
 
 **Runnable result.** `docker compose up`, then the browser shows the ITIL helpdesk (rules computing priority and requiring resolution notes); `examples/helpdesk/tmf621.sh` opens, updates and resolves a trouble ticket through TMF621 while `examples/listener` prints the events it receives; `pnpm ctk tmf621` runs TM Forum's kit against the running server. Tag `v0.0.3`.
 
@@ -256,7 +259,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 - Backup and restore: a `pg_dump` taken under load during a change set's follow-up phase restores into an empty Postgres 18; the change set completes, auto-numbers continue, sign-in works, and outbox consumers that dedupe by change ID (hub listeners by `eventId`) apply each repeated delivery once.
 - Restore then upgrade: a `v0.0.4` backup restored and upgraded reaches the same state as the release upgrade test.
 - The recovery runbook (interrupted schema change, failed or waiting index build, dead letters, paused imports) is executed by CI, so documented commands cannot drift from the code.
-- ODA: the component's YAML validates against the `oda.tmforum.org/v1` Component CRD; on kind with the pinned Canvas chart, the component reaches `Complete`, its exposed APIs are published through the Canvas gateway, the Canvas identity operator has created its Keycloak client with exactly the roles STD's TMF672 serves (and follows a role created afterwards), and every CTK of Steps 3 and 4 passes again through the gateway with Keycloak-issued tokens (`oda-canvas-deploy`). The Canvas BDD features for install, upgrade, uninstall, exposed APIs and permission specification sets pass with STD's chart as the component under test. `helm install` (bundled or external database, with and without `--wait`) starts no server or worker before this attempt's `std upgrade` has finished; a real `helm upgrade` from the previous release keeps upgrades offline (no server or worker session while `std upgrade` migrates); a failed migration leaves every pod waiting until a fixed new attempt completes (checked through Kubernetes in every mode, and as a Helm failure with `--wait`); and going back is a restore plus `helm upgrade` of the older chart (`oda-helm-lifecycle`, Contracts 13.1).
+- ODA: the component's YAML validates against the `oda.tmforum.org/v1` Component CRD; on kind with the pinned Canvas chart, the component reaches `Complete`, its exposed APIs are published through the Canvas gateway, the Canvas identity operator has created its Keycloak client with exactly the roles STD's TMF672 serves (and follows a role created afterwards), and every CTK of Steps 3 and 4 passes again through the gateway with Keycloak-issued tokens (`oda-canvas-deploy`). The Canvas BDD features for install, upgrade, uninstall, exposed APIs and permission specification sets pass with STD's chart as the component under test. `helm install` (bundled or external database, with and without `--wait`) starts no server or worker before this attempt's `std upgrade` has finished; a real `helm upgrade` from the previous release rolls: both releases serve side by side through expand, roll and finalize, and no request fails (`rolling-upgrade`, `expand-compat`, Contracts 8.8; decision 0021, decision 51); a failed expand leaves the old pods serving and the new ones waiting until a fixed new attempt completes (checked through Kubernetes in every mode, and as a Helm failure with `--wait`); going back before finalize is a `helm upgrade` of the older chart, after finalize a restore plus `helm upgrade`; and `helm uninstall` removes the component's APIs and Keycloak client and keeps the data (`oda-helm-lifecycle`, Contracts 13.1).
 - `check-conformance-matrix --gate step5` passes for every pinned specification, the ODA Component CRD included.
 - ODA security: a Keycloak token whose roles include `agent` gets exactly what a local `agent` session gets, through the generic API and TMF621 (the Contracts 3 hidden-field tests repeated with OIDC callers); a role the token names that STD does not know grants nothing.
 - `/api/v1` is gone, with a migration note in the release notes.
@@ -266,7 +269,7 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 
 - COPY only if the import measurement requires it (Contracts 7.8).
 - Docker image on ghcr.io with the web app built in, OpenTelemetry tracing and a metrics endpoint (the component's management API).
-- The ODA Component (Contracts 13): component YAML, a hook-free Helm chart whose per-attempt upgrade Job runs `std upgrade` while `Recreate` Deployments wait in init containers for that attempt's completion (works with and without `--wait`; the attempt ID can be supplied for GitOps), recovery to an older version by restore and `helm upgrade` (no `helm rollback` after migrations), OIDC bearer tokens from the Canvas identity provider, the Canvas deployment workflow.
+- The ODA Component (Contracts 13): component YAML, a hook-free, signed Helm chart whose per-attempt Jobs run `std upgrade --expand` while the old pods serve and `std upgrade --finalize` once they are gone, with `RollingUpdate` Deployments whose new pods wait in init containers for that attempt's expand (works with and without `--wait`; the attempt ID can be supplied for GitOps), the three upgrade phases and the new startup ledger check (Contracts 8.8), recovery to an older version by `helm upgrade` before finalize and by restore and `helm upgrade` after it (no `helm rollback` after migrations), uninstall that keeps the data, password sign-in off by default under OIDC, OIDC bearer tokens from the Canvas identity provider, the Canvas deployment workflow.
 - Docs site with the contracts, the ServiceNow and TM Forum mappings, backup and recovery runbooks.
 - Schema snapshot endpoint and SDK codegen CLI (Contracts 6.8).
 - Final public project name and npm scope.
@@ -277,10 +280,10 @@ Stage 0 tests from Contracts 3 "Acceptance tests": `rows-count`, `hidden-names`,
 | Workstream | Guarantee it proves | Test that proves it |
 | --- | --- | --- |
 | 5A Performance (was 4A) | Published numbers are reproducible | Committed import and benchmark results, rerunnable by script; Q3 and Q4 on a quiet or dedicated machine; Q7 reported as a known risk |
-| 5B Upgrade (was 4B) | An existing install with data and customizations upgrades safely | Release upgrade test |
+| 5B Upgrade (was 4B) | An existing install with data and customizations upgrades safely, also while the previous release keeps serving | Release upgrade test; `expand-compat`; `rolling-upgrade` |
 | 5C Backup and recovery (was 4C) | A restore, and an interrupted change, end in a consistent, usable install | Backup-restore drill; restore-then-upgrade test; runbook in CI |
 | 5D Packaging, docs, SDK (was 4D) | What we ship matches what we tested | Image smoke test; SDK golden-file test |
-| 5O ODA Component and Canvas | What the Canvas deploys is what CI tested, every exposed API is conformant behind the Canvas gateway, and chart upgrades stay offline | `oda-component-schema`; `oda-canvas-deploy` with the CTKs through the gateway; `oda-helm-lifecycle`; the Canvas BDD features |
+| 5O ODA Component and Canvas | What the Canvas deploys is what CI tested, every exposed API is conformant behind the Canvas gateway, and chart upgrades roll without failed requests | `oda-component-schema`; `oda-canvas-deploy` with the CTKs through the gateway; `oda-helm-lifecycle`; the Canvas BDD features |
 | 5S ODA security | The Canvas identity provider authenticates and assigns roles; STD alone decides access | OIDC versions of the Contracts 3 tests; `oidc-unknown-role`; Keycloak role sync test |
 
 **Runnable result.** `docker run` of the v0.1.0 image, or `docker compose up` from the release, then the helpdesk and CMDB examples; or `helm install` of the component onto an ODA Canvas (`deploy/oda/README.md`). Tag `v0.1.0`.
@@ -354,7 +357,7 @@ Crossing a threshold triggers a decision by Martin at that gate, not an automati
 - History retention, and erasure of a purged field's values from history (with data-protection work).
 - History of deleted records for non-admins.
 - Selecting child-only fields through a parent endpoint.
-- Rolling upgrades, high availability, clustering, multi-tenancy, other databases.
+- High availability beyond rolling upgrades, clustering, multi-tenancy, other databases. (Rolling upgrades moved into v0.1: Martin, 2026-10-22; decision 0021, decision 51.)
 - Accent-insensitive search; field types such as duration, currency, multi-choice, attachment, rich text, comment and internal-note logs.
 - Migration toolkit: a ServiceNow importer, and an optional ServiceNow-compatible API adapter.
 - Scripting: JavaScript or TypeScript checked against generated types, run in a locked-down process behind one protocol, reading and writing through the record service as a known user.
