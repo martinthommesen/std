@@ -41,7 +41,10 @@ export const LoadCurrentUser = Command.define("LoadCurrentUser", {
   messages: [Message.SucceededLoadCurrentUser, Message.FailedLoadCurrentUser],
 });
 
-const loadTablesAt = (revision: Option.Option<SchemaRevision>) =>
+const loadTablesAt = (
+  revision: Option.Option<SchemaRevision>,
+  sessionId: number
+) =>
   Effect.gen(function* loadTables() {
     const client = yield* StdApi;
 
@@ -50,9 +53,13 @@ const loadTablesAt = (revision: Option.Option<SchemaRevision>) =>
       .pipe(atRevision(revision));
 
     return Option.match(responseRevision(response), {
-      onNone: () => Message.FailedLoadTables(),
+      onNone: () => Message.FailedLoadTables({ sessionId }),
       onSome: (stated) =>
-        Message.SucceededLoadTables({ revision: stated, tables: list.tables }),
+        Message.SucceededLoadTables({
+          revision: stated,
+          sessionId,
+          tables: list.tables,
+        }),
     });
   });
 
@@ -60,17 +67,23 @@ const loadTablesAt = (revision: Option.Option<SchemaRevision>) =>
  * Loads the tables the user can open (`GET meta/tables`), for the
  * navigation and the home page, at the latest revision the app has seen.
  * A revision the database never had (after a restore) is dropped and the
- * list asked for again without one.
+ * list asked for again without one. Every answer names the session that
+ * asked, so it counts in no other.
  */
 export const LoadTables = Command.define("LoadTables", {
-  args: { maybeRevision: Schema.Option(SchemaRevision) },
-  execute: ({ maybeRevision }) =>
-    loadTablesAt(maybeRevision).pipe(
-      Effect.catchTag("SchemaChanged", () => loadTablesAt(Option.none())),
-      Effect.catchTag("Unauthenticated", () =>
-        Effect.succeed(Message.FailedAuthentication())
+  args: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    sessionId: Schema.Int,
+  },
+  execute: ({ maybeRevision, sessionId }) =>
+    loadTablesAt(maybeRevision, sessionId).pipe(
+      Effect.catchTag("SchemaChanged", () =>
+        loadTablesAt(Option.none(), sessionId)
       ),
-      Effect.orElseSucceed(() => Message.FailedLoadTables())
+      Effect.catchTag("Unauthenticated", () =>
+        Effect.succeed(Message.FailedAuthentication({ sessionId }))
+      ),
+      Effect.orElseSucceed(() => Message.FailedLoadTables({ sessionId }))
     ),
   messages: [
     Message.SucceededLoadTables,
@@ -81,22 +94,26 @@ export const LoadTables = Command.define("LoadTables", {
 
 /**
  * Ends the session (`POST auth/sign-out`); the server clears the cookie. A
- * session that had already ended counts as signed out.
+ * session that had already ended counts as signed out. The answer names
+ * the session that asked, so it counts in no other.
  */
 export const SignOut = Command.define("SignOut", {
-  args: { maybeRevision: Schema.Option(SchemaRevision) },
-  execute: ({ maybeRevision }) =>
+  args: {
+    maybeRevision: Schema.Option(SchemaRevision),
+    sessionId: Schema.Int,
+  },
+  execute: ({ maybeRevision, sessionId }) =>
     Effect.gen(function* signOut() {
       const client = yield* StdApi;
 
       yield* client.session.signOut().pipe(atRevision(maybeRevision));
 
-      return Message.SucceededSignOut();
+      return Message.SucceededSignOut({ sessionId });
     }).pipe(
       Effect.catchTag("Unauthenticated", () =>
-        Effect.succeed(Message.SucceededSignOut())
+        Effect.succeed(Message.SucceededSignOut({ sessionId }))
       ),
-      Effect.orElseSucceed(() => Message.FailedSignOut())
+      Effect.orElseSucceed(() => Message.FailedSignOut({ sessionId }))
     ),
   messages: [Message.SucceededSignOut, Message.FailedSignOut],
 });

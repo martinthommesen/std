@@ -109,17 +109,32 @@ const landSignedOut = (
 /** The first page number of the app's run. */
 const FIRST_PAGE_ID = 1;
 
-// NOTE: page numbers go on across sign-out and sign-in (`nextPageId` is
-// carried through the signed-out state), so an answer to a page of an
-// earlier session never reaches a page of the next one.
+/** The first session number of the app's run. */
+const FIRST_SESSION_ID = 1;
+
+/** The numbers the next session goes on from. */
+interface Counters {
+  readonly nextPageId: number;
+  readonly nextSessionId: number;
+}
+
+const FIRST_COUNTERS: Counters = {
+  nextPageId: FIRST_PAGE_ID,
+  nextSessionId: FIRST_SESSION_ID,
+};
+
+// NOTE: page and session numbers go on across sign-out and sign-in (both
+// counters are carried through the signed-out state), so an answer to a
+// page or a root request of an earlier session never reaches the next one.
 const initSignedOut = (
   route: SignedOutRoute,
   maybeReturnRoute: Option.Option<SignedInRoute>,
-  nextPageId: number = FIRST_PAGE_ID
+  counters: Counters = FIRST_COUNTERS
 ): Model =>
   Model.SignedOut({
     maybeReturnRoute,
-    nextPageId,
+    nextPageId: counters.nextPageId,
+    nextSessionId: counters.nextSessionId,
     route,
     signIn: signInInit(),
   });
@@ -128,19 +143,32 @@ const initSignedIn =
   (
     user: CurrentUser,
     maybeRevision: Option.Option<SchemaRevision>,
-    nextPageId: number = FIRST_PAGE_ID
+    counters: Counters = FIRST_COUNTERS
   ) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
       maybeRecordForm: Option.none(),
       maybeRevision,
       maybeTableList: Option.none(),
-      nextPageId,
+      nextPageId: counters.nextPageId,
       route,
+      sessionId: counters.nextSessionId,
       signOutRequest: SignOutRequest.Idle(),
       tables: Tables.Idle(),
       user,
     });
+
+/**
+ * The counters a session leaves to the next one: its page counter, and
+ * the session number after its own.
+ *
+ * @param signedInModel - The session that ends.
+ * @returns The counters for the signed-out state.
+ */
+const countersAfter = (signedInModel: SignedInModel): Counters => ({
+  nextPageId: signedInModel.nextPageId,
+  nextSessionId: signedInModel.sessionId + 1,
+});
 
 /**
  * Adds the move of focus to the new page's `main` to a result.
@@ -218,7 +246,12 @@ const reloadTables = (tables: TablesState): TablesState =>
 const reloadTableList: Step = (model) =>
   Model.guards.SignedIn(model) && !AsyncData.isPending(model.tables)
     ? {
-        commands: [LoadTables({ maybeRevision: model.maybeRevision })],
+        commands: [
+          LoadTables({
+            maybeRevision: model.maybeRevision,
+            sessionId: model.sessionId,
+          }),
+        ],
         model: modifyFields(model, { tables: reloadTables }),
       }
     : { model };
@@ -293,7 +326,7 @@ const endSession: Step = (model) =>
         model: initSignedOut(
           AppRoute.SignIn(),
           Option.some(model.route),
-          model.nextPageId
+          countersAfter(model)
         ),
       })
     : { model };
@@ -628,6 +661,25 @@ const inSignedIn = (
   Model.guards.SignedIn(model) ? whenSignedIn(model) : { model };
 
 /**
+ * Runs an update only in the signed-in session with this number; in any
+ * other state or session the Message answers a request of an earlier one
+ * and changes nothing.
+ *
+ * @param model - The state.
+ * @param sessionId - The number of the session that sent the request.
+ * @param whenInSession - The update for that session.
+ * @returns Its result, or the unchanged state.
+ */
+const inSession = (
+  model: Model,
+  sessionId: number,
+  whenInSession: (signedInModel: SignedInModel) => UpdateReturn
+): UpdateReturn =>
+  Model.guards.SignedIn(model) && model.sessionId === sessionId
+    ? whenInSession(model)
+    : { model };
+
+/**
  * Runs an update only while start-up asks for the session; a late answer
  * changes nothing.
  *
@@ -663,16 +715,13 @@ const enterAfterSignIn =
     );
 
     return focusingMain(
-      Update.combine(
-        initSignedIn(user, maybeRevision, model.nextPageId)(route),
-        [
-          (stepModel) => ({
-            commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
-            model: stepModel,
-          }),
-          enterSignedIn,
-        ]
-      )
+      Update.combine(initSignedIn(user, maybeRevision, model)(route), [
+        (stepModel) => ({
+          commands: [ReplaceUrl({ url: signedInRouteToUrl(route) })],
+          model: stepModel,
+        }),
+        enterSignedIn,
+      ])
     );
   };
 
@@ -734,7 +783,10 @@ export const update = (model: Model, message: Message) =>
           ? { model }
           : {
               commands: [
-                SignOut({ maybeRevision: signedInModel.maybeRevision }),
+                SignOut({
+                  maybeRevision: signedInModel.maybeRevision,
+                  sessionId: signedInModel.sessionId,
+                }),
               ],
               model: modifyFields(signedInModel, {
                 signOutRequest: () => SignOutRequest.Pending(),
@@ -750,20 +802,21 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedReplaceUrl: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedAuthentication: () => endSession(model),
+    FailedAuthentication: ({ sessionId }) =>
+      inSession(model, sessionId, endSession),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadCurrentUser: () =>
       inCheckingSession(model, (route) => ({
         model: Model.SessionUnavailable({ route }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadTables: () =>
-      inSignedIn(model, (signedInModel) => ({
+    FailedLoadTables: ({ sessionId }) =>
+      inSession(model, sessionId, (signedInModel) => ({
         model: modifyFields(signedInModel, { tables: failTables }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedSignOut: () =>
-      inSignedIn(model, (signedInModel) => ({
+    FailedSignOut: ({ sessionId }) =>
+      inSession(model, sessionId, (signedInModel) => ({
         model: modifyFields(signedInModel, {
           signOutRequest: () => SignOutRequest.Failed(),
         }),
@@ -783,8 +836,8 @@ export const update = (model: Model, message: Message) =>
         settleSession(route, maybeUser, maybeRevision)
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadTables: ({ revision, tables }) =>
-      inSignedIn(model, (signedInModel) => ({
+    SucceededLoadTables: ({ revision, sessionId, tables }) =>
+      inSession(model, sessionId, (signedInModel) => ({
         model: modifyFields(signedInModel, {
           maybeRevision: (maybeRevision) =>
             Option.some(latestRevision(maybeRevision, revision)),
@@ -792,14 +845,14 @@ export const update = (model: Model, message: Message) =>
         }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededSignOut: () =>
-      inSignedIn(model, (signedIn) =>
+    SucceededSignOut: ({ sessionId }) =>
+      inSession(model, sessionId, (signedIn) =>
         focusingMain({
           commands: [ReplaceUrl({ url: signInRouter() })],
           model: initSignedOut(
             AppRoute.SignIn(),
             Option.none(),
-            signedIn.nextPageId
+            countersAfter(signedIn)
           ),
         })
       ),

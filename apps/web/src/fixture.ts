@@ -28,6 +28,7 @@ export const adaAtHome = Model.SignedIn({
   maybeTableList: Option.none(),
   nextPageId: 1,
   route: AppRoute.Home(),
+  sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Success({
     data: { revision: REVISION_3, tables: adaTables.tables },
@@ -42,6 +43,7 @@ export const adaEnteringHome = Model.SignedIn({
   maybeTableList: Option.none(),
   nextPageId: 1,
   route: AppRoute.Home(),
+  sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Loading(),
   user: ada,
@@ -51,6 +53,7 @@ export const adaEnteringHome = Model.SignedIn({
 export const signInRedirectedFromHome = Model.SignedOut({
   maybeReturnRoute: Option.some(AppRoute.Home()),
   nextPageId: 1,
+  nextSessionId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
@@ -59,6 +62,7 @@ export const signInRedirectedFromHome = Model.SignedOut({
 export const signInOpenedDirectly = Model.SignedOut({
   maybeReturnRoute: Option.none(),
   nextPageId: 1,
+  nextSessionId: 1,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });

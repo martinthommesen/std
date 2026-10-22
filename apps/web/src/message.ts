@@ -21,10 +21,10 @@ export const Message = defineMessageUnion({
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},
-  FailedAuthentication: {},
+  FailedAuthentication: { sessionId: Schema.Int },
   FailedLoadCurrentUser: {},
-  FailedLoadTables: {},
-  FailedSignOut: {},
+  FailedLoadTables: { sessionId: Schema.Int },
+  FailedSignOut: { sessionId: Schema.Int },
   GotRecordFormMessage: { message: RecordFormMessage, pageId: Schema.Int },
   GotSignInMessage: { message: SignInMessage },
   GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
@@ -34,9 +34,10 @@ export const Message = defineMessageUnion({
   },
   SucceededLoadTables: {
     revision: SchemaRevision,
+    sessionId: Schema.Int,
     tables: Schema.Array(MetaTableSummarySchema),
   },
-  SucceededSignOut: {},
+  SucceededSignOut: { sessionId: Schema.Int },
 });
 
 /** What happens in the app. */

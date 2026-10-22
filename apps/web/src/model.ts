@@ -58,9 +58,14 @@ export type Tables = typeof Tables.schema.Type;
  *   tables the user can open; the latest schema revision a response
  *   stated (Contracts 6.2), seeded from `auth/me` or sign-in; the list
  *   page's state on a list route, the form page's on a record's or the
- *   new-record route, and the number the next page gets.
- *   The
- *   session token is never here: it lives in the HTTP-only cookie.
+ *   new-record route, and the number the next page gets. `sessionId`
+ *   numbers the session within the app's run: every root request carries
+ *   it and its answer counts only in the session that sent it, so a late
+ *   answer meant for an earlier session (another user's tables, a
+ *   sign-out or an ended session) changes nothing. The session token is
+ *   never here: it lives in the HTTP-only cookie.
+ * - `SignedOut` carries both counters (`nextPageId`, `nextSessionId`), so
+ *   the next session's pages and requests get numbers no earlier one had.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
@@ -72,6 +77,7 @@ export const Model = defineTaggedUnion({
     maybeTableList: Schema.Option(TableListModel),
     nextPageId: Schema.Int,
     route: SignedInRoute,
+    sessionId: Schema.Int,
     signOutRequest: SignOutRequest,
     tables: Tables.schema,
     user: CurrentUserSchema,
@@ -79,6 +85,7 @@ export const Model = defineTaggedUnion({
   SignedOut: {
     maybeReturnRoute: Schema.Option(SignedInRoute),
     nextPageId: Schema.Int,
+    nextSessionId: Schema.Int,
     route: SignedOutRoute,
     signIn: SignInModel,
   },

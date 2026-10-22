@@ -95,8 +95,10 @@ describe("app", () => {
       given(adaAtHome),
       click(signOutButton),
       expect(role("button", { name: "Signing out…" })).toBeDisabled(),
-      Command.expectExact(SignOut({ maybeRevision: Option.some(REVISION_3) })),
-      Command.resolve(SignOut, Message.SucceededSignOut()),
+      Command.expectExact(
+        SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
+      ),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()]
@@ -112,7 +114,7 @@ describe("app", () => {
       { update, view },
       given(adaAtHome),
       click(signOutButton),
-      Command.resolve(SignOut, Message.FailedSignOut()),
+      Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       expect(within(banner, role("alert"))).toHaveText(
         "Signing out did not work. Try again."
       ),
@@ -141,6 +143,7 @@ describe("app", () => {
         LoadTables,
         Message.SucceededLoadTables({
           revision: REVISION_3,
+          sessionId: 1,
           tables: adaTables.tables,
         })
       ),
@@ -192,13 +195,13 @@ describe("app", () => {
       ),
       Command.expectExact(
         ReplaceUrl({ url: homeRouter() }),
-        LoadTables({ maybeRevision: Option.some(REVISION_3) }),
+        LoadTables({ maybeRevision: Option.some(REVISION_3), sessionId: 1 }),
         FocusMain()
       ),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
         [FocusMain, Message.CompletedFocusMain()],
-        [LoadTables, Message.FailedLoadTables()]
+        [LoadTables, Message.FailedLoadTables({ sessionId: 1 })]
       ),
       expect(role("alert")).toContainText("The tables could not be loaded"),
       expect(within(banner, text("Ada Lovelace"))).toExist(),
