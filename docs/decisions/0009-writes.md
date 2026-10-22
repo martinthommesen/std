@@ -11,7 +11,7 @@ Phase 1 built everything that needs no access rules, actor service or HTTP, with
 | `records/save-pipeline` | `createRecord`, `updateRecord`, `deleteRecord` (`Effect.fn`), each one request transaction (joined when nested), acting as the `Actor` in the environment; `SaveInput` (`endpointClassId`, `cause?`), `SaveResult` (`outcome`, `id`, `classId`, `version`, `changeId`, `record`) |
 | `records/write-body` | `decodeWriteBody` (unknown input to a JSON object, `InvalidBody`), `resolveWriteBody` (names to fields, `UnknownField`, system members `ReadOnlyField`), `SYSTEM_FIELD_NAMES` |
 | `records/write-validation` | `proposeCreate`, `proposeUpdate` (6.7 absent vs null, defaults, `@std/values` conversion under the effective type), `finalizeCreate`, `finalizeUpdate`, `recheckValue` (the final candidate after hooks), `validateProposal` |
-| `records/field-errors` | the field errors of `ValidationFailed` as `Schema.TaggedStruct`s; `InvalidValue` reasons are `@std/values`'s plus `notUnique` |
+| `records/field-errors` | the field errors of `ValidationFailed` as `Schema.TaggedStruct`s; `InvalidValue` reasons are `@std/values`'s plus `notUnique` (now `@std/definitions/field-errors`, decision 0017) |
 | `records/save-sql` | `lockRoot`, `loadRecord`, `insertRecord`, `updateRecord` (rows), `deleteRecordRows`, `existingTargets`, `updateLock`, `NOW` |
 | `records/save-constraints` | `constraintFailure`, `mapConstraints`: constraint violations to API errors by generated name |
 | `records/change-entry` | `ChangeCauseSchema`, `changedFields`, `writeChangeEntry` |
@@ -25,7 +25,7 @@ Phase 1 built everything that needs no access rules, actor service or HTTP, with
 | `records/write-only-values` | `WriteOnlyValues` seam (`hashPassword`); `WriteOnlyValues.scrypt` (sign-in's hashing), `WriteOnlyValues.unavailable` |
 | `records/save-stack` | `SaveStack` reference: records of enclosing saves (`RecordInSave`) |
 | `records/stored-values` | `columnText`, `parseStoredText` (Postgres text to `@std/values`), `bindValue` (text parameters with casts) |
-| errors | In `@std/api/errors` with their HTTP status: `ValidationFailed` 422 (field errors in `field-errors`), `VersionConflict` 409 (`currentVersion`), `VersionRequired` 428, `InvalidReference` 422 (`field`), `Referenced` 409, `NotAllowed` 403, plus the reads' `NotFound` and `UnknownField`. Server-only: `RecordInSave`, `InvalidBody` |
+| errors | In `@std/api/errors` with their HTTP status: `ValidationFailed` 422 (field errors in `@std/definitions/field-errors` since decision 0017), `VersionConflict` 409 (`currentVersion`), `VersionRequired` 428, `InvalidReference` 422 (`field`), `Referenced` 409, `NotAllowed` 403, plus the reads' `NotFound` and `UnknownField`. Server-only: `RecordInSave`, `InvalidBody` |
 
 ## Pipeline order (Contracts 4.1)
 
