@@ -26,6 +26,7 @@ import {
 } from "../src/records/save-pipeline.ts";
 import type { StoredRecord } from "../src/records/stored-record.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
+import type { LoggedStatement } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   deliveriesOf,
@@ -59,6 +60,31 @@ const notifyIndexes = (entries: readonly { readonly text: string }[]) =>
   entries.flatMap((entry, index) =>
     entry.text.toLowerCase().includes("notify") ? [index] : []
   );
+
+// The save's delivery insert and its COMMIT, on its connection.
+const saveOf = (entries: readonly LoggedStatement[]) => {
+  const insert = entries.findIndex((entry) =>
+    entry.text.includes("INSERT INTO core.delivery")
+  );
+
+  const saveConnection = entries[insert]?.connection;
+
+  const commit = entries.findIndex(
+    (entry, index) =>
+      index > insert &&
+      entry.connection === saveConnection &&
+      entry.text === "COMMIT"
+  );
+
+  return { commit, insert, saveConnection };
+};
+
+// Whether a NOTIFY follows the save's commit.
+const wokeAfterCommit = (entries: readonly LoggedStatement[]): boolean => {
+  const { commit } = saveOf(entries);
+
+  return commit >= 0 && notifyIndexes(entries).some((index) => index > commit);
+};
 
 const watch = (
   name: string,
@@ -414,26 +440,13 @@ describe("outbox-producer", () => {
             endpointClassId: ACME.asset,
           });
 
-          const notifies = log.entries.pipe(Effect.map(notifyIndexes));
-
-          yield* waitUntil(
-            notifies.pipe(Effect.map((indexes) => indexes.length > 0))
-          );
+          // The wake-up of this save: a NOTIFY after its commit. (A debounced
+          // wake-up of an earlier test's save may still arrive after the log
+          // was cleared; it says nothing about this save.)
+          yield* waitUntil(log.entries.pipe(Effect.map(wokeAfterCommit)));
 
           const entries = yield* log.entries;
-
-          const insert = entries.findIndex((entry) =>
-            entry.text.includes("INSERT INTO core.delivery")
-          );
-
-          const saveConnection = entries[insert]?.connection;
-
-          const commit = entries.findIndex(
-            (entry, index) =>
-              index > insert &&
-              entry.connection === saveConnection &&
-              entry.text === "COMMIT"
-          );
+          const { commit, insert, saveConnection } = saveOf(entries);
 
           const begin = entries.findLastIndex(
             (entry, index) =>
@@ -445,13 +458,6 @@ describe("outbox-producer", () => {
           assert.isAbove(insert, begin);
           assert.isAbove(commit, insert);
 
-          const [firstNotify] = yield* notifies;
-
-          assert.isAbove(
-            firstNotify ?? -1,
-            commit,
-            "the wake-up follows the commit"
-          );
           assert.isFalse(
             entries
               .slice(begin, commit + 1)

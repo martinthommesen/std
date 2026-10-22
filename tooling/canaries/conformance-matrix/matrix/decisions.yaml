@@ -1,0 +1,28 @@
+entries:
+  - id: D1-accepted
+    rows:
+      - DEMO-A@1.0.0/DOC/3/excluded
+    requirement: Something STD deliberately does not do
+    reason: A reason.
+    recommendation: accept
+    state: decided
+    outcome: accepted
+    decidedBy: Martin
+    words: Accepted.
+    date: 2026-10-22
+  - id: D2-proposed
+    rows: []
+    requirement: Something not decided yet
+    reason: A reason.
+    recommendation: accept
+    state: proposed
+  - id: D3-rejected
+    rows: []
+    requirement: Something Martin rejected
+    reason: A reason.
+    recommendation: accept
+    state: decided
+    outcome: rejected
+    decidedBy: Martin
+    words: Rejected.
+    date: 2026-10-22

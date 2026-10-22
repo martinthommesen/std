@@ -6,7 +6,6 @@ import { assert, describe, it, layer } from "@effect/vitest";
  */
 import {
   BUILT_IN_ROLE_IDS,
-  USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
 import { Plaintext } from "@std/values/write-only";
@@ -65,6 +64,12 @@ const changeEntries = (classId: string) =>
     [classId]
   ).pipe(Effect.map(([count]) => Number(count)));
 
+const recordEntries = (recordId: string) =>
+  values(
+    `SELECT count(*)::text AS value FROM core.change WHERE record_id = $1::uuid`,
+    [recordId]
+  ).pipe(Effect.map(([count]) => Number(count)));
+
 const testLayer = InstanceSettings.layer.pipe(
   Layer.provideMerge(schemaTestLayer())
 );
@@ -97,9 +102,15 @@ describe("bootstrap-admin", () => {
 
           assert.strictEqual(created.outcome, "created");
 
-          // Saved through the pipeline: one change entry each for the user
-          // and its role assignment.
-          assert.strictEqual(yield* changeEntries(USER_CLASS_ID), 1);
+          // Saved through the pipeline: one change entry each for the user,
+          // its individual (Contracts 11.3) and its role assignment.
+          const [individual] = yield* values(
+            `SELECT individual::text AS value FROM core."user" WHERE id = $1::uuid`,
+            [created.userId]
+          );
+
+          assert.strictEqual(yield* recordEntries(created.userId), 1);
+          assert.strictEqual(yield* recordEntries(individual ?? ""), 1);
           assert.strictEqual(yield* changeEntries(USER_ROLE_CLASS_ID), 1);
 
           // The same login, in another case and with another password, is
@@ -110,7 +121,7 @@ describe("bootstrap-admin", () => {
             outcome: "exists",
             userId: created.userId,
           });
-          assert.strictEqual(yield* changeEntries(USER_CLASS_ID), 1);
+          assert.strictEqual(yield* recordEntries(created.userId), 1);
           assert.isTrue(yield* canSignIn("admin", FIRST));
           assert.isFalse(yield* canSignIn("admin", SECOND));
 

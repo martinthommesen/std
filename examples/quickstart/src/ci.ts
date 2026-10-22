@@ -196,6 +196,7 @@ const quickstart = Effect.gen(function* runQuickstart() {
     QUICKSTART_BOB_PASSWORD: PASSWORDS.bob,
     STD_ADMIN_LOGIN: ADMIN_LOGIN,
     STD_ADMIN_PASSWORD: PASSWORDS.admin,
+    STD_DATABASE_DIRECT_URL: database.url,
     STD_DATABASE_URL: database.url,
     STD_DOCTOR_COMMAND: `"${process.execPath}" "${CLI}" doctor`,
     STD_HTTP_HOST: "127.0.0.1",

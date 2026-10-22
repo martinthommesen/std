@@ -108,6 +108,7 @@ export const stdServe = Effect.fn("BrowserSupport.stdServe")(function* stdServe(
         detached: true,
         env: {
           ...process.env,
+          STD_DATABASE_DIRECT_URL: databaseUrl,
           STD_DATABASE_URL: databaseUrl,
           STD_HTTP_HOST: "127.0.0.1",
           STD_HTTP_PORT: "0",

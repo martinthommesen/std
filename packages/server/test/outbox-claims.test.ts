@@ -144,8 +144,10 @@ const bulkDeliveries = (subscription: string, status: string, count: number) =>
            FROM generate_series(1, $4::int4)
            RETURNING id, record_id)
          INSERT INTO core.delivery (subscription_id, change_id, record_id,
-           record_version, status, attempts, next_attempt_at)
-         SELECT $5::uuid, c.id, c.record_id, 1, $6::text, 0, now() FROM c`,
+           record_version, status, attempts, next_attempt_at, finished_at)
+         SELECT $5::uuid, c.id, c.record_id, 1, $6::text, 0, now(),
+           CASE WHEN $6::text IN ('done', 'dead') THEN now() END
+         FROM c`,
         [
           PLATFORM_CLASS_IDS.change,
           SYSTEM_USER_ID,

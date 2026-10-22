@@ -44,12 +44,14 @@ const ERRORS = {
   DependencyConflict: [409, "Other definitions depend on this one"],
   ExistingDataViolates: [409, "Existing records violate the change"],
   FieldsConflict: [409, "fields includes and excludes the same attribute"],
+  HookDepthExceeded: [422, "Hooks and record rules nest too deeply"],
   InvalidCredentials: [401, "The login or password is wrong"],
   InvalidCursor: [400, "The cursor was not issued for this sort"],
   InvalidFilter: [400, "The filter does not parse or check"],
   InvalidReference: [422, "A referenced record does not exist"],
   InvalidRequest: [400, "A request parameter is malformed"],
   InvalidSchemaRevision: [400, "The STD-Schema-Revision header is malformed"],
+  InvalidTransition: [422, "The state change is not allowed"],
   MethodNotAllowed: [405, "The method is not allowed on this resource"],
   NotAllowed: [403, "The operation is not allowed"],
   NotFound: [404, "The resource does not exist"],
@@ -57,7 +59,9 @@ const ERRORS = {
   PatchTestFailed: [409, "The patch does not apply to the current version"],
   PermissionRequired: [403, "A permission is required"],
   PurgeRefused: [409, "The purge is refused"],
+  RecordInSave: [422, "The record is already being saved in this transaction"],
   Referenced: [409, "Other records refer to this record"],
+  RuleRefused: [422, "A record rule refused the save"],
   SchemaBusy: [503, "Another schema change is running"],
   SchemaChanged: [409, "The schema changed since the request was built"],
   SchemaLockTimeout: [503, "The schema change could not get its locks"],
@@ -150,10 +154,21 @@ const ownDetails = (failure: TaggedFailure): JsonObject =>
     )
   );
 
-// `InvalidRequest`'s message is a fixed text per check; every other tag's
-// message is its reason.
+/**
+ * Tags whose message is a fixed text of its own: per check
+ * (`InvalidRequest`), or as a record rule's author wrote it (`RuleRefused`,
+ * `InvalidTransition`, Contracts 4.10).
+ */
+const OWN_MESSAGE: ReadonlySet<string> = new Set([
+  "InvalidRequest",
+  "InvalidTransition",
+  "RuleRefused",
+]);
+
+// Those tags show their own message; every other tag's message is its
+// reason.
 const messageOf = (failure: TaggedFailure, reason: string): string =>
-  failure._tag === "InvalidRequest" &&
+  OWN_MESSAGE.has(failure._tag) &&
   Predicate.hasProperty(failure, "message") &&
   Predicate.isString(failure.message)
     ? failure.message

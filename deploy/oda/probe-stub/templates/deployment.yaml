@@ -1,0 +1,61 @@
+# busybox httpd serves the ConfigMap under the API's path. The image is the
+# official busybox 1.38.0, pinned by the digest of its multi-platform index
+# (docs/decisions/0027-oda-canvas-probe.md). It runs as nobody, read-only,
+# without capabilities; Istio adds its sidecar in the `components` namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: std-probe-api
+  labels:
+    app.kubernetes.io/name: std-probe-api
+    oda.tmforum.org/componentName: std-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: std-probe-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: std-probe-api
+        oda.tmforum.org/componentName: std-probe
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+          command: ["httpd", "-f", "-v", "-p", "8080", "-h", "/www"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /std-probe/probe/v1/openapi.json
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: content
+              mountPath: /www/std-probe/probe/v1
+              readOnly: true
+      volumes:
+        - name: content
+          configMap:
+            name: std-probe-api-content

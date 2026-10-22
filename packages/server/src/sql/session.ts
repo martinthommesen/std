@@ -6,6 +6,8 @@ import { connect } from "node:net";
 import { Duplex } from "node:stream";
 
 import type { PgConnection } from "@effect/sql-pg";
+import { databaseSslOptions } from "@std/postgres/transport";
+import type { DatabaseTransport } from "@std/postgres/transport";
 import { Duration, Effect, Redacted } from "effect";
 import type { Types } from "effect";
 
@@ -42,7 +44,6 @@ export const CLIENT_KEEPALIVE = Duration.seconds(30);
 
 const DEFAULT_PORT = 5432;
 const KEEPALIVE_MILLIS = Duration.toMillis(CLIENT_KEEPALIVE);
-const BRACKETED_HOST = /^\[(?<host>.*)\]$/u;
 
 let connectionSequence = 0;
 
@@ -68,11 +69,11 @@ const openTappedStream = (
   connectionSequence += 1;
   const tap = makeFrontendTap(connectionSequence, observer);
 
-  const socket = connect({
-    host: target.host,
-    noDelay: true,
-    port: target.port,
-  });
+  const socket = connect(
+    target.host.startsWith("/")
+      ? { path: `${target.host}/.s.PGSQL.${target.port}` }
+      : { host: target.host, noDelay: true, port: target.port }
+  );
 
   if (target.keepAlive) {
     socket.setKeepAlive(true, KEEPALIVE_MILLIS);
@@ -115,23 +116,26 @@ const openTappedStream = (
 
 /**
  * A socket factory for the driver that taps every connection it opens.
- * @param url - The connection URL; only plaintext TCP is supported.
+ * @param url - The connection URL; the driver negotiates TLS before sending statements.
+ * @param host - The effective host, including any libpq query override.
  * @param observer - Receives each executed statement.
  * @param keepAlive - Whether to enable client-side TCP keepalive.
  * @returns The factory, for the driver's `stream` option.
  */
 const tappedStreamFactory = (
   url: string,
+  host: string,
   observer: StatementObserverFn,
   keepAlive: boolean
 ): (() => Duplex) => {
   const parsed = new URL(url);
-  const bracketed = BRACKETED_HOST.exec(parsed.hostname)?.groups?.host;
 
   const target: TapTarget = {
-    host: bracketed ?? (parsed.hostname === "" ? "localhost" : parsed.hostname),
+    host,
     keepAlive,
-    port: parsed.port === "" ? DEFAULT_PORT : Number(parsed.port),
+    port: Number(
+      parsed.searchParams.getAll("port").at(-1) ?? (parsed.port || DEFAULT_PORT)
+    ),
   };
 
   return () => openTappedStream(target, observer);
@@ -139,6 +143,7 @@ const tappedStreamFactory = (
 
 /** Options for one connection or pool. */
 export interface ConnectionSetup {
+  readonly transport: DatabaseTransport;
   readonly url: Redacted.Redacted;
   readonly applicationName: string;
   /** Extra startup parameters, added to `SESSION_PARAMETERS`. */
@@ -157,32 +162,34 @@ export interface ConnectionSetup {
 export const connectionConfig = (
   setup: ConnectionSetup
 ): Effect.Effect<PgConnection.Config> =>
-  StatementObserver.pipe(
-    Effect.map((observer) => {
-      const keepAlive = setup.keepAlive === true;
+  Effect.gen(function* configureConnection() {
+    const observer = yield* StatementObserver;
+    const { transport } = setup;
+    const keepAlive = setup.keepAlive === true;
 
-      const config: Types.Mutable<PgConnection.Config> = {
-        applicationName: setup.applicationName,
-        startupParameters: {
-          ...SESSION_PARAMETERS,
-          ...setup.startupParameters,
-        },
-        types: makeTextRegistry(),
-        url: setup.url,
-      };
+    const config: Types.Mutable<PgConnection.Config> = {
+      applicationName: setup.applicationName,
+      ssl: databaseSslOptions(transport),
+      startupParameters: {
+        ...SESSION_PARAMETERS,
+        ...setup.startupParameters,
+      },
+      types: makeTextRegistry(),
+      url: setup.url,
+    };
 
-      if (keepAlive) {
-        config.keepAlive = CLIENT_KEEPALIVE;
-      }
+    if (keepAlive) {
+      config.keepAlive = CLIENT_KEEPALIVE;
+    }
 
-      if (observer !== ignoreStatements) {
-        config.stream = tappedStreamFactory(
-          Redacted.value(setup.url),
-          observer,
-          keepAlive
-        );
-      }
+    if (observer !== ignoreStatements) {
+      config.stream = tappedStreamFactory(
+        Redacted.value(setup.url),
+        transport.host,
+        observer,
+        keepAlive
+      );
+    }
 
-      return config;
-    })
-  );
+    return config;
+  });

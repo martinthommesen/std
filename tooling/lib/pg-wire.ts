@@ -1,16 +1,21 @@
 /**
  * A minimal Postgres client for the tooling's own checks: protocol 3.0 over
- * TCP without TLS, SCRAM-SHA-256, MD5 or cleartext password authentication,
+ * TCP with STD's TLS policy, SCRAM-SHA-256, MD5 or cleartext password authentication,
  * and simple-query results as text. It exists so `check-postgres` needs no
  * driver dependency; application code uses `@effect/sql-pg`.
  */
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import type { Socket } from "node:net";
-import { connect } from "node:net";
+import { connect, isIP } from "node:net";
+import { connect as connectTls } from "node:tls";
+
+import { databaseSslOptions } from "@std/postgres/transport";
+import type { DatabaseTransport } from "@std/postgres/transport";
 
 /** Connection settings, as in a `postgres://` URL. */
 export interface PgSettings {
+  readonly url: string;
   readonly database: string;
   readonly host: string;
   readonly password: string;
@@ -23,6 +28,10 @@ interface Message {
   readonly body: Buffer;
   readonly type: string;
 }
+
+const SSL_REQUEST_LENGTH = 8;
+const SSL_REQUEST_CODE = 80_877_103;
+const SSL_ACCEPTED = 0x53;
 
 const protocolVersion = 196_608;
 const headerLength = 5;
@@ -321,14 +330,20 @@ const dataRow = (body: Buffer): (string | null)[] => {
  *
  * @param settings - Where and as whom to connect.
  * @param sql - One SQL statement.
+ * @param transport - Transport resolved once at startup.
  * @returns The rows, every value as text (`null` for SQL NULL).
  */
 export const queryOnce = async (
   settings: PgSettings,
-  sql: string
+  sql: string,
+  transport: DatabaseTransport
 ): Promise<(string | null)[][]> => {
-  const socket = connect({ host: settings.host, port: settings.port });
-  const reader = new MessageReader(socket);
+  let socket = connect(
+    transport.host.startsWith("/")
+      ? { path: `${transport.host}/.s.PGSQL.${settings.port}` }
+      : { host: transport.host, port: settings.port }
+  );
+
   const timeoutMs = 10_000;
 
   socket.setTimeout(timeoutMs, () => {
@@ -337,6 +352,35 @@ export const queryOnce = async (
 
   try {
     await once(socket, "connect");
+
+    if (transport.ssl !== false) {
+      const response = once(socket, "data");
+      const request = Buffer.alloc(SSL_REQUEST_LENGTH);
+      request.writeInt32BE(SSL_REQUEST_LENGTH, 0);
+      request.writeInt32BE(SSL_REQUEST_CODE, int32);
+      socket.write(request);
+      const answers: readonly unknown[] = await response;
+      const [answer] = answers;
+
+      if (
+        !Buffer.isBuffer(answer) ||
+        answer.length !== 1 ||
+        answer[0] !== SSL_ACCEPTED
+      ) {
+        throw new Error(
+          "Postgres refused TLS; plaintext fallback is forbidden"
+        );
+      }
+
+      socket = connectTls({
+        ...databaseSslOptions(transport),
+        servername: isIP(transport.host) === 0 ? transport.host : undefined,
+        socket,
+      });
+      await once(socket, "secureConnect");
+    }
+
+    const reader = new MessageReader(socket);
     socket.write(startupMessage(settings));
     await authenticate(socket, reader, settings);
     socket.write(frame("Q", cString(sql)));
@@ -381,7 +425,10 @@ export const parsePgUrl = (url: string): PgSettings => {
     database: decodeURIComponent(parsed.pathname.slice(1)) || user,
     host: parsed.hostname || "127.0.0.1",
     password: decodeURIComponent(parsed.password),
-    port: parsed.port === "" ? defaultPort : Number(parsed.port),
+    port: Number(
+      parsed.searchParams.getAll("port").at(-1) ?? (parsed.port || defaultPort)
+    ),
+    url,
     user,
   };
 };

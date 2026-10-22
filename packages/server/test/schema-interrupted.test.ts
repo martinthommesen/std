@@ -153,6 +153,7 @@ const startCoordinator = (
         spawn(process.execPath, [CHILD_SCRIPT], {
           env: {
             ...process.env,
+            STD_DATABASE_DIRECT_URL: url,
             STD_DATABASE_URL: url,
             STD_TEST_CONTINUE_ON_INPUT: continueOnInput ? "1" : "0",
             STD_TEST_OPERATIONS: JSON.stringify(operations),

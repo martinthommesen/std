@@ -207,14 +207,16 @@ const hostOf = (
     }
 
     // These extend no table. A namespace is checked by `storageProblem`;
-    // an access rule or subscription on a platform table is refused by
-    // validation (`invalidAccessRule`, `invalidSubscription`).
+    // an access rule, subscription or record rule on a platform table is
+    // refused by validation (`invalidAccessRule`, `invalidSubscription`,
+    // `invalidRecordRule`).
     case "namespace":
     case "role":
     case "permission":
     case "grant":
     case "accessRule":
-    case "subscription": {
+    case "subscription":
+    case "recordRule": {
       return undefined;
     }
 

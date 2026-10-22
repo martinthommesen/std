@@ -49,7 +49,23 @@ export const ChangeCauseSchema = Schema.Union([
     parentChangeId: Schema.String,
     subscriptionId: Schema.String,
   }),
-  Schema.Struct({ kind: Schema.Literal("system") }),
+  // A role's version bump for the access-rule changes of a change set that
+  // name it (Contracts 4.6, config subscriptions): `accessRules` lists their
+  // change IDs. It also says `kind: "system"`, so a previous release, whose
+  // schema lacks this member, still reads it (as a system change) during a
+  // rolling upgrade [decision 0023]. First, so it is not read as plain
+  // `system`.
+  Schema.Struct({
+    accessRules: Schema.Array(Schema.String),
+    kind: Schema.Literal("system"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("system"),
+    /** The `data` migration that made the change (Contracts 1.9, 3.1). */
+    migration: Schema.optionalKey(
+      Schema.Struct({ id: Schema.Int, name: Schema.String })
+    ),
+  }),
 ]);
 
 /** The cause of a change. */

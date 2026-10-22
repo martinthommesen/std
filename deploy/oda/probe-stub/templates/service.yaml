@@ -1,0 +1,17 @@
+# The Service named by the Component's `implementation`. The Istio API
+# operator marks the API ready when this Service has a ready endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: std-probe-api
+  labels:
+    app.kubernetes.io/name: std-probe-api
+    oda.tmforum.org/componentName: std-probe
+spec:
+  selector:
+    app.kubernetes.io/name: std-probe-api
+  ports:
+    - name: http-api
+      port: 8080
+      targetPort: http
+      protocol: TCP

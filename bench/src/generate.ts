@@ -11,7 +11,7 @@ import { PgClient } from "@effect/sql-pg/PgClient";
 import { Effect, Schema } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 
-import type { ServerConfig } from "./database.ts";
+import type { DatabaseClientError, ServerConfig } from "./database.ts";
 import { clientLayer } from "./database.ts";
 import type { BenchError } from "./errors.ts";
 import { query } from "./execute.ts";
@@ -275,7 +275,7 @@ const generateAll: (
 export const generate = (
   server: ServerConfig,
   plan: GenerationPlan
-): Effect.Effect<GenerationReport, SqlError> =>
+): Effect.Effect<GenerationReport, DatabaseClientError> =>
   generateAll(plan).pipe(
     Effect.provide(
       clientLayer(server, plan.database, {
@@ -304,7 +304,7 @@ const MarkerRow = Schema.Struct({
 export const isGenerated: (
   server: ServerConfig,
   plan: GenerationPlan
-) => Effect.Effect<boolean, SqlError | BenchError> = Effect.fn(
+) => Effect.Effect<boolean, DatabaseClientError | BenchError> = Effect.fn(
   "bench.isGenerated"
 )(
   function* checkMarker(_server: ServerConfig, plan: GenerationPlan) {

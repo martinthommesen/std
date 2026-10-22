@@ -11,14 +11,18 @@ import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
 import { Authentication } from "./authentication.ts";
+import { HookDepthExceeded } from "./errors/hook-depth-exceeded.ts";
 import { InvalidCursor } from "./errors/invalid-cursor.ts";
 import { InvalidFilter } from "./errors/invalid-filter.ts";
 import { InvalidReference } from "./errors/invalid-reference.ts";
 import { InvalidRequest } from "./errors/invalid-request.ts";
 import { InvalidSchemaRevision } from "./errors/invalid-schema-revision.ts";
+import { InvalidTransition } from "./errors/invalid-transition.ts";
 import { NotAllowed } from "./errors/not-allowed.ts";
 import { NotFound } from "./errors/not-found.ts";
+import { RecordInSave } from "./errors/record-in-save.ts";
 import { Referenced } from "./errors/referenced.ts";
+import { RuleRefused } from "./errors/rule-refused.ts";
 import { SchemaChanged } from "./errors/schema-changed.ts";
 import { UnknownField } from "./errors/unknown-field.ts";
 import { UnknownTable } from "./errors/unknown-table.ts";
@@ -196,6 +200,17 @@ const readErrors = [
 ] as const;
 
 /**
+ * What record rules add to every write (Contracts 4.1, 4.10): a `refuse`
+ * action's error, and the refusals of nested saves.
+ */
+const ruleErrors = [
+  RuleRefused,
+  InvalidTransition,
+  RecordInSave,
+  HookDepthExceeded,
+] as const;
+
+/**
  * Write errors. Writes to definition tables become one-operation change
  * sets (Contracts 1.4), so they can also end in a change set's refusals.
  */
@@ -205,6 +220,7 @@ const writeErrors = [
   InvalidReference,
   NotAllowed,
   NotFound,
+  ...ruleErrors,
   ...changeSetErrors,
 ] as const;
 
@@ -244,6 +260,10 @@ export class RecordsGroup extends HttpApiGroup.make("records")
         NotFound,
         NotAllowed,
         Referenced,
+        // After rules of a delete save other records (4.10).
+        ValidationFailed,
+        InvalidReference,
+        ...ruleErrors,
         ...versionErrors,
         ...changeSetErrors,
       ],

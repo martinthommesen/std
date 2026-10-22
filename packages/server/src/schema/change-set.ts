@@ -74,6 +74,7 @@ import type { ConfigState } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
+import { writeConfigDeliveries } from "./config-deliveries.ts";
 import { ConfigStateChanged } from "./config-state-changed.ts";
 import { openCoordinator, runFollowUps } from "./coordinator.ts";
 import { checkDdl } from "./ddl-forms.ts";
@@ -529,7 +530,7 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     yield* runDdl(plan.tables, budget);
 
     if (plan.seedSystemUser) {
-      yield* insertSystemUser(applied.after);
+      yield* insertSystemUser(applied.after, revision);
       yield* installSessionRevocation(applied.after);
     }
 
@@ -540,7 +541,8 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     }
 
     yield* writeDefinitions(plan.definitions, applied.before, requesterId);
-    yield* writeDefinitionChanges(
+
+    const written = yield* writeDefinitionChanges(
       applied.after,
       plan.definitions.map((after) => ({
         after,
@@ -550,6 +552,8 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
       input.request.cause ?? causeOf(input.request.source),
       revision
     );
+
+    yield* writeConfigDeliveries(applied.after, written, requesterId, revision);
     yield* writeEnforcementNotes(plan.enforcementUpdates);
     yield* writeDefinitionRevisions(revision, plan.definitions);
     yield* writeDependencies(plan.definitions);

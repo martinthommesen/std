@@ -80,6 +80,7 @@ import {
   ACME,
   ACME_SET_DIRECTORY,
   addAccessRule,
+  addRecordRule,
   addField,
   addIndex,
   addOverride,
@@ -551,7 +552,19 @@ const REFERENCE_CASES: Readonly<
         .op,
     ],
   ],
+  rule_on: ["class", (id) => [addRecordRule(id).op]],
   rule_role: ["role", (id) => [addAccessRule(ACME.asset, [id]).op]],
+  rule_writes: [
+    "field",
+    (id) => [
+      addRecordRule(ACME.asset, {
+        actions: [
+          { type: "set", values: [{ fieldId: id, value: { value: "x" } }] },
+        ],
+        ruleKind: "derive",
+      }).op,
+    ],
+  ],
   saved_filter_on: [
     "class",
     (id) => [
@@ -615,6 +628,7 @@ interface WalkRecords {
   readonly choice: string;
   readonly layout: string;
   readonly savedFilter: string;
+  readonly recordRule: string;
   readonly class: string;
   readonly field: string;
   readonly refField: string;
@@ -653,6 +667,13 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
   const layout = freshId();
   const savedFilter = freshId();
   const local = { owner: { layer: "local" }, protected: false } as const;
+
+  const recordRule = addRecordRule(walkClass.id, {
+    actions: [
+      { type: "set", values: [{ fieldId: field.id, value: { value: "x" } }] },
+    ],
+    ruleKind: "derive",
+  });
 
   yield* change([
     walkClass.op,
@@ -700,6 +721,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
       },
       op: "createSavedFilter",
     },
+    recordRule.op,
     {
       definition: {
         ...local,
@@ -747,6 +769,7 @@ const createWalkRecords = Effect.gen(function* createWalkRecords() {
     index: index.id,
     layout,
     override: override.id,
+    recordRule: recordRule.id,
     refField: refField.id,
     rule: rule.id,
     savedFilter,
@@ -819,7 +842,23 @@ const GENERIC_CASES: Readonly<Record<DependencyKind, GenericCase>> = {
     "refField",
     (id) => ({ type: { kind: "reference", targetClassId: id } }),
   ],
+  rule_on: [
+    "class",
+    "core.record_rule",
+    "recordRule",
+    (id) => ({ table_id: id }),
+  ],
   rule_role: ["role", "core.access_rule", "rule", (id) => ({ role_ids: [id] })],
+  rule_writes: [
+    "field",
+    "core.record_rule",
+    "recordRule",
+    (id) => ({
+      actions: [
+        { type: "set", values: [{ fieldId: id, value: { value: "x" } }] },
+      ],
+    }),
+  ],
   saved_filter_on: [
     "class",
     "core.saved_filter",
@@ -1095,6 +1134,18 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
         op: "createPermission",
       }),
       references: false,
+    },
+    target: "none",
+  },
+  createRecordRule: {
+    create: {
+      build: (id, refs) =>
+        addRecordRule(refs.class, {
+          condition: { arg: { path: [refs.field] }, op: "notEmpty" },
+          id,
+          name: "m_rule",
+        }).op,
+      references: true,
     },
     target: "none",
   },
@@ -1690,6 +1741,13 @@ describe("schema-http", () => {
             const admin = yield* adminToken;
             const fingerprint = yield* catalogFingerprint;
             const userVersion = yield* versionOf(USER_CLASS_ID);
+            // The built-in rules name `admin`, so its version moved past 1
+            // (Contracts 4.6: an access-rule change bumps the roles it names).
+            const adminRoleVersion = yield* versionOf(BUILT_IN_ROLE_IDS.admin);
+
+            const purgerVersion = yield* versionOf(
+              BUILT_IN_ROLE_IDS.schema_purger
+            );
 
             const nameField = (yield* (yield* Catalog).refresh).fieldByName(
               USER_CLASS_ID,
@@ -1721,9 +1779,15 @@ describe("schema-http", () => {
                 "UseRetireOrPurge",
               ],
               [
-                patch(admin, "core.role", BUILT_IN_ROLE_IDS.admin, 1, {
-                  state: "retired",
-                }),
+                patch(
+                  admin,
+                  "core.role",
+                  BUILT_IN_ROLE_IDS.admin,
+                  adminRoleVersion,
+                  {
+                    state: "retired",
+                  }
+                ),
                 403,
                 "DefinitionProtected",
               ],
@@ -1749,7 +1813,7 @@ describe("schema-http", () => {
                   {
                     id: BUILT_IN_ROLE_IDS.schema_purger,
                     op: "delete",
-                    version: 1,
+                    version: purgerVersion,
                   },
                 ]),
                 403,
@@ -3372,6 +3436,7 @@ describe("schema-http", () => {
                       VISIBLE_REFS
                     ),
                   ]),
+              addRecordRule(ACME.laptop, { name: "stored_rule" }).op,
             ]);
 
             // What the product supports, per tag; every case must say the

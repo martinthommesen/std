@@ -548,6 +548,43 @@ describe("v2-review-2", () => {
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
+      "a user's individual is read-only through /api/v2",
+      () =>
+        Effect.gen(function* individualReadOnly() {
+          const http = yield* TestHttpClient;
+          const callers = yield* v2Callers;
+          const { bob } = yield* AcmeFixture;
+          const path = `${V2.user}/${bob.id}`;
+
+          for (const value of [null, { id: RANDOM_ID }]) {
+            const read = yield* http.get(path, callers.admin);
+
+            assert.strictEqual(read.status, 200, read.text);
+
+            const refused = yield* http.request("PATCH", path, {
+              ...callers.admin,
+              headers: {
+                "content-type": MERGE_PATCH,
+                "if-match": read.headers.get("etag") ?? "",
+              },
+              rawBody: JSON.stringify({ individual: value }),
+            });
+
+            assert.strictEqual(refused.status, 422, refused.text);
+            assert.strictEqual(codeOf(refused), "ValidationFailed");
+
+            const [error] = asArray(asObject(refused.json).fieldErrors);
+
+            assert.strictEqual(textOf(asObject(error).field), "individual");
+            assert.strictEqual(textOf(asObject(error)._tag), "ReadOnlyField");
+          }
+        }),
+      { timeout: 120_000 }
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
       "R3-2: a history list's latest-version is the current revision whatever its filters and page",
       () =>
         Effect.gen(function* latestUnfiltered() {

@@ -1,0 +1,35 @@
+{
+  "$comment": "Fixture for the conformance-matrix-check tests (tooling/test/conformance-matrix.test.ts). A clean matrix: the tests copy it and break one thing per case.",
+  "specifications": [
+    {
+      "spec": "DEMO-A",
+      "version": "1.0.0",
+      "title": "A step 3 specification",
+      "kind": "openApi",
+      "step": 3,
+      "openApi": {
+        "file": "demo.oas.json",
+        "licence": "Apache-2.0",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sourceUrl": "https://example.test/demo.oas.json",
+        "upstreamCommit": "0000000000000000000000000000000000000000",
+        "upstreamRepository": "https://example.test/demo"
+      }
+    },
+    {
+      "spec": "DEMO-B",
+      "version": "2.0",
+      "title": "A step 4 specification",
+      "kind": "std",
+      "step": 4
+    },
+    {
+      "spec": "AWAITED",
+      "version": "v1",
+      "title": "A step 5 specification whose matrix file is not written yet",
+      "kind": "oda",
+      "step": 5,
+      "awaitingMatrix": "9Z"
+    }
+  ]
+}

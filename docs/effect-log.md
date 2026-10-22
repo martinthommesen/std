@@ -23,6 +23,8 @@ One row per defect with a possible Effect cause. "Effect root cause" is yes only
 | 2026-10-21 | ws/0a-sql-layer, review r6 finding 1 (fix d91d58c) | 0A | yes | no | `effect` (`Exit`, `Cause`) | Once an attempt had seen a lock timeout, the config-commit retry turned any failed exit into a retryable lock timeout, so a defect from an error handler or a dying scope finalizer was lost behind `SchemaLockTimeout`. STD's cause handling was at fault; an attempt is now retried only when its cause holds nothing but lock timeouts (55P03) |
 | 2026-10-21 | ws/1b-config-layers | 1B | yes | yes (type level) | `effect` (`Effect.fn`) | `Effect.fn` with a whole-function transform (`Effect.scoped`) inferred a call signature without parameters for a generator whose parameter has a default: that overload infers the arguments from the transform as well as from the body. `tsc` caught it, so nothing shipped wrong; an explicit function type on the constant fixes it, as `runPlatformMigrations` already did. Found by the writing agent, not by review |
 
+| 2026-10-22 | ws/3b-outbox-worker | 3B | no | no | `effect` (`Effect.forEach`, `Effect.forkChild`) | The soak test forked its 8 worker loops with `Effect.forkChild` inside `Effect.forEach(..., { concurrency: "unbounded" })`: each element runs in its own fiber, which ended at once and took its child with it, so no worker ever ran. Documented fiber supervision, misused by the test; the workers are now forked from the test's own fiber. Found by the writing agent, not by review |
+
 ## Agent rework
 
 One row per agent PR. "Sent back" is yes when review returned it for Effect 3 idioms or Effect misuse.

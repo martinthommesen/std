@@ -50,12 +50,14 @@ export const TmfErrorSubtypes = {
   DependencyConflict: tagError("DependencyConflict"),
   ExistingDataViolates: tagError("ExistingDataViolates"),
   FieldsConflict: tagError("FieldsConflict"),
+  HookDepthExceeded: tagError("HookDepthExceeded"),
   InvalidCredentials: tagError("InvalidCredentials"),
   InvalidCursor: tagError("InvalidCursor"),
   InvalidFilter: tagError("InvalidFilter"),
   InvalidReference: tagError("InvalidReference"),
   InvalidRequest: tagError("InvalidRequest"),
   InvalidSchemaRevision: tagError("InvalidSchemaRevision"),
+  InvalidTransition: tagError("InvalidTransition"),
   MethodNotAllowed: tagError("MethodNotAllowed"),
   NotAllowed: tagError("NotAllowed"),
   NotFound: tagError("NotFound"),
@@ -63,7 +65,9 @@ export const TmfErrorSubtypes = {
   PatchTestFailed: tagError("PatchTestFailed"),
   PermissionRequired: tagError("PermissionRequired"),
   PurgeRefused: tagError("PurgeRefused"),
+  RecordInSave: tagError("RecordInSave"),
   Referenced: tagError("Referenced"),
+  RuleRefused: tagError("RuleRefused"),
   SchemaBusy: tagError("SchemaBusy"),
   SchemaChanged: tagError("SchemaChanged"),
   SchemaLockTimeout: tagError("SchemaLockTimeout"),
@@ -146,10 +150,17 @@ export const UnsupportedMediaTypeError = subtypes.UnsupportedMediaType.pipe(
   HttpApiSchema.status(415)
 );
 
-/** `422`: invalid values. */
+/**
+ * `422`: invalid values, and saves a hook or record rule refused or could
+ * not complete (Contracts 4.1, 4.10).
+ */
 export const UnprocessableError = Schema.Union([
   subtypes.DefinitionInvalid,
+  subtypes.HookDepthExceeded,
   subtypes.InvalidReference,
+  subtypes.InvalidTransition,
+  subtypes.RecordInSave,
+  subtypes.RuleRefused,
   subtypes.ValidationFailed,
 ]).pipe(HttpApiSchema.status(422));
 

@@ -4,6 +4,7 @@
  * follow-ups it asks for), and write the results files.
  */
 import type { PgClient } from "@effect/sql-pg/PgClient";
+import type { DatabaseTlsError } from "@std/postgres/transport";
 import type { Config } from "effect";
 import { Effect } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -59,7 +60,11 @@ const classTable: ModelId = "class-table";
 const tenMillion = "10m";
 const invalidMeasurement = "invalid-measurement";
 
-type PipelineError = SqlError | BenchError;
+type PipelineError =
+  | SqlError
+  | BenchError
+  | Config.ConfigError
+  | DatabaseTlsError;
 
 const contextFor = (
   scale: Scale,

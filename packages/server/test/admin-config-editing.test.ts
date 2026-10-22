@@ -181,7 +181,8 @@ describe("admin config editing", () => {
             201
           );
 
-          assert.deepStrictEqual(user.deltas, [0, 0, 1]);
+          // Two change entries: the user's and its individual's (Contracts 11.3).
+          assert.deepStrictEqual(user.deltas, [0, 0, 2]);
 
           const auditor = yield* http.signIn(login, password);
           const assetList = "/api/v1/tables/acme.asset/records";

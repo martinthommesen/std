@@ -11,11 +11,11 @@ Stack: TypeScript 7 and Effect 4 on Node 26, a pnpm 12 workspace, Postgres 18.
 Requires Docker, bash, curl and jq.
 
 ```sh
-docker compose up --build                  # Postgres 18, then `std upgrade` once, then `std serve`
+docker compose up --build                  # Postgres 18, then `std upgrade` once, then `std serve` and `std worker`
 examples/quickstart.sh                     # in a second terminal, from the repository root
 ```
 
-`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade --set examples/helpdesk/v2`, which applies the platform migrations and loads the core definition set and the helpdesk example; then `std bootstrap-admin`, which creates the first administrator; then `pnpm helpdesk:seed`, the helpdesk's demo users and incidents), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
+`docker compose up` starts Postgres, runs the one-shot `upgrade` service (`std upgrade --set examples/helpdesk/v2`, which applies the platform migrations and loads the core definition set and the helpdesk example; then `std bootstrap-admin`, which creates the first administrator; then `pnpm helpdesk:seed`, the helpdesk's demo users and incidents), and starts the `server` service (`std serve`) on <http://127.0.0.1:8080> and the `worker` service (`std worker`, the outbox worker that runs after-commit effects; decision 0023) once the upgrade has exited 0. Open <http://localhost:8080> in a browser and sign in as the administrator, as `admin` or `agent` from the helpdesk (below), or, after the script below, as `alice` or `bob`; the web app keeps its session in an HTTP-only cookie.
 
 `examples/quickstart.sh` then works through the HTTP API only:
 
@@ -40,6 +40,10 @@ Each step prints a heading. Every refusal it shows is checked for its exact stat
 The passwords are disposable demo credentials: set `STD_ADMIN_PASSWORD` (and `QUICKSTART_ALICE_PASSWORD`, `QUICKSTART_BOB_PASSWORD`) for anything but a demo. The script never puts a password or a session token into a command's arguments. The server reads `STD_DATABASE_URL`, `STD_HTTP_HOST`, `STD_HTTP_PORT`, `STD_TIME_ZONE` (UTC by default), `STD_WEB_ROOT` (the built web app; this checkout's `apps/web/dist` by default) and `STD_SESSION_COOKIE_SECURE` (`auto`, `always` or `never`; see docs/decisions/0018-web-foundation.md). Upgrades are offline (Contracts 8.5): to run `std upgrade` again, stop the server first, for example with `docker compose down` (the database volume stays) and `docker compose up` again.
 
 The compose image (`docker/quickstart.Dockerfile`) is a development image that runs the TypeScript sources; the release image comes in Step 4. Without Docker, `pnpm quickstart:ci` runs the same script against `std serve` on a disposable database, as CI does. It needs Linux and `strace`: it traces every program the script starts and fails if a password reaches any program's arguments.
+
+Postgres TLS settings are `STD_DATABASE_SSL_MODE` (`disable`, `require`, `verify-ca`, `verify-full`), `STD_DATABASE_SSL_CA_FILE` (PEM CA), `STD_DATABASE_SSL_SYSTEM_ROOTS` (explicit public-root opt-in for `verify-full`), and optional paired `STD_DATABASE_SSL_CERT_FILE` / `STD_DATABASE_SSL_KEY_FILE`. Remote hosts default to `verify-full` and require a CA or explicit system roots; `verify-ca` requires a CA. `require` with a CA verifies the chain; without a CA it can be intercepted by anyone on the path. Unix sockets ignore TLS modes; loopback defaults to plaintext. Remote `disable` requires the warned `STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE=true` opt-out. Environment mode wins over URL `sslmode`; URL certificate and `ssl` parameters are refused. Settings and files are loaded once when configuration layers start.
+
+The compose quickstart uses a separate `quickstart-postgres` service and data volume with a generated CA; `pnpm db:up` still starts the unchanged shared development database. Existing data in the shared volume is not moved into the new quickstart volume. For external `STD_COMPOSE_DATABASE_URL`, pass the TLS variables above and mount the certificate files with a compose override. Bundled CA settings apply only to the bundled URL. See [release verification and TLS configuration](docs/runbooks/verify-release.md).
 
 ## Helpdesk
 

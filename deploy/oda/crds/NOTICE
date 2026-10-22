@@ -1,0 +1,15 @@
+oda-component-crd.yaml in this directory is a byte-for-byte copy of
+charts/oda-crds/templates/oda-component-crd.yaml from the ODA Canvas
+(https://github.com/tmforum-oda/oda-canvas), as released in the canvas-oda
+1.2.5 chart (sub-chart oda-crds 1.3.2; tag canvas-oda-1.2.5, chart archive
+sha256 c16d5f6bbfe0a885d3d06f77f08349c469c52376858e5706002d67ccc9f9d145).
+File sha256: 529337900627b7f648a7c0cdb97870cef66f87fc40cd8051a2e3c4c3634376ac.
+
+Copyright TM Forum and the ODA Canvas contributors. Licensed under the Apache
+License, Version 2.0 (https://github.com/tmforum-oda/oda-canvas/blob/main/LICENSE,
+the same licence as STD's LICENSE file). Not modified.
+
+It is the pinned Component CRD that tooling/check-oda-component-schema.ts
+validates the probe's stub Component against, and that the probe compares with
+the CRD inside the chart it installs (docs/decisions/0027-oda-canvas-probe.md).
+Replace it, and the hashes above, only together with the Canvas pin (Contracts 13.5).

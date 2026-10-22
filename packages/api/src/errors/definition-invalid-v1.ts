@@ -1,7 +1,8 @@
 /**
  * `DefinitionInvalid` as frozen `/api/v1` shows it (Contracts 10.1): the
  * problem codes of `v0.0.2`, so the v1 OpenAPI document never changes.
- * Codes added later (`apiNameClash`, Contracts 10.2) reach a v1 client as
+ * Codes added later (`apiNameClash`, Contracts 10.2; `invalidRecordRule`,
+ * workstream 3A) reach a v1 client as
  * the nearest v0.0.2 code ({@link toV1DefinitionInvalid}); `/api/v2` shows
  * them as they are.
  */
@@ -57,9 +58,23 @@ export class DefinitionInvalidV1 extends Schema.TaggedError<
   problems: Schema.Array(DefinitionProblemV1Schema),
 }) {}
 
+/** Codes `v0.0.2` did not have, and the nearest code it had. */
+const NEAREST_V1_CODE = {
+  // The name is not valid for the API.
+  apiNameClash: "invalidName",
+  // A record rule (workstream 3A) is a rule definition over records, as an
+  // access rule is; the message names the problem.
+  invalidRecordRule: "invalidAccessRule",
+} as const;
+
+type LaterCode = keyof typeof NEAREST_V1_CODE;
+
+const isLaterCode = (code: string): code is LaterCode =>
+  Object.hasOwn(NEAREST_V1_CODE, code);
+
 /**
- * The v1 form of a refusal: `apiNameClash`, which `v0.0.2` did not have,
- * becomes `invalidName` (the name is not valid for the API).
+ * The v1 form of a refusal: a code `v0.0.2` did not have becomes the
+ * nearest code it had ({@link NEAREST_V1_CODE}).
  *
  * @param error - The refusal.
  * @returns The same problems with v0.0.2 codes.
@@ -69,7 +84,7 @@ export const toV1DefinitionInvalid = (
 ): DefinitionInvalidV1 =>
   new DefinitionInvalidV1({
     problems: error.problems.map((found) => ({
-      code: found.code === "apiNameClash" ? "invalidName" : found.code,
+      code: isLaterCode(found.code) ? NEAREST_V1_CODE[found.code] : found.code,
       definitionId: found.definitionId,
       message: found.message,
     })),

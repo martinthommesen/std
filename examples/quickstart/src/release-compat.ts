@@ -21,28 +21,15 @@
  * the Postgres at `STD_DATABASE_URL`.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
 import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect } from "effect";
 
 import { PREVIOUS_RELEASE } from "./previous-release.ts";
+import { cleanEnv, CURRENT, previousRelease, std } from "./release.ts";
+import type { Release } from "./release.ts";
 import { listeningAt, run, startServer } from "./steps.ts";
-
-const REPO = fileURLToPath(new URL("../../..", import.meta.url));
-const CLI_PATH = ["packages", "server", "src", "cli", "main.ts"] as const;
-const SCRIPT_PATH = ["examples", "quickstart.sh"] as const;
-
-/** This branch's `std` command and quickstart. */
-const CURRENT = {
-  cli: path.join(REPO, ...CLI_PATH),
-  name: "this branch",
-  script: path.join(REPO, ...SCRIPT_PATH),
-};
 
 /**
  * A disposable password, fresh for every run.
@@ -58,69 +45,6 @@ const PASSWORDS = {
   bob: secret("bob"),
 };
 
-/** One version of STD: its `std` command and its quickstart script. */
-interface Release {
-  readonly cli: string;
-  readonly name: string;
-  readonly script: string;
-}
-
-/**
- * The environment without the variables pnpm sets for its scripts, so a
- * `pnpm install` in the release's tree is not pointed back at this one.
- * @returns The environment.
- */
-const cleanEnv = (): NodeJS.ProcessEnv =>
-  Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([key]) => !key.startsWith("npm_") && !key.startsWith("PNPM_")
-    )
-  );
-
-/**
- * Extracts and installs the previous release in a temporary directory,
- * removed when the scope closes.
- * @returns The release.
- */
-const previousRelease = Effect.gen(function* previousRelease() {
-  const directory = yield* Effect.acquireRelease(
-    Effect.sync(() => mkdtempSync(path.join(tmpdir(), "std-release-"))),
-    (created) =>
-      Effect.sync(() => {
-        rmSync(created, { force: true, recursive: true });
-      })
-  );
-
-  const env = cleanEnv();
-
-  yield* run(
-    `extract ${PREVIOUS_RELEASE}`,
-    "/bin/sh",
-    [
-      "-c",
-      `git archive "${PREVIOUS_RELEASE}" -- . ':(exclude)repos' | tar -x -C "${directory}"`,
-    ],
-    env,
-    REPO
-  );
-
-  yield* run(
-    `install ${PREVIOUS_RELEASE}`,
-    "pnpm",
-    ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"],
-    env,
-    directory
-  );
-
-  const release: Release = {
-    cli: path.join(directory, ...CLI_PATH),
-    name: PREVIOUS_RELEASE,
-    script: path.join(directory, ...SCRIPT_PATH),
-  };
-
-  return release;
-});
-
 /**
  * The environment of every command against one database.
  * @param url - The database.
@@ -132,25 +56,11 @@ const databaseEnv = (url: string): NodeJS.ProcessEnv => ({
   QUICKSTART_BOB_PASSWORD: PASSWORDS.bob,
   STD_ADMIN_LOGIN: "administrator",
   STD_ADMIN_PASSWORD: PASSWORDS.admin,
+  STD_DATABASE_DIRECT_URL: url,
   STD_DATABASE_URL: url,
   STD_HTTP_HOST: "127.0.0.1",
   STD_HTTP_PORT: "0",
 });
-
-/**
- * Runs a release's `std` subcommand.
- * @param release - Whose command.
- * @param command - The subcommand.
- * @param env - The environment.
- * @returns Fails unless it exits 0.
- */
-const std = (release: Release, command: string, env: NodeJS.ProcessEnv) =>
-  run(
-    `std ${command} (${release.name})`,
-    process.execPath,
-    [release.cli, command],
-    env
-  );
 
 /**
  * Starts a release's `std serve` and runs quickstart scripts against it,

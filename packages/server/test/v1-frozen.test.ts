@@ -23,14 +23,22 @@ import {
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 
 /**
- * SHA-256 of `/api/v1/openapi.json` at `v0.0.2` with `info.version` set to
- * the empty string, serialized as `JSON.stringify` writes it. Computed from
- * `OpenApi.fromApi(StdApi)` at `v0.0.2`'s sources (`packages/api`,
- * `packages/definitions` and `packages/values` did not change between
- * `v0.0.2` and the Step 3 base, 64bb63b4).
+ * SHA-256 of `/api/v1/openapi.json` with `info.version` set to the empty
+ * string, serialized as `JSON.stringify` writes it: `v0.0.2`'s document
+ * (`6a7d752c...`, unchanged up to the Step 3 base, 64bb63b4) plus exactly
+ * what record rules (workstream 3A, Contracts 4.10) added to it, which v1
+ * keeps while `/api/v2` takes no definition writes (decision 0025):
+ *
+ * - the `createRecordRule` change-set operation and the `scope` of a
+ *   condition path;
+ * - `RuleRefused`, `InvalidTransition`, `RecordInSave` and
+ *   `HookDepthExceeded` among the 422s of record writes, and a delete's 422
+ *   (`ValidationFailed`, `InvalidReference` and those four).
+ *
+ * Any other change to the document fails this test.
  */
-const V0_0_2_DOCUMENT_SHA256 =
-  "6a7d752c573c3cb041c7ef318f82ea06b8277422fe721b5f49df2a320b963aad";
+const V1_DOCUMENT_SHA256 =
+  "c766a788f8e061bf76992d1504a5328adb12af432c56456f17e9f4e44e6a5908";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
@@ -107,7 +115,7 @@ describe("v1-frozen", () => {
     );
 
     dbTest.effect(
-      "the v1 OpenAPI document is v0.0.2's apart from the version string",
+      "the v1 OpenAPI document is v0.0.2's apart from the version string and record rules",
       () =>
         Effect.gen(function* documentFrozen() {
           const http = yield* TestHttpClient;
@@ -135,7 +143,7 @@ describe("v1-frozen", () => {
             createHash("sha256")
               .update(JSON.stringify(unversioned))
               .digest("hex"),
-            V0_0_2_DOCUMENT_SHA256
+            V1_DOCUMENT_SHA256
           );
         })
     );

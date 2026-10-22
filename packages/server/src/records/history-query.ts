@@ -66,7 +66,9 @@ export interface HistoryEntry {
 }
 
 /**
- * One `core.change` row as text: `id`, `operation_id`, `record_version`,
+ * One `core.change` row as text: `id`, `operation_id`, `version_text`
+ * (the record version; never named like the column, so no `ORDER BY` can
+ * sort its text),
  * `kind`, `actor_id`, `occurred_at`, `schema_revision`, `cause`, `fields`.
  */
 export const EntryRowSchema = Schema.Struct({
@@ -77,8 +79,8 @@ export const EntryRowSchema = Schema.Struct({
   kind: ChangeKindSchema,
   occurred_at: Schema.String,
   operation_id: Schema.String,
-  record_version: Schema.String,
   schema_revision: Schema.String,
+  version_text: Schema.String,
 });
 
 /** One `core.change` row as text. */
@@ -137,7 +139,7 @@ export const entryOfRow = Effect.fn("Records.historyEntry")(
       occurredAt: occurredAt.value,
       operationId: row.operation_id,
       schemaRevision: Number(row.schema_revision),
-      version: Number(row.record_version),
+      version: Number(row.version_text),
     };
 
     return entry;
@@ -217,13 +219,13 @@ export const readHistory = Effect.fn("Records.readHistory")(
         const rows = yield* readOnly(
           sql.unsafe(
             `SELECT id::text AS id, operation_id::text AS operation_id,
-                    record_version::text AS record_version, kind,
+                    record_version::text AS version_text, kind,
                     actor_id::text AS actor_id, occurred_at::text AS occurred_at,
                     schema_revision::text AS schema_revision,
                     cause::text AS cause, fields::text AS fields
-             FROM core."change"
+             FROM core."change" AS c
              WHERE ${clauses.join(" AND ")}
-             ORDER BY record_version`,
+             ORDER BY c.record_version`,
             values
           )
         );

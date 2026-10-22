@@ -160,6 +160,13 @@ const printPath = (options: PrintOptions, path: Path): Printed => {
   let field: FieldInfo | undefined;
   const names: string[] = [];
 
+  // Record-rule actions only (Contracts 4.10); the text syntax has none.
+  if (path.scope !== undefined) {
+    throw new PrintFailureError(
+      "The text syntax cannot print a record-scoped path."
+    );
+  }
+
   for (const id of path.path) {
     classId = field === undefined ? classId : nextClass(field);
     field = options.field(classId, id);

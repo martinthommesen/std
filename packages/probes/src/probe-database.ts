@@ -6,13 +6,13 @@
  * layer is released.
  */
 import type { UpgradeError } from "@std/server/platform/runner";
+import type { DatabaseConfigError } from "@std/server/sql/database-config";
 import { DatabaseConfig } from "@std/server/sql/database-config";
 import type { DatabaseError } from "@std/server/sql/errors";
 import { SqlLayer } from "@std/server/sql/layer";
 import type { SqlServices } from "@std/server/sql/layer";
 import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Effect, Layer, Redacted } from "effect";
-import type { Config } from "effect";
 
 /** `application_name` of the probes' pooled connections. */
 export const PROBE_APPLICATION_NAME = "std-probes";
@@ -37,7 +37,7 @@ export const probeDatabaseLayer = (
   options: ProbeDatabaseOptions = {}
 ): Layer.Layer<
   ProbeServices,
-  DatabaseError | UpgradeError | Config.ConfigError
+  DatabaseError | UpgradeError | DatabaseConfigError
 > => {
   const config = Layer.effect(
     DatabaseConfig,
@@ -45,8 +45,10 @@ export const probeDatabaseLayer = (
       Effect.map((database) =>
         DatabaseConfig.of({
           applicationName: PROBE_APPLICATION_NAME,
+          directTransport: database.transport,
           directUrl: Redacted.make(database.url),
           maxConnections: options.maxConnections ?? DEFAULT_POOL,
+          transport: database.transport,
           url: Redacted.make(database.url),
         })
       )

@@ -29,6 +29,7 @@ export const PLATFORM_CLASS_IDS = {
   layout: "ae98b973-f436-4315-a093-057af79dbc5c",
   namespace: "53500c6c-063b-423a-b626-a6a938649162",
   permission: "0d6333e6-d241-4da7-a456-5cafd70db0a4",
+  record_rule: "72bd1370-a1dd-4a67-b8ed-efc66b50fe43",
   role: "a425953f-b934-47d6-8ff1-4bbeca1b9370",
   role_permission: "b16789cc-353b-4f92-9f9a-3683a7f8ec0e",
   saved_filter: "b3ac8bad-2b77-4610-9d09-816af6d2c8d4",
@@ -36,6 +37,15 @@ export const PLATFORM_CLASS_IDS = {
   schema_change_step: "3d49bff3-7640-48b7-9030-d37b68f8b639",
   subscription: "31446f0c-7ec7-4e5a-a1b4-f4a4686bca0e",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/**
+ * The config kinds a subscription may watch (Contracts 4.6, config
+ * subscriptions): `core.role` and `core.access_rule`. Change sets write
+ * their deliveries; every other platform table is refused.
+ */
+export const CONFIG_SUBSCRIPTION_CLASS_IDS: ReadonlySet<DefinitionId> = new Set(
+  [PLATFORM_CLASS_IDS.role, PLATFORM_CLASS_IDS.access_rule]
+);
 
 /** A platform table name. */
 export type PlatformTable = keyof typeof PLATFORM_CLASS_IDS;
@@ -67,9 +77,16 @@ export const BUILT_IN_ROLE_IDS = {
 export const SCHEMA_PURGE_PERMISSION_ID: DefinitionId =
   "ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9";
 
+/**
+ * The ID of the built-in `rules.run_as` permission (Contracts 3.1, 4.1):
+ * a record rule may run as another identity only when its author holds it.
+ */
+export const RULES_RUN_AS_PERMISSION_ID: DefinitionId =
+  "6de89171-f738-4ade-aa1b-2817f848899c";
+
 /** Built-in permissions (Contracts 3.1), checked by ID. */
 export const PERMISSION_IDS = {
-  "rules.run_as": "6de89171-f738-4ade-aa1b-2817f848899c",
+  "rules.run_as": RULES_RUN_AS_PERMISSION_ID,
   "schema.purge": SCHEMA_PURGE_PERMISSION_ID,
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",
 } as const satisfies Readonly<Record<string, DefinitionId>>;
@@ -77,6 +94,8 @@ export const PERMISSION_IDS = {
 /** Fields of `core.user` that code reads (sign-in, sessions, labels). */
 export const USER_FIELD_IDS = {
   active: "df9bb372-d557-445c-a173-66ab4e7a9c7c",
+  /** The user's individual (Contracts 11.3), read-only, unique. */
+  individual: "e8d96833-a256-4f38-8752-3f7b5fde3afd",
   login: "b3cabaa4-77cb-4845-9221-2105b21425eb",
   name: "13160bfb-1a94-4f0b-a29b-bccf701673c0",
   // oxlint-disable-next-line sonarjs/no-hardcoded-passwords -- a field's stable ID, not a password
@@ -87,4 +106,18 @@ export const USER_FIELD_IDS = {
 export const USER_ROLE_FIELD_IDS = {
   role: "9640bd3e-c66e-4b43-8b4c-31489d37dfc8",
   user: "f60c3043-b965-42f2-b9ea-a81c3f3ee84d",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** The party classes of the core set (Contracts 11.3, decision 0024). */
+export const PARTY_CLASS_IDS = {
+  individual: "a1d5e868-1a22-4b6e-8a65-605e046f24ab",
+  organization: "f94b83bf-19a4-4793-b06f-d5b4b0727fac",
+  party: "566904e7-72b9-455a-8ea1-5df797c43ae9",
+} as const satisfies Readonly<Record<string, DefinitionId>>;
+
+/** Fields of `core.party` and `core.individual` that code reads and sets. */
+export const PARTY_FIELD_IDS = {
+  familyName: "bd493796-8b5e-4907-9e12-6a047dac62e7",
+  givenName: "f41d3f02-c469-428e-85cb-c6f55a2902de",
+  name: "7292e739-5395-415e-a5b6-138c247bad45",
 } as const satisfies Readonly<Record<string, DefinitionId>>;

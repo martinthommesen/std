@@ -1,6 +1,3 @@
-import { randomBytes } from "node:crypto";
-
-import { PgConnection } from "@effect/sql-pg";
 /**
  * The test database harness: fresh migrated databases cloned from a
  * template, concurrent creation, teardown, the janitor and the statement log.
@@ -8,7 +5,11 @@ import { PgConnection } from "@effect/sql-pg";
  * Several suites may share the Postgres server, so database creation can be
  * slow: no test bounds it by wall time; they check what happened instead.
  */
+import { randomBytes } from "node:crypto";
+
+import { PgConnection } from "@effect/sql-pg";
 import { assert, describe, it, layer } from "@effect/vitest";
+import { isSchemaMigration } from "@std/server/platform/migration";
 import { PLATFORM_MIGRATIONS } from "@std/server/platform/migrations";
 import { migration0001 } from "@std/server/platform/migrations/0001-core";
 import { migration0002 } from "@std/server/platform/migrations/0002-definitions";
@@ -20,8 +21,16 @@ import { migration0007 } from "@std/server/platform/migrations/0007-outbox";
 import { migration0008 } from "@std/server/platform/migrations/0008-ui-config";
 import { migration0009 } from "@std/server/platform/migrations/0009-saved-filters";
 import { migration0010 } from "@std/server/platform/migrations/0010-definition-revision-field";
+import { migration0011 } from "@std/server/platform/migrations/0011-ledger-state";
+import { migration0012 } from "@std/server/platform/migrations/0012-user-individuals";
+import { migration0013 } from "@std/server/platform/migrations/0013-record-rules";
+import { migration0014 } from "@std/server/platform/migrations/0014-outbox-worker";
+import { migration0015 } from "@std/server/platform/migrations/0015-delivery-done";
+import { migration0016 } from "@std/server/platform/migrations/0016-system-user-history";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
+import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
+import { connectionConfig } from "@std/server/sql/session";
 import { StatementLog } from "@std/server/sql/statement-log";
 import {
   ConfigProvider,
@@ -76,10 +85,17 @@ const decodeTemplateId = decodeRows(
 const admin = maintenanceUrl.pipe(
   Effect.orDie,
   Effect.flatMap((url) =>
-    PgConnection.make({
-      applicationName: "std-testing-test",
-      url: Redacted.make(url),
-    })
+    DatabaseConfig.pipe(
+      Effect.flatMap((settings) =>
+        connectionConfig({
+          applicationName: "std-testing-test",
+          transport: settings.transport,
+          url: Redacted.make(url),
+        })
+      ),
+      Effect.provide(DatabaseConfig.fromEnv("std-testing-test")),
+      Effect.flatMap(PgConnection.make)
+    )
   )
 );
 
@@ -241,6 +257,12 @@ describe("test-database", () => {
         migration0008,
         migration0009,
         migration0010,
+        migration0011,
+        migration0012,
+        migration0013,
+        migration0014,
+        migration0015,
+        migration0016,
       ])
     );
     assert.notStrictEqual(
@@ -741,7 +763,11 @@ describe("test-database", () => {
       Effect.gen(function* migratedWithLog() {
         const sql = yield* SqlClient.SqlClient;
         const log = yield* StatementLog;
-        yield* checkPlatformMigrations();
+        // A template holds every tx and concurrent_index migration; data
+        // migrations need the sets loaded first (Contracts 1.9).
+        yield* checkPlatformMigrations(
+          PLATFORM_MIGRATIONS.filter(isSchemaMigration)
+        );
         yield* log.clear;
         yield* sql`SELECT 1 AS one`;
 
