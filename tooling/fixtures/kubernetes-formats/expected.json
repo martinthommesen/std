@@ -1,0 +1,236 @@
+{
+  "bsonobjectid": [
+    ["507f1f77bcf86cd799439011", true],
+    ["507f1f77", false],
+    ["507f1f77bcf86cd79943901z", false]
+  ],
+  "byte": [
+    ["aGVsbG8=", true],
+    ["aGVsbG8", false],
+    ["not base64!", false],
+    ["", false],
+    ["aGVsbG8gd29ybGQ=", true],
+    ["aGVs bG8=", false]
+  ],
+  "cidr": [
+    ["192.0.2.0/24", true],
+    ["2001:db8::/32", true],
+    ["192.0.2.0/33", false],
+    ["192.0.2.0", false],
+    ["010.0.2.0/24", true],
+    ["192.0.2.0/024", true],
+    ["::ffff:192.0.2.0/120", true]
+  ],
+  "creditcard": [
+    ["4111 1111 1111 1111", true],
+    ["4111 1111 1111 1112", false],
+    ["4111-1111-1111-1111", true],
+    ["5500000000000004", true],
+    ["4111", false]
+  ],
+  "date": [
+    ["2024-02-29", true],
+    ["2023-02-29", false],
+    ["0000-02-29", true],
+    ["0001-01-01", true],
+    ["9999-12-31", true],
+    ["2024-9-17", false],
+    ["2024-13-01", false],
+    ["2024-00-10", false],
+    ["2024-04-31", false],
+    ["24-09-17", false],
+    ["", false]
+  ],
+  "date-time": [
+    ["2024-09-17T00:00:00.000Z", true],
+    ["2024-09-17T10:20:30+02:00", true],
+    ["2024-09-17t10:20:30z", true],
+    ["0000-02-29T00:00:00Z", true],
+    ["2023-02-29T00:00:00Z", false],
+    ["2024-02-29T23:59:59Z", true],
+    ["2024-09-17T24:00:00Z", false],
+    ["2024-09-17T10:60:00Z", false],
+    ["2024-09-17T10:20:30", false],
+    ["2024-09-17T10:20:30.123456789-07:00", true],
+    ["2024-09-17 10:20:30Z", false],
+    ["definitely-not-a-date", false],
+    ["2024-9-17T10:20:30Z", false],
+    ["2024-09-17T10:20:30x02:00", false],
+    ["2024-09-17T10:20:30+0200", false],
+    ["", false]
+  ],
+  "duration": [
+    ["1h30m", true],
+    ["22 ns", true],
+    ["5 days", true],
+    ["-1.5h", true],
+    ["soon", false],
+    ["1x", false],
+    ["0", true],
+    ["1.5", false],
+    ["3 weeks ago", true],
+    ["10 seconds", true]
+  ],
+  "email": [
+    ["a@example.org", true],
+    ["Ann \u003ca@example.org\u003e", true],
+    ["not an address", false],
+    ["a..b@example.org", false],
+    ["\"a b\"@example.org", true],
+    [".a@example.org", false],
+    ["a.@example.org", false],
+    ["a@example..org", false],
+    ["a@", false],
+    ["@example.org", false],
+    ["a@b", true],
+    ["\"Ann Lee\" \u003ca@example.org\u003e", true],
+    ["\u003ca@example.org\u003e", true],
+    ["a@example.org (comment)", true],
+    ["a(b)@example.org", false],
+    ["a@[192.0.2.1]", false],
+    ["a+tag@example.org", true],
+    ["a b@example.org", false],
+    ["\"\"@example.org", false],
+    ["Ann Lee \u003ca@example.org\u003e", true],
+    ["a@example.org, b@example.org", false],
+    ["é@example.org", true],
+    ["a\\b@example.org", false],
+    ["\"a\\\"b\"@example.org", true],
+    ["Group: a@example.org;", true]
+  ],
+  "hexcolor": [
+    ["#FFFFFF", true],
+    ["fff", true],
+    ["#FFFF", false],
+    ["#ggg", false]
+  ],
+  "hostname": [
+    ["example.org", true],
+    ["localhost", true],
+    ["-bad.example", false],
+    ["a..b", false],
+    ["a-b", true],
+    ["ab-c", false],
+    ["a.b", false],
+    ["a.b1", false],
+    ["xn--bcher-kva.example", true],
+    ["bücher.example", true],
+    ["a_b.example", false],
+    ["example.org.", false],
+    ["a.b.c.example", true],
+    ["1.2.3.4", false],
+    ["-", false],
+    ["", false]
+  ],
+  "ipv4": [
+    ["192.0.2.1", true],
+    ["010.1.1.1", true],
+    ["2001:db8::1", false],
+    ["256.1.1.1", false],
+    ["::ffff:192.0.2.1", true],
+    ["1.2.3", false],
+    ["", false]
+  ],
+  "ipv6": [
+    ["2001:db8::1", true],
+    ["192.0.2.1", false],
+    ["2001:db8::1%eth0", false],
+    ["::ffff:192.0.2.1", true],
+    ["::", true],
+    ["2001:db8:::1", false]
+  ],
+  "isbn": [
+    ["0321751043", true],
+    ["978-0321751041", true],
+    ["0321751044", false],
+    ["0-321-75104-3", true],
+    ["032175104X", false]
+  ],
+  "isbn10": [
+    ["0321751043", true],
+    ["080442957X", true],
+    ["978-0321751041", false],
+    ["0321751044", false]
+  ],
+  "isbn13": [
+    ["978-0321751041", true],
+    ["9780321751041", true],
+    ["0321751043", false],
+    ["9780321751042", false]
+  ],
+  "mac": [
+    ["00:00:5e:00:53:01", true],
+    ["00-00-5e-00-53-01", true],
+    ["0000.5e00.5301", true],
+    ["00:00:5e:00:53", false],
+    ["02:00:5e:10:00:00:00:01", true],
+    ["00:00:5e:00:53:0g", false],
+    ["00:00:5e-00:53:01", false]
+  ],
+  "password": [
+    ["anything", true],
+    ["", true]
+  ],
+  "rgbcolor": [
+    ["rgb(255, 0, 12)", true],
+    ["rgb(256,0,0)", false],
+    ["rgb(0,0,0)", true],
+    ["rgb( 1 , 2 , 3 )", true],
+    ["RGB(0,0,0)", false]
+  ],
+  "ssn": [
+    ["123-45-6789", true],
+    ["123456789", false],
+    ["123 45 6789", true],
+    ["123-456-789", false]
+  ],
+  "uri": [
+    ["https://example.org/a", true],
+    ["/relative/path", true],
+    ["urn:isbn:0451450523", true],
+    ["relative/path", false],
+    ["", false],
+    ["https://example.org/%ZZ", false],
+    ["https://example.org/%41", true],
+    ["https://example.org/a b", true],
+    ["https://exa mple.org/", false],
+    ["https://example.org:80/", true],
+    ["https://example.org:8x/", false],
+    ["https://user:pass@example.org/", true],
+    ["https://us er@example.org/", false],
+    ["https://[2001:db8::1]:443/", true],
+    ["https://[2001:db8::1/", false],
+    ["https://example.org/?q=%ZZ", true],
+    ["*", true],
+    ["mailto:a@example.org", true],
+    ["1http://example.org/", false],
+    [":nothing", false],
+    ["https://example.org/a\tb", false],
+    ["https://ex%41mple.org/", false],
+    ["https://ex%C3%A9.org/", true],
+    ["https://example.org#frag", false],
+    ["http://example.org:/", true],
+    ["//example.org/path", true]
+  ],
+  "url": [
+    ["not a url", true],
+    ["", true]
+  ],
+  "uuid": [
+    ["123e4567-e89b-12d3-a456-426614174000", true],
+    ["123e4567", false],
+    ["123E4567E89B12D3A456426614174000", true]
+  ],
+  "uuid3": [
+    ["a3bb189e-8bf9-3888-9912-ace4e6543002", true],
+    ["123e4567-e89b-42d3-a456-426614174000", false]
+  ],
+  "uuid4": [
+    ["123e4567-e89b-42d3-a456-426614174000", true],
+    ["123e4567-e89b-12d3-a456-426614174000", false]
+  ],
+  "uuid5": [
+    ["886313e1-3b8a-5372-9b90-0c9aee199e5d", true],
+    ["123e4567-e89b-42d3-a456-426614174000", false]
+  ]
+}

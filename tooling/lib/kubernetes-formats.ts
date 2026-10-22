@@ -9,11 +9,14 @@
  * A format name is normalized by removing `-` (go-openapi's rule), so
  * `date-time` is `datetime`. The API server drops any other format from the
  * schema before validating, so such a format checks nothing here either.
- * Where Go's parsers (`net/url`, `net/mail`, `net`, `time`) are more involved
- * than a pattern, the port follows their documented rules closely but not
- * byte for byte; the probe's server-side dry run is the authority.
+ * `uri` and `email` are ports of Go's `net/url` and `net/mail` parsers
+ * (`go-url.ts`, `go-mail.ts`). tooling/fixtures/kubernetes-formats/ runs the
+ * pinned Go validators over a corpus of inputs, and the tests compare.
  */
 import { isIP } from "node:net";
+
+import { isEmailAddress } from "./go-mail.ts";
+import { isRequestUri } from "./go-url.ts";
 
 const fullDate = /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/u;
 
@@ -89,15 +92,18 @@ const unitLetter = /[A-Za-zµ]/u;
 
 const hexPair = /^[0-9a-f]{2}$/iu;
 const hexQuad = /^[0-9a-f]{4}$/iu;
-const uriScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
-const uriAuthority = /^[^:]+:\/\/(?<authority>[^/?#]*)/u;
-const emailAddress = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+$/u;
-const emailWithName = /^[^<>]*<(?<address>[^<>]+)>$/u;
 const dottedQuad = /^\d+(?:\.\d+){3}$/u;
 const decimal = /^\d+$/u;
 
+// The proleptic Gregorian calendar Go's time package uses, year 0 included
+// (a leap year); JavaScript's Date.UTC maps years 0 to 99 to 1900 to 1999.
+const isLeapYear = (year: number): boolean =>
+  year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
+const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
 const daysInMonth = (year: number, month: number): number =>
-  new Date(Date.UTC(year, month, 0)).getUTCDate();
+  month === 2 && isLeapYear(year) ? 29 : (monthDays[month - 1] ?? 0);
 
 // `time.Parse("2006-01-02", value)`.
 const isDate = (value: string): boolean => {
@@ -134,44 +140,6 @@ const isDateTime = (value: string): boolean => {
   const minuteValid = (groups.minute ?? "") <= "59";
 
   return hourValid && minuteValid && (groups.second ?? "") <= "59";
-};
-
-// Go's url package refuses ASCII control characters.
-const hasControlCharacter = (value: string): boolean => {
-  for (const char of value) {
-    const code = char.codePointAt(0) ?? 0;
-
-    if (code < 0x20 || code === 0x7f) {
-      return true;
-    }
-  }
-
-  return false;
-};
-
-// Go's `url.ParseRequestURI`: an absolute URI or an absolute path.
-const isRequestUri = (value: string): boolean => {
-  if (value === "" || hasControlCharacter(value)) {
-    return false;
-  }
-
-  if (value.startsWith("/")) {
-    return true;
-  }
-
-  const authority = uriAuthority.exec(value)?.groups?.authority;
-
-  return (
-    uriScheme.test(value) &&
-    (authority === undefined || !authority.includes(" "))
-  );
-};
-
-// Go's `mail.ParseAddress`, for an address with or without a name.
-const isEmail = (value: string): boolean => {
-  const address = emailWithName.exec(value)?.groups?.address ?? value;
-
-  return emailAddress.test(address.trim());
 };
 
 const isHostname = (value: string): boolean => {
@@ -382,7 +350,7 @@ const isDuration = (value: string): boolean =>
 const checks = new Map<string, (value: string) => boolean>([
   ["bsonobjectid", (value) => bsonObjectId.test(value)],
   ["uri", isRequestUri],
-  ["email", isEmail],
+  ["email", isEmailAddress],
   ["hostname", isHostname],
   ["ipv4", (value) => isIpAddress(value) && value.includes(".")],
   ["ipv6", (value) => isIpAddress(value) && value.includes(":")],
