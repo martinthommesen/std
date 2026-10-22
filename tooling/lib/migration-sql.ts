@@ -6,8 +6,8 @@ export interface SqlToken {
 }
 
 const identifier = /[a-z_\u0080-\uFFFF][a-z_\d$\u0080-\uFFFF]*/iuy;
-const identifierPart = /[a-z_\d$\u0080-\uFFFF]/iu;
 const asciiLowercase = /[a-z]/gu;
+const numericSuffix = /[a-z_]/iu;
 const numeric = /\d+(?:\.\d+)?/uy;
 const dollarTag = /\$(?:[a-z_][a-z_\d]*)?\$/iuy;
 const lineEnd = /[\r\n]/u;
@@ -61,6 +61,18 @@ interface Scan {
   readonly token: SqlToken | null;
 }
 
+const checkNumericBoundary = (sql: string, end: number): void => {
+  const next = sql.charAt(end);
+
+  if (next === "$") {
+    throw new Error("A SQL digit must not be immediately followed by $");
+  }
+
+  if (numericSuffix.test(next)) {
+    throw new Error("Unsupported SQL numeric token boundary");
+  }
+};
+
 const scan = (sql: string, start: number): Scan => {
   const character = sql.charAt(start);
 
@@ -99,7 +111,7 @@ const scan = (sql: string, start: number): Scan => {
   dollarTag.lastIndex = start;
   const tag = dollarTag.exec(sql)?.[0];
 
-  if (tag !== undefined && !identifierPart.test(sql.charAt(start - 1))) {
+  if (tag !== undefined) {
     const close = sql.indexOf(tag, start + tag.length);
 
     if (close === -1) {
@@ -116,11 +128,19 @@ const scan = (sql: string, start: number): Scan => {
     };
   }
 
+  if (character === "$") {
+    throw new Error("Unrecognized SQL dollar delimiter");
+  }
+
   for (const pattern of [identifier, numeric]) {
     pattern.lastIndex = start;
     const match = pattern.exec(sql)?.[0];
 
     if (match !== undefined) {
+      if (pattern === numeric) {
+        checkNumericBoundary(sql, start + match.length);
+      }
+
       return {
         end: start + match.length,
         token: {

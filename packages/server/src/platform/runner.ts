@@ -350,6 +350,8 @@ const applyMigration: (
     `Applying platform migration ${migration.id} (${migration.name})`
   );
 
+  yield* connection.execute("SET standard_conforming_strings = on");
+
   const outcome =
     migration.kind === "tx"
       ? yield* applyTx(connection, migration).pipe(

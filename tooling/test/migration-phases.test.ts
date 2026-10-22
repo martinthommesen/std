@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { fixture, runTool } from "./run-tools.ts";
@@ -27,12 +28,21 @@ describe("migration-phases", () => {
     const result = await runCanary("refused");
     expect(result.code).toBe(1);
 
-    const count = (
-      readFileSync(canary("refused"), "utf-8").match(/"id":/gu) ?? []
-    ).length;
+    const { PLATFORM_MIGRATIONS } = Schema.decodeUnknownSync(
+      Schema.Struct({
+        PLATFORM_MIGRATIONS: Schema.Array(
+          Schema.Struct({
+            expectedProblem: Schema.NonEmptyString,
+            id: Schema.Int,
+          })
+        ),
+      })
+    )(JSON.parse(readFileSync(canary("refused"), "utf-8")));
 
-    for (let index = 0; index < count; index += 1) {
-      expect(result.output).toContain(`${index + 17} statement 1:`);
+    for (const { id, expectedProblem } of PLATFORM_MIGRATIONS) {
+      expect(result.output.split("\n")).toContain(
+        `${id} statement 1: ${expectedProblem}`
+      );
     }
   });
 

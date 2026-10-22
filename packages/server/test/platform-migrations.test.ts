@@ -23,6 +23,7 @@ import {
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0001 } from "../src/platform/migrations/0001-core.ts";
 import {
+  applyPendingMigrations,
   checkPlatformMigrations,
   runPlatformMigrations,
   UpgradeRefused,
@@ -155,6 +156,78 @@ describe("platform-migrations", () => {
       ]);
     });
   });
+
+  layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "migration SQL pins standard_conforming_strings for tx and concurrent indexes",
+        () =>
+          Effect.scoped(
+            Effect.gen(function* migrationStringSettings() {
+              const connection = yield* makeDedicatedConnection();
+
+              const tableMigration = {
+                id: 2,
+                kind: "tx",
+                name: "literal-probe",
+                phase: "expand",
+                statements: [
+                  String.raw`CREATE TABLE core.literal_probe (value text DEFAULT '\', setting text DEFAULT current_setting('standard_conforming_strings'))`,
+                  "INSERT INTO core.literal_probe DEFAULT VALUES",
+                ],
+              } as const;
+
+              const indexMigration = {
+                id: 3,
+                index: "literal_probe_value",
+                kind: "concurrent_index",
+                name: "literal-probe-index",
+                phase: "expand",
+                schema: "core",
+                statement: String.raw`CREATE INDEX CONCURRENTLY literal_probe_value ON core.literal_probe (value) WHERE value <> '\'`,
+              } as const;
+
+              yield* connection.execute(
+                "SET standard_conforming_strings = off"
+              );
+              yield* applyPendingMigrations(connection, [
+                migration0001,
+                tableMigration,
+              ]);
+              assert.deepStrictEqual(
+                yield* connection.execute(
+                  "SELECT value, setting FROM core.literal_probe"
+                ),
+                [{ setting: "on", value: "\\" }]
+              );
+              assert.deepStrictEqual(
+                yield* connection.execute("SHOW standard_conforming_strings"),
+                [{ standard_conforming_strings: "on" }]
+              );
+              yield* connection.execute(
+                "SET standard_conforming_strings = off"
+              );
+
+              yield* applyPendingMigrations(connection, [
+                migration0001,
+                tableMigration,
+                indexMigration,
+              ]);
+              assert.deepStrictEqual(
+                yield* connection.execute("SHOW standard_conforming_strings"),
+                [{ standard_conforming_strings: "on" }]
+              );
+              assert.deepStrictEqual(
+                yield* connection.execute(
+                  "SELECT indisvalid FROM pg_index WHERE indexrelid = 'core.literal_probe_value'::regclass"
+                ),
+                [{ indisvalid: true }]
+              );
+            })
+          )
+      );
+    }
+  );
 
   layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
     (dbTest) => {

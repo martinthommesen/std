@@ -12,6 +12,17 @@ interface CheckMigration {
 }
 
 const asciiUppercase = /[A-Z]/gu;
+const nonAscii = /[\u0080-\u{10FFFF}]/u;
+
+const serialTypes = new Set([
+  "SERIAL",
+  "SERIAL2",
+  "SERIAL4",
+  "SERIAL8",
+  "SMALLSERIAL",
+  "BIGSERIAL",
+]);
+
 const number = /^\d+(?:\.\d+)?$/u;
 const forbidden = new Set(["DROP", "RENAME", "TRUNCATE", "CLUSTER", "REINDEX"]);
 
@@ -128,6 +139,13 @@ const addedColumnProblems = (
     problems.push("constraint on an existing table requires NOT VALID");
   }
 
+  const typeIndex = tokens[2]?.text === "IF" ? 6 : 3;
+  const columnType = tokens[typeIndex]?.text.replaceAll('"', "").toUpperCase();
+
+  if (columnType !== undefined && serialTypes.has(columnType)) {
+    problems.push("serial pseudo-type may rewrite the table");
+  }
+
   if (text.includes("GENERATED") || text.includes("IDENTITY")) {
     problems.push("generated/identity column may rewrite the table");
   }
@@ -237,9 +255,43 @@ interface ParsedStatements {
   readonly error?: string;
 }
 
-const parseStatements = (sql: string): ParsedStatements => {
+interface ParseOptions {
+  readonly singleStatement?: boolean;
+  readonly asciiOnly?: boolean;
+}
+
+const parseStatements = (
+  sql: string,
+  options: ParseOptions = {}
+): ParsedStatements => {
   try {
-    return { parts: splitSqlTokens(migrationSqlTokens(sql), ";") };
+    if (options.asciiOnly === true && nonAscii.test(sql)) {
+      throw new Error("Non-ASCII characters are unsupported in expand SQL");
+    }
+
+    const tokens = migrationSqlTokens(sql);
+
+    if (
+      options.singleStatement === true &&
+      tokens.some(
+        (token, index) =>
+          !token.literal && token.text === ";" && index !== tokens.length - 1
+      )
+    ) {
+      throw new Error(
+        "Each migration string must contain exactly one SQL statement"
+      );
+    }
+
+    const parts = splitSqlTokens(tokens, ";");
+
+    if (options.singleStatement === true && parts.length !== 1) {
+      throw new Error(
+        "Each migration string must contain exactly one SQL statement"
+      );
+    }
+
+    return { parts };
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : String(error),
@@ -429,7 +481,10 @@ const sqlProblems = (
       : [migration.statement ?? ""];
 
   for (const [index, sql] of statements.entries()) {
-    const { parts, error } = parseStatements(sql);
+    const { parts, error } = parseStatements(sql, {
+      asciiOnly: migration.phase === "expand",
+      singleStatement: true,
+    });
 
     if (error !== undefined) {
       problems.push(`${migration.id} statement ${index + 1}: ${error}`);

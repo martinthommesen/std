@@ -116,7 +116,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": [
-        "CREATE TABLE core.parent (id int); CREATE TABLE core.child () INHERITS (core.parent)"
+        "CREATE TABLE core.parent (id int)",
+        "CREATE TABLE core.child () INHERITS (core.parent)"
       ]
     },
     {
@@ -125,7 +126,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": [
-        "CREATE TABLE core.parent (id int) PARTITION BY RANGE (id); CREATE TABLE core.child PARTITION OF core.parent FOR VALUES FROM (1) TO (2)"
+        "CREATE TABLE core.parent (id int) PARTITION BY RANGE (id)",
+        "CREATE TABLE core.child PARTITION OF core.parent FOR VALUES FROM (1) TO (2)"
       ]
     },
     {
@@ -134,7 +136,9 @@
       "name": "fixture",
       "phase": "expand",
       "statements": [
-        "CREATE TABLE core.new_table (id int); CREATE INDEX ix ON core.new_table(id); CREATE TRIGGER t BEFORE INSERT ON core.new_table EXECUTE FUNCTION core.fn()"
+        "CREATE TABLE core.new_table (id int)",
+        "CREATE INDEX ix ON core.new_table(id)",
+        "CREATE TRIGGER t BEFORE INSERT ON core.new_table EXECUTE FUNCTION core.fn()"
       ]
     },
     {
@@ -143,8 +147,55 @@
       "name": "fixture",
       "phase": "expand",
       "statements": [
-        "CREATE TABLE core.new_table (id int); ALTER TABLE core.new_table ADD CONSTRAINT c UNIQUE (id)"
+        "CREATE TABLE core.new_table (id int)",
+        "ALTER TABLE core.new_table ADD CONSTRAINT c UNIQUE (id)"
       ]
+    },
+    {
+      "id": 34,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (id int); -- trailing comment"]
+    },
+    {
+      "id": 35,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.\"semi;colon\" (\"dollar$\" text DEFAULT ';$not_a_tag')"
+      ]
+    },
+    {
+      "id": 36,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (c text DEFAULT $tag$;$tag$)"]
+    },
+    {
+      "id": 37,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (s bigserial)"]
+    },
+    {
+      "id": 38,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.body_semicolons() RETURNS int LANGUAGE plpgsql AS $$ BEGIN PERFORM 1; RETURN 2; END $$"
+      ]
+    },
+    {
+      "id": 39,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["COMMENT ON TABLE core.sample IS 'backslash \\'"]
     }
   ]
 }
