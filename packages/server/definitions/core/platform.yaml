@@ -150,6 +150,9 @@ tables:
       - id: 94111e4d-b899-4179-9f6c-81963209e5f5
         name: default_value
         type: json
+      - id: 3a47d8d3-3405-4517-906a-153011a6df83
+        name: number_prefix
+        type: text
   - id: e29c0472-668e-40ff-bb0c-8ffa8e8b6f37
     name: core.field_override
     label: Field override
@@ -208,6 +211,12 @@ tables:
       - id: 1494a398-6d35-4464-833b-83e621a1534b
         name: default_value
         type: json
+      - id: 22aeeffa-a121-46d6-ad31-f54da48bd328
+        name: choices
+        type: json
+      - id: 826f3655-103e-43dc-8ca7-dfc4e787c4ce
+        name: number_prefix
+        type: text
   - id: 3e7e3e31-2fef-4414-9c85-e37a441a8809
     name: core.index
     label: Index
@@ -709,3 +718,73 @@ tables:
       - id: 53908536-35e8-4657-b9a6-dd8eaec46aa3
         name: resolved_at
         type: dateTime
+  - id: 633ddece-067a-4340-a43d-8dd8ae45b294
+    name: core.choice
+    label: Choice
+    storage: platform
+    displayField: label
+    fields:
+      - id: 0e861e82-047f-4b39-895c-851aac7a0ee1
+        name: owner_layer
+        type: text
+        required: true
+      - id: 2d61ff3b-27ac-47ef-917d-d1cc226e0185
+        name: owner_set_id
+        type: uuid
+      - id: d2730072-9da8-44ba-9a18-3130055c1f68
+        name: state
+        type: text
+        required: true
+      - id: 19666fe0-07ea-489a-801f-a4b2985d139e
+        name: protected
+        type: boolean
+      - id: 90a0ccf6-c61d-4871-8de1-43eb65af35fd
+        name: field_id
+        type: { kind: reference, target: core.field }
+        required: true
+      - id: 29b929c0-7cc1-42ff-afcd-830ed9f1b2ae
+        name: key
+        type: text
+        required: true
+      - id: 6169bc63-27ad-45e9-8b7b-92315e4c6fe3
+        name: label
+        type: text
+        required: true
+      - id: 2bf3e7d9-1911-4585-a380-0fd458f5f679
+        name: sort_order
+        type: integer
+        required: true
+      - id: cb95e6c1-2dac-4c83-892b-59c33f6bbe8d
+        name: hidden
+        type: boolean
+  - id: ae98b973-f436-4315-a093-057af79dbc5c
+    name: core.layout
+    label: Layout
+    storage: platform
+    fields:
+      - id: 137fb652-9076-45bf-ad60-e056ec7212e1
+        name: owner_layer
+        type: text
+        required: true
+      - id: c870492b-1af5-46f9-a985-36d1d4c63641
+        name: owner_set_id
+        type: uuid
+      - id: 2e6a0658-81ca-4b0a-b907-306a98dcf917
+        name: state
+        type: text
+        required: true
+      - id: fa18ab3d-2035-43ab-9ee9-3f4d9b040ba5
+        name: protected
+        type: boolean
+      - id: d8efd38f-8273-4f79-8b9e-48d24dac9eab
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 4631815e-6070-4d32-8e79-ed10bdf96d00
+        name: layout_type
+        type: text
+        required: true
+      - id: ccca548a-2da3-4c87-adab-bb4ff6ef1b75
+        name: elements
+        type: json
+        required: true

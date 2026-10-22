@@ -416,6 +416,28 @@ const DRIFTS: readonly Drift[] = [
     ],
   },
   {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.number_counter/number_counter_pkey"
+    ),
+    name: "a core.number_counter without its key",
+    statements: [
+      "ALTER TABLE core.number_counter DROP CONSTRAINT number_counter_pkey",
+    ],
+  },
+  {
+    expected: expect(
+      3,
+      "error",
+      "constraintMissing",
+      "core.choice/choice_key_live"
+    ),
+    name: "a dropped live-key index of core.choice",
+    statements: ["DROP INDEX core.choice_key_live"],
+  },
+  {
     expected: expect(11, "warning", "columnHeadroom", "fx.wide"),
     name: "1,400 columns",
     statements: [
@@ -646,6 +668,7 @@ describe("doctor", () => {
             operations: [
               {
                 definition: {
+                  choices: null,
                   classId: ACME.laptop,
                   default: null,
                   fieldId: ACME.cost,
@@ -656,6 +679,7 @@ describe("doctor", () => {
                   max: null,
                   maxLength: null,
                   min: null,
+                  numberPrefix: null,
                   owner: { layer: "local" },
                   protected: false,
                   readOnly: true,

@@ -85,10 +85,12 @@ import {
 export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
   {
     accessRule: "access_rule",
+    choice: "choice",
     class: "class",
     field: "field",
     grant: "role_permission",
     index: "index",
+    layout: "layout",
     namespace: "namespace",
     override: "field_override",
     permission: "permission",

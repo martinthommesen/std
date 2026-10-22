@@ -106,6 +106,7 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("required", "required", "boolean"),
     column("readOnly", "read_only", "boolean"),
     column("default", "default_value", "nullableJson"),
+    column("numberPrefix", "number_prefix", "nullableText"),
   ]),
   table("override", "field_override", [
     ...ENFORCEMENT,
@@ -119,6 +120,8 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("min", "min_value", "nullableJson"),
     column("max", "max_value", "nullableJson"),
     column("default", "default_value", "nullableJson"),
+    column("choices", "choices", "nullableJson"),
+    column("numberPrefix", "number_prefix", "nullableText"),
   ]),
   table("index", "index", [
     ...ENFORCEMENT,
@@ -160,6 +163,18 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("maxAttempts", "max_attempts", "int4"),
     column("deadLetter", "dead_letter", "text"),
     column("enabled", "enabled", "boolean"),
+  ]),
+  table("choice", "choice", [
+    column("fieldId", "field_id", "uuid"),
+    column("key", "key", "text"),
+    column("label", "label", "text"),
+    column("order", "sort_order", "int4"),
+    column("hidden", "hidden", "boolean"),
+  ]),
+  table("layout", "layout", [
+    column("classId", "table_id", "uuid"),
+    column("type", "layout_type", "text"),
+    column("elements", "elements", "json"),
   ]),
 ];
 

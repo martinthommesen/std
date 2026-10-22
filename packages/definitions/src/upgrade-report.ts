@@ -49,6 +49,8 @@ export type ChangeAction =
   | "renamed"
   | "deactivated"
   | "disabled"
+  | "hidden"
+  | "deleted"
   | "retired";
 
 /** One record the upgrade creates or changes (shipped or effective). */

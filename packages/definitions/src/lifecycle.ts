@@ -10,8 +10,8 @@
  * | retire field | protected; display field of a class; part of a multi-field unique index | other dependents | none (`required` becomes false) |
  * | retire table | protected; an active child class; an active reference field on an active table points at it | other dependents | none |
  * | retire role | protected; an active access rule names it | other dependents | none |
- * | purge field | not retired before this change set; any dependent that is not retired, except single-field indexes and overrides | none | its single-field indexes and overrides |
- * | purge table | not retired before; a child class or incoming reference field not purged; an access rule or subscription on it | none | its fields, indexes and overrides |
+ * | purge field | not retired before this change set; any dependent that is not retired, except single-field indexes, overrides, choices and layout entries | none | its single-field indexes, overrides and choices (layouts keep the entry, skipped where served) |
+ * | purge table | not retired before; a child class or incoming reference field not purged; an access rule or subscription on it | none | its fields with their choices, indexes, overrides and layouts |
  * | delete role | protected; any access rule names it | its grants | its grants |
  * | delete permission | protected | its grants | its grants |
  * | delete field, table, namespace | always (`UseRetireOrPurge`) | | |
@@ -513,14 +513,44 @@ const purgedCopy = (work: Work, definition: Definition): void => {
 
 /**
  * Whether a dependent of a purged field goes with it: a single-field
- * index, or an override of the field.
+ * index, an override of the field, or one of its choices.
  *
  * @param edge - A dependent of the field.
  * @returns True when it is purged along.
  */
-const goesWithField = (edge: DependentEdge): boolean =>
-  (edge.definition.kind === "index" && edge.definition.fieldIds.length === 1) ||
-  (edge.definition.kind === "override" && edge.kind === "overrides");
+const goesWithField = (edge: DependentEdge): boolean => {
+  const { definition, kind } = edge;
+
+  switch (definition.kind) {
+    case "index": {
+      return definition.fieldIds.length === 1;
+    }
+
+    case "override": {
+      return kind === "overrides";
+    }
+
+    case "choice": {
+      return kind === "choice_of";
+    }
+
+    case "namespace":
+    case "class":
+    case "field":
+    case "role":
+    case "permission":
+    case "grant":
+    case "accessRule":
+    case "subscription":
+    case "layout": {
+      return false;
+    }
+
+    default: {
+      return definition satisfies never;
+    }
+  }
+};
 
 const fieldPurgeBlockers = (
   edges: readonly DependentEdge[]
@@ -528,13 +558,16 @@ const fieldPurgeBlockers = (
   edges.filter(
     (edge) =>
       edge.kind !== "field_of" &&
+      // Layout entries never block a purge (Contracts 1.7): the entry
+      // stays and names a tombstone, which is skipped where it is served.
+      edge.kind !== "layout_uses" &&
       edge.definition.state !== "retired" &&
       !goesWithField(edge)
   );
 
 /**
- * The definitions a class's purge takes along: its own fields, its
- * indexes, and the overrides attached to it.
+ * The definitions a class's purge takes along: its own fields with their
+ * choices, its indexes, and the overrides and layouts attached to it.
  *
  * @param view - The configuration so far.
  * @param target - The class.
@@ -545,8 +578,10 @@ const ownParts = (
   target: ClassDefinition
 ): readonly Definition[] => [
   ...view.ownFields(target.id),
+  ...view.ownFields(target.id).flatMap((field) => view.choicesOf(field.id)),
   ...view.indexes(target.id),
   ...view.ownOverrides(target.id),
+  ...view.layoutsOf(target.id),
 ];
 
 /**

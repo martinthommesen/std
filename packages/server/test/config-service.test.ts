@@ -95,10 +95,13 @@ describe("config-service", () => {
       "default",
       "helpText",
       "label",
+      "numberPrefix",
       "readOnly",
       "required",
     ]);
     assert.deepStrictEqual(OVERRIDABLE.class, ["displayFieldId", "label"]);
+    assert.deepStrictEqual(OVERRIDABLE.choice, ["hidden", "label", "order"]);
+    assert.deepStrictEqual(OVERRIDABLE.layout, ["elements"]);
     assert.deepStrictEqual(OVERRIDABLE.role, ["label"]);
     assert.deepStrictEqual(OVERRIDABLE.accessRule, ["active"]);
     assert.deepStrictEqual(PROTECTED_OVERRIDABLE, ["helpText", "label"]);

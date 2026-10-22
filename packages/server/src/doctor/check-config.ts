@@ -30,7 +30,12 @@ import type { SqlError } from "effect/sql/SqlError";
 
 import { jsonColumn, jsonHash, setHash } from "../config/layer-store.ts";
 import { readSetDirectory, CORE_SET_DIRECTORY } from "../config/set-files.ts";
-import { defaultLiteral, quoteIdent, tableName } from "../schema/sql-text.ts";
+import {
+  choicePredicates,
+  defaultLiteral,
+  quoteIdent,
+  tableName,
+} from "../schema/sql-text.ts";
 import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
@@ -407,7 +412,7 @@ const VIOLATION_SAMPLES = 20;
 
 /**
  * The predicate of rows that break a field's effective rules at a class:
- * required, maximum length, numeric bounds.
+ * required, maximum length, numeric bounds, choice subset.
  *
  * @param field - The effective field at the override's class.
  * @returns SQL conditions over the field's column, ORed.
@@ -434,6 +439,8 @@ const violationPredicates = (field: EffectiveField): readonly string[] => {
       predicates.push(`${column} > ${defaultLiteral(type, type.max)}`);
     }
   }
+
+  predicates.push(...choicePredicates(column, field.choices, null));
 
   return predicates;
 };

@@ -172,7 +172,8 @@ export type NewDefinition = CreateOperation["definition"] | OverrideDraft;
 
 /**
  * The class a new definition attaches to, if any: a child class's parent,
- * or the class of a field, an index or an override. Every kind that
+ * or the class of a field, an index, an override or a layout, or the
+ * class of a choice's field. Every kind that
  * extends an existing table is listed here, so the attachment rule below
  * covers them all.
  *
@@ -191,8 +192,16 @@ const hostOf = (
 
     case "field":
     case "index":
-    case "override": {
+    case "override":
+    case "layout": {
       return classOf(work, definition.classId);
+    }
+
+    // A choice extends its field's class.
+    case "choice": {
+      const field = currentOf(work, definition.fieldId);
+
+      return field?.kind === "field" ? classOf(work, field.classId) : undefined;
     }
 
     // These extend no table. A namespace is checked by `storageProblem`;

@@ -196,7 +196,10 @@ export const addField = (
   name: string,
   type: FieldType,
   extra: Partial<
-    Pick<FieldDraft, "default" | "id" | "readOnly" | "required">
+    Pick<
+      FieldDraft,
+      "default" | "id" | "numberPrefix" | "readOnly" | "required"
+    >
   > = {}
 ): BuiltOperation => {
   const definition: FieldDraft = {
@@ -208,6 +211,7 @@ export const addField = (
     kind: "field",
     label: name,
     name,
+    numberPrefix: extra.numberPrefix ?? null,
     readOnly: extra.readOnly ?? false,
     required: extra.required ?? false,
     type,
@@ -253,10 +257,16 @@ export const addIndex = (
 export const addOverride = (
   classId: string,
   fieldId: string,
-  changes: Partial<Pick<OverrideDraft, "id" | "maxLength" | "required">>
+  changes: Partial<
+    Pick<
+      OverrideDraft,
+      "choices" | "id" | "maxLength" | "numberPrefix" | "required"
+    >
+  >
 ): BuiltOperation => {
   const definition: OverrideDraft = {
     ...local,
+    choices: changes.choices ?? null,
     classId,
     default: null,
     fieldId,
@@ -267,6 +277,7 @@ export const addOverride = (
     max: null,
     maxLength: changes.maxLength ?? null,
     min: null,
+    numberPrefix: changes.numberPrefix ?? null,
     readOnly: null,
     required: changes.required ?? null,
   };

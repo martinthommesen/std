@@ -46,6 +46,7 @@ import {
 } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
+import { fieldRulesOf, writtenOnCreate } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
@@ -80,7 +81,6 @@ import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
 import { WriteOnlyValues } from "./write-only-values.ts";
 import {
-  absentCreateValue,
   conditionRefusals,
   finalizeCreate,
   finalizeUpdate,
@@ -88,7 +88,11 @@ import {
   proposeUpdate,
   validateProposal,
 } from "./write-validation.ts";
-import type { Proposal, ValidationInput } from "./write-validation.ts";
+import type {
+  Proposal,
+  RulesById,
+  ValidationInput,
+} from "./write-validation.ts";
 
 /**
  * What every save names. The acting user is the `Actor` in the
@@ -146,6 +150,19 @@ const effectiveById = (
 ): ReadonlyMap<DefinitionId, EffectiveField> =>
   new Map(
     effectiveFields(snapshot, classId).map((field) => [field.field.id, field])
+  );
+
+// The write rules of every field of a class (`@std/definitions/record-rules`),
+// the same ones the browser's `recordSchema` applies to the metadata.
+const rulesById = (
+  snapshot: ConfigSnapshot,
+  fields: ReadonlyMap<DefinitionId, EffectiveField>
+): RulesById =>
+  new Map(
+    [...fields].map(([fieldId, field]) => [
+      fieldId,
+      fieldRulesOf(snapshot, field),
+    ])
   );
 
 const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
@@ -211,7 +228,7 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
   const access = yield* WriteAccess;
 
   const conditions = conditionRefusals(
-    input.fields,
+    input.rules,
     input.proposal.values,
     input.written,
     access.conditionView(snapshot)
@@ -237,10 +254,8 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
   });
 
   const shown = new Set(
-    [...input.fields.values()].flatMap((field) =>
-      input.supplied.has(field.field.id) || readable.has(field.field.id)
-        ? [field.field.name]
-        : []
+    [...input.rules.values()].flatMap((field) =>
+      input.supplied.has(field.id) || readable.has(field.id) ? [field.name] : []
     )
   );
 
@@ -454,7 +469,8 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     yield* refusePlatformTable(snapshot, classId);
 
     const fields = effectiveById(snapshot, classId);
-    const proposed = proposeCreate([...fields.values()], resolved);
+    const rules = rulesById(snapshot, fields);
+    const proposed = proposeCreate(rules, resolved);
 
     const values = yield* hooks.beforeWrite({
       classId,
@@ -464,7 +480,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       values: proposed.values,
     });
 
-    const proposal = finalizeCreate(fields, {
+    const proposal = finalizeCreate(rules, {
       invalid: proposed.invalid,
       values,
     });
@@ -480,14 +496,13 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     const written = new Set(
       [...supplied].filter((fieldId) => {
-        const field = fields.get(fieldId);
+        const field = rules.get(fieldId);
         const value = proposal.values.get(fieldId);
 
         return (
           field === undefined ||
           value === undefined ||
-          field.field.state !== "active" ||
-          !storedEquals(field.type.kind, absentCreateValue(field), value)
+          writtenOnCreate(field, value)
         );
       })
     );
@@ -495,8 +510,8 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: null,
-      fields,
       proposal,
+      rules,
       supplied: new Set(resolved.entries.keys()),
       written,
     });
@@ -740,7 +755,8 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     yield* refusePlatformTable(snapshot, classId);
 
     const fields = effectiveById(snapshot, classId);
-    const proposed = proposeUpdate([...fields.values()], resolved);
+    const rules = rulesById(snapshot, fields);
+    const proposed = proposeUpdate(rules, resolved, record);
 
     const existingCheck = {
       endpointClassId: input.endpointClassId,
@@ -761,8 +777,9 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     }
 
     const proposal = finalizeUpdate(
-      fields,
-      yield* hookedProposal(snapshot, record, proposed)
+      rules,
+      yield* hookedProposal(snapshot, record, proposed),
+      record
     );
 
     // Recomputed from the final candidate: a hook may restore a value
@@ -784,8 +801,8 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     yield* failIfInvalid(snapshot, {
       classId,
       existing: record,
-      fields,
       proposal,
+      rules,
       supplied: new Set(resolved.entries.keys()),
       written,
     });

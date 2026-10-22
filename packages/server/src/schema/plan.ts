@@ -67,7 +67,12 @@ import {
 } from "./ddl.ts";
 import { lockNames, planLifecycle } from "./plan-lifecycle.ts";
 import type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
-import { defaultLiteral, quoteIdent, tableName } from "./sql-text.ts";
+import {
+  choicePredicates,
+  defaultLiteral,
+  quoteIdent,
+  tableName,
+} from "./sql-text.ts";
 
 export type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
 
@@ -717,6 +722,7 @@ const overridePredicate = (
     ...(now.required && !was.required ? [`${column} IS NULL`] : []),
     ...lengthPredicates(column, now.type, was.type),
     ...boundPredicates(column, now.type, was.type),
+    ...choicePredicates(column, now.choices, was.choices),
   ];
 
   return predicates.length === 0

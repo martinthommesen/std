@@ -580,6 +580,20 @@ const immutableProblems = (
       ];
     }
 
+    if (
+      before?.kind === "field" &&
+      after.kind === "field" &&
+      (before.numberPrefix === null) !== (after.numberPrefix === null)
+    ) {
+      return [
+        problem(
+          "unsupportedChange",
+          after.id,
+          "Auto-numbering cannot be switched on or off for an existing field; add a new auto-numbered field instead."
+        ),
+      ];
+    }
+
     return [];
   });
 

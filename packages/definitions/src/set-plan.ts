@@ -8,7 +8,7 @@
  * 2. reference fields (whose FKs may point at any table of phase 1);
  * 3. indexes and overrides;
  * 4. roles, permissions and grants;
- * 5. access rules and subscriptions.
+ * 5. access rules, subscriptions, choices and layouts.
  *
  * An unchanged set plans no operation. Removals and changes that need a
  * new set version's upgrade rules (renames, type changes, retire) belong to
@@ -32,10 +32,12 @@ import type { ConfigSnapshot } from "./snapshot.ts";
 /** The phase of each kind; reference fields move to phase 2. */
 const PHASES: Readonly<Record<Draft["kind"], number>> = {
   accessRule: 5,
+  choice: 5,
   class: 1,
   field: 1,
   grant: 4,
   index: 3,
+  layout: 5,
   namespace: 1,
   override: 3,
   permission: 4,
@@ -92,6 +94,19 @@ export const draftDependencies = (draft: Draft): readonly DefinitionId[] => {
     return draft.classId === null
       ? draft.roleIds
       : [draft.classId, ...draft.roleIds];
+  }
+
+  if (draft.kind === "choice") {
+    return [draft.fieldId];
+  }
+
+  if (draft.kind === "layout") {
+    return [
+      draft.classId,
+      ...draft.elements.flatMap((element) =>
+        element.kind === "field" ? [element.fieldId] : []
+      ),
+    ];
   }
 
   return draft.kind === "subscription" ? [draft.classId] : [];
@@ -207,6 +222,14 @@ export const createOperation = (draft: Draft): Operation => {
 
   if (draft.kind === "grant") {
     return { definition: draft, op: "createGrant" };
+  }
+
+  if (draft.kind === "choice") {
+    return { definition: draft, op: "createChoice" };
+  }
+
+  if (draft.kind === "layout") {
+    return { definition: draft, op: "createLayout" };
   }
 
   return draft.kind === "accessRule"

@@ -134,6 +134,8 @@ const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "permission",
   "role",
   "subscription",
+  "choice",
+  "layout",
 ]);
 
 const isDefinitionKind = (kind: string): kind is DefinitionKind =>

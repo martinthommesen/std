@@ -13,11 +13,14 @@ import { decodeUnknownResult } from "effect/Schema";
 import type {
   AccessRuleDraft,
   AccessTarget,
+  ChoiceDraft,
   ClassDraft,
   Definition,
   FieldDraft,
   GrantDraft,
   IndexDraft,
+  LayoutDraft,
+  LayoutElement,
   NamespaceDraft,
   OverrideDraft,
   Owner,
@@ -57,7 +60,9 @@ export type Draft =
   | PermissionDraft
   | GrantDraft
   | AccessRuleDraft
-  | SubscriptionDraft;
+  | SubscriptionDraft
+  | ChoiceDraft
+  | LayoutDraft;
 
 /** A set with every name resolved. */
 export interface ResolvedSet {
@@ -344,6 +349,7 @@ const isConditionEntry = (type: TypeEntry): type is ConditionEntry =>
 const SIMPLE_TYPES: Readonly<Record<SimpleKind, FieldType>> = {
   bigInteger: { kind: "bigInteger" },
   boolean: { kind: "boolean" },
+  choice: { kind: "choice" },
   date: { kind: "date" },
   dateTime: { kind: "dateTime" },
   integer: { kind: "integer" },
@@ -398,9 +404,22 @@ const resolveField = (
       kind: "field",
       label: field.label ?? labelFor(field.name),
       name: field.name,
+      numberPrefix: field.numberPrefix ?? null,
       readOnly: field.readOnly ?? false,
       required: field.required ?? false,
       type,
+    });
+  }
+
+  for (const [position, choice] of (field.choices ?? []).entries()) {
+    resolution.drafts.push({
+      ...flagsOf(resolution, choice),
+      fieldId: field.id,
+      hidden: choice.hidden ?? false,
+      key: choice.key,
+      kind: "choice",
+      label: choice.label,
+      order: choice.order ?? position + 1,
     });
   }
 };
@@ -420,6 +439,7 @@ const resolveOverride = (
 
   resolution.drafts.push({
     ...flagsOf(resolution, override),
+    choices: override.choices ?? null,
     classId: table.id,
     default: override.default ?? null,
     fieldId,
@@ -429,6 +449,7 @@ const resolveOverride = (
     max: override.max ?? null,
     maxLength: override.maxLength ?? null,
     min: override.min ?? null,
+    numberPrefix: override.numberPrefix ?? null,
     readOnly: override.readOnly ?? null,
     required: override.required ?? null,
   });
@@ -456,6 +477,41 @@ const resolveIndexes = (resolution: Resolution, table: TableEntry): void => {
         kind: "index",
         name: index.name ?? null,
         unique: index.unique ?? false,
+      });
+    }
+  }
+};
+
+const resolveLayouts = (resolution: Resolution, table: TableEntry): void => {
+  for (const layout of table.layouts ?? []) {
+    const elements = layout.elements.flatMap((element): LayoutElement[] => {
+      if ("section" in element) {
+        return [{ kind: "section", label: element.section }];
+      }
+
+      const fieldId = fieldIdOnLineage(resolution, table, element.field, false);
+
+      if (fieldId === undefined) {
+        reportUnknown(
+          resolution,
+          layout.id,
+          "field of the layout's table",
+          element.field
+        );
+
+        return [];
+      }
+
+      return [{ fieldId, kind: "field" }];
+    });
+
+    if (elements.length === layout.elements.length) {
+      resolution.drafts.push({
+        ...flagsOf(resolution, layout),
+        classId: table.id,
+        elements,
+        kind: "layout",
+        type: layout.type,
       });
     }
   }
@@ -546,6 +602,7 @@ const resolveTable = (resolution: Resolution, table: TableEntry): void => {
   }
 
   resolveIndexes(resolution, table);
+  resolveLayouts(resolution, table);
 };
 
 const roleId = (
@@ -741,6 +798,10 @@ const resolveFile = (resolution: Resolution, file: SetFile): void => {
 const tableIds = (table: TableEntry): readonly DefinitionId[] => [
   table.id,
   ...(table.fields ?? []).map((entry) => entry.id),
+  ...(table.fields ?? []).flatMap((entry) =>
+    (entry.choices ?? []).map((choice) => choice.id)
+  ),
+  ...(table.layouts ?? []).map((entry) => entry.id),
   ...(table.overrides ?? []).map((entry) => entry.id),
   ...(table.indexes ?? []).map((entry) => entry.id),
 ];

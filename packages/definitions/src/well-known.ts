@@ -17,6 +17,7 @@ export const CORE_NAMESPACE_ID: DefinitionId =
 export const PLATFORM_CLASS_IDS = {
   access_rule: "051b98ff-3fc2-4155-a6e8-b3d9053a5b9e",
   change: "edde151d-f204-4639-bcbf-a4793f86a219",
+  choice: "633ddece-067a-4340-a43d-8dd8ae45b294",
   class: "7a8a7202-1e01-4d77-bf6f-4ff80876bef6",
   config_base: "aa13ec55-456b-415b-aab5-ef9c42438f16",
   config_conflict: "b7281780-9441-46f3-9d58-f14b812a59c2",
@@ -25,6 +26,7 @@ export const PLATFORM_CLASS_IDS = {
   field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
   field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",
   index: "3e7e3e31-2fef-4414-9c85-e37a441a8809",
+  layout: "ae98b973-f436-4315-a093-057af79dbc5c",
   namespace: "53500c6c-063b-423a-b626-a6a938649162",
   permission: "0d6333e6-d241-4da7-a456-5cafd70db0a4",
   role: "a425953f-b934-47d6-8ff1-4bbeca1b9370",

@@ -1,7 +1,7 @@
-import type { FieldError } from "@std/api/errors/field-errors";
 import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { Referenced } from "@std/api/errors/referenced";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
+import type { FieldError } from "@std/definitions/field-errors";
 /**
  * Constraint violations of record writes, mapped to API errors through the
  * constraint name (Contracts 1.1, 3.8, 3.10), never through message text.

@@ -93,3 +93,35 @@ export const defaultLiteral = (type: FieldType, value: JsonValue): string => {
 
   return `${quoteLiteral(literalText(type, value))}::${postgresColumn(type).sqlType}`;
 };
+
+/**
+ * The rows a narrowed choice subset rejects: a stored key outside it.
+ *
+ * @param column - The quoted column.
+ * @param tightened - The subset after the change set, or null (all keys).
+ * @param previous - The subset before it.
+ * @returns The predicates.
+ */
+export const choicePredicates = (
+  column: string,
+  tightened: readonly string[] | null,
+  previous: readonly string[] | null
+): readonly string[] => {
+  if (tightened === null) {
+    return [];
+  }
+
+  const kept = new Set(tightened);
+
+  const narrowed = previous === null || previous.some((key) => !kept.has(key));
+
+  if (!narrowed) {
+    return [];
+  }
+
+  return tightened.length === 0
+    ? [`${column} IS NOT NULL`]
+    : [
+        `(${column} IS NOT NULL AND ${column} NOT IN (${tightened.map(quoteLiteral).join(", ")}))`,
+      ];
+};

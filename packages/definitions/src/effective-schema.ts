@@ -4,8 +4,9 @@
  * between its own class and the target class stacked top down.
  *
  * Overrides only tighten, so stacking is order-independent for required,
- * read-only and bounds; label, help text and default take the lowest
- * override that sets them.
+ * read-only, bounds and choice subsets (intersected); label, help text,
+ * default and an auto-number prefix take the lowest override that sets
+ * them. An auto-numbered field is read-only: the record service assigns it.
  *
  * It also states the lifecycle (Contracts 1.6) the read compiler and the
  * save pipeline enforce: a retired field is hidden from default selection
@@ -19,10 +20,13 @@ import { compareBigIntegers, parseBigInteger } from "@std/values/integer";
 import type { JsonValue } from "@std/values/json-value";
 
 import type {
+  ChoiceDefinition,
   ClassDefinition,
   Enforcement,
   FieldDefinition,
   IndexDefinition,
+  LayoutDefinition,
+  LayoutType,
   OverrideDefinition,
 } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
@@ -40,6 +44,17 @@ export interface EffectiveField {
   readonly default: JsonValue | null;
   /** The field type with overridden max length and bounds applied. */
   readonly type: FieldType;
+  /**
+   * A choice field's allowed keys after the overrides' subsets (Contracts
+   * 2.5), intersected top down; null when no override restricts them.
+   */
+  readonly choices: readonly string[] | null;
+  /**
+   * An auto-numbered field's prefix for records of this class: the
+   * field's, replaced by the lowest override that sets one; null for a
+   * field that is not auto-numbered.
+   */
+  readonly numberPrefix: string | null;
   /** The overrides that apply, top down. */
   readonly overrideIds: readonly DefinitionId[];
   /** `active` or `retired`; purged fields are not in the schema. */
@@ -183,6 +198,31 @@ export const tightenType = (
 };
 
 /**
+ * Intersects an inherited choice subset with an override's.
+ *
+ * @param inherited - The subset so far, or null for every key.
+ * @param next - The override's subset, or null.
+ * @returns The keys of `inherited` that `next` keeps, in `inherited`'s
+ *   order (`next`'s order when nothing was inherited).
+ */
+export const stackChoices = (
+  inherited: readonly string[] | null,
+  next: readonly string[] | null
+): readonly string[] | null => {
+  if (next === null) {
+    return inherited;
+  }
+
+  if (inherited === null) {
+    return next;
+  }
+
+  const kept = new Set(next);
+
+  return inherited.filter((key) => kept.has(key));
+};
+
+/**
  * Stacks one override onto an effective field.
  *
  * @param effective - The field as inherited.
@@ -194,9 +234,14 @@ export const stackOverride = (
   override: OverrideDefinition
 ): EffectiveField => ({
   ...effective,
+  choices: stackChoices(effective.choices, override.choices),
   default: override.default ?? effective.default,
   helpText: override.helpText ?? effective.helpText,
   label: override.label ?? effective.label,
+  numberPrefix:
+    effective.numberPrefix === null
+      ? null
+      : (override.numberPrefix ?? effective.numberPrefix),
   overrideIds: [...effective.overrideIds, override.id],
   readOnly: effective.readOnly || override.readOnly === true,
   required: effective.required || override.required === true,
@@ -210,13 +255,15 @@ const baseField = (
   const active = field.state === "active";
 
   return {
+    choices: null,
     default: field.default,
     definedOn: field.classId,
     field,
     helpText: field.helpText,
     label: field.label,
+    numberPrefix: field.numberPrefix,
     overrideIds: [],
-    readOnly: field.readOnly,
+    readOnly: field.readOnly || field.numberPrefix !== null,
     required: field.required,
     selectedByDefault: active,
     state: active ? "active" : "retired",
@@ -360,3 +407,58 @@ export const effectiveIndexes = (
     index,
     uniqueEnforced: index.unique && index.enforcement === "enforced",
   }));
+
+/**
+ * The choices of a field as they apply to one class: its live choices
+ * (hidden ones included, as retired) restricted to the effective subset,
+ * sorted by order, then key.
+ *
+ * @param snapshot - The configuration.
+ * @param effective - The effective field.
+ * @returns The choices; empty for a field that is not a choice field.
+ */
+export const effectiveChoices = (
+  snapshot: ConfigSnapshot,
+  effective: EffectiveField
+): readonly ChoiceDefinition[] => {
+  if (effective.type.kind !== "choice") {
+    return [];
+  }
+
+  const all = snapshot.choicesOf(effective.field.id);
+
+  if (effective.choices === null) {
+    return all;
+  }
+
+  const allowed = new Set(effective.choices);
+
+  return all.filter((choice) => allowed.has(choice.key));
+};
+
+/**
+ * The layout of a class: its own live layout of that type, else the
+ * nearest ancestor's (a child's layout replaces its parent's as a whole).
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The class.
+ * @param type - `form` or `list`.
+ * @returns The layout, or undefined when no class of the lineage has one.
+ */
+export const effectiveLayout = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId,
+  type: LayoutType
+): LayoutDefinition | undefined => {
+  for (const level of snapshot.lineage(classId).toReversed()) {
+    const found = snapshot
+      .layoutsOf(level.id)
+      .find((layout) => layout.type === type);
+
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  return undefined;
+};

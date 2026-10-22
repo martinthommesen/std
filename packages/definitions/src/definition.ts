@@ -156,6 +156,11 @@ const fieldFields = {
   kind: Literal("field"),
   label: SchemaString,
   name: SchemaString,
+  /**
+   * Non-null for an auto-numbered text field: the record service assigns
+   * `<prefix><number>` on create (Contracts 6.5, decision 0017).
+   */
+  numberPrefix: NullableText,
   readOnly: SchemaBoolean,
   required: SchemaBoolean,
   type: FieldTypeSchema,
@@ -187,6 +192,8 @@ const Bound = NullOr(Union([Finite, SchemaString]));
 
 /** Properties of a override definition that its draft has too. */
 const overrideFields = {
+  /** A subset of the field's choice keys (Contracts 2.5); null: all. */
+  choices: NullOr(SchemaArray(SchemaString)),
   classId: DefinitionIdSchema,
   default: NullOr(Json),
   fieldId: DefinitionIdSchema,
@@ -196,6 +203,8 @@ const overrideFields = {
   max: Bound,
   maxLength: NullOr(Int),
   min: Bound,
+  /** Replaces an auto-numbered field's prefix for the class's subtree. */
+  numberPrefix: NullableText,
   readOnly: NullOr(SchemaBoolean),
   required: NullOr(SchemaBoolean),
 } as const;
@@ -414,6 +423,80 @@ export type SubscriptionDraft = typeof SubscriptionDraftSchema.Type;
 /** A subscription definition. */
 export type SubscriptionDefinition = typeof SubscriptionDefinitionSchema.Type;
 
+/** Properties of a choice definition that its draft has too. */
+const choiceFields = {
+  fieldId: DefinitionIdSchema,
+  /** Whether the choice may no longer be chosen (retired, Contracts 6.5). */
+  hidden: SchemaBoolean,
+  /** The stored value, `[a-z0-9_]`, unique among the field's live choices. */
+  key: SchemaString,
+  kind: Literal("choice"),
+  label: SchemaString,
+  order: Int,
+} as const;
+
+/**
+ * One choice of a choice field (Contracts 6.5, 8.2): a config record with a
+ * stable ID, a key (what records store), a label and an order. A hidden
+ * choice is retired: an unchanged stored key is kept, new writes refuse it.
+ */
+export const ChoiceDefinitionSchema = Struct({
+  ...common,
+  ...choiceFields,
+});
+
+/** What a create operation supplies for a choice definition. */
+export const ChoiceDraftSchema = Struct({ ...draft, ...choiceFields });
+
+/** A choice draft. */
+export type ChoiceDraft = typeof ChoiceDraftSchema.Type;
+
+/** A choice definition. */
+export type ChoiceDefinition = typeof ChoiceDefinitionSchema.Type;
+
+/** The kinds of layout. */
+export const LayoutTypeSchema = Literals(["form", "list"]);
+
+/** A layout kind. */
+export type LayoutType = typeof LayoutTypeSchema.Type;
+
+/** One element of a layout: a field by stable ID, or a section heading. */
+export const LayoutElementSchema = Union([
+  Struct({ fieldId: DefinitionIdSchema, kind: Literal("field") }),
+  Struct({ kind: Literal("section"), label: SchemaString }),
+]);
+
+/** A layout element. */
+export type LayoutElement = typeof LayoutElementSchema.Type;
+
+/** Properties of a layout definition that its draft has too. */
+const layoutFields = {
+  classId: DefinitionIdSchema,
+  elements: SchemaArray(LayoutElementSchema),
+  kind: Literal("layout"),
+  type: LayoutTypeSchema,
+} as const;
+
+/**
+ * A form or list layout of a class (plan Step 2). Elements name fields by
+ * stable ID, so renames never touch a layout; a child class without its
+ * own layout uses its nearest ancestor's. The element list is overridden as
+ * a whole (Contracts 8.2).
+ */
+export const LayoutDefinitionSchema = Struct({
+  ...common,
+  ...layoutFields,
+});
+
+/** What a create operation supplies for a layout definition. */
+export const LayoutDraftSchema = Struct({ ...draft, ...layoutFields });
+
+/** A layout draft. */
+export type LayoutDraft = typeof LayoutDraftSchema.Type;
+
+/** A layout definition. */
+export type LayoutDefinition = typeof LayoutDefinitionSchema.Type;
+
 /** Any definition. */
 export const DefinitionSchema = Union([
   NamespaceDefinitionSchema,
@@ -426,6 +509,8 @@ export const DefinitionSchema = Union([
   GrantDefinitionSchema,
   AccessRuleDefinitionSchema,
   SubscriptionDefinitionSchema,
+  ChoiceDefinitionSchema,
+  LayoutDefinitionSchema,
 ]);
 
 /** Any definition. */
@@ -452,6 +537,8 @@ export const DEFINITION_KINDS: readonly DefinitionKind[] = [
   "grant",
   "accessRule",
   "subscription",
+  "choice",
+  "layout",
 ];
 
 /**
