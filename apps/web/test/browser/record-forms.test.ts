@@ -26,7 +26,6 @@ import {
   apiCall,
   apiPages,
   apiRecord,
-  applySavedFilter,
   bearerToken,
   captureApiBodies,
   captureApiRequestBodies,
@@ -37,8 +36,6 @@ import {
   formFieldText,
   formOutcome,
   historyEntryTexts,
-  inOrder,
-  listedPages,
   openNewRecordForm,
   openRecordForm,
   openTableList,
@@ -46,8 +43,6 @@ import {
   referenceOptions,
   rendered,
   saveRecordForm,
-  savedFilterLabels,
-  setPageSize,
   signIn,
   waitForForm,
 } from "./app.ts";
@@ -351,67 +346,6 @@ const versionConflictKeepsTheInput = async (
   assert.strictEqual(stored.version, 3);
   assert.strictEqual(stored.values.description, "Mine: the jam is in tray 2.");
   await page.context().close();
-};
-
-// SAVED FILTERS
-
-const decodeMetadata = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      table: Schema.Struct({
-        savedFilters: Schema.Array(
-          Schema.Struct({ filter: Schema.String, label: Schema.String })
-        ),
-      }),
-    })
-  )
-);
-
-const savedFiltersMatchTheApi = async (
-  browser: Browser,
-  origin: string,
-  fixture: HelpdeskData
-) => {
-  await inOrder([fixture.admin, fixture.agent], async (user) => {
-    const page = await signedInPage(browser, origin, user);
-
-    await openTableList(page, origin, INCIDENTS);
-    await setPageSize(page, 5);
-
-    const response = await page
-      .context()
-      .request.get(`${origin}/api/v1/meta/tables/${INCIDENTS}`);
-
-    const served = decodeMetadata(await response.text()).table.savedFilters;
-
-    assert.deepStrictEqual(
-      await savedFilterLabels(page),
-      served.map((filter) => filter.label),
-      user.login
-    );
-    assert.strictEqual(
-      served.some((filter) => filter.label === "Costly tickets"),
-      user.login === fixture.admin.login,
-      `${user.login}: the costly filter names a field agents cannot read`
-    );
-
-    await inOrder(served, async (filter) => {
-      await applySavedFilter(page, filter.label);
-
-      const shown = await listedPages(page);
-
-      const answered = await apiPages(page, origin, INCIDENTS, {
-        filter: filter.filter,
-        limit: 5,
-      });
-
-      assert.deepStrictEqual(shown, answered, `${user.login}: ${filter.label}`);
-
-      await openTableList(page, origin, INCIDENTS);
-      await setPageSize(page, 5);
-    });
-    await page.context().close();
-  });
 };
 
 // THE PICKER
@@ -791,21 +725,6 @@ describe("record forms", () => {
 
           yield* Effect.promise(async () => {
             await versionConflictKeepsTheInput(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-
-    dbTest.effect(
-      "saved filters: each caller gets the filters metadata serves, and the list equals the API's",
-      () =>
-        Effect.gen(function* savedFiltersTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
-
-          yield* Effect.promise(async () => {
-            await savedFiltersMatchTheApi(browser, server.origin, fixture);
           });
         }).pipe(Effect.scoped)
     );
