@@ -24,6 +24,7 @@ import { update } from "../../update.ts";
 import { view } from "../../view.ts";
 import { Message as SignInMessage, SignIn } from "../sign-in/sign-in.ts";
 import { LoadDeadLetters } from "./command.ts";
+import { emptyPage } from "./fixture.ts";
 import { Message } from "./message.ts";
 
 const tables = [
@@ -43,10 +44,7 @@ const opened = update(
 const loadedPage = update(
   opened,
   AppMessage.GotDeadLettersMessage({
-    message: Message.SucceededLoadDeadLetters({
-      page: { deliveries: [], total: 0 },
-      requestId: 1,
-    }),
+    message: emptyPage(1),
     pageId: 1,
   })
 ).model;
@@ -90,13 +88,7 @@ describe("dead-letter session view", () => {
             tables,
           }),
         ],
-        [
-          LoadDeadLetters,
-          Message.SucceededLoadDeadLetters({
-            page: { deliveries: [], total: 0 },
-            requestId: 1,
-          }),
-        ]
+        [LoadDeadLetters, emptyPage(1)]
       ),
       expect(role("heading", { level: 1, name: "Dead letters" })).toExist(),
       expect(text("No dead deliveries match these filters.")).toExist(),

@@ -7,7 +7,11 @@ import type { Update } from "foldkit";
 import { AsyncData } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { FieldInput, formStateBody } from "../../domain/form-input.ts";
+import {
+  FieldInput,
+  buildBody,
+  formStateBody,
+} from "../../domain/form-input.ts";
 import type { MetaField } from "../../domain/metadata.ts";
 import { inputText, mergeDropped } from "../../domain/stale-edits.ts";
 import { wireFieldOf } from "../../domain/wire.ts";
@@ -15,7 +19,7 @@ import type { StdApi } from "../../std-client.ts";
 import { LoadFormState } from "./command.ts";
 import { recordFieldEdit } from "./field-edit.ts";
 import {
-  checkForm,
+  editedFieldsOf,
   hasEditableSchema,
   isCreating,
   isReady,
@@ -57,7 +61,7 @@ export const requestFormState = (
     return { model };
   }
 
-  const values = formStateBody(checkForm(model).body);
+  const values = formStateBody(buildBody(editedFieldsOf(model)).body);
 
   const id = Option.match(maybeRecord, {
     onNone: () => null,

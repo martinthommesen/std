@@ -8,6 +8,7 @@ import { AppRoute, deadLettersRouter } from "../../route.ts";
 import { REVISION_3 } from "../../table-fixture.ts";
 import { update } from "../../update.ts";
 import { Message as SignInMessage } from "../sign-in/sign-in.ts";
+import { emptyPage } from "./fixture.ts";
 import { Message } from "./message.ts";
 
 const opened = update(
@@ -93,10 +94,7 @@ describe("dead-letter session integration", () => {
     ).model;
 
     const reply = AppMessage.GotDeadLettersMessage({
-      message: Message.SucceededLoadDeadLetters({
-        page: { deliveries: [], total: 0 },
-        requestId: first.requestId,
-      }),
+      message: emptyPage(first.requestId),
       pageId: first.id,
     });
 

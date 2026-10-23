@@ -8,7 +8,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { buttonView, inputField, selectField } from "../../view/controls.ts";
 import { Message } from "./message.ts";
-import { Operation } from "./model.ts";
+import { Operation, PAGE_SIZES, isBusy } from "./model.ts";
 import type { Model } from "./model.ts";
 
 const ACTIONS_CLASS = "form-actions";
@@ -72,6 +72,23 @@ const rowView = (
     ]
   );
 
+const policyText = (
+  action: "retry" | "discard",
+  policy: typeof DeadDelivery.Type.deadLetterPolicy
+): string => {
+  if (policy === "block") {
+    return action === "retry"
+      ? "Under block, later deliveries for this record stay blocked until this delivery completes or is discarded."
+      : "Under block, discarding releases later deliveries for this record.";
+  }
+
+  if (policy === "skip") {
+    return "Under skip, later deliveries may already have run. A retry can arrive after newer versions.";
+  }
+
+  return "The subscription is no longer live. Under block, discard releases later deliveries; under skip, later deliveries may already have run and a retry can arrive out of order.";
+};
+
 const confirmationOf = (
   action: "retry" | "discard",
   delivery: typeof DeadDelivery.Type
@@ -81,61 +98,46 @@ const confirmationOf = (
       ? "Attempts reset to zero and the delivery is queued again."
       : "The delivery is marked done without running its effect. This cannot be undone from this page.";
 
-  let policy =
-    "The subscription is no longer live. Under block, discard releases later deliveries; under skip, later deliveries may already have run and a retry can arrive out of order.";
-
-  if (delivery.deadLetterPolicy === "block") {
-    policy =
-      action === "retry"
-        ? "Under block, later deliveries for this record stay blocked until this delivery completes or is discarded."
-        : "Under block, discarding releases later deliveries for this record.";
-  }
-
-  if (delivery.deadLetterPolicy === "skip") {
-    policy =
-      "Under skip, later deliveries may already have run. A retry can arrive after newer versions.";
-  }
-
-  return `Delivery ${delivery.id}. Subscription ${delivery.subscriptionId ?? "unknown"} is ${delivery.subscriptionState ?? "unknown"}. ${effect} ${policy}`;
+  return `Delivery ${delivery.id}. Subscription ${delivery.subscriptionId ?? "unknown"} is ${delivery.subscriptionState ?? "unknown"}. ${effect} ${policyText(action, delivery.deadLetterPolicy)}`;
 };
 
 const confirmationContentView = (
   model: Model,
   { title, description, closeButton }: Dialog.RenderInfo,
   h: HtmlBuilder<Message>
-): readonly Html[] => [
-  h.h2(
-    [...title],
-    [
-      Operation.guards.Confirming(model.operation) &&
-      model.operation.action === "retry"
-        ? "Retry this delivery?"
-        : "Discard this delivery?",
-    ]
-  ),
-  h.p(
-    [...description],
-    [
-      Operation.guards.Confirming(model.operation)
-        ? confirmationOf(model.operation.action, model.operation.delivery)
-        : "",
-    ]
-  ),
-  h.div(
-    [h.Class(ACTIONS_CLASS)],
-    [
-      h.button([...closeButton, h.Class("button button-quiet")], ["Cancel"]),
-      buttonView(
-        {
-          onClick: Message.ClickedConfirm(),
-          text: "Confirm",
-          variant: "primary",
-        },
-        h
-      ),
-    ]
-  ),
-];
+): readonly Html[] => {
+  const content = Operation.guards.Confirming(model.operation)
+    ? {
+        description: confirmationOf(
+          model.operation.action,
+          model.operation.delivery
+        ),
+        title:
+          model.operation.action === "retry"
+            ? "Retry this delivery?"
+            : "Discard this delivery?",
+      }
+    : { description: "", title: "Discard this delivery?" };
+
+  return [
+    h.h2([...title], [content.title]),
+    h.p([...description], [content.description]),
+    h.div(
+      [h.Class(ACTIONS_CLASS)],
+      [
+        h.button([...closeButton, h.Class("button button-quiet")], ["Cancel"]),
+        buttonView(
+          {
+            onClick: Message.ClickedConfirm(),
+            text: "Confirm",
+            variant: "primary",
+          },
+          h
+        ),
+      ]
+    ),
+  ];
+};
 
 const dialogView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.submodel({
@@ -275,7 +277,7 @@ const listView = (model: Model, h: HtmlBuilder<Message>): Html =>
 
 const filtersView = (
   model: Model,
-  isBusy: boolean,
+  busy: boolean,
   h: HtmlBuilder<Message>
 ): Html =>
   h.div(
@@ -293,10 +295,10 @@ const filtersView = (
       selectField(
         {
           id: "dead-letter-limit",
-          isDisabled: isBusy,
+          isDisabled: busy,
           label: "Page size",
           onChange: (value) => Message.SelectedPageSize({ value }),
-          options: ["10", "25", "100"].map((value) => ({
+          options: PAGE_SIZES.map((value) => ({
             label: value,
             value,
           })),
@@ -306,7 +308,7 @@ const filtersView = (
       ),
       buttonView(
         {
-          isDisabled: isBusy,
+          isDisabled: busy,
           onClick: Message.ClickedApplyFilters(),
           text: "Apply filters",
           variant: "primary",
@@ -315,7 +317,7 @@ const filtersView = (
       ),
       buttonView(
         {
-          isDisabled: isBusy,
+          isDisabled: busy,
           onClick: Message.ClickedRefresh(),
           text: "Refresh",
           variant: "quiet",
@@ -331,9 +333,7 @@ const filtersView = (
  * @returns The page.
  */
 export const view = Submodel.defineView<Model, Message>((model, h) => {
-  const isBusy =
-    AsyncData.isPending(model.deliveries) ||
-    Operation.guards.Executing(model.operation);
+  const busy = isBusy(model);
 
   return h.div(
     [h.Class("page dead-letters")],
@@ -345,8 +345,8 @@ export const view = Submodel.defineView<Model, Message>((model, h) => {
           "Review failed outbox deliveries, then retry or discard them. No record payloads are shown.",
         ]
       ),
-      filtersView(model, isBusy, h),
-      isBusy ? h.p([h.Role("status")], ["Waiting for STD…"]) : h.empty,
+      filtersView(model, busy, h),
+      busy ? h.p([h.Role("status")], ["Waiting for STD…"]) : h.empty,
       AsyncData.match(model.deliveries, {
         onFailure: (error) => h.p([h.Role("alert")], [error]),
         onIdle: () => h.empty,

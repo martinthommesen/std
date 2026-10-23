@@ -41,3 +41,14 @@ export const Model = Schema.Struct({
 
 /** The operator page's state. */
 export type Model = typeof Model.Type;
+
+/** The page sizes offered by the operator list. */
+export const PAGE_SIZES: readonly string[] = ["10", "25", "100"];
+
+/** Whether the page is waiting for a read or a confirmed task.
+ * @param model - The operator page.
+ * @returns Whether another operation must wait.
+ */
+export const isBusy = (model: Model): boolean =>
+  AsyncData.isPending(model.deliveries) ||
+  Operation.guards.Executing(model.operation);

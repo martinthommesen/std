@@ -114,18 +114,19 @@ export const schemaFieldsOf = (model: Model): readonly MetaField[] =>
       ),
   });
 
+const formTableOf = (model: Model): Option.Option<MetaTable> =>
+  Option.orElse(classMetaOf(model), () =>
+    Option.map(metaOf(model), (meta) => meta.table)
+  );
+
 /**
  * The concrete form rules, with caller-simplified conditions.
  * @param model - The record form.
  * @returns The caller-visible form description.
  */
 export const rulesOfForm = (model: Model): readonly MetaFormRule[] =>
-  Option.match(classMetaOf(model), {
-    onNone: () =>
-      Option.match(metaOf(model), {
-        onNone: () => [],
-        onSome: (meta) => meta.table.formRules,
-      }),
+  Option.match(formTableOf(model), {
+    onNone: () => [],
     onSome: (table) => table.formRules,
   });
 
@@ -159,9 +160,7 @@ interface LocalFieldState {
 const localFormStates = (
   model: Model
 ): Readonly<Record<string, LocalFieldState>> => {
-  const table = Option.orElse(classMetaOf(model), () =>
-    Option.map(metaOf(model), (meta) => meta.table)
-  );
+  const table = formTableOf(model);
 
   if (Option.isNone(table)) {
     return {};
@@ -337,7 +336,7 @@ export const fieldOf = (
  * @param field - The field.
  * @returns The value.
  */
-export const baseValueOf = (model: Model, field: MetaField): JsonValue =>
+const baseValueOf = (model: Model, field: MetaField): JsonValue =>
   Option.match(editedRecordOf(model), {
     onNone: () => createBaseValue(field),
     onSome: (record) => record.values[field.name] ?? null,
@@ -464,7 +463,7 @@ export const editedFieldsOf = (
  * @param body - The body as `recordSchema` judges it.
  * @returns The verdict, if the client can give one.
  */
-export const verdictOf = (
+const verdictOf = (
   model: Model,
   body: Readonly<Record<string, JsonValue>>
 ): Option.Option<RecordVerdict> =>
@@ -500,7 +499,7 @@ export const verdictOf = (
  * @param error - The error from `recordSchema` or the server.
  * @returns The text.
  */
-export const fieldErrorText = (error: FieldError): string =>
+const fieldErrorText = (error: FieldError): string =>
   Match.value(error).pipe(
     Match.tag("InvalidValue", ({ hint, message }) =>
       hint === undefined ? message : `${message} ${hint}`
@@ -545,30 +544,6 @@ export interface FormCheck {
   /** Names the server would answer `UnknownField` for (none expected). */
   readonly unknownFields: readonly string[];
 }
-
-/**
- * Whether a `Required` error names a field the user cannot supply on this
- * form (`write` is `no` for the form's mode, such as a definition's owner
- * layer and state, which the server sets): the server fills it or refuses,
- * and the form does not hold the save back for it [judgment, decision
- * 0020].
- *
- * @param model - The page.
- * @param name - The field the error names.
- * @param tag - The error's tag.
- * @returns True for such a `Required` error.
- */
-const isRequiredOfTheServer = (
-  model: Model,
-  name: string,
-  tag: string
-): boolean =>
-  tag === "Required" &&
-  fieldsOf(model).some(
-    (field) =>
-      field.name === name &&
-      (isCreating(model) ? field.write.create : field.write.update) === "no"
-  );
 
 const joinProblems = (
   left: readonly string[],
@@ -648,9 +623,19 @@ const choiceFormErrors = (
 export const checkForm = (model: Model): FormCheck => {
   const shown = fieldsOf(model);
   const built = buildBody(editedFieldsOf(model, shown));
+  const schemaFields = schemaFieldsOf(model);
+  const creating = isCreating(model);
+
+  const serverRequired = new Set(
+    shown.flatMap((field) => {
+      const writeMode = creating ? field.write.create : field.write.update;
+
+      return writeMode === "no" ? [field.name] : [];
+    })
+  );
 
   const active = new Set(
-    schemaFieldsOf(model).flatMap((field) =>
+    schemaFields.flatMap((field) =>
       field.state === "active" ? [field.name] : []
     )
   );
@@ -678,12 +663,12 @@ export const checkForm = (model: Model): FormCheck => {
   const fieldErrors = errorsByFieldId(
     shown,
     verdict.errors.filter(
-      (error) => !isRequiredOfTheServer(model, error.field, error._tag)
+      (error) => error._tag !== "Required" || !serverRequired.has(error.field)
     )
   );
 
   const schemaRequired = new Set(
-    schemaFieldsOf(model).flatMap((field) => (field.required ? [field.id] : []))
+    schemaFields.flatMap((field) => (field.required ? [field.id] : []))
   );
 
   const formProblems = errorsByFieldId(

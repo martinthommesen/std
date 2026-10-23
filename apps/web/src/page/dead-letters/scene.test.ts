@@ -13,7 +13,7 @@ import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
 import { LoadDeadLetters, OperateDeadDelivery } from "./command.ts";
-import { delivery, loaded } from "./fixture.ts";
+import { delivery, emptyPage, executing, loaded } from "./fixture.ts";
 import { Message } from "./message.ts";
 import { Deliveries } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -49,13 +49,7 @@ describe("dead-letter page view", () => {
         OperateDeadDelivery,
         Message.SucceededOperateDeadDelivery()
       ),
-      Command.resolve(
-        LoadDeadLetters,
-        Message.SucceededLoadDeadLetters({
-          page: { deliveries: [], total: 0 },
-          requestId: 2,
-        })
-      ),
+      Command.resolve(LoadDeadLetters, emptyPage(2)),
       expect(text("No dead deliveries match these filters.")).toExist()
     );
   });
@@ -104,13 +98,7 @@ describe("dead-letter page view", () => {
       expect(role("button", { name: "Next page" })).toBeDisabled(),
       expect(role("button", { name: "Previous page" })).toBeEnabled(),
       click(role("button", { name: "Previous page" })),
-      Command.resolve(
-        LoadDeadLetters,
-        Message.SucceededLoadDeadLetters({
-          page: { deliveries: [], total: 0 },
-          requestId: 2,
-        })
-      ),
+      Command.resolve(LoadDeadLetters, emptyPage(2)),
       expect(role("status")).toHaveText(
         "0 dead deliveries. This page is empty."
       ),
@@ -183,15 +171,10 @@ describe("dead-letter page view", () => {
   });
 
   it("a failed operation keeps the row, disables actions, and can recover by rereading", () => {
-    const confirming = update(
-      loaded,
-      Message.ClickedAction({ action: "retry", delivery })
-    ).model;
-
-    const executing = update(confirming, Message.ClickedConfirm()).model;
+    const executingPage = executing("retry");
 
     const failed = update(
-      executing,
+      executingPage,
       Message.FailedOperateDeadDelivery({ error: "The response was lost." })
     ).model;
 

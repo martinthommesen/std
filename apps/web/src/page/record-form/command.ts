@@ -9,7 +9,7 @@ import { isTmfError } from "@std/api/client";
  */
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
-import { Effect, Option, Predicate, Result, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { Command, Dom, Mount } from "foldkit";
 import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
@@ -59,13 +59,13 @@ const WITH_RESPONSE = "decoded-and-response";
 const UNAVAILABLE = "Unavailable";
 
 /** How many records a picker offers per search. [judgment] */
-export const PICKER_LIMIT = 10;
+const PICKER_LIMIT = 10;
 
 /** How many records a related list shows per page. [judgment] */
-export const RELATED_PAGE_SIZE = 10;
+const RELATED_PAGE_SIZE = 10;
 
 /** How many history entries one request asks for (the API's maximum). */
-export const HISTORY_PAGE_SIZE = 1000;
+const HISTORY_PAGE_SIZE = 1000;
 
 const decodeRevision = Schema.decodeUnknownOption(SchemaRevision);
 
@@ -262,9 +262,6 @@ const REFUSAL_TAGS: readonly string[] = [
   "VersionRequired",
 ];
 
-/** An ended session, told apart from the write's refusals. */
-const SESSION_ENDED = "SessionEnded";
-
 const decodeFieldErrors = Schema.decodeUnknownOption(
   Schema.Array(FieldErrorSchema)
 );
@@ -335,23 +332,19 @@ const changesOf = (
  *
  * @param error - The typed client's failure: a TMF `Error` body.
  * @param fields - The fields the request was built from.
- * @returns The refusal, `SessionEnded`, or `Unavailable` for anything that
+ * @returns The refusal, or `Unavailable` for anything that
  *   is not an answer of the API.
  */
 const writeErrorOf = (
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure is a union of every error the route declares plus transport failures
   error: unknown,
   fields: readonly WireField[]
-): WriteError | typeof SESSION_ENDED => {
+): WriteError => {
   const fieldOf = (member: string) =>
     nameIn(
       fields,
       Option.getOrElse(textDetail(error, member), () => "")
     );
-
-  if (isTmfError("Unauthenticated")(error)) {
-    return SESSION_ENDED;
-  }
 
   if (isTmfError("ValidationFailed")(error)) {
     return WriteError.ValidationFailed({
@@ -421,20 +414,12 @@ const currentRevisionOfWrite = (error: WriteError): Option.Option<Revision> =>
     ? decodeRevision(error.currentRevision)
     : Option.none();
 
-const failedSaveWith =
-  (generation: number) => (refusal: WriteError | typeof SESSION_ENDED) =>
-    refusal === SESSION_ENDED
-      ? Message.FailedAuthentication()
-      : Message.FailedSaveRecord({
-          error: refusal,
-          generation,
-          maybeRevision: currentRevisionOfWrite(refusal),
-        });
-
-const failedDeleteWith = (refusal: WriteError | typeof SESSION_ENDED) =>
-  refusal === SESSION_ENDED
-    ? Message.FailedAuthentication()
-    : Message.FailedDeleteRecord({ error: refusal });
+const failedSaveWith = (generation: number) => (refusal: WriteError) =>
+  Message.FailedSaveRecord({
+    error: refusal,
+    generation,
+    maybeRevision: currentRevisionOfWrite(refusal),
+  });
 
 /** A create's or update's body, secrets kept apart until the request. */
 const BodyArgs = {
@@ -533,11 +518,11 @@ export const CreateRecord = Command.define("CreateRecord", {
         ),
       });
     }).pipe(
-      Effect.result,
-      Effect.map(
-        Result.getOrElse((failure) =>
-          failedSaveWith(generation)(writeErrorOf(failure, fields))
-        )
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed((failure) =>
+        failedSaveWith(generation)(writeErrorOf(failure, fields))
       )
     ),
   messages: [
@@ -612,11 +597,11 @@ export const UpdateRecord = Command.define("UpdateRecord", {
         ),
       });
     }).pipe(
-      Effect.result,
-      Effect.map(
-        Result.getOrElse((failure) =>
-          failedSaveWith(generation)(writeErrorOf(failure, fields))
-        )
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed((failure) =>
+        failedSaveWith(generation)(writeErrorOf(failure, fields))
       )
     ),
   messages: [
@@ -650,11 +635,11 @@ export const DeleteRecord = Command.define("DeleteRecord", {
         maybeRevision: responseRevision(response),
       });
     }).pipe(
-      Effect.result,
-      Effect.map(
-        Result.getOrElse((failure) =>
-          failedDeleteWith(writeErrorOf(failure, []))
-        )
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed((failure) =>
+        Message.FailedDeleteRecord({ error: writeErrorOf(failure, []) })
       )
     ),
   messages: [
@@ -1179,7 +1164,7 @@ export const ReadToday = Command.define("ReadToday", {
  * floating action bar's height, which the stylesheet adds to the page's
  * bottom scroll padding.
  */
-export const ACTION_BAR_BLOCK_SIZE = "--action-bar-block-size";
+const ACTION_BAR_BLOCK_SIZE = "--action-bar-block-size";
 
 /**
  * The class of the element in the action bar that the stylesheet fixes
@@ -1361,17 +1346,13 @@ export const LoadFormState = Command.define("LoadFormState", {
       Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.orElseSucceed((failure) => {
-        const refusal = writeErrorOf(failure, fields);
-
-        return refusal === SESSION_ENDED
-          ? Message.FailedAuthentication()
-          : Message.FailedLoadFormState({
-              error: refusal,
-              generation,
-              maybeRevision: currentRevisionOf(failure),
-            });
-      })
+      Effect.orElseSucceed((failure) =>
+        Message.FailedLoadFormState({
+          error: writeErrorOf(failure, fields),
+          generation,
+          maybeRevision: currentRevisionOf(failure),
+        })
+      )
     ),
   interrupt: true,
   messages: [
