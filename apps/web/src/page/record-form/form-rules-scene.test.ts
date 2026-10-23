@@ -14,14 +14,49 @@ import {
 import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
+import { REVISION_5 } from "../../form-fixture.ts";
 import { LoadFormState, FocusField } from "./command.ts";
-import { closedFormVerdict, pendingForm } from "./form-rules-fixture.ts";
+import {
+  closedFormVerdict,
+  pendingForm,
+  pendingExistingForm,
+  readOnlyVerdict,
+} from "./form-rules-fixture.ts";
 import { Message } from "./message.ts";
 import { FormStateVerdict, WriteError } from "./model.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
 
 describe("accessible form rules", () => {
+  it("renders a colleague's readable record as values with a neutral note and no editable controls or Save", () => {
+    scene(
+      { update, view },
+      given(
+        update(
+          pendingExistingForm,
+          Message.SucceededLoadFormState({
+            generation: pendingExistingForm.formGeneration,
+            maybeRevision: Option.some(REVISION_5),
+            verdict: readOnlyVerdict,
+          })
+        ).model
+      ),
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
+      expect(text("You can view this record but not change it.")).toExist(),
+      expect(selector("[data-field] input")).toBeAbsent(),
+      expect(selector("[data-field] textarea")).toBeAbsent(),
+      expect(selector("[data-field] select")).toBeAbsent(),
+      expect(role("combobox")).toBeAbsent(),
+      expect(role("checkbox")).toBeAbsent(),
+      expect(role("button", { name: "Save" })).toBeAbsent(),
+      expect(
+        text("You are not allowed to make this proposed change.")
+      ).toBeAbsent(),
+      expect(text("Checking form rules…")).toBeAbsent(),
+      expect(role("textbox", { name: "Description" })).toBeAbsent()
+    );
+  });
+
   it("shows pending state quietly, labels required fields, hides controls and displays the derived read-only value", () => {
     scene(
       { update, view },

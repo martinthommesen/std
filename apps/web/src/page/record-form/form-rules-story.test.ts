@@ -15,12 +15,15 @@ import {
   closedFormVerdict,
   pendingForm,
   formRuleTable,
+  pendingExistingForm,
+  readOnlyVerdict,
 } from "./form-rules-fixture.ts";
 import { formNotices } from "./form-state-flow.ts";
 import {
   checkForm,
   fieldsOf,
   isFormStatePending,
+  isReadOnlyForm,
   pendingFormFields,
   showOfField,
 } from "./form.ts";
@@ -46,6 +49,40 @@ const trueFlagForm = modifyFields(pendingForm, {
 });
 
 describe("form rule verdicts", () => {
+  it("opens a readable record as read-only and sends no further check or save for attempted edits", () => {
+    story(
+      update,
+      given(pendingExistingForm),
+      message(
+        Message.SucceededLoadFormState({
+          generation: pendingExistingForm.formGeneration,
+          maybeRevision: Option.some(REVISION_5),
+          verdict: readOnlyVerdict,
+        })
+      ),
+      message(
+        Message.UpdatedText({
+          fieldId: TICKET_FIELDS.description,
+          text: "Attempted change",
+        })
+      ),
+      message(Message.ClickedSave()),
+      model((page) => {
+        assert.isTrue(isReadOnlyForm(page));
+        assert.isFalse(isFormStatePending(page));
+        assert.strictEqual(pendingFormFields(page).size, 0);
+        assert.deepStrictEqual(page.edits, {});
+        assert.strictEqual(page.submission._tag, "Idle");
+        assert.isTrue(
+          fieldsOf(page).every(
+            (field) => showOfField(page, field)._tag !== "Editable"
+          )
+        );
+      }),
+      Command.expectNone()
+    );
+  });
+
   it("coalesces rapid edits behind one request and applies only the final proposal's verdict", () => {
     const edits = Array.from("abcdefghijklmnopqrstuvwxyz012345", (_, index) =>
       "abcdefghijklmnopqrstuvwxyz012345".slice(0, index + 1)

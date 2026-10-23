@@ -411,7 +411,26 @@ const restrictedFieldAndFormStateNeverReachTheBrowser = async (
   await historyEntryTexts(page);
   await nothingHiddenAfter("open its history");
 
+  await page
+    .getByText("You can view this record but not change it.", { exact: true })
+    .waitFor();
+  assert.strictEqual(
+    await page.getByRole("button", { exact: true, name: "Save" }).count(),
+    0
+  );
+  assert.strictEqual(
+    await page
+      .locator(
+        "[data-field] input, [data-field] textarea, [data-field] select, [data-field] [role=combobox], [data-field] [role=checkbox]"
+      )
+      .count(),
+    0
+  );
+
+  await openRecordForm(page, origin, incident(fixture.records.vpn));
+  await nothingHiddenAfter("open an owned incident");
   await fillField(page, "Description", "Payroll asks again.");
+  await pickReference(page, "Assignee", "Sam", fixture.agent2.name);
 
   await page
     .getByRole("paragraph")

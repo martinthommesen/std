@@ -277,6 +277,17 @@ export const fieldsOf = (model: Model): readonly MetaField[] => {
   });
 };
 
+/** Whether an existing record offers no editable field under its current verdict.
+ * @param model - The record form.
+ * @returns Whether the page is a read-only record view.
+ */
+export const isReadOnlyForm = (model: Model): boolean =>
+  !isCreating(model) &&
+  isReady(model) &&
+  fieldsOf(model).every(
+    (field) => fieldShowOf(field, editedRecordOf(model))._tag !== "Editable"
+  );
+
 /**
  * Read-only values show the derived proposal; editable values stay under the user's control.
  * @param model - The record form.

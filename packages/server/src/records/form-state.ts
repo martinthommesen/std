@@ -530,6 +530,70 @@ const encodeFormState = Effect.fn("Forms.encodeFormState")(
   }
 );
 
+const readOnlyFormState = Effect.fn("Forms.readOnlyState")(
+  function* readOnlyFormState({
+    scope,
+    endpointClassId,
+    form,
+    readable,
+    written,
+  }: {
+    readonly scope: ReadScope;
+    readonly endpointClassId: string;
+    readonly form: Effect.Success<ReturnType<typeof proposeForm>>;
+    readonly readable: ReadonlySet<string>;
+    readonly written: ReadonlySet<string>;
+  }) {
+    const { existing, classId, fields, resolved, rules } = form;
+
+    if (existing === null) {
+      return Option.none();
+    }
+
+    const access = yield* WriteAccess;
+
+    const mayUpdate = yield* access
+      .checkExisting({
+        action: "update",
+        endpointClassId,
+        record: existing,
+        snapshot: scope.snapshot,
+        written,
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catchTag("NotAllowed", (error) =>
+          resolved.entries.size === 0
+            ? Effect.succeed(false)
+            : Effect.fail(error)
+        )
+      );
+
+    if (mayUpdate) {
+      return Option.none();
+    }
+
+    return Option.some(
+      yield* encodeFormState({
+        clears: new Map(),
+        fields,
+        masked: maskImage(scope, classId, imageOf(existing), readable),
+        messages: ["You can view this record but not change it."],
+        readable,
+        revision: existing.version,
+        rules,
+        schemaRevision: scope.snapshot.revision,
+        states: new Map(
+          [...readable].map((id) => [
+            id,
+            { choices: null, hidden: false, readOnly: true, required: false },
+          ])
+        ),
+      })
+    );
+  }
+);
+
 /**
  * Evaluates a proposal after derives without saving, running guards, assigning numbers or writing history.
  * @param endpointClassId - The class named by the endpoint.
@@ -545,8 +609,8 @@ export const formState = Effect.fn("Forms.state")(function* formState(
   const actorId = scope.context.me;
   const access = yield* WriteAccess;
 
-  const { existing, classId, fields, resolved, proposal, rules } =
-    yield* proposeForm(scope, endpointClassId, request);
+  const form = yield* proposeForm(scope, endpointClassId, request);
+  const { existing, classId, fields, resolved, proposal, rules } = form;
 
   const effective = new Map(fields.map((field) => [field.field.id, field]));
 
@@ -563,14 +627,18 @@ export const formState = Effect.fn("Forms.state")(function* formState(
       ? new Set(resolved.entries.keys())
       : writtenFields(effective, proposal, existing, oldReadable);
 
-  if (existing !== null) {
-    yield* access.checkExisting({
-      action: "update",
-      endpointClassId,
-      record: existing,
-      snapshot,
-      written: bodyWritten,
-    });
+  const maybeReadOnly = yield* readOnlyFormState({
+    endpointClassId,
+    form,
+    readable: oldReadable,
+    scope,
+    written: bodyWritten,
+  });
+
+  if (Option.isSome(maybeReadOnly)) {
+    yield* existingFor(scope, endpointClassId, request);
+
+    return maybeReadOnly.value;
   }
 
   const previous = existing === null ? null : imageOf(existing);

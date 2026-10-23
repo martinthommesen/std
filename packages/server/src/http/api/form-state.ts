@@ -1,7 +1,7 @@
 /** The form-state task resource (Contracts 6.3): HTTP naming and stale checks stay at this edge. */
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { FormStateRequest } from "@std/api/form-state";
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema, SchemaIssue } from "effect";
 
 import { formState } from "../../records/form-state.ts";
 import { currentReadScope, resolveTable } from "../../records/read-records.ts";
@@ -11,6 +11,8 @@ import { translateBody } from "./body.ts";
 import { collectionNamed, jsonAnswer, tableOf } from "./records.ts";
 import type { RouteInput } from "./records.ts";
 import { jsonBodyOf } from "./request.ts";
+
+const issuePaths = SchemaIssue.makeFormatterStandardSchemaV1();
 
 /**
  * Checks a typed proposal inside the caller's authenticated request transaction.
@@ -26,7 +28,18 @@ export const formStateIn = Effect.fn("Api.formState")(function* formStateIn(
     Effect.mapError(
       (error) =>
         new InvalidRequest({
-          message: error.message,
+          message: `Invalid form-state request at ${issuePaths(error.issue)
+            .issues.map((issue) =>
+              [
+                "body",
+                ...(issue.path ?? []).map((segment) =>
+                  Predicate.isPropertyKey(segment)
+                    ? String(segment)
+                    : String(segment.key)
+                ),
+              ].join(".")
+            )
+            .join(", ")}.`,
           parameter: "body",
         })
     )

@@ -28,6 +28,7 @@ import {
   fieldsOf,
   isCreating,
   isFormStatePending,
+  isReadOnlyForm,
   metaOf,
   pendingFormFields,
 } from "./form.ts";
@@ -526,15 +527,17 @@ const actionsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
     [h.Class("form-actions")],
     [
-      buttonView(
-        {
-          isDisabled: isSaveBlocked(model),
-          onClick: Message.ClickedSave(),
-          text: saveText(model),
-          variant: "primary",
-        },
-        h
-      ),
+      isReadOnlyForm(model)
+        ? h.empty
+        : buttonView(
+            {
+              isDisabled: isSaveBlocked(model),
+              onClick: Message.ClickedSave(),
+              text: saveText(model),
+              variant: "primary",
+            },
+            h
+          ),
       isCreating(model)
         ? h.empty
         : buttonView(

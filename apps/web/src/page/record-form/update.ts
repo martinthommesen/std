@@ -82,6 +82,7 @@ import {
   isCreating,
   isEmptyBody,
   isFormStatePending,
+  isReadOnlyForm,
   isReady,
   metaOf,
   pickerIdOf,
@@ -2376,7 +2377,7 @@ const isSaveHeld = (model: Model): boolean =>
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (isFormStatePending(model) || isSaveHeld(model)) {
+  if (isReadOnlyForm(model) || isFormStatePending(model) || isSaveHeld(model)) {
     return { model };
   }
 

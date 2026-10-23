@@ -6,7 +6,7 @@
  * For `admin` and for `agent`, in Chromium: open `/`, land on the sign-in
  * page, type the README's demo password into the rendered form and click
  * "Sign in", wait for the shell, open "Incident" from the navigation, and
- * see at least one incident; then open an incident the user may edit from the
+ * see at least one incident; then open the first incident from the
  * list. For the agent, the list has no "Internal cost" column, or every
  * cell of it is restricted, and the form does not show the internal cost
  * (no field, or a restricted one); the admin's form shows it. (The
@@ -212,7 +212,7 @@ const watchProblems = (page: Page, origin: string): ProblemWatch => {
 /**
  * As one demo user in a fresh browser context: open `/`, sign in through
  * the rendered form, open the incident list from the navigation and read
- * it, then open an incident the user may edit from the list.
+ * it, then open the first incident from the list and, as agent, a colleague's incident.
  *
  * @param browser - The browser.
  * @param origin - The compose server.
@@ -269,24 +269,63 @@ const visitIncidents = async (
 
     const costs = [...costColumn.values()];
 
-    step = "open an incident the user may edit from the list";
+    step = "open the first incident from the list";
 
-    const formRow =
-      user.login === "agent"
-        ? page
-            .locator("table.records tbody tr")
-            .filter({ has: page.getByText(user.name, { exact: true }) })
-            .first()
-        : page.locator("table.records tbody tr").first();
+    const formRow = page.locator("table.records tbody tr").first();
 
     await formRow.locator("a.link").first().click();
     await waitForForm(page);
 
-    await page
+    const save = page
       .locator('button:not([disabled]):not([aria-disabled="true"])')
-      .filter({ hasText: /^Save$/u })
-      .waitFor();
+      .filter({ hasText: /^Save$/u });
+
+    const readOnlyNote = page.getByText(
+      "You can view this record but not change it.",
+      { exact: true }
+    );
+
+    await save.or(readOnlyNote).waitFor();
     const formCost = await formFieldState(page, INTERNAL_COST_FIELD);
+
+    if (user.login === "agent") {
+      step = "open a colleague's incident read-only without any failed request";
+      const listedAgain = page.waitForResponse(isListResponse);
+      await page
+        .getByRole("navigation", { name: "Tables" })
+        .getByRole("link", { exact: true, name: "Incident" })
+        .click();
+      await waitForList(page, listedAgain);
+      await page
+        .locator("table.records tbody tr")
+        .filter({ has: page.getByText("Sam Agent", { exact: true }) })
+        .first()
+        .locator("a.link")
+        .first()
+        .click();
+      await waitForForm(page);
+      await readOnlyNote.waitFor();
+      assert.strictEqual(
+        await page.getByRole("button", { exact: true, name: "Save" }).count(),
+        0
+      );
+      assert.strictEqual(
+        await page
+          .locator(
+            "[data-field] input, [data-field] textarea, [data-field] select, [data-field] [role=combobox], [data-field] [role=checkbox]"
+          )
+          .count(),
+        0
+      );
+      assert.strictEqual(
+        await page
+          .getByText("You are not allowed to make this proposed change.", {
+            exact: true,
+          })
+          .count(),
+        0
+      );
+    }
 
     return { costs, formCost, problems: watch.problems(), rows };
   } catch (error) {

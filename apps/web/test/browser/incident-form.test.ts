@@ -7,6 +7,7 @@ import {
 } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import { Effect, Result, Schema } from "effect";
+import type { Page, Response } from "playwright";
 import { inject } from "vitest";
 
 import {
@@ -31,6 +32,29 @@ import { launchBrowser, stdServe } from "./support.ts";
 
 const INCIDENT = "helpdesk.incident";
 
+const watchBrowserErrors = (page: Page): string[] => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      errors.push(message.text());
+    }
+  });
+  page.on("requestfailed", (request) =>
+    errors.push(`Failed request: ${request.url()}`)
+  );
+  page.on("response", (response) => {
+    if (response.status() >= 400) {
+      errors.push(`${response.status()}: ${response.url()}`);
+    }
+  });
+
+  return errors;
+};
+
+const isFormCheck = (response: Response): boolean =>
+  new URL(response.url()).pathname === "/api/v1/checkFormState";
+
 describe("incident form v3", () => {
   it("rejects a form verdict missing the field-state contract", () => {
     assert.isTrue(
@@ -44,6 +68,58 @@ describe("incident form v3", () => {
     );
   });
   layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "an agent opens a colleague's incident read-only with no failed request",
+      () =>
+        Effect.gen(function* colleagueIncident() {
+          const fixture = yield* HelpdeskFixture;
+          const database = yield* TestDatabase;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+          yield* Effect.promise(async () => {
+            const page = await browser.newPage();
+            await signIn(page, server.origin, fixture.agent);
+            const errors = watchBrowserErrors(page);
+            const checked = page.waitForResponse(isFormCheck);
+            await openRecordForm(page, server.origin, {
+              id: fixture.records.password,
+              table: INCIDENT,
+            });
+            await page
+              .getByText("You can view this record but not change it.", {
+                exact: true,
+              })
+              .waitFor();
+            const verdictResponse = await checked;
+            assert.strictEqual(verdictResponse.status(), 200);
+            assert.strictEqual(
+              await page
+                .getByRole("button", { exact: true, name: "Save" })
+                .count(),
+              0
+            );
+            assert.strictEqual(
+              await page
+                .locator(
+                  "[data-field] input, [data-field] textarea, [data-field] select, [data-field] [role=combobox], [data-field] [role=checkbox]"
+                )
+                .count(),
+              0
+            );
+            assert.strictEqual(
+              await formFieldState(page, "description"),
+              "value"
+            );
+            assert.include(
+              [null, "restricted"],
+              await formFieldState(page, "internal_cost")
+            );
+            assert.deepStrictEqual(errors, []);
+            await page.close();
+          });
+        }).pipe(Effect.scoped)
+    );
+
     dbTest.effect(
       "creates an incident, shows derived read-only priority, requires resolution details, and clears a manager's major flag below priority 1",
       () =>

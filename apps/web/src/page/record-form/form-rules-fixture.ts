@@ -3,7 +3,13 @@ import type { FormState } from "@std/api/form-state";
 import { Option } from "effect";
 
 import type { MetaTable } from "../../domain/metadata.ts";
-import { REVISION_5, TICKET_FIELDS, ticketTable } from "../../form-fixture.ts";
+import {
+  REVISION_5,
+  TICKET_FIELDS,
+  ticketTable,
+  ticketRecord,
+  TICKET_ID,
+} from "../../form-fixture.ts";
 import { Message } from "./message.ts";
 import { FormMode } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -92,4 +98,44 @@ export const closedFormVerdict: typeof FormState.Type = {
     short_description: "Preview title",
     status: "closed",
   },
+};
+
+/** An existing record awaiting its initial access-aware verdict. */
+export const pendingExistingForm = update(
+  update(
+    init({
+      id: 1,
+      maybeAppRevision: Option.none(),
+      mode: FormMode.Edit({ recordId: TICKET_ID }),
+      table: ticketTable.name,
+    }).model,
+    Message.SucceededLoadFormMetadata({
+      revision: REVISION_5,
+      table: formRuleTable,
+    })
+  ).model,
+  Message.SucceededLoadRecord({
+    generation: 1,
+    maybeRevision: Option.some(REVISION_5),
+    purpose: "Open",
+    record: ticketRecord,
+  })
+).model;
+
+/** An empty proposal's answer when the caller may read but cannot update the record. */
+export const readOnlyVerdict: typeof FormState.Type = {
+  fields: Object.fromEntries(
+    formRuleTable.fields.map((field) => [
+      field.name,
+      {
+        hidden: false,
+        readOnly: true,
+        required: false,
+      },
+    ])
+  ),
+  messages: ["You can view this record but not change it."],
+  revision: ticketRecord.version,
+  schemaRevision: 5,
+  values: ticketRecord.values,
 };

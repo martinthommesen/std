@@ -46,6 +46,94 @@ const preview = Effect.fn("FormTest.preview")(function* preview(
 });
 
 describe("form-state", () => {
+  it.effect(
+    "an empty proposal for a colleague's incident returns masked read-only states, while an edit is still refused",
+    () =>
+      Effect.gen(function* readOnlyIncident() {
+        const fixture = yield* HelpdeskFixture;
+        const agent = yield* clientFor("agent");
+
+        const record = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent2.id },
+          internalCost: "9876.54",
+        });
+
+        const payload = {
+          id: textOf(record.id),
+          revision: numberOf(record.revision),
+          table: "helpdeskIncident",
+          values: {},
+        };
+
+        const verdict = yield* agent.records.formState({ payload });
+        assert.isNotEmpty(Object.keys(verdict.fields));
+        assert.isTrue(
+          Object.values(verdict.fields).every((field) => field.readOnly)
+        );
+        assert.deepStrictEqual(verdict.messages, [
+          "You can view this record but not change it.",
+        ]);
+        assert.isFalse(Object.hasOwn(verdict.fields, "internalCost"));
+        assert.isFalse(Object.hasOwn(verdict.values, "internalCost"));
+        assert.strictEqual(verdict.revision, record.revision);
+
+        const denied = yield* agent.records
+          .formState({
+            payload: {
+              ...payload,
+              values: { description: "Attempted change" },
+            },
+          })
+          .pipe(Effect.result);
+
+        assert.isTrue(Result.isFailure(denied));
+        const client = yield* clientFor();
+
+        const unchanged = yield* client.records.get({
+          params: { id: payload.id, table: payload.table },
+          query: {},
+        });
+
+        assert.deepStrictEqual(unchanged, record);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "invalid proposal envelopes name the key path without echoing the submitted value",
+    () =>
+      Effect.gen(function* privateDecoder() {
+        const fixture = yield* HelpdeskFixture;
+        const http = yield* TestHttpClient;
+
+        const token = yield* http.signIn(
+          fixture.agent.login,
+          fixture.agent.password
+        );
+
+        for (const [key, value] of Object.entries({
+          id: "private-record-id",
+          revision: "private-revision",
+          table: { private: "private-table" },
+          values: "private-values",
+        })) {
+          const reply = yield* http.request("POST", "/api/v1/checkFormState", {
+            body: {
+              id: null,
+              revision: null,
+              table: "helpdeskIncident",
+              values: {},
+              [key]: value,
+            },
+            token,
+          });
+
+          assert.strictEqual(reply.status, 400);
+          assert.include(reply.text, `body.${key}`);
+          assert.notInclude(reply.text, "private-");
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
   it("documents one task resource and validates the proposal envelope", () => {
     assert.strictEqual(
       StdApi.groups.records.endpoints.formState.path,
