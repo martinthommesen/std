@@ -10,3 +10,4 @@ coverage/
 .vite/
 bench/results/raw/
 .claude/worktrees/
+ctk-reports/
