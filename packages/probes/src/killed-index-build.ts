@@ -302,29 +302,24 @@ export const runKilledBuildScenario = Effect.fn("runKilledBuildScenario")(
       Effect.map((alive) => !alive)
     );
 
-    let backendAliveAfterKill = true;
-    let lockHeldAfterKill = true;
-    let tryLockRefusedAfterKill = true;
     let releasedAt: number | null = null;
 
     if (scenario.busy === "writer") {
       // Watch for the hold time: the backend may notice the lost client.
       yield* pollFor(noteExit, Duration.millis(scenario.holdAfterKillMs));
+    }
 
-      backendAliveAfterKill = !(yield* noteExit);
-      lockHeldAfterKill = (yield* watch.holder) === pid;
-      tryLockRefusedAfterKill = !(yield* watch.tryLock);
+    const backendAliveAfterKill = !(yield* noteExit);
+    const lockHeldAfterKill = (yield* watch.holder) === pid;
+    const tryLockRefusedAfterKill = !(yield* watch.tryLock);
 
+    if (scenario.busy === "writer") {
       if (scenario.duplicate) {
         yield* writer.query(`INSERT INTO ${TABLE_NAME} VALUES (-2, 1)`);
       }
 
       yield* writer.query("COMMIT");
       releasedAt = yield* now;
-    } else {
-      backendAliveAfterKill = !(yield* noteExit);
-      lockHeldAfterKill = (yield* watch.holder) === pid;
-      tryLockRefusedAfterKill = !(yield* watch.tryLock);
     }
 
     yield* waitFor(noteExit);

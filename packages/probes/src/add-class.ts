@@ -431,6 +431,9 @@ const addClassWork = Effect.fn("addClassWork")(function* addClassMain(
 
 const decodeRevision = decodeRows(Schema.Struct({ revision: Schema.String }));
 
+// One row suffices to acquire ACCESS SHARE, retained until the reader commits.
+const ROOT_READ_QUERY = "SELECT id FROM probe.asset LIMIT 1";
+
 /** The committed revision, read outside any config commit. */
 const committedRevision = SqlClient.SqlClient.pipe(
   Effect.flatMap(
@@ -450,7 +453,7 @@ const timedRootRequest = Effect.gen(function* rootRequest() {
   const [ms] = yield* timedMillis(
     request(
       SqlClient.SqlClient.pipe(
-        Effect.flatMap((sql) => sql`SELECT id FROM probe.asset LIMIT 1`)
+        Effect.flatMap((sql) => sql.unsafe(ROOT_READ_QUERY))
       )
     )
   );
@@ -464,19 +467,19 @@ const timedRootRequest = Effect.gen(function* rootRequest() {
  * @param coordinator - The coordinator's connection.
  * @param log - The commit's attempt log.
  * @param commit - The running config commit.
- * @returns The queue facts.
+ * @returns The timed commit result and queue facts.
  */
 const readerPastTimeout = Effect.fn("readerPastTimeout")(
-  function* holdPastTimeout(
+  function* holdPastTimeout<A>(
     coordinator: DedicatedConnection,
     log: AttemptLog,
-    commit: Effect.Effect<void, unknown>
+    commit: Effect.Effect<A, unknown>
   ) {
     const database = yield* TestDatabase;
     const reader = yield* database.session("std-probe-long-reader");
     yield* reader.query("BEGIN");
-    yield* reader.query("SELECT count(*) FROM probe.asset");
-    yield* reader.query("SELECT count(*) FROM probe.laptop");
+    yield* reader.query(ROOT_READ_QUERY);
+    yield* reader.query("SELECT id FROM probe.laptop LIMIT 1");
     const revisionBefore = yield* committedRevision;
 
     const commitFiber = yield* Effect.forkChild(commit);
@@ -485,7 +488,7 @@ const readerPastTimeout = Effect.fn("readerPastTimeout")(
     const plain = yield* database.session("std-probe-plain-reader");
 
     const plainFiber = yield* Effect.forkChild(
-      timedMillis(plain.query("SELECT id FROM probe.asset LIMIT 1")).pipe(
+      timedMillis(plain.query(ROOT_READ_QUERY)).pipe(
         Effect.flatMap(([ms]) =>
           now.pipe(Effect.map((endedAt) => ({ endedAt, ms })))
         )
@@ -521,7 +524,7 @@ const readerPastTimeout = Effect.fn("readerPastTimeout")(
 
     const releasedAt = yield* now;
     yield* reader.query("COMMIT");
-    yield* Fiber.join(commitFiber);
+    const result = yield* Fiber.join(commitFiber);
 
     const facts: QueueFacts = {
       plainReadMs: plainRead.ms,
@@ -533,7 +536,7 @@ const readerPastTimeout = Effect.fn("readerPastTimeout")(
       revisionUnchangedAfterFailedAttempt: revisionMid === revisionBefore,
     };
 
-    return facts;
+    return { queue: facts, result, staggered: null };
   }
 );
 
@@ -544,20 +547,20 @@ const readerPastTimeout = Effect.fn("readerPastTimeout")(
  * @param coordinator - The coordinator's connection.
  * @param holdMs - How long the commit waits on each reader.
  * @param commit - The running config commit.
- * @returns The observed waits and an STD request's latency.
+ * @returns The timed commit result, observed waits and an STD request's latency.
  */
-const staggeredReaders = Effect.fn("staggeredReaders")(function* staggered(
+const staggeredReaders = Effect.fn("staggeredReaders")(function* staggered<A>(
   coordinator: DedicatedConnection,
   holdMs: number,
-  commit: Effect.Effect<void, unknown>
+  commit: Effect.Effect<A, unknown>
 ) {
   const database = yield* TestDatabase;
   const rootReader = yield* database.session("std-probe-root-reader");
   const parentReader = yield* database.session("std-probe-parent-reader");
   yield* rootReader.query("BEGIN");
-  yield* rootReader.query("SELECT count(*) FROM probe.asset");
+  yield* rootReader.query(ROOT_READ_QUERY);
   yield* parentReader.query("BEGIN");
-  yield* parentReader.query("SELECT count(*) FROM probe.laptop");
+  yield* parentReader.query("SELECT id FROM probe.laptop LIMIT 1");
 
   const commitFiber = yield* Effect.forkChild(commit);
   yield* waitFor(isBlockedBy(coordinator.processId, rootReader.processId));
@@ -577,7 +580,7 @@ const staggeredReaders = Effect.fn("staggeredReaders")(function* staggered(
     parentReader.query("COMMIT")
   );
 
-  yield* Fiber.join(commitFiber);
+  const result = yield* Fiber.join(commitFiber);
   const rootRequest = yield* Fiber.join(requestFiber);
 
   const facts: StaggeredFacts = {
@@ -585,7 +588,7 @@ const staggeredReaders = Effect.fn("staggeredReaders")(function* staggered(
     requestMs: rootRequest.ms,
   };
 
-  return facts;
+  return { queue: null, result, staggered: facts };
 });
 
 /**
@@ -621,33 +624,28 @@ export const runAddClassProbe = Effect.fn("runAddClassProbe")(
         ? {}
         : { retryDelays: options.retryDelays };
 
-    let committed: Effect.Success<ReturnType<typeof addClassWork>> | undefined;
-
-    let commitMs = 0;
-
-    const commit = Effect.gen(function* timedCommit() {
-      const started = yield* now;
-      committed = yield* connection.transactions.configCommit(
+    const commit = timedMillis(
+      connection.transactions.configCommit(
         tracked(log, addClassWork(mechanism)),
         commitOptions
-      );
-      commitMs = (yield* now) - started;
-    }).pipe(Effect.orDie);
+      )
+    ).pipe(Effect.orDie);
 
-    let queue: QueueFacts | null = null;
-    let staggered: StaggeredFacts | null = null;
+    const {
+      result: [commitMs, committed],
+      queue,
+      staggered,
+    } = yield* Effect.gen(function* runScenario() {
+      if (blocking.kind === "reader-past-timeout") {
+        return yield* readerPastTimeout(connection, log, commit);
+      }
 
-    if (blocking.kind === "reader-past-timeout") {
-      queue = yield* readerPastTimeout(connection, log, commit);
-    } else if (blocking.kind === "staggered") {
-      staggered = yield* staggeredReaders(connection, blocking.holdMs, commit);
-    } else {
-      yield* commit;
-    }
+      if (blocking.kind === "staggered") {
+        return yield* staggeredReaders(connection, blocking.holdMs, commit);
+      }
 
-    if (committed === undefined) {
-      return yield* Effect.die(new Error("the config commit did not finish"));
-    }
+      return { queue: null, result: yield* commit, staggered: null };
+    });
 
     const { locks, scans: scanRows, steps } = committed;
 

@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
 import { Console, Effect } from "effect";
+import { forEach } from "effect/Effect";
 
 import { runAddClassProbe } from "./add-class.ts";
 import { runAddColumnProbe } from "./add-column.ts";
@@ -94,25 +95,6 @@ const record = Effect.fn("record")(function* recordProbe<A, E>(
 
 const DEFAULT_POOL = 10;
 
-/**
- * Runs `run` for each item, one after another.
- * @param items - The inputs.
- * @param run - One run.
- * @returns The results in order.
- */
-const inSequence = Effect.fn("inSequence")(function* eachInTurn<I, A, E, R>(
-  items: readonly I[],
-  run: (item: I) => Effect.Effect<A, E, R>
-) {
-  const results: A[] = [];
-
-  for (const item of items) {
-    results.push(yield* run(item));
-  }
-
-  return results;
-});
-
 const optional = <A, E>(
   enabled: boolean,
   effect: Effect.Effect<A, E>
@@ -139,7 +121,7 @@ const program = Effect.gen(function* probes() {
     record(
       "2 killed index build",
       DEFAULT_POOL,
-      inSequence(settings.killedBuild, (scenario) =>
+      forEach(settings.killedBuild, (scenario) =>
         Effect.scoped(runKilledBuildScenario(scenario))
       )
     )
@@ -150,7 +132,7 @@ const program = Effect.gen(function* probes() {
     record(
       "3 add class",
       DEFAULT_POOL,
-      inSequence(settings.addClass, (options) =>
+      forEach(settings.addClass, (options) =>
         Effect.scoped(runAddClassProbe(options))
       )
     )
@@ -161,7 +143,7 @@ const program = Effect.gen(function* probes() {
     record(
       "3b lock budget",
       DEFAULT_POOL,
-      inSequence(settings.lockBudget, (options) =>
+      forEach(settings.lockBudget, (options) =>
         Effect.scoped(runLockBudgetProbe(options))
       )
     )
@@ -181,7 +163,7 @@ const program = Effect.gen(function* probes() {
     record(
       "3d unbudgeted waits",
       DEFAULT_POOL,
-      inSequence(settings.unbudgetedWaits, (options) =>
+      forEach(settings.unbudgetedWaits, (options) =>
         Effect.scoped(runUnbudgetedWaitProbe(options))
       )
     )

@@ -194,19 +194,17 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     readonly path: string;
     readonly status: number;
     readonly text: string;
+    readonly json: JsonValue | undefined;
     readonly contentType: string | null;
-  }) => {
-    const checked = { ...exchange, json: bodyJson(exchange.text) };
-
-    return Effect.all([
-      checkApiExchange(checked),
-      checkTmfExchange(contracts, checked),
+  }) =>
+    Effect.all([
+      checkApiExchange(exchange),
+      checkTmfExchange(contracts, exchange),
     ]).pipe(
       Effect.mapError((problem) => new Error(problem)),
       Effect.orDie,
       Effect.asVoid
     );
-  };
 
   const request = Effect.fn("TestHttpClient.request")(function* request(
     method: string,
@@ -238,6 +236,7 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
 
     yield* checkExchange({
       contentType: response.headers.get(CONTENT_TYPE_HEADER),
+      json,
       method,
       path,
       status: response.status,
@@ -300,6 +299,7 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     await Effect.runPromise(
       checkExchange({
         contentType: response.headers.get(CONTENT_TYPE_HEADER),
+        json: bodyJson(text),
         method: outgoing.method,
         path: `${url.pathname}${url.search}`,
         status: response.status,
