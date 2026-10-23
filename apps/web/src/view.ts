@@ -305,7 +305,7 @@ const tablesNavView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
 
 const PREFERENCE_PROBLEM_TEXTS = {
   Invalid:
-    "This browser had stored something unreadable instead of whether Administration is open, so it starts closed; opening or closing it stores it again.",
+    "Could not restore the navigation preference. Administration starts closed. Open or close it to save the preference again.",
   Unreadable:
     "This browser did not let STD read whether Administration was open, so it starts closed.",
   Unsaved:

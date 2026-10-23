@@ -153,7 +153,7 @@ describe("app", () => {
   it.each([
     [
       "Invalid",
-      "This browser had stored something unreadable instead of whether Administration is open, so it starts closed; opening or closing it stores it again.",
+      "Could not restore the navigation preference. Administration starts closed. Open or close it to save the preference again.",
     ],
     [
       "Unreadable",

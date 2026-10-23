@@ -9,7 +9,10 @@
  * - after a version conflict, which makes the action bar's messages
  *   wrap, no field that Tab reaches is covered by the bar or the header:
  *   at 320 px, at 640 x 360 (a 1280 x 720 window at 200 % zoom), and at
- *   800 px, where the bar floats and wraps.
+ *   800 px, where the bar floats and wraps;
+ * - where the bar floats, Ctrl+S's conflict grows it under the control
+ *   that keeps focus, and that control is moved clear of it without a
+ *   key press or a scroll by the user.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import {
@@ -24,6 +27,7 @@ import { inject } from "vitest";
 
 import {
   apiCall,
+  apiRecord,
   bearerToken,
   collectionOf,
   fillField,
@@ -262,6 +266,101 @@ const conflictBarCoversNoField = async (
   await context.close();
 };
 
+/** Where the focused control is against the action bar, and the note. */
+interface FocusAgainstBar {
+  readonly focusedLabel: string;
+  readonly isCovered: boolean;
+  readonly note: string;
+}
+
+const focusAgainstBar = async (page: Page): Promise<FocusAgainstBar> =>
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    const bar = document.querySelector(".action-bar");
+
+    if (!(active instanceof HTMLElement) || bar === null) {
+      throw new Error("no focused element or action bar");
+    }
+
+    const box = active.getBoundingClientRect();
+    const barBox = bar.getBoundingClientRect();
+
+    return {
+      focusedLabel:
+        active.id === ""
+          ? ""
+          : (document.querySelector(`label[for="${active.id}"]`)?.textContent ??
+            ""),
+      isCovered: box.bottom > barBox.top && box.top < barBox.bottom,
+      note: bar.querySelector(".action-status")?.textContent ?? "",
+    };
+  });
+
+const ctrlSConflictKeepsFocusClear = async (
+  browser: Browser,
+  origin: string,
+  fixture: HelpdeskData
+) => {
+  const context = await browser.newContext({
+    viewport: { height: 600, width: 800 },
+  });
+
+  const page = await context.newPage();
+  const printer = { id: fixture.records.printer, table: INCIDENTS };
+
+  await signIn(page, origin, fixture.admin);
+  await openRecordForm(page, origin, printer);
+
+  const { version } = await apiRecord(page, origin, printer);
+  const email = page.getByLabel("Customer email", { exact: true });
+
+  await email.fill("mine@example.com");
+  // As a user who scrolled: the field just above the bar, as it is before
+  // the save (Sol's reproduction at 800 x 600).
+  await page.evaluate(() => {
+    const field = document.activeElement?.getBoundingClientRect();
+    const bar = document.querySelector(".action-bar")?.getBoundingClientRect();
+
+    if (field !== undefined && bar !== undefined) {
+      window.scrollBy(0, field.bottom - bar.top + 2);
+    }
+  });
+  await rendered(page);
+
+  const before = await focusAgainstBar(page);
+
+  assert.isFalse(before.isCovered, "the field starts clear of the bar");
+
+  const token = await bearerToken(origin, fixture.agent);
+
+  const theirs = await apiCall(origin, token, {
+    body: { description: "Theirs, saved first." },
+    method: "PATCH",
+    path: `/${collectionOf(INCIDENTS)}/${printer.id}`,
+    version,
+  });
+
+  assert.strictEqual(theirs.status, 200, theirs.text);
+
+  await page.keyboard.press("Control+s");
+  await page
+    .getByText("Not saved: someone else saved this record first.", {
+      exact: true,
+    })
+    .waitFor();
+  await rendered(page);
+
+  const after = await focusAgainstBar(page);
+
+  assert.deepStrictEqual(after, {
+    focusedLabel: "Customer email",
+    isCovered: false,
+    note: after.note,
+  });
+  assert.include(after.note, "Not saved");
+  await context.close();
+};
+
 describe("narrow screens", () => {
   it("walks at most TAB_LIMIT controls", () => {
     assert.isAbove(TAB_LIMIT, 0);
@@ -315,6 +414,21 @@ describe("narrow screens", () => {
               { height: 600, width: 800 },
               3
             );
+          });
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "where the action bar floats, Ctrl+S's conflict grows it, and the control that keeps focus is moved clear of it",
+      () =>
+        Effect.gen(function* growthTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+
+          yield* Effect.promise(async () => {
+            await ctrlSConflictKeepsFocusClear(browser, server.origin, fixture);
           });
         }).pipe(Effect.scoped)
     );

@@ -1215,9 +1215,13 @@ const isUnderStickyChrome = (target: Element): boolean => {
  *   header is scrolled into the clear part. Browsers scroll only to a
  *   control outside the window (Chromium leaves one alone that is in it,
  *   behind the bar, measured at 800 x 600 after a version conflict), so
- *   the padding alone does not keep it clear.
+ *   the padding alone does not keep it clear. That is checked when focus
+ *   moves, when the bar changes size (a refusal's note grows it under the
+ *   control that keeps focus: Customer email at y 504..536 was wholly
+ *   covered when Ctrl+S's conflict grew the bar from y 538 to y 498, Sol's
+ *   review of 1a19fe09), including when a narrower window wraps it.
  *
- * Both go when the bar does.
+ * All of it goes when the bar does.
  */
 export const KeepFocusClearOfActionBar = Mount.define(
   "KeepFocusClearOfActionBar",
@@ -1228,24 +1232,30 @@ export const KeepFocusClearOfActionBar = Mount.define(
 
         yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const observer = new ResizeObserver(() => {
-              root.style.setProperty(
-                ACTION_BAR_BLOCK_SIZE,
-                `${element.getBoundingClientRect().height}px`
-              );
-            });
-
-            const revealFocused = (event: FocusEvent) => {
-              const { target } = event;
-
+            const reveal = (target: Element | null) => {
               if (
-                target instanceof Element &&
+                target instanceof HTMLElement &&
+                target !== document.body &&
                 !element.contains(target) &&
                 isUnderStickyChrome(target)
               ) {
                 target.scrollIntoView({ block: "nearest" });
               }
             };
+
+            const revealFocused = () => {
+              reveal(document.activeElement);
+            };
+
+            // NOTE: the new height goes into the scroll padding first, so
+            // the check and the scroll use the bar as it is now.
+            const observer = new ResizeObserver(() => {
+              root.style.setProperty(
+                ACTION_BAR_BLOCK_SIZE,
+                `${element.getBoundingClientRect().height}px`
+              );
+              revealFocused();
+            });
 
             observer.observe(element, { box: "border-box" });
             document.addEventListener("focusin", revealFocused);
