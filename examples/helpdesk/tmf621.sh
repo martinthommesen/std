@@ -139,8 +139,8 @@ echo "  signed in"
 
 # TODO(3H): examples/listener prints the events (TroubleTicketCreateEvent,
 # TroubleTicketStatusChangeEvent, ...) the steps below cause: register its
-# hub here, with POST /tmf-api/troubleTicket/v5/hub, once workstream 3H serves
-# hubs.
+# hub here, with POST /tmf-api/troubleTicket/v5/hub, once workstream 3H ships
+# the listener.
 
 heading "Open an incident (POST $TICKETS)"
 ok 201 POST "$STD_URL$TICKETS" "$(jq -nc --arg name "Laptop does not boot [$RUN]" \
@@ -157,7 +157,9 @@ show "$BODY"
 expect "$BODY" ".id == \"$ID\" and .status == \"acknowledged\"" "the same acknowledged ticket"
 
 heading "Update it: urgency 1, status inProgress, first note (PATCH)"
-ok 200 PATCH "$URL" "$(jq -nc '{status: "inProgress", troubleTicketCharacteristic: [{name: "urgency", value: 1, "@type": "IntegerCharacteristic"}], note: [{text: "Looking at it now."}]}')"
+# The characteristics array replaces the old one (strict RFC 7396), so the
+# update sends them as read with urgency changed.
+ok 200 PATCH "$URL" "$(jq -c '{status: "inProgress", troubleTicketCharacteristic: [.troubleTicketCharacteristic[] | if .name == "urgency" then .value = 1 else . end], note: [{text: "Looking at it now."}]}' <<<"$BODY")"
 STALE=$(etag)
 show "$BODY"
 expect "$BODY" '.status == "inProgress" and .priority == "High" and (.note | length) == 1' "inProgress, priority High (Major x urgency 1) and one note"

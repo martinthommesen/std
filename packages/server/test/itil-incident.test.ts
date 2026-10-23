@@ -32,6 +32,7 @@ import { addRecordRule, change, values } from "./schema-support.ts";
 import {
   arrayOf,
   bodyOf,
+  characteristicsWith,
   JSON_PATCH,
   TICKETS,
   ticketBody,
@@ -904,11 +905,18 @@ describe("itil-incident", () => {
               `${TICKETS}/${textOf(ticket.id)}`,
               {
                 severity,
-                troubleTicketCharacteristic: [{ name: "urgency", value: 1 }],
+                troubleTicketCharacteristic: characteristicsWith(
+                  bodyOf(changed),
+                  { urgency: 1 }
+                ),
               }
             );
 
-            assert.strictEqual(bodyOf(urgent).priority, PRIORITIES[impact]);
+            assert.strictEqual(
+              bodyOf(urgent).priority,
+              PRIORITIES[impact],
+              urgent.text
+            );
           }
         }
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)

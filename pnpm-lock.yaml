@@ -664,6 +664,9 @@ importers:
       '@std/values':
         specifier: workspace:*
         version: link:../values
+      ajv:
+        specifier: 'catalog:'
+        version: 8.18.0
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -677,9 +680,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
-      ajv:
-        specifier: 'catalog:'
-        version: 8.18.0
       fast-check:
         specifier: 'catalog:'
         version: 4.10.2

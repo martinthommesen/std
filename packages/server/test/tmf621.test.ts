@@ -33,6 +33,7 @@ import {
 import {
   arrayOf,
   bodyOf,
+  characteristicsWith,
   etagOf,
   itemsOf,
   SPECIFICATIONS,
@@ -434,6 +435,96 @@ describe("tmf621", () => {
   );
 
   it.effect(
+    "severity and priority filters compare the rendered labels exactly, while writes take any case",
+    () =>
+      Effect.gen(function* exactLabels() {
+        const admin = yield* tmf621As("admin");
+
+        const ticket = yield* open(admin, {
+          name: "exact labels",
+          priority: "high",
+          severity: "minor",
+        });
+
+        assert.deepStrictEqual(
+          [ticket.severity, ticket.priority],
+          ["Minor", "High"]
+        );
+
+        const ids = (query: string) =>
+          Effect.map(
+            admin.get(`${TICKETS}?name=exact%20labels&${query}`),
+            sortedIds
+          );
+
+        assert.deepStrictEqual(yield* ids("severity=Minor"), sorted(ticket.id));
+        assert.deepStrictEqual(yield* ids("severity=minor"), []);
+        assert.deepStrictEqual(yield* ids("severity=MINOR"), []);
+        assert.deepStrictEqual(yield* ids("priority=High"), sorted(ticket.id));
+        assert.deepStrictEqual(yield* ids("priority=high"), []);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "value objects that do not fit the pinned schema are refused, naming the member, and nothing is stored",
+    () =>
+      Effect.gen(function* schemaRefusals() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin);
+        const path = `${TICKETS}/${textOf(ticket.id)}`;
+
+        const history = yield* admin.patch(path, {
+          statusChangeHistory: [{ status: "bogus" }],
+        });
+
+        assert.strictEqual(outcome(history), "400 ValidationFailed");
+        assert.match(
+          textOf(arrayOf(bodyOf(history), "fieldErrors")[0]?.field),
+          /^statusChangeHistory\.0\.status/u
+        );
+
+        const characteristic = yield* admin.patch(path, {
+          troubleTicketCharacteristic: [
+            ...characteristicsWith(ticket, {}),
+            { "@type": "StringCharacteristic", name: "region", value: 42 },
+          ],
+        });
+
+        assert.strictEqual(outcome(characteristic), "400 ValidationFailed");
+        assert.match(
+          textOf(arrayOf(bodyOf(characteristic), "fieldErrors")[0]?.field),
+          /^troubleTicketCharacteristic\.\d+\.value/u
+        );
+
+        const record = yield* stored(ticket);
+
+        assert.deepStrictEqual(
+          [record.statusChangeHistory ?? null, record.characteristic ?? null],
+          [null, null]
+        );
+        assert.deepStrictEqual(bodyOf(yield* admin.get(path)), ticket);
+
+        const specification = yield* admin.post(SPECIFICATIONS, {
+          "@type": "TroubleTicketSpecification",
+          name: "Invalid related party",
+          relatedParty: "invalid",
+        });
+
+        assert.strictEqual(outcome(specification), "400 ValidationFailed");
+        assert.match(
+          textOf(arrayOf(bodyOf(specification), "fieldErrors")[0]?.field),
+          /^relatedParty/u
+        );
+        assert.deepStrictEqual(
+          itemsOf(
+            yield* admin.get(`${SPECIFICATIONS}?name=Invalid%20related%20party`)
+          ),
+          []
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
     "statuses follow TMF621's life cycle onto the incident state model, and stored states read back",
     () =>
       Effect.gen(function* lifeCycle() {
@@ -510,9 +601,9 @@ describe("tmf621", () => {
 
         const held = yield* patch(admin, ticket, {
           status: "held",
-          troubleTicketCharacteristic: [
-            { name: "holdReason", value: "awaiting_change" },
-          ],
+          troubleTicketCharacteristic: characteristicsWith(ticket, {
+            holdReason: "awaiting_change",
+          }),
         });
 
         assert.strictEqual(held.status, "held");
@@ -525,9 +616,9 @@ describe("tmf621", () => {
           `${TICKETS}/${textOf(ticket.id)}`,
           {
             status: "pending",
-            troubleTicketCharacteristic: [
-              { name: "holdReason", value: "awaiting_vendor" },
-            ],
+            troubleTicketCharacteristic: characteristicsWith(held, {
+              holdReason: "awaiting_vendor",
+            }),
           }
         );
 
@@ -877,7 +968,7 @@ describe("tmf621", () => {
   );
 
   it.effect(
-    "characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority",
+    "characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given",
     () =>
       Effect.gen(function* mappedCharacteristics() {
         const admin = yield* tmf621As("admin");
@@ -887,7 +978,7 @@ describe("tmf621", () => {
 
         const urgent = yield* patch(admin, ticket, {
           troubleTicketCharacteristic: [
-            { "@type": "IntegerCharacteristic", name: "urgency", value: 1 },
+            ...characteristicsWith(ticket, { urgency: 1 }),
             { name: "resolutionNotes", value: "Restarted the relay." },
             { name: "region", value: "north" },
           ],
@@ -941,8 +1032,26 @@ describe("tmf621", () => {
           assert.strictEqual(outcome(invalid), "400 ValidationFailed");
         }
 
+        // Strict RFC 7396 (decision 0035): resolutionNotes and region, left
+        // out, are cleared; urgency and the major flag, required, must be
+        // sent, and a replacement without them names them.
+        const missing = yield* admin.patch(`${TICKETS}/${textOf(ticket.id)}`, {
+          troubleTicketCharacteristic: [{ name: "region", value: "south" }],
+        });
+
+        assert.strictEqual(outcome(missing), "400 ValidationFailed");
+        assert.includeMembers(
+          arrayOf(bodyOf(missing), "fieldErrors").map((error) => error.field),
+          ["majorIncident"]
+        );
+
+        const required = characteristicsWith(ticket, {}).filter(
+          (item) => item.name === "urgency" || item.name === "majorIncident"
+        );
+
         const related = yield* patch(admin, ticket, {
           troubleTicketCharacteristic: [
+            ...required,
             {
               characteristicRelationship: [
                 { id: "c-1", relationshipType: "dependsOn" },
@@ -952,6 +1061,17 @@ describe("tmf621", () => {
             },
           ],
         });
+
+        assert.strictEqual(
+          (yield* stored(ticket)).resolutionNotes ?? null,
+          null
+        );
+        assert.deepStrictEqual(
+          arrayOf(related, "troubleTicketCharacteristic").map(
+            (item) => item.name
+          ),
+          ["urgency", "majorIncident", "region"]
+        );
 
         assert.deepStrictEqual(
           arrayOf(related, "troubleTicketCharacteristic").find(

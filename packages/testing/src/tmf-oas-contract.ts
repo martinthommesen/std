@@ -26,6 +26,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import {
+  loadDocument,
+  SCHEMA_PREFIX,
+  SPECS_DIRECTORY,
+  SWAGGER_SCHEMA_PREFIX,
+  validatorOf,
+} from "@std/server/http/tmf/pinned-schemas";
+import type { LoadedDocument } from "@std/server/http/tmf/pinned-schemas";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   isJsonArray,
@@ -33,12 +41,7 @@ import {
   isJsonString,
   isJsonValue,
 } from "@std/values/json-value";
-import { Ajv } from "ajv";
-import type { ValidateFunction } from "ajv";
 import { Effect } from "effect";
-import { parse } from "yaml";
-
-import { isRfc3339DateTime } from "./rfc3339.ts";
 
 /** A TMF API whose responses are checked: its base path and document. */
 export interface TmfContract {
@@ -49,7 +52,7 @@ export interface TmfContract {
   readonly file: string;
 }
 
-const SPECS = path.join(import.meta.dirname, "..", "..", "tmf", "specs");
+const SPECS = SPECS_DIRECTORY;
 
 const asObject = (value: JsonValue | undefined): JsonObject =>
   value !== undefined && isJsonObject(value) ? value : {};
@@ -110,150 +113,7 @@ export const contractAt = (spec: string, basePath: string): TmfContract => {
   return { ...pinned, basePath };
 };
 
-/** A parsed OpenAPI document with its compiled validators. */
-interface LoadedDocument {
-  readonly document: JsonObject;
-  readonly validators: Map<string, ValidateFunction>;
-  readonly ajv: Ajv;
-}
-
-const SCHEMA_PREFIX = "#/components/schemas/";
-const SWAGGER_SCHEMA_PREFIX = "#/definitions/";
-const PLAIN = "__plain";
-
-// Rewrites `$ref`s to the `$defs` of the combined schema (of the schema
-// with the given `$id` when `base` is set): a ref directly in an `allOf`
-// (inheritance) to the plain variant, any other to the polymorphic one.
-const rewrite = (
-  value: JsonValue,
-  inAllOf: boolean,
-  base?: string
-): JsonValue => {
-  if (isJsonArray(value)) {
-    return value.map((item) => rewrite(item, inAllOf, base));
-  }
-
-  if (!isJsonObject(value)) {
-    return value;
-  }
-
-  const ref = value.$ref;
-
-  if (
-    ref !== undefined &&
-    isJsonString(ref) &&
-    (ref.startsWith(SCHEMA_PREFIX) || ref.startsWith(SWAGGER_SCHEMA_PREFIX))
-  ) {
-    const name = ref.slice(
-      ref.startsWith(SCHEMA_PREFIX)
-        ? SCHEMA_PREFIX.length
-        : SWAGGER_SCHEMA_PREFIX.length
-    );
-
-    return { $ref: `${base ?? ""}#/$defs/${name}${inAllOf ? PLAIN : ""}` };
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, member]): [string, JsonValue][] =>
-      key === "discriminator"
-        ? []
-        : [[key, rewrite(member, key === "allOf", base)]]
-    )
-  );
-};
-
-const withoutBranches = (schema: JsonObject): JsonObject =>
-  Object.fromEntries(
-    Object.entries(schema).filter(([key]) => key !== "oneOf" && key !== "anyOf")
-  );
-
-// The polymorphic variant: a dispatch on the discriminator's mapping.
-const polymorphic = (name: string, schema: JsonObject): JsonValue => {
-  const discriminator = asObject(schema.discriminator);
-  const property = discriminator.propertyName;
-  const mapping = asObject(discriminator.mapping);
-  const plain = { $ref: `#/$defs/${name}${PLAIN}` };
-
-  if (property === undefined || !isJsonString(property)) {
-    return plain;
-  }
-
-  const self = rewrite(withoutBranches(schema), false);
-
-  // An unknown `@type` matches any branch of a oneOf.
-  const otherwise: JsonValue =
-    schema.oneOf === undefined
-      ? plain
-      : rewrite({ ...withoutBranches(schema), anyOf: schema.oneOf }, false);
-
-  let dispatch = otherwise;
-
-  // The first mapping entry is the outermost `if`.
-  for (const [type, target] of Object.entries(mapping).toReversed()) {
-    const targetName = isJsonString(target)
-      ? target.slice(SCHEMA_PREFIX.length)
-      : name;
-
-    dispatch = {
-      else: dispatch,
-      if: {
-        properties: { [property]: { const: type } },
-        required: [property],
-      },
-      // oxlint-disable-next-line unicorn/no-thenable -- `then` is a JSON Schema keyword
-      then: { allOf: [{ $ref: `#/$defs/${targetName}${PLAIN}` }, self] },
-    };
-  }
-
-  return dispatch;
-};
-
 const DECLARED_STATUS = /^\d{3}$/u;
-
-const documents = new Map<string, LoadedDocument>();
-
-const loadDocument = (file: string): LoadedDocument => {
-  const known = documents.get(file);
-
-  if (known !== undefined) {
-    return known;
-  }
-
-  const parsed: unknown = parse(readFileSync(path.join(SPECS, file), "utf-8"));
-  const document = asObject(isJsonValue(parsed) ? parsed : undefined);
-
-  const schemas = asObject(
-    document.swagger === "2.0"
-      ? document.definitions
-      : asObject(document.components).schemas
-  );
-
-  const defs = new Map<string, JsonValue>();
-
-  for (const [name, schema] of Object.entries(schemas)) {
-    const object = asObject(schema);
-
-    defs.set(`${name}${PLAIN}`, rewrite(object, false));
-    defs.set(name, polymorphic(name, object));
-  }
-
-  const ajv = new Ajv({ allErrors: false, strict: false });
-
-  ajv.addFormat("date-time", isRfc3339DateTime);
-  ajv.addFormat("uri", (text: string) => URL.canParse(text));
-  ajv.addFormat("float", true);
-  ajv.addFormat("base64", true);
-  ajv.addSchema({
-    $defs: Object.fromEntries(defs),
-    $id: `tmf:${encodeURIComponent(file)}`,
-  });
-
-  const loaded: LoadedDocument = { ajv, document, validators: new Map() };
-
-  documents.set(file, loaded);
-
-  return loaded;
-};
 
 /** One operation of a document. */
 interface Operation {
@@ -349,33 +209,6 @@ const responseSchema = (
       : object;
 
   return asObject(asObject(resolved.content)["application/json"]).schema;
-};
-
-const validatorOf = (
-  loaded: LoadedDocument,
-  key: string,
-  schema: JsonValue
-): ValidateFunction => {
-  const known = loaded.validators.get(key);
-
-  if (known !== undefined) {
-    return known;
-  }
-
-  const compiled = loaded.ajv.compile({
-    $id: `tmf-response:${encodeURIComponent(key)}`,
-    allOf: [
-      rewrite(
-        schema,
-        false,
-        `tmf:${encodeURIComponent(key.split("|")[0] ?? "")}`
-      ),
-    ],
-  });
-
-  loaded.validators.set(key, compiled);
-
-  return compiled;
 };
 
 /**

@@ -11,9 +11,9 @@
  * - a mapped characteristic (`urgency`, `majorIncident`, `holdReason`,
  *   `resolutionCode`, `resolutionNotes`, and on problems `knownError`,
  *   `workaround`, `rootCause`) writes its field; one the array leaves out
- *   keeps its field [judgment: a client that sends only its own
- *   characteristics must not reset ITIL fields such as `urgency`, which has
- *   no empty value]; one whose field the record's class lacks (a
+ *   is cleared, as strict RFC 7396 replaces the array (Martin, decided in
+ *   decision 0035), so a required one (`urgency`) left out fails validation
+ *   naming its field; one whose field the record's class lacks (a
  *   `majorIncident` on a problem) is kept in json;
  * - an incident's `causedBy` and `parent` relationships write `problem`
  *   and `parent_incident`, and one the array leaves out clears its field
@@ -328,7 +328,7 @@ const relationshipsValid = (value: JsonValue | undefined): boolean =>
 
 const writeCharacteristics = (
   value: JsonValue,
-  _current: SourceValues | undefined,
+  current: SourceValues | undefined,
   target: WriteTarget
 ): Written => {
   const items = itemsOf("troubleTicketCharacteristic", value);
@@ -372,6 +372,17 @@ const writeCharacteristics = (
       }
 
       written.set(mapped.field, stored.success);
+    }
+  }
+
+  // Strict RFC 7396: a mapped characteristic the array leaves out is
+  // cleared, where the caller can read it (a required one then fails
+  // validation, naming its field).
+  for (const mapped of MAPPED_CHARACTERISTICS) {
+    const readable = current?.has(mapped.field) === true;
+
+    if (readable && lineage.has(mapped.classId) && !written.has(mapped.field)) {
+      written.set(mapped.field, null);
     }
   }
 

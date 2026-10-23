@@ -98,6 +98,7 @@ import {
 } from "./context.ts";
 import type { MappedResource, TmfRegistry } from "./context.ts";
 import { writeIssuesError } from "./errors.ts";
+import { pinnedDocumentOf, schemaProblemOf } from "./pinned-schemas.ts";
 import { parseTmfListQuery, parseTmfReadQuery } from "./query.ts";
 import {
   readSourceRecords,
@@ -935,6 +936,85 @@ const checkReadOrder = Effect.fn("Tmf.checkReadOrder")(function* checkReadOrder(
 });
 
 /**
+ * Checks, after a write and still in its transaction, that every member
+ * the body wrote renders as the pinned OpenAPI document's schema of the
+ * resource requires, discriminated subtypes included (a characteristic's
+ * `value` must fit its `@type`; decision 0035): the value objects STD
+ * keeps as given (statuses in a status history, characteristics,
+ * a specification's related parties) are validated whole. A misfit fails
+ * the whole write, which rolls back, with `ValidationFailed` naming the
+ * member's path, so nothing is stored. Members the caller cannot read
+ * after the write are not rendered and so not checked.
+ *
+ * @param input - The request.
+ * @param scope - The caller's scope.
+ * @param id - The record written.
+ * @param members - The body's attribute members.
+ * @returns Nothing, or `ValidationFailed`.
+ */
+const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
+  function* checkWrittenMembers(
+    input: TmfInput,
+    scope: ReadScope,
+    id: string,
+    members: readonly string[]
+  ) {
+    const file = yield* Effect.sync(() =>
+      pinnedDocumentOf(input.mapped.api.spec)
+    );
+
+    const current = yield* readCurrent(scope, input.mapped, id).pipe(
+      Effect.asSome,
+      Effect.catchTag("NotFound", () => Effect.succeedNone)
+    );
+
+    if (file === undefined || Option.isNone(current)) {
+      return yield* Effect.void;
+    }
+
+    const rendered = renderFor(
+      {
+        fields: null,
+        mapped: input.mapped,
+        origin: input.origin,
+        registry: input.registry,
+        scope,
+      },
+      current.value
+    );
+
+    for (const member of members) {
+      const value = rendered[member];
+
+      const problem =
+        value === undefined
+          ? undefined
+          : schemaProblemOf(file, input.mapped.resource.type, {
+              "@type": rendered["@type"] ?? null,
+              href: rendered.href ?? null,
+              id: rendered.id ?? null,
+              [member]: value,
+            });
+
+      if (problem !== undefined) {
+        return yield* new ValidationFailed({
+          errors: [
+            {
+              _tag: "InvalidValue",
+              field: problem.path.join("."),
+              message: `${problem.path.join(".")} does not fit the pinned ${input.mapped.api.spec} schema: ${problem.message}`,
+              reason: "invalidFormat",
+            },
+          ],
+        });
+      }
+    }
+
+    return yield* Effect.void;
+  }
+);
+
+/**
  * `POST /{resource}`.
  *
  * @param input - The request.
@@ -995,6 +1075,13 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
   // After finalization (aggregate rules may move or mask parts), still in
   // the request transaction: a mismatch rolls everything back.
   yield* checkReadOrder(scope, input.mapped, created.owner.id, created.written);
+
+  yield* checkWrittenMembers(
+    input,
+    scope,
+    created.owner.id,
+    Object.keys(withoutTypeMembers(body))
+  );
 
   return yield* resourceAnswer(input, created.owner.id, 201, fields);
 });
@@ -1305,7 +1392,12 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
 
       const written = yield* saveParts(snapshot, current.id, plan, current);
 
-      return { id: current.id, scope, written };
+      return {
+        id: current.id,
+        members: Object.keys(withoutTypeMembers(body)),
+        scope,
+        written,
+      };
     })
   );
 
@@ -1318,6 +1410,8 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
     patched.id,
     patched.written
   );
+
+  yield* checkWrittenMembers(input, patched.scope, patched.id, patched.members);
 
   return yield* resourceAnswer(input, id.toLowerCase(), 200, fields);
 });

@@ -13,7 +13,7 @@ import { Effect } from "effect";
 import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
-import { asArray, asObject } from "./api-support.ts";
+import { asArray, asObject, textOf } from "./api-support.ts";
 
 /** `/tmf-api/troubleTicket/v5/troubleTicket`. */
 export const TICKETS = `${TMF621_BASE_PATH}/troubleTicket` as const;
@@ -142,6 +142,33 @@ export const arrayOf = (
   name: string
 ): readonly JsonObject[] =>
   asArray(resource[name]).flatMap((item) => (isJsonObject(item) ? [item] : []));
+
+/**
+ * A ticket's characteristics as read, with some values changed or added:
+ * the array a strict RFC 7396 replacement sends (decision 0035).
+ *
+ * @param ticket - The ticket as read.
+ * @param changes - Characteristic name to its new value.
+ * @returns The array.
+ */
+export const characteristicsWith = (
+  ticket: JsonObject,
+  changes: Readonly<Record<string, JsonValue>>
+): readonly JsonObject[] => {
+  const current = arrayOf(ticket, "troubleTicketCharacteristic");
+  const names = new Set(current.map((item) => item.name));
+
+  return [
+    ...current.map((item) => {
+      const name = textOf(item.name);
+
+      return name in changes ? { ...item, value: changes[name] ?? null } : item;
+    }),
+    ...Object.entries(changes).flatMap(([name, value]) =>
+      names.has(name) ? [] : [{ name, value }]
+    ),
+  ];
+};
 
 /**
  * The resource's `ETag` version as an `If-Match` value.

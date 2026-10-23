@@ -21,7 +21,6 @@ import { parse } from "yaml";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { isRfc3339DateTime } from "../../testing/src/rfc3339.ts";
 import {
   contractAt,
   declaredStatusesOf,
@@ -29,6 +28,7 @@ import {
   tmfExchangeProblem,
 } from "../../testing/src/tmf-oas-contract.ts";
 import type { TmfExchange } from "../../testing/src/tmf-oas-contract.ts";
+import { isRfc3339DateTime } from "../src/http/tmf/rfc3339.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { itilLayer } from "./itil-support.ts";
 import {
