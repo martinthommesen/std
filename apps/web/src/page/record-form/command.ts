@@ -993,47 +993,113 @@ export const LoadHistory = Command.define("LoadHistory", {
 /** The user table, whose display names the history shows. */
 export const USER_TABLE = "core.user";
 
-/** The user table's display field (its API name is the same). */
-const USER_NAME_FIELD = "name";
+/** The user table's display field, by its API name. */
+export const USER_NAME_FIELD = "name";
 
 /**
- * Reads the names of the users who made the history's changes, as far as
- * the caller may read them (a list of `core.user` filtered by
- * `condition`, `id in (...)`); without them the panel shows the user IDs.
+ * The most records one list request may ask for (the API's `limit` is 1
+ * to 1000; `@std/api/records`, the `list` endpoint's description).
  */
-export const LoadActorNames = Command.define("LoadActorNames", {
+const LIST_LIMIT_MAX = 1000;
+
+const chunksOf = (
+  ids: readonly string[],
+  size: number
+): readonly (readonly string[])[] =>
+  Array.from({ length: Math.ceil(ids.length / size) }, (_, index) =>
+    ids.slice(index * size, (index + 1) * size)
+  );
+
+/**
+ * The API name of a table's display field, from its metadata.
+ *
+ * @param table - The table's name.
+ * @param revision - The form's revision.
+ * @returns The API name, or none when the table has no display field.
+ */
+const displayFieldOf = (table: string, revision: Revision) =>
+  fetchTableMetadata(collectionOf(table), Option.some(revision)).pipe(
+    Effect.map((loaded) =>
+      Option.flatMap(Option.fromNullishOr(loaded.table.displayField), (name) =>
+        Option.map(
+          Option.fromNullishOr(
+            loaded.table.fields.find((field) => field.name === name)
+          ),
+          (field) => field.apiName
+        )
+      )
+    )
+  );
+
+/**
+ * Reads the display values of the records a history names in one table:
+ * the users who made the changes (`core.user`, by `name`) and the targets
+ * of the references whose values changed, as far as the caller may read
+ * them. One list request per table (`condition` `id in (...)`, at most
+ * {@link LIST_LIMIT_MAX} IDs each), never one per record; the display
+ * field's API name comes with the request when the form knows it, and is
+ * read from the table's metadata otherwise. Records the caller cannot see
+ * are left out, and the panel shows their IDs.
+ */
+export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
   args: {
+    ids: Schema.Array(Schema.String),
+    maybeDisplayField: Schema.Option(Schema.String),
     revision: SchemaRevision,
-    userIds: Schema.Array(Schema.String),
+    table: Schema.String,
   },
-  execute: ({ revision, userIds }) =>
-    Effect.gen(function* loadActorNames() {
+  execute: ({ ids, maybeDisplayField, revision, table }) =>
+    Effect.gen(function* loadHistoryLabels() {
       const client = yield* StdApi;
 
-      const listed = yield* client.records
-        .list({
-          params: { table: collectionOf(USER_TABLE) },
-          query: {
-            condition: `id in (${userIds.map((id) => JSON.stringify(id)).join(", ")})`,
-            fields: USER_NAME_FIELD,
-            limit: String(userIds.length),
-          },
-        })
-        .pipe(atRevision(Option.some(revision)));
+      const maybeField = Option.isSome(maybeDisplayField)
+        ? maybeDisplayField
+        : yield* displayFieldOf(table, revision);
 
-      return Message.SucceededLoadActorNames({
-        names: Object.fromEntries(
-          listed.flatMap((resource) => {
-            const name = resource[USER_NAME_FIELD];
+      if (Option.isNone(maybeField)) {
+        return Message.SucceededLoadHistoryLabels({ labels: {}, table });
+      }
 
-            return name !== undefined && isJsonString(name)
-              ? [[resource.id, name] as const]
+      const field = maybeField.value;
+
+      const pages = yield* Effect.all(
+        chunksOf(ids, LIST_LIMIT_MAX).map((chunk) =>
+          client.records
+            .list({
+              params: { table: collectionOf(table) },
+              query: {
+                condition: `id in (${chunk.map((id) => JSON.stringify(id)).join(", ")})`,
+                fields: field,
+                limit: String(chunk.length),
+              },
+            })
+            .pipe(atRevision(Option.some(revision)))
+        )
+      );
+
+      return Message.SucceededLoadHistoryLabels({
+        labels: Object.fromEntries(
+          pages.flat().flatMap((resource) => {
+            const label = resource[field];
+
+            return label !== undefined && isJsonString(label)
+              ? [[resource.id, label] as const]
               : [];
           })
         ),
+        table,
       });
-    }).pipe(Effect.orElseSucceed(() => Message.FailedLoadActorNames())),
-  messages: [Message.SucceededLoadActorNames, Message.FailedLoadActorNames],
+    }).pipe(
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed(() => Message.FailedLoadHistoryLabels({ table }))
+    ),
+  messages: [
+    Message.SucceededLoadHistoryLabels,
+    Message.FailedLoadHistoryLabels,
+    Message.FailedAuthentication,
+  ],
 });
 
 /** Reads today's date in UTC, for the Date Pickers' "today" mark. */

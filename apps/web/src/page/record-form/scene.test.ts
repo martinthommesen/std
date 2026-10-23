@@ -327,10 +327,16 @@ describe("the history panel", () => {
     cause: { kind: "api" },
     changeId: "019a0000-0000-7000-8000-00000000c001",
     changes: {
+      assignee: { after: USERS.sam, before: null },
       pin: { changed: true },
       status: { after: "in_progress", before: "new" },
     },
     fields: {
+      assignee: {
+        choices: null,
+        label: "Assignee",
+        type: { kind: "reference" as const, target: "core.user" },
+      },
       pin: { choices: null, label: "PIN", type: { kind: "password" as const } },
       status: {
         choices: [
@@ -364,7 +370,10 @@ describe("the history panel", () => {
       generation: 1,
       maybeRevision: Option.none(),
     }),
-    Message.SucceededLoadActorNames({ names: { [USERS.alex]: "Alex Agent" } })
+    Message.SucceededLoadHistoryLabels({
+      labels: { [USERS.alex]: "Alex Agent", [USERS.sam]: "Sam Agent" },
+      table: "core.user",
+    })
   );
 
   it("reads each change with the entry's own labels, and shows entries without visible changes", () => {
@@ -382,7 +391,13 @@ describe("the history panel", () => {
         expect(text("State")).toExist(),
         expect(text("New")).toExist(),
         expect(text("Working")).toExist(),
-        expect(text("Changed (the value is never shown)")).toExist()
+        expect(text("Changed (the value is never shown)")).toExist(),
+        // A reference shows its target's display value, never its ID.
+        inside(
+          selector("[data-field='assignee']"),
+          expect(text("Sam Agent")).toExist(),
+          expect(text(USERS.sam)).not.toExist()
+        )
       ),
       inside(
         selector("[data-version='3']"),

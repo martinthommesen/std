@@ -35,7 +35,7 @@ import {
   CreateRecord,
   DeleteRecord,
   FocusField,
-  LoadActorNames,
+  LoadHistoryLabels,
   LoadClassMetadata,
   LoadFormMetadata,
   LoadHistory,
@@ -1692,12 +1692,18 @@ describe("related lists and history", () => {
       ),
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_5 })),
       Command.expectExact(
-        LoadActorNames({ revision: REVISION_5, userIds: [USERS.alex] })
+        LoadHistoryLabels({
+          ids: [USERS.alex],
+          maybeDisplayField: Option.some("name"),
+          revision: REVISION_5,
+          table: "core.user",
+        })
       ),
       Command.resolve(
-        LoadActorNames,
-        Message.SucceededLoadActorNames({
-          names: { [USERS.alex]: "Alex Agent" },
+        LoadHistoryLabels,
+        Message.SucceededLoadHistoryLabels({
+          labels: { [USERS.alex]: "Alex Agent" },
+          table: "core.user",
         })
       ),
       message(
@@ -1732,9 +1738,110 @@ describe("related lists and history", () => {
         })
       ),
       model((page) => {
-        expect(page.history.actorNames).toStrictEqual({
-          [USERS.alex]: "Alex Agent",
+        expect(page.history.labels).toStrictEqual({
+          "core.user": { [USERS.alex]: "Alex Agent" },
         });
+      })
+    );
+  });
+
+  it("asks for the display values of changed references, one list per table, and says when a table's did not load", () => {
+    const entry = {
+      actor: USERS.alex,
+      cause: { kind: "api" },
+      changeId: "019a0000-0000-7000-8000-00000000c002",
+      changes: {
+        assignee: { after: USERS.sam, before: null },
+        location: {
+          after: "019a0000-0000-7000-8000-0000000a0002",
+          before: "019a0000-0000-7000-8000-0000000a0001",
+        },
+      },
+      fields: {
+        assignee: {
+          choices: null,
+          label: "Assignee",
+          type: { kind: "reference" as const, target: "core.user" },
+        },
+        location: {
+          choices: null,
+          label: "Location",
+          type: { kind: "reference" as const, target: "help.location" },
+        },
+      },
+      kind: "update" as const,
+      occurredAt: "2026-10-21T10:00:00.000Z",
+      operationId: "019a0000-0000-7000-8000-00000000c102",
+      schemaRevision: 4,
+      version: 2,
+    };
+
+    story(
+      update,
+      given(ready),
+      message(Message.ToggledHistory({ isOpen: true })),
+      Command.resolve(
+        LoadHistory,
+        Message.SucceededLoadHistory({
+          entries: [entry],
+          generation: 1,
+          maybeRevision: Option.none(),
+        })
+      ),
+      // The actor and the assignee share one request; the location's
+      // table, which the form has no metadata for, gets its own, which
+      // reads that table's display field first.
+      Command.expectExact(
+        LoadHistoryLabels({
+          ids: [USERS.alex, USERS.sam],
+          maybeDisplayField: Option.some("name"),
+          revision: REVISION_5,
+          table: "core.user",
+        }),
+        LoadHistoryLabels({
+          ids: [
+            "019a0000-0000-7000-8000-0000000a0001",
+            "019a0000-0000-7000-8000-0000000a0002",
+          ],
+          maybeDisplayField: Option.none(),
+          revision: REVISION_5,
+          table: "help.location",
+        })
+      ),
+      Command.resolveAll(
+        [
+          LoadHistoryLabels({
+            ids: [USERS.alex, USERS.sam],
+            maybeDisplayField: Option.some("name"),
+            revision: REVISION_5,
+            table: "core.user",
+          }),
+          Message.SucceededLoadHistoryLabels({
+            labels: { [USERS.alex]: "Alex Agent", [USERS.sam]: "Sam Agent" },
+            table: "core.user",
+          }),
+        ],
+        [
+          LoadHistoryLabels({
+            ids: [
+              "019a0000-0000-7000-8000-0000000a0001",
+              "019a0000-0000-7000-8000-0000000a0002",
+            ],
+            maybeDisplayField: Option.none(),
+            revision: REVISION_5,
+            table: "help.location",
+          }),
+          Message.FailedLoadHistoryLabels({ table: "help.location" }),
+        ]
+      ),
+      model((page) => {
+        expect(page.history.labels).toStrictEqual({
+          "core.user": {
+            [USERS.alex]: "Alex Agent",
+            [USERS.sam]: "Sam Agent",
+          },
+        });
+        expect(page.history.failedLabelTables).toStrictEqual(["help.location"]);
       })
     );
   });

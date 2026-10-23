@@ -302,15 +302,22 @@ export type HistoryEntries = typeof HistoryEntries.schema.Type;
 /**
  * The history panel: open or closed, its entries (loaded when first
  * opened, again after each save while open), the number of its latest
- * request, and the names of the users who made the changes, as far as the
- * caller may read them.
+ * request, the display values of the records it names (`labels`, by
+ * table, then record ID: the users who made the changes, in `core.user`,
+ * and the targets of changed references), as far as the caller may read
+ * them, and the tables whose display values could not be loaded
+ * (`failedLabelTables`), whose records show by ID.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const History = Schema.Struct({
-  actorNames: Schema.Record(Schema.String, Schema.String),
   entries: HistoryEntries.schema,
+  failedLabelTables: Schema.Array(Schema.String),
   generation: Schema.Int,
   isOpen: Schema.Boolean,
+  labels: Schema.Record(
+    Schema.String,
+    Schema.Record(Schema.String, Schema.String)
+  ),
 });
 
 /** The history panel. */

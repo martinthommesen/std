@@ -30,6 +30,7 @@ import type { MetaTable } from "../../domain/metadata.ts";
 import type { HistoryEntrySchema, HistoryField } from "../../domain/record.ts";
 import { valueText } from "../../domain/value-text.ts";
 import { buttonView } from "../../view/controls.ts";
+import { chevronRight } from "../../view/icons.ts";
 import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";
 import type { RecordPage } from "../table-list/model.ts";
 import { USER_TABLE } from "./command.ts";
@@ -45,11 +46,8 @@ type HistoryEntry = typeof HistoryEntrySchema.Type;
 // NOTE: the open or closed mark is hidden from assistive technology,
 // which reads `aria-expanded`; generated CSS content would join the
 // button's accessible name.
-const disclosureMark = (isOpen: boolean, h: HtmlBuilder<Message>): Html =>
-  h.span(
-    [h.AriaHidden(true), h.Class("disclosure-mark")],
-    [isOpen ? "▾" : "▸"]
-  );
+const disclosureMark = (h: HtmlBuilder<Message>): Html =>
+  h.span([h.AriaHidden(true), h.Class("disclosure-mark")], [chevronRight()]);
 
 // RELATED LISTS
 
@@ -240,7 +238,7 @@ const relatedListView = (
                     h.button(
                       [...attributes.button, h.Class("disclosure-button")],
                       [
-                        disclosureMark(list.isOpen, h),
+                        disclosureMark(h),
                         `${list.entry.label} by ${list.entry.fieldLabel}`,
                       ]
                     ),
@@ -295,10 +293,28 @@ const KIND_TEXT = {
 } as const satisfies Record<HistoryEntry["kind"], string>;
 
 /**
+ * The display value of a record the history names, as far as the caller
+ * may read it.
+ *
+ * @param model - The page.
+ * @param table - The record's table.
+ * @param id - The record's ID.
+ * @returns The display value, or none (the panel then shows the ID).
+ */
+const historyLabelOf = (
+  model: Model,
+  table: string,
+  id: string
+): Option.Option<string> =>
+  Option.flatMap(Record.get(model.history.labels, table), (labels) =>
+    Record.get(labels, id)
+  );
+
+/**
  * An old or new value in a history entry, read with the entry's own
  * description of the field: choice labels at the entry's revision, a
- * user's name for a reference to a user when the caller may read it, and
- * a write-only field only as changed.
+ * referenced record's display value when the caller may read it (else
+ * its ID), and a write-only field only as changed.
  *
  * @param model - The page.
  * @param field - The field as the entry describes it.
@@ -314,16 +330,16 @@ export const historyValueText = (
     return "Empty";
   }
 
-  const userName =
+  const maybeLabel =
     field.type.kind === "reference" &&
-    field.type.target === USER_TABLE &&
+    field.type.target !== null &&
     isJsonString(value)
-      ? Record.get(model.history.actorNames, value)
-      : Option.none();
+      ? historyLabelOf(model, field.type.target, value)
+      : Option.none<string>();
 
   return valueText(field.type, value, {
     choices: field.choices,
-    maybeLabel: userName,
+    maybeLabel,
   });
 };
 
@@ -372,7 +388,7 @@ const entryView = (
   h: HtmlBuilder<Message>
 ): Html => {
   const who = Option.getOrElse(
-    Record.get(model.history.actorNames, entry.actor),
+    historyLabelOf(model, USER_TABLE, entry.actor),
     () => entry.actor
   );
 
@@ -412,6 +428,14 @@ const entriesView = (
   entries.length === 0
     ? [h.p([h.Class("placeholder")], ["No history."])]
     : [
+        model.history.failedLabelTables.length === 0
+          ? h.empty
+          : h.p(
+              [h.Role("status"), h.Class("notice")],
+              [
+                "Some names could not be loaded, so those records show their IDs.",
+              ]
+            ),
         h.ol(
           [h.Class("history-entries")],
           entries.toReversed().map((entry) => entryView(model, entry, h))
@@ -477,7 +501,7 @@ export const historyView = (model: Model, h: HtmlBuilder<Message>): Html =>
                       [
                         h.button(
                           [...attributes.button, h.Class("disclosure-button")],
-                          [disclosureMark(model.history.isOpen, h), "History"]
+                          [disclosureMark(h), "History"]
                         ),
                       ]
                     ),

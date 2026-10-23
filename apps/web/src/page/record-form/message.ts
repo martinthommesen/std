@@ -80,7 +80,6 @@ export const Message = defineMessageUnion({
   CompletedReadToday: { today: CalendarDate },
   FailedAuthentication: {},
   FailedDeleteRecord: { error: WriteError },
-  FailedLoadActorNames: {},
   FailedLoadClassMetadata: {
     error: MetaError,
     resourceType: Schema.String,
@@ -88,6 +87,7 @@ export const Message = defineMessageUnion({
   },
   FailedLoadFormMetadata: { error: MetaError },
   FailedLoadHistory: { error: HistoryError, generation: Schema.Int },
+  FailedLoadHistoryLabels: { table: Schema.String },
   FailedLoadRecord: {
     error: RecordError,
     generation: Schema.Int,
@@ -128,9 +128,6 @@ export const Message = defineMessageUnion({
   GotPickerMessage: { fieldId: Schema.String, message: Combobox.Message },
   SelectedChoice: { fieldId: Schema.String, key: Schema.String },
   SucceededDeleteRecord: { maybeRevision: Schema.Option(SchemaRevision) },
-  SucceededLoadActorNames: {
-    names: Schema.Record(Schema.String, Schema.String),
-  },
   SucceededLoadClassMetadata: {
     revision: SchemaRevision,
     table: MetaTableSchema,
@@ -143,6 +140,10 @@ export const Message = defineMessageUnion({
     entries: Schema.Array(HistoryEntrySchema),
     generation: Schema.Int,
     maybeRevision: Schema.Option(SchemaRevision),
+  },
+  SucceededLoadHistoryLabels: {
+    labels: Schema.Record(Schema.String, Schema.String),
+    table: Schema.String,
   },
   SucceededLoadRecord: {
     generation: Schema.Int,

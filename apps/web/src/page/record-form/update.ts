@@ -13,6 +13,7 @@
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import type { MetaRelatedList } from "@std/definitions/table-metadata";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
@@ -22,6 +23,7 @@ import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
+import type { HistoryEntry } from "../../domain/record.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
@@ -49,10 +51,10 @@ import {
   CreateRecord,
   DeleteRecord,
   FocusField,
-  LoadActorNames,
   LoadClassMetadata,
   LoadFormMetadata,
   LoadHistory,
+  LoadHistoryLabels,
   LoadRecord,
   LoadRelatedMetadata,
   LoadRelatedRecords,
@@ -60,6 +62,8 @@ import {
   NavigateAway,
   ReadToday,
   SearchTargets,
+  USER_NAME_FIELD,
+  USER_TABLE,
   UpdateRecord,
 } from "./command.ts";
 import {
@@ -204,10 +208,11 @@ export const init = (config: InitConfig): UpdateReturn => ({
     edits: {},
     generation: 0,
     history: {
-      actorNames: {},
       entries: HistoryEntries.Idle(),
+      failedLabelTables: [],
       generation: 0,
       isOpen: false,
+      labels: {},
     },
     id: config.id,
     isShowingProblems: false,
@@ -956,6 +961,79 @@ const toggleHistory = (model: Model, isOpen: boolean): UpdateReturn => {
 const refreshHistory: Step = (model) =>
   AsyncData.isIdle(model.history.entries) ? { model } : requestHistory(model);
 
+/**
+ * The records a history names, by table: the users who made the changes
+ * (`core.user`) and the old and new targets of every changed reference,
+ * each table's IDs once, in the order they first appear.
+ *
+ * @param entries - The history's entries.
+ * @returns The IDs, by table.
+ */
+export const historyRecordsOf = (
+  entries: readonly HistoryEntry[]
+): Readonly<Record<string, readonly string[]>> => {
+  const named = entries.flatMap((entry) => [
+    { id: entry.actor, table: USER_TABLE },
+    ...Record.toEntries(entry.changes).flatMap(([name, change]) => {
+      const field = entry.fields[name];
+
+      if (field?.type.kind !== "reference" || !isJsonObject(change)) {
+        return [];
+      }
+
+      const { target } = field.type;
+
+      if (target === null) {
+        return [];
+      }
+
+      return [change.before, change.after].flatMap((value) =>
+        value !== undefined && isJsonString(value)
+          ? [{ id: value, table: target }]
+          : []
+      );
+    }),
+  ]);
+
+  const tables = [...new Set(named.map((record) => record.table))];
+
+  return Object.fromEntries(
+    tables.map((table) => [
+      table,
+      [
+        ...new Set(
+          named.flatMap((record) => (record.table === table ? [record.id] : []))
+        ),
+      ],
+    ])
+  );
+};
+
+/**
+ * The API name of a table's display field, when the form knows it: the
+ * users' `name`, or a reference target whose metadata the form loaded.
+ *
+ * @param model - The page.
+ * @param table - The table.
+ * @returns The API name, or none (the Command then reads the metadata).
+ */
+const displayFieldApiNameOf = (
+  model: Model,
+  table: string
+): Option.Option<string> =>
+  table === USER_TABLE
+    ? Option.some(USER_NAME_FIELD)
+    : pipe(
+        Record.get(model.targets, table),
+        Option.flatMap(AsyncData.getData),
+        Option.flatMap((target) =>
+          Option.fromNullishOr(
+            target.fields.find((field) => field.name === target.displayField)
+          )
+        ),
+        Option.map((field) => field.apiName)
+      );
+
 const receiveHistory = (
   model: Model,
   generation: number,
@@ -965,31 +1043,61 @@ const receiveHistory = (
     return { model };
   }
 
-  const unknownActors = [
-    ...new Set(entries.map((entry) => entry.actor)),
-  ].filter((actor) => !Record.has(model.history.actorNames, actor));
+  const unknown = Record.toEntries(historyRecordsOf(entries)).flatMap(
+    ([table, ids]) => {
+      const known = Option.getOrElse(
+        Record.get(model.history.labels, table),
+        () => ({})
+      );
+
+      const missing = ids.filter((id) => !Record.has(known, id));
+
+      return missing.length === 0 ? [] : [{ ids: missing, table }];
+    }
+  );
 
   const shown = modifyFields(model, {
     history: (history) =>
       modifyFields(history, {
         entries: () => HistoryEntries.Success({ data: entries }),
+        failedLabelTables: () => [],
       }),
   });
 
   return Option.match(metaOf(model), {
     onNone: () => ({ model: shown }),
-    onSome: (meta) =>
-      unknownActors.length === 0
-        ? { model: shown }
-        : {
-            commands: [
-              LoadActorNames({
-                revision: meta.revision,
-                userIds: unknownActors,
-              }),
-            ],
-            model: shown,
-          },
+    onSome: (meta) => ({
+      commands: unknown.map(({ ids, table }) =>
+        LoadHistoryLabels({
+          ids,
+          maybeDisplayField: displayFieldApiNameOf(model, table),
+          revision: meta.revision,
+          table,
+        })
+      ),
+      model: shown,
+    }),
+  });
+};
+
+/**
+ * The history with the display values of one table's records added to
+ * those it knows.
+ *
+ * @param history - The history panel.
+ * @param table - The records' table.
+ * @param labels - Their display values, by record ID.
+ * @returns The panel.
+ */
+const withHistoryLabels = (
+  history: Model["history"],
+  table: string,
+  labels: Readonly<Record<string, string>>
+): Model["history"] => {
+  const known = Option.getOrElse(Record.get(history.labels, table), () => ({}));
+
+  return modifyFields(history, {
+    labels: Record.set(table, Record.union(known, labels, keepExisting)),
   });
 };
 
@@ -1608,7 +1716,17 @@ const updatePicker = (
     ]);
   }
 
-  return message._tag === "Opened"
+  // NOTE: the toggle button opens the Combobox without an `Opened`
+  // Message, so its opening asks for the first targets too; otherwise a
+  // field that already holds a value showed an empty, closed list.
+  const isOpenedByButton =
+    message._tag === "PressedToggleButton" &&
+    !Option.exists(
+      Record.get(model.pickers, fieldId),
+      (picker) => picker.combobox.isOpen
+    );
+
+  return message._tag === "Opened" || isOpenedByButton
     ? Update.combine(folded.model, [() => folded, searchTargets(fieldId, "")])
     : folded;
 };
@@ -2933,8 +3051,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedDeleteRecord: ({ error }) => failDelete(model, error),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadActorNames: () => ({ model }),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadClassMetadata: ({ error, resourceType, revision }) => ({
       model: isClassAnswerFor(model, resourceType, revision)
         ? modifyFields(model, {
@@ -2947,6 +3063,16 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadHistory: ({ error, generation }) =>
       failHistory(model, generation, error),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    FailedLoadHistoryLabels: ({ table }) => ({
+      model: modifyFields(model, {
+        history: (history) =>
+          modifyFields(history, {
+            failedLabelTables: (tables) =>
+              tables.includes(table) ? tables : [...tables, table],
+          }),
+      }),
+    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadRecord: ({ error, generation, maybeRevision }) =>
       failRecord(model, generation, error, maybeRevision),
@@ -2987,15 +3113,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         maybeRevision
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadActorNames: ({ names }) => ({
-      model: modifyFields(model, {
-        history: (history) =>
-          modifyFields(history, {
-            actorNames: (known) => Record.union(known, names, keepExisting),
-          }),
-      }),
-    }),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadClassMetadata: ({ revision, table }) =>
       isClassAnswerFor(model, table.resourceType, revision)
         ? receiveClassMetadata(model, table)
@@ -3012,6 +3129,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         ]),
         maybeRevision
       ),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    SucceededLoadHistoryLabels: ({ labels, table }) => ({
+      model: modifyFields(model, {
+        history: (history) => withHistoryLabels(history, table, labels),
+      }),
+    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadRecord: ({ generation, maybeRevision, purpose, record }) =>
       receiveRecord(model, generation, record, purpose, maybeRevision),

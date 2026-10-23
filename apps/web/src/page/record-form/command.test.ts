@@ -28,7 +28,7 @@ import { userTable } from "../../table-fixture.ts";
 import {
   CreateRecord,
   DeleteRecord,
-  LoadActorNames,
+  LoadHistoryLabels,
   LoadHistory,
   LoadRecord,
   SearchTargets,
@@ -893,19 +893,116 @@ describe("form Commands against the server", () => {
     });
 
     const result = await Effect.runPromise(
-      LoadActorNames({
+      LoadHistoryLabels({
+        ids: [USERS.alex, USERS.sam],
+        maybeDisplayField: Option.some("name"),
         revision: REVISION_5,
-        userIds: [USERS.alex, USERS.sam],
+        table: "core.user",
       }).effect.pipe(Effect.provide(api.layer))
     );
 
     expect(result).toStrictEqual(
-      Message.SucceededLoadActorNames({ names: { [USERS.alex]: "Alex Agent" } })
+      Message.SucceededLoadHistoryLabels({
+        labels: { [USERS.alex]: "Alex Agent" },
+        table: "core.user",
+      })
     );
+    expect(api.seen).toHaveLength(1);
     expect(api.seen[0]?.query).toStrictEqual({
       condition: `id in ("${USERS.alex}", "${USERS.sam}")`,
       fields: "name",
       limit: "2",
     });
+  });
+
+  it("a referenced table the form has no metadata for: its display field is read from its metadata, then its records in one list", async () => {
+    const LOCATIONS_PATH = "/api/v1/helpLocation";
+
+    const one = "019a0000-0000-7000-8000-0000000a0001";
+
+    const two = "019a0000-0000-7000-8000-0000000a0002";
+
+    const api = fakeStdApi({
+      "/api/v1/tableMetadata/helpLocation": {
+        body: {
+          ...userTable,
+          displayField: "title",
+          fields: [
+            {
+              ...NAME,
+              apiName: "title",
+              id: "00000000-0000-4000-8000-00000000a0a1",
+              label: "Title",
+              name: "title",
+            },
+          ],
+          id: "helpLocation",
+          name: "help.location",
+          resourceType: "HelpLocation",
+        },
+        headers: REVISION_HEADER,
+        status: 200,
+      },
+      [LOCATIONS_PATH]: {
+        body: [
+          {
+            "@type": "HelpLocation",
+            href: `http://std.test${LOCATIONS_PATH}/${one}`,
+            id: one,
+            title: "Floor 3",
+          },
+          {
+            "@type": "HelpLocation",
+            href: `http://std.test${LOCATIONS_PATH}/${two}`,
+            id: two,
+            title: "Floor 4",
+          },
+        ],
+        status: 200,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids: [one, two],
+        maybeDisplayField: Option.none(),
+        revision: REVISION_5,
+        table: "help.location",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.SucceededLoadHistoryLabels({
+        labels: { [one]: "Floor 3", [two]: "Floor 4" },
+        table: "help.location",
+      })
+    );
+    expect(api.seen.map((request) => request.path)).toStrictEqual([
+      "/api/v1/tableMetadata/helpLocation",
+      LOCATIONS_PATH,
+    ]);
+    expect(api.seen[1]?.query).toStrictEqual({
+      condition: `id in ("${one}", "${two}")`,
+      fields: "title",
+      limit: "2",
+    });
+  });
+
+  it("a failed list of display values is reported for its table", async () => {
+    // NOTE: the fake server answers no path it was not given with 599.
+    const api = fakeStdApi({});
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids: [USERS.alex],
+        maybeDisplayField: Option.some("name"),
+        revision: REVISION_5,
+        table: "core.user",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.FailedLoadHistoryLabels({ table: "core.user" })
+    );
   });
 });
