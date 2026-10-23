@@ -47,14 +47,8 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { FAST_RETRIES } from "./schema-support.ts";
 import { changeSetId, defectTextOf, errorOf, waitUntil } from "./support.ts";
-
-const FAST_RETRIES = [
-  Duration.millis(50),
-  Duration.millis(50),
-  Duration.millis(50),
-  Duration.millis(50),
-];
 
 const LOCK_STATEMENT = `SELECT pg_advisory_xact_lock(${CONFIG_KEY.toString()})`;
 
@@ -86,21 +80,32 @@ const namesSession = (
 const DATABASE_OID_QUERY =
   "SELECT oid::text AS database FROM pg_database WHERE datname = current_database()";
 
+const relationQuery = (name: string) =>
+  `SELECT '${name}'::regclass::oid::text AS relation, (${DATABASE_OID_QUERY}) AS database`;
+
 const decodeDatabaseOid = decodeRows(
   Schema.Struct({ database: Schema.String })
 );
 
-const configKeyWaiters = SqlClient.SqlClient.pipe(
-  Effect.flatMap(
-    (sql) => sql`
-      SELECT count(*)::int AS n FROM pg_locks
-      WHERE locktype = 'advisory' AND NOT granted
-         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-        AND classid = ${String(advisoryClassId(CONFIG_KEY))}::oid
-        AND objid = ${String(advisoryObjectId(CONFIG_KEY))}::oid`
-  ),
-  Effect.flatMap(decodeCount),
-  Effect.map(([row]) => row?.n ?? 0)
+const advisoryLockPids = Effect.fn("DriverSmoke.advisoryLockPids")(
+  function* advisoryLockPids(key: bigint, granted: boolean) {
+    const sql = yield* SqlClient.SqlClient;
+
+    const rows = yield* sql`
+    SELECT pid FROM pg_locks
+    WHERE locktype = 'advisory' AND granted = ${granted}
+      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+      AND classid = ${String(advisoryClassId(key))}::oid
+      AND objid = ${String(advisoryObjectId(key))}::oid`.pipe(
+      Effect.flatMap(decodePids)
+    );
+
+    return rows.map((row) => row.pid);
+  }
+);
+
+const configKeyWaiters = advisoryLockPids(CONFIG_KEY, false).pipe(
+  Effect.map((pids) => pids.length)
 );
 
 const concurrentRequests = Transactions.pipe(
@@ -112,18 +117,7 @@ const concurrentRequests = Transactions.pipe(
   )
 );
 
-const schemaKeyHolders = SqlClient.SqlClient.pipe(
-  Effect.flatMap(
-    (sql) => sql`
-      SELECT pid FROM pg_locks
-      WHERE locktype = 'advisory' AND granted
-         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-        AND classid = ${String(advisoryClassId(SCHEMA_KEY))}::oid
-        AND objid = ${String(advisoryObjectId(SCHEMA_KEY))}::oid`
-  ),
-  Effect.flatMap(decodePids),
-  Effect.map((rows) => rows.map((row) => row.pid))
-);
+const schemaKeyHolders = advisoryLockPids(SCHEMA_KEY, true);
 
 const currentRevision = Transactions.pipe(
   Effect.flatMap(({ request }) => request(RequestRevision)),
@@ -335,9 +329,7 @@ describe("driver-smoke-locks", () => {
             yield* log.clear;
 
             const exit = yield* Effect.exit(
-              configCommit(bumpRevision(changeSetId()), {
-                retryDelays: FAST_RETRIES,
-              })
+              configCommit(bumpRevision(changeSetId()), FAST_RETRIES)
             );
 
             const timeout = errorOf(exit);
@@ -458,9 +450,7 @@ describe("driver-smoke-locks", () => {
               yield* log.clear;
 
               const failure = errorOf(
-                yield* Effect.exit(
-                  configCommit(statement, { retryDelays: FAST_RETRIES })
-                )
+                yield* Effect.exit(configCommit(statement, FAST_RETRIES))
               );
 
               assert.instanceOf(failure, DatabaseError);
@@ -500,7 +490,7 @@ describe("driver-smoke-locks", () => {
                 lockWaiting(
                   sql`ALTER TABLE smoke_ddl ADD COLUMN extra int`
                 ).pipe(Effect.andThen(bumpRevision(changeSetId()))),
-                { retryDelays: FAST_RETRIES }
+                FAST_RETRIES
               )
             );
 
@@ -546,11 +536,9 @@ describe("driver-smoke-locks", () => {
             const database = yield* TestDatabase;
             yield* sql`CREATE TABLE smoke_fallback (id int)`;
 
-            const [table] = yield* sql`
-              SELECT 'smoke_fallback'::regclass::oid::text AS relation,
-                     (SELECT oid::text FROM pg_database WHERE datname = current_database()) AS database`.pipe(
-              Effect.flatMap(decodeRelation)
-            );
+            const [table] = yield* sql
+              .unsafe(relationQuery("smoke_fallback"))
+              .pipe(Effect.flatMap(decodeRelation));
 
             const relation = table?.relation ?? "";
             const databaseOid = table?.database ?? "";
@@ -607,11 +595,9 @@ describe("driver-smoke-locks", () => {
 
             // pg_class has the same oid (1259) in every database, so a lock on
             // it elsewhere is a lock on the same relation oid as ours.
-            const [ours] = yield* sql`
-              SELECT 'pg_catalog.pg_class'::regclass::oid::text AS relation,
-                     (SELECT oid::text FROM pg_database WHERE datname = current_database()) AS database`.pipe(
-              Effect.flatMap(decodeRelation)
-            );
+            const [ours] = yield* sql
+              .unsafe(relationQuery("pg_catalog.pg_class"))
+              .pipe(Effect.flatMap(decodeRelation));
 
             const relation = ours?.relation ?? "";
 
@@ -628,10 +614,7 @@ describe("driver-smoke-locks", () => {
             );
 
             const [foreignRelation] = yield* decodeRelation(
-              (yield* foreign.query(
-                `SELECT 'pg_catalog.pg_class'::regclass::oid::text AS relation,
-                        (${DATABASE_OID_QUERY}) AS database`
-              )).rows
+              (yield* foreign.query(relationQuery("pg_catalog.pg_class"))).rows
             );
 
             assert.strictEqual(foreignRelation?.relation, relation, "same oid");
@@ -697,7 +680,7 @@ describe("driver-smoke-locks", () => {
                     Effect.die(new Error("handler defect"))
                   )
                 ),
-                { retryDelays: FAST_RETRIES }
+                FAST_RETRIES
               )
             );
 
@@ -713,7 +696,7 @@ describe("driver-smoke-locks", () => {
                 Effect.addFinalizer(() =>
                   Effect.die(new Error("finalizer defect"))
                 ).pipe(Effect.andThen(alter)),
-                { retryDelays: FAST_RETRIES }
+                FAST_RETRIES
               )
             );
 

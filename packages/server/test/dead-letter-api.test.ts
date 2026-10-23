@@ -25,9 +25,17 @@ import { makeStdClient } from "../../api/src/client.ts";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import type {
+  TestHttpClientApi,
+  TestRequestOptions,
+} from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { DeadDeliveryTimestamp } from "../src/outbox/dead-letters.ts";
 import { claimDeliveries } from "../src/outbox/delivery-claims.ts";
+import type {
+  ClaimInput,
+  DeadLetterPolicy,
+} from "../src/outbox/delivery-claims.ts";
 import { deadDeliveries } from "../src/outbox/metrics.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { asArray, asObject, apiCallers, idsOf, textOf } from "./api-support.ts";
@@ -38,6 +46,38 @@ const COLLECTION = "/api/v1/deadDelivery";
 const RETRY = "/api/v1/retryDeadDelivery";
 const DISCARD = "/api/v1/discardDeadDelivery";
 const MISSING = "9223372036854775807";
+
+const task = (
+  http: TestHttpClientApi,
+  path: string,
+  caller: TestRequestOptions,
+  deliveryId: string
+) => http.request("POST", path, { ...caller, body: { deliveryId } });
+
+const actionsOf = (
+  http: TestHttpClientApi,
+  caller: TestRequestOptions,
+  deliveryId: string
+) =>
+  http.get(`/api/v1/coreDeadDeliveryAction?deliveryId=${deliveryId}`, caller);
+
+const claimInputFor = (
+  subscriptionId: string,
+  deadLetter: DeadLetterPolicy
+): ClaimInput => ({
+  deadLetter,
+  lease: Duration.minutes(1),
+  limit: 10,
+  maxAttempts: 1,
+  subscriptionId,
+});
+
+const pendingSecond = Effect.fn("DeadLetterTest.pendingSecond")(
+  function* pendingSecond(secondId: string) {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE core.delivery SET status = 'pending', attempts = 0, finished_at = NULL WHERE id = ${secondId}::int8`;
+  }
+);
 
 const linksOf = (header: string) =>
   new Map(
@@ -65,15 +105,11 @@ describe("dead-letter API", () => {
     "undecodable finished_at fails with a schema error instead of inventing an instant",
     () =>
       Effect.gen(function* badTimestamp() {
-        const result = yield* Effect.result(
+        const failure = yield* Effect.flip(
           Schema.decodeEffect(DeadDeliveryTimestamp)("infinity")
         );
 
-        assert.isTrue(Result.isFailure(result));
-
-        if (Result.isFailure(result)) {
-          assert.strictEqual(result.failure._tag, "SchemaError");
-        }
+        assert.strictEqual(failure._tag, "SchemaError");
       })
   );
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
@@ -144,10 +180,7 @@ describe("dead-letter API", () => {
 
         assert.strictEqual(hub.status, 201, hub.text);
 
-        const action = yield* http.request("POST", DISCARD, {
-          ...admin,
-          body: { deliveryId: seeded.firstId },
-        });
+        const action = yield* task(http, DISCARD, admin, seeded.firstId);
 
         assert.strictEqual(action.status, 201, action.text);
 
@@ -286,14 +319,8 @@ describe("dead-letter API", () => {
 
           const responses = yield* Effect.all(
             [
-              http.request("POST", RETRY, {
-                ...admin,
-                body: { deliveryId: seeded.firstId },
-              }),
-              http.request("POST", RETRY, {
-                ...admin,
-                body: { deliveryId: seeded.firstId },
-              }),
+              task(http, RETRY, admin, seeded.firstId),
+              task(http, RETRY, admin, seeded.firstId),
             ],
             { concurrency: 2 }
           );
@@ -312,10 +339,7 @@ describe("dead-letter API", () => {
           assert.strictEqual(row?.status, "pending");
           assert.strictEqual(row?.attempts, 0);
           assert.strictEqual(
-            (yield* http.request("POST", RETRY, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            })).status,
+            (yield* task(http, RETRY, admin, seeded.firstId)).status,
             404
           );
           assert.deepStrictEqual(
@@ -335,24 +359,14 @@ describe("dead-letter API", () => {
         Effect.gen(function* discard() {
           const { admin } = yield* apiCallers;
           const seeded = yield* seedDeadLetters(admin);
-          const sql = yield* SqlClient.SqlClient;
-          yield* sql`UPDATE core.delivery SET status = 'pending', attempts = 0, finished_at = NULL WHERE id = ${seeded.secondId}::int8`;
+          yield* pendingSecond(seeded.secondId);
 
-          const input = {
-            deadLetter: "block",
-            lease: Duration.minutes(1),
-            limit: 10,
-            maxAttempts: 1,
-            subscriptionId: seeded.subscriptionId,
-          } as const;
+          const input = claimInputFor(seeded.subscriptionId, "block");
 
           assert.lengthOf(yield* claimDeliveries(input), 0);
           const http = yield* TestHttpClient;
 
-          const discarded = yield* http.request("POST", DISCARD, {
-            ...admin,
-            body: { deliveryId: seeded.firstId },
-          });
+          const discarded = yield* task(http, DISCARD, admin, seeded.firstId);
 
           assert.strictEqual(discarded.status, 201, discarded.text);
           assert.strictEqual(asObject(discarded.json).state, "completed");
@@ -367,10 +381,7 @@ describe("dead-letter API", () => {
             [seeded.secondId]
           );
           assert.strictEqual(
-            (yield* http.request("POST", DISCARD, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            })).status,
+            (yield* task(http, DISCARD, admin, seeded.firstId)).status,
             404
           );
         })
@@ -523,19 +534,13 @@ describe("dead-letter API", () => {
           const seeded = yield* seedDeadLetters(admin);
           const http = yield* TestHttpClient;
 
-          const before = yield* http.get(
-            `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
-            admin
-          );
+          const before = yield* actionsOf(http, admin, seeded.firstId);
 
           assert.deepStrictEqual(before.json, []);
 
           const outcomes = yield* Effect.all(
             [RETRY, DISCARD].map((path) =>
-              http.request("POST", path, {
-                ...admin,
-                body: { deliveryId: seeded.firstId },
-              })
+              task(http, path, admin, seeded.firstId)
             ),
             { concurrency: "unbounded" }
           );
@@ -573,10 +578,7 @@ describe("dead-letter API", () => {
             fixture.admin.id
           );
 
-          const actions = yield* http.get(
-            `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
-            admin
-          );
+          const actions = yield* actionsOf(http, admin, seeded.firstId);
 
           assert.lengthOf(asArray(actions.json), 1);
         })
@@ -592,15 +594,9 @@ describe("dead-letter API", () => {
 
           for (const policy of ["block", "skip"] as const) {
             const seeded = yield* seedDeadLetters(admin, policy);
-            yield* sql`UPDATE core.delivery SET status = 'pending', attempts = 0, finished_at = NULL WHERE id = ${seeded.secondId}::int8`;
+            yield* pendingSecond(seeded.secondId);
 
-            const input = {
-              deadLetter: policy,
-              lease: Duration.minutes(1),
-              limit: 10,
-              maxAttempts: 1,
-              subscriptionId: seeded.subscriptionId,
-            };
+            const input = claimInputFor(seeded.subscriptionId, policy);
 
             const later = yield* claimDeliveries(input);
             assert.deepStrictEqual(
@@ -612,10 +608,7 @@ describe("dead-letter API", () => {
               yield* sql`UPDATE core.delivery SET status = 'done', lease_until = NULL, lease_token = NULL, finished_at = now() WHERE id = ${seeded.secondId}::int8`;
             }
 
-            const retried = yield* http.request("POST", RETRY, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            });
+            const retried = yield* task(http, RETRY, admin, seeded.firstId);
 
             assert.strictEqual(retried.status, 201, retried.text);
             const first = yield* claimDeliveries(input);
@@ -686,10 +679,7 @@ describe("dead-letter API", () => {
               entry.text
             );
 
-            const refusal = yield* http.request("POST", RETRY, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            });
+            const refusal = yield* task(http, RETRY, admin, seeded.firstId);
 
             assert.strictEqual(refusal.status, 409, refusal.text);
             assert.strictEqual(
@@ -705,17 +695,11 @@ describe("dead-letter API", () => {
               state === "deleted" ? "purged" : state
             );
 
-            const absent = yield* http.get(
-              `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
-              admin
-            );
+            const absent = yield* actionsOf(http, admin, seeded.firstId);
 
             assert.deepStrictEqual(absent.json, []);
 
-            const discarded = yield* http.request("POST", DISCARD, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            });
+            const discarded = yield* task(http, DISCARD, admin, seeded.firstId);
 
             assert.strictEqual(discarded.status, 201, discarded.text);
           }
@@ -754,25 +738,16 @@ describe("dead-letter API", () => {
               entry.text
             );
 
-            const refusal = yield* http.request("POST", RETRY, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            });
+            const refusal = yield* task(http, RETRY, admin, seeded.firstId);
 
             assert.strictEqual(refusal.status, 409, refusal.text);
             assert.strictEqual(asObject(refusal.json).state, state);
             assert.deepStrictEqual(
-              (yield* http.get(
-                `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
-                admin
-              )).json,
+              (yield* actionsOf(http, admin, seeded.firstId)).json,
               []
             );
 
-            const discarded = yield* http.request("POST", DISCARD, {
-              ...admin,
-              body: { deliveryId: seeded.firstId },
-            });
+            const discarded = yield* task(http, DISCARD, admin, seeded.firstId);
 
             assert.strictEqual(discarded.status, 201, discarded.text);
             yield* sql`UPDATE core.subscription SET state = 'active' WHERE id = ${seeded.subscriptionId}::uuid`;
@@ -881,10 +856,7 @@ describe("dead-letter API", () => {
           assert.strictEqual((yield* http.get(COLLECTION, bob)).status, 200);
 
           for (const path of [RETRY, DISCARD]) {
-            const denied = yield* http.request("POST", path, {
-              ...bob,
-              body: { deliveryId: seeded.firstId },
-            });
+            const denied = yield* task(http, path, bob, seeded.firstId);
 
             assert.strictEqual(denied.status, 404, denied.text);
           }
@@ -992,10 +964,7 @@ describe("dead-letter API", () => {
             "dead"
           );
           assert.deepStrictEqual(
-            (yield* http.get(
-              `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
-              admin
-            )).json,
+            (yield* actionsOf(http, admin, seeded.firstId)).json,
             []
           );
           assert.deepStrictEqual(yield* Metric.value(deadDeliveries), before);

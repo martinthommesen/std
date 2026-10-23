@@ -6,10 +6,10 @@ import { TMF688_PREFIX } from "@std/api/tmf688";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
-import { TestClock } from "effect/testing";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { testDatabaseLayer } from "../../testing/src/test-database.ts";
 import { eventIdOf, recordEventType } from "../src/events/event-id.ts";
 import { createEvent } from "../src/events/tmf688-resources.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
@@ -23,8 +23,6 @@ import { Transactions } from "../src/sql/transactions.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer } from "./hub-support.ts";
 import { actingAs, asLoadedUser } from "./worker-support.ts";
-
-const test = it.effect;
 
 const topicFixture = Effect.gen(function* topicFixture() {
   const http = yield* TestHttpClient;
@@ -48,6 +46,18 @@ const bodyOf = (id: string) => ({
 });
 
 const countOf = decodeRows(Schema.Struct({ total: Schema.FiniteFromString }));
+
+const eventCount = Effect.fn("EventTest.eventCount")(function* eventCount(
+  topicId: string
+) {
+  const sql = yield* SqlClient.SqlClient;
+
+  return yield* sql`SELECT count(*)::text AS total FROM core.event WHERE topic = ${topicId}::uuid`.pipe(
+    Effect.flatMap(countOf)
+  );
+});
+
+const test = it.live;
 
 describe("event lookups during rollout", () => {
   test("SQL lookup UUIDs match UUIDv5 for every record type and use the fallback index", () =>
@@ -78,7 +88,7 @@ describe("event lookups during rollout", () => {
       );
 
       assert.include(JSON.stringify(rows), "change_event_key");
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(testDatabaseLayer())));
 
   test("TMF688 and generic creates index in the save transaction and work before backfill", () =>
     Effect.gen(function* everyCreatePath() {
@@ -125,10 +135,7 @@ describe("event lookups during rollout", () => {
       );
 
       // A lookup write failure rolls back the record and its history as well.
-      const [before] =
-        yield* sql`SELECT count(*)::text AS total FROM core.event WHERE topic = ${id}::uuid`.pipe(
-          Effect.flatMap(countOf)
-        );
+      const [before] = yield* eventCount(id);
 
       yield* sql.unsafe(
         "CREATE FUNCTION core.refuse_test_lookup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test lookup failure'; END $$"
@@ -150,13 +157,10 @@ describe("event lookups during rollout", () => {
 
       assert.strictEqual(failedGeneric._tag, "DatabaseError");
 
-      const [after] =
-        yield* sql`SELECT count(*)::text AS total FROM core.event WHERE topic = ${id}::uuid`.pipe(
-          Effect.flatMap(countOf)
-        );
+      const [after] = yield* eventCount(id);
 
       assert.strictEqual(after?.total, before?.total);
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 
   test("0022 counts both tables, commits bounded phases, resumes after a failed batch and reaches zero", () =>
     Effect.gen(function* resumableLookupBackfill() {
@@ -236,5 +240,5 @@ describe("event lookups during rollout", () => {
           .every((text) => text.includes("LIMIT $2"))
       );
       assert.deepStrictEqual(yield* runDataMigrations({ batchSize: 2 }), []);
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 });

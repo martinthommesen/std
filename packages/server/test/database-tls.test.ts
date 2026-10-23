@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { DatabaseTlsError } from "@std/postgres/transport";
-import { ConfigProvider, Effect, Layer, Result } from "effect";
+import { ConfigProvider, Effect, Layer } from "effect";
 
 import { DatabaseConfig, withDatabase } from "../src/sql/database-config.ts";
 
@@ -41,17 +41,13 @@ describe("database-tls-config", () => {
     "refuses a remote direct endpoint at startup even when the pool is local",
     () =>
       Effect.gen(function* tlsPolicyCase8() {
-        const result = yield* resolveConfig({
+        const failure = yield* resolveConfig({
           STD_DATABASE_DIRECT_URL: "postgres://std@remote.example/std",
           STD_DATABASE_SSL_MODE: "disable",
-        }).pipe(Effect.result);
+        }).pipe(Effect.flip);
 
-        assert.isTrue(Result.isFailure(result));
-
-        if (Result.isFailure(result)) {
-          assert.instanceOf(result.failure, DatabaseTlsError);
-          assert.include(result.failure.message, "Refusing plaintext");
-        }
+        assert.instanceOf(failure, DatabaseTlsError);
+        assert.include(failure.message, "Refusing plaintext");
       })
   );
   it.effect("allows an explicit dangerous remote plaintext opt-out", () =>
@@ -103,44 +99,36 @@ describe("database-tls-config", () => {
     "keeps missing client key errors in the startup failure channel",
     () =>
       Effect.gen(function* missingClientKey() {
-        const result = yield* resolveConfig({
+        const failure = yield* resolveConfig({
           STD_DATABASE_SSL_CERT_FILE: "/missing",
-        }).pipe(Effect.result);
+        }).pipe(Effect.flip);
 
-        assert.isTrue(Result.isFailure(result));
-
-        if (Result.isFailure(result)) {
-          assert.instanceOf(result.failure, DatabaseTlsError);
-          assert.strictEqual(
-            result.failure.message,
-            "Postgres client TLS requires both STD_DATABASE_SSL_CERT_FILE and STD_DATABASE_SSL_KEY_FILE."
-          );
-        }
+        assert.instanceOf(failure, DatabaseTlsError);
+        assert.strictEqual(
+          failure.message,
+          "Postgres client TLS requires both STD_DATABASE_SSL_CERT_FILE and STD_DATABASE_SSL_KEY_FILE."
+        );
       })
   );
   it.effect(
     "keeps explicit URL policy errors in the startup failure channel",
     () =>
       Effect.gen(function* explicitUrlFailure() {
-        const result = yield* DatabaseConfig.pipe(
+        const failure = yield* DatabaseConfig.pipe(
           Effect.provide(
             DatabaseConfig.fromUrl({
               applicationName: "std-test",
               url: "postgres://std@remote.example/std",
             })
           ),
-          Effect.result
+          Effect.flip
         );
 
-        assert.isTrue(Result.isFailure(result));
-
-        if (Result.isFailure(result)) {
-          assert.instanceOf(result.failure, DatabaseTlsError);
-          assert.strictEqual(
-            result.failure.message,
-            "Postgres verify-full requires STD_DATABASE_SSL_CA_FILE or explicit STD_DATABASE_SSL_SYSTEM_ROOTS=true."
-          );
-        }
+        assert.instanceOf(failure, DatabaseTlsError);
+        assert.strictEqual(
+          failure.message,
+          "Postgres verify-full requires STD_DATABASE_SSL_CA_FILE or explicit STD_DATABASE_SSL_SYSTEM_ROOTS=true."
+        );
       })
   );
 });

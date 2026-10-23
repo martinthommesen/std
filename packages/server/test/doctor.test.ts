@@ -14,6 +14,7 @@ import {
   BUILT_IN_ROLE_IDS,
   PLATFORM_CLASS_IDS,
   USER_CLASS_ID,
+  USER_FIELD_IDS,
 } from "@std/definitions/well-known";
 import { Duration, Effect, Layer, Redacted } from "effect";
 import { SqlClient } from "effect/sql";
@@ -30,6 +31,7 @@ import { SqlLayer } from "../src/sql/layer.ts";
 import { CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { FIXTURE, FX } from "./config-support.ts";
+import { ACME_FIELDS, LOGIN_INDEX_ID } from "./records-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
@@ -41,15 +43,6 @@ import {
 
 /** A local override making `acme.asset.cost` read-only on laptops. */
 const COST_OVERRIDE = "5d3f0f3e-3d77-4f0a-9d0c-6f1f3a1c2b44";
-
-/** `acme.asset.owner`, a reference to `core.user`. */
-const ASSET_OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
-
-/** `core.user.name`. */
-const USER_NAME = "13160bfb-1a94-4f0b-a29b-bccf701673c0";
-
-/** The unique index on `core.user.login`. */
-const LOGIN_INDEX = "4941e670-8c9b-4a1a-a758-93854cef07bb";
 
 const name = generatedName;
 
@@ -130,11 +123,11 @@ const DRIFTS: readonly Drift[] = [
       3,
       "error",
       "constraintInvalid",
-      `core.user/${name("ix", LOGIN_INDEX)}`
+      `core.user/${name("ix", LOGIN_INDEX_ID)}`
     ),
     name: "an invalid index",
     statements: [
-      `UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'core.${name("ix", LOGIN_INDEX)}'::regclass`,
+      `UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'core.${name("ix", LOGIN_INDEX_ID)}'::regclass`,
     ],
   },
   {
@@ -344,13 +337,13 @@ const DRIFTS: readonly Drift[] = [
       2,
       "error",
       "constraintMismatch",
-      `core.user/${name("ck", USER_NAME)}`
+      `core.user/${name("ck", USER_FIELD_IDS.name)}`
     ),
     name: "a max-length CHECK calling a look-alike quoted function",
     statements: [
       `CREATE FUNCTION public."char_""length"(text) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 0'`,
-      `ALTER TABLE core."user" DROP CONSTRAINT ${name("ck", USER_NAME)},
-         ADD CONSTRAINT ${name("ck", USER_NAME)} CHECK ("char_""length"(name) <= 255)`,
+      `ALTER TABLE core."user" DROP CONSTRAINT ${name("ck", USER_FIELD_IDS.name)},
+         ADD CONSTRAINT ${name("ck", USER_FIELD_IDS.name)} CHECK ("char_""length"(name) <= 255)`,
     ],
   },
   {
@@ -474,12 +467,12 @@ const DRIFTS: readonly Drift[] = [
       12,
       "error",
       "fkAction",
-      `acme.asset/${name("fk", ASSET_OWNER)}`
+      `acme.asset/${name("fk", ACME_FIELDS.owner)}`
     ),
     name: "a reference FK with a cascading action",
     statements: [
-      `ALTER TABLE acme.asset DROP CONSTRAINT ${name("fk", ASSET_OWNER)},
-         ADD CONSTRAINT ${name("fk", ASSET_OWNER)} FOREIGN KEY (owner) REFERENCES core."user" (id) ON DELETE SET NULL`,
+      `ALTER TABLE acme.asset DROP CONSTRAINT ${name("fk", ACME_FIELDS.owner)},
+         ADD CONSTRAINT ${name("fk", ACME_FIELDS.owner)} FOREIGN KEY (owner) REFERENCES core."user" (id) ON DELETE SET NULL`,
     ],
   },
   {
@@ -539,22 +532,8 @@ const notInfo = (findings: readonly Finding[]): readonly string[] =>
 const onFreshInstall = <A, E>(
   effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof schemaTestLayer>>>
 ) =>
-  Effect.scoped(
-    Effect.gen(function* freshDatabase() {
-      const memoMap = yield* Layer.makeMemoMap;
-      const scope = yield* Effect.scope;
-
-      const context = yield* Layer.buildWithMemoMap(
-        schemaTestLayer(),
-        memoMap,
-        scope
-      );
-
-      return yield* Effect.provideContext(
-        Effect.andThen(install, effect),
-        context
-      );
-    })
+  Effect.andThen(install, effect).pipe(
+    Effect.provide(schemaTestLayer(), { local: true })
   );
 
 /**
@@ -565,13 +544,11 @@ const onFreshInstall = <A, E>(
  * @returns The report.
  */
 const doctorOnFreshPool = (url: string) =>
-  Effect.scoped(
-    Effect.gen(function* freshPool() {
-      const settings = yield* DatabaseConfig;
-      const memoMap = yield* Layer.makeMemoMap;
-      const scope = yield* Effect.scope;
+  Effect.gen(function* freshPool() {
+    const settings = yield* DatabaseConfig;
 
-      const context = yield* Layer.buildWithMemoMap(
+    return yield* runDoctor().pipe(
+      Effect.provide(
         Catalog.layer.pipe(
           Layer.provideMerge(SqlLayer),
           Layer.provideMerge(
@@ -588,13 +565,10 @@ const doctorOnFreshPool = (url: string) =>
             )
           )
         ),
-        memoMap,
-        scope
-      );
-
-      return yield* Effect.provideContext(runDoctor(), context);
-    })
-  );
+        { local: true }
+      )
+    );
+  });
 
 describe("doctor", () => {
   it("compares Unicode versions without trailing zero parts", () => {

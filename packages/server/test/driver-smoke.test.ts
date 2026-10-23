@@ -450,10 +450,7 @@ describe("driver-smoke", () => {
           events.length = 0;
           yield* Effect.exit(
             request(
-              CurrentTransaction.pipe(
-                Effect.flatMap((transaction) =>
-                  transaction.afterCommit(record("never"))
-                ),
+              registerAfterCommit(record("never")).pipe(
                 Effect.andThen(Effect.fail("rolled back" as const))
               )
             )

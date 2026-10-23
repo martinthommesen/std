@@ -44,6 +44,7 @@ import {
   insertAdmin,
   overridesOf,
 } from "./config-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
 import { currentRevision, schemaTestLayer, values } from "./schema-support.ts";
 
 const { choices, fields, layouts } = HELPDESK;
@@ -58,19 +59,13 @@ const LOCAL_FORM: readonly LayoutElement[] = [
   { fieldId: fields.number, kind: "field" },
 ];
 
-const versionOf = (table: string, id: string) =>
-  values(
-    `SELECT version::text AS value FROM core."${table}" WHERE id = $1::uuid`,
-    [id]
-  ).pipe(Effect.map(([version]) => Number(version)));
-
-const edit = (table: string, id: string, changes: Record<string, JsonValue>) =>
+const edit = (id: string, changes: Record<string, JsonValue>) =>
   Effect.gen(function* editShipped() {
     return yield* editDefinition({
       actorId: ADMIN,
       changes,
       id,
-      version: yield* versionOf(table, id),
+      version: yield* definitionVersion(id),
     });
   });
 
@@ -112,10 +107,10 @@ describe("helpdesk-upgrade", () => {
           yield* insertAdmin;
 
           // Local overrides on shipped choices and a shipped layout.
-          yield* edit("choice", choices.inProgress, { label: "Working" });
-          yield* edit("choice", choices.onHold, { label: "Waiting on caller" });
-          yield* edit("choice", choices.awaitingApproval, { hidden: true });
-          yield* edit("layout", layouts.incidentForm, {
+          yield* edit(choices.inProgress, { label: "Working" });
+          yield* edit(choices.onHold, { label: "Waiting on caller" });
+          yield* edit(choices.awaitingApproval, { hidden: true });
+          yield* edit(layouts.incidentForm, {
             elements: LOCAL_FORM.map((element) => ({ ...element })),
           });
 
