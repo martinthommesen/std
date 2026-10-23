@@ -15,18 +15,10 @@ import {
   mergeChanges,
   reconcileWithMetadata,
 } from "./stale-edits.ts";
+import { fieldById as findFieldById } from "./table-view.ts";
 
-const fieldById = (fieldId: string): MetaField => {
-  const field = ticketTable.fields.find(
-    (candidate) => candidate.id === fieldId
-  );
-
-  if (field === undefined) {
-    throw new RangeError(`the fixture lacks field ${fieldId}`);
-  }
-
-  return field;
-};
+const fieldById = (fieldId: string): MetaField =>
+  Option.getOrThrow(findFieldById(ticketTable, fieldId));
 
 describe("reconciling edits with new metadata", () => {
   it("drops an edit whose input no longer fits the field's type, noting what was typed", () => {

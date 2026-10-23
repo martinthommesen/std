@@ -416,20 +416,24 @@ export const currentRevisionOf = (
 export const formStateOfResponse = (
   verdict: typeof FormState.Type,
   fields: readonly WireField[]
-): typeof FormState.Type => ({
-  fields: Object.fromEntries(
-    Object.entries(verdict.fields).map(([name, state]) => [
-      nameIn(fields, name),
-      state,
-    ])
-  ),
-  messages: verdict.messages ?? [],
-  revision: verdict.revision,
-  schemaRevision: verdict.schemaRevision,
-  values: Object.fromEntries(
-    Object.entries(verdict.values).map(([name, value]) => [
-      nameIn(fields, name),
-      value,
-    ])
-  ),
-});
+): typeof FormState.Type => {
+  const names = new Map(fields.map((field) => [field.apiName, field.name]));
+
+  return {
+    fields: Object.fromEntries(
+      Object.entries(verdict.fields).map(([name, state]) => [
+        names.get(name) ?? name,
+        state,
+      ])
+    ),
+    messages: verdict.messages ?? [],
+    revision: verdict.revision,
+    schemaRevision: verdict.schemaRevision,
+    values: Object.fromEntries(
+      Object.entries(verdict.values).map(([name, value]) => [
+        names.get(name) ?? name,
+        value,
+      ])
+    ),
+  };
+};

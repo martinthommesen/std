@@ -1,6 +1,9 @@
-import { parseJson, stringifyJson } from "@std/values/json";
+import { emptyValue } from "@std/values/codec";
+import { parseJson } from "@std/values/json";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { jsonbEquals } from "@std/values/jsonb";
+import { isSecretState } from "@std/values/write-only";
 import { Match, Option, Redacted, Result, Schema } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
@@ -187,7 +190,7 @@ export const inputOfValue = (
  * @returns The value.
  */
 export const createBaseValue = (field: MetaField): JsonValue =>
-  field.default ?? (field.type.kind === "boolean" ? false : null);
+  field.default ?? emptyValue(field.type.kind);
 
 const WHOLE_NUMBER = /^[+-]?\d+$/u;
 
@@ -324,7 +327,7 @@ export const inputJson = (
  * @returns True when equal.
  */
 export const sameJson = (left: JsonValue, right: JsonValue): boolean =>
-  stringifyJson(left) === stringifyJson(right);
+  left === right || jsonbEquals(left, right);
 
 /**
  * Whether a write-only input changes what is stored: a new value always
@@ -339,8 +342,7 @@ const writeOnlyChanges = (
   stored: JsonValue
 ): input is typeof FieldInput.WriteOnly.Type =>
   FieldInput.guards.WriteOnly(input) &&
-  (Option.isSome(input.maybeValue) ||
-    (isJsonObject(stored) && stored.set === true));
+  (Option.isSome(input.maybeValue) || (isSecretState(stored) && stored.set));
 
 /** A write body's values by field name (Contracts 6.6). */
 export type FormValues = Readonly<Record<string, JsonValue>>;

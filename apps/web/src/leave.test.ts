@@ -1,11 +1,12 @@
+import { Dialog, Menu } from "@foldkit/ui";
+import { Option } from "effect";
 /**
  * Leaving a form with unsaved edits: an in-app link opens the leave
  * confirmation instead of navigating, "Discard changes" follows the link,
  * "Keep editing" stays, and the page asks the browser to confirm an
  * unload only while edits are unsaved.
  */
-import { Dialog, Menu } from "@foldkit/ui";
-import { Option } from "effect";
+import { reduce } from "effect/Array";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
 import { modifyFields } from "foldkit/struct";
@@ -13,7 +14,7 @@ import { toString as urlToString } from "foldkit/url";
 import { describe, expect, it } from "vitest";
 
 import { NavigateInternal, SignOut } from "./command.ts";
-import { adaAtHome, urlOf } from "./fixture.ts";
+import { adaAtHome, signedIn, urlOf } from "./fixture.ts";
 import {
   REVISION_5,
   TICKET,
@@ -25,7 +26,7 @@ import {
 import { subscriptions } from "./main.ts";
 import { Message } from "./message.ts";
 import { LeaveIntent } from "./model.ts";
-import type { Model, SignedInModel } from "./model.ts";
+import type { SignedInModel } from "./model.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
 import type { Model as RecordFormModel } from "./page/record-form/model.ts";
@@ -40,13 +41,12 @@ import { update } from "./update.ts";
 const formAfter = (
   start: RecordFormModel,
   ...messages: readonly RecordFormMessage[]
-): RecordFormModel => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : formAfter(recordFormUpdate(start, first).model, ...rest);
-};
+): RecordFormModel =>
+  reduce(
+    messages,
+    start,
+    (current, nextMessage) => recordFormUpdate(current, nextMessage).model
+  );
 
 const loadedTicket = formAfter(
   recordFormInit({
@@ -124,14 +124,6 @@ const LIST = `/tables/${TICKET}`;
 const LIST_URL = urlToString(urlOf(LIST));
 
 const RECORD = `/tables/${TICKET}/records/${TICKET_ID}`;
-
-const signedIn = (app: Model): SignedInModel => {
-  if (app._tag !== "SignedIn") {
-    throw new Error(`expected a signed-in state, found ${app._tag}`);
-  }
-
-  return app;
-};
 
 describe("leaving a form with unsaved edits", () => {
   it("an in-app link opens the leave confirmation, and Discard changes follows it", () => {

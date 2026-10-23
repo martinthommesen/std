@@ -13,6 +13,7 @@ import {
   isJsonString,
 } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { isSecretState } from "@std/values/write-only";
 import { Option } from "effect";
 
 import { formatInstant } from "./list-columns.ts";
@@ -40,7 +41,7 @@ const writeOnlyText = (value: JsonValue): string => {
     return "Changed (the value is never shown)";
   }
 
-  return value.set === true ? "Set" : "Not set";
+  return isSecretState(value) && value.set ? "Set" : "Not set";
 };
 
 /**

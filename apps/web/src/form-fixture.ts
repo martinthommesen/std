@@ -5,46 +5,17 @@
  * handles, an incident table extending it (a narrower status subset, an
  * own field, its own form layout), and the user table pickers search.
  */
-import { apiAttributeNameOf } from "@std/definitions/names";
-import type { MetaFieldType } from "@std/definitions/table-metadata";
-
 import { listColumns } from "./domain/list-columns.ts";
 import type { MetaField, MetaTable } from "./domain/metadata.ts";
 import type { RecordJson } from "./domain/record.ts";
 import { defaultSelectionOf, wireFieldOf } from "./domain/wire.ts";
-import { USER_TABLE_NAME, revision, servedAs } from "./table-fixture.ts";
+import { USER_TABLE_NAME, field, revision, servedAs } from "./table-fixture.ts";
 
 /** The ticket table's name. */
 export const TICKET = "help.ticket";
 
 /** The incident table's name. */
 export const INCIDENT = "help.incident";
-
-const field = (
-  id: string,
-  name: string,
-  label: string,
-  type: MetaFieldType,
-  overrides: Partial<MetaField> = {}
-): MetaField => ({
-  apiName: apiAttributeNameOf(overrides.name ?? name),
-  autoNumber: null,
-  choices: null,
-  default: null,
-  helpText: null,
-  id,
-  inheritedFrom: null,
-  label,
-  name,
-  nullable: type.kind !== "boolean",
-  read: "yes",
-  readOnly: false,
-  required: false,
-  state: "active",
-  type,
-  write: { create: "yes", update: "yes" },
-  ...overrides,
-});
 
 /** Field IDs of the ticket table (the incident inherits them). */
 export const TICKET_FIELDS = {

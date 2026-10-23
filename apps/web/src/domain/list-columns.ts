@@ -5,6 +5,7 @@ import {
   isJsonString,
 } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
+import { isSecretState } from "@std/values/write-only";
 import { Option } from "effect";
 
 import type { MetaField, MetaTable } from "./metadata.ts";
@@ -25,6 +26,7 @@ import type { MetaField, MetaTable } from "./metadata.ts";
  * response did not deliver (absent and not withheld).
  */
 import type { RecordJson } from "./record.ts";
+import { fieldsParameterOf, wireFieldOf } from "./wire.ts";
 
 /** The most columns the default selection shows. [judgment] */
 export const DEFAULT_COLUMN_LIMIT = 6;
@@ -86,11 +88,8 @@ export const ID_FIELD = "id";
  * @param table - The table's metadata.
  * @returns The parameter.
  */
-export const listFieldsParameter = (table: MetaTable): string => {
-  const names = listColumns(table).map((field) => field.apiName);
-
-  return names.length > 0 ? names.join(",") : ID_FIELD;
-};
+export const listFieldsParameter = (table: MetaTable): string =>
+  fieldsParameterOf(listColumns(table).map(wireFieldOf));
 
 /** What one cell shows. */
 export type Cell =
@@ -136,7 +135,7 @@ const shownText = (
   }
 
   if ((kind === "password" || kind === "secret") && isJsonObject(value)) {
-    return value.set === true ? "Set" : "Not set";
+    return isSecretState(value) && value.set ? "Set" : "Not set";
   }
 
   if (kind === "dateTime" && isJsonString(value)) {

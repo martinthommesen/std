@@ -1,7 +1,8 @@
 import { Option } from "effect";
+import { modifyFields } from "foldkit/struct";
 import type { Url } from "foldkit/url";
 
-import type { CurrentUser } from "./model.ts";
+import type { CurrentUser, SignedInModel } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
 import { initLeaveDialog, initNavigationDrawer } from "./navigation-drawer.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
@@ -50,34 +51,8 @@ export const adaAtHome = Model.SignedIn({
 });
 
 /** Ada, just signed in, on the home page: her tables are loading. */
-export const adaEnteringHome = Model.SignedIn({
-  leaveDialog: initLeaveDialog(),
-  maybeDeadLetters: Option.none(),
-  maybeLeaveIntent: Option.none(),
-  maybePreferenceProblem: Option.none(),
-  maybeRecordForm: Option.none(),
-  maybeRevision: Option.some(REVISION_3),
-  maybeTableList: Option.none(),
-  navigationDrawer: initNavigationDrawer(),
-  nextPageId: 1,
-  preferences: DEFAULT_SHELL_PREFERENCES,
-  route: AppRoute.Home(),
-  sessionId: 1,
-  signOutRequest: SignOutRequest.Idle(),
-  tables: Tables.Loading(),
-  user: ada,
-  userMenu: initUserMenu(),
-});
-
-/** The sign-in page after a redirect from the home page. */
-export const signInRedirectedFromHome = Model.SignedOut({
-  maybePreferenceProblem: Option.none(),
-  maybeReturnRoute: Option.some(AppRoute.Home()),
-  nextPageId: 1,
-  nextSessionId: 1,
-  preferences: DEFAULT_SHELL_PREFERENCES,
-  route: AppRoute.SignIn(),
-  signIn: signInInit(),
+export const adaEnteringHome = modifyFields(adaAtHome, {
+  tables: () => Tables.Loading(),
 });
 
 /** The sign-in page, opened directly. */
@@ -90,6 +65,24 @@ export const signInOpenedDirectly = Model.SignedOut({
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
+
+/** The sign-in page after a redirect from the home page. */
+export const signInRedirectedFromHome = modifyFields(signInOpenedDirectly, {
+  maybeReturnRoute: () => Option.some(AppRoute.Home()),
+});
+
+/**
+ * The signed-in state, or a failure naming the state found instead.
+ * @param app - The app's state.
+ * @returns It, signed in.
+ */
+export const signedIn = (app: Model): SignedInModel => {
+  if (!Model.guards.SignedIn(app)) {
+    throw new Error(`expected a signed-in state, found ${app._tag}`);
+  }
+
+  return app;
+};
 
 /**
  * An address of the app, as the runtime parses it.
