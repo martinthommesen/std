@@ -56,6 +56,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | merged |
 | 6 | `ws/sec-part-owner` | security follow-up | scan finding F3: a write to a part is a write to its owner; part creates, updates and deletes need update rights on every owner up to the root (decision 0039) | merged |
 | 6 | `ws/sec-history-paging` | security follow-up | scan finding F6: history pages, counts and lookups run in SQL with key-first selection; bounded work per request (decision 0040) | merged |
+| 6 | `ws/web-ux` | web follow-up | UI and UX overhaul with the Impeccable skill (Martin, 2026-10-23): design tokens, app shell and Administration group, dense lists, two-column forms with a sticky action bar and Ctrl/Cmd+S, form-rules states, leave confirmation, mobile drawer; `apps/web/DESIGN.md`, decision 0020 note | merged |
 | 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party roles; config subscriptions; TMF632, TMF669, TMF672 | planned |
 | 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
 | 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |
