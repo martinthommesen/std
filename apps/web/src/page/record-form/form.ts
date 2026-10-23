@@ -5,11 +5,9 @@
  * verdict as the server's for every field both see).
  */
 import { Combobox, DatePicker } from "@foldkit/ui";
-import type { RecordJson } from "@std/api/records";
 import type { FieldError } from "@std/definitions/field-errors";
 import { validateRecord } from "@std/definitions/record-schema";
 import type { RecordVerdict } from "@std/definitions/record-schema";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 import { Match, Option, Record, pipe } from "effect";
 import { AsyncData } from "foldkit";
@@ -30,6 +28,8 @@ import type {
   FormBody,
   FieldInput,
 } from "../../domain/form-input.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
+import type { RecordJson } from "../../domain/record.ts";
 import type { TableMeta } from "../table-list/model.ts";
 import { FormMode } from "./model.ts";
 import type { Model } from "./model.ts";
@@ -240,18 +240,23 @@ export const verdictOf = (
     Option.match(editedRecordOf(model), {
       onNone: () => Option.some(validateRecord(meta.table, "create", body)),
       onSome: (record) => {
-        const stored = { class: record.class, values: record.values };
-
-        if (record.class === meta.table.name) {
+        if (record.class === meta.table.resourceType) {
           return Option.some(
-            validateRecord(meta.table, "update", body, stored)
+            validateRecord(meta.table, "update", body, {
+              class: meta.table.name,
+              values: record.values,
+            })
           );
         }
 
         return Option.map(classMetaOf(model), (concrete) =>
-          validateRecord(concrete, "update", body, stored, {
-            through: meta.table,
-          })
+          validateRecord(
+            concrete,
+            "update",
+            body,
+            { class: concrete.name, values: record.values },
+            { through: meta.table }
+          )
         );
       },
     })

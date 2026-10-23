@@ -12,11 +12,7 @@
  * asked again after the refresh; a save never is: the user saves again.
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
-import type {
-  MetaField,
-  MetaRelatedList,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import type { MetaRelatedList } from "@std/definitions/table-metadata";
 import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
@@ -24,7 +20,8 @@ import { modifyFields } from "foldkit/struct";
 
 import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
-import { listFieldsParameter } from "../../domain/list-columns.ts";
+import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
@@ -37,6 +34,12 @@ import {
   reconcileWithRecord,
 } from "../../domain/stale-edits.ts";
 import type { Reconciled } from "../../domain/stale-edits.ts";
+import {
+  apiNameIn,
+  collectionOf,
+  defaultSelectionOf,
+  wireFieldOf,
+} from "../../domain/wire.ts";
 import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
 import { recordRouter, tableListRouter } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
@@ -577,8 +580,12 @@ const writeRelatedList = (
       lists.map((list) => (list.id === listId ? change(list) : list)),
   });
 
-const relatedFilterOf = (list: RelatedList, recordId: string): string =>
-  `${list.entry.field} = ${JSON.stringify(recordId)}`;
+const relatedFilterOf = (
+  list: RelatedList,
+  related: MetaTable,
+  recordId: string
+): string =>
+  `${apiNameIn(related.fields.map(wireFieldOf), list.entry.field)} = ${JSON.stringify(recordId)}`;
 
 const reloadingRelated = (records: RelatedList["records"]) =>
   Option.match(AsyncData.getData(records), {
@@ -613,9 +620,10 @@ const relatedPageRequest = (
       return {
         commands: [
           LoadRelatedRecords({
+            columns: listColumns(meta.table).map(wireFieldOf),
             cursor: Option.flatten(Option.fromNullishOr(cursors.at(-1))),
             fields: listFieldsParameter(meta.table),
-            filter: relatedFilterOf(list, recordId),
+            filter: relatedFilterOf(list, meta.table, recordId),
             generation,
             listId: list.id,
             revision: meta.revision,
@@ -1511,7 +1519,7 @@ const searchTargets =
           onNone: () => reloadFailedTarget(waiting, target, meta.revision),
           onSome: (targetMeta) =>
             searchOrNothing(waiting, {
-              allowedFor: `${model.table}/${field.name}`,
+              allowedFor: `${collectionOf(model.table)}/${field.apiName}`,
               cursor,
               fieldId,
               generation,
@@ -1845,6 +1853,7 @@ const requestRecord =
                   purpose,
                   recordId: model.mode.recordId,
                   revision: meta.revision,
+                  selected: defaultSelectionOf(meta.table),
                   table: model.table,
                 }),
               ],
@@ -1867,11 +1876,11 @@ const requestClassMetadata: Step = (model) =>
   Option.match(Option.all([metaOf(model), recordOf(model)]), {
     onNone: () => ({ model }),
     onSome: ([meta, record]) => {
-      const isOther = record.class !== meta.table.name;
+      const isOther = record.class !== meta.table.resourceType;
 
       const isCurrent = Option.exists(
         classMetaOf(model),
-        (concrete) => concrete.name === record.class
+        (concrete) => concrete.resourceType === record.class
       );
 
       return isOther && !isCurrent && !AsyncData.isPending(model.classMetadata)
@@ -2031,7 +2040,10 @@ const isClassAnswerFor = (
  */
 const receiveClassMetadata = (model: Model, table: MetaTable): UpdateReturn => {
   if (
-    !Option.exists(recordOf(model), (record) => record.class === table.name)
+    !Option.exists(
+      recordOf(model),
+      (record) => record.class === table.resourceType
+    )
   ) {
     return { model };
   }
@@ -2307,18 +2319,22 @@ const save = (model: Model): UpdateReturn => {
       const command = Option.match(recordOf(model), {
         onNone: () =>
           CreateRecord({
+            fields: meta.table.fields.map(wireFieldOf),
             generation,
             revision: meta.revision,
             secrets: check.body.secrets,
+            selected: defaultSelectionOf(meta.table),
             table: model.table,
             values: check.body.values,
           }),
         onSome: (record) =>
           UpdateRecord({
+            fields: meta.table.fields.map(wireFieldOf),
             generation,
             recordId: record.id,
             revision: meta.revision,
             secrets: check.body.secrets,
+            selected: defaultSelectionOf(meta.table),
             table: model.table,
             values: check.body.values,
             version: record.version,
@@ -2887,7 +2903,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadClassMetadata: ({ revision, table }) =>
-      isClassAnswerFor(model, table.name, revision)
+      isClassAnswerFor(model, table.resourceType, revision)
         ? receiveClassMetadata(model, table)
         : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

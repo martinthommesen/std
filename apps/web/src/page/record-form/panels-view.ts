@@ -15,8 +15,6 @@
  *   the version.
  */
 import { Disclosure } from "@foldkit/ui";
-import type { HistoryEntrySchema, HistoryField } from "@std/api/records";
-import type { MetaTable } from "@std/definitions/table-metadata";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Option, Record } from "effect";
@@ -28,6 +26,8 @@ import {
   formatInstant,
   listColumns,
 } from "../../domain/list-columns.ts";
+import type { MetaTable } from "../../domain/metadata.ts";
+import type { HistoryEntrySchema, HistoryField } from "../../domain/record.ts";
 import { valueText } from "../../domain/value-text.ts";
 import { buttonView } from "../../view/controls.ts";
 import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";

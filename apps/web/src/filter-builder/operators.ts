@@ -6,11 +6,11 @@
  */
 import { DatePicker } from "@foldkit/ui";
 import { operatorFitsKind } from "@std/conditions/profile";
-import type { MetaField } from "@std/definitions/table-metadata";
 import type { FieldKind } from "@std/values/field-type";
 import { Match, Option } from "effect";
 import type { CalendarDate } from "foldkit/calendar";
 
+import type { MetaField } from "../domain/metadata.ts";
 import { FilterOperator, Operand } from "./model.ts";
 import type { NowUnit, PeriodUnit, TodayUnit, ValueSource } from "./model.ts";
 

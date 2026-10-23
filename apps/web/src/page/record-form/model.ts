@@ -17,19 +17,16 @@
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
-import { HistoryEntrySchema, RecordJsonSchema } from "@std/api/records";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
-import {
-  MetaFieldSchema,
-  MetaRelatedListSchema,
-  MetaTableSchema,
-} from "@std/definitions/table-metadata";
+import { MetaRelatedListSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { CalendarDate } from "foldkit/calendar";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { FieldInput } from "../../domain/form-input.ts";
+import { MetaFieldSchema, MetaTableSchema } from "../../domain/metadata.ts";
+import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { DroppedEdit } from "../../domain/stale-edits.ts";
 import {

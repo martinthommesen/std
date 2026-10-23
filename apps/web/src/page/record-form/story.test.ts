@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
 import {
-  INCIDENT,
   INCIDENT_ID,
   REVISION_5,
   REVISION_6,
@@ -27,6 +26,9 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TICKET_WIRE,
+  TICKET_SELECTION,
+  TASK_COLUMNS,
 } from "../../form-fixture.ts";
 import { REVISION_3, userTable } from "../../table-fixture.ts";
 import {
@@ -126,10 +128,12 @@ const updateRequest = (
   overrides: Partial<Parameters<typeof UpdateRecord>[0]> = {}
 ) =>
   UpdateRecord({
+    fields: TICKET_WIRE,
     generation: 2,
     recordId: TICKET_ID,
     revision: REVISION_5,
     secrets: {},
+    selected: TICKET_SELECTION,
     table: TICKET,
     values: {},
     version: 3,
@@ -164,6 +168,7 @@ describe("opening a form", () => {
           purpose: "Open",
           recordId: TICKET_ID,
           revision: REVISION_5,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -219,7 +224,10 @@ describe("opening a form", () => {
         })
       ),
       Command.expectHas(
-        LoadClassMetadata({ revision: REVISION_5, table: INCIDENT })
+        LoadClassMetadata({
+          revision: REVISION_5,
+          table: incidentTable.resourceType,
+        })
       ),
       Command.resolveAll(
         [
@@ -317,6 +325,7 @@ describe("opening a form", () => {
           purpose: "Open",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -563,6 +572,7 @@ describe("editing and saving", () => {
           purpose: "ReloadAfterConflict",
           recordId: TICKET_ID,
           revision: REVISION_5,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -825,9 +835,11 @@ describe("creating", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         CreateRecord({
+          fields: TICKET_WIRE,
           generation: 1,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { escalated: true, short_description: "Printer jams" },
         })
@@ -876,9 +888,11 @@ describe("creating", () => {
     expect(described(sending.commands)).toStrictEqual(
       described([
         CreateRecord({
+          fields: TICKET_WIRE,
           generation: 1,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { short_description: "A" },
         }),
@@ -936,10 +950,12 @@ describe("creating", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: TICKET_WIRE,
           generation: 2,
           recordId: NEW_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { description: "Later", short_description: "AB" },
           version: 1,
@@ -1134,7 +1150,7 @@ describe("the reference picker", () => {
       ),
       Command.expectExact(
         SearchTargets({
-          allowedFor: `${TICKET}/assignee`,
+          allowedFor: "helpTicket/assignee",
           cursor: Option.none(),
           display: Option.fromNullishOr(userTable.fields[0]),
           fieldId: TICKET_FIELDS.assignee,
@@ -1344,9 +1360,10 @@ describe("related lists and history", () => {
       ),
       Command.expectExact(
         LoadRelatedRecords({
+          columns: TASK_COLUMNS,
           cursor: Option.none(),
           fields:
-            "short_description,number,status,assignee,internal_cost,customer_email",
+            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 1,
           listId: LIST,
@@ -1377,9 +1394,10 @@ describe("related lists and history", () => {
       }),
       Command.expectExact(
         LoadRelatedRecords({
+          columns: TASK_COLUMNS,
           cursor: Option.some("c2"),
           fields:
-            "short_description,number,status,assignee,internal_cost,customer_email",
+            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 2,
           listId: LIST,

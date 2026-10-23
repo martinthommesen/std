@@ -11,15 +11,12 @@
  */
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
-import type {
-  MetaSavedFilter,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import type { MetaSavedFilter } from "@std/definitions/table-metadata";
 import { Equal, Option, Record, Result, Schema, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
-import { listFieldsParameter } from "../../domain/list-columns.ts";
+import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
 import {
   addressOf,
   conditionOf,
@@ -32,9 +29,11 @@ import {
   sortParameter,
 } from "../../domain/list-query.ts";
 import type { ListAddress, ListQuery } from "../../domain/list-query.ts";
+import type { MetaTable } from "../../domain/metadata.ts";
 import { isNewerRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { TablesByName } from "../../domain/table-view.ts";
+import { wireFieldOf } from "../../domain/wire.ts";
 import { followedReferences } from "../../filter-builder/condition.ts";
 import type { ConditionScope } from "../../filter-builder/condition.ts";
 import {
@@ -274,6 +273,7 @@ const sendRequest: Step = (model) =>
       return {
         commands: [
           LoadRecords({
+            columns: listColumns(meta.table).map(wireFieldOf),
             cursor: Option.flatten(
               Option.fromNullishOr(requestedCursors(model).at(-1))
             ),

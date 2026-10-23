@@ -1,3 +1,9 @@
+import { parseJson, stringifyJson } from "@std/values/json";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
+import { Match, Option, Redacted, Result, Schema } from "effect";
+import { defineTaggedUnion } from "foldkit/schema";
+
 /**
  * What a form input holds for one field, and how it turns into the JSON a
  * write sends (Contracts 6.5, 6.6, 6.7).
@@ -21,12 +27,7 @@
  * them as `Redacted`, and the body keeps them apart (`secrets`) until the
  * request is built.
  */
-import type { MetaField } from "@std/definitions/table-metadata";
-import { parseJson, stringifyJson } from "@std/values/json";
-import { isJsonObject, isJsonString } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
-import { Match, Option, Redacted, Result, Schema } from "effect";
-import { defineTaggedUnion } from "foldkit/schema";
+import type { MetaField } from "./metadata.ts";
 
 const WRITE_ONLY_LABEL = "write-only value";
 

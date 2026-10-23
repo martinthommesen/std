@@ -1,4 +1,5 @@
-import { authenticationClient, makeStdClient } from "@std/api/client";
+import { makeStdClientV2 } from "@std/api/v2/client";
+import type { Schema } from "effect";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
@@ -27,10 +28,12 @@ const BASE_URL = "http://std.test";
 const decoder = new TextDecoder();
 
 /**
- * The real typed client over a fake server that answers by path, for
- * testing what a Command does with each answer. Requests are recorded.
+ * The real typed client over a fake server that answers by method and
+ * path (`DELETE /api/v2/session/current`) or by path alone
+ * (`/api/v2/tableMetadata`), for testing what a Command does with each
+ * answer. Requests are recorded.
  *
- * @param answers - The answer for each path, such as `/api/v1/auth/me`.
+ * @param answers - The answer for each method and path, or path.
  * @returns The `StdApi` layer and the requests it received.
  */
 export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
@@ -40,7 +43,9 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
     Effect.sync(() => {
       const url = new URL(request.url);
       const path = decodeURIComponent(url.pathname);
-      const answer = answers[path] ?? { status: 599 };
+
+      const answer = answers[`${request.method} ${path}`] ??
+        answers[path] ?? { status: 599 };
 
       seen.push({
         body:
@@ -77,9 +82,7 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
 
   const layer = Layer.effect(
     StdApi,
-    makeStdClient({ baseUrl: BASE_URL, webClient: true }).pipe(
-      Effect.provide(authenticationClient())
-    )
+    makeStdClientV2({ baseUrl: BASE_URL, webClient: true })
   ).pipe(
     Layer.provide(
       Layer.succeed(HttpClient.HttpClient, sendingRequestRevision(client))
@@ -88,3 +91,27 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
 
   return { layer, seen };
 };
+
+/**
+ * A TMF `Error` answer as the API sends one (Contracts 10.6).
+ *
+ * @param code - The error's code, such as `Unauthenticated`.
+ * @param status - The HTTP status.
+ * @param details - Extension members, such as `currentRevision`.
+ * @returns The answer.
+ */
+export const tmfError = (
+  code: string,
+  status: number,
+  details: Readonly<Record<string, Schema.Json>> = {}
+): FakeAnswer => ({
+  body: {
+    "@baseType": "Error",
+    "@type": code,
+    code,
+    reason: code,
+    status: String(status),
+    ...details,
+  },
+  status,
+});

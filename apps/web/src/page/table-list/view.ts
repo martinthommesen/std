@@ -7,7 +7,6 @@
  * (`data-cell`).
  */
 import { Button } from "@foldkit/ui";
-import type { MetaField } from "@std/definitions/table-metadata";
 import { Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -15,6 +14,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import { ID_FIELD, listColumns } from "../../domain/list-columns.ts";
 import { PAGE_SIZES, isSortable } from "../../domain/list-query.ts";
 import type { SortKey } from "../../domain/list-query.ts";
+import type { MetaField } from "../../domain/metadata.ts";
 import { view as filterBuilderView } from "../../filter-builder/view.ts";
 import { homeRouter, newRecordRouter, tableListRouter } from "../../route.ts";
 import { buttonView, selectField } from "../../view/controls.ts";

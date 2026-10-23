@@ -1,3 +1,4 @@
+import { isTmfError } from "@std/api/v2/client";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { today } from "foldkit/calendar";
@@ -5,6 +6,14 @@ import { replaceUrl } from "foldkit/navigation";
 
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
+import {
+  WireField,
+  collectionOf,
+  currentRevisionOf,
+  nextCursorOf,
+  recordOfResource,
+  totalCountOf,
+} from "../../domain/wire.ts";
 import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
 import { Message } from "./message.ts";
 import type { ListError } from "./model.ts";
@@ -26,35 +35,38 @@ const requireRevision = (maybeRevision: Option.Option<Revision>) =>
   });
 
 /**
- * Fetches one table's metadata (`GET meta/tables/{table}`) at the given
- * revision, for the list page and the form page. A revision the server says the database never had (after a
- * restore, Contracts 6.4) is dropped and the metadata asked for again
- * without one.
+ * Fetches one table's metadata (`GET tableMetadata/{collection}`) at the
+ * given revision, for the list page and the form page. A revision the
+ * server says the database never had (after a restore, Contracts 6.4) is
+ * dropped and the metadata asked for again without one.
  *
- * @param table - The table.
+ * @param collection - The table's collection (`collectionOf`).
  * @param maybeRevision - The revision to send.
  * @returns The metadata and the revision the response stated.
  */
 export const fetchTableMetadata = (
-  table: string,
+  collection: string,
   maybeRevision: Option.Option<Revision>
 ) => {
   const fetchAt = (revision: Option.Option<Revision>) =>
     Effect.gen(function* fetchMetadata() {
       const client = yield* StdApi;
 
-      const [metadata, response] = yield* client.metadata
-        .table({ params: { table }, responseMode: "decoded-and-response" })
+      const [table, response] = yield* client.tableMetadata
+        .get({
+          params: { table: collection },
+          responseMode: "decoded-and-response",
+        })
         .pipe(atRevision(revision));
 
       return {
         revision: yield* requireRevision(responseRevision(response)),
-        table: metadata.table,
+        table,
       };
     });
 
   return fetchAt(maybeRevision).pipe(
-    Effect.catchTag("SchemaChanged", () => fetchAt(Option.none()))
+    Effect.catchIf(isTmfError("SchemaChanged"), () => fetchAt(Option.none()))
   );
 };
 
@@ -69,14 +81,14 @@ export const LoadTableMetadata = Command.define("LoadTableMetadata", {
     table: Schema.String,
   },
   execute: ({ maybeRevision, table }) =>
-    fetchTableMetadata(table, maybeRevision).pipe(
+    fetchTableMetadata(collectionOf(table), maybeRevision).pipe(
       Effect.map((loaded) => Message.SucceededLoadTableMetadata(loaded)),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadTableMetadata({ error: "UnknownTable" })
         )
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>
@@ -102,11 +114,11 @@ export const LoadTargetTable = Command.define("LoadTargetTable", {
     table: Schema.String,
   },
   execute: ({ maybeRevision, request, table }) =>
-    fetchTableMetadata(table, maybeRevision).pipe(
+    fetchTableMetadata(collectionOf(table), maybeRevision).pipe(
       Effect.map((loaded) =>
         Message.SucceededLoadTargetTable({ request, table: loaded.table })
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadTargetTable({
             error: "UnknownTable",
@@ -115,7 +127,7 @@ export const LoadTargetTable = Command.define("LoadTargetTable", {
           })
         )
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>
@@ -129,8 +141,13 @@ export const LoadTargetTable = Command.define("LoadTargetTable", {
   ],
 });
 
-/** The list request, in the API's terms (names, not IDs). */
+/**
+ * The list request, in the API's terms (API names, not IDs): `fields`,
+ * `filter` (sent as `condition`) and `sort` are printed with API names;
+ * `columns` are the selected fields, to read the answer back by name.
+ */
 const ListRequestArgs = {
+  columns: Schema.Array(WireField),
   cursor: Schema.Option(Schema.String),
   fields: Schema.String,
   filter: Schema.Option(Schema.String),
@@ -147,13 +164,15 @@ const failedList =
     Message.FailedLoadRecords({ error, generation, maybeRevision });
 
 /**
- * Loads a page of records (`GET tables/{table}/records`) with the count and
- * reference labels, at the revision of the page's metadata. A refusal
- * names its reason; `SchemaChanged` carries the server's current revision.
+ * Loads a page of records (`GET {collection}`) with the count, at the
+ * revision of the page's metadata: the next page's cursor comes from the
+ * `Link` header, the count from `X-Total-Count`. A refusal names its
+ * reason; `SchemaChanged` carries the server's current revision.
  */
 export const LoadRecords = Command.define("LoadRecords", {
   args: ListRequestArgs,
   execute: ({
+    columns,
     cursor,
     fields,
     filter,
@@ -166,17 +185,16 @@ export const LoadRecords = Command.define("LoadRecords", {
     Effect.gen(function* loadRecords() {
       const client = yield* StdApi;
 
-      const [list, response] = yield* client.records
+      const [resources, response] = yield* client.records
         .list({
-          params: { table },
+          params: { table: collectionOf(table) },
           query: {
             count: "true",
             fields,
-            labels: "true",
             limit: String(limit),
             ...Option.match(filter, {
               onNone: () => ({}),
-              onSome: (text) => ({ filter: text }),
+              onSome: (text) => ({ condition: text }),
             }),
             ...Option.match(sort, {
               onNone: () => ({}),
@@ -184,7 +202,7 @@ export const LoadRecords = Command.define("LoadRecords", {
             }),
             ...Option.match(cursor, {
               onNone: () => ({}),
-              onSome: (text) => ({ cursor: text }),
+              onSome: (text) => ({ after: text }),
             }),
           },
           responseMode: "decoded-and-response",
@@ -195,30 +213,29 @@ export const LoadRecords = Command.define("LoadRecords", {
         generation,
         maybeRevision: responseRevision(response),
         page: {
-          maybeCount: Option.fromNullishOr(list.count),
-          maybeNextCursor: Option.fromNullishOr(list.nextCursor),
-          records: list.records,
+          maybeCount: totalCountOf(response.headers),
+          maybeNextCursor: nextCursorOf(response.headers),
+          records: resources.map((resource) =>
+            recordOfResource(resource, columns)
+          ),
         },
       });
     }).pipe(
-      Effect.catchTag("SchemaChanged", (changed) =>
+      Effect.catchIf(isTmfError("SchemaChanged"), (changed) =>
         Effect.succeed(
-          failedList(
-            generation,
-            "SchemaChanged"
-          )(Schema.decodeUnknownOption(SchemaRevision)(changed.currentRevision))
+          failedList(generation, "SchemaChanged")(currentRevisionOf(changed))
         )
       ),
-      Effect.catchTag("UnknownField", () =>
+      Effect.catchIf(isTmfError("UnknownField"), () =>
         Effect.succeed(failedList(generation, "UnknownField")(Option.none()))
       ),
-      Effect.catchTag("InvalidFilter", () =>
+      Effect.catchIf(isTmfError("InvalidFilter"), () =>
         Effect.succeed(failedList(generation, "InvalidFilter")(Option.none()))
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(failedList(generation, "UnknownTable")(Option.none()))
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>

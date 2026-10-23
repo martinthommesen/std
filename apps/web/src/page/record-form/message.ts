@@ -1,11 +1,11 @@
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
-import { HistoryEntrySchema, RecordJsonSchema } from "@std/api/records";
-import { MetaTableSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
 
 import { WriteOnlyValue } from "../../domain/form-input.ts";
+import { MetaTableSchema } from "../../domain/metadata.ts";
+import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { MetaError, RecordPage } from "../table-list/model.ts";
 import {

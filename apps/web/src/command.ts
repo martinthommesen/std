@@ -1,3 +1,4 @@
+import { isTmfError } from "@std/api/v2/client";
 import { Effect, Option, Schema } from "effect";
 import { Command, Dom } from "foldkit";
 import { load, pushUrl, replaceUrl } from "foldkit/navigation";
@@ -10,8 +11,9 @@ import { StdApi, atRevision, responseRevision } from "./std-client.ts";
 export const MAIN_ID = "main";
 
 /**
- * Asks the server who the browser's session acts as (`GET auth/me`). The
- * session cookie is HTTP-only, so this is the only way the app learns
+ * Asks the server who the browser's session acts as (the current
+ * session). The session cookie is HTTP-only, so this is the only way the
+ * app learns
  * whether it is signed in: `Unauthenticated` is a normal answer (no
  * session), anything else that goes wrong means the server is unavailable.
  */
@@ -19,7 +21,7 @@ export const LoadCurrentUser = Command.define("LoadCurrentUser", {
   execute: Effect.gen(function* loadCurrentUser() {
     const client = yield* StdApi;
 
-    const [user, response] = yield* client.session.me({
+    const [user, response] = yield* client.session.current({
       responseMode: "decoded-and-response",
     });
 
@@ -28,7 +30,7 @@ export const LoadCurrentUser = Command.define("LoadCurrentUser", {
       maybeUser: Option.some(user),
     });
   }).pipe(
-    Effect.catchTag("Unauthenticated", () =>
+    Effect.catchIf(isTmfError("Unauthenticated"), () =>
       Effect.succeed(
         Message.SucceededLoadCurrentUser({
           maybeRevision: Option.none(),
@@ -48,8 +50,8 @@ const loadTablesAt = (
   Effect.gen(function* loadTables() {
     const client = yield* StdApi;
 
-    const [list, response] = yield* client.metadata
-      .tables({ responseMode: "decoded-and-response" })
+    const [tables, response] = yield* client.tableMetadata
+      .list({ responseMode: "decoded-and-response" })
       .pipe(atRevision(revision));
 
     return Option.match(responseRevision(response), {
@@ -58,13 +60,13 @@ const loadTablesAt = (
         Message.SucceededLoadTables({
           revision: stated,
           sessionId,
-          tables: list.tables,
+          tables,
         }),
     });
   });
 
 /**
- * Loads the tables the user can open (`GET meta/tables`), for the
+ * Loads the tables the user can open (`GET tableMetadata`), for the
  * navigation and the home page, at the latest revision the app has seen.
  * A revision the database never had (after a restore) is dropped and the
  * list asked for again without one. Every answer names the session that
@@ -77,10 +79,10 @@ export const LoadTables = Command.define("LoadTables", {
   },
   execute: ({ maybeRevision, sessionId }) =>
     loadTablesAt(maybeRevision, sessionId).pipe(
-      Effect.catchTag("SchemaChanged", () =>
+      Effect.catchIf(isTmfError("SchemaChanged"), () =>
         loadTablesAt(Option.none(), sessionId)
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication({ sessionId }))
       ),
       Effect.orElseSucceed(() => Message.FailedLoadTables({ sessionId }))
@@ -93,7 +95,8 @@ export const LoadTables = Command.define("LoadTables", {
 });
 
 /**
- * Ends the session (`POST auth/sign-out`); the server clears the cookie. A
+ * Ends the session (`DELETE session/current`); the server clears the
+ * cookie. A
  * session that had already ended counts as signed out. The answer names
  * the session that asked, so it counts in no other.
  */
@@ -110,7 +113,7 @@ export const SignOut = Command.define("SignOut", {
 
       return Message.SucceededSignOut({ sessionId });
     }).pipe(
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.SucceededSignOut({ sessionId }))
       ),
       Effect.orElseSucceed(() => Message.FailedSignOut({ sessionId }))

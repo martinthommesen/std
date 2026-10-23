@@ -1,3 +1,9 @@
+import { Match } from "effect";
+import type { Html, HtmlBuilder } from "foldkit/html";
+
+import { ID_FIELD, cellOf } from "../domain/list-columns.ts";
+import type { Cell } from "../domain/list-columns.ts";
+import type { MetaField, MetaTable } from "../domain/metadata.ts";
 /**
  * One cell of a records table, as the list page and the record form's
  * related lists both show it (Contracts 6.6): a value; a stored empty
@@ -7,13 +13,7 @@
  * delivered"). The cell says which in `data-cell`. The first column links
  * to the record's form.
  */
-import type { RecordJson } from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
-import { Match } from "effect";
-import type { Html, HtmlBuilder } from "foldkit/html";
-
-import { ID_FIELD, cellOf } from "../domain/list-columns.ts";
-import type { Cell } from "../domain/list-columns.ts";
+import type { RecordJson } from "../domain/record.ts";
 import { recordRouter } from "../route.ts";
 
 const RESTRICTED_TEXT = "Restricted";

@@ -6,7 +6,6 @@
  * revision on any answer refreshes the metadata in the background.
  */
 import type { SchemaChange } from "@std/api/errors/schemas";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import { Option } from "effect";
 import {
   Command,
@@ -19,8 +18,9 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
+import { defaultSelectionOf, wireFieldOf } from "../../domain/wire.ts";
 import {
-  INCIDENT,
   INCIDENT_ID,
   REVISION_5,
   REVISION_6,
@@ -34,6 +34,8 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TICKET_WIRE,
+  TICKET_SELECTION,
 } from "../../form-fixture.ts";
 import { REVISION_3, revision, userTable } from "../../table-fixture.ts";
 import {
@@ -107,7 +109,7 @@ const changeFields = (
  */
 const changedTable = changeFields(ticketTable, (field) => {
   if (field.id === TICKET_FIELDS.shortDescription) {
-    return [{ ...field, name: "summary" }];
+    return [{ ...field, apiName: "summary", name: "summary" }];
   }
 
   if (field.id === TICKET_FIELDS.description) {
@@ -196,6 +198,7 @@ const rereadAt6 = LoadRecord({
   purpose: "Refresh",
   recordId: TICKET_ID,
   revision: REVISION_6,
+  selected: defaultSelectionOf(changedTable),
   table: TICKET,
 });
 
@@ -211,10 +214,12 @@ describe("a save refused with SchemaChanged", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: TICKET_WIRE,
           generation: 2,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: {
             description: "My details",
@@ -301,10 +306,12 @@ describe("a save refused with SchemaChanged", () => {
       // Only now, asked by the user: the new name, the new revision.
       Command.expectExact(
         UpdateRecord({
+          fields: changedTable.fields.map(wireFieldOf),
           generation: 4,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
+          selected: defaultSelectionOf(changedTable),
           table: TICKET,
           values: { status: "new", summary: "Mine" },
           version: 3,
@@ -884,10 +891,12 @@ describe("edits made while a save is in flight (review round 1)", () => {
       [
         "UpdateRecord",
         {
+          fields: TICKET_WIRE,
           generation: 2,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { points: 5, short_description: "A" },
           version: 3,
@@ -939,10 +948,12 @@ describe("edits made while a save is in flight (review round 1)", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: TICKET_WIRE,
           generation: 3,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { description: "Later", short_description: "AB" },
           version: 4,
@@ -996,6 +1007,7 @@ describe("a record not read again under new definitions (review round 1)", () =>
           purpose: "Refresh",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: defaultSelectionOf(changedTable),
           table: TICKET,
         })
       ),
@@ -1014,10 +1026,12 @@ describe("a record not read again under new definitions (review round 1)", () =>
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: changedTable.fields.map(wireFieldOf),
           generation: 4,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
+          selected: defaultSelectionOf(changedTable),
           table: TICKET,
           values: { summary: "Mine" },
           version: 3,
@@ -1089,9 +1103,13 @@ describe("the concrete class's metadata arriving after the record's reread (revi
           purpose: "Refresh",
           recordId: INCIDENT_ID,
           revision: REVISION_6,
+          selected: TICKET_SELECTION,
           table: TICKET,
         }),
-        LoadClassMetadata({ revision: REVISION_6, table: INCIDENT })
+        LoadClassMetadata({
+          revision: REVISION_6,
+          table: incidentTable.resourceType,
+        })
       ),
       // The record first: the form still describes the fields by the ticket.
       Command.resolve(
@@ -1220,7 +1238,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
   /** Revision 6: only `short_description` renamed `summary`. */
   const renamed = changeFields(ticketTable, (field) =>
     field.id === TICKET_FIELDS.shortDescription
-      ? [{ ...field, name: "summary" }]
+      ? [{ ...field, apiName: "summary", name: "summary" }]
       : [field]
   );
 
@@ -1271,6 +1289,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
         purpose: "Refresh",
         recordId: TICKET_ID,
         revision: REVISION_6,
+        selected: defaultSelectionOf(renamed),
         table: TICKET,
       },
     ]);
@@ -1289,10 +1308,12 @@ describe("a rename while a save is in flight (review round 2)", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: renamed.fields.map(wireFieldOf),
           generation: 5,
           recordId: TICKET_ID,
           revision: REVISION_6,
           secrets: {},
+          selected: defaultSelectionOf(renamed),
           table: TICKET,
           values: { summary: "AB" },
           version: 4,
@@ -1369,6 +1390,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
         purpose: "Refresh",
         recordId: NEW_ID,
         revision: REVISION_6,
+        selected: defaultSelectionOf(renamed),
         table: TICKET,
       },
     ]);
@@ -1392,10 +1414,12 @@ describe("a rename while a save is in flight (review round 2)", () => {
       [
         "UpdateRecord",
         {
+          fields: renamed.fields.map(wireFieldOf),
           generation: 3,
           recordId: NEW_ID,
           revision: REVISION_6,
           secrets: {},
+          selected: defaultSelectionOf(renamed),
           table: TICKET,
           values: { summary: "AB" },
           version: 1,
@@ -1407,7 +1431,7 @@ describe("a rename while a save is in flight (review round 2)", () => {
   it("a subclass record's later edit survives the class's metadata arriving before the reread (review round 3)", () => {
     const renamedIncident = changeFields(incidentTable, (field) =>
       field.id === TICKET_FIELDS.shortDescription
-        ? [{ ...field, name: "summary" }]
+        ? [{ ...field, apiName: "summary", name: "summary" }]
         : [field]
     );
 
@@ -1487,10 +1511,12 @@ describe("a rename while a save is in flight (review round 2)", () => {
       [
         "UpdateRecord",
         {
+          fields: renamed.fields.map(wireFieldOf),
           generation: 5,
           recordId: INCIDENT_ID,
           revision: REVISION_6,
           secrets: {},
+          selected: defaultSelectionOf(renamed),
           table: TICKET,
           values: { summary: "AB" },
           version: 4,

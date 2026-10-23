@@ -1,6 +1,6 @@
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { authenticationClient, makeStdClient } from "@std/api/client";
-import type { StdClient } from "@std/api/client";
+import { makeStdClientV2 } from "@std/api/v2/client";
+import type { StdClientV2 } from "@std/api/v2/client";
 import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientResponse } from "effect/http";
@@ -72,8 +72,9 @@ export const responseRevision = (
   parseSchemaRevision(response.headers[SCHEMA_REVISION_HEADER]);
 
 /**
- * The typed client of STD's fixed endpoints, built once for the runtime
- * (its `resources`) from the shared `@std/api` definition.
+ * The typed client of STD's API (Contracts 10), built once for the runtime
+ * (its `resources`) from the shared `@std/api/v2` definition; requests go
+ * through `wire.ts`, which converts names and shapes at the API's edge.
  *
  * Requests go to the page's own origin. The session is the HTTP-only
  * cookie the server sets at sign-in, which the browser sends and no script
@@ -82,15 +83,13 @@ export const responseRevision = (
  * on an unsafe request (decision 0018), and with the revision set by
  * {@link atRevision}.
  */
-export class StdApi extends Context.Service<StdApi, StdClient>()(
+export class StdApi extends Context.Service<StdApi, StdClientV2>()(
   "@std/web/std-client/StdApi"
 ) {
   /** The client over Foldkit's Fetch-backed `HttpClient`. */
   static readonly layer = Layer.effect(
     StdApi,
-    makeStdClient({ webClient: true }).pipe(
-      Effect.provide(authenticationClient())
-    )
+    makeStdClientV2({ webClient: true })
   ).pipe(
     Layer.provide(
       Layer.effect(

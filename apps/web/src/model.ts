@@ -1,5 +1,5 @@
-import { CurrentUserSchema } from "@std/api/session";
-import { MetaTableSummarySchema } from "@std/definitions/table-metadata";
+import { CurrentSession } from "@std/api/v2/session";
+import { TableMetadataSummary } from "@std/api/v2/table-metadata";
 import { Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
@@ -22,13 +22,13 @@ export const SignOutRequest = defineTaggedUnion({
 export type SignOutRequest = typeof SignOutRequest.Type;
 
 /**
- * The tables the user can open (`GET meta/tables`), with the revision the
+ * The tables the user can open (`GET tableMetadata`), with the revision the
  * response stated: the navigation and the home page list them.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const TableCatalog = Schema.Struct({
   revision: SchemaRevision,
-  tables: Schema.Array(MetaTableSummarySchema),
+  tables: Schema.Array(TableMetadataSummary),
 });
 
 /** The tables the user can open. */
@@ -80,7 +80,7 @@ export const Model = defineTaggedUnion({
     sessionId: Schema.Int,
     signOutRequest: SignOutRequest,
     tables: Tables.schema,
-    user: CurrentUserSchema,
+    user: CurrentSession,
   },
   SignedOut: {
     maybeReturnRoute: Schema.Option(SignedInRoute),
@@ -99,3 +99,6 @@ export type SignedInModel = typeof Model.SignedIn.Type;
 
 /** The signed-out state. */
 export type SignedOutModel = typeof Model.SignedOut.Type;
+
+/** Who the session acts as (`GET session/current`): never a token. */
+export type CurrentUser = typeof CurrentSession.Type;

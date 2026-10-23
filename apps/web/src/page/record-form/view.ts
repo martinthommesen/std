@@ -5,8 +5,6 @@
  * history (Foldkit UI Disclosure each).
  */
 import { Dialog, Fieldset } from "@foldkit/ui";
-import type { RecordJson } from "@std/api/records";
-import type { MetaField } from "@std/definitions/table-metadata";
 import { isJsonString } from "@std/values/json-value";
 import { Match, Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
@@ -14,6 +12,8 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { formSections } from "../../domain/form-fields.ts";
 import type { FormSection } from "../../domain/form-fields.ts";
+import type { MetaField } from "../../domain/metadata.ts";
+import type { RecordJson } from "../../domain/record.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
@@ -97,7 +97,7 @@ const recordFactsView = (
           `${meta.table.label} · version ${record.version}`,
           ...Option.match(classMetaOf(model), {
             onNone: () =>
-              record.class === meta.table.name
+              record.class === meta.table.resourceType
                 ? []
                 : [` · a ${record.class} record`],
             onSome: (concrete) => [
