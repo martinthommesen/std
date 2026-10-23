@@ -385,10 +385,8 @@ const selectField = (
 ): UpdateReturn =>
   Option.match(resolvePath(path, scope), {
     onNone: () => ({ model }),
-    onSome: ({ hops, field }) => {
-      const [first] = hops;
-
-      return Update.withOutMessage(
+    onSome: (field) =>
+      Update.withOutMessage(
         {
           model: modifyFields(model, {
             root: (root) =>
@@ -397,11 +395,8 @@ const selectField = (
               ),
           }),
         },
-        path.length === 1 && first !== undefined
-          ? requestTargetOf(first.field, scope)
-          : undefined
-      );
-    },
+        path.length === 1 ? requestTargetOf(field, scope) : undefined
+      ),
   });
 
 const fieldOf = (
@@ -410,7 +405,7 @@ const fieldOf = (
   scope: ConditionScope
 ): Option.Option<MetaField> =>
   Option.flatMap(findCondition(model.root, conditionId), (condition) =>
-    Option.map(resolvePath(condition.path, scope), ({ field }) => field)
+    resolvePath(condition.path, scope)
   );
 
 const changeCondition = (

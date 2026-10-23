@@ -1,8 +1,10 @@
 /**
  * Operations on the builder's tree, by node ID. Every operation returns a
- * new tree; nodes it does not touch are shared.
+ * tree without mutating its nodes; replacements share untouched branches.
  */
 import { Option } from "effect";
+import { findFirst } from "effect/Array";
+import { modifyFields } from "foldkit/struct";
 
 import { Group, Negation } from "./model.ts";
 import type { Condition, FilterNode } from "./model.ts";
@@ -34,16 +36,24 @@ export const replaceNode = (
   }
 
   if (node._tag === "Group") {
-    return Group({
-      children: node.children.map((child) => replaceNode(child, id, replace)),
-      id: node.id,
-      junction: node.junction,
-    });
+    const children = node.children.map((child) =>
+      replaceNode(child, id, replace)
+    );
+
+    return children.every((child, index) => child === node.children[index])
+      ? node
+      : modifyFields(node, { children: () => children });
   }
 
-  return node._tag === "Negation"
-    ? Negation({ child: replaceNode(node.child, id, replace), id: node.id })
-    : node;
+  if (node._tag === "Negation") {
+    const child = replaceNode(node.child, id, replace);
+
+    return child === node.child
+      ? node
+      : modifyFields(node, { child: () => child });
+  }
+
+  return node;
 };
 
 /**
@@ -80,9 +90,7 @@ export const findNode = (
   }
 
   if (node._tag === "Group") {
-    return Option.firstSomeOf(
-      node.children.map((child) => findNode(child, id))
-    );
+    return findFirst(node.children, (child) => findNode(child, id));
   }
 
   return node._tag === "Negation" ? findNode(node.child, id) : Option.none();

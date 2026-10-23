@@ -26,6 +26,7 @@ import type {
 } from "@std/conditions/ast";
 import { isCompare, isPath } from "@std/conditions/ast";
 import { MAX_RELATIVE_OFFSET } from "@std/conditions/check";
+import { operatorFitsKind } from "@std/conditions/profile";
 import { parseChoiceKey } from "@std/values/choice";
 import { parseDate } from "@std/values/date";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
@@ -70,17 +71,6 @@ export interface ConditionProblem {
   readonly message: string;
 }
 
-/** A path's fields, from the table to the field compared. */
-export interface ResolvedPath {
-  /** Each field with the table it was read on. */
-  readonly hops: readonly {
-    readonly table: MetaTable;
-    readonly field: MetaField;
-  }[];
-  /** The field compared: the last hop's. */
-  readonly field: MetaField;
-}
-
 /**
  * A reference field's target table, when the browser holds its metadata.
  *
@@ -102,12 +92,12 @@ export const targetOf = (
  *
  * @param path - Field IDs.
  * @param scope - The tables.
- * @returns The fields, or none when a field is not (or no longer) there.
+ * @returns The field compared, or none when a field is no longer there.
  */
 export const resolvePath = (
   path: readonly string[],
   scope: ConditionScope
-): Option.Option<ResolvedPath> => {
+): Option.Option<MetaField> => {
   const table = scope.tables.get(scope.table);
   const [firstId, secondId, ...rest] = path;
 
@@ -117,17 +107,11 @@ export const resolvePath = (
 
   return Option.flatMap(fieldById(table, firstId), (first) => {
     if (secondId === undefined) {
-      return Option.some({ field: first, hops: [{ field: first, table }] });
+      return Option.some(first);
     }
 
     return Option.flatMap(targetOf(first, scope.tables), (target) =>
-      Option.map(fieldById(target, secondId), (second) => ({
-        field: second,
-        hops: [
-          { field: first, table },
-          { field: second, table: target },
-        ],
-      }))
+      fieldById(target, secondId)
     );
   });
 };
@@ -461,8 +445,8 @@ export const conditionToExpr = (
   Option.match(resolvePath(condition.path, scope), {
     onNone: () =>
       Result.fail("This field is no longer available. Choose another."),
-    onSome: ({ field }) =>
-      operatorsFor(field.type.kind).includes(condition.operator)
+    onSome: (field) =>
+      operatorFitsKind(condition.operator, field.type.kind)
         ? atomOf(
             condition.operator,
             { path: condition.path },
@@ -706,7 +690,7 @@ const loadPath = (loader: Loader, path: Path): MetaField => {
 
   return Option.match(resolvePath(path.path, loader.context), {
     onNone: () => cannotLoad("A field is unknown or not readable."),
-    onSome: ({ field }) => field,
+    onSome: (field) => field,
   });
 };
 
@@ -771,7 +755,7 @@ const loadAtom = (loader: Loader, expr: Expr): Condition => {
 
   const field = loadPath(loader, atom.path);
 
-  if (!operatorsFor(field.type.kind).includes(atom.operator)) {
+  if (!operatorFitsKind(atom.operator, field.type.kind)) {
     return cannotLoad("An operator does not fit its field.");
   }
 
