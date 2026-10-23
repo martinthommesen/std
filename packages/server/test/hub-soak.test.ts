@@ -178,12 +178,19 @@ describe("hub-soak", () => {
 
         assert.lengthOf(deliveries, 24);
         assert.isTrue(deliveries.every((row) => row.status === "done"));
-        const byChange = new Map(deliveries.map((row) => [row.change_id, row]));
         const versions = new Map<string, number>();
         const eventIds = new Map<string, string>();
 
+        // Each event's own eventId is its Idempotency-Key (decision 0035).
         for (const call of callback.calls) {
-          const row = byChange.get(call.idempotencyKey ?? "");
+          assert.strictEqual(call.idempotencyKey, textOf(call.body.eventId));
+
+          const row = deliveries.find(
+            (candidate) =>
+              eventIdOf(candidate.change_id, textOf(call.body.eventType)) ===
+              call.idempotencyKey
+          );
+
           assert.isDefined(row, "no rolled-back change reaches the listener");
 
           if (row === undefined) {

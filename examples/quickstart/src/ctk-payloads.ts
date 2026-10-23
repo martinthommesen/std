@@ -37,3 +37,29 @@ export const CTK_PAYLOADS = {
 export type CtkPayload =
   | typeof TROUBLE_TICKET
   | typeof TROUBLE_TICKET_SPECIFICATION;
+
+/**
+ * The arguments of `pnpm ctk`: every input by value or file, the token by
+ * file only.
+ * @param input - The base URL, the kit's files and the reports directory.
+ * @returns The arguments.
+ */
+export const ctkArguments = (input: {
+  readonly base: string;
+  readonly payloads: string;
+  readonly tokenFile: string;
+  readonly reports: string;
+}): readonly string[] => [
+  "ctk",
+  "tmf621",
+  "--url",
+  input.base,
+  "--token-file",
+  input.tokenFile,
+  "--payloads",
+  input.payloads,
+  "--network",
+  "host",
+  "--reports",
+  input.reports,
+];

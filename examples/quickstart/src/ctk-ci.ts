@@ -34,6 +34,7 @@ import {
   CTK_PAYLOADS,
   TROUBLE_TICKET,
   TROUBLE_TICKET_SPECIFICATION,
+  ctkArguments,
 } from "./ctk-payloads.ts";
 import type { CtkPayload } from "./ctk-payloads.ts";
 import { REPOSITORY_ROOT, startHelpdeskServer } from "./helpdesk-server.ts";
@@ -77,25 +78,33 @@ export class PayloadCheckFailed extends Schema.TaggedError<
   }
 }
 
+/** Only the owner may read the token file (`pnpm ctk --token-file`). */
+const OWNER_ONLY = 0o600;
+
 /**
- * The payloads file in a fresh temporary directory, removed when the scope
- * closes.
- * @returns The file's path.
+ * The kit's inputs in a fresh temporary directory, removed when the scope
+ * closes: the payloads, and the bearer token in a file only its owner may
+ * read, so the token never appears in a command line or its echo.
+ * @param token - The bearer token.
+ * @returns The two files' paths.
  */
-const payloadsFile = Effect.acquireRelease(
-  Effect.sync(() => {
-    const directory = mkdtempSync(path.join(tmpdir(), "std-ctk-"));
-    const file = path.join(directory, "payloads.json");
-
-    writeFileSync(file, JSON.stringify(CTK_PAYLOADS));
-
-    return { directory, file };
-  }),
-  ({ directory }) =>
+const kitFiles = (token: Redacted.Redacted) =>
+  Effect.acquireRelease(
     Effect.sync(() => {
-      rmSync(directory, { force: true, recursive: true });
-    })
-).pipe(Effect.map(({ file }) => file));
+      const directory = mkdtempSync(path.join(tmpdir(), "std-ctk-"));
+      const payloads = path.join(directory, "payloads.json");
+      const tokenFile = path.join(directory, "token");
+
+      writeFileSync(payloads, JSON.stringify(CTK_PAYLOADS));
+      writeFileSync(tokenFile, Redacted.value(token), { mode: OWNER_ONLY });
+
+      return { directory, payloads, tokenFile };
+    }),
+    ({ directory }) =>
+      Effect.sync(() => {
+        rmSync(directory, { force: true, recursive: true });
+      })
+  );
 
 /**
  * Signs in as the administrator and returns the session token.
@@ -329,27 +338,14 @@ const ctk = Effect.gen(function* runCtk() {
       );
     }
 
-    const payloads = yield* payloadsFile;
+    const { payloads, tokenFile } = yield* kitFiles(token);
 
     mkdirSync(REPORTS, { recursive: true });
 
     return yield* run(
       "pnpm ctk tmf621",
       "pnpm",
-      [
-        "ctk",
-        "tmf621",
-        "--url",
-        base,
-        "--token",
-        Redacted.value(token),
-        "--payloads",
-        payloads,
-        "--network",
-        "host",
-        "--reports",
-        REPORTS,
-      ],
+      ctkArguments({ base, payloads, reports: REPORTS, tokenFile }),
       process.env,
       REPOSITORY_ROOT
     );

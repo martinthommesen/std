@@ -11,9 +11,11 @@
  * - `priority` ↔ `priority`: `Critical`, `High`, `Medium`, `Low`,
  *   `Planning` ↔ 1 to 5, the same way with `priority_label`.
  *
- * A filter on a recognized value selects the records whose rendered value
- * it is (the numeric key, no label); any other value selects the stored
- * label exactly (decision 0025, D4). A sort orders by the numeric key.
+ * Writes recognize the labels case-insensitively; filters compare the
+ * rendered text exactly (decision 0025, D4): a canonical label (`Minor`)
+ * selects the records whose numeric key renders it, with no free-text
+ * label, and any other value (`minor` included) selects the stored label
+ * exactly. A sort orders by the numeric key.
  */
 import type { Expr } from "@std/conditions/ast";
 import { isJsonString } from "@std/values/json-value";
@@ -135,7 +137,9 @@ const filter =
     }
 
     const atoms = values.map((value): Expr => {
-      const key = keyOfLabel(choice.labels, value);
+      // Filters compare the rendered text exactly (decision 0025, D4).
+      const index = choice.labels.indexOf(value);
+      const key = index === -1 ? undefined : String(index + 1);
 
       return key === undefined
         ? { left: { path: [choice.label] }, op: "eq", right: { value } }

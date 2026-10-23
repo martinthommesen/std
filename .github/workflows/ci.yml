@@ -114,6 +114,9 @@ jobs:
   # payload self-check alone. The reports are the artifact.
   ctk-tmf621:
     runs-on: ubuntu-24.04
+    # A tripwire, not a budget: the whole job ran 1m49s on run 39944349143
+    # (gh run view: 11:11:34Z to 11:13:23Z, 2026-10-23), so 30 minutes only
+    # ever stops a hung kit, server or download.
     timeout-minutes: 30
     services:
       postgres:
