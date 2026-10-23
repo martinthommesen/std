@@ -168,7 +168,7 @@ const existingFor = Effect.fn("Forms.existing")(function* existingFor(
     return yield* new VersionConflict({ currentVersion: root.value.version });
   }
 
-  return { owners, record: loaded.value };
+  return { owners, readable: readable.value, record: loaded.value };
 });
 
 const maskImage = (
@@ -529,6 +529,7 @@ const proposeForm = Effect.fn("Forms.propose")(function* proposeForm(
     fields,
     owners: checked?.owners ?? "allowed",
     proposal,
+    readable: checked?.readable ?? new Set<string>(),
     resolved: resolved.success,
     rules,
   };
@@ -688,13 +689,7 @@ export const formState = Effect.fn("Forms.state")(function* formState(
 
   const effective = new Map(fields.map((field) => [field.field.id, field]));
 
-  const oldReadable =
-    existing === null
-      ? new Set<string>()
-      : Option.getOrElse(
-          yield* readableOnRecord(scope, classId, existing.id),
-          () => new Set<string>()
-        );
+  const oldReadable = form.readable;
 
   const bodyWritten =
     existing === null

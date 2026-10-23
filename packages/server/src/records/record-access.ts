@@ -170,17 +170,19 @@ export const readableOnProposal = Effect.fn("Records.readableOnProposal")(
       const readField = view.byId(field.id);
 
       return truthColumn(
-        readField === undefined
-          ? FALSE_SQL
-          : sql`(${view.visibility(ALIAS)} AND ${view.readable(ALIAS, readField)})`,
+        readField === undefined ? FALSE_SQL : view.readable(ALIAS, readField),
         `f${index}`
       );
     });
 
     const [row] = yield* readRows(
-      sql`SELECT ${joinSql(columns, ", ")}
+      sql`SELECT ${joinSql([truthColumn(view.visibility(ALIAS), "visible"), ...columns], ", ")}
 FROM ${proposedRelation(scope.snapshot, record)} AS ${identSql(ALIAS)}`
     );
+
+    if (row?.visible !== "true") {
+      return new Set<DefinitionId>();
+    }
 
     const readable: ReadonlySet<DefinitionId> = new Set(
       fields.flatMap((field, index) =>

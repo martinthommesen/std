@@ -74,6 +74,16 @@ export interface SubscribedChange {
 const imageOf = (record: StoredRecord): RecordImage =>
   Object.fromEntries(record.values);
 
+const checkedBySnapshot = new WeakMap<
+  ConfigSnapshot,
+  Map<string, ReturnType<typeof checkCondition>>
+>();
+
+const carriersBySnapshot = new WeakMap<
+  ConfigSnapshot,
+  ReadonlySet<DefinitionId>
+>();
+
 const evaluateSubscriptionCondition = (
   snapshot: ConfigSnapshot,
   subscription: SubscriptionDefinition,
@@ -86,14 +96,26 @@ const evaluateSubscriptionCondition = (
     return true;
   }
 
-  const view = classViewOf(snapshot);
+  let conditions = checkedBySnapshot.get(snapshot);
 
-  const checked = checkCondition(condition, {
-    classId: subscription.classId,
-    profile: "subscription",
-    purpose: "evaluate",
-    view: exactText ? exactTextView(view) : view,
-  });
+  if (conditions === undefined) {
+    conditions = new Map();
+    checkedBySnapshot.set(snapshot, conditions);
+  }
+
+  const key = `${subscription.id}:${exactText}`;
+  let checked = conditions.get(key);
+
+  if (checked === undefined) {
+    const view = classViewOf(snapshot);
+    checked = checkCondition(condition, {
+      classId: subscription.classId,
+      profile: "subscription",
+      purpose: "evaluate",
+      view: exactText ? exactTextView(view) : view,
+    });
+    conditions.set(key, checked);
+  }
 
   if (!checked.ok) {
     throw new ConditionDefectError(
@@ -167,8 +189,14 @@ const conditionHolds = (
  */
 export const ruleCarriers = (
   snapshot: ConfigSnapshot
-): ReadonlySet<DefinitionId> =>
-  new Set(
+): ReadonlySet<DefinitionId> => {
+  const existing = carriersBySnapshot.get(snapshot);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const carriers = new Set(
     snapshot
       .recordRules()
       .flatMap((rule) =>
@@ -177,6 +205,11 @@ export const ruleCarriers = (
           : []
       )
   );
+
+  carriersBySnapshot.set(snapshot, carriers);
+
+  return carriers;
+};
 
 /**
  * The subscriptions a change matches, by ID. Throws `ConditionDefectError`
@@ -216,7 +249,7 @@ export const matchingSubscriptions = (
           subscription,
           change.classId,
           change.kind,
-          new Map(Object.entries(image))
+          change.image.values
         ) &&
         conditionHolds(snapshot, subscription, image, context)
     )

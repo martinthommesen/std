@@ -42,6 +42,25 @@ const imageOf = (
 ): JsonObject | null =>
   record === null ? null : storedImageOf(snapshot, record);
 
+const insertChangeImage = Effect.fn("Records.insertChangeImage")(
+  function* insertChangeImage(
+    entry: ChangeEntry,
+    before: string | null,
+    after: string | null
+  ) {
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* sql`INSERT INTO core.change_image (change_id, before_image, after_image)
+      SELECT ${entry.changeId}::uuid, bridge.image, ${after}::jsonb
+      FROM (SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM core.change c JOIN core.change_image i ON i.change_id = c.id
+        WHERE c.record_id = ${entry.recordId}::uuid
+          AND c.record_version = ${entry.recordVersion - 1} AND i.after_image IS NOT NULL
+      ) THEN ${before}::jsonb ELSE NULL END AS image) bridge
+      WHERE bridge.image IS NOT NULL OR ${after !== null}`;
+  }
+);
+
 /** Insert canonical non-secret images, bridging a missing predecessor in one statement. */
 export const writeChangeImageValues = Effect.fn(
   "Records.writeChangeImageValues"
@@ -51,8 +70,6 @@ export const writeChangeImageValues = Effect.fn(
   before: JsonObject | null,
   after: JsonObject | null
 ) {
-  const sql = yield* SqlClient.SqlClient;
-
   const nonSecret = (image: JsonObject | null) => {
     if (image === null) {
       return null;
@@ -71,14 +88,7 @@ export const writeChangeImageValues = Effect.fn(
     return JSON.stringify(Object.fromEntries(values));
   };
 
-  yield* sql`INSERT INTO core.change_image (change_id, before_image, after_image)
-      SELECT ${entry.changeId}::uuid, bridge.image, ${nonSecret(after)}::jsonb
-      FROM (SELECT CASE WHEN NOT EXISTS (
-        SELECT 1 FROM core.change c JOIN core.change_image i ON i.change_id = c.id
-        WHERE c.record_id = ${entry.recordId}::uuid
-          AND c.record_version = ${entry.recordVersion - 1} AND i.after_image IS NOT NULL
-      ) THEN ${nonSecret(before)}::jsonb ELSE NULL END AS image) bridge
-      WHERE bridge.image IS NOT NULL OR ${after !== null}`;
+  yield* insertChangeImage(entry, nonSecret(before), nonSecret(after));
 });
 
 /** Save immutable non-secret images and client lookup keys in the change's transaction. */
@@ -91,11 +101,11 @@ export const writeChangeImage = Effect.fn("Records.writeChangeImage")(
   ) {
     const sql = yield* SqlClient.SqlClient;
     const afterImage = imageOf(snapshot, after);
-    yield* writeChangeImageValues(
-      snapshot,
+    const beforeImage = imageOf(snapshot, before);
+    yield* insertChangeImage(
       entry,
-      imageOf(snapshot, before),
-      afterImage
+      beforeImage === null ? null : JSON.stringify(beforeImage),
+      afterImage === null ? null : JSON.stringify(afterImage)
     );
 
     if (entry.recordClassId !== EVENT_CLASS_IDS.event) {
@@ -111,7 +121,9 @@ export const writeChangeImage = Effect.fn("Records.writeChangeImage")(
     const payload =
       payloadField === undefined ? undefined : afterImage?.[payloadField.id];
 
-    yield* sql`DELETE FROM core.client_event WHERE record_id = ${entry.recordId}::uuid`;
+    if (entry.kind !== "create") {
+      yield* sql`DELETE FROM core.client_event WHERE record_id = ${entry.recordId}::uuid`;
+    }
 
     if (topic === undefined || !isJsonString(topic)) {
       return;

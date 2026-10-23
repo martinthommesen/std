@@ -215,25 +215,6 @@ export const bindStoredText = (
 ): string => BINDERS[kind](value) ?? mismatch(kind);
 
 /**
- * Whether a non-null input value has the TypeScript shape of its kind
- * (plaintext for password and secret).
- *
- * @param kind - The field kind.
- * @param value - An input value, for example one a hook proposed.
- * @returns True when the value can be bound and encoded as that kind.
- */
-export const isInputOfKind = (
-  kind: FieldKind,
-  value: Exclude<DecodedInput, null>
-): boolean => {
-  if (isWriteOnly(kind) || isPlaintext(value)) {
-    return isWriteOnly(kind) && isPlaintext(value);
-  }
-
-  return BINDERS[kind](value) !== undefined;
-};
-
-/**
  * Binds a value for a write. Password and secret plaintext must be hashed
  * or encrypted first (see `WriteOnlyValues`) and passed as `hashed`.
  *

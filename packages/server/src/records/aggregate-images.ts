@@ -18,7 +18,7 @@ import { Effect, Option } from "effect";
 
 import type { OwnerEntry } from "./aggregate-state.ts";
 import { recordRelation } from "./relation.ts";
-import { loadRecord } from "./save-sql.ts";
+import { loadRecord, loadRecords } from "./save-sql.ts";
 import { readRows } from "./sql-run.ts";
 import type { StoredRecord } from "./stored-record.ts";
 
@@ -69,6 +69,26 @@ const imageOfRecord = (
   record: StoredRecord
 ): Record<DefinitionId, StoredOrPlaintext> => Object.fromEntries(record.values);
 
+const rememberImage = (
+  set: SettleSet,
+  record: StoredRecord,
+  ownerKey: string | null
+): SettleImage => {
+  const image: SettleImage = {
+    classId: record.classId,
+    id: record.id,
+    image: imageOfRecord(record),
+    key: record.id,
+    ownerKey,
+    rules: new Set(),
+    stored: record,
+  };
+
+  set.images.set(record.id, image);
+
+  return image;
+};
+
 const imageFor = Effect.fn("Records.settleImage")(function* imageFor(
   set: SettleSet,
   classId: DefinitionId,
@@ -89,19 +109,7 @@ const imageFor = Effect.fn("Records.settleImage")(function* imageFor(
     );
   }
 
-  const image: SettleImage = {
-    classId: loaded.value.classId,
-    id,
-    image: imageOfRecord(loaded.value),
-    key: id,
-    ownerKey,
-    rules: new Set(),
-    stored: loaded.value,
-  };
-
-  set.images.set(id, image);
-
-  return image;
+  return rememberImage(set, loaded.value, ownerKey);
 });
 
 /**
@@ -131,12 +139,51 @@ WHERE ${identSql("p", reference.name)} = ${textParameter(owner.id, "uuid")}
 ORDER BY ${identSql("p", "id")}`
     );
 
-    for (const row of rows) {
-      if (isString(row.id) && isString(row.class_id)) {
-        const part = yield* imageFor(set, row.class_id, row.id, owner.key);
+    const parts = rows.flatMap((row) =>
+      isString(row.id) && isString(row.class_id)
+        ? [{ classId: row.class_id, id: row.id }]
+        : []
+    );
 
-        keys.push(part.key);
+    const idsByClass = new Map<DefinitionId, string[]>();
+
+    for (const part of parts.filter(
+      (candidate) => !set.images.has(candidate.id)
+    )) {
+      const ids = idsByClass.get(part.classId) ?? [];
+      ids.push(part.id);
+      idsByClass.set(part.classId, ids);
+    }
+
+    const records = new Map<string, StoredRecord>();
+
+    for (const [classId, ids] of idsByClass) {
+      for (const [id, record] of yield* loadRecords(
+        set.snapshot,
+        classId,
+        ids
+      )) {
+        records.set(id, record);
       }
+    }
+
+    for (const part of parts) {
+      const known = set.images.get(part.id);
+
+      if (known !== undefined) {
+        keys.push(known.key);
+        continue;
+      }
+
+      const record = records.get(part.id);
+
+      if (record === undefined) {
+        return yield* Effect.die(
+          new Error("A locked record of an aggregate cannot be read")
+        );
+      }
+
+      keys.push(rememberImage(set, record, owner.key).key);
     }
   }
 
