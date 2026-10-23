@@ -41,6 +41,9 @@ const ifMatch = { "if-match": Schema.String } as const;
 /** A history list's named query parameters (Contracts 3.7, 10.4). */
 export const HistoryQuery = {
   actor: Schema.optionalKey(Schema.String),
+  after: Schema.optionalKey(Schema.String),
+  before: Schema.optionalKey(Schema.String),
+  count: Schema.optionalKey(Schema.String),
   field: Schema.optionalKey(Schema.String),
   fields: Schema.optionalKey(Schema.String),
   kind: Schema.optionalKey(Schema.String),
@@ -108,7 +111,7 @@ export class RecordsGroup extends HttpApiGroup.make("records").add(
     success: Schema.Array(ChangeEntry),
   }).annotate(
     OpenApi.Description,
-    "The record's change entries the caller may see (Contracts 3.7, 10.4). Besides the named parameters, ChangeEntry attributes filter with the operator forms of 10.3: `action`, `kind`, `revision` and `creationDate` with `.gt`/`.gte`/`.lt`/`.lte`, `revisedBy.id`."
+    "The record's change entries the caller may see (Contracts 3.7, 10.4). Besides the named parameters, ChangeEntry attributes filter with the operator forms of 10.3: `action`, `kind`, `revision` and `creationDate` with `.gt`/`.gte`/`.lt`/`.lte`, `revisedBy.id`. `after` and `before` are version keyset cursors; `count=false` omits totals on cursor pages. History requests without cursors or count retain offset navigation."
   ),
   HttpApiEndpoint.get("historyEntry", `${ITEM_PATH}/history/:changeId`, {
     error: READ_ERRORS,

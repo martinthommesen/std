@@ -1,3 +1,4 @@
+import { InvalidCursor } from "@std/api/errors/invalid-cursor";
 /**
  * History of `/api/v1/{table}/{id}` (Contracts 10.4; TMF630 v5.0.0 Part 1
  * §12 pp.206-238): a record's `ChangeEntry` resources (`@baseType`
@@ -17,17 +18,21 @@ import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { parseDateTime } from "@std/values/date-time";
+import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import {
   isJsonArray,
-  isJsonNumber,
   isJsonObject,
   isJsonString,
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { parseInt8Text } from "@std/values/postgres-text";
+import { Effect, Schema } from "effect";
 
 import { recordHistory } from "../../records/history-endpoint.ts";
+import type {
+  HistoryAttributeFilter,
+  HistorySelection,
+} from "../../records/history-query.ts";
 import { currentReadScope } from "../../records/read-records.ts";
 import type { ReadScope } from "../../records/read-view.ts";
 import { checkRequestRevision } from "../stale-request.ts";
@@ -37,6 +42,7 @@ import type { RouteInput } from "./records.ts";
 import { queryOf } from "./request.ts";
 import { entityRef, recordHref } from "./resource.ts";
 
+// Page-size policy: Contracts 10.3 (TMF630 v5.0.0 Part 1 §4.5.1 pp.75–77).
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 const NON_NEGATIVE_INTEGER = /^\d+$/u;
@@ -85,28 +91,10 @@ const SYMBOL_SUFFIXES: readonly (readonly [string, Comparison])[] = [
   ["<", "lt"],
 ];
 
-const COMPARES: Readonly<
-  Record<Comparison, (left: number, right: number) => boolean>
-> = {
-  eq: (left, right) => left === right,
-  ge: (left, right) => left >= right,
-  gt: (left, right) => left > right,
-  le: (left, right) => left <= right,
-  lt: (left, right) => left < right,
-};
-
 /** A comparison of a numeric `ChangeEntry` attribute with alternatives. */
 interface Bound {
   readonly comparison: Comparison;
   readonly values: readonly number[];
-}
-
-/** The filters on `ChangeEntry` attributes. */
-interface EntryFilter {
-  readonly actions: readonly (readonly string[])[];
-  readonly revisions: readonly Bound[];
-  readonly dates: readonly Bound[];
-  readonly actors: readonly (readonly string[])[];
 }
 
 const invalid = (parameter: string, message: string) =>
@@ -222,7 +210,7 @@ const numbersOf = Effect.fn("Api.historyNumbers")(function* numbersOf(
   for (const part of alternativesOf(text)) {
     const value = parse(part.trim());
 
-    if (value === undefined) {
+    if (value === undefined || !Number.isFinite(value)) {
       return yield* invalid(parameter, expected);
     }
 
@@ -234,16 +222,19 @@ const numbersOf = Effect.fn("Api.historyNumbers")(function* numbersOf(
 
 const pagingNumber = Effect.fn("Api.historyPaging")(function* pagingNumber(
   parameter: string,
-  text: string | undefined,
+  text: string | null,
   fallback: number
 ) {
-  if (text === undefined) {
+  if (text === null) {
     return fallback;
   }
 
-  return NON_NEGATIVE_INTEGER.test(text)
+  return NON_NEGATIVE_INTEGER.test(text) && Number.isSafeInteger(Number(text))
     ? Number(text)
-    : yield* invalid(parameter, "Expected a non-negative integer.");
+    : yield* invalid(
+        parameter,
+        `Expected a non-negative safe integer; max=${Number.MAX_SAFE_INTEGER}, asked for ${text}.`
+      );
 });
 
 const fieldSelection = (text: string): ReadonlySet<string> =>
@@ -253,6 +244,137 @@ const fieldSelection = (text: string): ReadonlySet<string> =>
       .map((item) => item.trim().split(".")[0] ?? "")
       .filter((item) => item !== "")
   );
+
+const PAGING_PARAMETERS: ReadonlySet<string> = new Set([
+  "offset",
+  "limit",
+  "after",
+  "before",
+  "count",
+]);
+
+const HistoryVersion = Schema.String.check(
+  Schema.makeFilter((value) => parseInt8Text(value).ok)
+);
+
+// The range travels inside the opaque cursor, separately from the moving position.
+// Keeping it out of the filters also keeps X-Total-Count unchanged during navigation.
+const HistoryCursor = Schema.fromJsonString(
+  Schema.Struct({
+    i: HistoryVersion,
+    k: Schema.Tuple([]),
+    range: Schema.optionalKey(
+      Schema.Struct({ after: HistoryVersion, before: HistoryVersion })
+    ),
+    s: Schema.Tuple([]),
+  })
+);
+
+const decodeHistoryCursor = Effect.fn("Api.historyCursor")(
+  function* decodeHistoryCursor(text: string | null) {
+    if (text === null) {
+      return null;
+    }
+
+    return yield* Schema.decodeEffect(HistoryCursor)(
+      Buffer.from(text, "base64url").toString("utf-8")
+    ).pipe(Effect.mapError(() => new InvalidCursor()));
+  }
+);
+
+const encodeHistoryCursor = (
+  version: number,
+  range: Extract<HistorySelection, { kind: "page" }>["range"]
+): string => {
+  const cursor: typeof HistoryCursor.Type = {
+    i: String(version),
+    k: [],
+    s: [],
+  };
+
+  return Buffer.from(
+    Schema.encodeSync(HistoryCursor)(
+      range === null ? cursor : { ...cursor, range }
+    ),
+    "utf-8"
+  ).toString("base64url");
+};
+
+const historyCursors = Effect.fn("Api.historyCursors")(function* historyCursors(
+  afterText: string | null,
+  beforeText: string | null
+) {
+  const after = yield* decodeHistoryCursor(afterText);
+  const before = yield* decodeHistoryCursor(beforeText);
+  let range = after?.range ?? before?.range ?? null;
+
+  if (after !== null && before !== null) {
+    range = { after: after.i, before: before.i };
+  }
+
+  return {
+    after: after?.i ?? null,
+    before: before?.i ?? null,
+    range,
+    reversed: before !== null && after === null,
+  };
+});
+
+const historyPaging = Effect.fn("Api.historyWindow")(function* historyPaging(
+  input: RouteInput
+) {
+  const parameters = new URLSearchParams(
+    queryOf(input.request).map(([key, value]) => [key, value])
+  );
+
+  const offsetText = parameters.get("offset");
+  const limitText = parameters.get("limit");
+  const afterText = parameters.get("after");
+  const beforeText = parameters.get("before");
+  const countText = parameters.get("count");
+  const offset = yield* pagingNumber("offset", offsetText, 0);
+  const limit = yield* pagingNumber("limit", limitText, DEFAULT_LIMIT);
+
+  if (limit < 1 || limit > MAX_LIMIT) {
+    return yield* invalid(
+      "limit",
+      `limit must be 1 to ${MAX_LIMIT}; asked for ${limit}.`
+    );
+  }
+
+  if (offsetText !== null && (afterText !== null || beforeText !== null)) {
+    return yield* invalid(
+      "offset",
+      "offset cannot be combined with after or before."
+    );
+  }
+
+  if (countText !== null && countText !== "true" && countText !== "false") {
+    return yield* invalid("count", "Expected true or false.");
+  }
+
+  const cursors = yield* historyCursors(afterText, beforeText);
+  const fromCursor = afterText !== null || beforeText !== null;
+
+  // History keeps its existing default offset links; explicit cursors/count opt into keyset links.
+  const cursorPage = offsetText === null && (fromCursor || countText !== null);
+
+  const selection = {
+    ...cursors,
+    count: !cursorPage || countText !== "false",
+    kind: "page",
+    limit,
+    offset,
+  } satisfies HistorySelection;
+
+  return {
+    cursorPage,
+    fromCursor,
+    limit,
+    offset,
+    selection,
+  };
+});
 
 const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
   input: RouteInput,
@@ -264,8 +386,6 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
   const dates: Bound[] = [];
   const actors: string[][] = [];
   let fields: ReadonlySet<string> | null = null;
-  let offsetText: string | undefined;
-  let limitText: string | undefined;
 
   for (const [key, value] of queryOf(input.request)) {
     if (key === "fields") {
@@ -274,10 +394,8 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
       return yield* invalid(key, "A history entry takes only fields.");
     } else if (SERVICE_PARAMETERS.has(key)) {
       service[key] = value;
-    } else if (key === "offset") {
-      offsetText ??= value;
-    } else if (key === "limit") {
-      limitText ??= value;
+    } else if (PAGING_PARAMETERS.has(key)) {
+      continue;
     } else if (key === "action") {
       const names = alternativesOf(value).map((name) => name.trim());
 
@@ -319,41 +437,33 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
     }
   }
 
-  const offset = yield* pagingNumber("offset", offsetText, 0);
-  const limit = yield* pagingNumber("limit", limitText, DEFAULT_LIMIT);
+  const attributes: HistoryAttributeFilter[] = [
+    ...actions.map((values) => ({
+      column: "kind" as const,
+      comparison: "eq" as const,
+      values: [...ACTIONS].flatMap(([kind, name]) =>
+        values.includes(name) ? [kind] : []
+      ),
+    })),
+    ...actors.map((values) => ({
+      column: "actor_id" as const,
+      comparison: "eq" as const,
+      values,
+    })),
+    ...revisions.map((bound) => ({
+      column: "record_version" as const,
+      comparison: bound.comparison,
+      values: bound.values.map(String),
+    })),
+    ...dates.map((bound) => ({
+      column: "occurred_at" as const,
+      comparison: bound.comparison,
+      values: bound.values.map(formatDateTime),
+    })),
+  ];
 
-  if (limit < 1 || limit > MAX_LIMIT) {
-    return yield* invalid("limit", `Expected 1 to ${MAX_LIMIT}.`);
-  }
-
-  const filter: EntryFilter = { actions, actors, dates, revisions };
-
-  return { fields, filter, limit, offset, service };
+  return { attributes, fields, service, ...(yield* historyPaging(input)) };
 });
-
-const meets = (bound: Bound, actual: number | undefined): boolean =>
-  actual !== undefined &&
-  bound.values.some((value) => COMPARES[bound.comparison](actual, value));
-
-const matches = (filter: EntryFilter, entry: JsonObject): boolean => {
-  const { revision } = entry;
-
-  return (
-    filter.actions.every((names) => names.includes(textOf(entry.action))) &&
-    filter.revisions.every((bound) =>
-      meets(
-        bound,
-        isJsonNumber(revision ?? null) ? Number(revision) : undefined
-      )
-    ) &&
-    filter.dates.every((bound) =>
-      meets(bound, instantOf(textOf(entry.creationDate)))
-    ) &&
-    filter.actors.every((ids) =>
-      ids.includes(textOf(asRecord(entry.actor).id).toLowerCase())
-    )
-  );
-};
 
 const selected = (
   fields: ReadonlySet<string> | null,
@@ -372,7 +482,9 @@ const selected = (
 const visibleEntries = Effect.fn("Api.historyEntries")(function* entries(
   input: RouteInput,
   id: string,
-  service: Readonly<Record<string, string>>
+  service: Readonly<Record<string, string>>,
+  selection: HistorySelection,
+  attributes: readonly HistoryAttributeFilter[] = []
 ) {
   const table = yield* tableOf(input.collection);
 
@@ -383,7 +495,14 @@ const visibleEntries = Effect.fn("Api.historyEntries")(function* entries(
 
   yield* checkRequestRevision(input.stated, table, scopeParameters);
 
-  const history = yield* recordHistory({ ...service, id, table });
+  const history = yield* recordHistory({
+    ...service,
+    attributes,
+    id,
+    selection,
+    table,
+  });
+
   const scope = yield* currentReadScope();
   const concrete = scope.snapshot.qualifiedNameOf(history.classId);
   const endpoint = scope.snapshot.classByName(table)?.id;
@@ -411,9 +530,13 @@ const visibleEntries = Effect.fn("Api.historyEntries")(function* entries(
   const { entries: raw } = history.body;
   const list = isJsonArray(raw) ? raw : [];
 
-  return list.map((entry) =>
-    changeEntryOf(scope, input.origin, record, href, entry)
-  );
+  return {
+    entries: list.map((entry) =>
+      changeEntryOf(scope, input.origin, record, href, entry)
+    ),
+    href,
+    page: history.page,
+  };
 });
 
 const linkTo = (
@@ -424,7 +547,7 @@ const linkTo = (
 
   const search = new URLSearchParams([
     ...queryOf(input.request).flatMap(([key, value]) =>
-      key === "offset" ? [] : [[key, value]]
+      ["offset", "after", "before"].includes(key) ? [] : [[key, value]]
     ),
     ...Object.entries(changes),
   ]).toString();
@@ -439,7 +562,7 @@ const linkHeader = (
   offset: number,
   limit: number,
   total: number,
-  latest: JsonObject | undefined
+  latest: string | undefined
 ): string => {
   const lastOffset = Math.max(0, Math.floor((total - 1) / limit) * limit);
 
@@ -463,7 +586,7 @@ const linkHeader = (
   links.push(`${linkTo(input, { offset: String(lastOffset) })}; rel="last"`);
 
   if (latest !== undefined) {
-    links.push(`<${textOf(latest.href)}>; rel="latest-version"`);
+    links.push(`<${latest}>; rel="latest-version"`);
   }
 
   return links.join(", ");
@@ -476,27 +599,31 @@ const linkHeader = (
  * among the entries the caller may see (3.7), so no link names an entry
  * the caller cannot read.
  *
- * @param entries - The visible entries, oldest first.
- * @param index - The entry's position among them.
+ * @param self - The selected entry URL.
+ * @param href - Builds a URL from a visible change ID.
+ * @param page - Authorized navigation IDs.
  * @returns The header value.
  */
-const entryLinks = (entries: readonly JsonObject[], index: number): string => {
-  const hrefAt = (at: number) => textOf(entries[at]?.href);
-  const self = hrefAt(index);
+const entryLinks = (
+  self: string,
+  href: (id: string) => string,
+  page: Effect.Success<ReturnType<typeof recordHistory>>["page"]
+): string => {
   const history = self.slice(0, self.lastIndexOf("/"));
 
   const links = [
     `<${self}>; rel="self"`,
     `<${history}>; rel="version-history"`,
-    `<${hrefAt(entries.length - 1)}>; rel="latest-version"`,
   ];
 
-  if (index > 0) {
-    links.push(`<${hrefAt(index - 1)}>; rel="predecessor-version"`);
-  }
-
-  if (index < entries.length - 1) {
-    links.push(`<${hrefAt(index + 1)}>; rel="successor-version"`);
+  for (const [id, relation] of [
+    [page.latestId, "latest-version"],
+    [page.predecessorId, "predecessor-version"],
+    [page.successorId, "successor-version"],
+  ] as const) {
+    if (id !== undefined) {
+      links.push(`<${href(id)}>; rel="${relation}"`);
+    }
   }
 
   return links.join(", ");
@@ -516,33 +643,61 @@ export const historyIn = Effect.fn("Api.history")(function* historyIn(
   id: string
 ) {
   const query = yield* parseHistoryQuery(input, "list");
-  const all = yield* visibleEntries(input, id, query.service);
-  const kept = all.filter((entry) => matches(query.filter, entry));
 
-  // `latest-version` is the current revision (TMF630 v5.0.0 Part 1 §12.4
-  // p.238): the last entry the caller may see, whatever the filters select.
-  const unfiltered =
-    Object.keys(query.service).length === 0
-      ? all
-      : yield* visibleEntries(input, id, {});
-
-  const page = kept.slice(query.offset, query.offset + query.limit);
-
-  return jsonAnswer(
-    page.map((entry) => selected(query.fields, entry)),
-    200,
-    {
-      link: linkHeader(
-        input,
-        query.offset,
-        query.limit,
-        kept.length,
-        unfiltered.at(-1)
-      ),
-      "x-result-count": String(page.length),
-      "x-total-count": String(kept.length),
-    }
+  const { entries, page, href } = yield* visibleEntries(
+    input,
+    id,
+    query.service,
+    query.selection,
+    query.attributes
   );
+
+  const latest = page.latestId === undefined ? undefined : href(page.latestId);
+  let link: string;
+
+  if (query.cursorPage) {
+    const links = [`<${input.origin}${input.request.url}>; rel="self"`];
+    const [first] = page.entries;
+    const last = page.entries.at(-1);
+
+    if (query.fromCursor && first !== undefined && page.hasPrevious) {
+      links.push(
+        `${linkTo(input, { before: encodeHistoryCursor(first.version, query.selection.range) })}; rel="prev"`
+      );
+    }
+
+    if (last !== undefined && page.hasNext) {
+      links.push(
+        `${linkTo(input, { after: encodeHistoryCursor(last.version, query.selection.range) })}; rel="next"`
+      );
+    }
+
+    if (latest !== undefined) {
+      links.push(`<${latest}>; rel="latest-version"`);
+    }
+
+    link = links.join(", ");
+  } else {
+    link = linkHeader(
+      input,
+      query.offset,
+      query.limit,
+      page.total ?? 0,
+      latest
+    );
+  }
+
+  const body = entries.map((entry) => selected(query.fields, entry));
+  const headers = { link, "x-result-count": String(entries.length) };
+
+  if (page.total === undefined) {
+    return jsonAnswer(body, 200, headers);
+  }
+
+  return jsonAnswer(body, 200, {
+    ...headers,
+    "x-total-count": String(page.total),
+  });
 });
 
 /**
@@ -557,19 +712,20 @@ export const historyIn = Effect.fn("Api.history")(function* historyIn(
 export const historyEntryIn = Effect.fn("Api.historyEntry")(
   function* historyEntryIn(input: RouteInput, id: string, changeId: string) {
     const query = yield* parseHistoryQuery(input, "entry");
-    const all = yield* visibleEntries(input, id, {});
-    const wanted = changeId.toLowerCase();
 
-    const index = all.findIndex(
-      (entry) => textOf(entry.id).toLowerCase() === wanted
+    const { entries, page, href } = yield* visibleEntries(
+      input,
+      id,
+      {},
+      { changeId: changeId.toLowerCase(), kind: "entry" }
     );
 
-    const found = all[index];
+    const [found] = entries;
 
     return found === undefined
       ? yield* new NotFound()
       : jsonAnswer(selected(query.fields, found), 200, {
-          link: entryLinks(all, index),
+          link: entryLinks(textOf(found.href), href, page),
         });
   }
 );
