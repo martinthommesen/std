@@ -40,6 +40,9 @@ import { migration0026 } from "@std/server/platform/migrations/0026-client-event
 import { migration0027 } from "@std/server/platform/migrations/0027-client-event-record";
 import { migration0028 } from "@std/server/platform/migrations/0028-change-image-backfill";
 import { migration0029 } from "@std/server/platform/migrations/0029-dead-delivery-actions";
+import { migration0030 } from "@std/server/platform/migrations/0030-http-edge";
+import { migration0031 } from "@std/server/platform/migrations/0031-session-expiry";
+import { migration0032 } from "@std/server/platform/migrations/0032-session-issuance";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
@@ -289,6 +292,9 @@ describe("test-database", () => {
         migration0027,
         migration0028,
         migration0029,
+        migration0030,
+        migration0031,
+        migration0032,
       ])
     );
     assert.notStrictEqual(
