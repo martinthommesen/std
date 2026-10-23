@@ -13,6 +13,15 @@
  * value. A field filter only matches fields in the readable set, so it
  * cannot probe a hidden field.
  */
+import {
+  arrayParameter,
+  identSql,
+  joinSql,
+  rawSql,
+  sql,
+  textParameter,
+} from "@std/conditions/sql-fragment";
+import type { SqlFragment } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject } from "@std/values/json-value";
@@ -22,13 +31,12 @@ import {
   parseTimestamptzText,
 } from "@std/values/postgres-text";
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/sql";
 
-import { decodeRows } from "../sql/rows.ts";
-import { readOnly } from "../sql/statement-marks.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { ChangeCauseSchema, ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeCause, ChangeKind } from "./change-entry.ts";
+import { readRows } from "./sql-run.ts";
+import type { TextRow } from "./sql-run.ts";
 
 /** Filters on history entries; every given filter must match. */
 export interface HistoryFilter {
@@ -40,6 +48,8 @@ export interface HistoryFilter {
   readonly kinds?: readonly ChangeKind[];
   /** Entries that changed at least one of these (readable) fields. */
   readonly fieldIds?: readonly DefinitionId[];
+  /** ANDed groups of OR alternatives on public ChangeEntry metadata. */
+  readonly attributes?: readonly HistoryAttributeFilter[];
 }
 
 /** What to read. */
@@ -48,6 +58,7 @@ export interface HistoryInput {
   /** The fields whose changes the caller may see. */
   readonly readable: ReadonlySet<DefinitionId>;
   readonly filter?: HistoryFilter;
+  readonly selection?: HistorySelection;
 }
 
 /** One entry as the caller may see it. */
@@ -86,7 +97,7 @@ export const EntryRowSchema = Schema.Struct({
 /** One `core.change` row as text. */
 export type EntryRow = typeof EntryRowSchema.Type;
 
-const decodeEntryRows = decodeRows(EntryRowSchema);
+const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
 
 const decodeCause = Schema.decodeUnknownEffect(ChangeCauseSchema);
 
@@ -146,49 +157,118 @@ export const entryOfRow = Effect.fn("Records.historyEntry")(
   }
 );
 
-// Builds the WHERE clause of the filters, binding every value.
-const filterClauses = (
+const HISTORY_COLUMNS = [
+  "record_version",
+  "occurred_at",
+  "kind",
+  "actor_id",
+] as const;
+
+/** A comparison on public change metadata; never on stored record values. */
+export interface HistoryAttributeFilter {
+  readonly column: (typeof HISTORY_COLUMNS)[number];
+  readonly comparison: keyof typeof COMPARISONS;
+  readonly values: readonly string[];
+}
+
+/** SQL selection, independent of field projection and historical definitions. */
+export type HistorySelection =
+  | {
+      readonly kind: "page";
+      readonly limit: number;
+      readonly offset?: number;
+      readonly after: string | null;
+      readonly before: string | null;
+      readonly count: boolean;
+    }
+  | { readonly kind: "entry"; readonly changeId: string }
+  | { readonly kind: "latest" };
+
+/** Contracts 10.3's default page: no caller can accidentally read an unbounded history. */
+export const DEFAULT_HISTORY_SELECTION: HistorySelection = {
+  after: null,
+  before: null,
+  count: true,
+  kind: "page",
+  limit: 100,
+};
+
+const NULL_TEXT = rawSql("NULL::text");
+
+const COMPARISONS = {
+  eq: rawSql("="),
+  ge: rawSql(">="),
+  gt: rawSql(">"),
+  le: rawSql("<="),
+  lt: rawSql("<"),
+} as const;
+
+const filterSql = (
   filter: HistoryFilter,
-  readable: ReadonlySet<DefinitionId>,
-  values: (string | null)[]
-): readonly string[] => {
-  const bind = (value: string): string => {
-    values.push(value);
-
-    return `$${values.length}`;
-  };
-
-  const clauses: string[] = [];
+  readable: (id: DefinitionId) => SqlFragment
+): readonly SqlFragment[] => {
+  const clauses: SqlFragment[] = [];
 
   if (filter.since !== undefined) {
     clauses.push(
-      `occurred_at >= ${bind(formatDateTime(filter.since))}::timestamptz`
+      sql`c.occurred_at >= ${textParameter(formatDateTime(filter.since), "timestamptz")}`
     );
   }
 
   if (filter.until !== undefined) {
     clauses.push(
-      `occurred_at < ${bind(formatDateTime(filter.until))}::timestamptz`
+      sql`c.occurred_at < ${textParameter(formatDateTime(filter.until), "timestamptz")}`
     );
   }
 
   if (filter.actorIds !== undefined) {
     clauses.push(
-      `actor_id IN (SELECT jsonb_array_elements_text(${bind(JSON.stringify(filter.actorIds))}::jsonb)::uuid)`
+      sql`c.actor_id = ANY(${arrayParameter(filter.actorIds, "uuid")})`
     );
   }
 
   if (filter.kinds !== undefined) {
-    clauses.push(
-      `kind IN (SELECT jsonb_array_elements_text(${bind(JSON.stringify(filter.kinds))}::jsonb))`
-    );
+    clauses.push(sql`c.kind = ANY(${arrayParameter(filter.kinds, "text")})`);
   }
 
   if (filter.fieldIds !== undefined) {
-    const visible = filter.fieldIds.filter((fieldId) => readable.has(fieldId));
+    const fields = filter.fieldIds.map(
+      (id) =>
+        sql`(jsonb_exists(c.fields, ${textParameter(id, "text")}) AND ${readable(id)})`
+    );
 
     clauses.push(
-      `jsonb_exists_any(fields, ARRAY(SELECT jsonb_array_elements_text(${bind(JSON.stringify(visible))}::jsonb)))`
+      fields.length === 0 ? rawSql("FALSE") : sql`(${joinSql(fields, " OR ")})`
+    );
+  }
+
+  for (const group of filter.attributes ?? []) {
+    // Actor alternatives historically compare lower-case text, including invalid UUIDs (which match nothing).
+    const column =
+      group.column === "actor_id"
+        ? sql`c.actor_id::text`
+        : identSql("c", group.column);
+
+    const casts = {
+      actor_id: "text",
+      kind: "text",
+      occurred_at: "timestamptz",
+      record_version: "numeric",
+    } as const;
+
+    const alternatives = group.values.map((value) => {
+      const cast =
+        group.column === "record_version" && Number.isSafeInteger(Number(value))
+          ? "int8"
+          : casts[group.column];
+
+      return sql`${column} ${COMPARISONS[group.comparison]} ${textParameter(value, cast)}`;
+    });
+
+    clauses.push(
+      alternatives.length === 0
+        ? rawSql("FALSE")
+        : sql`(${joinSql(alternatives, " OR ")})`
     );
   }
 
@@ -196,11 +276,153 @@ const filterClauses = (
 };
 
 /**
- * Reads a record's change entries in version order, with only the changes
- * of readable fields.
- *
- * @param input - Record, readable fields and filters.
- * @returns The entries.
+ * One bounded history query, also usable laterally beside current-row authorization.
+ * COUNT is a separate scalar aggregate over the same masked filter, never entry materialization.
+ * The selected CTE is bounded before decoding or definition reconstruction. The extra
+ * page row is a lookahead (Contracts 3.5); latest/entry selections fetch exactly one.
+ * @param input - Record, filters and selection.
+ * @param readable - Current-row field predicates, from the enclosing authorized relation.
+ * @returns A SELECT with at most limit + 1 rows (one sentinel for an empty page).
+ */
+export const historyStatement = (
+  input: Omit<HistoryInput, "readable">,
+  readable: (id: DefinitionId) => SqlFragment
+): SqlFragment => {
+  const selection = input.selection ?? DEFAULT_HISTORY_SELECTION;
+  const record = sql`c.record_id = ${textParameter(input.recordId, "uuid")}`;
+  const base = [record, ...filterSql(input.filter ?? {}, readable)];
+  const window = [...base];
+
+  const reversed =
+    selection.kind === "latest" ||
+    (selection.kind === "page" &&
+      selection.before !== null &&
+      selection.after === null);
+
+  if (selection.kind === "entry") {
+    window.push(sql`c.id = ${textParameter(selection.changeId, "uuid")}`);
+  }
+
+  if (selection.kind === "page") {
+    if (selection.after !== null) {
+      window.push(
+        sql`c.record_version > ${textParameter(selection.after, "int8")}`
+      );
+    }
+
+    if (selection.before !== null) {
+      window.push(
+        sql`c.record_version < ${textParameter(selection.before, "int8")}`
+      );
+    }
+  }
+
+  const count =
+    selection.kind === "page" && selection.count
+      ? sql`(SELECT count(*)::text FROM core."change" c WHERE ${joinSql(base, " AND ")})`
+      : NULL_TEXT;
+
+  const latest =
+    selection.kind === "latest"
+      ? NULL_TEXT
+      : sql`(SELECT c.id::text FROM core."change" c WHERE ${record} ORDER BY c.record_version DESC LIMIT 1)`;
+
+  const neighbor = (direction: "before" | "after") => {
+    if (selection.kind !== "entry") {
+      return NULL_TEXT;
+    }
+
+    const comparison = direction === "before" ? rawSql("<") : rawSql(">");
+    const order = direction === "before" ? rawSql("DESC") : rawSql("ASC");
+
+    return sql`(SELECT c.id::text FROM core."change" c WHERE ${record} AND c.record_version ${comparison} (SELECT version_text::bigint FROM selected LIMIT 1) ORDER BY c.record_version ${order} LIMIT 1)`;
+  };
+
+  const limit = selection.kind === "page" ? selection.limit + 1 : 1;
+  const offset = selection.kind === "page" ? (selection.offset ?? 0) : 0;
+
+  return sql`WITH selected AS MATERIALIZED (
+    SELECT c.id::text AS id, c.operation_id::text AS operation_id,
+      c.record_version::text AS version_text, c.kind::text AS kind,
+      c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+      c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields
+    FROM core."change" c WHERE ${joinSql(window, " AND ")}
+    ORDER BY c.record_version ${reversed ? rawSql("DESC") : rawSql("ASC")}
+    LIMIT ${textParameter(String(limit), "int8")} OFFSET ${textParameter(String(offset), "int8")}
+  ), navigation AS MATERIALIZED (
+    SELECT ${count} AS total, ${latest} AS latest_id,
+      ${neighbor("before")} AS predecessor_id, ${neighbor("after")} AS successor_id
+  )
+  SELECT selected.*, navigation.* FROM navigation LEFT JOIN selected ON true
+  ORDER BY selected.version_text::bigint ${reversed ? rawSql("DESC") : rawSql("ASC")}`;
+};
+
+/**
+ * Decode only the selected page, leaving the lookahead and navigation unenriched.
+ * @param rows - Bounded SQL rows with navigation.
+ * @param readable - Current readable field IDs.
+ * @param selection - The SQL selection used for these rows.
+ * @returns Entries and navigation (IDs only, never historical values).
+ */
+export const historyPageOfRows = Effect.fn("History.pageOfRows")(
+  function* historyPageOfRows(
+    rows: readonly TextRow[],
+    readable: ReadonlySet<DefinitionId>,
+    selection: HistorySelection = DEFAULT_HISTORY_SELECTION
+  ) {
+    const candidates = rows.filter(
+      (row) => row.id !== null && row.id !== undefined
+    );
+
+    yield* Effect.annotateCurrentSpan(
+      "history.candidate_rows",
+      candidates.length
+    );
+
+    const selected =
+      selection.kind === "page"
+        ? candidates.slice(0, selection.limit)
+        : candidates;
+
+    const entries: HistoryEntry[] = [];
+
+    for (const row of selected) {
+      entries.push(
+        yield* entryOfRow(
+          yield* decodeEntryRow(row).pipe(Effect.orDie),
+          readable
+        )
+      );
+    }
+
+    if (
+      selection.kind === "page" &&
+      selection.before !== null &&
+      selection.after === null
+    ) {
+      entries.reverse();
+    }
+
+    const [first] = rows;
+
+    return {
+      entries,
+      hasMore: selection.kind === "page" && candidates.length > selection.limit,
+      latestId: first?.latest_id ?? undefined,
+      predecessorId: first?.predecessor_id ?? undefined,
+      successorId: first?.successor_id ?? undefined,
+      total:
+        first?.total === null || first?.total === undefined
+          ? undefined
+          : Number(first.total),
+    };
+  }
+);
+
+/**
+ * Read a bounded page of a record's change entries with an explicit readable set.
+ * @param input - Record, readable fields, SQL filters and window.
+ * @returns The selected entries in numeric version order, plus continuation and count metadata.
  */
 export const readHistory = Effect.fn("Records.readHistory")(
   function* readHistory(input: HistoryInput) {
@@ -208,35 +430,13 @@ export const readHistory = Effect.fn("Records.readHistory")(
 
     return yield* request(
       Effect.gen(function* readEntries() {
-        const sql = yield* SqlClient.SqlClient;
-        const values: (string | null)[] = [input.recordId];
-
-        const clauses = [
-          "record_id = $1::uuid",
-          ...filterClauses(input.filter ?? {}, input.readable, values),
-        ];
-
-        const rows = yield* readOnly(
-          sql.unsafe(
-            `SELECT id::text AS id, operation_id::text AS operation_id,
-                    record_version::text AS version_text, kind,
-                    actor_id::text AS actor_id, occurred_at::text AS occurred_at,
-                    schema_revision::text AS schema_revision,
-                    cause::text AS cause, fields::text AS fields
-             FROM core."change" AS c
-             WHERE ${clauses.join(" AND ")}
-             ORDER BY c.record_version`,
-            values
+        const rows = yield* readRows(
+          historyStatement(input, (id) =>
+            input.readable.has(id) ? rawSql("TRUE") : rawSql("FALSE")
           )
         );
 
-        const entries: HistoryEntry[] = [];
-
-        for (const row of yield* decodeEntryRows(rows)) {
-          entries.push(yield* entryOfRow(row, input.readable));
-        }
-
-        return entries;
+        return yield* historyPageOfRows(rows, input.readable, input.selection);
       })
     );
   }

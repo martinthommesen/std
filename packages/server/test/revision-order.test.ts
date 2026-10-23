@@ -52,7 +52,7 @@ const deletedHistory = Effect.gen(function* deletedHistoryTest() {
     id: created.id,
   });
 
-  const entries = yield* readHistory({
+  const { entries } = yield* readHistory({
     readable: new Set(),
     recordId: created.id,
   });

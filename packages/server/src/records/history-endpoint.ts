@@ -27,6 +27,7 @@ import { NotFound } from "@std/api/errors/not-found";
 import { UnknownField } from "@std/api/errors/unknown-field";
 import {
   arrayParameter,
+  rawSql,
   identSql,
   joinSql,
   sql,
@@ -39,15 +40,23 @@ import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option } from "effect";
 
 import { RequestRevision } from "../sql/request-revision.ts";
 import { FALSE_SQL, TRUE_SQL } from "./access-sql.ts";
 import { ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeKind } from "./change-entry.ts";
 import { entryDefinitions } from "./history-definitions.ts";
-import { EntryRowSchema, entryOfRow, readHistory } from "./history-query.ts";
-import type { HistoryEntry, HistoryFilter } from "./history-query.ts";
+import {
+  historyStatement,
+  historyPageOfRows,
+  DEFAULT_HISTORY_SELECTION,
+} from "./history-query.ts";
+import type {
+  HistoryEntry,
+  HistoryFilter,
+  HistorySelection,
+} from "./history-query.ts";
 import { currentReadScope, resolveTable } from "./read-records.ts";
 import type { ReadScope } from "./read-view.ts";
 import { readableOnRecord, truthColumn } from "./record-access.ts";
@@ -66,6 +75,8 @@ export interface HistoryRequest {
   readonly actor?: string;
   readonly kind?: string;
   readonly field?: string;
+  readonly attributes?: HistoryFilter["attributes"];
+  readonly selection?: HistorySelection;
 }
 
 const listOf = (text: string | undefined): readonly string[] | undefined =>
@@ -176,6 +187,8 @@ const filterOf = Effect.fn("History.filter")(function* filterOf(
     filter.fieldIds = fieldIds;
   }
 
+  filter.attributes = request.attributes ?? [];
+
   const built: HistoryFilter = filter;
 
   return built;
@@ -243,69 +256,6 @@ LIMIT 1`
 });
 
 const ALIAS = "r";
-const CHANGE = "c";
-
-// Each column of the entry and its text alias; the version's alias is
-// not the column's name, so no ORDER BY can sort its text.
-const CHANGE_COLUMNS = [
-  ["id", "id"],
-  ["operation_id", "operation_id"],
-  ["record_version", "version_text"],
-  ["kind", "kind"],
-  ["actor_id", "actor_id"],
-  ["occurred_at", "occurred_at"],
-  ["schema_revision", "schema_revision"],
-  ["cause", "cause"],
-  ["fields", "fields"],
-] as const;
-
-const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
-
-// The filters as SQL over the joined entry, the field filter limited to
-// fields readable on the same row (`readableSql`).
-const filterSql = (
-  filter: HistoryFilter,
-  readableSql: (fieldId: DefinitionId) => SqlFragment
-): readonly SqlFragment[] => {
-  const clauses: SqlFragment[] = [];
-
-  if (filter.since !== undefined) {
-    clauses.push(
-      sql`${identSql(CHANGE, "occurred_at")} >= ${textParameter(formatDateTime(filter.since), "timestamptz")}`
-    );
-  }
-
-  if (filter.until !== undefined) {
-    clauses.push(
-      sql`${identSql(CHANGE, "occurred_at")} < ${textParameter(formatDateTime(filter.until), "timestamptz")}`
-    );
-  }
-
-  if (filter.actorIds !== undefined) {
-    clauses.push(
-      sql`${identSql(CHANGE, "actor_id")} = ANY(${arrayParameter(filter.actorIds, "uuid")})`
-    );
-  }
-
-  if (filter.kinds !== undefined) {
-    clauses.push(
-      sql`${identSql(CHANGE, "kind")} = ANY(${arrayParameter(filter.kinds, "text")})`
-    );
-  }
-
-  if (filter.fieldIds !== undefined) {
-    const changed = filter.fieldIds.map(
-      (fieldId) =>
-        sql`(jsonb_exists(${identSql(CHANGE, "fields")}, ${textParameter(fieldId, "text")}) AND ${readableSql(fieldId)})`
-    );
-
-    clauses.push(
-      changed.length === 0 ? FALSE_SQL : sql`(${joinSql(changed, " OR ")})`
-    );
-  }
-
-  return clauses;
-};
 
 /**
  * A live record's history in one statement (3.7): the record's visibility,
@@ -321,7 +271,8 @@ const liveHistory = Effect.fn("History.live")(function* liveHistory(
   classId: DefinitionId,
   id: string,
   filter: HistoryFilter,
-  purged: readonly DefinitionId[]
+  purged: readonly DefinitionId[],
+  selection: HistorySelection
 ) {
   const view = scope.view(classId, true);
   const fields = scope.snapshot.fields(classId);
@@ -342,29 +293,27 @@ const liveHistory = Effect.fn("History.live")(function* liveHistory(
     ...fields.map((field, index) =>
       truthColumn(readableSql(field.id), `f${index}`)
     ),
-    ...CHANGE_COLUMNS.map(
-      ([column, alias]) =>
-        sql`${identSql(CHANGE, column)}::text AS ${identSql(alias)}`
-    ),
+    rawSql('"h".*'),
   ];
 
-  const joined = [
-    sql`${identSql(CHANGE, "record_id")} = ${identSql(ALIAS, "id")}`,
-    ...filterSql(filter, readableSql),
-  ];
+  const reversed =
+    selection.kind === "latest" ||
+    (selection.kind === "page" &&
+      selection.before !== null &&
+      selection.after === null);
 
   const rows = yield* readRows(
     sql`SELECT ${joinSql(columns, ", ")}
 FROM ${recordRelation(scope.snapshot, classId)} AS ${identSql(ALIAS)}
-LEFT JOIN core."change" AS ${identSql(CHANGE)} ON ${joinSql(joined, " AND ")}
+LEFT JOIN LATERAL (${historyStatement({ filter, recordId: id, selection }, readableSql)}) AS "h" ON true
 WHERE ${identSql(ALIAS, "id")} = ${textParameter(id, "uuid")}
-ORDER BY ${identSql(CHANGE, "record_version")}`
+ORDER BY "h"."version_text"::bigint ${reversed ? rawSql("DESC") : rawSql("ASC")}`
   );
 
   const [first] = rows;
 
   if (first === undefined) {
-    return Option.none<readonly HistoryEntry[]>();
+    return Option.none<Effect.Success<ReturnType<typeof historyPageOfRows>>>();
   }
 
   if (first.visible !== "true") {
@@ -378,16 +327,7 @@ ORDER BY ${identSql(CHANGE, "record_version")}`
     ...purged,
   ]);
 
-  const entries: HistoryEntry[] = [];
-
-  for (const row of rows) {
-    if (row.id !== null && row.id !== undefined) {
-      const decoded = yield* decodeEntryRow(row).pipe(Effect.orDie);
-      entries.push(yield* entryOfRow(decoded, readable));
-    }
-  }
-
-  return Option.some<readonly HistoryEntry[]>(entries);
+  return Option.some(yield* historyPageOfRows(rows, readable, selection));
 });
 
 // The fields a field filter may name on a live record: those the caller
@@ -452,7 +392,18 @@ const deletedHistory = Effect.fn("History.deleted")(function* deletedHistory(
 
   const filter = yield* filterOf(request, readable);
 
-  return yield* readHistory({ filter, readable, recordId: id });
+  const rows = yield* readRows(
+    historyStatement(
+      {
+        filter,
+        recordId: id,
+        selection: request.selection ?? DEFAULT_HISTORY_SELECTION,
+      },
+      (fieldId) => (readable.has(fieldId) ? TRUE_SQL : FALSE_SQL)
+    )
+  );
+
+  return yield* historyPageOfRows(rows, readable, request.selection);
 });
 
 const entryJson = (
@@ -511,10 +462,16 @@ export const recordHistory = Effect.fn("Records.history")(
       ? purgedFields(scope.snapshot, concrete)
       : [];
 
-    let entries: readonly HistoryEntry[];
+    const selection = request.selection ?? DEFAULT_HISTORY_SELECTION;
+
+    if (selection.kind === "entry" && !parseUuid(selection.changeId).ok) {
+      return yield* new NotFound();
+    }
+
+    let page: Effect.Success<ReturnType<typeof historyPageOfRows>>;
 
     if (found.value.deleted) {
-      entries = yield* deletedHistory(
+      page = yield* deletedHistory(
         scope,
         request,
         concrete,
@@ -537,11 +494,12 @@ export const recordHistory = Effect.fn("Records.history")(
         concrete,
         parsedId.value,
         filter,
-        purged
+        purged,
+        selection
       );
 
       // Deleted between the class lookup and the read: as a deleted record.
-      entries = Option.isSome(live)
+      page = Option.isSome(live)
         ? live.value
         : yield* deletedHistory(
             scope,
@@ -552,7 +510,16 @@ export const recordHistory = Effect.fn("Records.history")(
           );
     }
 
-    const definitions = yield* entryDefinitions(scope, concrete, entries);
+    const { entries } = page;
+    yield* Effect.annotateCurrentSpan(
+      "history.definition_entries",
+      selection.kind === "latest" ? 0 : entries.length
+    );
+
+    const definitions =
+      selection.kind === "latest"
+        ? []
+        : yield* entryDefinitions(scope, concrete, entries);
 
     const body = {
       entries: entries.map((entry, index) =>
@@ -561,6 +528,6 @@ export const recordHistory = Effect.fn("Records.history")(
       schemaRevision: revision,
     } satisfies JsonObject;
 
-    return { body, classId: concrete };
+    return { body, classId: concrete, page };
   }
 );

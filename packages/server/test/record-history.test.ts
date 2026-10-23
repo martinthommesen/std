@@ -71,7 +71,7 @@ const toVersions = (entries: readonly HistoryEntry[]): readonly number[] =>
 
 const versionsOf = (recordId: string, filter: HistoryFilter) =>
   readHistory({ filter, readable: READABLE_WITHOUT_COST, recordId }).pipe(
-    Effect.map(toVersions)
+    Effect.map(({ entries }) => toVersions(entries))
   );
 
 describe("record-history", () => {
@@ -117,7 +117,7 @@ describe("record-history", () => {
             id: laptop.id,
           }).pipe(asUser(USERS.bob));
 
-          const entries = yield* readHistory({
+          const { entries } = yield* readHistory({
             readable: READABLE_WITHOUT_COST,
             recordId: laptop.id,
           });
@@ -141,7 +141,7 @@ describe("record-history", () => {
           });
           assert.deepStrictEqual(entries[3]?.cause, { kind: "api" });
 
-          const withCost = yield* readHistory({
+          const { entries: withCost } = yield* readHistory({
             readable: new Set([...READABLE_WITHOUT_COST, ACME.cost]),
             recordId: laptop.id,
           });
@@ -191,7 +191,7 @@ describe("record-history", () => {
           id: monitor.id,
         }).pipe(asUser(USERS.bob));
 
-        const entries = yield* readHistory({
+        const { entries } = yield* readHistory({
           readable: new Set([
             ACME.name,
             "9ecc19c5-8401-4887-ac05-d5dbdd937297",
