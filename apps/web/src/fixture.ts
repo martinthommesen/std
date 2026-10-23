@@ -3,9 +3,12 @@ import type { Url } from "foldkit/url";
 
 import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
+import { initLeaveDialog, initNavigationDrawer } from "./navigation-drawer.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
+import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
 import { REVISION_3, adaTables } from "./table-fixture.ts";
+import { initUserMenu } from "./user-menu.ts";
 
 /** A signed-in user, as `session/current` describes her. */
 export const ada: CurrentUser = {
@@ -26,11 +29,16 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
+  leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
+  maybeLeaveIntent: Option.none(),
+  maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  navigationDrawer: initNavigationDrawer(),
   nextPageId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
   sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
@@ -38,36 +46,47 @@ export const adaAtHome = Model.SignedIn({
     data: { revision: REVISION_3, tables: adaTables.tables },
   }),
   user: ada,
+  userMenu: initUserMenu(),
 });
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
+  leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
+  maybeLeaveIntent: Option.none(),
+  maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  navigationDrawer: initNavigationDrawer(),
   nextPageId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
   sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Loading(),
   user: ada,
+  userMenu: initUserMenu(),
 });
 
 /** The sign-in page after a redirect from the home page. */
 export const signInRedirectedFromHome = Model.SignedOut({
+  maybePreferenceProblem: Option.none(),
   maybeReturnRoute: Option.some(AppRoute.Home()),
   nextPageId: 1,
   nextSessionId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
 
 /** The sign-in page, opened directly. */
 export const signInOpenedDirectly = Model.SignedOut({
+  maybePreferenceProblem: Option.none(),
   maybeReturnRoute: Option.none(),
   nextPageId: 1,
   nextSessionId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });

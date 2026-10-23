@@ -28,7 +28,7 @@ import { userTable } from "../../table-fixture.ts";
 import {
   CreateRecord,
   DeleteRecord,
-  LoadActorNames,
+  LoadHistoryLabels,
   LoadHistory,
   LoadRecord,
   SearchTargets,
@@ -58,6 +58,9 @@ const present = <A>(value: A | undefined): A => {
 };
 
 const NAME = present(userTable.fields.find((field) => field.name === "name"));
+
+/** The UUIDs in a text. */
+const UUIDS = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gu;
 
 /** An integer display field, for labels that are not text. */
 const BADGE: MetaField = {
@@ -254,6 +257,7 @@ const REFUSALS = [
     expected: failedSave(
       WriteError.Refused({
         message: "Close the tasks first.",
+        problems: [],
         tag: "RuleRefused",
       })
     ),
@@ -320,7 +324,7 @@ describe("form Commands against the server", () => {
     }
   );
 
-  it("a definition change set's refusal is shown with its message", async () => {
+  it("a definition change set's refusal is shown with its message and every problem", async () => {
     const { result } = await runUpdate(
       tmfError("DefinitionInvalid", 422, {
         message: "The definitions are invalid; nothing was applied",
@@ -338,6 +342,13 @@ describe("form Commands against the server", () => {
       failedSave(
         WriteError.Refused({
           message: "The definitions are invalid; nothing was applied",
+          problems: [
+            {
+              code: "unsupportedChange",
+              definitionId: "f1",
+              message: "type cannot change",
+            },
+          ],
           tag: "DefinitionInvalid",
         })
       )
@@ -893,19 +904,210 @@ describe("form Commands against the server", () => {
     });
 
     const result = await Effect.runPromise(
-      LoadActorNames({
+      LoadHistoryLabels({
+        ids: [USERS.alex, USERS.sam],
+        maybeDisplayField: Option.some(NAME),
         revision: REVISION_5,
-        userIds: [USERS.alex, USERS.sam],
+        table: "core.user",
       }).effect.pipe(Effect.provide(api.layer))
     );
 
     expect(result).toStrictEqual(
-      Message.SucceededLoadActorNames({ names: { [USERS.alex]: "Alex Agent" } })
+      Message.SucceededLoadHistoryLabels({
+        labels: { [USERS.alex]: "Alex Agent" },
+        table: "core.user",
+      })
     );
+    expect(api.seen).toHaveLength(1);
     expect(api.seen[0]?.query).toStrictEqual({
       condition: `id in ("${USERS.alex}", "${USERS.sam}")`,
       fields: "name",
       limit: "2",
     });
+  });
+
+  it("a referenced table the form has no metadata for: its display field is read from its metadata, then its records in one list", async () => {
+    const LOCATIONS_PATH = "/api/v1/helpLocation";
+
+    const one = "019a0000-0000-7000-8000-0000000a0001";
+
+    const two = "019a0000-0000-7000-8000-0000000a0002";
+
+    const api = fakeStdApi({
+      "/api/v1/tableMetadata/helpLocation": {
+        body: {
+          ...userTable,
+          displayField: "title",
+          fields: [
+            {
+              ...NAME,
+              apiName: "title",
+              id: "00000000-0000-4000-8000-00000000a0a1",
+              label: "Title",
+              name: "title",
+            },
+          ],
+          id: "helpLocation",
+          name: "help.location",
+          resourceType: "HelpLocation",
+        },
+        headers: REVISION_HEADER,
+        status: 200,
+      },
+      [LOCATIONS_PATH]: {
+        body: [
+          {
+            "@type": "HelpLocation",
+            href: `http://std.test${LOCATIONS_PATH}/${one}`,
+            id: one,
+            title: "Floor 3",
+          },
+          {
+            "@type": "HelpLocation",
+            href: `http://std.test${LOCATIONS_PATH}/${two}`,
+            id: two,
+            title: "Floor 4",
+          },
+        ],
+        status: 200,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids: [one, two],
+        maybeDisplayField: Option.none(),
+        revision: REVISION_5,
+        table: "help.location",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.SucceededLoadHistoryLabels({
+        labels: { [one]: "Floor 3", [two]: "Floor 4" },
+        table: "help.location",
+      })
+    );
+    expect(api.seen.map((request) => request.path)).toStrictEqual([
+      "/api/v1/tableMetadata/helpLocation",
+      LOCATIONS_PATH,
+    ]);
+    expect(api.seen[1]?.query).toStrictEqual({
+      condition: `id in ("${one}", "${two}")`,
+      fields: "title",
+      limit: "2",
+    });
+  });
+
+  it("a failed list of display values is reported for its table", async () => {
+    // NOTE: the fake server answers no path it was not given with 599.
+    const api = fakeStdApi({});
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids: [USERS.alex],
+        maybeDisplayField: Option.some(NAME),
+        revision: REVISION_5,
+        table: "core.user",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result).toStrictEqual(
+      Message.FailedLoadHistoryLabels({ table: "core.user" })
+    );
+  });
+
+  it.each([
+    ["an integer", BADGE, 42, "42"],
+    [
+      "a choice, by its label",
+      {
+        ...NAME,
+        apiName: "tier",
+        choices: [
+          { key: "gold", label: "Gold member", order: 1, retired: false },
+        ],
+        id: "00000000-0000-4000-8000-00000000c0c0",
+        label: "Tier",
+        name: "tier",
+        type: { kind: "choice" as const },
+      },
+      "gold",
+      "Gold member",
+    ],
+  ] as const)(
+    "a display field holding %s is shown as the pickers show it",
+    async (_case, display, value, shown) => {
+      const api = fakeStdApi({
+        [USERS_PATH]: {
+          body: [
+            {
+              "@type": "CoreUser",
+              href: `http://std.test${USERS_PATH}/${USERS.alex}`,
+              id: USERS.alex,
+              [display.apiName]: value,
+            },
+          ],
+          status: 200,
+        },
+      });
+
+      const result = await Effect.runPromise(
+        LoadHistoryLabels({
+          ids: [USERS.alex],
+          maybeDisplayField: Option.some(display),
+          revision: REVISION_5,
+          table: "core.user",
+        }).effect.pipe(Effect.provide(api.layer))
+      );
+
+      expect(result).toStrictEqual(
+        Message.SucceededLoadHistoryLabels({
+          labels: { [USERS.alex]: shown },
+          table: "core.user",
+        })
+      );
+      expect(api.seen[0]?.query.fields).toBe(display.apiName);
+    }
+  );
+
+  it("many records of one table are asked for in as few lists as fit a request's address", async () => {
+    const ids = Array.from(
+      { length: 400 },
+      (_, index) =>
+        `019a0000-0000-7000-8000-${index.toString(16).padStart(12, "0")}`
+    );
+
+    const api = fakeStdApi({
+      [USERS_PATH]: { body: [], status: 200 },
+    });
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids,
+        maybeDisplayField: Option.some(NAME),
+        revision: REVISION_5,
+        table: "core.user",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result._tag).toBe("SucceededLoadHistoryLabels");
+
+    const conditions = api.seen.map((seen) => seen.query.condition ?? "");
+
+    // 400 UUIDs take 46 encoded bytes each, 18 400 in all: three lists
+    // within the 8 192-byte budget, every ID in exactly one.
+    expect(conditions).toHaveLength(3);
+
+    for (const condition of conditions) {
+      expect(encodeURIComponent(condition).length).toBeLessThanOrEqual(8192);
+    }
+
+    expect(
+      conditions.flatMap((condition) => condition.match(UUIDS) ?? [])
+    ).toStrictEqual(ids);
+    expect(api.seen.map((seen) => Number(seen.query.limit))).toStrictEqual(
+      conditions.map((condition) => condition.match(UUIDS)?.length ?? 0)
+    );
   });
 });

@@ -9,12 +9,12 @@ import { isTmfError } from "@std/api/client";
  */
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
-import { isJsonString } from "@std/values/json-value";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
-import { Command, Dom } from "foldkit";
+import { Command, Dom, Mount } from "foldkit";
 import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
+import { DefinitionProblem } from "../../domain/definition-problems.ts";
 import { WriteOnlyValue, sentBody } from "../../domain/form-input.ts";
 import { MetaFieldSchema } from "../../domain/metadata.ts";
 import type { MetaField } from "../../domain/metadata.ts";
@@ -47,6 +47,7 @@ import type { RecordPage } from "../table-list/model.ts";
 import { Message, ReadPurpose, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";
 import type { HistoryError, RecordError, RelatedError } from "./model.ts";
+import { displayFieldOf } from "./picker-search.ts";
 
 /** The zone of the Date Pickers' "today": never the device's (5.7). */
 const CALENDAR_ZONE = "UTC";
@@ -272,6 +273,10 @@ const decodeChanges = Schema.decodeUnknownOption(
   Schema.Array(SchemaChangeSchema)
 );
 
+const decodeProblems = Schema.decodeUnknownOption(
+  Schema.Array(DefinitionProblem)
+);
+
 /**
  * A detail of a TMF `Error` that is text.
  *
@@ -396,6 +401,10 @@ const writeErrorOf = (
   return isTmfError(...REFUSAL_TAGS)(error)
     ? WriteError.Refused({
         message: error.message ?? error.reason,
+        problems: Option.getOrElse(
+          Option.flatMap(errorDetail(error, "problems"), decodeProblems),
+          () => []
+        ),
         tag: error.code,
       })
     : WriteError.Unavailable();
@@ -994,47 +1003,167 @@ export const LoadHistory = Command.define("LoadHistory", {
 /** The user table, whose display names the history shows. */
 export const USER_TABLE = "core.user";
 
-/** The user table's display field (its API name is the same). */
-const USER_NAME_FIELD = "name";
+/**
+ * The most records one list request may ask for (the API's `limit` is 1
+ * to 1000; `@std/api/records`, the `list` endpoint's description), which
+ * is also the most elements an `in` list may hold
+ * (`IN_LIST_MAX_ELEMENTS`, `@std/conditions/check`).
+ */
+const LIST_LIMIT_MAX = 1000;
 
 /**
- * Reads the names of the users who made the history's changes, as far as
- * the caller may read them (a list of `core.user` filtered by
- * `condition`, `id in (...)`); without them the panel shows the user IDs.
+ * The most bytes the percent-encoded `condition` of one history-label
+ * list may take in the request's address. `std serve` answers 431 when a
+ * request line and its headers pass Node's `http.maxHeaderSize`: 16 384
+ * bytes on Node 26.12 (`node -p "require('node:http').maxHeaderSize"`,
+ * 2026-10-23; `std serve` does not change it). Against it, an `id in`
+ * list of 300 UUIDs (a 13 857-byte request target) was answered and one
+ * of 400 (18 457 bytes) refused (Sol's review of a4068ab1, 46 bytes per
+ * UUID). Half the limit leaves the other half for the path, the other
+ * parameters and the browser's headers, its cookie among them; the
+ * browser test "history names come from several lists" lists past it.
  */
-export const LoadActorNames = Command.define("LoadActorNames", {
+const LABEL_CONDITION_BUDGET = 8192;
+
+/**
+ * The condition that lists these records.
+ *
+ * @param ids - Their IDs.
+ * @returns `id in ("…", "…")`.
+ */
+const idsConditionOf = (ids: readonly string[]): string =>
+  `id in (${ids.map((id) => JSON.stringify(id)).join(", ")})`;
+
+/**
+ * The bytes a text takes in a URL, percent-encoded: `encodeURIComponent`'s
+ * length, which a query string's encoding never exceeds (it writes a space
+ * as one `+` where this counts three).
+ *
+ * @param text - The text.
+ * @returns Its encoded length.
+ */
+const encodedLength = (text: string): number => encodeURIComponent(text).length;
+
+/**
+ * Splits the IDs of a history's records in one table into lists whose
+ * condition stays within {@link LABEL_CONDITION_BUDGET} encoded bytes and
+ * {@link LIST_LIMIT_MAX} IDs, in order. Each ID adds its quoted text and a
+ * separator, so the size is summed rather than encoded again per ID.
+ *
+ * @param ids - The IDs.
+ * @returns The lists, none for no IDs.
+ */
+const labelBatchesOf = (
+  ids: readonly string[]
+): readonly (readonly string[])[] => {
+  const emptySize = encodedLength(idsConditionOf([]));
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let size = emptySize;
+
+  for (const id of ids) {
+    const cost = encodedLength(`${JSON.stringify(id)}, `);
+
+    const isFull =
+      batch.length === LIST_LIMIT_MAX || size + cost > LABEL_CONDITION_BUDGET;
+
+    if (batch.length > 0 && isFull) {
+      batches.push(batch);
+      batch = [];
+      size = emptySize;
+    }
+
+    batch.push(id);
+    size += cost;
+  }
+
+  return batch.length === 0 ? batches : [...batches, batch];
+};
+
+/**
+ * A table's display field, from its metadata.
+ *
+ * @param table - The table's name.
+ * @param revision - The form's revision.
+ * @returns The field, or none when the table has no display field.
+ */
+const displayFieldFromMetadata = (table: string, revision: Revision) =>
+  fetchTableMetadata(collectionOf(table), Option.some(revision)).pipe(
+    Effect.map((loaded) => displayFieldOf(loaded.table))
+  );
+
+/**
+ * Reads the display values of the records a history names in one table:
+ * the users who made the changes (`core.user`) and the targets of the
+ * references whose values changed, as far as the caller may read them.
+ * One list request (`condition` `id in (...)`) per batch of IDs that fits
+ * the request's address ({@link labelBatchesOf}), never one per record.
+ * The display field comes with the request when the form has the table's
+ * metadata, and is read from the table's metadata otherwise; its values
+ * are shown as the pickers show them (a choice by its label, a number as
+ * its digits). Records the caller cannot see are left out, and the panel
+ * shows their IDs.
+ */
+export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
   args: {
+    ids: Schema.Array(Schema.String),
+    maybeDisplayField: Schema.Option(MetaFieldSchema),
     revision: SchemaRevision,
-    userIds: Schema.Array(Schema.String),
+    table: Schema.String,
   },
-  execute: ({ revision, userIds }) =>
-    Effect.gen(function* loadActorNames() {
+  execute: ({ ids, maybeDisplayField, revision, table }) =>
+    Effect.gen(function* loadHistoryLabels() {
       const client = yield* StdApi;
 
-      const listed = yield* client.records
-        .list({
-          params: { table: collectionOf(USER_TABLE) },
-          query: {
-            condition: `id in (${userIds.map((id) => JSON.stringify(id)).join(", ")})`,
-            fields: USER_NAME_FIELD,
-            limit: String(userIds.length),
-          },
-        })
-        .pipe(atRevision(Option.some(revision)));
+      const maybeField = Option.isSome(maybeDisplayField)
+        ? maybeDisplayField
+        : yield* displayFieldFromMetadata(table, revision);
 
-      return Message.SucceededLoadActorNames({
-        names: Object.fromEntries(
-          listed.flatMap((resource) => {
-            const name = resource[USER_NAME_FIELD];
+      if (Option.isNone(maybeField)) {
+        return Message.SucceededLoadHistoryLabels({ labels: {}, table });
+      }
 
-            return name !== undefined && isJsonString(name)
-              ? [[resource.id, name] as const]
-              : [];
+      const field = maybeField.value;
+
+      const pages = yield* Effect.all(
+        labelBatchesOf(ids).map((batch) =>
+          client.records
+            .list({
+              params: { table: collectionOf(table) },
+              query: {
+                condition: idsConditionOf(batch),
+                fields: field.apiName,
+                limit: String(batch.length),
+              },
+            })
+            .pipe(atRevision(Option.some(revision)))
+        )
+      );
+
+      const selected = [wireFieldOf(field)];
+
+      return Message.SucceededLoadHistoryLabels({
+        labels: Object.fromEntries(
+          pages.flat().flatMap((resource) => {
+            const record = recordOfResource(resource, selected);
+            const label = displayOf(record, field);
+
+            return label === record.id ? [] : [[record.id, label] as const];
           })
         ),
+        table,
       });
-    }).pipe(Effect.orElseSucceed(() => Message.FailedLoadActorNames())),
-  messages: [Message.SucceededLoadActorNames, Message.FailedLoadActorNames],
+    }).pipe(
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed(() => Message.FailedLoadHistoryLabels({ table }))
+    ),
+  messages: [
+    Message.SucceededLoadHistoryLabels,
+    Message.FailedLoadHistoryLabels,
+    Message.FailedAuthentication,
+  ],
 });
 
 /** Reads today's date in UTC, for the Date Pickers' "today" mark. */
@@ -1044,6 +1173,128 @@ export const ReadToday = Command.define("ReadToday", {
     .pipe(Effect.map((date) => Message.CompletedReadToday({ today: date }))),
   messages: [Message.CompletedReadToday],
 });
+
+/**
+ * The custom property on the document's root element that holds the
+ * floating action bar's height, which the stylesheet adds to the page's
+ * bottom scroll padding.
+ */
+export const ACTION_BAR_BLOCK_SIZE = "--action-bar-block-size";
+
+/**
+ * The class of the element in the action bar that the stylesheet fixes
+ * over the whole window, whose size is the window's.
+ */
+export const VIEWPORT_PROBE_CLASS = "viewport-probe";
+
+/**
+ * Whether an element lies outside the part of the window the scroll
+ * padding leaves clear: under the sticky header or the floating action
+ * bar, wholly or in part.
+ *
+ * @param target - The focused element.
+ * @returns True when it should be scrolled into the clear part.
+ */
+const isUnderStickyChrome = (target: Element): boolean => {
+  const padding = getComputedStyle(document.documentElement);
+  const box = target.getBoundingClientRect();
+  // NOTE: a computed padding carries its unit ("110px"), which only
+  // parseFloat reads (Number() makes it NaN); "auto" is none.
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- the value ends in "px"
+  const clearTop = Number.parseFloat(padding.scrollPaddingTop) || 0;
+
+  const clearBottom =
+    window.innerHeight -
+    // oxlint-disable-next-line unicorn/prefer-number-coercion -- the value ends in "px"
+    (Number.parseFloat(padding.scrollPaddingBottom) || 0);
+
+  return box.top < clearTop || box.bottom > clearBottom;
+};
+
+/**
+ * Keeps what gets focus in the form clear of the floating action bar and
+ * the sticky header, however far the bar's messages make it wrap (WCAG
+ * 2.2, 2.4.11), while the bar is on the page:
+ *
+ * - {@link ACTION_BAR_BLOCK_SIZE} follows the bar's height (its border
+ *   box), so the page's bottom scroll padding is the bar's real height;
+ * - a focused control that is in the window but under the bar or the
+ *   header is scrolled into the clear part. Browsers scroll only to a
+ *   control outside the window (Chromium leaves one alone that is in it,
+ *   behind the bar, measured at 800 x 600 after a version conflict), so
+ *   the padding alone does not keep it clear. That is checked when focus
+ *   moves, when the bar changes size (a refusal's note grows it under the
+ *   control that keeps focus: Customer email at y 504..536 was wholly
+ *   covered when Ctrl+S's conflict grew the bar from y 538 to y 498, Sol's
+ *   review of 1a19fe09), including when a narrower window wraps it,
+ *   and when the window changes size with the bar as it was: a window
+ *   cut from 800 x 600 to 800 x 560 hid a focused field behind the
+ *   unchanged bar (Sol's review of 94086d53). The bar renders a probe
+ *   fixed over the whole window ({@link VIEWPORT_PROBE_CLASS}) for that;
+ *   the html and main elements do not change size with the window's
+ *   height.
+ *
+ * All of it goes when the bar does.
+ */
+export const KeepFocusClearOfActionBar = Mount.define(
+  "KeepFocusClearOfActionBar",
+  {
+    execute: ({ element }) =>
+      Effect.gen(function* keepFocusClearOfActionBar() {
+        const root = document.documentElement;
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const reveal = (target: Element | null) => {
+              if (
+                target instanceof HTMLElement &&
+                target !== document.body &&
+                !element.contains(target) &&
+                isUnderStickyChrome(target)
+              ) {
+                target.scrollIntoView({ block: "nearest" });
+              }
+            };
+
+            const revealFocused = () => {
+              reveal(document.activeElement);
+            };
+
+            // NOTE: the new height goes into the scroll padding first, so
+            // the check and the scroll use the bar as it is now.
+            const observer = new ResizeObserver(() => {
+              root.style.setProperty(
+                ACTION_BAR_BLOCK_SIZE,
+                `${element.getBoundingClientRect().height}px`
+              );
+              revealFocused();
+            });
+
+            observer.observe(element, { box: "border-box" });
+
+            const probe = element.querySelector(`.${VIEWPORT_PROBE_CLASS}`);
+
+            if (probe !== null) {
+              observer.observe(probe);
+            }
+
+            document.addEventListener("focusin", revealFocused);
+
+            return { observer, revealFocused };
+          }),
+          ({ observer, revealFocused }) =>
+            Effect.sync(() => {
+              document.removeEventListener("focusin", revealFocused);
+              observer.disconnect();
+              root.style.removeProperty(ACTION_BAR_BLOCK_SIZE);
+            })
+        );
+
+        return Message.CompletedKeepFocusClearOfActionBar();
+      }),
+    messages: [Message.CompletedKeepFocusClearOfActionBar],
+  }
+);
 
 /** Moves focus to a field's input, such as the first field with a problem. */
 export const FocusField = Command.define("FocusField", {

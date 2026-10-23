@@ -4,29 +4,36 @@
  * (Foldkit UI Dialog), and on an existing record its related lists and
  * history (Foldkit UI Disclosure each).
  */
-import { Dialog, Fieldset } from "@foldkit/ui";
+import { Button, Dialog, Fieldset } from "@foldkit/ui";
 import { isJsonString } from "@std/values/json-value";
 import { Match, Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { problemFieldOf } from "../../domain/definition-problems.ts";
 import { formSections } from "../../domain/form-fields.ts";
 import type { FormSection } from "../../domain/form-fields.ts";
 import type { MetaField } from "../../domain/metadata.ts";
 import type { RecordJson } from "../../domain/record.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
-import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
+import { PLAIN_LIST, homeRouter, recordRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
+import { check } from "../../view/icons.ts";
 import { view as notFoundView } from "../not-found.ts";
 import type { TableMeta } from "../table-list/model.ts";
+import { KeepFocusClearOfActionBar, VIEWPORT_PROBE_CLASS } from "./command.ts";
 import { fieldView, shownProblemsOf } from "./fields-view.ts";
-import { formStateStatusView } from "./form-state-view.ts";
+import {
+  formStateLiveRegionView,
+  formStateMessagesView,
+} from "./form-state-view.ts";
 import {
   classMetaOf,
   editedRecordOf,
   fieldOf,
   fieldsOf,
   isCreating,
+  hasUnsavedEdits,
   isFormStatePending,
   isReadOnlyForm,
   metaOf,
@@ -36,7 +43,12 @@ import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { historyView, relatedListsView } from "./panels-view.ts";
-import { isRecordOutdated, isReloading } from "./update.ts";
+import {
+  FORM_MESSAGES_ID,
+  isRecordOutdated,
+  isReloading,
+  listUrlOf,
+} from "./update.ts";
 
 const HEADING_ID = "record-form-heading";
 
@@ -47,14 +59,6 @@ const FAILURE_CLASS = "list-failure";
 const TRY_AGAIN = "Try again";
 
 const RELOAD_DEFINITION = "Reload the definition";
-
-const listUrlOf = (table: string): string =>
-  tableListRouter({
-    filter: Option.none(),
-    limit: Option.none(),
-    sort: Option.none(),
-    table,
-  });
 
 // HEADING
 
@@ -108,7 +112,13 @@ const recordFactsView = (
               ` · a ${concrete.label} record · `,
               h.a(
                 [
-                  h.Href(recordRouter({ id: record.id, table: concrete.name })),
+                  h.Href(
+                    recordRouter({
+                      ...PLAIN_LIST,
+                      id: record.id,
+                      table: concrete.name,
+                    })
+                  ),
                   h.Class("link"),
                 ],
                 [`Open as ${concrete.label}`]
@@ -281,9 +291,10 @@ const schemaChangedView = (
  */
 const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   // NOTE: the live region stays mounted, so notes that appear in it are
-  // announced.
+  // announced. A polite live region without the status role: the form's
+  // status is the save's, in the action bar.
   h.div(
-    [h.Class("form-dropped"), h.Role("status")],
+    [h.Class("form-dropped"), h.AriaLive("polite")],
     [
       model.droppedEdits.length === 0
         ? h.empty
@@ -298,38 +309,75 @@ const droppedEditsView = (model: Model, h: HtmlBuilder<Message>): Html =>
     ]
   );
 
-const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
+/**
+ * A refusal's alert: what was refused, and for a refused change set each
+ * of its problems, the field it names first where the form can tell.
+ *
+ * @param model - The page.
+ * @param error - The refusal.
+ * @param h - The builder.
+ * @returns The alert.
+ */
+const refusalAlertView = (
+  model: Model,
+  error: WriteError,
+  h: HtmlBuilder<Message>
+): Html => {
+  const problems = WriteError.guards.Refused(error) ? error.problems : [];
+
+  const fieldLabelOf = (problem: (typeof problems)[number]) =>
+    Option.flatMap(editedRecordOf(model), (record) =>
+      Option.fromNullishOr(
+        problemFieldOf(problem, record.id, fieldsOf(model))?.label
+      )
+    );
+
+  // NOTE: a refusal's problems are replaced as a whole by the next save's
+  // outcome, never reordered, so the list's items need no keys.
+  return h.div(
+    [h.Role("alert"), h.Class(ALERT_CLASS)],
+    [
+      h.p([], [writeErrorText(error)]),
+      problems.length === 0
+        ? h.empty
+        : h.ul(
+            [h.Class("problem-list")],
+            problems.map((problem) =>
+              h.li(
+                [],
+                Option.match(fieldLabelOf(problem), {
+                  onNone: () => [problem.message],
+                  onSome: (label) => [
+                    h.strong([], [`${label}: `]),
+                    problem.message,
+                  ],
+                })
+              )
+            )
+          ),
+    ]
+  );
+};
+
+/**
+ * What the last save's refusal says, at the top of the form, where it
+ * stays in place while the user corrects the input: the stale-form
+ * conflict with its reload, a definition change, any other refusal.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The alert, or nothing.
+ */
+const submissionAlertView = (model: Model, h: HtmlBuilder<Message>): Html =>
   Match.value(model.submission).pipe(
-    Match.tag("Idle", () => h.empty),
     Match.tag("Outdated", () => outdatedView(model, h)),
-    Match.tag("Saving", () => h.p([h.Role("status")], ["Saving…"])),
-    Match.tag("Saved", () =>
-      h.p([h.Role("status"), h.Class("notice")], ["Saved."])
-    ),
-    Match.tag("SavedUnread", () =>
-      h.p(
-        [h.Role("status"), h.Class("notice")],
-        [
-          "Saved. The record could not be read back: reload it to see what it holds before saving again.",
-        ]
-      )
-    ),
-    Match.tag("Unchanged", () =>
-      h.p(
-        [h.Role("status"), h.Class("notice")],
-        ["There are no changes to save."]
-      )
-    ),
     Match.tag("Failed", ({ error }) =>
       WriteError.guards.SchemaChanged(error)
         ? schemaChangedView(model, error, h)
         : h.div(
             [h.Class(FAILURE_CLASS)],
             [
-              h.p(
-                [h.Role("alert"), h.Class(ALERT_CLASS)],
-                [writeErrorText(error)]
-              ),
+              refusalAlertView(model, error, h),
               WriteError.guards.VersionConflict(error)
                 ? buttonView(
                     {
@@ -343,8 +391,149 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
             ]
           )
     ),
+    Match.orElse(() => h.empty)
+  );
+
+/**
+ * The save's progress and outcome, as the action bar says it beside the
+ * button the user pressed.
+ *
+ * @param model - The page.
+ * @returns The status text, empty when there is none.
+ */
+const submissionStatusText = (model: Model): string =>
+  Match.value(model.submission).pipe(
+    Match.tag("Saving", () => "Saving…"),
+    Match.tag("Saved", () => "Saved."),
+    Match.tag(
+      "SavedUnread",
+      () =>
+        "Saved. The record could not be read back: reload it to see what it holds before saving again."
+    ),
+    Match.tag("Unchanged", () => "There are no changes to save."),
+    Match.orElse(() => "")
+  );
+
+/** The action bar's button that moves focus to the alert at the top. */
+const SHOW_THE_REASON = "Show the reason";
+
+/** The action bar's notes that are not announced. */
+const ACTION_STATUS_QUIET_CLASS = "action-status-quiet";
+
+/** What the action bar's status shows, for its look (`data-state`). */
+type ActionState =
+  | "checkFailed"
+  | "checking"
+  | "dirty"
+  | "failed"
+  | "idle"
+  | "saved"
+  | "saving";
+
+/**
+ * Before a save: Save waits for the form rules' verdict, while the check
+ * runs ("checking") or because it failed ("checkFailed", whose alert with
+ * "Check form again" is at the top of the form), or there are edits
+ * leaving would lose ("dirty", form rules' effective edits), or neither.
+ *
+ * @param model - The page.
+ * @returns The state.
+ */
+const idleStateOf = (model: Model): ActionState => {
+  if (isFormStatePending(model)) {
+    return Option.isSome(AsyncData.getError(model.formState))
+      ? "checkFailed"
+      : "checking";
+  }
+
+  return hasUnsavedEdits(model) ? "dirty" : "idle";
+};
+
+const actionStateOf = (model: Model): ActionState =>
+  Match.value(model.submission).pipe(
+    Match.withReturnType<ActionState>(),
+    Match.tag("Failed", "Outdated", () => "failed"),
+    Match.tag("Saving", () => "saving"),
+    Match.tag("Saved", "SavedUnread", () => "saved"),
+    Match.tag("Unchanged", () => "idle"),
+    Match.tag("Idle", () => idleStateOf(model)),
     Match.exhaustive
   );
+
+/**
+ * What the action bar says of a refused save, in a few words; the alert
+ * at the top of the form says the rest.
+ *
+ * @param submission - The save's state.
+ * @returns The note.
+ */
+const refusalNoteOf = (submission: Submission): string =>
+  Submission.guards.Failed(submission) &&
+  WriteError.guards.VersionConflict(submission.error)
+    ? "Not saved: someone else saved this record first."
+    : "Not saved: the reason is at the top of the form.";
+
+/**
+ * The action bar's status: the live save status, and, not announced, that
+ * Save waits for the form rules, that there are unsaved changes, or that
+ * the last save was refused (its alert is at the top of the form).
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The status.
+ */
+const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const state = actionStateOf(model);
+
+  const quiet = Match.value(state).pipe(
+    Match.when("failed", () => [
+      h.span(
+        [h.Class(ACTION_STATUS_QUIET_CLASS)],
+        [refusalNoteOf(model.submission)]
+      ),
+      buttonView(
+        {
+          onClick: Message.ClickedShowRefusal(),
+          text: SHOW_THE_REASON,
+          variant: "ghost",
+        },
+        h
+      ),
+    ]),
+    Match.when("dirty", () => [
+      h.span([h.Class(ACTION_STATUS_QUIET_CLASS)], ["Unsaved changes"]),
+    ]),
+    Match.when("checking", () => [
+      h.span([h.Class(ACTION_STATUS_QUIET_CLASS)], ["Checking form rules…"]),
+    ]),
+    Match.when("checkFailed", () => [
+      h.span(
+        [h.Class(ACTION_STATUS_QUIET_CLASS)],
+        ["Save waits: the form check failed."]
+      ),
+      buttonView(
+        {
+          onClick: Message.ClickedShowRefusal(),
+          text: SHOW_THE_REASON,
+          variant: "ghost",
+        },
+        h
+      ),
+    ]),
+    Match.orElse((): readonly Html[] => [])
+  );
+
+  return h.div(
+    [h.Class("action-status"), h.DataAttribute("state", state)],
+    [
+      Submission.guards.Saved(model.submission) ? check() : h.empty,
+      // NOTE: the live region stays mounted, so each outcome that appears
+      // in it is announced.
+      h.span([h.Role("status")], [submissionStatusText(model)]),
+      ...quiet,
+    ]
+  );
+};
 
 const deleteErrorText = (error: WriteError): string =>
   Match.value(error).pipe(
@@ -473,7 +662,11 @@ const sectionView = (
 
   return Option.match(section.maybeLabel, {
     onNone: () =>
-      h.keyed("div")(`section-${index}`, [h.Class("form-section")], fields),
+      h.keyed("div")(
+        `section-${index}`,
+        [h.Class("form-section form-section-plain")],
+        fields
+      ),
     onSome: (label) =>
       h.keyed("div")(
         `section-${index}-${label}`,
@@ -523,38 +716,92 @@ const saveText = (model: Model): string => {
   return isCreating(model) ? "Create" : "Save";
 };
 
-const actionsView = (model: Model, h: HtmlBuilder<Message>): Html =>
+/**
+ * The action bar: it stays at the bottom of the window while the form is
+ * on screen, with the save status, "Save" (Ctrl+S or Cmd+S in the form),
+ * "Delete" and the way back to the list.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The bar.
+ */
+const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
-    [h.Class("form-actions")],
     [
-      isReadOnlyForm(model)
-        ? h.empty
-        : buttonView(
-            {
-              isDisabled: isSaveBlocked(model),
-              onClick: Message.ClickedSave(),
-              text: saveText(model),
-              variant: "primary",
-            },
-            h
+      h.Class("action-bar"),
+      h.DataAttribute("read-only", String(isReadOnlyForm(model))),
+      h.OnMount(KeepFocusClearOfActionBar()),
+    ],
+    [
+      // NOTE: the probe is fixed over the whole window, so the bar's Mount
+      // learns when the window changes size (an element's ResizeObserver;
+      // the html and main elements do not change with the window's
+      // height).
+      h.div([h.Class(VIEWPORT_PROBE_CLASS), h.AriaHidden(true)]),
+      // NOTE: a read-only form has nothing to save, so its bar keeps only
+      // the way back and Delete.
+      isReadOnlyForm(model) ? h.empty : actionStatusView(model, h),
+      h.div(
+        [h.Class("form-actions")],
+        [
+          h.a(
+            [h.Href(listUrlOf(model)), h.Class("button button-ghost")],
+            ["Back to the list"]
           ),
-      isCreating(model)
-        ? h.empty
-        : buttonView(
-            {
-              isDisabled: Deletion.guards.Deleting(model.deletion),
-              onClick: Message.ClickedDelete(),
-              text: "Delete",
-              variant: "quiet",
-            },
-            h
-          ),
-      h.a(
-        [h.Href(listUrlOf(model.table)), h.Class("link")],
-        ["Back to the list"]
+          isCreating(model)
+            ? h.empty
+            : buttonView(
+                {
+                  isDisabled: Deletion.guards.Deleting(model.deletion),
+                  onClick: Message.ClickedDelete(),
+                  text: "Delete",
+                  variant: "danger",
+                },
+                h
+              ),
+          isReadOnlyForm(model)
+            ? h.empty
+            : Button.view(
+                {
+                  isDisabled: isSaveBlocked(model),
+                  onClick: Message.ClickedSave(),
+                  toView: (attributes) =>
+                    h.button(
+                      [
+                        ...attributes.button,
+                        h.Attribute("aria-keyshortcuts", "Control+S Meta+S"),
+                        h.Title("Save (Ctrl+S or ⌘S)"),
+                        h.Class("button button-primary"),
+                      ],
+                      [saveText(model)]
+                    ),
+                },
+                h
+              ),
+        ]
       ),
     ]
   );
+
+/**
+ * Ctrl+S, or Cmd+S on a Mac, anywhere in the form saves it, as "Save"
+ * does, instead of the browser saving the page.
+ *
+ * @param key - The key pressed.
+ * @param modifiers - The modifier keys held.
+ * @returns The Message, or none for any other key.
+ */
+const saveShortcut = (
+  key: string,
+  modifiers: { readonly ctrlKey: boolean; readonly metaKey: boolean }
+): Option.Option<Message> => {
+  const isSaveKey = key.toLowerCase() === "s";
+  const isCommand = modifiers.ctrlKey || modifiers.metaKey;
+
+  return isSaveKey && isCommand
+    ? Option.some(Message.PressedSaveShortcut())
+    : Option.none();
+};
 
 const deleteDialogView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.submodel({
@@ -592,17 +839,23 @@ const deleteDialogView = (model: Model, h: HtmlBuilder<Message>): Html =>
                       ]
                     ),
                     h.div(
-                      [h.Class("form-actions")],
+                      [h.Class("dialog-actions")],
                       [
                         h.button(
                           [...closeButton, h.Class("button button-quiet")],
                           ["Cancel"]
                         ),
-                        buttonView(
+                        Button.view(
                           {
                             onClick: Message.ClickedConfirmDelete(),
-                            text: "Delete",
-                            variant: "primary",
+                            toView: (attributes) =>
+                              h.button(
+                                [
+                                  ...attributes.button,
+                                  h.Class("button button-danger-solid"),
+                                ],
+                                ["Delete"]
+                              ),
                           },
                           h
                         ),
@@ -633,19 +886,39 @@ const formBodyView = (
   // NOTE: a `div` with the form role, not a native form: Enter in a field
   // must not save (a JSON or long-text editor, a picker's search), and the
   // pickers' and Date Pickers' own buttons stay outside any submission.
-  // Saving is the "Save" button. No `aria-busy`: it would hold back the
-  // "Saving…" status inside it; the button says a save is running.
+  // Saving is the "Save" button, or Ctrl+S / Cmd+S. No `aria-busy`: it
+  // would hold back the "Saving…" status inside it; the button says a
+  // save is running. A refusal's alert sits above the sections, where the
+  // user reads it before correcting the fields it names; the outcome of a
+  // save shows in the action bar beside "Save".
   return h.div(
-    [h.Role("form"), h.AriaLabelledBy(HEADING_ID), h.Class("record-form")],
     [
+      h.Role("form"),
+      h.AriaLabelledBy(HEADING_ID),
+      h.Class("record-form"),
+      h.OnKeyDownPreventDefault(saveShortcut),
+    ],
+    [
+      h.div(
+        [
+          h.Id(FORM_MESSAGES_ID),
+          // NOTE: focusable from script only, so "Show the reason" can
+          // bring the refusal into view without the page jumping by itself.
+          h.Tabindex(-1),
+          h.Class("form-messages"),
+        ],
+        [
+          submissionAlertView(model, h),
+          deletionView(model, h),
+          ...formStateMessagesView(model, h),
+        ]
+      ),
+      droppedEditsView(model, h),
       ...sections.map((section, index) =>
         sectionView(model, section, pending, index, problems, h)
       ),
-      formStateStatusView(model, h),
-      submissionView(model, h),
-      droppedEditsView(model, h),
-      deletionView(model, h),
-      actionsView(model, h),
+      formStateLiveRegionView(model, h),
+      actionBarView(model, h),
     ]
   );
 };
@@ -664,16 +937,30 @@ const readyView = (
   h.div(
     [h.Class("page")],
     [
-      h.h1([h.Id(HEADING_ID)], [headingOf(model)]),
-      recordFactsView(model, meta, h),
+      h.div(
+        [h.Class("page-heading")],
+        [
+          h.div(
+            [h.Class("page-heading-text")],
+            [
+              h.h1([h.Id(HEADING_ID)], [headingOf(model)]),
+              recordFactsView(model, meta, h),
+            ]
+          ),
+        ]
+      ),
       staleMetadataView(model, h),
       isCreating(model) ? h.empty : staleRecordView(model, h),
       isCreating(model) && !meta.table.creatable
         ? notCreatableView(meta, h)
         : formBodyView(model, meta, h),
       isCreating(model) ? h.empty : deleteDialogView(model, h),
-      isCreating(model) ? h.empty : relatedListsView(model, h),
-      isCreating(model) ? h.empty : historyView(model, h),
+      isCreating(model)
+        ? h.empty
+        : h.div(
+            [h.Class("record-panels")],
+            [relatedListsView(model, h), historyView(model, h)]
+          ),
     ]
   );
 
@@ -719,12 +1006,7 @@ const goneView = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
       h.p(
         [],
-        [
-          h.a(
-            [h.Href(listUrlOf(model.table)), h.Class("link")],
-            ["Back to the list"]
-          ),
-        ]
+        [h.a([h.Href(listUrlOf(model)), h.Class("link")], ["Back to the list"])]
       ),
     ]
   );
@@ -767,7 +1049,7 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
     onFailure: (error) =>
       error === "UnknownTable"
         ? notFoundView(
-            listUrlOf(model.table),
+            listUrlOf(model),
             { href: homeRouter(), text: "Go to the home page" },
             h
           )

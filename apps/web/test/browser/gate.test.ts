@@ -1031,6 +1031,9 @@ const devToolsNeverHoldRestrictedValues = Effect.fn(
   yield* Effect.promise(async () => {
     await reloadingList(page, async () => {
       await page.getByRole("link", { name: "Back to the list" }).click();
+      // NOTE: the proposal was never saved, so leaving asks first; the
+      // step leaves without it, as before the leave confirmation.
+      await page.getByRole("button", { name: "Discard changes" }).click();
     });
     await addCondition(page);
     await buildCondition(page, 1, [

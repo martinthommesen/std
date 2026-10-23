@@ -476,7 +476,9 @@ const sameListsAsApi = async (
 };
 
 const decodeTableList = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Array(Schema.Struct({ label: Schema.String })))
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ label: Schema.String, name: Schema.String }))
+  )
 );
 
 /**
@@ -563,9 +565,17 @@ const navigationMatchesTheApi = async (browser: Browser, origin: string) => {
 
     const listed = decodeTableList(await response.text());
 
+    // The app's tables come first, then the platform's (`core`) under
+    // Administration, each group in the table list's order.
+    const isPlatform = (table: (typeof listed)[number]) =>
+      table.name.startsWith("core.");
+
     assert.deepStrictEqual(
       await navigationTables(page),
-      listed.map((table) => table.label),
+      [
+        ...listed.filter((table) => !isPlatform(table)),
+        ...listed.filter(isPlatform),
+      ].map((table) => table.label),
       visitor.login
     );
     await context.close();

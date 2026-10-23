@@ -179,7 +179,12 @@ const sessionInTheBrowser = async (
     .getByText(visitor.name, { exact: true })
     .waitFor({ state: "attached" });
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  // Sign-out is in the user menu, under the user's name.
+  await page
+    .getByRole("banner")
+    .getByRole("button", { name: visitor.name })
+    .click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await page.waitForURL(`${origin}/sign-in`);
   assert.isUndefined(await sessionCookie(context));
 

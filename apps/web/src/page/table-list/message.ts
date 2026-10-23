@@ -41,6 +41,7 @@ export const Message = defineMessageUnion({
     table: MetaTableSchema,
   },
   SucceededLoadTargetTable: { request: Schema.Int, table: MetaTableSchema },
+  ToggledFilter: { isOpen: Schema.Boolean },
 });
 
 /** What happens on a list page. */

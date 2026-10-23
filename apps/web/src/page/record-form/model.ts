@@ -25,11 +25,13 @@ import { AsyncData } from "foldkit";
 import { CalendarDate } from "foldkit/calendar";
 import { defineTaggedUnion } from "foldkit/schema";
 
+import { DefinitionProblem } from "../../domain/definition-problems.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { MetaFieldSchema, MetaTableSchema } from "../../domain/metadata.ts";
 import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { DroppedEdit } from "../../domain/stale-edits.ts";
+import { ListQuery } from "../../route.ts";
 import {
   MetaError,
   Metadata,
@@ -95,7 +97,8 @@ export type ClassMetadata = typeof ClassMetadata.schema.Type;
  * - `UnknownField`: a field the server does not know for the caller.
  * - `NotAllowed`, `NotFound`, `Referenced` (deletes only).
  * - `Refused`: any other refusal, such as a definition change set's; its
- *   message names no value.
+ *   message names no value. A refused change set (`DefinitionInvalid`)
+ *   lists its `problems`, which the form shows one by one.
  * - `Unavailable`: no answer.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -104,7 +107,11 @@ export const WriteError = defineTaggedUnion({
   NotAllowed: {},
   NotFound: {},
   Referenced: {},
-  Refused: { message: Schema.String, tag: Schema.String },
+  Refused: {
+    message: Schema.String,
+    problems: Schema.Array(DefinitionProblem),
+    tag: Schema.String,
+  },
   SchemaChanged: {
     changes: Schema.Array(SchemaChangeSchema),
     currentRevision: Schema.String,
@@ -303,15 +310,22 @@ export type HistoryEntries = typeof HistoryEntries.schema.Type;
 /**
  * The history panel: open or closed, its entries (loaded when first
  * opened, again after each save while open), the number of its latest
- * request, and the names of the users who made the changes, as far as the
- * caller may read them.
+ * request, the display values of the records it names (`labels`, by
+ * table, then record ID: the users who made the changes, in `core.user`,
+ * and the targets of changed references), as far as the caller may read
+ * them, and the tables whose display values could not be loaded
+ * (`failedLabelTables`), whose records show by ID.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const History = Schema.Struct({
-  actorNames: Schema.Record(Schema.String, Schema.String),
   entries: HistoryEntries.schema,
+  failedLabelTables: Schema.Array(Schema.String),
   generation: Schema.Int,
   isOpen: Schema.Boolean,
+  labels: Schema.Record(
+    Schema.String,
+    Schema.Record(Schema.String, Schema.String)
+  ),
 });
 
 /** The history panel. */
@@ -330,6 +344,8 @@ export const FormStateVerdict = AsyncData.Schema(FormState, WriteError);
  *   the page the new record's form (decision 0020).
  * - `maybeAppRevision`: the latest revision the app had seen when the page
  *   opened, sent with the first metadata request.
+ * - `listQuery`: the list the form was opened from (the route's), which
+ *   "Back to the list", a delete and a create's new address keep.
  * - `metadata`: the endpoint's metadata and the revision it was built at,
  *   which every request of the form sends (Contracts 6.2).
  * - `record`: the record as read (edit only).
@@ -381,6 +397,7 @@ export const Model = Schema.Struct({
   history: History,
   id: Schema.Int,
   isShowingProblems: Schema.Boolean,
+  listQuery: ListQuery,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeEditsFrom: Schema.Option(RecordJsonSchema),
   maybeFormStateInFlight: Schema.Option(Schema.Int),

@@ -40,6 +40,7 @@ import {
   savedFiltersOf,
   update,
 } from "./update.ts";
+import { conditionCount } from "./view.ts";
 
 const ASSETS = "acme.asset";
 
@@ -1756,5 +1757,79 @@ describe("positions, sorts and addresses after failures and refreshes", () => {
         ]
       )
     );
+  });
+});
+
+/**
+ * A condition on the asset's status.
+ *
+ * @param value - The status it compares with.
+ * @returns The condition.
+ */
+const statusIs = (value: string): Expr => ({
+  left: { path: [ASSET_FIELDS.status] },
+  op: "eq",
+  right: { value },
+});
+
+/**
+ * How many conditions and groups the builder's outermost group holds.
+ *
+ * @param page - The page.
+ * @returns The count (1 when the root is a single node).
+ */
+const conditionsOf = (page: Model): number =>
+  page.builder.root._tag === "Group" ? page.builder.root.children.length : 1;
+
+describe("the filter's disclosure", () => {
+  it("starts closed and opens and closes with the Filter button", () => {
+    story(
+      update,
+      given(opened.model),
+      model((page) => {
+        expect(page.isFilterOpen).toBeFalsy();
+      }),
+      message(Message.ToggledFilter({ isOpen: true })),
+      Command.expectNone(),
+      model((page) => {
+        expect(page.isFilterOpen).toBeTruthy();
+      }),
+      message(Message.ToggledFilter({ isOpen: false })),
+      model((page) => {
+        expect(page.isFilterOpen).toBeFalsy();
+      })
+    );
+  });
+
+  it("opened on an empty filter, starts its first condition; opened again, adds none", () => {
+    story(
+      update,
+      given(opened.model),
+      ...metadataLoaded,
+      message(Message.ToggledFilter({ isOpen: true })),
+      model((page) => {
+        expect(conditionsOf(page)).toBe(1);
+      }),
+      message(Message.ToggledFilter({ isOpen: false })),
+      message(Message.ToggledFilter({ isOpen: true })),
+      model((page) => {
+        expect(conditionsOf(page)).toBe(1);
+      })
+    );
+  });
+
+  it("counts every condition of an applied filter, through groups and negations", () => {
+    expect(
+      conditionCount({
+        args: [
+          statusIs("lost"),
+          { arg: statusIs("spare"), op: "not" },
+          { args: [statusIs("scrapped"), statusIs("in_use")], op: "or" },
+        ],
+        op: "and",
+      })
+    ).toBe(4);
+    expect(conditionCount(statusIs("lost"))).toBe(1);
+    expect(conditionCount({ args: [], op: "and" })).toBe(0);
   });
 });

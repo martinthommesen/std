@@ -731,3 +731,24 @@ export const checkForm = (model: Model): FormCheck => {
  */
 export const isEmptyBody = (body: FormBody): boolean =>
   Record.isEmptyRecord(body.values) && Record.isEmptyRecord(body.secrets);
+
+/**
+ * Whether the form holds edits leaving would lose: of the effective edits
+ * (hidden and read-only fields left out, automatic clears kept), one a save
+ * would send (it differs from the stored value), or one that does not
+ * convert yet, such as incomplete JSON or a number with a letter in it,
+ * which a save cannot send but the user typed. A read-only form never has
+ * any.
+ *
+ * @param model - The page.
+ * @returns True when leaving would lose them.
+ */
+export const hasUnsavedEdits = (model: Model): boolean => {
+  if (isReadOnlyForm(model)) {
+    return false;
+  }
+
+  const built = buildBody(editedFieldsOf(model));
+
+  return !isEmptyBody(built.body) || !Record.isEmptyRecord(built.problems);
+};

@@ -5,6 +5,11 @@ import { load, pushUrl, replaceUrl } from "foldkit/navigation";
 
 import { SchemaRevision } from "./domain/schema-revision.ts";
 import { Message } from "./message.ts";
+import {
+  SHELL_PREFERENCES_KEY,
+  ShellPreferences,
+  ShellPreferencesJson,
+} from "./shell-preferences.ts";
 import { StdApi, atRevision, responseRevision } from "./std-client.ts";
 
 /** The element ID of every page's `main`. */
@@ -131,6 +136,30 @@ export const FocusMain = Command.define("FocusMain", {
     preventScroll: true,
   }).pipe(Effect.ignore, Effect.as(Message.CompletedFocusMain())),
   messages: [Message.CompletedFocusMain],
+});
+
+/**
+ * Stores the shell's preferences in the browser (`localStorage`), so the
+ * next visit opens the navigation as the user left it. A browser that
+ * refuses (storage disabled or full) answers `FailedSaveShellPreferences`,
+ * which the navigation says.
+ */
+export const SaveShellPreferences = Command.define("SaveShellPreferences", {
+  args: { preferences: ShellPreferences },
+  execute: ({ preferences }) =>
+    Schema.encodeEffect(ShellPreferencesJson)(preferences).pipe(
+      Effect.flatMap((text) =>
+        Effect.try(() => {
+          globalThis.localStorage.setItem(SHELL_PREFERENCES_KEY, text);
+        })
+      ),
+      Effect.as(Message.CompletedSaveShellPreferences()),
+      Effect.orElseSucceed(() => Message.FailedSaveShellPreferences())
+    ),
+  messages: [
+    Message.CompletedSaveShellPreferences,
+    Message.FailedSaveShellPreferences,
+  ],
 });
 
 /** Follows an in-app link. */

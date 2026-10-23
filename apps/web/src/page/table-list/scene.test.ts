@@ -14,6 +14,7 @@ import {
   type,
   within,
 } from "foldkit/scene";
+import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
 import type { RecordJson } from "../../domain/record.ts";
@@ -34,6 +35,15 @@ import { init, update } from "./update.ts";
 import { view } from "./view.ts";
 
 const ASSETS = "acme.asset";
+
+/**
+ * A saved filter's button.
+ *
+ * @param name - Its label, or "All records".
+ * @returns Its locator.
+ */
+const savedFilter = (name: string) =>
+  within(role("group", { name: "Saved filters" }), role("button", { name }));
 
 const BOB_ID = "019a0000-0000-7000-8000-0000000000b0";
 
@@ -124,6 +134,32 @@ describe("list page", () => {
       expect(role("button", { name: "Previous page" })).toBeDisabled(),
       expect(role("button", { name: "Next page" })).toBeEnabled(),
       expect(text("Page 1")).toExist()
+    );
+  });
+
+  it("links each record, and New, with the list's own address, so the form goes back to this list", () => {
+    scene(
+      { update, view },
+      given(
+        modifyFields(loaded, {
+          address: () => ({
+            filter: Option.none(),
+            limit: Option.some("50"),
+            sort: Option.some("-number"),
+          }),
+        })
+      ),
+      inside(
+        rowWith("AST0000001"),
+        expect(role("link", { name: "L" })).toHaveAttr(
+          "href",
+          "/tables/acme.asset/records/019a0000-0000-7000-8000-00000000000a?limit=50&sort=-number"
+        )
+      ),
+      expect(role("link", { name: /^New/u })).toHaveAttr(
+        "href",
+        "/tables/acme.asset/new?limit=50&sort=-number"
+      )
     );
   });
 
@@ -327,7 +363,18 @@ describe("list page", () => {
     scene(
       { update, view },
       given(loaded),
-      click(role("button", { name: "Add condition" })),
+      // The builder is collapsed behind "Filter" until the user opens it.
+      expect(role("button", { name: "Filter" })).toHaveAttr(
+        "aria-expanded",
+        "false"
+      ),
+      click(role("button", { name: "Filter" })),
+      expect(role("button", { name: "Filter" })).toHaveAttr(
+        "aria-expanded",
+        "true"
+      ),
+      // Opened on an empty filter, the builder starts its first condition.
+      expect(role("group", { name: "Condition 2" })).not.toExist(),
       inside(
         role("group", { name: "Condition 1" }),
         change(label("Field"), ASSET_FIELDS.sizeInches),
@@ -351,7 +398,10 @@ describe("list page", () => {
       expect(role("status")).toHaveText("2 records"),
       expect(
         within(role("group", { name: "Condition 1" }), label("Value"))
-      ).toHaveValue("27")
+      ).toHaveValue("27"),
+      expect(
+        role("button", { name: "Filter, 1 condition applied" })
+      ).toHaveAttr("aria-expanded", "true")
     );
   });
 
@@ -479,9 +529,10 @@ describe("list page failures", () => {
     scene(
       { update, view },
       given(withSaved),
-      expect(label("Saved filter")).toHaveValue(""),
-      expect(role("option", { name: "Lost assets" })).toExist(),
-      change(label("Saved filter"), "00000000-0000-4000-8000-0000000005f1"),
+      expect(savedFilter("All records")).toHaveAttr("aria-pressed", "true"),
+      expect(savedFilter("Lost assets")).toHaveAttr("aria-pressed", "false"),
+      // One click applies a saved filter.
+      click(savedFilter("Lost assets")),
       Command.resolveAll(
         [ReplaceListUrl, Message.CompletedReplaceListUrl()],
         [
@@ -494,9 +545,12 @@ describe("list page failures", () => {
         ]
       ),
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
-      expect(label("Saved filter")).toHaveValue(
-        "00000000-0000-4000-8000-0000000005f1"
-      )
+      expect(savedFilter("Lost assets")).toHaveAttr("aria-pressed", "true"),
+      expect(savedFilter("All records")).toHaveAttr("aria-pressed", "false"),
+      // The "Filter" button counts the applied conditions.
+      expect(
+        role("button", { name: "Filter, 1 condition applied" })
+      ).toHaveAttr("aria-expanded", "false")
     );
   });
 });
