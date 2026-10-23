@@ -7,6 +7,8 @@ import type { LayoutElement } from "@std/definitions/definition";
 import type { NamedSetFile } from "@std/definitions/set-file";
 import {
   HELPDESK_CASCADE_ROLE_ID,
+  HELPDESK_CASCADE_LOGIN,
+  HELPDESK_CASCADE_NAME,
   HELPDESK_CASCADE_USER_ID,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
@@ -25,12 +27,14 @@ import {
   helpdeskTestLayer,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { Actor } from "../src/auth/actor.ts";
 import { ensureUser } from "../src/auth/bootstrap-admin.ts";
 import { hashPassword } from "../src/auth/password.ts";
-import { Catalog } from "../src/catalog/catalog.ts";
+import { Catalog, makeCatalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
+import { ensureSetIdentities } from "../src/config/set-identities.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
@@ -52,6 +56,7 @@ import {
   clientFor,
 } from "./itil-support.ts";
 import { subscribe } from "./outbox-support.ts";
+import { USERS } from "./records-support.ts";
 import {
   addField,
   change,
@@ -650,6 +655,169 @@ const serviceFindings = Effect.gen(function* serviceFindings() {
 
 describe("helpdesk-service-identity", () => {
   it.effect(
+    "reserves the service login and ID before v3, including bootstrap and rename",
+    () =>
+      Effect.gen(function* reserveService() {
+        const fixture = yield* HelpdeskFixture;
+
+        for (const login of [HELPDESK_CASCADE_LOGIN, "STD-HELPDESK-CASCADE"]) {
+          const created = yield* createRecord({
+            body: { active: true, login, name: "Human" },
+            endpointClassId: USER_CLASS_ID,
+          }).pipe(Effect.flip);
+
+          assert.strictEqual(created._tag, "NotAllowed");
+
+          const renamed = yield* updateRecord({
+            body: { login },
+            endpointClassId: USER_CLASS_ID,
+            expectedVersion: null,
+            id: fixture.agent.id,
+          }).pipe(Effect.flip);
+
+          assert.strictEqual(renamed._tag, "NotAllowed");
+          assert.strictEqual(
+            (yield* ensureUser({ ...account, login }, []).pipe(Effect.flip))
+              ._tag,
+            "NotAllowed"
+          );
+        }
+
+        const reservedId = yield* createRecord({
+          body: { active: true, login: "human-service-id", name: "Human" },
+          endpointClassId: USER_CLASS_ID,
+          fixedId: HELPDESK_CASCADE_USER_ID,
+        }).pipe(Effect.flip);
+
+        assert.strictEqual(reservedId._tag, "NotAllowed");
+      }).pipe(
+        Effect.provide(
+          recordServices.pipe(
+            Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+          )
+        ),
+        TestClock.withLive
+      )
+  );
+
+  it.effect(
+    "names a pre-existing login collision and recovers after the operator renames it",
+    () =>
+      Effect.gen(function* collision() {
+        const fixture = yield* HelpdeskFixture;
+        yield* values(
+          'UPDATE core."user" SET login = $2 WHERE id = $1::uuid RETURNING id::text AS value',
+          [fixture.agent.id, "STD-HELPDESK-CASCADE"]
+        );
+        assert.deepStrictEqual(yield* serviceFindings, [
+          "serviceIdentityLoginCollision",
+        ]);
+        const error = yield* loadSetDirectory(HELPDESK_V3).pipe(Effect.flip);
+        assert.strictEqual(error._tag, "SetIdentityFailed");
+
+        if (error._tag === "SetIdentityFailed") {
+          assert.strictEqual(error.conflictingUserId, fixture.agent.id);
+          assert.include(error.message, fixture.agent.id);
+          assert.include(error.message, "rename that user's login");
+        }
+
+        const diagnostics = (yield* runDoctor()).findings.filter(
+          (entry) => entry.code === "serviceIdentityLoginCollision"
+        );
+
+        assert.lengthOf(diagnostics, 1);
+        assert.include(diagnostics[0]?.message ?? "", fixture.agent.id);
+        yield* updateRecord({
+          body: { login: "renamed-human" },
+          endpointClassId: USER_CLASS_ID,
+          expectedVersion: null,
+          id: fixture.agent.id,
+        });
+        yield* loadSetDirectory(HELPDESK_V3);
+        assert.deepStrictEqual(yield* serviceFindings, []);
+      }).pipe(
+        Effect.provide(
+          recordServices.pipe(
+            Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+          )
+        ),
+        TestClock.withLive
+      )
+  );
+
+  it.effect(
+    "an unchanged v3 reload writes no service user, individual or assignment changes",
+    () =>
+      Effect.gen(function* unchangedIdentity() {
+        const entries = values(
+          'SELECT row_to_json(c)::text AS value FROM core.change c WHERE record_id = $1::uuid OR record_id IN (SELECT individual FROM core."user" WHERE id = $1::uuid) OR record_id IN (SELECT id FROM core.user_role WHERE "user" = $1::uuid) ORDER BY id',
+          [HELPDESK_CASCADE_USER_ID]
+        );
+
+        const before = yield* entries;
+        assert.isAtLeast(before.length, 3);
+        yield* loadSetDirectory(HELPDESK_V3);
+        assert.deepStrictEqual(yield* entries, before);
+        assert.deepStrictEqual(yield* serviceFindings, []);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "doctor explains a retired role and provisioning waits for its restoration",
+    () =>
+      Effect.gen(function* inactiveRole() {
+        yield* values(
+          "UPDATE core.role SET state = 'retired' WHERE id = $1::uuid RETURNING id::text AS value",
+          [HELPDESK_CASCADE_ROLE_ID]
+        );
+        yield* values(
+          'UPDATE core."user" SET active = false WHERE id = $1::uuid RETURNING id::text AS value',
+          [HELPDESK_CASCADE_USER_ID]
+        );
+        yield* (yield* Catalog).refresh;
+
+        const findings = (yield* runDoctor()).findings.filter(
+          (entry) => entry.check === 18
+        );
+
+        assert.deepStrictEqual(
+          findings.map((entry) => entry.code),
+          ["serviceIdentityRoleInactive"]
+        );
+        assert.include(
+          findings[0]?.message ?? "",
+          "restore the role to active"
+        );
+        // Raw corruption does not advance the revision; emulate a fresh CLI catalog.
+        const freshCatalog = Catalog.of(yield* makeCatalog);
+        assert.strictEqual(
+          (yield* freshCatalog.refresh).role(HELPDESK_CASCADE_ROLE_ID)?.state,
+          "retired"
+        );
+        yield* ensureSetIdentities().pipe(
+          Effect.provideService(Catalog, freshCatalog)
+        );
+        assert.deepStrictEqual(yield* serviceFindings, [
+          "serviceIdentityRoleInactive",
+        ]);
+        assert.deepStrictEqual(
+          yield* values(
+            'SELECT active::text AS value FROM core."user" WHERE id = $1::uuid',
+            [HELPDESK_CASCADE_USER_ID]
+          ),
+          ["false"]
+        );
+        yield* values(
+          "UPDATE core.role SET state = 'active' WHERE id = $1::uuid RETURNING id::text AS value",
+          [HELPDESK_CASCADE_ROLE_ID]
+        );
+        yield* (yield* Catalog).refresh;
+        yield* loadSetDirectory(HELPDESK_V3);
+        assert.deepStrictEqual(yield* serviceFindings, []);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
     "a direct v3 set load creates and repairs a missing identity through the pipeline with local fields and outbox delivery",
     () =>
       Effect.gen(function* loadWithoutDataMigration() {
@@ -665,7 +833,7 @@ describe("helpdesk-service-identity", () => {
 
         const subscription = yield* subscribe({
           classId: USER_CLASS_ID,
-          identityId: SYSTEM_USER_ID,
+          identityId: USERS.alice,
           operations: ["create"],
         });
 
@@ -745,6 +913,8 @@ describe("helpdesk-service-identity", () => {
         for (const body of [
           { password: "disposable-test-password" },
           { active: false },
+          { login: "renamed-service" },
+          { name: "Renamed service" },
         ]) {
           const error = yield* updateRecord({
             body,
@@ -763,6 +933,24 @@ describe("helpdesk-service-identity", () => {
         }).pipe(Effect.flip);
 
         assert.strictEqual(deleted._tag, "NotAllowed");
+
+        const systemActor = yield* updateRecord({
+          body: { password: "disposable-test-password" },
+          endpointClassId: USER_CLASS_ID,
+          expectedVersion: null,
+          id: HELPDESK_CASCADE_USER_ID,
+        }).pipe(
+          Effect.provideService(
+            Actor,
+            Actor.of({
+              roleIds: [BUILT_IN_ROLE_IDS.admin],
+              userId: SYSTEM_USER_ID,
+            })
+          ),
+          Effect.flip
+        );
+
+        assert.strictEqual(systemActor._tag, "NotAllowed");
 
         for (const body of [
           { role: HELPDESK_CASCADE_ROLE_ID, user: fixture.agent.id },
@@ -868,7 +1056,7 @@ describe("helpdesk-service-identity", () => {
       Effect.gen(function* repairService() {
         const fixture = yield* HelpdeskFixture;
         yield* values(
-          "UPDATE core.\"user\" SET active = false, password = 'corrupt' WHERE id = $1::uuid RETURNING id::text AS value",
+          "UPDATE core.\"user\" SET active = false, password = 'corrupt', login = 'changed-service', name = 'Changed service' WHERE id = $1::uuid RETURNING id::text AS value",
           [HELPDESK_CASCADE_USER_ID]
         );
         yield* values(
@@ -886,12 +1074,20 @@ describe("helpdesk-service-identity", () => {
         );
         assert.deepStrictEqual(yield* serviceFindings, [
           "serviceIdentityInactive",
+          "serviceIdentityNames",
           "serviceIdentityPassword",
           "serviceIdentityRoles",
           "serviceRoleAssigned",
         ]);
         yield* runUpgrade({ sets: [HELPDESK_V3] });
         assert.deepStrictEqual(yield* serviceFindings, []);
+        assert.deepStrictEqual(
+          yield* values(
+            "SELECT login || '/' || name AS value FROM core.\"user\" WHERE id = $1::uuid",
+            [HELPDESK_CASCADE_USER_ID]
+          ),
+          [`${HELPDESK_CASCADE_LOGIN}/${HELPDESK_CASCADE_NAME}`]
+        );
         assert.deepStrictEqual(
           yield* values(
             "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND record_version = 2",

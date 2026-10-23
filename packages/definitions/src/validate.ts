@@ -66,7 +66,11 @@ import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
 import { recordRuleProblems } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { CONFIG_SUBSCRIPTION_CLASS_IDS, USER_FIELD_IDS } from "./well-known.ts";
+import {
+  CONFIG_SUBSCRIPTION_CLASS_IDS,
+  SERVICE_USER_IDS,
+  USER_FIELD_IDS,
+} from "./well-known.ts";
 
 /** Field kinds that can be created in Step 1 (Contracts plan, Step 1). */
 export const SUPPORTED_FIELD_KINDS: ReadonlySet<FieldKind> = new Set<FieldKind>(
@@ -1172,6 +1176,19 @@ const checkSubscription = (
   subscription: SubscriptionDefinition,
   purpose: ConditionPurpose
 ): void => {
+  if (
+    subscription.owner.layer === "local" &&
+    SERVICE_USER_IDS.has(subscription.identityId)
+  ) {
+    problems.push(
+      problem(
+        "invalidSubscription",
+        subscription.id,
+        `Local subscriptions cannot run as reserved service identity ${subscription.identityId}; choose an ordinary user.`
+      )
+    );
+  }
+
   nameProblem(
     problems,
     subscription,

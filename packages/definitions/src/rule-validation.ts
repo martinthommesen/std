@@ -59,7 +59,11 @@ import type {
   RuleValue,
 } from "./rule-definition.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
-import { RULES_RUN_AS_PERMISSION_ID, USER_CLASS_ID } from "./well-known.ts";
+import {
+  RULES_RUN_AS_PERMISSION_ID,
+  SERVICE_USER_IDS,
+  USER_CLASS_ID,
+} from "./well-known.ts";
 
 /** The longest fixed message a `refuse` action may carry. [judgment] */
 export const REFUSAL_MESSAGE_MAX = 500;
@@ -960,6 +964,19 @@ export const recordRuleProblems = (
   purpose: ConditionPurpose
 ): readonly DefinitionProblem[] => {
   const checking: Checking = { problems: [], purpose, rule, snapshot };
+  const identityId = runIdentityOf(snapshot, rule);
+
+  if (
+    rule.owner.layer === "local" &&
+    identityId !== null &&
+    SERVICE_USER_IDS.has(identityId)
+  ) {
+    invalid(
+      checking,
+      `Local rules cannot run as reserved service identity ${identityId}; choose an ordinary user.`
+    );
+  }
+
   const nameFound = identifierProblem(rule.name);
 
   if (nameFound !== undefined) {

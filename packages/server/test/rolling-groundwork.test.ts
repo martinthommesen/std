@@ -27,7 +27,7 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { STD_VERSION } from "../src/version.ts";
 import { startServe, startWorker } from "./cli-support.ts";
 import { outboxTestLayer, subscribe } from "./outbox-support.ts";
-import { setUpAcme } from "./records-support.ts";
+import { USERS, setUpAcme } from "./records-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
@@ -208,7 +208,7 @@ describe("rolling-groundwork", () => {
 
           const subscriptionId = yield* subscribe({
             classId: PLATFORM_CLASS_IDS.role,
-            identityId: SYSTEM_USER_ID,
+            identityId: USERS.alice,
           });
 
           const role = addRole("version_floor_probe");

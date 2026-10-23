@@ -25,6 +25,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
   HELPDESK_CASCADE_ROLE_ID,
+  HELPDESK_CASCADE_LOGIN,
   SERVICE_USER_IDS,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
@@ -131,7 +132,11 @@ export const ensureUser = Effect.fn("BootstrapAdmin.ensureUser")(
     account: AdminAccount,
     roleIds: readonly DefinitionId[]
   ) {
-    if (roleIds.includes(HELPDESK_CASCADE_ROLE_ID)) {
+    if (
+      roleIds.includes(HELPDESK_CASCADE_ROLE_ID) ||
+      textKey(account.login.normalize("NFC").trim(), false) ===
+        HELPDESK_CASCADE_LOGIN
+    ) {
       return yield* new NotAllowed();
     }
 

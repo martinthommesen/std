@@ -177,7 +177,7 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
     ...(yield* checkLevelRows(snapshot, exists)),
     ...(yield* checkAuditUsers(snapshot, exists)),
     ...(yield* checkExternalIdentities),
-    ...(yield* checkServiceIdentities(snapshot)),
+    ...(yield* checkServiceIdentities(snapshot, exists)),
     ...(yield* checkProtected(snapshot, layers, options.coreDirectory)),
   ];
 });

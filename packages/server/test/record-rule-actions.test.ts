@@ -33,6 +33,7 @@ import type {
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
+  HELPDESK_CASCADE_USER_ID,
   PERMISSION_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
@@ -74,7 +75,7 @@ import {
 } from "./schema-support.ts";
 import { LAPTOP, MONITOR, patch, versionOf } from "./writes-support.ts";
 
-const SYSTEM: Requester = { roleIds: [], userId: SYSTEM_USER_ID };
+const LOCAL_REQUESTER: Requester = { roleIds: [], userId: USERS.alice };
 
 /**
  * A part class of acme.asset (Contracts 4.9), created in the same change
@@ -181,7 +182,7 @@ const carrier = (id: string, extra: Record<string, JsonValue> = {}) =>
       deadLetter: "block",
       enabled: true,
       id,
-      identityId: SYSTEM_USER_ID,
+      identityId: USERS.alice,
       kind: "subscription",
       maxAttempts: 10,
       name: `carrier_${id.slice(0, 8)}`,
@@ -234,7 +235,7 @@ const ruleIn = (slot: Slot, actions: readonly RuleAction[]) => {
 const outcomeOf = (
   snapshot: ConfigSnapshot,
   operations: readonly Operation[],
-  requester: Requester = SYSTEM
+  requester: Requester = LOCAL_REQUESTER
 ): readonly string[] => {
   const applied = applyOperations(
     snapshot,
@@ -417,7 +418,7 @@ describe("record-rule-actions", () => {
               addRecordRule(ACME.asset, {
                 actions: set,
                 ruleKind: "derive",
-                runAsId: SYSTEM_USER_ID,
+                runAsId: USERS.alice,
               }).op,
             ],
           ],
@@ -429,7 +430,7 @@ describe("record-rule-actions", () => {
                 actions: each,
                 phase: "afterCommit",
                 ruleKind: null,
-                runAsId: SYSTEM_USER_ID,
+                runAsId: USERS.alice,
                 subscriptionId: subscription,
               }).op,
             ],
@@ -996,6 +997,34 @@ describe("record-rule-actions", () => {
           );
 
           assert.strictEqual(assignment.status, 201, assignment.text);
+
+          for (const identityId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            const reservedRule = yield* postChangeSet(ada, [
+              dockLaptops("reserved", identityId).op,
+            ]);
+
+            assert.strictEqual(reservedRule.status, 422, reservedRule.text);
+            assert.include(
+              reservedRule.text,
+              "Local rules cannot run as reserved service identity"
+            );
+            assert.include(reservedRule.text, identityId);
+
+            const reservedSubscription = yield* postChangeSet(ada, [
+              carrier(freshId(), { identityId }),
+            ]);
+
+            assert.strictEqual(
+              reservedSubscription.status,
+              422,
+              reservedSubscription.text
+            );
+            assert.include(
+              reservedSubscription.text,
+              "Local subscriptions cannot run as reserved service identity"
+            );
+            assert.include(reservedSubscription.text, identityId);
+          }
 
           const written = yield* postChangeSet(ada, [rule.op]);
 

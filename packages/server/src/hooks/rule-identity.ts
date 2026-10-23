@@ -19,7 +19,10 @@ import type { RecordRuleDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { RULES_RUN_AS_PERMISSION_ID } from "@std/definitions/well-known";
+import {
+  RULES_RUN_AS_PERMISSION_ID,
+  SERVICE_USER_IDS,
+} from "@std/definitions/well-known";
 import { Effect } from "effect";
 
 import { loadActor } from "../auth/actor.ts";
@@ -63,6 +66,10 @@ export const checkRunAsAuthor = Effect.fn("Rules.checkRunAsAuthor")(
   ) {
     if (rule.owner.layer !== "local") {
       return yield* Effect.void;
+    }
+
+    if (SERVICE_USER_IDS.has(identityId)) {
+      return yield* new NotAllowed();
     }
 
     const author = yield* authorOf(rule);
