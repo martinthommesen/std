@@ -26,6 +26,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { objectOf } from "./authz-support.ts";
 import {
+  codeOf,
   listOf,
   listPath,
   readsTestLayer,
@@ -240,6 +241,56 @@ describe("read-hygiene", () => {
 
             assert.strictEqual(selected.status, 200, selected.text);
             assert.strictEqual(filtered.status, 200, filtered.text);
+
+            // A one-hop filter through a target the caller has no allow on
+            // behaves like an empty value: every record matches "is
+            // empty", none matches "is not empty", and nothing is revealed.
+            const hiddenEmpty = yield* listOf(
+              yield* http.get(
+                listPath("acme.asset", {
+                  condition: "roleRef.creationDate is empty",
+                }),
+                { token: session }
+              )
+            );
+
+            const hiddenValue = yield* listOf(
+              yield* http.get(
+                listPath("acme.asset", {
+                  condition: "roleRef.creationDate is not empty",
+                }),
+                { token: session }
+              )
+            );
+
+            const everyone = yield* listOf(
+              yield* http.get(listPath("acme.asset"), { token: session })
+            );
+
+            assert.strictEqual(
+              hiddenEmpty.resources.length,
+              everyone.resources.length
+            );
+            assert.isAbove(everyone.resources.length, 0);
+            assert.strictEqual(hiddenValue.resources.length, 0);
+
+            // A target field the caller cannot read is refused exactly
+            // like a field that does not exist.
+            const unreadable = yield* http.get(
+              listPath("acme.asset", { condition: 'roleRef.name = "admin"' }),
+              { token: session }
+            );
+
+            const missing = yield* http.get(
+              listPath("acme.asset", {
+                condition: 'roleRef.nonesuch = "admin"',
+              }),
+              { token: session }
+            );
+
+            assert.strictEqual(unreadable.status, 400);
+            assert.strictEqual(yield* codeOf(unreadable), "UnknownField");
+            assert.strictEqual(yield* codeOf(missing), "UnknownField");
             // No allow on core.role: the target's class name is not shown.
             assert.notInclude(selected.text, "CoreRole");
             assert.notInclude(selected.text, "core.role");

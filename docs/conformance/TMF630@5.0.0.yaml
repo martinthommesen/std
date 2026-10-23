@@ -200,7 +200,7 @@ rows:
     level: optional
     requirement: A server may send any header defined by RFC 9110, RFC 9111 or RFC 9112.
     status: pending
-    note: "C10.1: STD sends its own headers (`STD-Schema-Revision`, `Cache-Control`, `Deprecation` on v1) beside the standard ones"
+    note: "C10.1: STD sends its own headers (`STD-Schema-Revision`, `Cache-Control`) beside the standard ones"
   - id: TMF630@5.0.0/P1/1.5.2/server-expects-any-header
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: mandatory
@@ -2389,7 +2389,7 @@ rows:
     level: mandatory
     requirement: In a minor version that adds operations, every existing operation is kept. (lowercase 'must' in the source)
     status: pending
-    note: "spec-authoring: constrains STD's /api/v1/openapi.json across minor releases; C10.1 keeps v1 frozen and removes it only with a new major path"
+    note: "spec-authoring: constrains STD's /api/v1/openapi.json across minor releases; C10.1 keeps the major version in the path"
   - id: TMF630@5.0.0/P1/13.1.2/minor-new-parameters-optional
     source: TMF630 v5.0.0 P1 §13.1.2 p.239
     level: mandatory

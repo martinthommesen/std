@@ -58,8 +58,9 @@ import {
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 
-import { v2OpenApi } from "./api/openapi.ts";
+import { apiOpenApi } from "./api/openapi.ts";
 import { API_PREFIX } from "./api/resource.ts";
+import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
 
 /** How the document describes the revision it was served at. */
 export interface DocumentRevision {
@@ -563,7 +564,7 @@ type OperationId = (typeof OPERATION_IDS)[number];
 // from, by operation ID.
 const operationsById = (): ReadonlyMap<string, JsonObject> => {
   const found = new Map<string, JsonObject>();
-  const paths = v2OpenApi.paths ?? null;
+  const paths = apiOpenApi.paths ?? null;
 
   for (const item of isJsonObject(paths) ? Object.values(paths) : []) {
     for (const operation of isJsonObject(item) ? Object.values(item) : []) {
@@ -594,7 +595,7 @@ const COMPONENT_PREFIX = "#/components/schemas/";
 
 // A component schema of the API-wide document.
 const apiSchema = (name: string): JsonValue | undefined => {
-  const components = v2OpenApi.components ?? null;
+  const components = apiOpenApi.components ?? null;
 
   const schemas = isJsonObject(components)
     ? (components.schemas ?? null)
@@ -648,8 +649,28 @@ const operationOf = (
   responses: { ...success, ...errorResponsesOf(operationId) },
 });
 
+/**
+ * The media types a `PATCH` takes: a merge patch, and a JSON Patch except
+ * on a definition table, whose writes are change sets (Contracts 10.5).
+ *
+ * @param definitionTable - Whether the table holds definitions.
+ * @returns The request body's content.
+ */
+const patchContent = (definitionTable: boolean): JsonObject => {
+  const merge = { schema: componentRef("ResourcePatch") };
+
+  return definitionTable
+    ? { "application/json": merge, "application/merge-patch+json": merge }
+    : {
+        "application/json": merge,
+        "application/json-patch+json": { schema: componentRef("JsonPatch") },
+        "application/merge-patch+json": merge,
+      };
+};
+
 const paths = (table: MetaTable, naming: DocumentNaming): JsonObject => {
   const base = `${API_PREFIX}/${naming.collection}`;
+  const definitionTable = DEFINITION_KIND_OF_TABLE.has(table.name);
   const id = parameter("id", "path");
   const resource = componentRef("Resource");
 
@@ -685,19 +706,12 @@ const paths = (table: MetaTable, naming: DocumentNaming): JsonObject => {
       patch: operationOf(
         "patch",
         {
-          description:
-            "A merge patch (`application/merge-patch+json`, or `application/json`) or an RFC 6902 operation list (`application/json-patch+json`); `If-Match` carries the revision the change is based on.",
+          description: definitionTable
+            ? "A merge patch (`application/merge-patch+json`, or `application/json`): a definition table's write is a change set, so it takes no JSON Patch; `If-Match` carries the revision the change is based on."
+            : "A merge patch (`application/merge-patch+json`, or `application/json`) or an RFC 6902 operation list (`application/json-patch+json`); `If-Match` carries the revision the change is based on.",
           parameters: [id, IF_MATCH],
           requestBody: {
-            content: {
-              "application/json": { schema: componentRef("ResourcePatch") },
-              "application/json-patch+json": {
-                schema: componentRef("JsonPatch"),
-              },
-              "application/merge-patch+json": {
-                schema: componentRef("ResourcePatch"),
-              },
-            },
+            content: patchContent(definitionTable),
             required: true,
           },
         },
@@ -765,12 +779,17 @@ export const tableOpenApi = (
     apiSchemas
   );
 
+  // A JSON Patch body only where the table takes one (not a definition
+  // table's change sets).
+  if (!DEFINITION_KIND_OF_TABLE.has(table.name)) {
+    apiSchemas.set("JsonPatch", JSON_PATCH);
+  }
+
   return {
     components: {
       schemas: {
         ...Object.fromEntries(apiSchemas),
         ...referenceSchemas(table, naming.refs),
-        JsonPatch: JSON_PATCH,
         Resource: resourceSchema(table, naming),
         ResourceCreate: bodySchema(table, "create", naming.refs),
         ResourcePatch: bodySchema(table, "update", naming.refs),

@@ -59,7 +59,7 @@ import {
 import { tableOpenApi } from "../table-openapi.ts";
 import { answered } from "./answered.ts";
 import { getAndHead } from "./methods.ts";
-import { v2OpenApi } from "./openapi.ts";
+import { apiOpenApi } from "./openapi.ts";
 import { jsonAnswer } from "./records.ts";
 import { checkedSessionCreate } from "./request-schemas.ts";
 import { jsonBodyOf, withSession } from "./request.ts";
@@ -656,7 +656,7 @@ export const FixedRoutes = Layer.unwrap(
           Effect.gen(function* openApiRequest() {
             yield* checkUnscopedRevision(stated);
 
-            return jsonAnswer(v2OpenApi, 200);
+            return jsonAnswer(apiOpenApi, 200);
           })
         );
       });

@@ -63,6 +63,7 @@ import { stepBoundary } from "../schema/recovery-settings.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { TransactionsApi } from "../sql/transactions.ts";
+import { mergePatch } from "./api/patch.ts";
 import {
   applyAsActor,
   checkTargetsVisible,
@@ -518,6 +519,45 @@ const PATCH_BUILDERS: Readonly<
 const sameValue = (left: JsonValue, right: JsonValue | undefined): boolean =>
   stringifyJson(left) === stringifyJson(right ?? null);
 
+/** The codecs of JSON-valued definition columns. */
+const JSON_CODECS: ReadonlySet<string> = new Set(["json", "nullableJson"]);
+
+/**
+ * A body whose JSON-valued columns are merged into the definition's current
+ * values by RFC 7396 (Contracts 10.5: a `PATCH` is a merge patch), so a
+ * patch that names one member of a field type or a condition keeps the
+ * others. The update is applied at the definition's version (`If-Match`),
+ * which the change set checks again under its lock, so the merge never
+ * builds on a value another change set replaced. Other columns are taken
+ * as they are.
+ *
+ * @param current - The definition as stored.
+ * @param body - Column values.
+ * @returns The body with merged JSON columns.
+ */
+const mergedJsonColumns = (
+  current: Definition,
+  body: Readonly<Record<string, JsonValue>>
+): Readonly<Record<string, JsonValue>> => {
+  const stored: JsonObject = current;
+
+  const jsonProperties = new Map(
+    (TABLE_OF.get(current.kind)?.columns ?? []).flatMap((spec) =>
+      JSON_CODECS.has(spec.codec) ? [[spec.column, spec.property] as const] : []
+    )
+  );
+
+  return Object.fromEntries(
+    Object.entries(body).map(([column, value]): [string, JsonValue] => {
+      const property = jsonProperties.get(column);
+      const before = property === undefined ? null : (stored[property] ?? null);
+      const merges = isJsonObject(value) && isJsonObject(before);
+
+      return merges ? [column, mergePatch(before, value)] : [column, value];
+    })
+  );
+};
+
 /**
  * The operations a `PATCH` body stands for, from `PATCH_FIELD_OPERATIONS`
  * and `PATCH_OTHER_OPERATIONS`: first the other fields as one update (an
@@ -537,7 +577,7 @@ export const updateOperations = Effect.fn("Http.definitionUpdate")(
     body: Readonly<Record<string, JsonValue>>
   ) {
     const properties = yield* fromResult(
-      propertiesOf(current.kind, body, true)
+      propertiesOf(current.kind, mergedJsonColumns(current, body), true)
     );
 
     const dispatched = new Set<string>(

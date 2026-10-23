@@ -34,6 +34,7 @@ import type { TransactionsApi } from "../../sql/transactions.ts";
 import { applyDefinitionWrite } from "../definition-writes.ts";
 import type { DefinitionWrite } from "../definition-writes.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
+import { recordServedRevision } from "../schema-revision-header.ts";
 import { checkRequestRevision } from "../stale-request.ts";
 import { bodyNames, translateBody } from "./body.ts";
 import { readDelete, readPatch } from "./record-changes.ts";
@@ -190,6 +191,14 @@ export const definitionWriteIn = Effect.fn("Api.definitionWriteIn")(
     );
 
     if (action === "delete") {
+      // The answer states the revision the change set committed, as every
+      // other answer states the one it was served at (6.2).
+      const latest = yield* (yield* Catalog).refresh.pipe(
+        Effect.catchTag("DatabaseError", Effect.die)
+      );
+
+      recordServedRevision(input.request, latest.key);
+
       return HttpServerResponse.empty({ status: 204 });
     }
 

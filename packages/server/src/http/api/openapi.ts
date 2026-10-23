@@ -14,6 +14,6 @@ import { Schema } from "effect";
 import { OpenApi } from "effect/http-api";
 
 /** The document. */
-export const v2OpenApi: JsonObject = Schema.decodeUnknownSync(
+export const apiOpenApi: JsonObject = Schema.decodeUnknownSync(
   Schema.Record(Schema.String, Schema.Json)
 )(OpenApi.fromApi(StdApi));

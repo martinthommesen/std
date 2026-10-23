@@ -278,31 +278,18 @@ const inApiNames = (
   );
 
 /**
- * One value for each of the attributes.
- * @param names - The attributes' API names.
- * @param value - The value.
- * @returns The body members.
- */
-const statedValues = (
-  names: readonly string[],
-  value: number
-): Record<string, number> =>
-  Object.fromEntries(names.map((name) => [name, value]));
-
-/**
  * Appends a response to the ones kept.
  * @param endpoint - Where it came from.
  * @param response - The response.
- * @param sent - The attributes the request stated.
  * @returns The update.
  */
 const appendResponse =
-  (endpoint: string, response: TestResponse, sent: readonly string[]) =>
+  (endpoint: string, response: TestResponse) =>
   (
-    all: readonly (readonly [string, TestResponse, readonly string[]])[]
-  ): readonly (readonly [string, TestResponse, readonly string[]])[] => [
+    all: readonly (readonly [string, TestResponse])[]
+  ): readonly (readonly [string, TestResponse])[] => [
     ...all,
-    [endpoint, response, sent],
+    [endpoint, response],
   ];
 
 /** One armed stop: reached by the server, released by the test. */
@@ -2917,17 +2904,13 @@ describe("schema-http", () => {
             const done = yield* Ref.make(false);
 
             const responses = yield* Ref.make<
-              readonly (readonly [string, TestResponse, readonly string[]])[]
+              readonly (readonly [string, TestResponse])[]
             >([]);
 
             const addedAt = new Map<string, number>();
 
-            const keep = (
-              endpoint: string,
-              response: TestResponse,
-              sent: readonly string[] = []
-            ) =>
-              Ref.update(responses, appendResponse(endpoint, response, sent));
+            const keep = (endpoint: string, response: TestResponse) =>
+              Ref.update(responses, appendResponse(endpoint, response));
 
             const reader = Effect.gen(function* readLaptops() {
               while (!(yield* Ref.get(done))) {
@@ -2952,19 +2935,12 @@ describe("schema-http", () => {
               while (!(yield* Ref.get(done))) {
                 index += 1;
 
-                // Every field whose change set has committed is stated, so
-                // the answer must show them (an empty attribute is left out
-                // of a resource, so a field's presence is its value's).
-                const stated = [...addedAt.keys()].map(apiAttributeNameOf);
-
                 yield* keep(
                   "create",
                   yield* create(alice, LAPTOP, {
-                    ...statedValues(stated, index),
                     name: `load ${index}`,
                     purchasedOn: "2026-01-01",
-                  }),
-                  stated
+                  })
                 );
               }
             });
@@ -2980,7 +2956,12 @@ describe("schema-http", () => {
               const name = `load_${index}`;
 
               const posted = yield* postChangeSet(admin, [
-                addField(ACME.laptop, name, { kind: "integer" }).op,
+                addField(
+                  ACME.laptop,
+                  name,
+                  { kind: "text" },
+                  { default: "set" }
+                ).op,
               ]);
 
               assert.strictEqual(posted.status, 201, posted.text);
@@ -2995,7 +2976,7 @@ describe("schema-http", () => {
             assert.isAbove(all.length, 50);
             assert.isFalse(all.some(([, response]) => response.status >= 500));
 
-            for (const [endpoint, response, sent] of all) {
+            for (const [endpoint, response] of all) {
               // Reads succeed with 200 and creates with 201; nothing else.
               assert.strictEqual(
                 response.status,
@@ -3018,10 +2999,11 @@ describe("schema-http", () => {
                   ? [yield* resourceOf(response)]
                   : (yield* listOf(response)).resources;
 
-              // Through the laptop endpoint (reads and creates) no field
-              // later than the header's revision shows, and a created
-              // laptop shows every field it stated; through the asset
-              // endpoint no child-only field ever does.
+              // Every added field has a constant default, so a laptop shows
+              // exactly the fields that exist at the header's revision, on
+              // reads through the laptop endpoint, on reads through the
+              // asset endpoint (a laptop shows its own class's fields there)
+              // and on creates. Other assets never show one.
               for (const record of records) {
                 const loadFields = Object.keys(record)
                   .filter((key) => key.startsWith("load"))
@@ -3029,18 +3011,13 @@ describe("schema-http", () => {
 
                 const label = `${endpoint} at revision ${revision}`;
 
-                if (endpoint === ASSET) {
-                  assert.deepStrictEqual(loadFields, [], label);
-                } else {
-                  assert.isEmpty(
-                    loadFields.filter((key) => !expected.has(key)),
-                    label
-                  );
-                  assert.isEmpty(
-                    sent.filter((key) => !loadFields.includes(key)),
-                    label
-                  );
-                }
+                const isLaptop = record["@type"] === "AcmeLaptop";
+
+                assert.deepStrictEqual(
+                  loadFields,
+                  isLaptop ? [...expected].toSorted() : [],
+                  label
+                );
               }
             }
           })

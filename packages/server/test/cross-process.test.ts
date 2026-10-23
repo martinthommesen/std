@@ -65,6 +65,9 @@ interface ServerResponse {
   readonly json: JsonValue | undefined;
 }
 
+/** The constant default of every field the test adds. */
+const FIELD_DEFAULT = "set";
+
 const SignInBody = Schema.Struct({ token: Schema.String });
 const ErrorBody = Schema.Struct({ code: Schema.String });
 const ListBody = Schema.Array(Schema.Record(Schema.String, Schema.Json));
@@ -150,10 +153,13 @@ const assertServedWith = Effect.fn("CrossProcess.assertServedWith")(
 
     const body = yield* Schema.decodeUnknownEffect(ListBody)(response.json);
 
-    // An empty attribute is left out of a resource, so the new field
-    // shows only as accepted: before the change it is an unknown field.
+    // The field has a constant default, so every asset has a value for it
+    // exactly when the server serves the revision that added it.
     assert.isAbove(body.length, 0, label);
-    assert.isString(field, label);
+
+    for (const record of body) {
+      assert.strictEqual(record[field], FIELD_DEFAULT, label);
+    }
   }
 );
 
@@ -207,7 +213,16 @@ const addAssetField = Effect.fn("CrossProcess.addAssetField")(
       HttpClientRequest.post("/api/v1/applyChangeSet").pipe(
         HttpClientRequest.bearerToken(token)
       ),
-      { operations: [addField(ACME.asset, name, { kind: "text" }).op] }
+      {
+        operations: [
+          addField(
+            ACME.asset,
+            name,
+            { kind: "text" },
+            { default: FIELD_DEFAULT }
+          ).op,
+        ],
+      }
     );
 
     const response = yield* send(server, request);

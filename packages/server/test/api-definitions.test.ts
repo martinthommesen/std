@@ -12,9 +12,16 @@ import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
-import { asArray, asObject, textOf, API, apiCallers } from "./api-support.ts";
+import {
+  API,
+  apiCallers,
+  asArray,
+  asObject,
+  statedRevision,
+  textOf,
+} from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField } from "./schema-support.ts";
+import { ACME, addField, change } from "./schema-support.ts";
 
 const APPLY = "/api/v1/applyChangeSet";
 const ROLES = "/api/v1/coreRole";
@@ -23,6 +30,17 @@ const MERGE_PATCH = "application/merge-patch+json";
 
 const codeOf = (response: TestResponse): JsonValue | undefined =>
   asObject(response.json).code;
+
+// The media types a per-table document offers for a path's PATCH.
+const patchTypes = (document: TestResponse, path: string): string[] =>
+  Object.keys(
+    asObject(
+      asObject(
+        asObject(asObject(asObject(asObject(document.json).paths)[path]).patch)
+          .requestBody
+      ).content
+    )
+  ).toSorted();
 
 describe("api-definitions", () => {
   it("names the definition collections", () => {
@@ -214,6 +232,127 @@ describe("api-definitions", () => {
           );
 
           assert.strictEqual(asArray(roles.json).length, 1);
+        }),
+      { timeout: 120_000 }
+    );
+
+    dbTest.effect(
+      "a definition delete states the revision it committed",
+      () =>
+        Effect.gen(function* deleteRevision() {
+          const http = yield* TestHttpClient;
+          const callers = yield* apiCallers;
+
+          const created = yield* http.request("POST", ROLES, {
+            ...callers.admin,
+            body: { label: "Gone", name: `gone_${randomUUID().slice(0, 8)}` },
+          });
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const deleted = yield* http.request(
+            "DELETE",
+            `${ROLES}/${textOf(asObject(created.json).id)}`,
+            {
+              ...callers.admin,
+              headers: { "if-match": created.headers.get("etag") ?? "" },
+            }
+          );
+
+          assert.strictEqual(deleted.status, 204, deleted.text);
+          assert.strictEqual(
+            deleted.headers.get("std-schema-revision"),
+            yield* statedRevision
+          );
+
+          const metadata = yield* http.get(
+            "/api/v1/tableMetadata",
+            callers.admin
+          );
+
+          assert.strictEqual(
+            metadata.headers.get("std-schema-revision"),
+            deleted.headers.get("std-schema-revision")
+          );
+        }),
+      { timeout: 120_000 }
+    );
+
+    dbTest.effect(
+      "a merge patch merges into a definition's JSON-valued attribute (RFC 7396)",
+      () =>
+        Effect.gen(function* mergeJsonAttribute() {
+          const http = yield* TestHttpClient;
+          const callers = yield* apiCallers;
+
+          const dock = addField(ACME.asset, "merge_dock", {
+            allowedRecords: {
+              left: { path: [ACME.status] },
+              op: "eq",
+              right: { value: "in_use" },
+            },
+            kind: "reference",
+            targetClassId: ACME.asset,
+          });
+
+          yield* change([dock.op]);
+
+          const path = `/api/v1/coreField/${dock.id}`;
+          const before = yield* http.get(path, callers.admin);
+
+          assert.strictEqual(before.status, 200, before.text);
+          assert.property(
+            asObject(asObject(before.json).fieldType),
+            "allowedRecords"
+          );
+
+          const merged = yield* http.request("PATCH", path, {
+            ...callers.admin,
+            headers: {
+              "content-type": MERGE_PATCH,
+              "if-match": before.headers.get("etag") ?? "",
+            },
+            rawBody: JSON.stringify({ fieldType: { allowedRecords: null } }),
+          });
+
+          assert.strictEqual(merged.status, 200, merged.text);
+
+          const fieldType = asObject(asObject(merged.json).fieldType);
+
+          assert.strictEqual(fieldType.kind, "reference");
+          assert.strictEqual(fieldType.targetClassId, ACME.asset);
+          assert.notProperty(fieldType, "allowedRecords");
+        }),
+      { timeout: 120_000 }
+    );
+
+    dbTest.effect(
+      "a definition table's OpenAPI document offers only the merge patch it takes",
+      () =>
+        Effect.gen(function* definitionDocument() {
+          const http = yield* TestHttpClient;
+          const callers = yield* apiCallers;
+
+          const roles = yield* http.get(
+            "/api/v1/tableMetadata/coreRole/openapi.json",
+            callers.admin
+          );
+
+          assert.strictEqual(roles.status, 200, roles.text);
+          assert.deepStrictEqual(patchTypes(roles, `${ROLES}/{id}`), [
+            "application/json",
+            "application/merge-patch+json",
+          ]);
+
+          const assets = yield* http.get(
+            "/api/v1/tableMetadata/acmeAsset/openapi.json",
+            callers.admin
+          );
+
+          assert.include(
+            patchTypes(assets, `${API.asset}/{id}`),
+            "application/json-patch+json"
+          );
         }),
       { timeout: 120_000 }
     );

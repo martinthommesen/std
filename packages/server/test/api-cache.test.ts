@@ -404,6 +404,10 @@ describe("api-cache", () => {
               "/api/v1/tableMetadata/acmeAsset",
               { cookie }
             ),
+            "cookie metadata openapi": yield* http.get(
+              "/api/v1/tableMetadata/acmeAsset/openapi.json",
+              { cookie }
+            ),
             "cookie metadata schema": yield* http.get(
               "/api/v1/tableMetadata/acmeAsset/schema.json",
               { cookie }
@@ -465,6 +469,10 @@ describe("api-cache", () => {
             },
             "cookie GET records": { cacheControl: "no-store", status: 200 },
             "cookie metadata": { cacheControl: "no-store", status: 200 },
+            "cookie metadata openapi": {
+              cacheControl: "no-store",
+              status: 200,
+            },
             "cookie metadata schema": {
               cacheControl: "no-store",
               status: 200,

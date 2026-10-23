@@ -10,7 +10,7 @@ import { TmfError, TmfErrorSubtypes } from "@std/api/tmf-error";
 import { Effect, Schema } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { v2OpenApi } from "../src/http/api/openapi.ts";
+import { apiOpenApi } from "../src/http/api/openapi.ts";
 import { TMF_ERROR_TAGS } from "../src/http/api/tmf-error.ts";
 import { asObject, textOf, API, apiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -36,7 +36,7 @@ describe("api-openapi", () => {
           );
 
           assert.strictEqual(response.status, 200, response.text);
-          assert.deepStrictEqual(response.json, v2OpenApi);
+          assert.deepStrictEqual(response.json, apiOpenApi);
 
           const schemas = asObject(
             asObject(asObject(response.json).components).schemas

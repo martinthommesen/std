@@ -68,6 +68,7 @@ const PATHS = [
   "sign-out",
   "openapi",
   "metadata",
+  "metadata openapi",
   "metadata tables",
   "picker list",
   "change-set apply",
@@ -293,6 +294,11 @@ const take = (
           headers,
           ...as(token),
         }),
+      "metadata openapi": () =>
+        http.get("/api/v1/tableMetadata/acmeAsset/openapi.json", {
+          headers,
+          ...as(token),
+        }),
       "metadata tables": () =>
         http.get("/api/v1/tableMetadata", { headers, ...as(token) }),
       openapi: () => http.get(OPENAPI_PATH, { headers }),
@@ -373,6 +379,7 @@ const success: Readonly<Record<PathName, number>> = {
   list: 200,
   me: 200,
   metadata: 200,
+  "metadata openapi": 200,
   "metadata tables": 200,
   openapi: 200,
   "picker list": 200,
