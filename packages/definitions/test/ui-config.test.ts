@@ -8,16 +8,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { isFailure, isSuccess } from "effect/Result";
 
 import { applyOperations } from "../src/apply.ts";
-import type { ApplyContext } from "../src/apply.ts";
 import type {
   ChoiceDefinition,
   Definition,
   FieldDefinition,
-  GrantDefinition,
   LayoutDefinition,
   LayoutElement,
-  PermissionDefinition,
-  RoleDefinition,
 } from "../src/definition.ts";
 import { dependenciesOf } from "../src/dependencies.ts";
 import {
@@ -36,18 +32,18 @@ import {
   writtenOnCreate,
 } from "../src/record-rules.ts";
 import type { FieldRules } from "../src/record-rules.ts";
-import { LOCAL_ORIGIN, setOrigin, SYSTEM_REQUESTER } from "../src/requester.ts";
+import { setOrigin, SYSTEM_REQUESTER } from "../src/requester.ts";
 import type { NamedSetFile, SetFile } from "../src/set-file.ts";
 import { planSet } from "../src/set-plan.ts";
 import { decodeSetFile, resolveSet } from "../src/set-resolve.ts";
 import { ConfigSnapshot } from "../src/snapshot.ts";
 import { validateSnapshot } from "../src/validate.ts";
-import { PERMISSION_IDS } from "../src/well-known.ts";
 import {
   field,
   freshId,
   KEY,
   namespace,
+  purgeAuthorization,
   override,
   snapshotOf,
   table,
@@ -469,44 +465,12 @@ describe("layouts", () => {
   });
 });
 
-const PURGE_PERMISSION: PermissionDefinition = {
-  helpText: null,
-  id: PERMISSION_IDS["schema.purge"],
-  kind: "permission",
-  label: "Purge",
-  name: "schema.purge",
-  owner: { layer: "core" },
-  protected: true,
-  state: "active",
-  version: 1,
-};
-
-const PURGER: RoleDefinition = {
-  ...local,
-  helpText: null,
-  id: freshId(),
-  kind: "role",
-  label: "purger",
-  name: "schema_purger",
-  state: "active",
-  version: 1,
-};
-
-const PURGE_GRANT: GrantDefinition = {
-  id: freshId(),
-  kind: "grant",
-  owner: { layer: "core" },
-  permissionId: PURGE_PERMISSION.id,
-  protected: true,
-  roleId: PURGER.id,
-  state: "active",
-  version: 1,
-};
-
-const asPurger: ApplyContext = {
-  origin: LOCAL_ORIGIN,
-  requester: { roleIds: [PURGER.id], userId: freshId() },
-};
+const {
+  context: asPurger,
+  grant: PURGE_GRANT,
+  permission: PURGE_PERMISSION,
+  role: PURGER,
+} = purgeAuthorization();
 
 describe("ui-config lifecycle", () => {
   it("a field purge takes its choices along and keeps the layout entry; a retire reports the layout", () => {

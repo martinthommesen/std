@@ -408,3 +408,64 @@ export const imageReader = (
 
   return read;
 };
+
+/**
+ * Whether a resolved tree still holds a context value the caller did not
+ * provide.
+ *
+ * @param node - A resolved tree.
+ * @returns True when some operand is `unavailable`.
+ */
+const hasUnavailableContext = (node: ResolvedNode): boolean => {
+  switch (node.op) {
+    case "and":
+    case "or": {
+      return node.args.some((arg) => hasUnavailableContext(arg));
+    }
+
+    case "not": {
+      return hasUnavailableContext(node.arg);
+    }
+
+    case "compare": {
+      return node.right.kind === "unavailable";
+    }
+
+    case "in": {
+      return node.right.some((operand) => operand.kind === "unavailable");
+    }
+
+    case "const":
+    case "empty":
+    case "pattern":
+    case "changed": {
+      return false;
+    }
+
+    default: {
+      return node satisfies never;
+    }
+  }
+};
+
+/**
+ * Evaluates a resolved tree on complete images, refusing unavailable data.
+ * @param node - The resolved tree.
+ * @param read - The complete-image reader.
+ * @returns Whether the condition holds.
+ */
+export const twoValued = (node: ResolvedNode, read: PathReader): boolean => {
+  if (hasUnavailableContext(node)) {
+    throw new ConditionDefectError(
+      "A context value was not provided to the resolver."
+    );
+  }
+
+  const verdict = evaluateNode(node, read);
+
+  if (verdict === "unknown") {
+    throw new ConditionDefectError("The two-valued evaluator met Unknown.");
+  }
+
+  return verdict;
+};
