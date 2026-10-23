@@ -35,7 +35,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { ItemMapping, SourceKey, SourceRecord } from "@std/tmf/mapping";
 import { renderItem } from "@std/tmf/render";
-import { mergeBodyOf, planWrite } from "@std/tmf/write";
+import { mergeBodyOf, planWrite, reorderRefusal } from "@std/tmf/write";
 import type { WritePlan } from "@std/tmf/write";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -643,7 +643,14 @@ const saveParts = Effect.fn("Tmf.saveParts")(function* saveParts(
   plan: WritePlan,
   current?: SourceRecord
 ) {
+  // Each array's parts in the body's order, created ones included.
+  const written = new Map<string, string[]>();
+
   for (const parts of plan.parts) {
+    const ids: string[] = [];
+
+    written.set(parts.attribute.name, ids);
+
     const { item } = parts.attribute;
 
     const visible = new Map(
@@ -667,20 +674,84 @@ const saveParts = Effect.fn("Tmf.saveParts")(function* saveParts(
       if (planned.existingId === undefined) {
         const owner = snapshot.field(item.ownerField)?.name ?? "";
 
-        yield* createRecord({
+        const created = yield* createRecord({
           body: { ...body, [owner]: ownerId },
           endpointClassId: item.classId,
         }).pipe(writeFailures);
-      } else if (Object.keys(body).length > 0) {
-        yield* updateRecord({
-          body,
-          endpointClassId: item.classId,
-          expectedVersion: visible.get(planned.existingId)?.version ?? null,
-          id: planned.existingId,
-        }).pipe(writeFailures);
+
+        ids.push(created.id);
+      } else {
+        ids.push(planned.existingId);
+
+        if (Object.keys(body).length > 0) {
+          yield* updateRecord({
+            body,
+            endpointClassId: item.classId,
+            expectedVersion: visible.get(planned.existingId)?.version ?? null,
+            id: planned.existingId,
+          }).pipe(writeFailures);
+        }
       }
     }
   }
+
+  return written;
+});
+
+/**
+ * Checks, after a write and under the aggregate's lock, that the caller
+ * reads each array in the body's order (decision 0033): the positions a
+ * write stores can be withheld from the caller by a mask whose condition
+ * the same write sets or lifts, so only the state written can tell. Parts
+ * the caller cannot see after the write are left out of the comparison.
+ * A different order fails the whole write, which rolls back, with the
+ * refusal that names only the array.
+ *
+ * @param scope - The caller's scope.
+ * @param mapped - The resource.
+ * @param ownerId - The record written.
+ * @param written - Each array's parts in the body's order.
+ * @returns Nothing, or `ValidationFailed`.
+ */
+const checkReadOrder = Effect.fn("Tmf.checkReadOrder")(function* checkReadOrder(
+  scope: ReadScope,
+  mapped: MappedResource,
+  ownerId: string,
+  written: ReadonlyMap<string, readonly string[]>
+) {
+  if (written.size === 0) {
+    return yield* Effect.void;
+  }
+
+  const after = yield* readCurrent(scope, mapped, ownerId).pipe(
+    Effect.asSome,
+    Effect.catchTag("NotFound", () => Effect.succeedNone)
+  );
+
+  if (Option.isNone(after)) {
+    return yield* Effect.void;
+  }
+
+  for (const attribute of mapped.resource.attributes) {
+    const expected = written.get(attribute.name);
+
+    if (attribute.kind === "parts" && expected !== undefined) {
+      const read = (after.value.parts.get(attribute.name) ?? []).map(
+        (part) => part.id
+      );
+
+      const readIds = new Set(read);
+      const expectedIds = new Set(expected);
+      const wanted = expected.filter((id) => readIds.has(id));
+      const got = read.filter((id) => expectedIds.has(id));
+
+      if (wanted.some((id, index) => got[index] !== id)) {
+        return yield* writeIssuesError([reorderRefusal(attribute)]);
+      }
+    }
+  }
+
+  return yield* Effect.void;
 });
 
 /**
@@ -735,7 +806,9 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
         endpointClassId: classId,
       }).pipe(writeFailures);
 
-      yield* saveParts(snapshot, owner.id, plan);
+      const written = yield* saveParts(snapshot, owner.id, plan);
+
+      yield* checkReadOrder(scope, input.mapped, owner.id, written);
 
       return owner;
     })
@@ -1010,7 +1083,9 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
         }).pipe(writeFailures);
       }
 
-      yield* saveParts(snapshot, current.id, plan, current);
+      const written = yield* saveParts(snapshot, current.id, plan, current);
+
+      yield* checkReadOrder(scope, input.mapped, current.id, written);
     })
   );
 

@@ -182,6 +182,28 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
       context
     )(app);
 
+  // Every exchange, through `request` or `fetch`, is checked against what
+  // it must be: an `/api/v1` answer against the shared definition (and so
+  // `/api/v1/openapi.json`), a TMF API answer against its pinned OpenAPI
+  // document (`tmf-oas-contract`, Contracts 11.1). A mismatch is a defect.
+  const checkExchange = (exchange: {
+    readonly method: string;
+    readonly path: string;
+    readonly status: number;
+    readonly text: string;
+  }) => {
+    const checked = { ...exchange, json: bodyJson(exchange.text) };
+
+    return Effect.all([
+      checkApiExchange(checked),
+      checkTmfExchange(contracts, checked),
+    ]).pipe(
+      Effect.mapError((problem) => new Error(problem)),
+      Effect.orDie,
+      Effect.asVoid
+    );
+  };
+
   const request = Effect.fn("TestHttpClient.request")(function* request(
     method: string,
     path: string,
@@ -210,31 +232,7 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     const text = yield* Effect.promise(async () => await response.text());
     const json = bodyJson(text);
 
-    // Every `/api/v1` answer must be what the shared definition (and so
-    // `/api/v1/openapi.json`) documents for it.
-    yield* checkApiExchange({
-      json,
-      method,
-      path,
-      status: response.status,
-      text,
-    }).pipe(
-      Effect.mapError((problem) => new Error(problem)),
-      Effect.orDie
-    );
-
-    // Every TMF API answer must be what its pinned OpenAPI document
-    // declares (`tmf-oas-contract`, Contracts 11.1).
-    yield* checkTmfExchange(contracts, {
-      json,
-      method,
-      path,
-      status: response.status,
-      text,
-    }).pipe(
-      Effect.mapError((problem) => new Error(problem)),
-      Effect.orDie
-    );
+    yield* checkExchange({ method, path, status: response.status, text });
 
     return {
       headers: response.headers,
@@ -281,8 +279,25 @@ const makeTestHttpClient = Effect.fnUntraced(function* makeTestHttpClient(
     }
   );
 
-  const fetchOver: typeof globalThis.fetch = async (input, init) =>
-    await handler(new Request(input, init));
+  // `fetch` keeps normal Response semantics: a clone is read and checked,
+  // and a mismatch rejects the call.
+  const fetchOver: typeof globalThis.fetch = async (input, init) => {
+    const outgoing = new Request(input, init);
+    const url = new URL(outgoing.url);
+    const response = await handler(outgoing);
+    const text = await response.clone().text();
+
+    await Effect.runPromise(
+      checkExchange({
+        method: outgoing.method,
+        path: `${url.pathname}${url.search}`,
+        status: response.status,
+        text,
+      })
+    );
+
+    return response;
+  };
 
   const client: TestHttpClientApi = {
     cookieSignIn,

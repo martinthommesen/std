@@ -177,6 +177,7 @@ const render = (
 const ALL_ACCESS: ClassAccess = {
   canName: () => true,
   canRead: () => true,
+  canWrite: () => true,
   knows: true,
 };
 
@@ -411,6 +412,7 @@ describe("tmf-mapping", () => {
             ...ALL_ACCESS,
             canName: (key) => !hidden.includes(key),
             canRead: (key) => !hidden.includes(key),
+            canWrite: (key) => !hidden.includes(key),
           };
         },
       });
@@ -529,19 +531,13 @@ describe("tmf-mapping", () => {
       0, 1,
     ]);
 
-    // Readable but not writable, or a kept part's position withheld from
-    // the caller (a conditional mask on that record): no reorder.
-    const withheld: SourceRecord = {
-      ...record,
-      parts: new Map([
-        ["note", [positioned("a", -5), positioned("b", -3), note("c", "c")]],
-      ]),
-    };
-
-    for (const [access, current] of [
-      [{ ...ALL_ACCESS, canName: (key: string) => key !== F.status }, record],
-      [ALL_ACCESS, withheld],
-    ] as const) {
+    // Nameable (readable) but not writable, or not in the caller's schema:
+    // no reorder. Whether each stored position is read after the write is
+    // the server's check (`tmf-arrays`).
+    for (const access of [
+      { ...ALL_ACCESS, canWrite: (key: string) => key !== F.status },
+      { ...ALL_ACCESS, canRead: (key: string) => key !== F.status },
+    ]) {
       const refused = planWrite({
         access: ALL_ACCESS,
         attributes: [notes],
@@ -551,12 +547,38 @@ describe("tmf-mapping", () => {
             { id: "a", text: "a" },
           ],
         },
-        current: { record: current, rendered: {}, renderedParts: new Map() },
+        current: { record, rendered: {}, renderedParts: new Map() },
         partAccess: () => access,
       });
 
       expect(Result.isFailure(refused)).toBeTruthy();
     }
+
+    // Appending after a part at the integer bound without write permission
+    // on the kept part: no renumbering, the new item gets no position.
+    const atTheBound: SourceRecord = {
+      ...record,
+      parts: new Map([["note", [positioned("a", 2_147_483_647)]]]),
+    };
+
+    const appended = planWrite({
+      access: ALL_ACCESS,
+      attributes: [notes],
+      body: { note: [{ id: "a", text: "a" }, { text: "b" }] },
+      current: { record: atTheBound, rendered: {}, renderedParts: new Map() },
+      partAccess: (_item, existing) =>
+        existing === undefined
+          ? ALL_ACCESS
+          : { ...ALL_ACCESS, canWrite: (key: string) => key !== F.status },
+    });
+
+    expect(
+      Result.isSuccess(appended)
+        ? appended.success.parts[0]?.items.map((item) =>
+            item.values.get(F.status)
+          )
+        : ["refused"]
+    ).toStrictEqual([undefined, undefined]);
   });
 
   it("keeps empty positions as read, appends without a position after one, and renumbers when positions run out", () => {

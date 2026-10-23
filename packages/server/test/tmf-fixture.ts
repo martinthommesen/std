@@ -511,6 +511,13 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
       effect: "deny",
       fields: [FF.noteAuthor.id],
     }),
+    // The manager reads a locked note's position but may neither create
+    // nor update it: nameable, not writable (decision 0033).
+    accessRule(LOCKED_NOTE.id, [manager], {
+      actions: ["create", "update"],
+      effect: "deny",
+      fields: [FF.notePosition.id],
+    }),
     // The manager does not read the position of a note whose text is
     // "masked position": a conditional mask on that record only.
     accessRule(FX.note.id, [manager], {

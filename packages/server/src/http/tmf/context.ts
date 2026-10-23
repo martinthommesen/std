@@ -243,17 +243,24 @@ export const classAccessOf = (
   const view = scope.view(classId, true);
   const canRead = (key: SourceKey) => readFieldOf(view, key) !== undefined;
 
+  // A purged field is gone: unknown, as one that never existed.
+  const exists = (key: SourceKey) =>
+    (snapshot.field(key)?.state ?? "purged") !== "purged";
+
+  const decisions = (key: SourceKey) =>
+    actions.map(
+      (action) => fieldDecision(snapshot, caller, action, classId, key).kind
+    );
+
   return {
     canName: (key) =>
-      // A purged field is gone: unknown, as one that never existed.
-      (snapshot.field(key)?.state ?? "purged") !== "purged" &&
-      (canRead(key) ||
-        actions.some(
-          (action) =>
-            fieldDecision(snapshot, caller, action, classId, key).kind !==
-            "never"
-        )),
+      exists(key) &&
+      (canRead(key) || decisions(key).some((kind) => kind !== "never")),
     canRead,
+    // Write permission on every record of the class, for every action:
+    // a conditional field rule may refuse some records.
+    canWrite: (key) =>
+      exists(key) && decisions(key).every((kind) => kind === "always"),
     knows: knowsTable(snapshot, caller, classId),
   };
 };

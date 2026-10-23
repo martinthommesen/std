@@ -700,5 +700,143 @@ describe("tmf-arrays", () => {
           ]);
         })
     );
+
+    dbTest.effect(
+      "a reorder is judged on the state written: a mask the same request sets refuses it, one it lifts allows it",
+      () =>
+        Effect.gen(function* maskInSameRequest() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+
+          const masking = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "a" },
+              { "@type": "Note", text: "b" },
+            ],
+          });
+
+          const maskingPath = `${FIXTURE_TICKETS}/${textOf(masking.id)}`;
+          const before = yield* http.get(maskingPath, alice);
+
+          const [a = {}, b = {}] = asArray(asObject(before.json).note).map(
+            asObject
+          );
+
+          const refused = yield* http.request(
+            "PATCH",
+            maskingPath,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [{ ...b, text: "masked position" }, a],
+            })
+          );
+
+          assert.strictEqual(refused.status, 400, refused.text);
+          assert.strictEqual(asObject(refused.json).code, "ValidationFailed");
+          assert.notInclude(refused.text, textOf(b.id));
+
+          const unchanged = yield* http.get(maskingPath, alice);
+
+          assert.strictEqual(
+            unchanged.headers.get("etag"),
+            before.headers.get("etag")
+          );
+          assert.deepStrictEqual(noteTexts(asObject(unchanged.json)), [
+            "a",
+            "b",
+          ]);
+
+          const lifting = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "c" },
+              { "@type": "Note", text: "masked position" },
+            ],
+          });
+
+          const liftingPath = `${FIXTURE_TICKETS}/${textOf(lifting.id)}`;
+          const read = yield* http.get(liftingPath, alice);
+
+          const [c = {}, masked = {}] = asArray(asObject(read.json).note).map(
+            asObject
+          );
+
+          const allowed = yield* http.request(
+            "PATCH",
+            liftingPath,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [{ ...masked, text: "lifted" }, c],
+            })
+          );
+
+          assert.strictEqual(allowed.status, 200, allowed.text);
+          assert.deepStrictEqual(noteTexts(asObject(allowed.json)), [
+            "lifted",
+            "c",
+          ]);
+        })
+    );
+
+    dbTest.effect(
+      "an order field the caller may read but not write: an append at the bound gets no position, a reorder the array-only refusal",
+      () =>
+        Effect.gen(function* readNotWrite() {
+          const http = yield* TestHttpClient;
+          const { admin, alice } = yield* apiCallers;
+          const ticket = yield* newTicket(alice);
+          const id = textOf(ticket.id);
+          const path = `${FIXTURE_TICKETS}/${id}`;
+
+          // The administrator places a locked note at the integer bound.
+          const locked = yield* http.request(
+            "POST",
+            "/api/v1/tmffxLockedNote",
+            {
+              ...admin,
+              body: { position: 2_147_483_647, text: "locked", ticket: { id } },
+            }
+          );
+
+          assert.strictEqual(locked.status, 201, locked.text);
+
+          const read = asObject((yield* http.get(path, alice)).json);
+          const [item = {}] = asArray(read.note).map(asObject);
+
+          const appended = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [item, { text: "new" }],
+            })
+          );
+
+          assert.strictEqual(appended.status, 200, appended.text);
+          assert.deepStrictEqual(noteTexts(asObject(appended.json)), [
+            "locked",
+            "new",
+          ]);
+
+          const [position] = yield* values(
+            `SELECT coalesce(position::text, 'none') AS value FROM ${NOTES} WHERE ticket = $1::uuid AND text = 'new'`,
+            [id]
+          );
+
+          assert.strictEqual(position, "none");
+
+          const [first = {}, second = {}] = asArray(
+            asObject(appended.json).note
+          ).map(asObject);
+
+          const reordered = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [second, first],
+            })
+          );
+
+          assert.strictEqual(reordered.status, 400, reordered.text);
+          assert.strictEqual(asObject(reordered.json).code, "ValidationFailed");
+          assert.notInclude(reordered.text, textOf(first.id));
+        })
+    );
   });
 });

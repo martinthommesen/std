@@ -10,7 +10,7 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import type { TmfOperation } from "@std/tmf/mapping";
 import { tmfStatusFor } from "@std/tmf/status";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -305,6 +305,61 @@ describe("tmf-oas-contract", () => {
           assert.deepStrictEqual(
             statuses,
             [201, 200, 200, 200, 200, 200, 200, 400, 400, 400, 405, 400, 204]
+          );
+        })
+    );
+
+    dbTest.effect(
+      "the client's fetch checks every exchange too: an undeclared status fails it",
+      () =>
+        Effect.gen(function* fetchChecked() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+
+          // Until workstream 3H wires the hubs, the hub seam answers 404,
+          // which TMF621's hub operations declare only through `default`.
+          const viaRequest = yield* Effect.exit(
+            http.request("POST", `${FIXTURE_BASE}/hub`, {
+              ...alice,
+              body: { "@type": "Hub", callback: "https://listener.test/" },
+            })
+          );
+
+          const viaFetch = yield* Effect.exit(
+            Effect.tryPromise(
+              async () =>
+                await http.fetch(`http://std.test${FIXTURE_BASE}/hub`, {
+                  body: JSON.stringify({
+                    "@type": "Hub",
+                    callback: "https://listener.test/",
+                  }),
+                  headers: {
+                    authorization: `Bearer ${alice.token ?? ""}`,
+                    "content-type": "application/json",
+                  },
+                  method: "POST",
+                })
+            )
+          );
+
+          assert.isTrue(Exit.isFailure(viaRequest));
+          assert.isTrue(Exit.isFailure(viaFetch));
+          assert.include(
+            Exit.isFailure(viaFetch) ? Cause.pretty(viaFetch.cause) : "",
+            "does not declare status 404"
+          );
+
+          // A declared answer through fetch keeps normal Response semantics.
+          const listed = yield* Effect.promise(
+            async () =>
+              await http.fetch(`http://std.test${FIXTURE_TICKETS}`, {
+                headers: { authorization: `Bearer ${alice.token ?? ""}` },
+              })
+          );
+
+          assert.strictEqual(listed.status, 200);
+          assert.isArray(
+            yield* Effect.promise(async () => await listed.json())
           );
         })
     );

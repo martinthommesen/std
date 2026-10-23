@@ -71,8 +71,18 @@ export interface ClassAccess {
   readonly knows: boolean;
   /** Whether the field is in the caller's visible schema of the class. */
   readonly canRead: (source: SourceKey) => boolean;
-  /** Whether the caller may name the field in this write. */
+  /**
+   * Whether the caller may name the field in this write: readable, or
+   * writable by a field rule.
+   */
   readonly canName: (source: SourceKey) => boolean;
+  /**
+   * Whether the caller may write the field in this write (create for a new
+   * record, update for an existing one) on every record of the class:
+   * write permission, not only nameability. The order field's positions
+   * are written only then (decision 0033).
+   */
+  readonly canWrite: (source: SourceKey) => boolean;
 }
 
 /** One item of an array of parts, planned. */
@@ -439,7 +449,14 @@ interface PlannedItem {
   readonly access: ClassAccess;
 }
 
-const reordered = (attribute: PartsAttribute): WriteIssue => ({
+/**
+ * The refusal of an order the write cannot store or the caller could not
+ * see: it names only the array, never a part.
+ *
+ * @param attribute - The array attribute.
+ * @returns The issue.
+ */
+export const reorderRefusal = (attribute: PartsAttribute): WriteIssue => ({
   attribute: attribute.name,
   kind: "invalidValue",
   message: `${attribute.name} cannot be reordered here: list the kept items in their current order, new items after them.`,
@@ -494,8 +511,6 @@ const withPosition = (
 interface Positions {
   /** A part's position as the caller reads it on that part, if readable. */
   readonly of: (id: string) => JsonValue | undefined;
-  /** Whether the caller reads the part's position (not withheld). */
-  readonly readable: (id: string) => boolean;
 }
 
 const positionsOf = (
@@ -506,7 +521,6 @@ const positionsOf = (
 
   return {
     of: (id) => byId.get(id)?.values.get(orderField)?.value,
-    readable: (id) => byId.get(id)?.values.has(orderField) === true,
   };
 };
 
@@ -551,7 +565,7 @@ const appended = (
   const fresh = items.filter(({ plan }) => plan.existingId === undefined);
 
   const writable = fresh.every(
-    ({ access }) => access.canRead(orderField) && access.canName(orderField)
+    ({ access }) => access.canRead(orderField) && access.canWrite(orderField)
   );
 
   const lastKept = plans.findLast((plan) => plan.existingId !== undefined);
@@ -586,11 +600,15 @@ const appended = (
  *   new items after them writes no kept position (so an array sent back
  *   as read changes nothing, whatever positions other writers left, empty
  *   ones included) and positions only the new items (`appended`).
- * - Any other order is a reorder. It is stored, as positions 0 to n-1 on
- *   every item, only with an order field the caller may write on every
- *   item and actually reads on every kept part (present in the caller's
- *   read of it, not withheld by a mask); otherwise it is refused, naming
- *   only the array and judged on the parts the caller can see.
+ * - Any other order is a reorder. It is planned, as positions 0 to n-1 on
+ *   every item, only when the caller may write the order field on every
+ *   item (create or update permission, not only nameability) and has it in
+ *   its schema; otherwise it is refused, naming only the array and judged
+ *   on the parts the caller can see. Whether the caller reads each stored
+ *   position depends on the state written, so the server compares the
+ *   order the caller reads after the write with the body's, under the
+ *   aggregate's lock, and refuses the whole write the same way when they
+ *   differ (decision 0033).
  *
  * @param attribute - The array attribute.
  * @param items - The planned items, in the body's order.
@@ -611,15 +629,15 @@ const ordered = (
   const positions =
     orderField === undefined ? undefined : positionsOf(visible, orderField);
 
+  // Write permission on every item (create for new ones, update for kept
+  // ones) and the field in the caller's schema. Whether the caller reads
+  // each stored position depends on the state being written (a mask the
+  // same request sets or lifts), so the server checks the order the
+  // caller reads after the write, under the aggregate's lock.
   const storable =
     orderField !== undefined &&
-    positions !== undefined &&
     items.every(
-      ({ access, plan }) =>
-        access.canName(orderField) &&
-        (plan.existingId === undefined
-          ? access.canRead(orderField)
-          : positions.readable(plan.existingId))
+      ({ access }) => access.canRead(orderField) && access.canWrite(orderField)
     );
 
   if (sameOrder && newAtEnd) {
@@ -629,7 +647,7 @@ const ordered = (
   }
 
   if (orderField === undefined || !storable) {
-    issues.push(reordered(attribute));
+    issues.push(reorderRefusal(attribute));
 
     return plans;
   }
