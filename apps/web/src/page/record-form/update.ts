@@ -170,6 +170,9 @@ const FALLBACK_TODAY: CalendarDate = { day: 1, month: 1, year: 2000 };
 /** The element ID of the delete confirmation. */
 export const DELETE_DIALOG_ID = "record-delete-dialog";
 
+/** The element ID of the messages at the top of the form. */
+export const FORM_MESSAGES_ID = "record-form-messages";
+
 // INIT
 
 /** What a form page opens with. */
@@ -3035,6 +3038,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedRetryRelatedList: ({ listId }) => retryRelatedList(model, listId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSave: () => save(model),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ClickedShowRefusal: () => ({
+      commands: [FocusField({ elementId: FORM_MESSAGES_ID })],
+      model,
+    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedFocusField: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

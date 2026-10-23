@@ -279,6 +279,10 @@ describe("the record form", () => {
       expect(selector(".action-status")).toContainText(
         "Not saved: the reason is at the top of the form."
       ),
+      // One click from the action bar brings the reason into view.
+      click(role("button", { name: "Show the reason" })),
+      Command.expectExact(FocusField({ elementId: "record-form-messages" })),
+      Command.resolve(FocusField, Message.CompletedFocusField()),
       // Any other key, or S alone, is the field's own.
       keydown(role("form"), "s"),
       expectIgnored()

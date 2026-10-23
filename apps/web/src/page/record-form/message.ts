@@ -75,6 +75,7 @@ export const Message = defineMessageUnion({
   ClickedRetry: {},
   ClickedRetryRelatedList: { listId: Schema.Int },
   ClickedSave: {},
+  ClickedShowRefusal: {},
   CompletedFocusField: {},
   CompletedNavigateAway: {},
   CompletedReadToday: { today: CalendarDate },

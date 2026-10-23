@@ -34,7 +34,7 @@ import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { historyView, relatedListsView } from "./panels-view.ts";
-import { isRecordOutdated, isReloading } from "./update.ts";
+import { FORM_MESSAGES_ID, isRecordOutdated, isReloading } from "./update.ts";
 
 const HEADING_ID = "record-form-heading";
 
@@ -430,10 +430,26 @@ const actionStateOf = (model: Model): ActionState =>
 const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const state = actionStateOf(model);
 
-  const quiet =
-    state === "failed"
-      ? "Not saved: the reason is at the top of the form."
-      : "Unsaved changes";
+  const quiet = Match.value(state).pipe(
+    Match.when("failed", () => [
+      h.span(
+        [h.Class("action-status-quiet")],
+        ["Not saved: the reason is at the top of the form."]
+      ),
+      buttonView(
+        {
+          onClick: Message.ClickedShowRefusal(),
+          text: "Show the reason",
+          variant: "ghost",
+        },
+        h
+      ),
+    ]),
+    Match.when("dirty", () => [
+      h.span([h.Class("action-status-quiet")], ["Unsaved changes"]),
+    ]),
+    Match.orElse((): readonly Html[] => [])
+  );
 
   return h.div(
     [h.Class("action-status"), h.DataAttribute("state", state)],
@@ -442,9 +458,7 @@ const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
       // NOTE: the live region stays mounted, so each outcome that appears
       // in it is announced.
       h.span([h.Role("status")], [submissionStatusText(model)]),
-      state === "failed" || state === "dirty"
-        ? h.span([h.Class("action-status-quiet")], [quiet])
-        : h.empty,
+      ...quiet,
     ]
   );
 };
@@ -574,7 +588,11 @@ const sectionView = (
 
   return Option.match(section.maybeLabel, {
     onNone: () =>
-      h.keyed("div")(`section-${index}`, [h.Class("form-section")], fields),
+      h.keyed("div")(
+        `section-${index}`,
+        [h.Class("form-section form-section-plain")],
+        fields
+      ),
     onSome: (label) =>
       h.keyed("div")(
         `section-${index}-${label}`,
@@ -789,7 +807,13 @@ const formBodyView = (
     ],
     [
       h.div(
-        [h.Class("form-messages")],
+        [
+          h.Id(FORM_MESSAGES_ID),
+          // NOTE: focusable from script only, so "Show the reason" can
+          // bring the refusal into view without the page jumping by itself.
+          h.Tabindex(-1),
+          h.Class("form-messages"),
+        ],
         [submissionAlertView(model, h), deletionView(model, h)]
       ),
       droppedEditsView(model, h),
