@@ -20,7 +20,7 @@ import { Effect, Schema } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import { objectOf, signInAll } from "./authz-support.ts";
+import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import {
@@ -366,6 +366,59 @@ describe("saved-filters", () => {
 
           assert.strictEqual(snapshot.get(tableFilterId)?.state, "purged");
           assert.strictEqual(snapshot.get(filterId)?.state, "purged");
+        })
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "through /api/v2 a saved filter is written as a change set and served in API names, as condition takes it",
+      () =>
+        Effect.gen(function* servedInApiNames() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+
+          const inService = addField(ACME.asset, "in_service", {
+            kind: "text",
+          });
+
+          yield* change([inService.op]);
+
+          const created = yield* http.request(
+            "POST",
+            "/api/v2/coreSavedFilter",
+            {
+              body: {
+                condition: notEmpty(inService.id),
+                label: "In service",
+                name: "in_service_set",
+                tableId: ACME.asset,
+              },
+              token: tokens.admin,
+            }
+          );
+
+          assert.strictEqual(created.status, 201, created.text);
+          assert.deepStrictEqual(yield* filtersOf(tokens.admin, "acme.asset"), [
+            "in_service_set: in_service is not empty",
+          ]);
+
+          const metadata = yield* http.get("/api/v2/tableMetadata/acmeAsset", {
+            token: tokens.admin,
+          });
+
+          const [saved] = arrayOf(objectOf(metadata.json).savedFilters).map(
+            (filter) => objectOf(filter)
+          );
+
+          assert.strictEqual(saved?.filter, "inService is not empty");
+
+          const listed = yield* http.get(
+            `/api/v2/acmeAsset?condition=${encodeURIComponent(textOf(saved?.filter))}`,
+            { token: tokens.admin }
+          );
+
+          assert.strictEqual(listed.status, 200, listed.text);
         })
     );
   });

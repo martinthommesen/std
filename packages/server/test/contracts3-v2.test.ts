@@ -1874,10 +1874,10 @@ describe("platform-tables-v2", () => {
           const before = yield* changeCount();
           const deliveriesBefore = yield* deliveries();
 
-          // `coreChange` is refused for every caller. A definition table
-          // is not written through /api/v2 yet (10.2, decision 0025): 405
-          // with Allow: GET, before any table or record is looked up; v1's
-          // change-set path serves it.
+          // `coreChange` is refused for every caller. A write to a
+          // definition table is a change set (Contracts 1.4), as in v1: an
+          // incomplete create is ValidationFailed, and the built-in rules
+          // are protected.
           const writes = [
             [
               "POST",
@@ -1904,22 +1904,22 @@ describe("platform-tables-v2", () => {
               "POST",
               "/api/v2/coreAccessRule",
               { ...caller, body: { description: "forged" } },
-              405,
-              "MethodNotAllowed",
+              422,
+              "ValidationFailed",
             ],
             [
               "PATCH",
               `/api/v2/coreAccessRule/${ruleId}`,
               merge(caller, Number(ruleVersion), { description: "edited" }),
-              405,
-              "MethodNotAllowed",
+              403,
+              "DefinitionProtected",
             ],
             [
               "DELETE",
               `/api/v2/coreAccessRule/${ruleId}`,
               { ...caller, headers: { "if-match": `"${ruleVersion}"` } },
-              405,
-              "MethodNotAllowed",
+              403,
+              "DefinitionProtected",
             ],
           ] as const;
 
@@ -1940,18 +1940,19 @@ describe("platform-tables-v2", () => {
               { ...caller, body: {} }
             );
 
-            // Definition tables are read-only here (405); every other
-            // platform table is refused (NotAllowed).
+            // An empty create on a definition table is an incomplete
+            // change set (ValidationFailed); every other platform table is
+            // refused (NotAllowed).
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
 
             assert.strictEqual(
               response.status,
-              definitionTable ? 405 : 403,
+              definitionTable ? 422 : 403,
               `POST ${table}`
             );
             assert.strictEqual(
               codeOf(response),
-              definitionTable ? "MethodNotAllowed" : "NotAllowed"
+              definitionTable ? "ValidationFailed" : "NotAllowed"
             );
           }
 

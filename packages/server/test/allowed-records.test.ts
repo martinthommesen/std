@@ -152,6 +152,17 @@ const tagAndParameter = (response: TestResponse) => [
   textOf(objectOf(response.json).parameter ?? ""),
 ];
 
+// A v2 list as a caller sees it.
+const v2List = (collection: string, query: string, token: string) =>
+  Effect.gen(function* listV2() {
+    const http = yield* TestHttpClient;
+
+    return yield* http.get(`/api/v2/${collection}?${query}`, { token });
+  });
+
+const v2Ids = (response: TestResponse): string[] =>
+  arrayOf(response.json).map((item) => textOf(objectOf(item).id));
+
 describe("allowed-records", () => {
   it("names the picker's field as table/field", () => {
     assert.strictEqual(PICKER.split("/").length, 2);
@@ -533,6 +544,68 @@ describe("allowed-records", () => {
           );
           assert.strictEqual((yield* read()).status, 200);
         })
+    );
+  });
+
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "through /api/v2, allowedFor=<collection>/<attribute> equals the list filtered by the condition, and refuses what it cannot name like v1",
+      () =>
+        Effect.gen(function* pickerV2() {
+          yield* setup;
+
+          const { tokens } = yield* signInAll;
+
+          for (const token of [tokens.alice, tokens.bob, tokens.admin]) {
+            for (const collection of [
+              "acmeAsset",
+              "acmeLaptop",
+              "acmeMonitor",
+            ]) {
+              const picked = yield* v2List(
+                collection,
+                "allowedFor=acmeAsset/dock&sort=name",
+                token
+              );
+
+              const plain = yield* v2List(
+                collection,
+                `condition=${encodeURIComponent('status = "in_use"')}&sort=name`,
+                token
+              );
+
+              assert.strictEqual(picked.status, 200, picked.text);
+              assert.deepStrictEqual(v2Ids(picked), v2Ids(plain), collection);
+              assert.strictEqual(
+                picked.headers.get("x-total-count"),
+                plain.headers.get("x-total-count")
+              );
+            }
+          }
+
+          const refusals = [
+            ["allowedFor=noSuchTable/dock", 404, "UnknownTable"],
+            ["allowedFor=acmeAsset/noSuchField", 400, "UnknownField"],
+            ["allowedFor=acmeAsset", 400, "InvalidRequest"],
+            ["allowedFor=acmeAsset/name", 400, "InvalidRequest"],
+          ] as const;
+
+          for (const [query, status, code] of refusals) {
+            const refused = yield* v2List("acmeAsset", query, tokens.bob);
+
+            assert.strictEqual(
+              refused.status,
+              status,
+              `${query}: ${refused.text}`
+            );
+            assert.strictEqual(
+              textOf(objectOf(refused.json).code),
+              code,
+              query
+            );
+          }
+        }),
+      { timeout: 120_000 }
     );
   });
 });

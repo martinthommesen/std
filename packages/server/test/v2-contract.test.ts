@@ -26,6 +26,7 @@ import {
   v2EndpointOf,
 } from "../../testing/src/v2-contract.ts";
 import { readsTestLayer } from "./reads-support.ts";
+import { ACME, addField } from "./schema-support.ts";
 import { asArray, asObject, textOf, V2, v2Callers } from "./v2-support.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
@@ -171,6 +172,54 @@ describe("v2-contract", () => {
             "/api/v2/openapi.json",
             { headers: { "std-schema-revision": "not a revision" } },
             400
+          );
+
+          // Change sets.
+          const applied = yield* exchange(
+            "POST",
+            "/api/v2/applyChangeSet",
+            {
+              ...callers.admin,
+              body: {
+                operations: [
+                  addField(ACME.asset, "contract_note", { kind: "text" }).op,
+                ],
+              },
+            },
+            201
+          );
+
+          // Nothing to change: no change set is recorded.
+          yield* exchange(
+            "POST",
+            "/api/v2/applyChangeSet",
+            { ...callers.admin, body: { operations: [] } },
+            200
+          );
+          yield* exchange(
+            "POST",
+            "/api/v2/applyChangeSet",
+            {
+              ...callers.bob,
+              body: {
+                operations: [
+                  addField(ACME.asset, "bob_note", { kind: "text" }).op,
+                ],
+              },
+            },
+            403
+          );
+          yield* exchange(
+            "GET",
+            new URL(textOf(asObject(applied.json).href)).pathname,
+            callers.admin,
+            200
+          );
+          yield* exchange(
+            "GET",
+            `/api/v2/applyChangeSet/${RANDOM_ID}`,
+            callers.admin,
+            404
           );
 
           // Collections and resources.

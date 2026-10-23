@@ -664,7 +664,7 @@ const ALLOWED_FOR_USAGE =
  * @param text - The parameter, if given.
  * @returns The compiled condition, or none.
  */
-const compileAllowedFor = Effect.fn("Records.allowedFor")(
+export const compileAllowedFor = Effect.fn("Records.allowedFor")(
   function* compileAllowedFor(
     scope: ReadScope,
     endpointClassId: DefinitionId,

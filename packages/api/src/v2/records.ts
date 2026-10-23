@@ -25,6 +25,7 @@ const tableAndId = { id: Schema.String, table: Schema.String } as const;
 /** The list query. Attribute filters are further, open-ended parameters. */
 export const ListQuery = {
   after: Schema.optionalKey(Schema.String),
+  allowedFor: Schema.optionalKey(Schema.String),
   before: Schema.optionalKey(Schema.String),
   condition: Schema.optionalKey(Schema.String),
   count: Schema.optionalKey(Schema.String),
@@ -57,7 +58,7 @@ export class RecordsGroup extends HttpApiGroup.make("records").add(
     success: Schema.Array(Resource),
   }).annotate(
     OpenApi.Description,
-    "A page of the table's resources. Besides the named parameters, any attribute name filters by equality (`status=spare`), with the operator forms of Contracts 10.3. `fields` selects attributes and one-hop paths (`!name` excludes), `sort` lists attribute names (`-` descending), `condition` takes STD's condition text syntax with API names. `after` and `before` are cursors, `offset` and `limit` (1 to 1000, default 100) page by position; `count=false` drops `X-Total-Count` on cursor pages."
+    "A page of the table's resources. Besides the named parameters, any attribute name filters by equality (`status=spare`), with the operator forms of Contracts 10.3. `fields` selects attributes and one-hop paths (`!name` excludes), `sort` lists attribute names (`-` descending), `condition` takes STD's condition text syntax with API names. `allowedFor=<collection>/<attribute>` narrows to what a reference attribute may point at (decision 0020). `after` and `before` are cursors, `offset` and `limit` (1 to 1000, default 100) page by position; `count=false` drops `X-Total-Count` on cursor pages."
   ),
   HttpApiEndpoint.post("create", "/:table", {
     error: WRITE_ERRORS,

@@ -19,8 +19,11 @@ import { knowsTable } from "@std/access/rules";
  */
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
+import { UnknownField } from "@std/api/errors/unknown-field";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import type { DefinitionId } from "@std/definitions/ids";
+import { apiAttributeNameOf } from "@std/definitions/names";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { stringifyJson } from "@std/values/json";
 import {
   isJsonArray,
@@ -39,6 +42,7 @@ import {
   defaultSelection,
 } from "../../records/read-query.ts";
 import {
+  compileAllowedFor,
   currentReadScope,
   readByIds,
   readOne,
@@ -76,6 +80,7 @@ const DIRECTIVES: ReadonlySet<string> = new Set([
   "filter",
   "condition",
   "count",
+  "allowedFor",
   "@type",
 ]);
 
@@ -375,6 +380,108 @@ const concreteRecords = Effect.fn("V2.concreteRecords")(
   }
 );
 
+/** A picker's source (decision 0020): `allowedFor=<collection>/<attribute>`. */
+interface PickerSource {
+  readonly collection: string;
+  readonly attribute: string;
+  /** The source table's qualified name, when the collection names one. */
+  readonly table: string | undefined;
+}
+
+const PICKER_USAGE =
+  "allowedFor is <collection>/<attribute>: a reference attribute whose target is this table or one of its ancestors.";
+
+const pickerProblem = () =>
+  new InvalidRequest({ message: PICKER_USAGE, parameter: "allowedFor" });
+
+// `allowedFor` as the request names it, if given.
+const pickerSourceOf = Effect.fn("V2.pickerSource")(function* pickerSourceOf(
+  snapshot: ConfigSnapshot,
+  query: QueryParameters
+) {
+  const given = query.filter(([key]) => key === "allowedFor");
+  const text = given[0]?.[1] ?? "";
+  const slash = text.indexOf("/");
+  const attribute = text.slice(slash + 1);
+
+  const malformed =
+    given.length > 1 ||
+    slash <= 0 ||
+    attribute === "" ||
+    attribute.includes("/");
+
+  if (given.length > 0 && malformed) {
+    return yield* pickerProblem();
+  }
+
+  const collection = text.slice(0, slash);
+
+  return given.length === 0
+    ? Option.none<PickerSource>()
+    : Option.some<PickerSource>({
+        attribute,
+        collection,
+        table: tableOfCollection(snapshot, collection),
+      });
+});
+
+// A refusal of the record service, naming what the request said.
+const pickerFailure =
+  (source: PickerSource, unknownTable: UnknownTable) =>
+  (
+    failure: InvalidRequest | UnknownField | UnknownTable
+  ): InvalidRequest | UnknownField | UnknownTable => {
+    if (failure._tag === "InvalidRequest") {
+      return pickerProblem();
+    }
+
+    return failure._tag === "UnknownField"
+      ? new UnknownField({ field: source.attribute })
+      : unknownTable;
+  };
+
+/**
+ * A picker's allowed-records condition over the listed class (decision
+ * 0020, as for every list): the source resolves like an endpoint and its
+ * attribute like a write body's name, and the answers name what the
+ * request said, so nothing is revealed about a table or field the caller
+ * cannot name.
+ *
+ * @param scope - The caller's scope.
+ * @param classId - The listed class.
+ * @param source - The picker's source.
+ * @returns The compiled condition, if the field has one.
+ */
+const pickerCondition = Effect.fn("V2.pickerCondition")(
+  function* pickerCondition(
+    scope: ReadScope,
+    classId: DefinitionId,
+    source: PickerSource
+  ) {
+    const unknownTable = new UnknownTable({ table: source.collection });
+
+    if (source.table === undefined) {
+      return yield* unknownTable;
+    }
+
+    const sourceClassId = yield* resolveTable(scope, source.table).pipe(
+      Effect.mapError(() => unknownTable)
+    );
+
+    const field = scope.snapshot
+      .fields(sourceClassId)
+      .find(
+        (candidate) => apiAttributeNameOf(candidate.name) === source.attribute
+      );
+
+    return yield* compileAllowedFor(
+      scope,
+      classId,
+      `${source.table}/${field?.name ?? source.attribute}`
+    ).pipe(Effect.mapError(pickerFailure(source, unknownTable)));
+  }
+);
+
 /**
  * `GET /api/v2/{table}`, inside the request transaction as the `Actor`.
  *
@@ -384,12 +491,31 @@ const concreteRecords = Effect.fn("V2.concreteRecords")(
 export const listIn = Effect.fn("V2.list")(function* listIn(input: RouteInput) {
   const query = queryOf(input.request);
   const table = yield* tableOf(input.collection);
+  const snapshot = yield* (yield* Catalog).current;
+  const picker = yield* pickerSourceOf(snapshot, query);
 
-  yield* checkRequestRevision(input.stated, table, scopeOfQuery(query));
+  // The picker's field is in scope on its own table (decision 0020).
+  const scopeParameters = scopeOfQuery(query);
+  const source = Option.getOrUndefined(picker);
+
+  yield* checkRequestRevision(
+    input.stated,
+    table,
+    source?.table === undefined
+      ? scopeParameters
+      : {
+          ...scopeParameters,
+          allowedFor: `${source.table}/${source.attribute}`,
+        }
+  );
 
   const scope = yield* currentReadScope();
   const view = scope.view(yield* resolveTable(scope, table));
   const parsed = yield* parseListQuery(scope, view, query);
+
+  const allowed = Option.isSome(picker)
+    ? yield* pickerCondition(scope, view.classId, picker.value)
+    : Option.none();
 
   // TMF filters compare text unmodified (D4); `condition` keeps each
   // field's case behavior. Each compiles with its own join aliases.
@@ -413,7 +539,7 @@ export const listIn = Effect.fn("V2.list")(function* listIn(input: RouteInput) {
       ]
     : [];
 
-  const filters = [...tmf, ...condition];
+  const filters = [...tmf, ...condition, ...Option.toArray(allowed)];
 
   const page = yield* readPage(scope, view, {
     after: parsed.cursors.after,
@@ -774,7 +900,13 @@ const createdClass = Effect.fn("V2.createdClass")(function* createdClass(
   return named;
 });
 
-const withoutTypeMembers = (body: JsonObject): JsonObject =>
+/**
+ * A body without the members that name the class.
+ *
+ * @param body - The body.
+ * @returns The attributes.
+ */
+export const withoutTypeMembers = (body: JsonObject): JsonObject =>
   Object.fromEntries(
     Object.entries(body).filter(([key]) => !TYPE_MEMBERS.has(key))
   );

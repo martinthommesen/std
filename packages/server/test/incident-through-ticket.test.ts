@@ -6,7 +6,7 @@
  * alone, through `/api/v1` and through `/api/v2` (`helpdeskTicket`,
  * `helpdeskIncident`, Contracts 10). The admin writes the rule through the
  * generic API, as a one-operation change set on `core.record_rule`
- * (definition tables are not written through `/api/v2` yet, decision 0025).
+ * (`/api/v1`) or a write to `coreRecordRule` (`/api/v2`).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { JsonValue } from "@std/values/json-value";
@@ -193,10 +193,22 @@ describe("incident-through-ticket", () => {
             fixture.agent.password
           );
 
+          // The rule itself through /api/v2, in v2 names: a change set.
           const created = yield* http.request(
             "POST",
-            "/api/v1/tables/core.record_rule/records",
-            { body: RULE_BODY, token: admin }
+            "/api/v2/coreRecordRule",
+            {
+              body: {
+                actions: RULE_BODY.actions,
+                condition: RULE_BODY.condition,
+                name: RULE_BODY.name,
+                operations: RULE_BODY.operations,
+                phase: RULE_BODY.phase,
+                ruleKind: RULE_BODY.rule_kind,
+                tableId: RULE_BODY.table_id,
+              },
+              token: admin,
+            }
           );
 
           assert.strictEqual(created.status, 201, created.text);

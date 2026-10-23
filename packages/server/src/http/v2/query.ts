@@ -61,6 +61,7 @@ const DIRECTIVES: ReadonlySet<string> = new Set([
   "filter",
   "condition",
   "count",
+  "allowedFor",
 ]);
 
 /** Attributes every resource has; in `fields` they select nothing more. */

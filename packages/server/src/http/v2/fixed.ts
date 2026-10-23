@@ -1,3 +1,4 @@
+import { apiFilterText } from "@std/access/saved-filters";
 /**
  * The fixed resources of `/api/v2` (Contracts 10.1):
  *
@@ -536,6 +537,7 @@ export const FixedRoutes = Layer.unwrap(
         const { described } = yield* metadataOf(collection);
         const { revision } = yield* RequestRevision;
         const snapshot = yield* (yield* Catalog).current;
+        const actor = yield* Actor;
 
         return jsonAnswer(
           {
@@ -549,6 +551,17 @@ export const FixedRoutes = Layer.unwrap(
             href: `${origin}${METADATA_PATH}/${collection}`,
             id: collection,
             resourceType: typeNameOf(snapshot, described.id),
+            // Saved filters in v2 names, as `condition` takes them.
+            savedFilters: (described.savedFilters ?? []).flatMap((saved) => {
+              const filter = apiFilterText(
+                snapshot,
+                actor,
+                described.id,
+                saved.condition
+              );
+
+              return filter === undefined ? [] : [{ ...saved, filter }];
+            }),
             schemaRevision: revision,
           },
           200

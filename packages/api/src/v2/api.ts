@@ -6,6 +6,7 @@
  */
 import { HttpApi, OpenApi } from "effect/http-api";
 
+import { ChangeSetGroup } from "./change-sets.ts";
 import { MetaGroup } from "./meta.ts";
 import { RecordsGroup } from "./records.ts";
 import { SessionGroup } from "./session.ts";
@@ -20,6 +21,7 @@ export class StdApiV2 extends HttpApi.make("std-v2")
   .add(SessionGroup)
   .add(TableMetadataGroup)
   .add(MetaGroup)
+  .add(ChangeSetGroup)
   .add(RecordsGroup)
   .annotate(OpenApi.Title, "STD API")
   .annotate(OpenApi.Version, "2")

@@ -788,19 +788,20 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
 });
 
 /**
- * Runs a write to a definition table as a change set and answers like the
- * generic write routes: 201 or 200 with the record, or the delete's ID and
- * version.
+ * Runs a write to a definition table as a change set: the request's checks
+ * in a request transaction, then the change set, everything checked again
+ * under its lock. Both APIs answer from the result.
  *
  * @param transactions - The process's transactions.
  * @param request - The HTTP request.
+ * @param stated - The request's stated revision.
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
- * @param write - The write.
- * @returns The response.
+ * @param write - The write, keyed by definition column names.
+ * @returns The definition's ID and the acting user.
  */
-export const writeDefinition = Effect.fn("Http.writeDefinition")(
-  function* writeDefinition(
+export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
+  function* applyDefinitionWrite(
     transactions: TransactionsApi,
     request: HttpServerRequest,
     stated: StatedRevision,
@@ -843,6 +844,40 @@ export const writeDefinition = Effect.fn("Http.writeDefinition")(
       operations: prepared.operations,
       source: { kind: "api", route: "records", table },
     });
+
+    return { actor: prepared.actor, id: prepared.id };
+  }
+);
+
+/**
+ * Runs a write to a definition table as a change set and answers like the
+ * generic write routes: 201 or 200 with the record, or the delete's ID and
+ * version.
+ *
+ * @param transactions - The process's transactions.
+ * @param request - The HTTP request.
+ * @param table - The qualified table name.
+ * @param kind - Its definition kind.
+ * @param write - The write.
+ * @returns The response.
+ */
+export const writeDefinition = Effect.fn("Http.writeDefinition")(
+  function* writeDefinition(
+    transactions: TransactionsApi,
+    request: HttpServerRequest,
+    stated: StatedRevision,
+    table: string,
+    kind: DefinitionKind,
+    write: DefinitionWrite
+  ) {
+    const prepared = yield* applyDefinitionWrite(
+      transactions,
+      request,
+      stated,
+      table,
+      kind,
+      write
+    );
 
     return yield* inRequestTransaction(
       transactions,

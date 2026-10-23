@@ -51,6 +51,8 @@ export const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   declared("tableMetadata/:table", ["GET"]),
   declared("tableMetadata/:table/schema.json", ["GET"]),
   declared("openapi.json", ["GET"], true),
+  declared("applyChangeSet", ["POST"]),
+  declared("applyChangeSet/:id", ["GET"]),
   declared(":collection", ["GET", "POST"]),
   declared(":collection/:id", ["GET", "PATCH", "DELETE"]),
   declared(":collection/:id/history", ["GET"]),

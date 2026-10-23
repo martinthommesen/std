@@ -1,6 +1,8 @@
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import type { DefinitionKind } from "@std/definitions/definition";
+import { apiTableNameOf } from "@std/definitions/names";
 import { isJsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 /**
@@ -21,11 +23,16 @@ import type { InstanceSettings } from "../../config/instance-settings.ts";
 import type { SaveHooks } from "../../records/save-hooks.ts";
 import { RuleWriteAccess } from "../../records/write-access-rules.ts";
 import type { WriteOnlyValues } from "../../records/write-only-values.ts";
+import type { ChangeSetServices } from "../../schema/change-set.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import type { TransactionsApi } from "../../sql/transactions.ts";
+import { DEFINITION_KIND_OF_TABLE } from "../change-sets.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { parseRequestRevision } from "../stale-request.ts";
 import { answered } from "./answered.ts";
+import { ChangeSetRoutes } from "./change-sets.ts";
+import { definitionWriteIn } from "./definition-writes.ts";
+import type { DefinitionAction } from "./definition-writes.ts";
 import { FixedRoutes } from "./fixed.ts";
 import { historyEntryIn, historyIn } from "./history.ts";
 import {
@@ -64,9 +71,26 @@ const parametersOf = HttpRouter.params.pipe(
   )
 );
 
+/**
+ * The definition tables by v2 collection name. Platform tables are never
+ * renamed, so the names are fixed and a write is routed without reading
+ * the configuration.
+ */
+const DEFINITION_COLLECTIONS: ReadonlyMap<
+  string,
+  readonly [string, DefinitionKind]
+> = new Map(
+  [...DEFINITION_KIND_OF_TABLE].map(([table, kind]) => {
+    const [namespace = "", name = ""] = table.split(".");
+
+    return [apiTableNameOf(namespace, name), [table, kind] as const];
+  })
+);
+
 /** The services a record route's work needs. */
 type RouteServices =
   | Catalog
+  | ChangeSetServices
   | InstanceSettings
   | SaveHooks
   | WriteOnlyValues
@@ -105,6 +129,47 @@ const inSession = <E, R>(
         )
       )
     );
+  });
+
+/** Which definition-table write a request is. */
+interface DefinitionTarget {
+  readonly action: DefinitionAction;
+  readonly kind: DefinitionKind;
+  readonly table: string;
+}
+
+/**
+ * A write to a definition table: a change set, outside any request
+ * transaction (`definition-writes.ts`).
+ *
+ * @param transactions - The request transactions.
+ * @param request - The request.
+ * @param parameters - The path parameters.
+ * @param target - The table, its kind and the write.
+ * @returns The response.
+ */
+const definitionRequest = (
+  transactions: TransactionsApi,
+  request: HttpServerRequest,
+  parameters: RouteParameters,
+  target: DefinitionTarget
+) =>
+  Effect.gen(function* definitionWrite() {
+    const input: RouteInput = {
+      collection: parameters.collection,
+      origin: yield* originOf(request),
+      request,
+      stated: yield* parseRequestRevision(request),
+    };
+
+    return yield* definitionWriteIn(
+      transactions,
+      input,
+      target.table,
+      target.kind,
+      target.action,
+      parameters.id
+    ).pipe(collectionNamed(parameters.collection));
   });
 
 /**
@@ -173,6 +238,32 @@ const RecordRoutes = Layer.unwrap(
           })
         ).pipe(Effect.provide(services));
 
+    // A write to a definition table becomes a change set outside any
+    // request transaction (definition-writes.ts); any other write is
+    // `work` in one.
+    const write =
+      <E, R>(action: DefinitionAction, work: RouteWork<E, R>) =>
+      (request: HttpServerRequest) =>
+        Effect.gen(function* writeRequest() {
+          const parameters = yield* parametersOf;
+          const definition = DEFINITION_COLLECTIONS.get(parameters.collection);
+
+          if (definition === undefined) {
+            return yield* route(work)(request);
+          }
+
+          return yield* answered(
+            withSession(
+              request,
+              definitionRequest(transactions, request, parameters, {
+                action,
+                kind: definition[1],
+                table: definition[0],
+              })
+            )
+          );
+        }).pipe(Effect.provide(services));
+
     const unrouted = (resource: ResourceRoute, request: HttpServerRequest) =>
       unroutedAnswer(transactions, resource, request).pipe(
         Effect.provide(services)
@@ -210,7 +301,7 @@ const RecordRoutes = Layer.unwrap(
       HttpRouter.route(
         "POST",
         `${V2_PREFIX}/:collection`,
-        route((input) =>
+        write("create", (input) =>
           Effect.gen(function* createRoute() {
             const body = yield* checkedCreate(yield* jsonBodyOf(input.request));
 
@@ -230,14 +321,14 @@ const RecordRoutes = Layer.unwrap(
       HttpRouter.route(
         "PATCH",
         `${V2_PREFIX}/:collection/:id`,
-        route((input, { id }) =>
+        write("update", (input, { id }) =>
           Effect.flatMap(readPatch(input), (patch) => patchIn(input, id, patch))
         )
       ),
       HttpRouter.route(
         "DELETE",
         `${V2_PREFIX}/:collection/:id`,
-        route((input, { id }) =>
+        write("delete", (input, { id }) =>
           Effect.flatMap(readDelete(input), (version) =>
             deleteIn(input, id, version)
           )
@@ -258,4 +349,8 @@ const RecordRoutes = Layer.unwrap(
 );
 
 /** Every `/api/v2` route. */
-export const V2RoutesLayer = Layer.mergeAll(RecordRoutes, FixedRoutes);
+export const V2RoutesLayer = Layer.mergeAll(
+  RecordRoutes,
+  FixedRoutes,
+  ChangeSetRoutes
+);
