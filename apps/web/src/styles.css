@@ -100,11 +100,22 @@
   /* Sizes. 2 rem (32 px) controls keep lists and forms dense and stay
      above WCAG 2.2's 24 px target minimum (2.5.8). */
   --control-height: 2rem;
+  /* The header holds one 32 px control row with 8 px above and below. */
   --header-height: 3rem;
+  /* The longest core table label ("Installed definition set") fits on
+     one line at 14 px with the nav item's padding (screenshots/after, 72). */
   --sidebar-width: 15rem;
+  /* Pages stop growing at 1440 px of content (the 1440 px screenshots'
+     page width beside the sidebar), so a list's columns do not drift
+     apart on wide monitors. */
   --content-max: 90rem;
+  /* Two form columns of about 30 rem each: room for a date and a time
+     input side by side, and short enough to read across. */
   --form-max: 64rem;
 
+  /* Operate surfaces keep transitions within 150 to 250 ms (Impeccable,
+     reference/operate.md, "Motion"); 120 ms for colour changes on hover,
+     which should feel immediate. */
   --duration-fast: 120ms;
   --duration: 180ms;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
