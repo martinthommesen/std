@@ -16,6 +16,7 @@
  */
 import type { Expr } from "@std/conditions/ast";
 import type { DefinitionId } from "@std/definitions/ids";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { pathOf, pathSource } from "@std/tmf/mapping";
 import type {
   Attribute,
@@ -23,10 +24,11 @@ import type {
   SourceKey,
   SourceRecord,
   SourceValue,
+  SourceValues,
 } from "@std/tmf/mapping";
 import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { readHistory } from "../../records/history-query.ts";
@@ -160,6 +162,39 @@ export const selectionOf = (
 
     return field === undefined ? [] : [{ field, key: field.name }];
   });
+
+const sourceValueOf = (
+  snapshot: ConfigSnapshot,
+  fieldId: string,
+  value: JsonValue
+): SourceValue =>
+  snapshot.field(fieldId)?.type.kind === "reference" && isJsonString(value)
+    ? { reference: { id: value, label: null, targetClassId: null }, value }
+    : { value };
+
+/**
+ * An image (field ID to canonical JSON, a change entry's or a stored
+ * record's) as the mapping reads it, readable fields only: references
+ * carry their ID, without a label or target class.
+ *
+ * @param snapshot - The configuration.
+ * @param image - Field ID to value.
+ * @param readable - The fields the identity can read on that image;
+ *   absent: every field the image holds.
+ * @returns The values.
+ */
+export const sourceValuesOf = (
+  snapshot: ConfigSnapshot,
+  image: JsonObject,
+  readable?: ReadonlySet<string>
+): SourceValues =>
+  new Map(
+    Object.entries(image).flatMap(([fieldId, value]) =>
+      (readable === undefined || readable.has(fieldId)) && value !== undefined
+        ? [[fieldId, sourceValueOf(snapshot, fieldId, value)] as const]
+        : []
+    )
+  );
 
 const READ_OPTIONS = { withLabels: true, withTargets: true } as const;
 

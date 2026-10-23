@@ -29,12 +29,16 @@ import type { MappedResource } from "../http/tmf/context.ts";
 import { parseTmfListQuery } from "../http/tmf/query.ts";
 import { uuidv7At } from "../records/change-entry.ts";
 import { currentReadScope } from "../records/read-records.ts";
+import type { ReadScope } from "../records/read-view.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { callbackUrl } from "./callback.ts";
 import { TooManyRequests } from "./too-many-requests.ts";
 
 const REGISTRATION_WINDOW = "1 minute";
+
+/** A value that parses for every text attribute's filter. */
+const PROBE_VALUE = "probe";
 const REGISTRATIONS_PER_WINDOW = 10;
 const DEFAULT_MAX_ACTIVE_HUBS = 20;
 const DEFAULT_MAX_ACTIVE_HUBS_PER_HOST = 10;
@@ -102,6 +106,94 @@ export interface Registration {
   readonly queryFieldIds: readonly string[];
 }
 
+/**
+ * Whether a TMF attribute filter compiles to a condition on stored fields
+ * only, which a hub's subscription condition can test (Contracts 5.10: the
+ * version's own image, no reference hops; the class and system fields are
+ * not in it).
+ *
+ * @param scope - The caller's scope.
+ * @param classId - The hub's class.
+ * @param mapped - The mapped resource.
+ * @param filter - One query parameter.
+ * @returns True when it does; false also when it does not parse.
+ */
+const filtersStoredFields = Effect.fnUntraced(function* filtersStoredFields(
+  scope: ReadScope,
+  classId: string,
+  mapped: MappedResource,
+  filter: readonly [string, string]
+) {
+  const parsed = yield* parseTmfListQuery(scope, scope.view(classId), mapped, [
+    filter,
+  ]).pipe(Effect.option);
+
+  const expr = parsed.pipe(Option.flatMap((query) => query.filter));
+
+  if (Option.isNone(expr)) {
+    return Option.isSome(parsed);
+  }
+
+  return (
+    Schema.is(ConditionSchema)(expr.value) &&
+    conditionFieldIds(expr.value).every(
+      (id) => scope.snapshot.field(id) !== undefined
+    )
+  );
+});
+
+/**
+ * Refuses a TMF hub filter on an attribute that is not stored in fields
+ * (TMF621's `ticketType`, derived from the record's class; `creationDate`,
+ * a system field): a hub's condition tests stored fields only. The error
+ * names the attribute and the attributes a hub query can filter on.
+ *
+ * @param scope - The caller's scope.
+ * @param classId - The hub's class.
+ * @param mapped - The mapped resource.
+ * @param filters - The query's attribute filters.
+ * @returns Nothing, or `InvalidRequest`.
+ */
+const refuseUnstoredFilters = Effect.fnUntraced(function* refuseUnstoredFilters(
+  scope: ReadScope,
+  classId: string,
+  mapped: MappedResource,
+  filters: readonly (readonly [string, string])[]
+) {
+  for (const [name, value] of filters) {
+    const attribute = name.split(".")[0] ?? name;
+
+    const known = mapped.resource.attributes.some(
+      (entry) => entry.name === attribute
+    );
+
+    if (
+      known &&
+      !(yield* filtersStoredFields(scope, classId, mapped, [name, value]))
+    ) {
+      const supported: string[] = [];
+
+      for (const entry of mapped.resource.attributes) {
+        const probe = yield* filtersStoredFields(scope, classId, mapped, [
+          entry.name,
+          PROBE_VALUE,
+        ]);
+
+        if (entry.kind === "value" && probe) {
+          supported.push(entry.name);
+        }
+      }
+
+      return yield* new InvalidRequest({
+        message: `A ${mapped.api.spec} hub query cannot filter on ${attribute}: hub filters test the record's stored fields, and ${attribute} is derived from its class or system fields. A hub query takes eventType and filters on ${supported.join(", ")}.`,
+        parameter: "query",
+      });
+    }
+  }
+
+  return yield* Effect.void;
+});
+
 /** Parse event selection and resource filters using the shared TMF630 grammar. */
 export const prepareRegistration = Effect.fn("Hubs.prepare")(
   function* prepareRegistration(
@@ -157,6 +249,10 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
           "A hub query selects event types and resource attributes only.",
         parameter: "query",
       });
+    }
+
+    if (mapped !== undefined) {
+      yield* refuseUnstoredFilters(scope, target.classId, mapped, filters);
     }
 
     const parsed = yield* mapped === undefined

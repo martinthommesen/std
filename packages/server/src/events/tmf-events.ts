@@ -29,7 +29,6 @@
  *   possible types it names makes no delivery (`acceptsHubEvent`).
  */
 import type { HubConfiguration } from "@std/definitions/hub";
-import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { eventEnvelope, eventTypesOf, TMF688_BASE_PATH } from "@std/tmf/events";
 import type {
   Attribute,
@@ -37,14 +36,12 @@ import type {
   EventRule,
   SourceKey,
   SourceRecord,
-  SourceValue,
-  SourceValues,
 } from "@std/tmf/mapping";
 import { pathOf } from "@std/tmf/mapping";
 import { readableOn, renderResource } from "@std/tmf/render";
 import { formatDateTime } from "@std/values/date-time";
-import { isJsonObject, isJsonString } from "@std/values/json-value";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { isJsonObject } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 
 import { SHIPPED_TMF_APIS } from "../http/tmf/apis.ts";
 import {
@@ -54,6 +51,7 @@ import {
   typeAttributesFor,
 } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
+import { sourceValuesOf } from "../http/tmf/sources.ts";
 import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import type { ChangeKind } from "../records/change-entry.ts";
 import { eventIdOf } from "./event-id.ts";
@@ -89,37 +87,6 @@ export const possibleEventTypes = (
 ): readonly string[] =>
   mapped.resource.events.flatMap((rule) =>
     rule.on === kind ? [rule.type] : []
-  );
-
-const sourceValueOf = (
-  snapshot: ConfigSnapshot,
-  fieldId: string,
-  value: JsonValue
-): SourceValue =>
-  snapshot.field(fieldId)?.type.kind === "reference" && isJsonString(value)
-    ? { reference: { id: value, label: null, targetClassId: null }, value }
-    : { value };
-
-/**
- * An image's values as the mapping reads them, readable fields only.
- *
- * @param snapshot - The configuration.
- * @param image - Field ID to value.
- * @param readable - The fields the identity can read on that image;
- *   absent: every field the image holds.
- * @returns The values.
- */
-export const sourceValuesOf = (
-  snapshot: ConfigSnapshot,
-  image: JsonObject,
-  readable?: ReadonlySet<string>
-): SourceValues =>
-  new Map(
-    Object.entries(image).flatMap(([fieldId, value]) =>
-      (readable === undefined || readable.has(fieldId)) && value !== undefined
-        ? [[fieldId, sourceValueOf(snapshot, fieldId, value)] as const]
-        : []
-    )
   );
 
 // The image before an update: the version's image with each change's

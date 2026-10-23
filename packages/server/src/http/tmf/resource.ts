@@ -35,7 +35,7 @@ import { VersionConflict } from "@std/api/errors/version-conflict";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { pathOf } from "@std/tmf/mapping";
+import { pathOf, SYSTEM_SOURCES } from "@std/tmf/mapping";
 import type {
   Attribute,
   ItemMapping,
@@ -46,6 +46,7 @@ import type {
 import { renderItem } from "@std/tmf/render";
 import { mergeBodyOf, planWrite, reorderRefusal } from "@std/tmf/write";
 import type { WritePlan } from "@std/tmf/write";
+import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
@@ -54,6 +55,7 @@ import { HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import { Actor } from "../../auth/actor.ts";
+import { storedImageOf } from "../../records/change-image.ts";
 import { compileFilterExpr } from "../../records/read-query.ts";
 import {
   currentReadScope,
@@ -70,6 +72,7 @@ import {
   lockAggregates,
   updateRecord,
 } from "../../records/save-pipeline.ts";
+import { loadRecord } from "../../records/save-sql.ts";
 import type { ConfigState } from "../../sql/request-revision.ts";
 import {
   applyJsonPatch,
@@ -104,6 +107,7 @@ import {
   readSourceRecords,
   selectionOf,
   sourceKeysOf,
+  sourceValuesOf,
   withHistory,
 } from "./sources.ts";
 
@@ -943,8 +947,10 @@ const checkReadOrder = Effect.fn("Tmf.checkReadOrder")(function* checkReadOrder(
  * keeps as given (statuses in a status history, characteristics,
  * a specification's related parties) are validated whole. A misfit fails
  * the whole write, which rolls back, with `ValidationFailed` naming the
- * member's path, so nothing is stored. Members the caller cannot read
- * after the write are not rendered and so not checked.
+ * member's path, so nothing is stored. The values checked are the
+ * stored ones, as the system sees them before any read mask: a member the
+ * caller may write but not read is checked too, and the error names its
+ * path and the schema's rule, never its value.
  *
  * @param input - The request.
  * @param scope - The caller's scope.
@@ -959,18 +965,44 @@ const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
     id: string,
     members: readonly string[]
   ) {
+    const { snapshot } = scope;
+
     const file = yield* Effect.sync(() =>
       pinnedDocumentOf(input.mapped.api.spec)
     );
 
-    const current = yield* readCurrent(scope, input.mapped, id).pipe(
+    const stored = yield* loadRecord(
+      snapshot,
+      input.mapped.resource.classId,
+      id
+    );
+
+    if (file === undefined || Option.isNone(stored)) {
+      return yield* Effect.void;
+    }
+
+    // What the caller reads adds labels, reference paths, parts and
+    // history; the stored values underneath are the system's, unmasked.
+    const read = yield* readCurrent(scope, input.mapped, id).pipe(
       Effect.asSome,
       Effect.catchTag("NotFound", () => Effect.succeedNone)
     );
 
-    if (file === undefined || Option.isNone(current)) {
-      return yield* Effect.void;
-    }
+    const record = stored.value;
+    const caller = Option.getOrUndefined(read);
+
+    const unmasked: SourceRecord = {
+      ...(caller ?? { parts: new Map() }),
+      classId: record.classId,
+      id,
+      values: new Map([
+        ...sourceValuesOf(snapshot, storedImageOf(snapshot, record)),
+        [SYSTEM_SOURCES.createdAt, { value: formatDateTime(record.createdAt) }],
+        [SYSTEM_SOURCES.updatedAt, { value: formatDateTime(record.updatedAt) }],
+        ...(caller?.values ?? new Map()),
+      ]),
+      version: record.version,
+    };
 
     const rendered = renderFor(
       {
@@ -980,7 +1012,7 @@ const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
         registry: input.registry,
         scope,
       },
-      current.value
+      unmasked
     );
 
     for (const member of members) {
@@ -996,6 +1028,8 @@ const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
               [member]: value,
             });
 
+      // The path and the schema's rule only: never the value, which the
+      // caller may not be able to read.
       if (problem !== undefined) {
         return yield* new ValidationFailed({
           errors: [

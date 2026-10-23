@@ -35,6 +35,7 @@ import { ProductionDeliveryHandlers } from "../src/outbox/production-handlers.ts
 import { WorkerSettings, workerPass } from "../src/outbox/worker.ts";
 import { OutboxSaveHooks } from "../src/records/outbox-producer.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
+import { StatementLog } from "../src/sql/statement-log.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import { listener } from "./hub-support.ts";
 import type { CallbackCall } from "./hub-support.ts";
@@ -568,5 +569,130 @@ describe("tmf621-events", () => {
           assert.strictEqual(key, eventId);
         }
       }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "a hub query filters on stored attributes, and one on ticketType is refused naming it and the attributes it can filter on",
+    () =>
+      Effect.gen(function* hubFilters() {
+        const admin = yield* tmf621As("admin");
+        const calls = yield* listener();
+
+        const refused = yield* admin.post(HUBS, {
+          "@type": "Hub",
+          callback: calls.origin,
+          query: "ticketType=incident",
+        });
+
+        const message = textOf(bodyOf(refused).message);
+
+        assert.deepStrictEqual(
+          [refused.status, bodyOf(refused).code, bodyOf(refused).parameter],
+          [400, "InvalidRequest", "query"]
+        );
+        assert.match(message, /cannot filter on ticketType/u);
+        assert.match(
+          message,
+          /filters on name, description, severity, priority, status/u
+        );
+        assert.notMatch(message, /on .*creationDate/u);
+
+        // A stored attribute filters the hub's events.
+        yield* register(admin, calls.origin, `eventType=${AVC}&name=filtered`);
+
+        for (const name of ["other", "filtered"]) {
+          const created = yield* admin.post(TICKETS, ticketBody({ name }));
+
+          yield* admin.patch(`${TICKETS}/${textOf(bodyOf(created).id)}`, {
+            description: `${name}, described again`,
+          });
+        }
+
+        yield* deliverAll;
+
+        assert.deepStrictEqual(
+          calls.calls.map(
+            (call) => resourceOf(call, "troubleTicket").description
+          ),
+          ["filtered, described again"]
+        );
+      }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "a touched array is read in the same statements for 10, 100 and 1,000 notes",
+    () =>
+      Effect.gen(function* arrayStatements() {
+        const admin = yield* tmf621As("admin");
+        const log = yield* StatementLog;
+        const calls = yield* listener();
+
+        yield* register(admin, calls.origin, `eventType=${AVC}`);
+
+        const counts: { notes: number; statements: number; images: number }[] =
+          [];
+
+        for (const size of [10, 100, 1000]) {
+          const created = yield* admin.post(
+            TICKETS,
+            ticketBody({
+              note: Array.from({ length: size }, (_, index) => ({
+                text: `note ${index}`,
+              })),
+            })
+          );
+
+          const ticket = bodyOf(created);
+
+          yield* deliverAll;
+
+          const [first, ...rest] = arrayOf(ticket, "note");
+
+          const changed = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            { note: [{ ...first, text: "changed note" }, ...rest] }
+          );
+
+          assert.strictEqual(changed.status, 200, changed.text);
+          yield* log.clear;
+          yield* workerPass();
+
+          const statements = yield* log.texts;
+          const event = carrying(calls.calls, "note").at(-1) ?? {};
+
+          // The event carries the whole array, the change included.
+          assert.deepStrictEqual(
+            arrayOf(event, "note").map((note) => note.text),
+            ["changed note", ...rest.map((note) => note.text)]
+          );
+
+          counts.push({
+            images: statements.filter((text) => text.includes("change_image"))
+              .length,
+            notes: size,
+            // Wake-ups of earlier writes' after-commit notifications land
+            // whenever they are flushed; they are not the delivery's.
+            statements: statements.filter((text) => !text.includes("pg_notify"))
+              .length,
+          });
+        }
+
+        // No statement per part: the counts do not grow with the array.
+        const [small, ...larger] = counts;
+
+        for (const count of larger) {
+          assert.strictEqual(
+            count.images,
+            small?.images,
+            JSON.stringify(counts)
+          );
+          assert.strictEqual(
+            count.statements,
+            small?.statements,
+            JSON.stringify(counts)
+          );
+        }
+      }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive),
+    { timeout: 120_000 }
   );
 });

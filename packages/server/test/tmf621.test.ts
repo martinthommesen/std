@@ -6,18 +6,30 @@
  * TMF621 document by the test client (`tmf-oas-contract`), so each test
  * also proves its statuses are declared ones.
  */
+import { randomUUID } from "node:crypto";
+
 import { assert, describe, it } from "@effect/vitest";
+import { HELPDESK_CLASS_IDS, TICKET_FIELD_IDS } from "@std/tmf/helpdesk-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
-import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
+import {
+  HELPDESK,
+  HelpdeskFixture,
+} from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
-import { apiCallers, asObject, numberOf, textOf } from "./api-support.ts";
+import {
+  apiCallers,
+  asArray,
+  asObject,
+  numberOf,
+  textOf,
+} from "./api-support.ts";
 import {
   clientFor,
   createTicket,
@@ -89,7 +101,6 @@ const stored = Effect.fn("Tmf621Test.stored")(function* stored(
   return asObject(read.json);
 });
 
-/** The individual of a helpdesk user, as the admin reads it. */
 /**
  * A TMF `Error`'s status and code, as `"<status> <code>"`.
  *
@@ -505,6 +516,67 @@ describe("tmf621", () => {
             yield* admin.get(`${SPECIFICATIONS}?name=Invalid%20related%20party`)
           ),
           []
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a member the writer may write but not read is checked against the pinned schema as stored, refused without its value, and nothing is stored",
+    () =>
+      Effect.gen(function* hiddenMember() {
+        yield* change([
+          {
+            definition: {
+              actions: ["read"],
+              active: true,
+              classId: HELPDESK_CLASS_IDS.ticket,
+              condition: null,
+              description: null,
+              effect: "deny",
+              id: randomUUID(),
+              kind: "accessRule",
+              name: null,
+              owner: { layer: "local" },
+              protected: false,
+              roleIds: [HELPDESK.agentRole],
+              target: {
+                fields: [TICKET_FIELD_IDS.statusChangeHistory],
+                kind: "fields",
+              },
+            },
+            op: "createAccessRule",
+          },
+        ]);
+
+        const agent = yield* tmf621As("agent");
+        const ticket = yield* open(agent);
+        const before = yield* stored(ticket, "helpdeskIncident");
+
+        const refused = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
+          statusChangeHistory: [{ status: "bogus" }],
+        });
+
+        const [error] = arrayOf(bodyOf(refused), "fieldErrors");
+
+        assert.strictEqual(outcome(refused), "400 ValidationFailed");
+        assert.match(textOf(error?.field), /^statusChangeHistory\.0\.status/u);
+        assert.notInclude(refused.text, "bogus");
+
+        // Rolled back: the stored record is unchanged.
+        assert.deepStrictEqual(
+          yield* stored(ticket, "helpdeskIncident"),
+          before
+        );
+
+        // A fitting value is still written.
+        yield* patch(agent, ticket, {
+          statusChangeHistory: [{ status: "acknowledged" }],
+        });
+        assert.deepStrictEqual(
+          asArray(
+            (yield* stored(ticket, "helpdeskIncident")).statusChangeHistory
+          ).map((item) => asObject(item).status),
+          ["acknowledged"]
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );

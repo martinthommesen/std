@@ -1,33 +1,46 @@
+/**
+ * What a mapped TMF hub's events read beyond their change entry
+ * (Contracts 12.1; decision 0035), in the preparation transaction, as the
+ * hub's identity:
+ *
+ * - **Arrays of parts.** An update of an owner touches an array when it
+ *   changed a field an owner item renders from (the ticket's caller), or
+ *   when it is the owner's aggregate save and its transaction wrote a part
+ *   of the array that the identity may see (a note added, a related party
+ *   changed). A touched array is read whole, as TMF630 v5.0.0 Part 1
+ *   §11.6.2 pp.202-203 asks: every part of the owner at the change, each
+ *   at its version then, masked by the identity's current read rules like
+ *   any delivery payload (`payloadOf`). An array whose owner reference the
+ *   identity cannot read on the part class is unreadable, as in a GET.
+ * - **Which part versions belong to an owner version** follows from the
+ *   change entries, never from clocks or ID order: every part write is
+ *   finalized in its own transaction by exactly one aggregate save of its
+ *   owner (Contracts 4.9), which lists the saves' part changes in
+ *   `cause.aggregate.parts` and shares the transaction's `operation_id`
+ *   with them and with the part writes the settling made. So a part change
+ *   belongs to the owner version of the aggregate save in its operation; a
+ *   part change with none predates aggregates (a set before helpdesk v3)
+ *   and so every aggregate version.
+ * - **A fixed number of statements**, whatever the number of parts: the
+ *   touched parts in one, the array's members (today's parts and those
+ *   deleted after the change) in two, and their versions at the change with
+ *   their saved images (`core.change_image`) in one. Only a change entry the
+ *   image backfill (migration 0028) has not reached yet is rebuilt alone,
+ *   from its history (`readEntries`).
+ * - **Reference paths** (`assigned_to.individual`): the target's field as
+ *   the identity may read it now, for the reference the change's image
+ *   holds; `statusChangeHistory` from the record's history up to the
+ *   change (`withHistory`).
+ *
+ * Reference labels are not read (the event's references carry their
+ * `id`), so a part renders what its own fields give.
+ */
 import {
   arrayParameter,
   identSql,
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
-/**
- * What a mapped TMF hub's events read beyond their change entry
- * (Contracts 12.1; decision 0035), in the preparation transaction, as the
- * hub's identity:
- *
- * - **Arrays of parts.** A change of an owner's version touches an array
- *   when the operation wrote a part of it (a note added, a related party
- *   changed) that the identity may see, or changed a field an owner item
- *   renders from (the ticket's caller). Each part write belongs to the
- *   owner's first version at or after it: every part write is followed in
- *   its own transaction by the owner's aggregate save (Contracts 4.9), and
- *   change IDs are UUIDv7, ordered by the aggregate root's lock. A touched
- *   array is read whole, as TMF630 v5.0.0 Part 1 §11.6.2 pp.202-203 asks:
- *   every part of the owner at the change, each at its version then, from
- *   the change history, masked by the identity's current read rules like
- *   any delivery payload (`payloadOf`). An array whose owner reference the
- *   identity cannot read on the part class is unreadable, as in a GET.
- * - **Reference paths** (`assigned_to.individual`): the target's field as
- *   the identity may read it now, for the reference the change's image
- *   holds.
- *
- * Reference labels are not read (the event's references carry their
- * `id`), so a part renders what its own fields give.
- */
 import type { DefinitionId } from "@std/definitions/ids";
 import { pathOf, SYSTEM_SOURCES } from "@std/tmf/mapping";
 import type {
@@ -37,93 +50,147 @@ import type {
   SourceRecord,
 } from "@std/tmf/mapping";
 import { formatDateTime } from "@std/values/date-time";
-import { isJsonNumber, isJsonString } from "@std/values/json-value";
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
-import { parseTimestamptzText } from "@std/values/postgres-text";
-import { Effect } from "effect";
+import {
+  parseJsonbText,
+  parseTimestamptzText,
+} from "@std/values/postgres-text";
+import { Effect, Schema } from "effect";
 
 import type { MappedResource } from "../http/tmf/context.ts";
-import { readFieldOf, sourceKeysOf, withHistory } from "../http/tmf/sources.ts";
+import {
+  readFieldOf,
+  sourceKeysOf,
+  sourceValuesOf,
+  withHistory,
+} from "../http/tmf/sources.ts";
 import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import {
   PayloadUnreadable,
   payloadOf,
   readEntries,
   readFieldOrigins,
-  versionImage,
 } from "../outbox/delivery-payload.ts";
-import type { FieldOrigin } from "../outbox/delivery-payload.ts";
+import type { DeliveryPayload } from "../outbox/delivery-payload.ts";
+import { ChangeKindSchema } from "../records/change-entry.ts";
 import { currentReadScope, readByIds } from "../records/read-records.ts";
 import type { DecodedRecord } from "../records/read-records.ts";
 import type { ReadScope } from "../records/read-view.ts";
 import { recordRelation } from "../records/relation.ts";
 import { readRows } from "../records/sql-run.ts";
-import { mappedResourceOfHub, sourceValuesOf } from "./tmf-events.ts";
+import { decodeRows } from "../sql/rows.ts";
+import { mappedResourceOfHub } from "./tmf-events.ts";
 
 const NOTHING: RenderPrepared = { parts: new Map(), paths: new Map() };
 
-/** The smallest UUID: no change entry comes before it. */
-const NO_CHANGE = "00000000-0000-0000-0000-000000000000";
+/** One part change with its saved image, as the version queries read it. */
+const PartRowSchema = Schema.Struct({
+  change_id: Schema.String,
+  created_at: Schema.NullOr(Schema.String),
+  image: Schema.NullOr(Schema.String),
+  kind: ChangeKindSchema,
+  occurred_at: Schema.String,
+  record_class_id: Schema.String,
+  record_id: Schema.String,
+  schema_revision: Schema.FiniteFromString,
+  version: Schema.FiniteFromString,
+});
+
+type PartRow = typeof PartRowSchema.Type;
+
+const PartRows = decodeRows(PartRowSchema);
+
+// The columns of a part change, its image (a delete's: the image before
+// it, saved with it or with the version before) and its creation time.
+const PART_COLUMNS = sql`"p"."id"::text AS "change_id", "p"."record_id"::text AS "record_id",
+  "p"."record_class_id"::text AS "record_class_id", "p"."record_version"::text AS "version",
+  "p"."kind", "p"."occurred_at"::text AS "occurred_at",
+  "p"."schema_revision"::text AS "schema_revision",
+  (CASE WHEN "p"."kind" = 'delete' THEN COALESCE("i"."before_image", "pi"."after_image")
+    ELSE "i"."after_image" END)::text AS "image",
+  (SELECT "f"."occurred_at" FROM core."change" AS "f"
+    WHERE "f"."record_id" = "p"."record_id" AND "f"."record_version" = 1)::text AS "created_at"`;
+
+const PART_IMAGES = sql`LEFT JOIN core."change_image" AS "i" ON "i"."change_id" = "p"."id"
+LEFT JOIN core."change" AS "pp" ON "pp"."record_id" = "p"."record_id"
+  AND "pp"."record_version" = "p"."record_version" - 1
+LEFT JOIN core."change_image" AS "pi" ON "pi"."change_id" = "pp"."id"`;
 
 /** What reading one delivery's arrays shares. */
 interface ArrayRead {
   readonly delivery: Delivery;
   readonly scope: ReadScope;
-  /** Field origins by class, read once per class. */
-  readonly origins: Map<DefinitionId, ReadonlyMap<DefinitionId, FieldOrigin>>;
 }
 
-const originsOf = Effect.fnUntraced(function* originsOf(
-  read: ArrayRead,
-  classId: DefinitionId
-) {
-  const known = read.origins.get(classId);
-
-  if (known !== undefined) {
-    return known;
-  }
-
-  const origins = yield* readFieldOrigins(read.delivery.snapshot, classId);
-
-  read.origins.set(classId, origins);
-
-  return origins;
-});
-
-/** One part version as history holds it. */
-interface PartVersion {
-  readonly recordId: string;
-  readonly version: number;
+/** A part at one version: its whole image and what the identity sees. */
+interface PartAt {
+  readonly row: PartRow;
+  /** Field ID to canonical JSON, unmasked (the owner reference). */
+  readonly known: ReadonlyMap<DefinitionId, JsonValue>;
+  readonly payload: DeliveryPayload;
 }
 
 /**
- * A part at one version as the identity may see it: whether it is visible
- * and names the owner, and its readable values.
+ * A part change as the identity may see it: its saved image masked by
+ * `payloadOf`, or, for an entry the image backfill has not reached, its
+ * history rebuilt by `readEntries`.
  *
  * @param read - The delivery and scope.
- * @param part - The part's version, which history holds.
- * @returns Its whole known image and its payload for the identity.
+ * @param row - The part change.
+ * @returns The part at that version.
  */
 const partAt = Effect.fnUntraced(function* partAt(
   read: ArrayRead,
-  part: PartVersion
+  row: PartRow
 ) {
   const { snapshot } = read.delivery;
-  const entries = yield* readEntries(part.recordId, part.version);
-  const entry = entries.at(-1);
+  const saved = row.image === null ? undefined : parseJsonbText(row.image);
 
-  if (entry === undefined) {
+  const image =
+    saved?.ok === true && isJsonObject(saved.value) ? saved.value : undefined;
+
+  if (row.image !== null && image === undefined) {
     return yield* new PayloadUnreadable({
-      reason: `Part ${part.recordId} has no change entry at version ${part.version}.`,
+      reason: `Change image ${row.change_id} is not readable.`,
     });
   }
 
-  const origins = yield* originsOf(read, entry.recordClassId);
+  const occurredAt = parseTimestamptzText(row.occurred_at);
+
+  // A saved image is the version's whole image (a delete's: the one it
+  // removed), so the entry is read as a version of it.
+  const entries =
+    image === undefined
+      ? yield* readEntries(row.record_id, row.version)
+      : [
+          {
+            actorId: "",
+            changeId: row.change_id,
+            fields: {},
+            image,
+            kind: row.kind === "delete" ? ("update" as const) : row.kind,
+            occurredAt: occurredAt.ok ? occurredAt.value : 0,
+            operationId: "",
+            recordClassId: row.record_class_id,
+            recordVersion: row.version,
+            schemaRevision: row.schema_revision,
+          },
+        ];
+
+  const origins =
+    image === undefined
+      ? yield* readFieldOrigins(snapshot, row.record_class_id)
+      : new Map();
 
   const payload = payloadOf(
     snapshot,
     read.scope.caller,
-    { entries, origins, recordId: part.recordId },
+    { entries, origins, recordId: row.record_id },
     read.scope.context
   );
 
@@ -131,10 +198,11 @@ const partAt = Effect.fnUntraced(function* partAt(
     return yield* payload;
   }
 
-  return {
-    known: versionImage(snapshot, entries, origins).known,
-    payload,
-  };
+  const known: ReadonlyMap<DefinitionId, JsonValue> = new Map(
+    Object.entries(image ?? payload.image)
+  );
+
+  return { known, payload, row } satisfies PartAt;
 });
 
 const partClassesOf = (
@@ -161,8 +229,10 @@ const arrayOfClass = (
 };
 
 /**
- * The arrays the operation's part writes touched for this owner version:
- * those with a written part the identity may see.
+ * The arrays an aggregate save's transaction wrote a part of that the
+ * identity may see: the part changes of the save's operation (those
+ * `cause.aggregate.parts` lists and those the settling wrote). Any other
+ * owner change wrote no part (Contracts 4.9).
  *
  * @param read - The delivery and scope.
  * @param arrays - The resource's arrays of parts.
@@ -173,32 +243,20 @@ const arraysWritten = Effect.fnUntraced(function* arraysWritten(
   arrays: readonly PartsAttribute[]
 ) {
   const { delivery } = read;
-  const { payload } = delivery;
   const touched = new Set<string>();
 
   const rows = yield* readRows(
-    sql`SELECT DISTINCT ON ("c"."record_id") "c"."record_id"::text AS "record_id",
-  "c"."record_version"::text AS "version"
-FROM core."change" AS "c"
-WHERE "c"."operation_id" = ${textParameter(payload.operationId, "uuid")}
-  AND "c"."id" <= ${textParameter(delivery.changeId, "uuid")}
-  AND "c"."id" > COALESCE((SELECT "p"."id" FROM core."change" AS "p"
-    WHERE "p"."record_id" = ${textParameter(delivery.recordId, "uuid")}
-      AND "p"."record_version" = ${textParameter(String(delivery.recordVersion - 1), "int8")}),
-    ${textParameter(NO_CHANGE, "uuid")})
-  AND "c"."record_class_id" = ANY(${arrayParameter(partClassesOf(delivery, arrays), "uuid")})
-ORDER BY "c"."record_id", "c"."record_version" DESC`
-  );
+    sql`SELECT ${PART_COLUMNS}
+FROM core."change" AS "o"
+JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
+${PART_IMAGES}
+WHERE "o"."id" = ${textParameter(delivery.changeId, "uuid")} AND "o"."cause" ? 'aggregate'
+  AND "p"."record_class_id" = ANY(${arrayParameter(partClassesOf(delivery, arrays), "uuid")})`
+  ).pipe(Effect.flatMap(PartRows));
 
   for (const row of rows) {
-    const recordId = row.record_id ?? "";
-
-    const part = yield* partAt(read, {
-      recordId,
-      version: Number(row.version),
-    });
-
-    const array = arrayOfClass(delivery, arrays, part.payload.classId);
+    const part = yield* partAt(read, row);
+    const array = arrayOfClass(delivery, arrays, row.record_class_id);
 
     if (
       array !== undefined &&
@@ -211,6 +269,43 @@ ORDER BY "c"."record_id", "c"."record_version" DESC`
 
   return touched;
 });
+
+/**
+ * A visible part as the mapping reads it, with its system dates.
+ *
+ * @param read - The delivery and scope.
+ * @param part - The part at its version.
+ * @returns The source record and its creation time.
+ */
+const sourcePartOf = (
+  read: ArrayRead,
+  part: PartAt
+): SourceRecord & { readonly createdAt: number } => {
+  const created = parseTimestamptzText(part.row.created_at ?? "");
+  const updated = parseTimestamptzText(part.row.occurred_at);
+
+  const values = new Map(
+    sourceValuesOf(read.delivery.snapshot, part.payload.image)
+  );
+
+  for (const [key, time] of [
+    [SYSTEM_SOURCES.createdAt, created],
+    [SYSTEM_SOURCES.updatedAt, updated],
+  ] as const) {
+    if (time.ok) {
+      values.set(key, { value: formatDateTime(time.value) });
+    }
+  }
+
+  return {
+    classId: part.payload.classId,
+    createdAt: created.ok ? created.value : 0,
+    id: part.row.record_id,
+    parts: new Map(),
+    values,
+    version: part.payload.recordVersion,
+  };
+};
 
 /**
  * The parts of an array at the change, each at its version then, as the
@@ -237,75 +332,56 @@ const partsAtChange = Effect.fnUntraced(function* partsAtChange(
     return null;
   }
 
-  const classes = partClassesOf(delivery, [array]);
+  const classes = arrayParameter(partClassesOf(delivery, [array]), "uuid");
+  const ownerId = textParameter(delivery.recordId, "uuid");
+  const version = textParameter(String(delivery.recordVersion), "int8");
 
-  // Today's parts of the owner, and those deleted since the change.
+  // The members: today's parts of the owner, and those a later aggregate
+  // version of it deleted.
   const live = yield* readRows(
     sql`SELECT ${identSql("p", "id")}::text AS "id"
 FROM ${recordRelation(snapshot, owner.classId)} AS ${identSql("p")}
-WHERE ${identSql("p", owner.name)} = ${textParameter(delivery.recordId, "uuid")}`
+WHERE ${identSql("p", owner.name)} = ${ownerId}`
   );
 
   const deleted = yield* readRows(
-    sql`SELECT "c"."record_id"::text AS "id"
-FROM core."change" AS "c" JOIN core."change_image" AS "i" ON "i"."change_id" = "c"."id"
-WHERE "c"."id" > ${textParameter(delivery.changeId, "uuid")} AND "c"."kind" = 'delete'
-  AND "c"."record_class_id" = ANY(${arrayParameter(classes, "uuid")})
-  AND "i"."before_image" ->> ${textParameter(owner.id, "text")} = ${textParameter(delivery.recordId, "text")}`
+    sql`SELECT "p"."record_id"::text AS "id"
+FROM core."change" AS "o"
+JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
+WHERE "o"."record_id" = ${ownerId} AND "o"."record_version" > ${version}
+  AND "o"."cause" ? 'aggregate' AND "p"."kind" = 'delete'
+  AND "p"."record_class_id" = ANY(${classes})`
   );
 
   const ids = [...live, ...deleted].flatMap((row) =>
     row.id === undefined || row.id === null ? [] : [row.id]
   );
 
-  // Each one's version at the change, and when it was created.
+  // Each member's last change that belongs to an owner version up to the
+  // change's: the aggregate save in its operation, or none (before
+  // aggregates).
   const versions = yield* readRows(
-    sql`SELECT DISTINCT ON ("c"."record_id") "c"."record_id"::text AS "id",
-  "c"."record_version"::text AS "version", "c"."kind", "c"."occurred_at"::text AS "updated_at",
-  (SELECT "f"."occurred_at" FROM core."change" AS "f"
-    WHERE "f"."record_id" = "c"."record_id" AND "f"."record_version" = 1)::text AS "created_at"
-FROM core."change" AS "c"
-WHERE "c"."record_id" = ANY(${arrayParameter(ids, "uuid")})
-  AND "c"."id" <= ${textParameter(delivery.changeId, "uuid")}
-ORDER BY "c"."record_id", "c"."record_version" DESC`
-  );
+    sql`SELECT DISTINCT ON ("p"."record_id") ${PART_COLUMNS}
+FROM core."change" AS "p"
+LEFT JOIN core."change" AS "o" ON "o"."operation_id" = "p"."operation_id"
+  AND "o"."record_id" = ${ownerId} AND "o"."cause" ? 'aggregate'
+${PART_IMAGES}
+WHERE "p"."record_id" = ANY(${arrayParameter(ids, "uuid")})
+  AND ("o"."record_version" IS NULL OR "o"."record_version" <= ${version})
+ORDER BY "p"."record_id", "p"."record_version" DESC`
+  ).pipe(Effect.flatMap(PartRows));
 
   const parts: (SourceRecord & { readonly createdAt: number })[] = [];
 
   for (const row of versions) {
-    const id = row.id ?? "";
-    const created = parseTimestamptzText(row.created_at ?? "");
-    const updated = parseTimestamptzText(row.updated_at ?? "");
-
-    const part =
-      row.kind === "delete"
-        ? undefined
-        : yield* partAt(read, { recordId: id, version: Number(row.version) });
+    const part = row.kind === "delete" ? undefined : yield* partAt(read, row);
 
     if (
       part !== undefined &&
       part.payload.visible &&
       part.payload.image[owner.id] === delivery.recordId
     ) {
-      const values = new Map(sourceValuesOf(snapshot, part.payload.image));
-
-      for (const [key, time] of [
-        [SYSTEM_SOURCES.createdAt, created],
-        [SYSTEM_SOURCES.updatedAt, updated],
-      ] as const) {
-        if (time.ok) {
-          values.set(key, { value: formatDateTime(time.value) });
-        }
-      }
-
-      parts.push({
-        classId: part.payload.classId,
-        createdAt: created.ok ? created.value : 0,
-        id,
-        parts: new Map(),
-        values,
-        version: part.payload.recordVersion,
-      });
+      parts.push(sourcePartOf(read, part));
     }
   }
 
@@ -333,8 +409,8 @@ ORDER BY "c"."record_id", "c"."record_version" DESC`
 
 /**
  * Where a path source's value is read: the target class's view, its field
- * and the referenced ID the version's image holds; null when the
- * identity cannot read the reference or the target's field.
+ * and the referenced ID the version's image holds; null when the identity
+ * cannot read the reference or the target's field.
  *
  * @param scope - The identity's scope.
  * @param delivery - The delivery.
@@ -440,11 +516,11 @@ const arraysTouched = Effect.fnUntraced(function* arraysTouched(
 /**
  * Reads what a mapped hub's events render beyond the change entry, as the
  * hub's identity in the preparation transaction (decision 0035): the
- * reference paths, and for an update the whole arrays it touched. Other
- * hubs need nothing.
+ * reference paths, the history-backed attributes' entries, and for an
+ * update the whole arrays it touched. Other hubs need nothing.
  *
  * @param delivery - The delivery.
- * @returns The arrays and paths.
+ * @returns The arrays, paths and history.
  */
 export const prepareMappedEvents = Effect.fn("Events.prepareMappedEvents")(
   function* prepareMappedEvents(delivery: Delivery) {
@@ -491,7 +567,7 @@ export const prepareMappedEvents = Effect.fn("Events.prepareMappedEvents")(
     }
 
     const arrays = attributes.filter(isParts);
-    const read: ArrayRead = { delivery, origins: new Map(), scope };
+    const read: ArrayRead = { delivery, scope };
     const parts = new Map<string, readonly SourceRecord[]>();
 
     for (const array of yield* arraysTouched(read, arrays)) {
