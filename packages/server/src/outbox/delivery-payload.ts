@@ -360,6 +360,88 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
   }
 );
 
+const historyRows = decodeRows(
+  Schema.Struct({
+    ...EntryTextSchema.fields,
+    after_image: Schema.NullOr(Schema.String),
+    record_id: Schema.String,
+  })
+);
+
+/**
+ * The whole histories of several records up to one version each, in one
+ * statement whatever their number: each record's entries in version order,
+ * with the image saved with each where there is one, the requested entry
+ * last, so `versionImage` rebuilds the version as `readEntries`' legacy
+ * reduction does (complete from create). For records whose entries the
+ * image backfill (migration 0028) has not reached yet.
+ *
+ * @param targets - Each record and the version to read it at.
+ * @returns The entries by record ID; a record without its version's entry
+ *   is left out.
+ */
+export const readHistories = Effect.fn("Outbox.readHistories")(
+  function* readHistories(
+    targets: readonly { readonly recordId: string; readonly version: number }[]
+  ) {
+    const histories = new Map<string, StoredEntry[]>();
+
+    if (targets.length === 0) {
+      return histories;
+    }
+
+    const rows = yield* readRows(
+      sql`SELECT "c"."id"::text AS "id", "c"."record_id"::text AS "record_id",
+  "c"."operation_id"::text AS "operation_id", "c"."record_class_id"::text AS "record_class_id",
+  "c"."record_version"::text AS "version_text", "c"."kind", "c"."actor_id"::text AS "actor_id",
+  "c"."occurred_at"::text AS "occurred_at", "c"."schema_revision"::text AS "schema_revision",
+  "c"."fields"::text AS "fields", "i"."after_image"::text AS "after_image"
+FROM unnest(${arrayParameter(
+        targets.map((target) => target.recordId),
+        "uuid"
+      )}, ${arrayParameter(
+        targets.map((target) => String(target.version)),
+        "int8"
+      )}) AS "t"("record_id", "version")
+JOIN core."change" AS "c" ON "c"."record_id" = "t"."record_id"
+  AND "c"."record_version" <= "t"."version"
+LEFT JOIN core."change_image" AS "i" ON "i"."change_id" = "c"."id"
+ORDER BY "c"."record_id", "c"."record_version"`
+    ).pipe(Effect.flatMap(historyRows));
+
+    for (const row of rows) {
+      const entry = yield* entryOf(row);
+
+      const parsed =
+        row.after_image === null ? null : parseJsonbText(row.after_image);
+
+      const image =
+        parsed?.ok === true && isJsonObject(parsed.value) ? parsed.value : null;
+
+      if (parsed !== null && image === null) {
+        return yield* unreadable(`Change image ${row.id} is not readable.`);
+      }
+
+      const history = histories.get(row.record_id) ?? [];
+
+      history.push(
+        image === null || entry.kind === "delete" ? entry : { ...entry, image }
+      );
+      histories.set(row.record_id, history);
+    }
+
+    for (const target of targets) {
+      if (
+        histories.get(target.recordId)?.at(-1)?.recordVersion !== target.version
+      ) {
+        histories.delete(target.recordId);
+      }
+    }
+
+    return histories;
+  }
+);
+
 /**
  * The fields a payload may carry: live and not write-only.
  *

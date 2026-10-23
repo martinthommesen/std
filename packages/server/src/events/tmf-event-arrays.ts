@@ -18,9 +18,10 @@
  *   owner (Contracts 4.9), which lists the saves' part changes in
  *   `cause.aggregate.parts` and shares the transaction's `operation_id`
  *   with them and with the part writes the settling made. So a part change
- *   belongs to the owner version of the aggregate save in its operation; a
- *   part change with none predates aggregates (a set before helpdesk v3)
- *   and so every aggregate version.
+ *   belongs to the owner version of the aggregate save in its operation,
+ *   or of the owner's delete there (which deletes its parts without an
+ *   aggregate save); a part change with neither predates aggregates (a set
+ *   before helpdesk v3) and so every aggregate version.
  * - **A fixed number of statements**, whatever the number of parts: the
  *   touched parts in one, the array's members (today's parts and those
  *   deleted after the change) in two, and their versions at the change with
@@ -73,10 +74,15 @@ import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import {
   PayloadUnreadable,
   payloadOf,
-  readEntries,
   readFieldOrigins,
+  readHistories,
+  versionImage,
 } from "../outbox/delivery-payload.ts";
-import type { DeliveryPayload } from "../outbox/delivery-payload.ts";
+import type {
+  DeliveryPayload,
+  FieldOrigin,
+  StoredEntry,
+} from "../outbox/delivery-payload.ts";
 import { ChangeKindSchema } from "../records/change-entry.ts";
 import { currentReadScope, readByIds } from "../records/read-records.ts";
 import type { DecodedRecord } from "../records/read-records.ts";
@@ -121,6 +127,13 @@ LEFT JOIN core."change" AS "pp" ON "pp"."record_id" = "p"."record_id"
   AND "pp"."record_version" = "p"."record_version" - 1
 LEFT JOIN core."change_image" AS "pi" ON "pi"."change_id" = "pp"."id"`;
 
+/**
+ * The owner versions part changes belong to: its aggregate saves, and its
+ * delete, whose transaction deletes its parts with no aggregate save
+ * (Contracts 4.9: a deleted owner is never finalized).
+ */
+const OWNER_VERSION = sql`("o"."cause" ? 'aggregate' OR "o"."kind" = 'delete')`;
+
 /** What reading one delivery's arrays shares. */
 interface ArrayRead {
   readonly delivery: Delivery;
@@ -136,73 +149,106 @@ interface PartAt {
 }
 
 /**
- * A part change as the identity may see it: its saved image masked by
- * `payloadOf`, or, for an entry the image backfill has not reached, its
- * history rebuilt by `readEntries`.
+ * A part change with its saved image as the entries `payloadOf` reads: the
+ * image is the version's whole image (a delete's: the one it removed), so
+ * the entry is read as a version of it.
+ *
+ * @param row - The part change.
+ * @param text - Its saved image.
+ * @returns The entries, or undefined when the image does not parse.
+ */
+const savedEntries = (
+  row: PartRow,
+  text: string
+): readonly StoredEntry[] | undefined => {
+  const saved = parseJsonbText(text);
+  const occurredAt = parseTimestamptzText(row.occurred_at);
+
+  if (!saved.ok || !isJsonObject(saved.value)) {
+    return undefined;
+  }
+
+  return [
+    {
+      actorId: "",
+      changeId: row.change_id,
+      fields: {},
+      image: saved.value,
+      kind: row.kind === "delete" ? "update" : row.kind,
+      occurredAt: occurredAt.ok ? occurredAt.value : 0,
+      operationId: "",
+      recordClassId: row.record_class_id,
+      recordVersion: row.version,
+      schemaRevision: row.schema_revision,
+    },
+  ];
+};
+
+/**
+ * Part changes as the identity may see them: each saved image masked by
+ * `payloadOf`; the entries the image backfill (migration 0028) has not
+ * reached yet are rebuilt together, from one read of their histories
+ * (`readHistories`) and each class's field origins, read once.
  *
  * @param read - The delivery and scope.
- * @param row - The part change.
- * @returns The part at that version.
+ * @param rows - The part changes.
+ * @returns Each part at that version, in the rows' order.
  */
-const partAt = Effect.fnUntraced(function* partAt(
+const partsAt = Effect.fnUntraced(function* partsAt(
   read: ArrayRead,
-  row: PartRow
+  rows: readonly PartRow[]
 ) {
   const { snapshot } = read.delivery;
-  const saved = row.image === null ? undefined : parseJsonbText(row.image);
+  const legacy = rows.filter((row) => row.image === null);
 
-  const image =
-    saved?.ok === true && isJsonObject(saved.value) ? saved.value : undefined;
+  const histories = yield* readHistories(
+    legacy.map((row) => ({ recordId: row.record_id, version: row.version }))
+  );
 
-  if (row.image !== null && image === undefined) {
-    return yield* new PayloadUnreadable({
-      reason: `Change image ${row.change_id} is not readable.`,
+  const origins = new Map<
+    DefinitionId,
+    ReadonlyMap<DefinitionId, FieldOrigin>
+  >();
+
+  for (const classId of new Set(legacy.map((row) => row.record_class_id))) {
+    origins.set(classId, yield* readFieldOrigins(snapshot, classId));
+  }
+
+  const parts: PartAt[] = [];
+
+  for (const row of rows) {
+    const entries =
+      row.image === null
+        ? histories.get(row.record_id)
+        : savedEntries(row, row.image);
+
+    if (entries === undefined) {
+      return yield* new PayloadUnreadable({
+        reason: `Part ${row.record_id} at version ${row.version} (change ${row.change_id}) is not readable.`,
+      });
+    }
+
+    const classOrigins = origins.get(row.record_class_id) ?? new Map();
+
+    const payload = payloadOf(
+      snapshot,
+      read.scope.caller,
+      { entries, origins: classOrigins, recordId: row.record_id },
+      read.scope.context
+    );
+
+    if (payload instanceof PayloadUnreadable) {
+      return yield* payload;
+    }
+
+    parts.push({
+      known: versionImage(snapshot, entries, classOrigins).known,
+      payload,
+      row,
     });
   }
 
-  const occurredAt = parseTimestamptzText(row.occurred_at);
-
-  // A saved image is the version's whole image (a delete's: the one it
-  // removed), so the entry is read as a version of it.
-  const entries =
-    image === undefined
-      ? yield* readEntries(row.record_id, row.version)
-      : [
-          {
-            actorId: "",
-            changeId: row.change_id,
-            fields: {},
-            image,
-            kind: row.kind === "delete" ? ("update" as const) : row.kind,
-            occurredAt: occurredAt.ok ? occurredAt.value : 0,
-            operationId: "",
-            recordClassId: row.record_class_id,
-            recordVersion: row.version,
-            schemaRevision: row.schema_revision,
-          },
-        ];
-
-  const origins =
-    image === undefined
-      ? yield* readFieldOrigins(snapshot, row.record_class_id)
-      : new Map();
-
-  const payload = payloadOf(
-    snapshot,
-    read.scope.caller,
-    { entries, origins, recordId: row.record_id },
-    read.scope.context
-  );
-
-  if (payload instanceof PayloadUnreadable) {
-    return yield* payload;
-  }
-
-  const known: ReadonlyMap<DefinitionId, JsonValue> = new Map(
-    Object.entries(image ?? payload.image)
-  );
-
-  return { known, payload, row } satisfies PartAt;
+  return parts;
 });
 
 const partClassesOf = (
@@ -254,9 +300,8 @@ WHERE "o"."id" = ${textParameter(delivery.changeId, "uuid")} AND "o"."cause" ? '
   AND "p"."record_class_id" = ANY(${arrayParameter(partClassesOf(delivery, arrays), "uuid")})`
   ).pipe(Effect.flatMap(PartRows));
 
-  for (const row of rows) {
-    const part = yield* partAt(read, row);
-    const array = arrayOfClass(delivery, arrays, row.record_class_id);
+  for (const part of yield* partsAt(read, rows)) {
+    const array = arrayOfClass(delivery, arrays, part.row.record_class_id);
 
     if (
       array !== undefined &&
@@ -349,7 +394,7 @@ WHERE ${identSql("p", owner.name)} = ${ownerId}`
 FROM core."change" AS "o"
 JOIN core."change" AS "p" ON "p"."operation_id" = "o"."operation_id"
 WHERE "o"."record_id" = ${ownerId} AND "o"."record_version" > ${version}
-  AND "o"."cause" ? 'aggregate' AND "p"."kind" = 'delete'
+  AND ${OWNER_VERSION} AND "p"."kind" = 'delete'
   AND "p"."record_class_id" = ANY(${classes})`
   );
 
@@ -358,13 +403,13 @@ WHERE "o"."record_id" = ${ownerId} AND "o"."record_version" > ${version}
   );
 
   // Each member's last change that belongs to an owner version up to the
-  // change's: the aggregate save in its operation, or none (before
-  // aggregates).
+  // change's: the aggregate save or delete in its operation, or none
+  // (before aggregates).
   const versions = yield* readRows(
     sql`SELECT DISTINCT ON ("p"."record_id") ${PART_COLUMNS}
 FROM core."change" AS "p"
 LEFT JOIN core."change" AS "o" ON "o"."operation_id" = "p"."operation_id"
-  AND "o"."record_id" = ${ownerId} AND "o"."cause" ? 'aggregate'
+  AND "o"."record_id" = ${ownerId} AND ${OWNER_VERSION}
 ${PART_IMAGES}
 WHERE "p"."record_id" = ANY(${arrayParameter(ids, "uuid")})
   AND ("o"."record_version" IS NULL OR "o"."record_version" <= ${version})
@@ -373,11 +418,10 @@ ORDER BY "p"."record_id", "p"."record_version" DESC`
 
   const parts: (SourceRecord & { readonly createdAt: number })[] = [];
 
-  for (const row of versions) {
-    const part = row.kind === "delete" ? undefined : yield* partAt(read, row);
+  const kept = versions.filter((row) => row.kind !== "delete");
 
+  for (const part of yield* partsAt(read, kept)) {
     if (
-      part !== undefined &&
       part.payload.visible &&
       part.payload.image[owner.id] === delivery.recordId
     ) {

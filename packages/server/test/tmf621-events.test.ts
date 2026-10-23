@@ -15,7 +15,11 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import type { AccessRuleDraft } from "@std/definitions/definition";
 import { PERMISSION_IDS } from "@std/definitions/well-known";
-import { HELPDESK_CLASS_IDS, NOTE_FIELD_IDS } from "@std/tmf/helpdesk-ids";
+import {
+  HELPDESK_CLASS_IDS,
+  NOTE_FIELD_IDS,
+  TICKET_FIELD_IDS,
+} from "@std/tmf/helpdesk-ids";
 import { TMF621_BASE_PATH } from "@std/tmf/tmf621";
 import type { JsonObject } from "@std/values/json-value";
 import { ConfigProvider, Effect, Layer } from "effect";
@@ -620,19 +624,144 @@ describe("tmf621-events", () => {
   );
 
   it.effect(
-    "a touched array is read in the same statements for 10, 100 and 1,000 notes",
+    "a queued update delivered after its ticket is deleted carries the array as updated, and the Delete event the identity only",
+    () =>
+      Effect.gen(function* afterDelete() {
+        const admin = yield* tmf621As("admin");
+        const calls = yield* listener();
+
+        yield* register(
+          admin,
+          calls.origin,
+          `eventType=${AVC},TroubleTicketDeleteEvent`
+        );
+
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ note: [{ text: "original note" }] })
+        );
+
+        const ticket = bodyOf(created);
+        const path = `${TICKETS}/${textOf(ticket.id)}`;
+
+        yield* deliverAll;
+        calls.calls.length = 0;
+
+        const changed = yield* admin.patch(path, {
+          note: arrayOf(ticket, "note").map((note) => ({
+            ...note,
+            text: "changed note",
+          })),
+        });
+
+        assert.strictEqual(changed.status, 200, changed.text);
+        assert.strictEqual((yield* admin.del(path)).status, 204);
+        yield* deliverAll;
+
+        assert.deepStrictEqual(typesOf(calls.calls), [
+          AVC,
+          "TroubleTicketDeleteEvent",
+        ]);
+
+        const [update, deletion] = calls.calls;
+
+        assert.deepStrictEqual(texts(carrying(calls.calls, "note")), [
+          ["changed note"],
+        ]);
+        assert.deepStrictEqual(
+          Object.keys(resourceOf(deletion, "troubleTicket")).toSorted(),
+          ["@type", "href", "id"]
+        );
+
+        for (const call of [update, deletion]) {
+          assert.isDefined(call);
+          assert.isUndefined(eventProblem(call, "troubleTicket"));
+        }
+      }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "a hub filter on a hidden attribute answers exactly as one on a missing attribute",
+    () =>
+      Effect.gen(function* hiddenFilter() {
+        yield* change([
+          {
+            definition: {
+              actions: ["read"],
+              active: true,
+              classId: HELPDESK_CLASS_IDS.ticket,
+              condition: null,
+              description: null,
+              effect: "deny",
+              id: randomUUID(),
+              kind: "accessRule",
+              name: null,
+              owner: { layer: "local" },
+              protected: false,
+              roleIds: [HELPDESK.agentRole],
+              target: { fields: [TICKET_FIELD_IDS.impact], kind: "fields" },
+            },
+            op: "createAccessRule",
+          },
+        ]);
+
+        const agent = yield* tmf621As("agent");
+        const calls = yield* listener();
+
+        const answers = [];
+
+        for (const attribute of ["severity", "noSuchAttribute"]) {
+          const response = yield* agent.post(HUBS, {
+            "@type": "Hub",
+            callback: calls.origin,
+            query: `${attribute}=Minor`,
+          });
+
+          // The answer names the attribute asked for, as any UnknownField.
+          const body: JsonObject = {
+            ...bodyOf(response),
+            field: "<attribute>",
+          };
+
+          answers.push({ body, status: response.status });
+        }
+
+        const [hidden, missing] = answers;
+
+        assert.deepStrictEqual(hidden, missing);
+        assert.deepStrictEqual(
+          [missing?.status, missing?.body.code],
+          [400, "UnknownField"]
+        );
+
+        // The refusal of an unstored attribute lists only what the agent
+        // can read.
+        const refused = yield* agent.post(HUBS, {
+          "@type": "Hub",
+          callback: calls.origin,
+          query: "ticketType=incident",
+        });
+
+        assert.strictEqual(bodyOf(refused).code, "InvalidRequest");
+        assert.notMatch(textOf(bodyOf(refused).message), /severity/u);
+      }).pipe(Effect.provide(maskedLayer), Effect.scoped, TestClock.withLive)
+  );
+
+  it.effect(
+    "a touched array is read in the same statements for 10, 100 and 1,000 notes, with saved images and without",
     () =>
       Effect.gen(function* arrayStatements() {
         const admin = yield* tmf621As("admin");
         const log = yield* StatementLog;
+        const sql = yield* SqlClient.SqlClient;
         const calls = yield* listener();
 
         yield* register(admin, calls.origin, `eventType=${AVC}`);
 
-        const counts: { notes: number; statements: number; images: number }[] =
-          [];
-
-        for (const size of [10, 100, 1000]) {
+        const measure = Effect.fn("Tmf621Events.measure")(function* measure(
+          size: number,
+          legacy: boolean
+        ) {
           const created = yield* admin.post(
             TICKETS,
             ticketBody({
@@ -643,10 +772,18 @@ describe("tmf621-events", () => {
           );
 
           const ticket = bodyOf(created);
+          const notes = arrayOf(ticket, "note");
 
           yield* deliverAll;
 
-          const [first, ...rest] = arrayOf(ticket, "note");
+          // History written before migration 0028's backfill reached it.
+          if (legacy) {
+            const ids = `{${notes.map((note) => textOf(note.id)).join(",")}}`;
+
+            yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ANY(${ids}::uuid[]))`;
+          }
+
+          const [first, ...rest] = notes;
 
           const changed = yield* admin.patch(
             `${TICKETS}/${textOf(ticket.id)}`,
@@ -666,33 +803,35 @@ describe("tmf621-events", () => {
             ["changed note", ...rest.map((note) => note.text)]
           );
 
-          counts.push({
-            images: statements.filter((text) => text.includes("change_image"))
-              .length,
+          return {
+            legacy,
             notes: size,
             // Wake-ups of earlier writes' after-commit notifications land
             // whenever they are flushed; they are not the delivery's.
             statements: statements.filter((text) => !text.includes("pg_notify"))
               .length,
-          });
-        }
+          };
+        });
 
-        // No statement per part: the counts do not grow with the array.
-        const [small, ...larger] = counts;
+        for (const legacy of [false, true]) {
+          const counts = [];
 
-        for (const count of larger) {
-          assert.strictEqual(
-            count.images,
-            small?.images,
-            JSON.stringify(counts)
-          );
-          assert.strictEqual(
-            count.statements,
-            small?.statements,
-            JSON.stringify(counts)
-          );
+          for (const size of [10, 100, 1000]) {
+            counts.push(yield* measure(size, legacy));
+          }
+
+          // No statement per part: the counts do not grow with the array.
+          const [small, ...larger] = counts;
+
+          for (const count of larger) {
+            assert.strictEqual(
+              count.statements,
+              small?.statements,
+              JSON.stringify(counts)
+            );
+          }
         }
       }).pipe(Effect.provide(eventsLayer), Effect.scoped, TestClock.withLive),
-    { timeout: 120_000 }
+    { timeout: 180_000 }
   );
 });
