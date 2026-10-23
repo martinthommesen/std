@@ -418,6 +418,86 @@ const navigationDrawerView = (
     },
   });
 
+/**
+ * The leave confirmation (Foldkit UI Dialog): a link would leave a form
+ * with unsaved edits. "Keep editing" closes it, and has focus first, since
+ * it loses nothing; "Discard changes" follows the link.
+ *
+ * @param model - The signed-in state.
+ * @param h - The builder.
+ * @returns The dialog.
+ */
+const leaveDialogView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
+  h.submodel({
+    model: model.leaveDialog,
+    slotId: model.leaveDialog.id,
+    toParentMessage: (message) => Message.GotLeaveDialogMessage({ message }),
+    view: Dialog.view,
+    viewInputs: {
+      hasDescription: true,
+      toView: ({
+        backdrop,
+        closeButton,
+        description,
+        dialog,
+        initialFocus,
+        isVisible,
+        panel,
+        title,
+      }) =>
+        h.dialog(
+          [...dialog, h.Class("dialog")],
+          isVisible
+            ? [
+                h.div([...backdrop, h.Class("dialog-backdrop")]),
+                h.div(
+                  [...panel, h.Class("dialog-panel")],
+                  [
+                    h.h2(
+                      [...title, h.Class("dialog-title")],
+                      ["Leave without saving?"]
+                    ),
+                    h.p(
+                      [...description],
+                      [
+                        "This record has changes that are not saved. If you leave, they are lost.",
+                      ]
+                    ),
+                    h.div(
+                      [h.Class("dialog-actions")],
+                      [
+                        h.button(
+                          [
+                            ...closeButton,
+                            ...initialFocus,
+                            h.Class("button button-quiet"),
+                          ],
+                          ["Keep editing"]
+                        ),
+                        Button.view(
+                          {
+                            onClick: Message.ClickedDiscardChanges(),
+                            toView: (attributes) =>
+                              h.button(
+                                [
+                                  ...attributes.button,
+                                  h.Class("button button-danger-solid"),
+                                ],
+                                ["Discard changes"]
+                              ),
+                          },
+                          h
+                        ),
+                      ]
+                    ),
+                  ]
+                ),
+              ]
+            : []
+        ),
+    },
+  });
+
 const navigationToggleView = (h: HtmlBuilder<Message>): Html =>
   Button.view(
     {
@@ -584,7 +664,11 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
           ? `${MAIN_CLASS} dead-letters-main`
           : MAIN_CLASS,
       page: signedInPageView(model, h),
-      side: [sidebarView(model, h), navigationDrawerView(model, h)],
+      side: [
+        sidebarView(model, h),
+        navigationDrawerView(model, h),
+        leaveDialogView(model, h),
+      ],
     },
     h
   );

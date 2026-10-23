@@ -859,6 +859,38 @@ select.control-input {
   border-color: var(--color-warning-border);
 }
 
+/* What the server says of the form without anything being wrong, such as
+   why a record opens read-only: neutral, in the panel's colours. */
+.form-info {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.form-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* A field waiting for the form rules' first verdict: a control-sized
+   placeholder with a dashed border, so it reads as "not yet" rather than
+   as an empty value or a disabled control. */
+.field-pending {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-sunken);
+  border: 1px dashed var(--color-border-control);
+  border-radius: var(--radius);
+}
+
 .list-failure {
   display: flex;
   flex-wrap: wrap;
@@ -1629,6 +1661,23 @@ th[aria-sort="descending"] .sort-icon {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-popover);
+}
+
+/* Fixed over the whole window and never seen: the action bar's Mount
+   observes its size, which is the window's (record-form/command.ts,
+   KeepFocusClearOfActionBar). */
+.viewport-probe {
+  position: fixed;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* A read-only record has nothing to save: its bar keeps the way back and
+   Delete, in place at the form's end rather than floating. */
+.action-bar[data-read-only="true"] {
+  position: static;
+  box-shadow: none;
 }
 
 .action-status {

@@ -1182,6 +1182,12 @@ export const ReadToday = Command.define("ReadToday", {
 export const ACTION_BAR_BLOCK_SIZE = "--action-bar-block-size";
 
 /**
+ * The class of the element in the action bar that the stylesheet fixes
+ * over the whole window, whose size is the window's.
+ */
+export const VIEWPORT_PROBE_CLASS = "viewport-probe";
+
+/**
  * Whether an element lies outside the part of the window the scroll
  * padding leaves clear: under the sticky header or the floating action
  * bar, wholly or in part.
@@ -1220,7 +1226,13 @@ const isUnderStickyChrome = (target: Element): boolean => {
  *   moves, when the bar changes size (a refusal's note grows it under the
  *   control that keeps focus: Customer email at y 504..536 was wholly
  *   covered when Ctrl+S's conflict grew the bar from y 538 to y 498, Sol's
- *   review of 1a19fe09), including when a narrower window wraps it.
+ *   review of 1a19fe09), including when a narrower window wraps it,
+ *   and when the window changes size with the bar as it was: a window
+ *   cut from 800 x 600 to 800 x 560 hid a focused field behind the
+ *   unchanged bar (Sol's review of 94086d53). The bar renders a probe
+ *   fixed over the whole window ({@link VIEWPORT_PROBE_CLASS}) for that;
+ *   the html and main elements do not change size with the window's
+ *   height.
  *
  * All of it goes when the bar does.
  */
@@ -1259,6 +1271,13 @@ export const KeepFocusClearOfActionBar = Mount.define(
             });
 
             observer.observe(element, { box: "border-box" });
+
+            const probe = element.querySelector(`.${VIEWPORT_PROBE_CLASS}`);
+
+            if (probe !== null) {
+              observer.observe(probe);
+            }
+
             document.addEventListener("focusin", revealFocused);
 
             return { observer, revealFocused };

@@ -1023,6 +1023,33 @@ const fieldShowView = (
 };
 
 /**
+ * A field whose control waits for the form rules' first verdict: its
+ * label over a placeholder the size of a control, busy, saying so.
+ *
+ * @param field - The field.
+ * @param h - The builder.
+ * @returns The placeholder.
+ */
+const pendingFieldView = (field: MetaField, h: HtmlBuilder<Message>): Html =>
+  h.div(
+    [
+      h.Class("form-field"),
+      h.DataAttribute("field-state", "pending"),
+      h.AriaBusy(true),
+    ],
+    [
+      h.span([h.Class(LABEL_CLASS)], [field.label]),
+      h.div(
+        [h.Class("field-pending")],
+        [
+          h.span([h.Class("visually-hidden")], [`${field.label}: `]),
+          "Checking field state…",
+        ]
+      ),
+    ]
+  );
+
+/**
  * One field of the form.
  *
  * @param model - The page.
@@ -1050,7 +1077,7 @@ export const fieldView = (
     ],
     [
       isPending
-        ? h.p([], [`${field.label}: checking field state…`])
+        ? pendingFieldView(field, h)
         : fieldShowView(model, field, showOfField(model, field), problems, h),
     ]
   );

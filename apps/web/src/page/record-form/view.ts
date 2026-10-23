@@ -21,15 +21,19 @@ import { buttonView } from "../../view/controls.ts";
 import { check } from "../../view/icons.ts";
 import { view as notFoundView } from "../not-found.ts";
 import type { TableMeta } from "../table-list/model.ts";
-import { KeepFocusClearOfActionBar } from "./command.ts";
+import { KeepFocusClearOfActionBar, VIEWPORT_PROBE_CLASS } from "./command.ts";
 import { fieldView, shownProblemsOf } from "./fields-view.ts";
-import { formStateStatusView } from "./form-state-view.ts";
+import {
+  formStateLiveRegionView,
+  formStateMessagesView,
+} from "./form-state-view.ts";
 import {
   classMetaOf,
   editedRecordOf,
   fieldOf,
   fieldsOf,
   isCreating,
+  hasUnsavedEdits,
   isFormStatePending,
   isReadOnlyForm,
   metaOf,
@@ -410,8 +414,33 @@ const submissionStatusText = (model: Model): string =>
     Match.orElse(() => "")
   );
 
+/** The action bar's notes that are not announced. */
+const ACTION_STATUS_QUIET_CLASS = "action-status-quiet";
+
 /** What the action bar's status shows, for its look (`data-state`). */
-type ActionState = "dirty" | "failed" | "idle" | "saved" | "saving";
+type ActionState =
+  | "checking"
+  | "dirty"
+  | "failed"
+  | "idle"
+  | "saved"
+  | "saving";
+
+/**
+ * Before a save: Save waits for the form rules' first verdict
+ * ("checking"), or there are edits a save would send ("dirty", form
+ * rules' effective edits), or neither.
+ *
+ * @param model - The page.
+ * @returns The state.
+ */
+const idleStateOf = (model: Model): ActionState => {
+  if (isFormStatePending(model)) {
+    return "checking";
+  }
+
+  return hasUnsavedEdits(model) ? "dirty" : "idle";
+};
 
 const actionStateOf = (model: Model): ActionState =>
   Match.value(model.submission).pipe(
@@ -420,21 +449,10 @@ const actionStateOf = (model: Model): ActionState =>
     Match.tag("Saving", () => "saving"),
     Match.tag("Saved", "SavedUnread", () => "saved"),
     Match.tag("Unchanged", () => "idle"),
-    Match.tag("Idle", () =>
-      Record.isEmptyRecord(model.edits) ? "idle" : "dirty"
-    ),
+    Match.tag("Idle", () => idleStateOf(model)),
     Match.exhaustive
   );
 
-/**
- * The action bar's status: the live save status, and, not announced, that
- * there are unsaved changes or that the last save was refused (its alert
- * is at the top of the form).
- *
- * @param model - The page.
- * @param h - The builder.
- * @returns The status.
- */
 /**
  * What the action bar says of a refused save, in a few words; the alert
  * at the top of the form says the rest.
@@ -448,13 +466,22 @@ const refusalNoteOf = (submission: Submission): string =>
     ? "Not saved: someone else saved this record first."
     : "Not saved: the reason is at the top of the form.";
 
+/**
+ * The action bar's status: the live save status, and, not announced, that
+ * Save waits for the form rules, that there are unsaved changes, or that
+ * the last save was refused (its alert is at the top of the form).
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The status.
+ */
 const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const state = actionStateOf(model);
 
   const quiet = Match.value(state).pipe(
     Match.when("failed", () => [
       h.span(
-        [h.Class("action-status-quiet")],
+        [h.Class(ACTION_STATUS_QUIET_CLASS)],
         [refusalNoteOf(model.submission)]
       ),
       buttonView(
@@ -467,7 +494,10 @@ const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
       ),
     ]),
     Match.when("dirty", () => [
-      h.span([h.Class("action-status-quiet")], ["Unsaved changes"]),
+      h.span([h.Class(ACTION_STATUS_QUIET_CLASS)], ["Unsaved changes"]),
+    ]),
+    Match.when("checking", () => [
+      h.span([h.Class(ACTION_STATUS_QUIET_CLASS)], ["Checking form rules…"]),
     ]),
     Match.orElse((): readonly Html[] => [])
   );
@@ -676,9 +706,20 @@ const saveText = (model: Model): string => {
  */
 const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
-    [h.Class("action-bar"), h.OnMount(KeepFocusClearOfActionBar())],
     [
-      actionStatusView(model, h),
+      h.Class("action-bar"),
+      h.DataAttribute("read-only", String(isReadOnlyForm(model))),
+      h.OnMount(KeepFocusClearOfActionBar()),
+    ],
+    [
+      // NOTE: the probe is fixed over the whole window, so the bar's Mount
+      // learns when the window changes size (an element's ResizeObserver;
+      // the html and main elements do not change with the window's
+      // height).
+      h.div([h.Class(VIEWPORT_PROBE_CLASS), h.AriaHidden(true)]),
+      // NOTE: a read-only form has nothing to save, so its bar keeps only
+      // the way back and Delete.
+      isReadOnlyForm(model) ? h.empty : actionStatusView(model, h),
       h.div(
         [h.Class("form-actions")],
         [
@@ -845,13 +886,17 @@ const formBodyView = (
           h.Tabindex(-1),
           h.Class("form-messages"),
         ],
-        [submissionAlertView(model, h), deletionView(model, h)]
+        [
+          submissionAlertView(model, h),
+          deletionView(model, h),
+          ...formStateMessagesView(model, h),
+        ]
       ),
       droppedEditsView(model, h),
       ...sections.map((section, index) =>
         sectionView(model, section, pending, index, problems, h)
       ),
-      formStateStatusView(model, h),
+      formStateLiveRegionView(model, h),
       actionBarView(model, h),
     ]
   );

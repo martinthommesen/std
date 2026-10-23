@@ -7,6 +7,18 @@
  */
 import { Dialog } from "@foldkit/ui";
 
+/** The leave confirmation's ID: the native `dialog` element's. */
+export const LEAVE_DIALOG_ID = "leave-confirmation";
+
+/**
+ * The leave confirmation of a new session: closed. It opens on "Keep
+ * editing", the choice that loses nothing.
+ *
+ * @returns Its Model.
+ */
+export const initLeaveDialog = (): Dialog.Model =>
+  Dialog.init({ id: LEAVE_DIALOG_ID });
+
 /** The drawer's ID: the native `dialog` element's. */
 export const NAVIGATION_DRAWER_ID = "navigation-drawer";
 

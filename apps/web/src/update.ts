@@ -3,6 +3,7 @@ import { Match, Option, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 import { toString as urlToString } from "foldkit/url";
+import type { Url } from "foldkit/url";
 
 import {
   FocusMain,
@@ -26,7 +27,7 @@ import type {
   SignedOutModel,
 } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
-import { initNavigationDrawer } from "./navigation-drawer.ts";
+import { initLeaveDialog, initNavigationDrawer } from "./navigation-drawer.ts";
 import { OutMessage as DeadLettersOutMessage } from "./page/dead-letters/message.ts";
 import type { Message as DeadLettersMessage } from "./page/dead-letters/message.ts";
 import type { Model as DeadLettersModel } from "./page/dead-letters/model.ts";
@@ -34,6 +35,7 @@ import {
   init as deadLettersInit,
   update as deadLettersUpdate,
 } from "./page/dead-letters/update.ts";
+import { hasUnsavedEdits } from "./page/record-form/form.ts";
 import { OutMessage as RecordFormOutMessage } from "./page/record-form/message.ts";
 import type { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
@@ -189,7 +191,9 @@ const initSignedIn =
   ) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
+      leaveDialog: initLeaveDialog(),
       maybeDeadLetters: Option.none(),
+      maybeLeaveUrl: Option.none(),
       maybePreferenceProblem: carried.maybePreferenceProblem,
       maybeRecordForm: Option.none(),
       maybeRevision,
@@ -772,6 +776,123 @@ const pageKeyOf = (route: AppRoute): Option.Option<string> =>
   );
 
 /**
+ * Whether two routes show the same page: the same kind of page, for the
+ * same table and record.
+ *
+ * @param route - One route.
+ * @param other - The other.
+ * @returns True when no page would change.
+ */
+const isSamePage = (route: AppRoute, other: AppRoute): boolean =>
+  route._tag === other._tag &&
+  Option.makeEquivalence((a: string, b: string) => a === b)(
+    pageKeyOf(route),
+    pageKeyOf(other)
+  );
+
+// LEAVING A FORM WITH UNSAVED EDITS
+
+const ignoreLeaveOutMessage = Dialog.OutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  Closed: () => (model) => ({
+    model: Model.guards.SignedIn(model)
+      ? modifyFields(model, { maybeLeaveUrl: () => Option.none() })
+      : model,
+  }),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  Opened: () => (model) => ({ model }),
+});
+
+const readLeaveDialog = (model: Model): Option.Option<Dialog.Model> =>
+  Model.guards.SignedIn(model) ? Option.some(model.leaveDialog) : Option.none();
+
+const writeLeaveDialog = (model: Model, nextDialog: Dialog.Model): Model =>
+  Model.guards.SignedIn(model)
+    ? modifyFields(model, { leaveDialog: () => nextDialog })
+    : model;
+
+const toGotLeaveDialogMessage = (message: Dialog.Message): Message =>
+  Message.GotLeaveDialogMessage({ message });
+
+const foldLeaveDialog = Update.foldChild({
+  foldOutMessage: ignoreLeaveOutMessage,
+  read: readLeaveDialog,
+  toParentMessage: toGotLeaveDialogMessage,
+  update: (dialog: Dialog.Model, message: Dialog.Message) =>
+    Dialog.update(dialog, message),
+  write: writeLeaveDialog,
+});
+
+const openLeaveDialog = Update.foldChildStep({
+  foldOutMessage: ignoreLeaveOutMessage,
+  read: readLeaveDialog,
+  toParentMessage: toGotLeaveDialogMessage,
+  update: Dialog.open,
+  write: writeLeaveDialog,
+});
+
+const closeLeaveDialog = Update.foldChildStep({
+  foldOutMessage: ignoreLeaveOutMessage,
+  read: readLeaveDialog,
+  toParentMessage: toGotLeaveDialogMessage,
+  update: Dialog.close,
+  write: writeLeaveDialog,
+});
+
+/**
+ * Whether the form page on screen holds edits a save would send (form
+ * rules' effective edits): what leaving it would lose.
+ *
+ * @param model - The state.
+ * @returns True on a form with unsaved edits.
+ */
+export const isLeavingUnsavedEdits = (model: Model): boolean =>
+  Model.guards.SignedIn(model) &&
+  Option.exists(model.maybeRecordForm, hasUnsavedEdits);
+
+/**
+ * Follows an in-app link, unless it leaves a form with unsaved edits: then
+ * the leave confirmation opens and keeps the address until the user
+ * chooses. A link to the page on screen (the form's own address) changes
+ * no page, so it never asks.
+ *
+ * @param model - The state.
+ * @param url - The link's address.
+ * @returns The navigation, or the open confirmation.
+ */
+const followInternalLink = (model: Model, url: Url): UpdateReturn => {
+  const address = urlToString(url);
+
+  return Model.guards.SignedIn(model) &&
+    isLeavingUnsavedEdits(model) &&
+    !isSamePage(urlToAppRoute(url), model.route)
+    ? openLeaveDialog(
+        modifyFields(model, { maybeLeaveUrl: () => Option.some(address) })
+      )
+    : { commands: [NavigateInternal({ url: address })], model };
+};
+
+/**
+ * "Discard changes": closes the leave confirmation and follows the link
+ * it kept.
+ *
+ * @param signedInModel - The signed-in state.
+ * @returns The closed confirmation and the navigation.
+ */
+const discardChanges = (signedInModel: SignedInModel): UpdateReturn =>
+  Option.match(signedInModel.maybeLeaveUrl, {
+    onNone: () => ({ model: signedInModel }),
+    onSome: (url) =>
+      Update.combine(signedInModel, [
+        closeLeaveDialog,
+        (stepModel) => ({
+          commands: [NavigateInternal({ url })],
+          model: stepModel,
+        }),
+      ]),
+  });
+
+/**
  * Applies a new address, and moves focus when another page appears.
  *
  * @param model - The state.
@@ -781,8 +902,11 @@ const pageKeyOf = (route: AppRoute): Option.Option<string> =>
 const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
   const landed = Update.combine(model, [
     (stepModel) => landOnRoute(stepModel, route),
-    // NOTE: following a link in the navigation drawer closes it.
+    // NOTE: following a link in the navigation drawer closes it, and any
+    // other way to another address (Back, Forward) closes the leave
+    // confirmation, whose question no longer applies.
     closeNavigationDrawer,
+    closeLeaveDialog,
     syncTableList,
     syncRecordForm,
     syncDeadLetters,
@@ -791,11 +915,7 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
   const showsAnotherPage =
     (Model.guards.SignedIn(landed.model) ||
       Model.guards.SignedOut(landed.model)) &&
-    (landed.model.route._tag !== model.route._tag ||
-      !Option.makeEquivalence((a: string, b: string) => a === b)(
-        pageKeyOf(landed.model.route),
-        pageKeyOf(model.route)
-      ));
+    !isSamePage(landed.model.route, model.route);
 
   return showsAnotherPage ? focusingMain(landed) : landed;
 };
@@ -989,6 +1109,8 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ChangedUrl: ({ url }) => changeRoute(model, urlToAppRoute(url)),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ClickedDiscardChanges: () => inSignedIn(model, discardChanges),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedLink: ({ request }) =>
       Match.value(request).pipe(
         withUpdateReturn,
@@ -998,10 +1120,7 @@ export const update = (model: Model, message: Message) =>
         Match.tag("Internal", ({ url }) =>
           Option.contains(url.hash, MAIN_ID)
             ? { commands: [FocusMain()], model }
-            : {
-                commands: [NavigateInternal({ url: urlToString(url) })],
-                model,
-              }
+            : followInternalLink(model, url)
         ),
         Match.tag("External", ({ href }) => ({
           commands: [LoadExternal({ href })],
@@ -1074,6 +1193,9 @@ export const update = (model: Model, message: Message) =>
     GotDeadLettersMessage: ({ message: deadLettersMessage, pageId }) =>
       foldDeadLetters(pageId)(model, deadLettersMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    GotLeaveDialogMessage: ({ message: dialogMessage }) =>
+      foldLeaveDialog(model, dialogMessage),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotNavigationDrawerMessage: ({ message: drawerMessage }) =>
       foldNavigationDrawer(model, drawerMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -1088,6 +1210,10 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotUserMenuMessage: ({ message: userMenuMessage }) =>
       foldUserMenu(model, userMenuMessage),
+    // NOTE: the browser asks the user itself; the Subscription only marked
+    // the page's unload as one to confirm.
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    RequestedUnloadWithUnsavedEdits: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadCurrentUser: ({ maybeRevision, maybeUser }) =>
       inCheckingSession(model, (checking) =>

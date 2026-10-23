@@ -3,7 +3,7 @@ import type { Url } from "foldkit/url";
 
 import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
-import { initNavigationDrawer } from "./navigation-drawer.ts";
+import { initLeaveDialog, initNavigationDrawer } from "./navigation-drawer.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
 import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
@@ -29,7 +29,9 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
+  leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
+  maybeLeaveUrl: Option.none(),
   maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
@@ -49,7 +51,9 @@ export const adaAtHome = Model.SignedIn({
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
+  leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
+  maybeLeaveUrl: Option.none(),
   maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),

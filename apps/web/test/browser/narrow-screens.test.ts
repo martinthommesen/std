@@ -12,7 +12,8 @@
  *   800 px, where the bar floats and wraps;
  * - where the bar floats, Ctrl+S's conflict grows it under the control
  *   that keeps focus, and that control is moved clear of it without a
- *   key press or a scroll by the user.
+ *   key press or a scroll by the user, and so is it when the window gets
+ *   shorter under an unchanged bar.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import {
@@ -270,9 +271,17 @@ const conflictBarCoversNoField = async (
 /** Where the focused control is against the action bar, and the note. */
 interface FocusAgainstBar {
   readonly focusedLabel: string;
+  /** The room between the control's bottom and the bar's top, in px. */
+  readonly gapToBar: number;
   readonly isCovered: boolean;
   readonly note: string;
 }
+
+/**
+ * The most room, in px, a control may have above the bar for the setup to
+ * count as "just above" it: the bar or the window then moves over it.
+ */
+const JUST_ABOVE = 10;
 
 const focusAgainstBar = async (page: Page): Promise<FocusAgainstBar> =>
   await page.evaluate(() => {
@@ -292,6 +301,7 @@ const focusAgainstBar = async (page: Page): Promise<FocusAgainstBar> =>
           ? ""
           : (document.querySelector(`label[for="${active.id}"]`)?.textContent ??
             ""),
+      gapToBar: barBox.top - box.bottom,
       isCovered: box.bottom > barBox.top && box.top < barBox.bottom,
       note: bar.querySelector(".action-status")?.textContent ?? "",
     };
@@ -314,8 +324,9 @@ const ctrlSConflictKeepsFocusClear = async (
 
   const { version } = await apiRecord(page, origin, printer);
   // NOTE: Sol's reproduction used Customer email; helpdesk v3's incident
-  // layout no longer shows it, so another one-line field takes its place.
-  await formControl(page, "Short description").fill("Mine, saved second");
+  // layout no longer shows it, so Internal cost, the form's last one-line
+  // field, takes its place: low enough to scroll down to the bar.
+  await formControl(page, "Internal cost").fill("42.00");
   // As a user who scrolled: the field just above the bar, as it is before
   // the save (Sol's reproduction at 800 x 600).
   await page.evaluate(() => {
@@ -331,6 +342,11 @@ const ctrlSConflictKeepsFocusClear = async (
   const before = await focusAgainstBar(page);
 
   assert.isFalse(before.isCovered, "the field starts clear of the bar");
+  assert.isAtMost(
+    before.gapToBar,
+    JUST_ABOVE,
+    "the field starts just above it"
+  );
 
   const token = await bearerToken(origin, fixture.agent);
 
@@ -353,12 +369,79 @@ const ctrlSConflictKeepsFocusClear = async (
 
   const after = await focusAgainstBar(page);
 
-  assert.deepStrictEqual(after, {
-    focusedLabel: "Short description (required)",
-    isCovered: false,
-    note: after.note,
-  });
+  assert.strictEqual(after.focusedLabel, "Internal cost");
+  assert.isFalse(after.isCovered, "the focused field is clear of the bar");
   assert.include(after.note, "Not saved");
+  await context.close();
+};
+
+const shorterWindowKeepsFocusClear = async (
+  browser: Browser,
+  origin: string,
+  fixture: HelpdeskData
+) => {
+  const context = await browser.newContext({
+    viewport: { height: 600, width: 800 },
+  });
+
+  const page = await context.newPage();
+
+  await signIn(page, origin, fixture.admin);
+  await openRecordForm(page, origin, {
+    id: fixture.records.printer,
+    table: INCIDENTS,
+  });
+  // The form rules' first check done, so the bar keeps its size.
+  await page
+    .locator('.action-status[data-state="checking"]')
+    .waitFor({ state: "detached" });
+  await rendered(page);
+
+  // The first one-line control below the bar, focused and scrolled to
+  // just above it; then the window 40 px shorter: the bar keeps its size
+  // and moves up over the control (Sol's review of 94086d53, 800 x 600 to
+  // 800 x 560).
+  const focusedId = await page.evaluate(() => {
+    const bar = document.querySelector(".action-bar")?.getBoundingClientRect();
+
+    const below = [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="form"] select, [role="form"] input[type="text"]'
+      ),
+    ].find(
+      (control) => control.getBoundingClientRect().top > (bar?.bottom ?? 0)
+    );
+
+    below?.focus({ preventScroll: true });
+
+    const field = below?.getBoundingClientRect();
+
+    if (field !== undefined && bar !== undefined) {
+      window.scrollBy(0, field.bottom - bar.top + 2);
+    }
+
+    return below?.id ?? "";
+  });
+
+  assert.notStrictEqual(focusedId, "", "a control below the bar");
+  await rendered(page);
+
+  const before = await focusAgainstBar(page);
+
+  assert.isFalse(before.isCovered, "the field starts clear of the bar");
+  assert.isAtMost(
+    before.gapToBar,
+    JUST_ABOVE,
+    "the field starts just above it"
+  );
+
+  await page.setViewportSize({ height: 560, width: 800 });
+  await rendered(page);
+
+  const after = await focusAgainstBar(page);
+
+  assert.strictEqual(after.focusedLabel, before.focusedLabel);
+  assert.isFalse(after.isCovered, "the focused field is clear of the bar");
   await context.close();
 };
 
@@ -430,6 +513,21 @@ describe("narrow screens", () => {
 
           yield* Effect.promise(async () => {
             await ctrlSConflictKeepsFocusClear(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "where the action bar floats, a shorter window moves the control that keeps focus clear of it",
+      () =>
+        Effect.gen(function* shorterTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+
+          yield* Effect.promise(async () => {
+            await shorterWindowKeepsFocusClear(browser, server.origin, fixture);
           });
         }).pipe(Effect.scoped)
     );

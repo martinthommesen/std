@@ -2,7 +2,7 @@ import "./styles.css";
 import { Effect } from "effect";
 import { Runtime } from "foldkit";
 
-import { Flags, init } from "./main.ts";
+import { Flags, init, subscriptions } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model } from "./model.ts";
 import { readShellPreferences } from "./shell-preferences.ts";
@@ -21,6 +21,7 @@ const application = Runtime.makeApplication({
     onUrlChange: (url) => Message.ChangedUrl({ url }),
     onUrlRequest: (request) => Message.ClickedLink({ request }),
   },
+  subscriptions,
   update,
   view,
 });

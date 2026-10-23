@@ -1,9 +1,10 @@
-import { Option, Schema } from "effect";
+import { Option, Schema, Stream } from "effect";
+import { Dom, Subscription } from "foldkit";
 import type { Runtime } from "foldkit";
 import type { Url } from "foldkit/url";
 
 import { LoadCurrentUser } from "./command.ts";
-import type { Message } from "./message.ts";
+import { Message } from "./message.ts";
 import { Model } from "./model.ts";
 import { urlToAppRoute } from "./route.ts";
 import {
@@ -15,6 +16,7 @@ import type {
   ShellPreferences,
 } from "./shell-preferences.ts";
 import type { StdApi } from "./std-client.ts";
+import { isLeavingUnsavedEdits } from "./update.ts";
 
 // FLAGS
 
@@ -70,3 +72,34 @@ export const init: Runtime.RoutingApplicationInit<
     }),
   };
 };
+
+// SUBSCRIPTIONS
+
+/**
+ * While the form page holds unsaved edits, the browser asks before the
+ * page unloads (a reload, a typed address, closing the tab, an external
+ * link): the `beforeunload` event is cancelled, and the browser shows its
+ * own question. In-app links ask through the leave confirmation instead.
+ * The browser's Back and Forward buttons change the address of this
+ * single-page app without unloading it, and a history move cannot be held
+ * back, so they leave the form without asking.
+ */
+export const subscriptions = Subscription.make<Model, Message>()((entry) => ({
+  unsavedEdits: entry(
+    { isLeavingUnsavedEdits: Schema.Boolean },
+    {
+      dependenciesToStream: ({ isLeavingUnsavedEdits: isGuarded }) =>
+        isGuarded
+          ? Dom.streamFromEventFilterMapPreventDefault({
+              filterMapEvent: () =>
+                Option.some(Message.RequestedUnloadWithUnsavedEdits()),
+              target: globalThis.window,
+              type: "beforeunload",
+            })
+          : Stream.empty,
+      modelToDependencies: (model) => ({
+        isLeavingUnsavedEdits: isLeavingUnsavedEdits(model),
+      }),
+    }
+  ),
+}));

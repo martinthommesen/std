@@ -74,8 +74,10 @@ export type Tables = typeof Tables.schema.Type;
  *   the user left it, and why they are not as the user left them when the
  *   browser could not read or store them (`maybePreferenceProblem`), which
  *   the navigation says. Signed in, the shell also holds the navigation
- *   drawer of narrow screens (Foldkit UI Dialog) and the user menu
- *   (Foldkit UI Menu).
+ *   drawer of narrow screens (Foldkit UI Dialog), the user menu (Foldkit
+ *   UI Menu), and the leave confirmation (Foldkit UI Dialog) with the
+ *   address a link would have opened while the form held unsaved edits
+ *   (`maybeLeaveUrl`).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
@@ -90,7 +92,9 @@ export const Model = defineTaggedUnion({
     route: AppRoute,
   },
   SignedIn: {
+    leaveDialog: Dialog.Model,
     maybeDeadLetters: Schema.Option(DeadLettersModel),
+    maybeLeaveUrl: Schema.Option(Schema.String),
     maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),

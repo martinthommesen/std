@@ -184,7 +184,7 @@ A fixed rem scale, steps of about 1.15 to 1.2: 12 px (small labels, badges), 13 
 - **Navigation:** Home, then each app namespace's tables under its name, then a collapsible Administration group whose open state the browser remembers: its pages first (Dead letters, for whoever may read `core.subscription`), then the `core` tables.
 - **Narrow screens (below 48 rem):** the navigation becomes a modal drawer (Foldkit UI Dialog) behind the header's menu button: the page behind it is inert, Tab and Shift+Tab stay inside it, it opens on its first link, and Escape, the backdrop, its close button or a link close it and give focus back to the menu button. Forms go to one column, and the action bar sits at the form's end instead of floating: wrapped at 320 px or at 200 % zoom it was 173 px tall over the fields (review of a4068ab1). The list's table scrolls sideways in its own container and its header row stops sticking.
 - **Touch screens (`pointer: coarse`):** controls, navigation rows and sort buttons grow to 44 px. Navigation rows take their height from `--nav-row-height`, which the touch rule sets, so no later rule can undo it.
-- **Focus clearance (WCAG 2.2, 2.4.11):** `scroll-padding` keeps a focused control clear of the sticky header and of the floating action bar at the bar's real height (`--action-bar-block-size`, kept by the form while the bar is shown). Browsers scroll only to a control outside the window, so the form also scrolls a focused control that is in the window but under the header or the bar into the clear part: when focus moves, when the bar changes size (a refusal's note grows it under the control that keeps focus after Ctrl+S, or a narrower window wraps it).
+- **Focus clearance (WCAG 2.2, 2.4.11):** `scroll-padding` keeps a focused control clear of the sticky header and of the floating action bar at the bar's real height (`--action-bar-block-size`, kept by the form while the bar is shown). Browsers scroll only to a control outside the window, so the form also scrolls a focused control that is in the window but under the header or the bar into the clear part: when focus moves, when the bar changes size (a refusal's note grows it under the control that keeps focus after Ctrl+S, or a narrower window wraps it), and when the window changes size under an unchanged bar, which a probe fixed over the whole window (`.viewport-probe`) reports to the same ResizeObserver: the html and main elements do not change size with the window's height.
 - **Lists:** one panel: the toolbar (Filter, saved filters, count, page size, pager), the filter builder below it when opened, then the table with a header row that sticks under the app header on wide screens.
 - **Forms:** up to 64 rem wide; each layout section is a panel with its fields in two columns, long values (long text, JSON, conditions, write-only fields) across both; the action bar floats at the bottom; related lists and history follow as disclosures. A form opened from a list keeps that list's filter, sort and page size in its address, so "Back to the list", a delete and a create return to the same list.
 - **Spacing:** a 4 px grid (`--space-*`); more space between sections than inside them.
@@ -225,7 +225,19 @@ Dense rows (36 px), a sticky header row with sort buttons (`aria-sort` on the he
 
 ### The record bar
 
-See Overview. Its status is a live region; "Unsaved changes" and the refusal note are not announced (the alert at the top is). After a refusal, "Show the reason" moves focus to the alert, and so into view.
+See Overview. Its status is a live region; "Unsaved changes", "Checking form rules…" and the refusal note are not announced (the alert at the top, and form rules' own live region, are). "Unsaved changes" means edits a save would send, as form rules build them (hidden and read-only fields left out). While Save waits for the first form-state verdict the bar says "Checking form rules…", which is why Save is disabled. After a refusal, "Show the reason" moves focus to the alert, and so into view.
+
+A read-only record (the caller may read it but not change it) keeps a reduced bar: no status and no Save, only "Back to the list" and Delete, in place at the form's end rather than floating.
+
+### Form rules
+
+- **Pending:** a field waiting for the first form-state verdict shows its label over a control-sized placeholder with a dashed border, on the sunken surface, saying "Checking field state…" (`aria-busy`). It reads as "not yet", not as an empty value or a disabled control.
+- **Required:** "(required)" in the label, as for required fields; **read-only:** the value as text, like any read-only field; **hidden:** the row is not rendered; **restricted choices:** the select offers only the allowed ones.
+- **Corrections** (a value a rule clears or sets when you save) are warning notices at the top of the form; **a failed check** is a danger alert there, with "Check form again" and, where it applies, the reload buttons; **the server's own messages**, such as "You can view this record but not change it.", are neutral information (`form-info`: the sunken surface and a border), not warnings, since nothing is wrong.
+
+### Leaving with unsaved edits
+
+An in-app link from a form with unsaved edits opens "Leave without saving?" (Foldkit UI Dialog), on "Keep editing", the choice that loses nothing; "Discard changes" (danger) follows the link. A reload, a typed address, closing the tab or an external link get the browser's own question (`beforeunload`, only while edits are unsaved). The browser's Back and Forward buttons move this single-page app's history without unloading it and cannot be held back, so they leave without asking.
 
 ### Filter
 
@@ -233,7 +245,7 @@ One "Filter" button opens the builder (pressed look while open) and counts the a
 
 ### Messages
 
-Alerts (refusals, failures) in the danger tint, notices in the warning tint, at the top of what they are about; the save's outcome in the action bar; the sign-out state in the header.
+Alerts (refusals, failures) in the danger tint, notices in the warning tint, neutral information (`form-info`) on the sunken surface, at the top of what they are about; the save's outcome in the action bar; the sign-out state in the header.
 
 ## Do's and Don'ts
 

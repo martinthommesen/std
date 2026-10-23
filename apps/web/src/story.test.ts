@@ -34,6 +34,7 @@ import type { CurrentUser, SignedInModel } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
 import {
   NAVIGATION_DRAWER_ID,
+  initLeaveDialog,
   initNavigationDrawer,
 } from "./navigation-drawer.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
@@ -345,7 +346,9 @@ describe("signing in", () => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "leaveDialog",
           "maybeDeadLetters",
+          "maybeLeaveUrl",
           "maybePreferenceProblem",
           "maybeRecordForm",
           "maybeRevision",
@@ -591,7 +594,9 @@ describe("answers of an earlier session", () => {
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
   const bobEntering = Model.SignedIn({
+    leaveDialog: initLeaveDialog(),
     maybeDeadLetters: Option.none(),
+    maybeLeaveUrl: Option.none(),
     maybePreferenceProblem: Option.none(),
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),
