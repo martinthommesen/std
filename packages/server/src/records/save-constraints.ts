@@ -166,21 +166,62 @@ export const constraintFailure = (
 };
 
 /**
+ * Keeps a mapped failure to the fields the caller may see named (Contracts
+ * 3.8): with `shown`, an `InvalidReference` on any other field becomes
+ * `ValidationFailed` naming no field, and `ValidationFailed` keeps only the
+ * errors of shown fields. The accepted leak of a unique conflict (that a
+ * value is taken) stays; the name of a field the caller cannot read does
+ * not. Without `shown` (a caller's own body) the failure is unchanged.
+ *
+ * @param failure - The mapped failure.
+ * @param shown - The names of the fields errors may name, if limited.
+ * @returns The failure as the caller may see it.
+ */
+export const withShownFields = <F extends ConstraintFailure>(
+  failure: F,
+  shown: ReadonlySet<string> | undefined
+): F | ValidationFailed => {
+  if (shown === undefined) {
+    return failure;
+  }
+
+  if (failure instanceof InvalidReference) {
+    return shown.has(failure.field)
+      ? failure
+      : new ValidationFailed({ errors: [] });
+  }
+
+  return failure instanceof ValidationFailed
+    ? new ValidationFailed({
+        errors: failure.errors.filter((error) => shown.has(error.field)),
+      })
+    : failure;
+};
+
+/**
  * Runs record-writing statements, mapping constraint violations.
  *
  * @param snapshot - The configuration the write runs at.
  * @param direction - Whether the statements write or delete a record.
+ * @param shown - The names of the fields errors may name, for a system
+ *   write (`withShownFields`); omitted for a caller's own body.
  * @returns A function wrapping the statements' effect.
  */
 export const mapConstraints =
-  (snapshot: ConfigSnapshot, direction: WriteDirection) =>
+  (
+    snapshot: ConfigSnapshot,
+    direction: WriteDirection,
+    shown?: ReadonlySet<string>
+  ) =>
   <A, R>(
     effect: Effect.Effect<A, SqlError, R>
   ): Effect.Effect<A, ConstraintFailure, R> =>
     Effect.catchTag(effect, "SqlError", (failure) =>
       toDatabaseError(failure).pipe(
         Effect.flatMap((safe) =>
-          Effect.fail(constraintFailure(snapshot, direction, safe))
+          Effect.fail(
+            withShownFields(constraintFailure(snapshot, direction, safe), shown)
+          )
         )
       )
     );

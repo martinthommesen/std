@@ -30,6 +30,7 @@ import type { AfterWriteInput } from "../records/save-hooks.ts";
 import { WriteAccess } from "../records/write-access.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
 import { afterCommitCarriers } from "./after-commit-rules.ts";
+import { settleAggregates } from "./aggregate-settle.ts";
 import { runBeforeRules } from "./before-rules.ts";
 import { runSaveActions } from "./rule-actions.ts";
 import { imageOf, ruleConditionHolds } from "./rule-condition.ts";
@@ -155,6 +156,10 @@ export const RecordRuleSaveHooks: Layer.Layer<
           Effect.provideService(WorkerWakeup, wakeup),
           Effect.provideService(InstanceSettings, settings)
         ),
+      settle: (input) =>
+        Effect.gen(function* settle() {
+          return yield* settleAggregates(input, yield* contextOf(timeZone));
+        }),
     });
   })
 );

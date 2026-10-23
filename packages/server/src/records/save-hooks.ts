@@ -9,6 +9,9 @@
  * - `afterWrite` (step 10): runs after the rows, the change entry and the
  *   delivery rows; may save other records through the record service, as
  *   a nested save in the same transaction. Any failure fails the save.
+ * - `settle` (step 10, finalization, Contracts 4.9): runs the `aggregate`
+ *   rules (and the `derive` rules of changed images) of a settling set to
+ *   a fixed point, in memory. It reads, and writes nothing.
  *
  * Every hook point runs inside the save's transaction, so its Effect
  * environment holds the record service and the SQL client but no HTTP
@@ -20,6 +23,7 @@
  * producer (`outbox-producer.ts`, 1E) provide real layers; `SaveHooks.none`
  * runs nothing.
  */
+import type { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
 import type { HookDepthExceeded } from "@std/api/errors/hook-depth-exceeded";
 import type { InvalidReference } from "@std/api/errors/invalid-reference";
 import type { InvalidTransition } from "@std/api/errors/invalid-transition";
@@ -43,6 +47,7 @@ import type { Catalog } from "../catalog/catalog.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import type { Transactions } from "../sql/transactions.ts";
+import type { SettleImage, SettleSet } from "./aggregate-images.ts";
 import type { ChangeEntry, ChangeKind } from "./change-entry.ts";
 import type { InvalidBody } from "./invalid-body.ts";
 import type { StoredRecord } from "./stored-record.ts";
@@ -113,7 +118,31 @@ export type SaveFailure =
   | RecordInSave
   | HookDepthExceeded
   | RuleRefused
-  | InvalidTransition;
+  | InvalidTransition
+  | AggregateNotSettled;
+
+/**
+ * How settling fails (Contracts 4.9): an aggregate rule's `refuse`, or no
+ * fixed point by pass 3.
+ */
+export type SettleFailure =
+  | SqlError
+  | RuleRefused
+  | InvalidTransition
+  | AggregateNotSettled;
+
+/** What `settle` works on (Contracts 4.9). */
+export interface SettleInput {
+  /** The settling set: owners, parts and their in-memory images. */
+  readonly set: SettleSet;
+  /**
+   * Enrolls a changed part that owns parts itself in the settling set, so
+   * its rules run from the next pass; a no-op for one already enrolled.
+   */
+  readonly enroll: (
+    part: SettleImage
+  ) => Effect.Effect<void, SqlError | AggregateNotSettled, SqlClient.SqlClient>;
+}
 
 /**
  * What an in-transaction hook may use: the save's SQL client and the
@@ -153,6 +182,14 @@ export interface SaveHooksApi {
   readonly afterWrite: (
     input: AfterWriteInput
   ) => Effect.Effect<void, SaveFailure, HookEnvironment>;
+  /**
+   * Finalization's settling (Contracts 4.9 step 1): changes the images of
+   * the settling set in place to a fixed point, or refuses. Writes
+   * nothing.
+   */
+  readonly settle: (
+    input: SettleInput
+  ) => Effect.Effect<void, SettleFailure, SqlClient.SqlClient | Actor>;
 }
 
 /** Hooks, record rules and outbox producers of the save pipeline.
@@ -164,13 +201,18 @@ export interface SaveHooksApi {
 export class SaveHooks extends Context.Service<SaveHooks, SaveHooksApi>()(
   "std/server/SaveHooks"
 ) {
-  /** No hooks, no subscriptions. */
+  /**
+   * No hooks, no subscriptions, no aggregate rules: settling changes
+   * nothing, so finalization persists only the aggregate saves of owners
+   * whose parts changed.
+   */
   static readonly none: Layer.Layer<SaveHooks> = Layer.succeed(
     SaveHooks,
     SaveHooks.of({
       afterWrite: () => Effect.void,
       beforeWrite: (input) => Effect.succeed(input.values),
       deliveries: () => Effect.void,
+      settle: () => Effect.void,
     })
   );
 }

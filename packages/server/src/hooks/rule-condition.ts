@@ -46,6 +46,12 @@ export interface RuleImages {
   readonly record: RecordImage;
   /** The stored record; null on create. */
   readonly previous: RecordImage | null;
+  /**
+   * Records whose in-memory image replaces the database when a path
+   * follows a reference to them: the settling images of 4.9, so a
+   * `derive` rule run while settling reads what settling proposed.
+   */
+  readonly live?: ReadonlyMap<string, RecordImage>;
 }
 
 /**
@@ -158,7 +164,7 @@ const preloadTargets = Effect.fn("Rules.preloadTargets")(function* preload(
         break;
       }
 
-      const known = targets.get(id);
+      const known = images.live?.get(id) ?? targets.get(id);
 
       if (known === undefined) {
         const loaded = yield* loadRecord(
@@ -171,6 +177,7 @@ const preloadTargets = Effect.fn("Rules.preloadTargets")(function* preload(
         targets.set(id, image);
       } else {
         image = known;
+        targets.set(id, known);
       }
     }
   }

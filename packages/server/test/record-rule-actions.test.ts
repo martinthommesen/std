@@ -9,8 +9,14 @@
  * The validation cases apply change sets in memory to the acme fixture's
  * configuration; the runtime cases go through `/api/v1` as Ada (admin),
  * Alice (asset manager) and Bob (employee, who may not change a laptop's
- * status, rule 9). The `aggregate` phase's runtime behavior (actions that
- * write nothing until persistence) belongs to the aggregates workstream.
+ * status, rule 9).
+ *
+ * The `aggregate` phase (Contracts 4.9, decision 0029): its conditions'
+ * quantifiers and owner paths are accepted there only
+ * (`quantifier-profiles` at definition validation), its actions name only part classes
+ * of the rule's class, and at run time they write nothing until
+ * persistence, whose change entries name the acting user and the
+ * proposing rules (the test-fixture aggregates of `aggregates-support`).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { applyOperations } from "@std/definitions/apply";
@@ -36,18 +42,65 @@ import { Effect, Result } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { Actor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { SaveHooks } from "../src/records/save-hooks.ts";
+import type { SaveHooksApi } from "../src/records/save-hooks.ts";
+import {
+  aggregatesTestLayer,
+  C,
+  CHANGE_RULES,
+  create,
+  entriesOf,
+  setUpAggregates,
+  TABLE as AGGREGATE_TABLE,
+  update as updateAggregate,
+} from "./aggregates-support.ts";
 import {
   readsTestLayer,
   recordOf,
   recordPath,
   tagOf,
 } from "./reads-support.ts";
-import { ACME_FIELDS } from "./records-support.ts";
-import { ACME, addRecordRule, freshId, values } from "./schema-support.ts";
+import { ACME_FIELDS, actorOf, USERS } from "./records-support.ts";
+import {
+  ACME,
+  addField,
+  addRecordRule,
+  createClass,
+  createNamespace,
+  freshId,
+  values,
+} from "./schema-support.ts";
 import { LAPTOP, MONITOR, patch, versionOf } from "./writes-support.ts";
 
 const SYSTEM: Requester = { roleIds: [], userId: SYSTEM_USER_ID };
+
+/**
+ * A part class of acme.asset (Contracts 4.9), created in the same change
+ * set as each rule: `setParts` and `createParts` name only part classes
+ * of the rule's class.
+ */
+const PART_NAMESPACE = createNamespace("rra_parts");
+const PART = createClass("rra_part", { namespaceId: PART_NAMESPACE.id });
+
+const PART_OWNER = addField(PART.id, "asset", {
+  aggregate: true,
+  kind: "reference",
+  targetClassId: ACME.asset,
+});
+
+const PART_STATUS = addField(PART.id, "status", {
+  kind: "text",
+  maxLength: 40,
+});
+
+const PART_OPS: readonly Operation[] = [
+  PART_NAMESPACE.op,
+  PART.op,
+  PART_OWNER.op,
+  PART_STATUS.op,
+];
 
 const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
   createEach: {
@@ -57,10 +110,10 @@ const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
     values: [{ fieldId: ACME.name, value: { value: "made" } }],
   },
   createParts: {
-    classId: ACME.laptop,
+    classId: PART.id,
     forEach: null,
     type: "createParts",
-    values: [{ fieldId: ACME.name, value: { value: "part" } }],
+    values: [{ fieldId: PART_STATUS.id, value: { value: "part" } }],
   },
   refuse: { code: "RuleRefused", message: "No.", type: "refuse" },
   set: {
@@ -68,9 +121,9 @@ const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
     values: [{ fieldId: ACME.status, value: { value: "set" } }],
   },
   setParts: {
-    classId: ACME.laptop,
+    classId: PART.id,
     type: "setParts",
-    values: [{ fieldId: ACME.status, value: { value: "part" } }],
+    values: [{ fieldId: PART_STATUS.id, value: { value: "part" } }],
     where: null,
   },
   updateEach: {
@@ -165,7 +218,9 @@ const ruleIn = (slot: Slot, actions: readonly RuleAction[]) => {
     subscriptionId: phase === "afterCommit" ? subscription : null,
   });
 
-  return phase === "afterCommit" ? [carrier(subscription), rule.op] : [rule.op];
+  return phase === "afterCommit"
+    ? [...PART_OPS, carrier(subscription), rule.op]
+    : [...PART_OPS, rule.op];
 };
 
 /**
@@ -263,6 +318,37 @@ const renameMonitor = Effect.fn("RuleActions.renameMonitor")(function* rename(
     name,
   });
 });
+
+/**
+ * Hooks that record, right after each settling, how many approvals a
+ * fixture change has and its version, as `count/version`.
+ * @param hooks - The record-rule hooks.
+ * @param changeId - The change.
+ * @param seen - Receives one entry per settling.
+ * @returns The hooks.
+ */
+const recordingSettles = (
+  hooks: SaveHooksApi,
+  changeId: string,
+  seen: string[]
+): SaveHooksApi =>
+  SaveHooks.of({
+    ...hooks,
+    settle: (input) =>
+      Effect.gen(function* recordSettle() {
+        yield* hooks.settle(input);
+
+        const [state] = yield* values(
+          `SELECT (SELECT count(*) FROM ${AGGREGATE_TABLE.changeApproval}
+                   WHERE change = $1::uuid)::text || '/' ||
+                  (SELECT version FROM ${AGGREGATE_TABLE.change}
+                   WHERE id = $1::uuid)::text AS value`,
+          [changeId]
+        ).pipe(Effect.orDie);
+
+        seen.push(state ?? "");
+      }),
+  });
 
 describe("record-rule-actions", () => {
   it("lists every phase and action kind", () => {
@@ -673,6 +759,142 @@ describe("record-rule-actions", () => {
     );
 
     dbTest.effect(
+      "quantifier-profiles: anyPart, allParts, partsChanged and owner paths are accepted only in aggregate rules, over their own part classes",
+      () =>
+        Effect.gen(function* quantifierProfiles() {
+          const snapshot = yield* (yield* Catalog).refresh;
+
+          const anyOpenPart: Condition = {
+            class: PART.id,
+            op: "anyPart",
+            where: {
+              left: path(PART_STATUS.id),
+              op: "eq",
+              right: { path: [ACME.status], scope: "owner" },
+            },
+          };
+
+          // An owner path stands only in a part condition, so it is refused
+          // on its own even in an aggregate rule.
+          const quantified: readonly (readonly [string, Condition, boolean])[] =
+            [
+              ["anyPart", anyOpenPart, true],
+              ["allParts", { ...anyOpenPart, op: "allParts" }, true],
+              ["partsChanged", { class: PART.id, op: "partsChanged" }, true],
+              [
+                "an owner path",
+                { arg: { path: [ACME.status], scope: "owner" }, op: "empty" },
+                false,
+              ],
+            ];
+
+          const slots: readonly (readonly [Slot, RuleAction])[] = [
+            ["derive", ACTIONS.set],
+            ["guard", ACTIONS.refuse],
+            ["invariant", ACTIONS.refuse],
+            ["after", ACTIONS.updateEach],
+            ["afterCommit", ACTIONS.updateEach],
+          ];
+
+          for (const [what, condition, aggregate] of quantified) {
+            for (const [slot, action] of slots) {
+              const rule = ruleIn(slot, [action]);
+              const last = rule.at(-1);
+
+              const withCondition =
+                last?.op === "createRecordRule"
+                  ? [
+                      ...rule.slice(0, -1),
+                      {
+                        ...last,
+                        definition: { ...last.definition, condition },
+                      },
+                    ]
+                  : rule;
+
+              assert.deepStrictEqual(
+                outcomeOf(snapshot, withCondition),
+                ["invalidCondition"],
+                `${what} in a ${slot} rule`
+              );
+            }
+
+            assert.deepStrictEqual(
+              outcomeOf(snapshot, [
+                ...PART_OPS,
+                addRecordRule(ACME.asset, {
+                  actions: [ACTIONS.set],
+                  condition,
+                  operations: [],
+                  phase: "aggregate",
+                  ruleKind: null,
+                }).op,
+              ]),
+              aggregate ? [] : ["invalidCondition"],
+              `${what} in an aggregate rule`
+            );
+          }
+
+          // An aggregate rule names only part classes of its own class.
+          assert.deepStrictEqual(
+            outcomeOf(snapshot, [
+              ...PART_OPS,
+              addRecordRule(ACME.asset, {
+                actions: [
+                  {
+                    classId: ACME.laptop,
+                    type: "setParts",
+                    values: [{ fieldId: ACME.status, value: { value: "x" } }],
+                    where: null,
+                  },
+                ],
+                operations: [],
+                phase: "aggregate",
+                ruleKind: null,
+              }).op,
+            ]),
+            ["invalidRecordRule"]
+          );
+          assert.deepStrictEqual(
+            outcomeOf(snapshot, [
+              ...PART_OPS,
+              addRecordRule(ACME.asset, {
+                actions: [ACTIONS.set],
+                condition: { class: ACME.laptop, op: "partsChanged" },
+                operations: [],
+                phase: "aggregate",
+                ruleKind: null,
+              }).op,
+            ]),
+            ["invalidCondition"]
+          );
+
+          // No action sets an owner reference but a create's.
+          assert.deepStrictEqual(
+            outcomeOf(snapshot, [
+              ...PART_OPS,
+              addRecordRule(ACME.asset, {
+                actions: [
+                  {
+                    classId: PART.id,
+                    type: "setParts",
+                    values: [
+                      { fieldId: PART_OWNER.id, value: { value: null } },
+                    ],
+                    where: null,
+                  },
+                ],
+                operations: [],
+                phase: "aggregate",
+                ruleKind: null,
+              }).op,
+            ]),
+            ["invalidRecordRule"]
+          );
+        })
+    );
+
+    dbTest.effect(
       "after actions are refused by access rules exactly as the acting user's own write",
       () =>
         Effect.gen(function* accessRules() {
@@ -813,6 +1035,77 @@ describe("record-rule-actions", () => {
             [403, "NotAllowed"]
           );
           assert.strictEqual(yield* versionOf(M), before);
+        })
+    );
+  });
+
+  layer(aggregatesTestLayer(), { excludeTestServices: true })((aggregates) => {
+    aggregates.effect("sets up the fixture aggregates", () => setUpAggregates);
+
+    aggregates.effect(
+      "aggregate actions write nothing until persistence, and their change entries name the acting user and the proposing rules",
+      () =>
+        Effect.gen(function* aggregateActions() {
+          yield* create(C.authority.id, {
+            approver: "ann",
+            change_type: "emergency",
+          });
+
+          const changeId = (yield* create(C.change.id, {
+            change_type: "emergency",
+            name: "rra-change",
+            status: "new",
+          })).id;
+
+          const hooks = yield* SaveHooks;
+          const seen: string[] = [];
+
+          yield* updateAggregate(
+            C.change.id,
+            AGGREGATE_TABLE.change,
+            changeId,
+            {
+              status: "authorize",
+            }
+          ).pipe(
+            Effect.provideService(
+              SaveHooks,
+              recordingSettles(hooks, changeId, seen)
+            ),
+            Effect.provideService(Actor, actorOf(USERS.bob))
+          );
+
+          // When settling had run, before persistence: no approval yet, and
+          // the change only at the user's version.
+          assert.deepStrictEqual(seen, ["0/2"]);
+
+          const [approval] = yield* values(
+            `SELECT id::text AS value FROM ${AGGREGATE_TABLE.changeApproval}
+             WHERE change = $1::uuid`,
+            [changeId]
+          );
+
+          const settled = (yield* entriesOf(changeId)).at(-1);
+          const created = (yield* entriesOf(approval ?? "")).at(0);
+
+          assert.strictEqual(settled?.actor, USERS.bob);
+          assert.strictEqual(created?.actor, USERS.bob);
+          assert.deepStrictEqual(settled?.cause, {
+            aggregate: {
+              parts: [created?.changeId ?? ""],
+              reason: "both",
+              rules: [CHANGE_RULES.createRound.id],
+            },
+            kind: "system",
+          });
+          assert.deepStrictEqual(created?.cause, {
+            aggregate: {
+              parts: [],
+              reason: "derived",
+              rules: [CHANGE_RULES.createRound.id],
+            },
+            kind: "system",
+          });
         })
     );
   });

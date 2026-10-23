@@ -33,12 +33,20 @@ import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
  *   condition path;
  * - `RuleRefused`, `InvalidTransition`, `RecordInSave` and
  *   `HookDepthExceeded` among the 422s of record writes, and a delete's 422
- *   (`ValidationFailed`, `InvalidReference` and those four).
+ *   (`ValidationFailed`, `InvalidReference` and those four);
+ *
+ * and what aggregates (Contracts 4.9, decision 0029) added, all optional
+ * or additive for a v0.0.2 client:
+ *
+ * - `AggregateNotSettled` among the same 422s;
+ * - the optional `aggregate` of a reference field's metadata type;
+ * - the `owner` scope of a condition path, and the `anyPart`, `allParts`
+ *   and `partsChanged` members of a condition.
  *
  * Any other change to the document fails this test.
  */
 const V1_DOCUMENT_SHA256 =
-  "c766a788f8e061bf76992d1504a5328adb12af432c56456f17e9f4e44e6a5908";
+  "f68b6d14a935a8d0261fd6a68a41135eec5bac1cdd290b9e723fa06774b2aa9f";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 

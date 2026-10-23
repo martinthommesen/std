@@ -27,6 +27,7 @@ import type { StoredOrPlaintext } from "@std/values/compare";
 import { isDecimal } from "@std/values/decimal";
 import { refuse } from "@std/values/field-error";
 import type { Decoded } from "@std/values/field-error";
+import { isOwnerReferenceType } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
 import {
   isBigint,
@@ -111,6 +112,17 @@ export const fieldRulesOf = (
   state: effective.state,
   type: effective.type,
 });
+
+/**
+ * A field's rules on an update: an owner reference is read-only after
+ * create (Contracts 4.9), so a part never changes owner; writing a
+ * different owner is `ReadOnlyField`.
+ *
+ * @param rules - The field's rules.
+ * @returns The rules an update applies.
+ */
+export const rulesOnUpdate = (rules: FieldRules): FieldRules =>
+  isOwnerReferenceType(rules.type) ? { ...rules, readOnly: true } : rules;
 
 /**
  * The constant default of a field as an input value.

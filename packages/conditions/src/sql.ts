@@ -60,6 +60,7 @@ import type { FieldInfo } from "./class-view.ts";
 import { ConditionDefectError } from "./defect.ts";
 import { negationNormalForm } from "./nnf.ts";
 import type { Atom, NnfNode } from "./nnf.ts";
+import { refuseAggregateConstructs } from "./owner-scope.ts";
 import {
   arrayParameter,
   EMPTY_SQL,
@@ -469,6 +470,9 @@ export const compileNodeToSql = (
   root: ResolvedNode,
   options: CompileOptions
 ): CompiledCondition => {
+  // Owner paths and quantifiers are evaluated in TypeScript only (5.10).
+  refuseAggregateConstructs(root);
+
   const compiler: Compiler = { joins: [], options, sources: new Map() };
   const predicate = compileNode(compiler, negationNormalForm(root));
 

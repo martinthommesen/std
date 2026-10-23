@@ -60,6 +60,12 @@ export class DefinitionInvalidV1 extends Schema.TaggedError<
 
 /** Codes `v0.0.2` did not have, and the nearest code it had. */
 const NEAREST_V1_CODE = {
+  // The aggregate graph (Contracts 4.9, decision 0029): a cycle is the
+  // nearest of `extendsCycle`; a fourth level or a second owner reference
+  // is a field type the configuration cannot take.
+  aggregateCycle: "extendsCycle",
+  aggregateSecondOwner: "invalidType",
+  aggregateTooDeep: "invalidType",
   // The name is not valid for the API.
   apiNameClash: "invalidName",
   // A record rule (workstream 3A) is a rule definition over records, as an

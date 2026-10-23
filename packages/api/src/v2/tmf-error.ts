@@ -45,6 +45,7 @@ const tagError = <const Tag extends string>(tag: Tag) =>
 
 /** The error subtype of each tag, by tag. */
 export const TmfErrorSubtypes = {
+  AggregateNotSettled: tagError("AggregateNotSettled"),
   DefinitionInvalid: tagError("DefinitionInvalid"),
   DefinitionProtected: tagError("DefinitionProtected"),
   DependencyConflict: tagError("DependencyConflict"),
@@ -152,9 +153,11 @@ export const UnsupportedMediaTypeError = subtypes.UnsupportedMediaType.pipe(
 
 /**
  * `422`: invalid values, and saves a hook or record rule refused or could
- * not complete (Contracts 4.1, 4.10).
+ * not complete, aggregates that did not settle included (Contracts 4.1,
+ * 4.9, 4.10).
  */
 export const UnprocessableError = Schema.Union([
+  subtypes.AggregateNotSettled,
   subtypes.DefinitionInvalid,
   subtypes.HookDepthExceeded,
   subtypes.InvalidReference,

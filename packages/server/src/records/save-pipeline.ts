@@ -6,6 +6,7 @@ import { RecordInSave } from "@std/api/errors/record-in-save";
 import type { UnknownField } from "@std/api/errors/unknown-field";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
+import { ownerReferenceOf } from "@std/definitions/aggregates";
 import { allowedRecordsOf } from "@std/definitions/allowed-records";
 /**
  * The save pipeline (Contracts 2.2, 3.9, 4.1, 4.2): create, update and
@@ -50,7 +51,11 @@ import {
 } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
-import { fieldRulesOf, writtenOnCreate } from "@std/definitions/record-rules";
+import {
+  fieldRulesOf,
+  rulesOnUpdate,
+  writtenOnCreate,
+} from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   PARTY_CLASS_IDS,
@@ -72,6 +77,15 @@ import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
+import {
+  lockAggregates as lockAggregatesIn,
+  lockChainForCreate,
+  lockChainOf,
+} from "./aggregate-chain.ts";
+import type { AggregateMember, OwnerChain } from "./aggregate-chain.ts";
+import { finalizeAggregates } from "./aggregate-finalize.ts";
+import type { PersistCreate, PersistUpdate } from "./aggregate-finalize.ts";
+import { AggregateScope, noteAggregateWrite } from "./aggregate-state.ts";
 import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
@@ -80,7 +94,7 @@ import {
   individualOf,
   needsIndividual,
 } from "./party-rules.ts";
-import { mapConstraints } from "./save-constraints.ts";
+import { mapConstraints, withShownFields } from "./save-constraints.ts";
 import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
@@ -103,7 +117,11 @@ import {
 import type { StoredRecord } from "./stored-record.ts";
 import { bindValue, isWriteOnly } from "./stored-values.ts";
 import { forgetSupplied, recordSupplied } from "./supplied-fields.ts";
-import { WriteAccess } from "./write-access.ts";
+import {
+  systemEffectAccess,
+  userAccessOf,
+  WriteAccess,
+} from "./write-access.ts";
 import type { InTransaction } from "./write-access.ts";
 import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
@@ -137,6 +155,12 @@ export interface SaveInput {
    * saves that settling persists (4.9), where only invariants run.
    */
   readonly mode?: SaveMode;
+  /**
+   * `aggregate`: a save finalization makes as the system effect (4.9,
+   * 4.10): it needs no write right of the acting user (read-only fields
+   * included, owner references excepted), but is validated as usual.
+   */
+  readonly system?: "aggregate";
 }
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
@@ -158,6 +182,11 @@ export interface UpdateInput extends SaveInput {
    * record is locked (4.1 steps 1 and 2).
    */
   readonly body: unknown;
+  /**
+   * An owner's aggregate save (4.9): never a no-op, even when no field
+   * changes; the version goes up and one change entry is written.
+   */
+  readonly aggregateSave?: boolean;
   /**
    * A patch evaluated against the record as locked (Contracts 10.5): given
    * the caller's projection of the locked record, it returns the update
@@ -229,16 +258,22 @@ const effectiveById = (
   );
 
 // The write rules of every field of a class (`@std/definitions/record-rules`),
-// the same ones the browser's `recordSchema` applies to the metadata.
+// the same ones the browser's `recordSchema` applies to the metadata: on
+// an update an owner reference is read-only (4.9), and the system effect
+// `aggregate` writes read-only fields like the service's own values.
 const rulesById = (
   snapshot: ConfigSnapshot,
-  fields: ReadonlyMap<DefinitionId, EffectiveField>
+  fields: ReadonlyMap<DefinitionId, EffectiveField>,
+  on: { readonly update: boolean; readonly input: SaveInput }
 ): RulesById =>
   new Map(
-    [...fields].map(([fieldId, field]) => [
-      fieldId,
-      fieldRulesOf(snapshot, field),
-    ])
+    [...fields].map(([fieldId, field]) => {
+      const rules = fieldRulesOf(snapshot, field);
+      const system = on.input.system === "aggregate";
+      const writable = system ? { ...rules, readOnly: false } : rules;
+
+      return [fieldId, on.update ? rulesOnUpdate(writable) : writable];
+    })
   );
 
 const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
@@ -287,6 +322,24 @@ const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
       : undefined;
   }
 );
+
+/**
+ * The fields the caller supplied, which validation errors may name
+ * whatever the caller can read (3.8). A system-effect save (4.9: what
+ * settling persists) has no caller body: the acting user supplied none of
+ * its values, so its errors name only fields the acting user can read on
+ * the proposed record, and an error on a field they cannot read is
+ * `ValidationFailed` with no field named. [judgment, decision 0029]
+ *
+ * @param input - The save.
+ * @param body - Its resolved body.
+ * @returns The caller-supplied field IDs.
+ */
+const callerSupplied = (
+  input: SaveInput,
+  body: WriteBody
+): ReadonlySet<DefinitionId> =>
+  input.system === "aggregate" ? new Set() : new Set(body.entries.keys());
 
 /**
  * Validates the final candidate, then names only fields the caller
@@ -352,7 +405,8 @@ const checkReferences = Effect.fn("Records.checkReferences")(
     snapshot: ConfigSnapshot,
     fields: ReadonlyMap<DefinitionId, EffectiveField>,
     values: ReadonlyMap<DefinitionId, DecodedInput>,
-    written: ReadonlySet<DefinitionId>
+    written: ReadonlySet<DefinitionId>,
+    shown: ReadonlySet<string> | undefined
   ) {
     const access = yield* WriteAccess;
 
@@ -374,7 +428,10 @@ const checkReferences = Effect.fn("Records.checkReferences")(
         });
 
         if (!visible.has(value)) {
-          return yield* new InvalidReference({ field: field.field.name });
+          return yield* withShownFields(
+            new InvalidReference({ field: field.field.name }),
+            shown
+          );
         }
       }
     }
@@ -382,6 +439,50 @@ const checkReferences = Effect.fn("Records.checkReferences")(
     return yield* Effect.void;
   }
 );
+
+/**
+ * The names a system-effect save's errors may carry (4.9, 3.8): the
+ * fields the acting user can read on the proposed record, decided before
+ * anything is written, so a constraint failure, after which the
+ * transaction can run no further statement, is filtered by the same
+ * decision. Undefined for a caller's own save, whose errors keep their
+ * rules (the fields its body named, or readable ones).
+ *
+ * @param snapshot - The configuration.
+ * @param input - The save.
+ * @param proposal - The record's class, its stored record and the
+ *   proposed values.
+ * @returns The field names, or undefined.
+ */
+const shownFieldsOf = Effect.fn("Records.shownFields")(function* shownFieldsOf(
+  snapshot: ConfigSnapshot,
+  input: SaveInput,
+  proposal: {
+    readonly classId: DefinitionId;
+    readonly existing: StoredRecord | null;
+    readonly values: ReadonlyMap<DefinitionId, DecodedInput>;
+  }
+) {
+  const access = yield* WriteAccess;
+
+  const readable =
+    input.system === "aggregate"
+      ? yield* access.readableOnProposal({ ...proposal, snapshot })
+      : undefined;
+
+  const shown: ReadonlySet<string> | undefined =
+    readable === undefined
+      ? undefined
+      : new Set(
+          [...readable].flatMap((fieldId) => {
+            const field = snapshot.field(fieldId);
+
+            return field === undefined ? [] : [field.name];
+          })
+        );
+
+  return shown;
+});
 
 // Binds the values to write, hashing password plaintext.
 const columnWrites = Effect.fn("Records.columnWrites")(function* columnWrites(
@@ -484,10 +585,13 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     readonly writeOnly: ReadonlySet<DefinitionId>;
     /** The fields the caller's body named (none for a delete). */
     readonly supplied: Iterable<DefinitionId>;
+    /** The record's owner chain, as locked (4.9); empty for no part. */
+    readonly chain: OwnerChain;
   }
 ) {
   const hooks = yield* SaveHooks;
   const stack = yield* SaveStack;
+  const access = yield* WriteAccess;
 
   const entry: ChangeEntry = yield* writeChangeEntry({
     actorId: (yield* Actor).userId,
@@ -512,6 +616,18 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     snapshot,
   };
 
+  // The touched set (4.9): the owners this save changes, or `AggregateNotSettled`
+  // for one this transaction already persisted.
+  yield* noteAggregateWrite({
+    before: change.before,
+    chain: change.chain,
+    changeId: entry.changeId,
+    classId: change.classId,
+    finalizing: change.input.system === "aggregate",
+    kind: change.kind,
+    recordId: change.recordId,
+    snapshot,
+  });
   yield* hooks.deliveries(hookInput);
   yield* noteSupplied(
     change.input,
@@ -519,7 +635,10 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     change.kind,
     change.supplied
   );
-  yield* withinSave(hooks.afterWrite(hookInput), stack, change.recordId);
+  // A system-effect save's hooks write as the acting user again.
+  yield* withinSave(hooks.afterWrite(hookInput), stack, change.recordId).pipe(
+    Effect.provideService(WriteAccess, userAccessOf(access))
+  );
 
   return entry;
 });
@@ -657,6 +776,65 @@ const createIndividual = (
   ).pipe(Effect.map((created) => created.id));
 };
 
+/**
+ * Reads and locks the owner chain of a part to be created, aggregate root
+ * first, before anything is written (4.9). A missing owner, also one
+ * deleted concurrently, is `InvalidReference` on the owner reference, like
+ * any unknown target.
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The new record's class.
+ * @param values - The proposed values.
+ * @returns The locked chain; empty for a class that is no part, or when
+ *   the owner reference has no valid value (validation refuses it).
+ */
+const lockOwnersForCreate = Effect.fn("Records.lockOwnersForCreate")(
+  function* lockOwnersForCreate(
+    snapshot: ConfigSnapshot,
+    classId: DefinitionId,
+    values: ReadonlyMap<DefinitionId, DecodedInput>
+  ) {
+    const reference = ownerReferenceOf(snapshot, classId);
+    const ownerId = reference === undefined ? null : values.get(reference.id);
+
+    if (reference === undefined || !isString(ownerId)) {
+      return [] satisfies OwnerChain;
+    }
+
+    const chain = yield* lockChainForCreate(snapshot, classId, ownerId);
+
+    return Option.isSome(chain)
+      ? chain.value
+      : yield* new InvalidReference({ field: reference.name });
+  }
+);
+
+/**
+ * Reads and locks the owner chain of an existing record before its own
+ * root lock (4.9); an owner that is gone by then is `NotFound`.
+ *
+ * @param snapshot - The configuration.
+ * @param input - The save.
+ * @returns The locked chain; empty for a record that is no part.
+ */
+const lockOwnersOf = Effect.fn("Records.lockOwnersOf")(function* lockOwnersOf(
+  snapshot: ConfigSnapshot,
+  input: SaveInput & { readonly id: string }
+) {
+  // No statement at all for an endpoint whose records are never parts.
+  const parts = snapshot
+    .subtree(input.endpointClassId)
+    .some((level) => ownerReferenceOf(snapshot, level.id) !== undefined);
+
+  if (!(parts && parseUuid(input.id).ok)) {
+    return [] satisfies OwnerChain;
+  }
+
+  const chain = yield* lockChainOf(snapshot, input.endpointClassId, input.id);
+
+  return Option.isSome(chain) ? chain.value : yield* new NotFound();
+});
+
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInRequest(
     input: CreateInput,
@@ -676,7 +854,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     yield* refusePlatformTable(snapshot, classId);
 
     const fields = effectiveById(snapshot, classId);
-    const rules = rulesById(snapshot, fields);
+    const rules = rulesById(snapshot, fields, { input, update: false });
     const proposed = proposeCreate(rules, resolved);
 
     const values = deriveIndividualName(
@@ -698,6 +876,12 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       invalid: proposed.invalid,
       values,
     });
+
+    const chain = yield* lockOwnersForCreate(
+      snapshot,
+      classId,
+      proposal.values
+    );
 
     // The fields the create sets: those the body supplied and those the
     // hooks changed (values rules set count as supplied, 3.9). Read-only
@@ -726,10 +910,17 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       existing: null,
       proposal,
       rules,
-      supplied: new Set(resolved.entries.keys()),
+      supplied: callerSupplied(input, resolved),
       written,
     });
-    yield* checkReferences(snapshot, fields, proposal.values, supplied);
+
+    const shown = yield* shownFieldsOf(snapshot, input, {
+      classId,
+      existing: null,
+      values: proposal.values,
+    });
+
+    yield* checkReferences(snapshot, fields, proposal.values, supplied, shown);
 
     // Auto-numbered fields get their number last, in this transaction; a
     // user gets its individual then too (`party-rules.ts`).
@@ -757,7 +948,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
       classId,
       (yield* Actor).userId,
       writes
-    ).pipe(mapConstraints(snapshot, "write"));
+    ).pipe(mapConstraints(snapshot, "write", shown));
 
     const after = yield* reload(snapshot, classId, id);
 
@@ -773,6 +964,7 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     const entry = yield* recordChange(snapshot, {
       after,
       before: null,
+      chain,
       classId,
       input,
       kind: "create",
@@ -794,21 +986,6 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
     return result;
   }
 );
-
-/**
- * Creates a record of exactly the endpoint's class.
- *
- * @param input - Endpoint class, actor and body.
- * @returns The new record's ID, version 1 and projection.
- */
-export const createRecord = Effect.fn("Records.create")(function* createRecord(
-  input: CreateInput
-) {
-  const body = yield* decodeWriteBody(input.body);
-  const { request } = yield* Transactions;
-
-  return yield* request(createInTransaction(input, body));
-}, poisonIfNested);
 
 /**
  * Steps 2 of 4.1: lock the root row alone, then (next statements) load the
@@ -1009,6 +1186,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       ...assigned.keys(),
     ]);
 
+    const chain = yield* lockOwnersOf(snapshot, input);
     const locked = yield* lockExisting(snapshot, input, lock);
     const { readable, record } = locked;
     const { classId } = record;
@@ -1035,8 +1213,9 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
           );
 
     const fields = effectiveById(snapshot, classId);
-    const rules = rulesById(snapshot, fields);
+    const rules = rulesById(snapshot, fields, { input, update: true });
     const proposed = proposeUpdate(rules, evaluated, record);
+    const aggregateSave = input.aggregateSave === true;
 
     const existingCheck = {
       endpointClassId: input.endpointClassId,
@@ -1053,7 +1232,12 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       written: bodyWritten,
     });
 
-    if (bodyWritten.size === 0 && assignedChanges.size === 0) {
+    // An aggregate save (4.9) is never a no-op.
+    if (
+      !aggregateSave &&
+      bodyWritten.size === 0 &&
+      assignedChanges.size === 0
+    ) {
       yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
 
       return yield* unchanged(snapshot, input.endpointClassId, record);
@@ -1078,7 +1262,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       });
     }
 
-    if (written.size === 0 && assignedChanges.size === 0) {
+    if (!aggregateSave && written.size === 0 && assignedChanges.size === 0) {
       yield* noteSupplied(input, record.id, "update", resolved.entries.keys());
 
       return yield* unchanged(snapshot, input.endpointClassId, record);
@@ -1089,10 +1273,17 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       existing: record,
       proposal,
       rules,
-      supplied: new Set(evaluated.entries.keys()),
+      supplied: callerSupplied(input, evaluated),
       written,
     });
-    yield* checkReferences(snapshot, fields, proposal.values, written);
+
+    const shown = yield* shownFieldsOf(snapshot, input, {
+      classId,
+      existing: record,
+      values: proposal.values,
+    });
+
+    yield* checkReferences(snapshot, fields, proposal.values, written, shown);
 
     const changes = new Map([
       ...changedValues(fields, proposal.values, record),
@@ -1108,7 +1299,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       record.version,
       (yield* Actor).userId,
       writes
-    ).pipe(mapConstraints(snapshot, "write"));
+    ).pipe(mapConstraints(snapshot, "write", shown));
 
     const after = yield* reload(snapshot, classId, record.id);
 
@@ -1124,6 +1315,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     const entry = yield* recordChange(snapshot, {
       after,
       before: record,
+      chain,
       classId,
       input,
       kind: "update",
@@ -1145,22 +1337,6 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     return result;
   }
 );
-
-/**
- * Updates a record through any endpoint of its hierarchy whose subtree
- * holds its class, validated against its concrete class.
- *
- * @param input - Endpoint class, actor, record ID, expected version, body.
- * @returns The new version and projection, or `unchanged` for a no-op.
- */
-export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
-  input: UpdateInput
-) {
-  const body = yield* decodeWriteBody(input.body);
-  const { request } = yield* Transactions;
-
-  return yield* request(updateInTransaction(input, body));
-}, poisonIfNested);
 
 /** What `ensureUserIndividual` did. */
 export type EnsuredIndividual = "assigned" | "present" | "missing";
@@ -1250,6 +1426,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
+    const chain = yield* lockOwnersOf(snapshot, input);
     const { record } = yield* lockExisting(snapshot, input, "FOR UPDATE");
 
     yield* refusePlatformTable(snapshot, record.classId);
@@ -1288,6 +1465,7 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const entry = yield* recordChange(snapshot, {
       after: null,
       before: record,
+      chain,
       classId: record.classId,
       input,
       kind: "delete",
@@ -1311,6 +1489,153 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
 );
 
 /**
+ * Runs a save of finalization as the system effect `aggregate` (4.9,
+ * 4.10): mode `settled`, with the system effect's access layer.
+ *
+ * @param effect - The save.
+ * @returns The save as the system effect.
+ */
+const asSystemEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* systemEffect() {
+    const access = yield* WriteAccess;
+
+    return yield* Effect.provideService(
+      effect,
+      WriteAccess,
+      systemEffectAccess(access)
+    );
+  });
+
+/** The saves finalization persists (`aggregate-finalize.ts`). */
+const persistOps = {
+  create: (input: PersistCreate) =>
+    asSystemEffect(
+      createInTransaction(
+        { ...input, mode: "settled", system: "aggregate" },
+        input.body
+      )
+    ),
+  update: (input: PersistUpdate) =>
+    asSystemEffect(
+      updateInTransaction(
+        { ...input, mode: "settled", system: "aggregate" },
+        input.body
+      )
+      // Persistence evaluates no patch, so no patch test can fail.
+    ).pipe(Effect.catchTag("PatchTestFailed", Effect.die)),
+} as const;
+
+/**
+ * Finalizes the touched aggregates of the running transaction (4.9 steps 1
+ * to 3): settle in memory, then persist each touched owner at most once.
+ * The record service runs it at the end of an outermost save and of an
+ * aggregate operation; an after-commit effect runs it at the end of its
+ * actions.
+ *
+ * @returns Nothing.
+ */
+export const finalizeTouchedAggregates = finalizeAggregates(persistOps);
+
+/**
+ * A saved record as the transaction now holds it, projected with the
+ * acting user's read rights (3.9): finalization (4.9) may have changed it
+ * after its save returned, through an aggregate save of it or of its
+ * owner, so a response built before finalization would show a version and
+ * values that were never committed, or a record the caller can no longer
+ * see. A deleted record is returned as it is.
+ *
+ * @param saved - The save's result.
+ * @param endpointClassId - The endpoint the response is projected for.
+ * @returns The result with the record's current version and projection.
+ */
+export const reloadSaved = Effect.fn("Records.reloadSaved")(
+  function* reloadSaved(saved: SaveResult, endpointClassId: DefinitionId) {
+    if (saved.outcome === "deleted") {
+      return saved;
+    }
+
+    const snapshot = yield* (yield* Catalog).current;
+    const current = yield* loadRecord(snapshot, saved.classId, saved.id);
+
+    if (Option.isNone(current)) {
+      return saved;
+    }
+
+    const reloaded: SaveResult = {
+      ...saved,
+      record: yield* project(snapshot, endpointClassId, current.value),
+      version: current.value.version,
+    };
+
+    return reloaded;
+  }
+);
+
+/**
+ * Finalizes at the end of a save when it is the outermost one of its
+ * operation (on an empty save stack and outside an aggregate operation),
+ * then answers with the saved record as finalization left it.
+ *
+ * @param saved - The save's result.
+ * @param endpointClassId - The endpoint the response is projected for.
+ * @returns The result, reloaded when finalization settled anything.
+ */
+const finishSave = Effect.fn("Records.finishSave")(function* finishSave(
+  saved: SaveResult,
+  endpointClassId: DefinitionId
+) {
+  const stack = yield* SaveStack;
+  const scope = yield* AggregateScope;
+
+  if (stack.depth > 0 || scope.deferred) {
+    return saved;
+  }
+
+  return (yield* finalizeTouchedAggregates)
+    ? yield* reloadSaved(saved, endpointClassId)
+    : saved;
+});
+
+/**
+ * Creates a record of exactly the endpoint's class.
+ *
+ * @param input - Endpoint class, actor and body.
+ * @returns The new record's ID, version 1 and projection.
+ */
+export const createRecord = Effect.fn("Records.create")(function* createRecord(
+  input: CreateInput
+) {
+  const body = yield* decodeWriteBody(input.body);
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    createInTransaction(input, body).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
+  );
+}, poisonIfNested);
+
+/**
+ * Updates a record through any endpoint of its hierarchy whose subtree
+ * holds its class, validated against its concrete class.
+ *
+ * @param input - Endpoint class, actor, record ID, expected version, body.
+ * @returns The new version and projection, or `unchanged` for a no-op.
+ */
+export const updateRecord = Effect.fn("Records.update")(function* updateRecord(
+  input: UpdateInput
+) {
+  const body = yield* decodeWriteBody(input.body);
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    updateInTransaction(input, body).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
+  );
+}, poisonIfNested);
+
+/**
  * Deletes a whole record (all levels) through any endpoint whose subtree
  * holds its class.
  *
@@ -1322,5 +1647,61 @@ export const deleteRecord = Effect.fn("Records.delete")(function* deleteRecord(
 ) {
   const { request } = yield* Transactions;
 
-  return yield* request(deleteInTransaction(input));
+  return yield* request(
+    deleteInTransaction(input).pipe(
+      Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
+    )
+  );
 }, poisonIfNested);
+
+/**
+ * Runs several saves as one operation (Contracts 4.9): in one request
+ * transaction (joined when one runs), with the touched aggregates
+ * finalized once, at its end, instead of at the end of each save. A
+ * move (a delete and a create), a TMF write of an owner and its parts or
+ * a batch use it, with `lockAggregates` first. Nested in another
+ * operation or in a save's hooks, it runs its saves and leaves
+ * finalization to the enclosing one.
+ *
+ * The results of the saves inside are built before finalization, which
+ * may change those records (an aggregate save of an owner, a part a rule
+ * moved): a caller that answers with a saved record projects it after the
+ * operation completes, with `reloadSaved`.
+ *
+ * @param effect - The saves.
+ * @returns Their result, after finalization.
+ */
+export const aggregateOperation = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* operation() {
+    const { request } = yield* Transactions;
+    const stack = yield* SaveStack;
+    const scope = yield* AggregateScope;
+
+    if (stack.depth > 0 || scope.deferred) {
+      return yield* request(effect);
+    }
+
+    return yield* request(
+      Effect.provideService(effect, AggregateScope, { deferred: true }).pipe(
+        Effect.tap(() => finalizeTouchedAggregates)
+      )
+    );
+  });
+
+/**
+ * Locks the aggregates an operation will write, before it writes any
+ * (Contracts 4.9): ordered by aggregate root ID, each chain from its root
+ * down, in the running request transaction. Call it first inside an
+ * `aggregateOperation`.
+ *
+ * @param members - The owners and parts the operation writes.
+ * @returns Nothing.
+ */
+export const lockAggregates = Effect.fn("Records.lockAggregates")(
+  function* lockAggregates(members: readonly AggregateMember[]) {
+    const snapshot = yield* (yield* Catalog).current;
+    const { request } = yield* Transactions;
+
+    return yield* request(lockAggregatesIn(snapshot, members));
+  }
+);

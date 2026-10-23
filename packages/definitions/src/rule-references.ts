@@ -2,8 +2,9 @@
  * What a record rule refers to (Contracts 1.7, 4.10), for the dependency
  * index and the set loader's order:
  *
- * - `classes`: its own class, every class an action names (`forEach`,
- *   `createEach`, `setParts`, `createParts`) and, for an `afterCommit`
+ * - `classes`: its own class, every part class its condition names
+ *   (`anyPart`, `allParts`, `partsChanged`), every class an action names
+ *   (`forEach`, `createEach`, `setParts`, `createParts`) and, for an `afterCommit`
  *   rule, its subscription (`rule_on` edges);
  * - `writes`: every field an action sets (`rule_writes`), so an active
  *   rule keeps the fields it writes from being retired;
@@ -11,7 +12,7 @@
  *   path included, and every field a value copies or increments, or an
  *   `updateEach` follows (`condition_reads`).
  */
-import { conditionFieldIds } from "./condition.ts";
+import { conditionClassIds, conditionFieldIds } from "./condition.ts";
 import type { Condition } from "./condition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
@@ -141,6 +142,7 @@ export const actionWrites = (action: RuleAction): readonly DefinitionId[] =>
 export const ruleReferences = (rule: ReferencingRule): RuleReferences => ({
   classes: sorted([
     rule.classId,
+    ...(rule.condition === null ? [] : conditionClassIds(rule.condition)),
     ...rule.actions.flatMap(actionClasses),
     ...(rule.subscriptionId === null ? [] : [rule.subscriptionId]),
   ]),

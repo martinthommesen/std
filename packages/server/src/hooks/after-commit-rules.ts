@@ -43,7 +43,9 @@ import { Clock, Effect, Option } from "effect";
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { poisonOnAnyFailure } from "../records/aggregate-finalize.ts";
 import type { AfterWriteInput } from "../records/save-hooks.ts";
+import { finalizeTouchedAggregates } from "../records/save-pipeline.ts";
 import { loadRecord } from "../records/save-sql.ts";
 import { SaveStack } from "../records/save-stack.ts";
 import { readRows } from "../records/sql-run.ts";
@@ -298,26 +300,34 @@ export const runAfterCommitRule = Effect.fn("Rules.afterCommit")(
     const { timeZone } = yield* InstanceSettings;
     const depth = (yield* chainDepth(delivery.changeId)) + 1;
 
-    yield* runSaveActions({
-      cause: {
-        kind: "after_commit",
-        parentChangeId: delivery.changeId,
-        subscriptionId: delivery.subscriptionId,
-      },
-      context: {
-        me: identity.userId,
-        now: yield* Clock.currentTimeMillis,
-        timeZone,
-      },
-      record: { id: change.recordId, image: current.value },
-      rule,
-      snapshot,
+    const access = (yield* WriteAccess).forActor(identity);
+
+    const now = yield* Clock.currentTimeMillis;
+
+    // Its saves start below the cause chain's depth, so none of them is an
+    // outermost save: the aggregates they touched are finalized here, in
+    // the delivery transaction (4.9), at the same depth, so the cap on
+    // nesting still counts the cause chain. The actions and their
+    // finalization are one unit: whatever ends it early (a failure, a
+    // defect, an interruption) poisons the delivery transaction, so the
+    // actions' writes never commit without their aggregates.
+    yield* Effect.gen(function* actionsThenFinalize() {
+      yield* runSaveActions({
+        cause: {
+          kind: "after_commit",
+          parentChangeId: delivery.changeId,
+          subscriptionId: delivery.subscriptionId,
+        },
+        context: { me: identity.userId, now, timeZone },
+        record: { id: change.recordId, image: current.value },
+        rule,
+        snapshot,
+      });
+      yield* finalizeTouchedAggregates;
     }).pipe(
+      poisonOnAnyFailure("an after-commit effect did not complete"),
       Effect.provideService(Actor, identity),
-      Effect.provideService(
-        WriteAccess,
-        (yield* WriteAccess).forActor(identity)
-      ),
+      Effect.provideService(WriteAccess, access),
       Effect.provideService(SaveStack, { depth, recordIds: new Set<string>() })
     );
 

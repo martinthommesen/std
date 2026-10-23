@@ -1288,6 +1288,11 @@ describe("record-rules", () => {
 
               return hooks.deliveries(input);
             },
+            settle: (input) => {
+              calls += 1;
+
+              return hooks.settle(input);
+            },
           });
 
           const unchanged = yield* updateRecord({

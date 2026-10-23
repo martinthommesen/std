@@ -22,6 +22,7 @@ import { convertLongText, convertSingleLineText } from "@std/values/text";
 
 import { evaluateNode, imageReader, UNAVAILABLE } from "./evaluate-core.ts";
 import type { Read, RecordImage, Verdict } from "./evaluate-core.ts";
+import { refuseAggregateConstructs } from "./owner-scope.ts";
 import type { ResolvedCondition, TypedPath } from "./typed.ts";
 
 /** What the browser has loaded. Every image may lack fields. */
@@ -72,11 +73,15 @@ const checkText = (path: TypedPath, value: Read, proposed: boolean): Read => {
 export const evaluateInBrowser = (
   condition: ResolvedCondition,
   source: PartialSource
-): Verdict =>
-  evaluateNode(
+): Verdict => {
+  // Owner paths and quantifiers belong to the aggregate evaluator (5.10).
+  refuseAggregateConstructs(condition.root);
+
+  return evaluateNode(
     condition.root,
     imageReader(source, {
       missing: () => UNAVAILABLE,
       terminal: checkText,
     })
   );
+};
