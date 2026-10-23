@@ -52,6 +52,7 @@ export const RESOURCE_ROUTES: readonly ResourceRoute[] = [
   declared("tableMetadata/:table/schema.json", ["GET"]),
   declared("tableMetadata/:table/openapi.json", ["GET"]),
   declared("openapi.json", ["GET"], true),
+  declared("checkFormState", ["POST"]),
   declared("deadDelivery", ["GET"]),
   declared("deadDelivery/:id", ["GET"]),
   declared("retryDeadDelivery", ["POST"]),

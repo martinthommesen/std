@@ -31,10 +31,11 @@ import { Actor } from "@std/server/auth/actor";
 import { ensureUser } from "@std/server/auth/bootstrap-admin";
 import { Catalog } from "@std/server/catalog/catalog";
 import { InstanceSettings } from "@std/server/config/instance-settings";
+import { readLayerState } from "@std/server/config/layer-store";
 import { loadSetDirectory } from "@std/server/config/load-set";
 import { CORE_SET_DIRECTORY } from "@std/server/config/set-files";
+import { RecordRuleSaveHooks } from "@std/server/hooks/record-rule-hooks";
 import { runDataMigrations } from "@std/server/platform/data-migrations";
-import { OutboxSaveHooks } from "@std/server/records/outbox-producer";
 import { createRecord } from "@std/server/records/save-pipeline";
 import { readRows } from "@std/server/records/sql-run";
 import { WriteAccess } from "@std/server/records/write-access";
@@ -55,13 +56,14 @@ const setDirectory = (version: string): string =>
 export const HELPDESK_SET_DIRECTORIES = {
   v1: setDirectory("v1"),
   v2: setDirectory("v2"),
+  v3: setDirectory("v3"),
 } as const;
 
 /** A version of the helpdesk set. */
 export type HelpdeskVersion = keyof typeof HELPDESK_SET_DIRECTORIES;
 
 /** The current version, which `docker compose up` loads. */
-export const HELPDESK_CURRENT_VERSION: HelpdeskVersion = "v2";
+export const HELPDESK_CURRENT_VERSION: HelpdeskVersion = "v3";
 
 /** Stable IDs of the helpdesk set (`examples/helpdesk`). */
 export const HELPDESK = {
@@ -214,21 +216,74 @@ const fieldName = (snapshot: ConfigSnapshot, fieldId: DefinitionId): string => {
   return field.name;
 };
 
+const PRIORITY_KEYS = [
+  ["critical", "1"],
+  ["high", "2"],
+  ["moderate", "3"],
+  ["low", "4"],
+] as const;
+
+const IMPACT_KEYS = [
+  ["high", "1"],
+  ["medium", "2"],
+  ["low", "3"],
+] as const;
+
+type DemoBody = Readonly<Record<string, JsonValue>>;
+
 const bodyOf = (
   snapshot: ConfigSnapshot,
-  values: DemoValues
-): Readonly<Record<string, JsonValue>> =>
-  Object.fromEntries(
+  values: DemoValues,
+  v3: boolean
+): DemoBody => {
+  const priorityKey =
+    PRIORITY_KEYS.find(([key]) => key === values.priority)?.[1] ?? "4";
+
+  const fields = Object.fromEntries(
     Object.entries(values).flatMap(([key, value]) => {
       const fieldId = Object.entries(HELPDESK.fields).find(
         ([candidate]) => candidate === key
       )?.[1];
 
-      return fieldId === undefined || value === undefined
-        ? []
-        : [[fieldName(snapshot, fieldId), value]];
+      if (
+        fieldId === undefined ||
+        value === undefined ||
+        (v3 && key === "impact")
+      ) {
+        return [];
+      }
+
+      return [
+        [
+          fieldName(snapshot, fieldId),
+          v3 && key === "priority" ? priorityKey : value,
+        ],
+      ];
     })
   );
+
+  if (!v3) {
+    return fields;
+  }
+
+  const impact = IMPACT_KEYS.find(([key]) => key === values.impact)?.[1] ?? "3";
+
+  const body = {
+    ...fields,
+    description: values.description ?? values.shortDescription ?? "Demo ticket",
+    impact,
+    // Contracts 14.2 matrix: demo pairs (1,1)→1, (2,1)→2, (3,1)→3, (3,2)→4.
+    urgency: priorityKey === "4" ? "2" : "1",
+  };
+
+  return values.status === "resolved"
+    ? {
+        ...body,
+        resolution_code: "solved_permanently",
+        resolution_notes: "Service restored for the demo.",
+      }
+    : body;
+};
 
 /**
  * The seeding saves: every record allowed (the admin creates them), the
@@ -237,7 +292,7 @@ const bodyOf = (
  */
 const SeedServices = Layer.mergeAll(
   WriteAccess.allowAll,
-  OutboxSaveHooks,
+  RecordRuleSaveHooks,
   WriteOnlyValues.scrypt
 );
 
@@ -265,9 +320,15 @@ const insertRecords = Effect.fn("HelpdeskFixture.insertRecords")(
     snapshot: ConfigSnapshot,
     users: HelpdeskDemo["users"]
   ) {
+    const installed = yield* readLayerState;
+
+    const v3 = [...installed.sets.values()].some(
+      (set) => set.name === "helpdesk" && set.version >= 3
+    );
+
     const create = (classId: DefinitionId, values: DemoValues) =>
       createRecord({
-        body: bodyOf(snapshot, values),
+        body: bodyOf(snapshot, values, v3),
         endpointClassId: classId,
       }).pipe(
         Effect.map((saved) => saved.id),

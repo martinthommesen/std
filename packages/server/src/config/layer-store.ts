@@ -145,6 +145,7 @@ export const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
   "layout",
   "savedFilter",
   "recordRule",
+  "formRule",
 ]);
 
 /**

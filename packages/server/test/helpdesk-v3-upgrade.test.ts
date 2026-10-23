@@ -121,6 +121,7 @@ const definitionsByCategory = (
       ...categorized("accessRules", content.accessRules),
       ...categorized("recordRules", content.recordRules),
       ...categorized("subscriptions", content.subscriptions),
+      ...categorized("formRules", content.formRules),
       ...categorized("tables", content.tables),
       ...(content.tables ?? []).flatMap((table) => [
         ...categorized("fields", table.fields),

@@ -216,6 +216,7 @@ const hostOf = (
     case "grant":
     case "accessRule":
     case "subscription":
+    case "formRule":
     case "recordRule": {
       return undefined;
     }

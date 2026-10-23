@@ -42,6 +42,7 @@ export const DroppedReason = Schema.Literals([
   "TypeChanged",
   "Restricted",
   "NotDelivered",
+  "FormRule",
 ]);
 
 /** Why an edit was dropped. */
@@ -347,6 +348,7 @@ export const changeText = (
  */
 export const droppedReasonText = (reason: DroppedReason): string =>
   Match.value(reason).pipe(
+    Match.when("FormRule", () => "a form rule hid or locked this field"),
     Match.when("Removed", () => "the field is no longer available to you"),
     Match.when("Retired", () => "the field was retired"),
     Match.when("ReadOnly", () => "you can no longer change this field"),

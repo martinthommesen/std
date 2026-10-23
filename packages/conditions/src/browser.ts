@@ -13,16 +13,22 @@
  * goes through steps 1 to 4 of the write conversion (Contracts 5.5) first;
  * text the server would refuse is Unknown, so the server decides.
  *
- * Results are advisory: the browser's clock and time-zone data may differ
- * from the server's, and the server's verdict at save time is binding.
+ * The form-state verdict binds the form (6.3). Callers must use server
+ * context for time-sensitive conditions; device time is never authoritative.
  */
 import { isString } from "@std/values/field-value";
 import { isFullyAssignedInFoldTableVersion } from "@std/values/fold";
 import { convertLongText, convertSingleLineText } from "@std/values/text";
 
+import type { Expr, Value, Path } from "./ast.ts";
+import { isCompare, isIn, isJunction, isMyGroups } from "./ast.ts";
+import { checkCondition } from "./check.ts";
+import type { ClassView } from "./class-view.ts";
 import { evaluateNode, imageReader, UNAVAILABLE } from "./evaluate-core.ts";
 import type { Read, RecordImage, Verdict } from "./evaluate-core.ts";
 import { refuseAggregateConstructs } from "./owner-scope.ts";
+import type { ConditionContext } from "./resolve.ts";
+import { resolveCondition } from "./resolve.ts";
 import type { ResolvedCondition, TypedPath } from "./typed.ts";
 
 /** What the browser has loaded. Every image may lack fields. */
@@ -84,4 +90,75 @@ export const evaluateInBrowser = (
       terminal: checkText,
     })
   );
+};
+
+const clockValue = (value: Value | Path): boolean =>
+  "rel" in value || ("ctx" in value && value.ctx === "now");
+
+const readsClock = (expression: Expr): boolean => {
+  if (expression.op === "inPeriod") {
+    return true;
+  }
+
+  if (isJunction(expression)) {
+    return expression.args.some(readsClock);
+  }
+
+  if (expression.op === "not") {
+    return readsClock(expression.arg);
+  }
+
+  if (isCompare(expression)) {
+    return clockValue(expression.right);
+  }
+
+  return (
+    isIn(expression) &&
+    !isMyGroups(expression.right) &&
+    expression.right.some(clockValue)
+  );
+};
+
+/**
+ * Evaluates a stored form condition when its schema and context are available; unsupported inputs are Unknown.
+ * @param expression - The stored condition.
+ * @param options - Available schema, images and server context.
+ * @returns The resulting verdict or Unknown.
+ */
+export const evaluateFormConditionInBrowser = (
+  expression: Expr,
+  options: {
+    readonly classId: string;
+    readonly view: ClassView;
+    readonly source: PartialSource;
+    readonly context?: ConditionContext;
+  }
+): Verdict => {
+  const checked = checkCondition(expression, {
+    classId: options.classId,
+    profile: "formRule",
+    purpose: "evaluate",
+    view: options.view,
+  });
+
+  if (!checked.ok) {
+    return "unknown";
+  }
+
+  if (checked.value.root.op === "const") {
+    return checked.value.root.value;
+  }
+
+  if (options.context === undefined && readsClock(expression)) {
+    return "unknown";
+  }
+
+  const resolved = resolveCondition(
+    checked.value,
+    options.context ?? { now: 0, timeZone: "UTC" }
+  );
+
+  return resolved.ok
+    ? evaluateInBrowser(resolved.value, options.source)
+    : "unknown";
 };

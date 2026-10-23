@@ -959,9 +959,90 @@
       "id": "d65607c7-ee17-53ed-bae5-b86ae1aa128b",
       "category": "accessRules",
       "name": ""
+    },
+    {
+      "id": "2f27cc72-d127-5cc8-a9ec-c2bf735b36eb",
+      "category": "formRules",
+      "name": "description_required"
+    },
+    {
+      "id": "fa39dc63-3725-58f0-acce-b59916bbc62b",
+      "category": "formRules",
+      "name": "priority_locked"
+    },
+    {
+      "id": "ea2e1e9d-bb5c-583b-a555-2b7cadcf5530",
+      "category": "formRules",
+      "name": "resolved_at_locked"
+    },
+    {
+      "id": "e39fe8cf-4229-5263-a15a-d1be17b5324f",
+      "category": "formRules",
+      "name": "status_changed_at_locked"
+    },
+    {
+      "id": "a690d9e9-d5b3-547a-a792-7ccd179f3790",
+      "category": "formRules",
+      "name": "ticket_type_locked"
+    },
+    {
+      "id": "b847a57f-3441-5a5b-ab48-63863226cf57",
+      "category": "formRules",
+      "name": "status_change_history_locked"
+    },
+    {
+      "id": "33bbfea4-585b-558a-afbe-3d4f7afe5dea",
+      "category": "formRules",
+      "name": "severity_label_locked"
+    },
+    {
+      "id": "c6b2bf7c-3fe5-5e04-ab74-b27aeec11e6c",
+      "category": "formRules",
+      "name": "priority_label_locked"
+    },
+    {
+      "id": "34501244-e09d-5e6c-ad91-ad4307c862b0",
+      "category": "formRules",
+      "name": "resolution_code_required"
+    },
+    {
+      "id": "a19418c5-1ae5-51a0-a302-c1951ab6cb1b",
+      "category": "formRules",
+      "name": "resolution_notes_required"
+    },
+    {
+      "id": "e0913c4c-f8c7-521e-aa67-5257aace6856",
+      "category": "formRules",
+      "name": "hold_reason_required"
+    },
+    {
+      "id": "f264fd63-62d3-561a-a4be-849bca10a0b1",
+      "category": "formRules",
+      "name": "major_at_priority_one"
+    },
+    {
+      "id": "cbcb892e-cdc7-5f8d-a5fc-80a7d428cc57",
+      "category": "formRules",
+      "name": "known_error_workaround"
+    },
+    {
+      "id": "585daa53-64e0-5a21-a117-787c29068392",
+      "category": "formRules",
+      "name": "root_cause_required"
+    },
+    {
+      "id": "adbc287e-6554-56c8-ad5f-22b3165b8256",
+      "category": "formRules",
+      "name": "author_locked"
+    },
+    {
+      "id": "a7e9724c-bada-4fb7-96b4-79b33bcdb933",
+      "category": "formRules",
+      "name": "default_assess_path"
     }
   ],
   "newFeatures": [
+    "formRule",
     "recordRule",
     "reference.aggregate",
     "ruleValue.copy.firstLine"

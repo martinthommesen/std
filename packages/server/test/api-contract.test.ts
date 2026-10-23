@@ -176,6 +176,27 @@ describe("api-contract", () => {
             400
           );
 
+          // Non-persisting form proposals.
+          const proposal = {
+            id: null,
+            revision: null,
+            table: "acmeAsset",
+            values: { name: "Preview", status: "spare" },
+          };
+
+          yield* exchange(
+            "POST",
+            "/api/v1/checkFormState",
+            { ...callers.alice, body: proposal },
+            200
+          );
+          yield* exchange(
+            "POST",
+            "/api/v1/checkFormState",
+            { body: proposal },
+            401
+          );
+
           // Change sets.
           const applied = yield* exchange(
             "POST",

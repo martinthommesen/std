@@ -17,6 +17,7 @@
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
+import { FormState } from "@std/api/form-state";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import { MetaRelatedListSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
@@ -316,6 +317,9 @@ export const History = Schema.Struct({
 /** The history panel. */
 export type History = typeof History.Type;
 
+/** The latest binding form-state answer; stale data remains visible while checking. */
+export const FormStateVerdict = AsyncData.Schema(FormState, WriteError);
+
 /**
  * A record's form page.
  *
@@ -363,18 +367,24 @@ export type History = typeof History.Type;
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = Schema.Struct({
+  automaticClears: Schema.Array(Schema.String),
   classMetadata: ClassMetadata.schema,
   datePickers: Schema.Record(Schema.String, DatePicker.Model),
   deleteDialog: Dialog.Model,
   deletion: Deletion,
   droppedEdits: Schema.Array(DroppedEdit),
   edits: Schema.Record(Schema.String, FieldInput),
+  formAnnouncement: Schema.String,
+  formGeneration: Schema.Int,
+  formState: FormStateVerdict.schema,
   generation: Schema.Int,
   history: History,
   id: Schema.Int,
   isShowingProblems: Schema.Boolean,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeEditsFrom: Schema.Option(RecordJsonSchema),
+  maybeFormStateInFlight: Schema.Option(Schema.Int),
+  maybeFormStateKey: Schema.Option(Schema.String),
   maybeRecordRevision: Schema.Option(SchemaRevision),
   maybeToday: Schema.Option(CalendarDate),
   metadata: Metadata.schema,
@@ -388,6 +398,7 @@ export const Model = Schema.Struct({
   serverErrors: Schema.Record(Schema.String, Schema.Array(Schema.String)),
   staleChanges: Schema.Array(SchemaChangeSchema),
   submission: Submission,
+  suppressedFormFields: Schema.Array(Schema.String),
   table: Schema.String,
   targetRequests: Schema.Record(Schema.String, Schema.Int),
   targets: Schema.Record(Schema.String, TargetMetadata.schema),

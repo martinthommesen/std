@@ -167,6 +167,13 @@ export interface WriteAccessApi {
   readonly checkProposed: (
     input: ProposedCheck
   ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
+  /** Checks record and written-field permissions over an in-memory candidate, without persisting it (6.3). */
+  readonly checkProposedImage: (
+    input: ProposalCheck & {
+      readonly action: "create" | "update";
+      readonly written: ReadonlySet<DefinitionId>;
+    }
+  ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
   /**
    * The owner check of a part write (4.9, decision 0039): for each owner,
    * whether the caller sees it and may update it as it now is, by the
@@ -241,6 +248,7 @@ export const projectAll = (input: ProjectionInput): JsonObject => {
 const ALLOW_ALL: WriteAccessApi = {
   checkExisting: () => Effect.void,
   checkProposed: () => Effect.void,
+  checkProposedImage: () => Effect.void,
   conditionView: classViewOf,
   forActor: () => ALLOW_ALL,
   nameable: (input) => input.snapshot.fields(input.endpointClassId),

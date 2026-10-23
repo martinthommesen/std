@@ -305,6 +305,7 @@ describe("part-owner-levels", () => {
           const fixture = yield* AcmeFixture;
           const { admin, bob } = yield* apiCallers;
           const { AM, M } = fixture.records;
+          const http = yield* TestHttpClient;
 
           const sealed = yield* saved(
             yield* create(admin.token, BOXES, {
@@ -351,6 +352,78 @@ describe("part-owner-levels", () => {
             );
             assertOwnerRefusal(
               yield* remove(bob.token, ITEMS, existing.id, existing.version)
+            );
+
+            const proposed = { box: { id: owner.id }, label: "Bob's" };
+
+            const checkedCreate = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                ...bob,
+                body: {
+                  id: null,
+                  revision: null,
+                  table: "pownItem",
+                  values: proposed,
+                },
+              }
+            );
+
+            const savedCreate = yield* create(bob.token, ITEMS, proposed);
+            assertOwnerRefusal(checkedCreate);
+            assert.strictEqual(checkedCreate.text, savedCreate.text);
+
+            const edit = { label: "Bob's" };
+
+            const checkedEdit = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                ...bob,
+                body: {
+                  id: existing.id,
+                  revision: existing.version,
+                  table: "pownItem",
+                  values: edit,
+                },
+              }
+            );
+
+            const savedEdit = yield* patch(
+              bob.token,
+              ITEMS,
+              existing.id,
+              existing.version,
+              edit
+            );
+
+            assertOwnerRefusal(checkedEdit);
+            assert.strictEqual(checkedEdit.text, savedEdit.text);
+
+            const checkedEmpty = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                ...bob,
+                body: {
+                  id: existing.id,
+                  revision: existing.version,
+                  table: "pownItem",
+                  values: {},
+                },
+              }
+            );
+
+            assert.strictEqual(checkedEmpty.status, 200, checkedEmpty.text);
+            const verdict = asObject(checkedEmpty.json);
+            assert.deepStrictEqual(verdict.messages, [
+              "You can view this record but not change it.",
+            ]);
+            assert.isTrue(
+              Object.values(asObject(verdict.fields)).every(
+                (field) => asObject(field).readOnly === true
+              )
             );
 
             assert.deepStrictEqual(yield* everything, before);
@@ -442,6 +515,57 @@ describe("part-owner-levels", () => {
             asObject(hiddenCreate.json).code,
             "InvalidReference"
           );
+
+          for (const ownerId of [box.id, ABSENT]) {
+            const checked = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                ...bob,
+                body: {
+                  id: null,
+                  revision: null,
+                  table: "pownItem",
+                  values: { box: { id: ownerId }, label: "Bob's" },
+                },
+              }
+            );
+
+            assert.strictEqual(
+              checked.status,
+              hiddenCreate.status,
+              checked.text
+            );
+            assert.strictEqual(checked.text, hiddenCreate.text);
+          }
+
+          const savedEdit = yield* patch(
+            bob.token,
+            ITEMS,
+            existing.id,
+            existing.version,
+            { label: "Bob's" }
+          );
+
+          // Hidden ownership precedes both version disclosure and read-only viewing.
+          for (const proposed of [{}, { label: "Bob's" }]) {
+            const checked = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                ...bob,
+                body: {
+                  id: existing.id,
+                  revision: existing.version + 1,
+                  table: "pownItem",
+                  values: proposed,
+                },
+              }
+            );
+
+            assert.strictEqual(checked.status, savedEdit.status, checked.text);
+            assert.strictEqual(checked.text, savedEdit.text);
+          }
 
           const pairs = [
             [

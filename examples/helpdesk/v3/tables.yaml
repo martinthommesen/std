@@ -377,6 +377,7 @@ tables:
           - field: resolution_code
           - field: resolution_notes
           - field: resolved_at
+          - field: internal_cost
       - id: b0538214-492c-4970-a437-ca18fd68d942
         type: list
         elements:

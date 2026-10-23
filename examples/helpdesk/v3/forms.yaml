@@ -1,0 +1,174 @@
+formRules:
+  - id: 2f27cc72-d127-5cc8-a9ec-c2bf735b36eb
+    table: helpdesk.ticket
+    name: description_required
+    field: description
+    property: required
+    order: 0
+    value: true
+  - id: fa39dc63-3725-58f0-acce-b59916bbc62b
+    table: helpdesk.ticket
+    name: priority_locked
+    field: priority
+    property: readOnly
+    order: 10
+    value: true
+  - id: ea2e1e9d-bb5c-583b-a555-2b7cadcf5530
+    table: helpdesk.ticket
+    name: resolved_at_locked
+    field: resolved_at
+    property: readOnly
+    order: 20
+    value: true
+  - id: e39fe8cf-4229-5263-a15a-d1be17b5324f
+    table: helpdesk.ticket
+    name: status_changed_at_locked
+    field: status_changed_at
+    property: readOnly
+    order: 30
+    value: true
+  - id: a690d9e9-d5b3-547a-a792-7ccd179f3790
+    table: helpdesk.ticket
+    name: ticket_type_locked
+    field: ticket_type
+    property: readOnly
+    order: 40
+    value: true
+  - id: b847a57f-3441-5a5b-ab48-63863226cf57
+    table: helpdesk.ticket
+    name: status_change_history_locked
+    field: status_change_history
+    property: readOnly
+    order: 50
+    value: true
+  - id: 33bbfea4-585b-558a-afbe-3d4f7afe5dea
+    table: helpdesk.ticket
+    name: severity_label_locked
+    field: severity_label
+    property: readOnly
+    order: 60
+    value: true
+  - id: c6b2bf7c-3fe5-5e04-ab74-b27aeec11e6c
+    table: helpdesk.ticket
+    name: priority_label_locked
+    field: priority_label
+    property: readOnly
+    order: 70
+    value: true
+  - id: 34501244-e09d-5e6c-ad91-ad4307c862b0
+    table: helpdesk.ticket
+    name: resolution_code_required
+    field: resolution_code
+    property: required
+    condition:
+      op: in
+      left:
+        path:
+          - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+      right:
+        - value: resolved
+        - value: closed
+    order: 80
+    value: true
+  - id: a19418c5-1ae5-51a0-a302-c1951ab6cb1b
+    table: helpdesk.ticket
+    name: resolution_notes_required
+    field: resolution_notes
+    property: required
+    condition:
+      op: in
+      left:
+        path:
+          - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+      right:
+        - value: resolved
+        - value: closed
+    order: 90
+    value: true
+  - id: e0913c4c-f8c7-521e-aa67-5257aace6856
+    table: helpdesk.ticket
+    name: hold_reason_required
+    field: hold_reason
+    property: required
+    condition:
+      op: eq
+      left:
+        path:
+          - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+      right:
+        value: on_hold
+    order: 100
+    value: true
+  - id: f264fd63-62d3-561a-a4be-849bca10a0b1
+    table: helpdesk.incident
+    clearHidden:
+      clearedNotice: The major incident flag will be cleared when you save.
+      retainedNotice: "The major incident flag is retained because you cannot change it. Use the ‘Major incidents not at priority 1’ saved filter to find these records."
+    name: major_at_priority_one
+    field: major_incident
+    property: hidden
+    condition:
+      op: not
+      arg:
+        op: eq
+        left:
+          path:
+            - 222508c2-9257-41db-a243-151441078982
+        right:
+          value: "1"
+    order: 110
+    value: true
+  - id: cbcb892e-cdc7-5f8d-a5fc-80a7d428cc57
+    table: helpdesk.problem
+    name: known_error_workaround
+    field: workaround
+    property: required
+    condition:
+      op: eq
+      left:
+        path:
+          - b37db3c0-e16e-5d19-afeb-1bf972e75307
+      right:
+        value: true
+    order: 120
+    value: true
+  - id: 585daa53-64e0-5a21-a117-787c29068392
+    table: helpdesk.problem
+    name: root_cause_required
+    field: root_cause
+    property: required
+    condition:
+      op: in
+      left:
+        path:
+          - 4f51d80d-0886-4184-a8bb-5b5f7eefa4d2
+      right:
+        - value: fix_in_progress
+        - value: resolved
+        - value: closed
+    order: 130
+    value: true
+  - id: adbc287e-6554-56c8-ad5f-22b3165b8256
+    table: helpdesk.ticket_note
+    name: author_locked
+    field: author
+    property: readOnly
+    order: 140
+    value: true
+  - id: a7e9724c-bada-4fb7-96b4-79b33bcdb933
+    table: helpdesk.problem
+    name: default_assess_path
+    field: status
+    property: choices
+    value: [new, assess, canceled]
+    order: 150
+    message: Start with Assess, then analyze the root cause before working on a fix.
+    condition:
+      op: or
+      args:
+        - op: empty
+          arg: { image: previous, path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
+        - op: eq
+          left:
+            { image: previous, path: [4f51d80d-0886-4184-a8bb-5b5f7eefa4d2] }
+          right: { value: new }
