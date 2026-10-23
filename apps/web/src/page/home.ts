@@ -1,4 +1,3 @@
-import { Option } from "effect";
 import { AsyncData } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
@@ -24,12 +23,15 @@ const ADMINISTRATION_HEADING_ID = "home-administration-heading";
  * @returns Its path.
  */
 export const tableHref = (table: string): string =>
-  tableListRouter({
-    filter: Option.none(),
-    limit: Option.none(),
-    sort: Option.none(),
-    table,
-  });
+  tableListRouter({ ...PLAIN_LIST, table });
+
+const tableNameView = <Message>(
+  table: MetaTableSummary,
+  h: HtmlBuilder<Message>
+): readonly Html[] => [
+  h.a([h.Href(tableHref(table.name)), h.Class("link")], [table.label]),
+  h.span([h.Class("table-name")], [table.name]),
+];
 
 /**
  * One table: its label, linking to its list, its name, and a link that
@@ -47,13 +49,7 @@ const tableRowView = <Message>(
     table.name,
     [h.Class("home-table")],
     [
-      h.div(
-        [h.Class("home-table-name")],
-        [
-          h.a([h.Href(tableHref(table.name)), h.Class("link")], [table.label]),
-          h.span([h.Class("table-name")], [table.name]),
-        ]
-      ),
+      h.div([h.Class("home-table-name")], tableNameView(table, h)),
       table.creatable
         ? h.a(
             [
@@ -70,8 +66,7 @@ const sectionView = <Message>(
   config: {
     readonly headingId: string;
     readonly heading: string;
-    readonly tables: readonly MetaTableSummary[];
-    readonly emptyText: string;
+    readonly content: Html;
   },
   h: HtmlBuilder<Message>
 ): Html =>
@@ -82,12 +77,7 @@ const sectionView = <Message>(
         [h.Class("section-heading")],
         [h.h2([h.Id(config.headingId)], [config.heading])]
       ),
-      config.tables.length === 0
-        ? h.p([h.Class("placeholder panel-body")], [config.emptyText])
-        : h.ul(
-            [h.Class("home-tables")],
-            config.tables.map((table) => tableRowView(table, h))
-          ),
+      config.content,
     ]
   );
 
@@ -103,30 +93,22 @@ const administrationView = <Message>(
   tables: readonly MetaTableSummary[],
   h: HtmlBuilder<Message>
 ): Html =>
-  h.section(
-    [h.Class("panel"), h.AriaLabelledBy(ADMINISTRATION_HEADING_ID)],
-    [
-      h.div(
-        [h.Class("section-heading")],
-        [h.h2([h.Id(ADMINISTRATION_HEADING_ID)], [ADMINISTRATION_LABEL])]
-      ),
-      h.ul(
+  sectionView(
+    {
+      content: h.ul(
         [h.Class("home-admin-grid")],
         tables.map((table) =>
           h.keyed("li")(
             table.name,
             [h.Class("home-table-name")],
-            [
-              h.a(
-                [h.Href(tableHref(table.name)), h.Class("link")],
-                [table.label]
-              ),
-              h.span([h.Class("table-name")], [table.name]),
-            ]
+            tableNameView(table, h)
           )
         )
       ),
-    ]
+      heading: ADMINISTRATION_LABEL,
+      headingId: ADMINISTRATION_HEADING_ID,
+    },
+    h
   );
 
 const catalogView = <Message>(
@@ -140,15 +122,25 @@ const catalogView = <Message>(
   }
 
   const groups = navigationGroupsOf(tables);
+  const appTables = groups.apps.flatMap((group) => group.tables);
 
   return [
     sectionView(
       {
-        emptyText:
-          "No app tables are open to you. The tables of the platform are under Administration.",
+        content:
+          appTables.length === 0
+            ? h.p(
+                [h.Class("placeholder panel-body")],
+                [
+                  "No app tables are open to you. The tables of the platform are under Administration.",
+                ]
+              )
+            : h.ul(
+                [h.Class("home-tables")],
+                appTables.map((table) => tableRowView(table, h))
+              ),
         heading: "Tables",
         headingId: TABLES_HEADING_ID,
-        tables: groups.apps.flatMap((group) => group.tables),
       },
       h
     ),

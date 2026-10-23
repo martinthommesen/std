@@ -20,6 +20,7 @@
  * `id` takes only equality, so an exact ID). A text nothing can match
  * sends nothing.
  */
+import type { Expr } from "@std/conditions/ast";
 import { ExprSchema } from "@std/conditions/ast";
 import { dateFromEpochDay, dateToEpochDay, parseDate } from "@std/values/date";
 import { formatDateTime } from "@std/values/date-time";
@@ -97,16 +98,18 @@ const dateTimeMatch = (field: MetaField, needle: string): DisplayMatch => {
 
   const start = dateToEpochDay(day.value);
 
+  const from: Expr = {
+    left: pathOf(field),
+    op: "ge",
+    right: { value: instantOfDay(start) },
+  };
+
   // NOTE: 9999-12-31 has no next day; its day runs to the end of time.
-  return dateFromEpochDay(start + 1).ok
-    ? DisplayMatch.Match({
-        condition: {
+  return DisplayMatch.Match({
+    condition: dateFromEpochDay(start + 1).ok
+      ? {
           args: [
-            {
-              left: pathOf(field),
-              op: "ge",
-              right: { value: instantOfDay(start) },
-            },
+            from,
             {
               left: pathOf(field),
               op: "lt",
@@ -114,15 +117,9 @@ const dateTimeMatch = (field: MetaField, needle: string): DisplayMatch => {
             },
           ],
           op: "and",
-        },
-      })
-    : DisplayMatch.Match({
-        condition: {
-          left: pathOf(field),
-          op: "ge",
-          right: { value: instantOfDay(start) },
-        },
-      });
+        }
+      : from,
+  });
 };
 
 /**

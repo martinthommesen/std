@@ -16,6 +16,7 @@ import type { MetaChoice } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { Match, Option, Record, pipe } from "effect";
+import { groupBy } from "effect/Array";
 import { AsyncData } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { childAttributes } from "foldkit/html";
@@ -186,10 +187,7 @@ interface ControlConfig {
   readonly isInvalid: boolean;
 }
 
-const requiredAttributes = (
-  field: MetaField,
-  h: HtmlBuilder<Message>
-): readonly Attribute<Message>[] =>
+const requiredAttributes = (field: MetaField, h: HtmlBuilder<Message>) =>
   field.required ? [h.AriaRequired(true)] : [];
 
 const NUMERIC_KINDS: ReadonlySet<string> = new Set([
@@ -261,7 +259,7 @@ const textareaControl = (
             ),
             h.textarea([
               ...attributes.textarea,
-              ...(config.field.required ? [h.AriaRequired(true)] : []),
+              ...requiredAttributes(config.field, h),
               h.Spellcheck(config.field.type.kind === "longText"),
               h.Class(INPUT_CLASS),
             ]),
@@ -320,7 +318,7 @@ const checkboxControl = (
  * @param chosenKey - The key the input holds, `""` for none.
  * @returns The options.
  */
-export const choiceOptionsOf = (
+const choiceOptionsOf = (
   field: MetaField,
   storedKey: string,
   chosenKey = storedKey
@@ -915,7 +913,7 @@ const combineProblems = (
  * @param model - The page.
  * @returns The problems' messages, by field ID.
  */
-export const definitionProblemsByField = (
+const definitionProblemsByField = (
   model: Model
 ): Readonly<Record<string, readonly string[]>> => {
   if (
@@ -930,21 +928,19 @@ export const definitionProblemsByField = (
   return Option.match(editedRecordOf(model), {
     onNone: () => ({}),
     onSome: (record) => {
+      const fields = fieldsOf(model);
+
       const named = problems.flatMap((problem) => {
-        const field = problemFieldOf(problem, record.id, fieldsOf(model));
+        const field = problemFieldOf(problem, record.id, fields);
 
         return field === undefined
           ? []
           : [{ fieldId: field.id, message: problem.message }];
       });
 
-      return Object.fromEntries(
-        [...new Set(named.map((entry) => entry.fieldId))].map((fieldId) => [
-          fieldId,
-          named.flatMap((entry) =>
-            entry.fieldId === fieldId ? [entry.message] : []
-          ),
-        ])
+      return Record.map(
+        groupBy(named, (entry) => entry.fieldId),
+        (entries) => entries.map((entry) => entry.message)
       );
     },
   });

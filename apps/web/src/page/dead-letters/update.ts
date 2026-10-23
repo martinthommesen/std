@@ -1,12 +1,13 @@
 import { Dialog } from "@foldkit/ui";
 import { Option } from "effect";
-import { AsyncData, Update } from "foldkit";
+import { Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 
+import { DEFAULT_PAGE_SIZE } from "../../domain/list-query.ts";
 import type { StdApi } from "../../std-client.ts";
 import { LoadDeadLetters, OperateDeadDelivery } from "./command.ts";
 import { Message, OutMessage } from "./message.ts";
-import { Deliveries, Operation } from "./model.ts";
+import { Deliveries, Operation, PAGE_SIZES, isBusy } from "./model.ts";
 import type { Model } from "./model.ts";
 
 type UpdateReturn = Update.ReturnWithOutMessage<
@@ -17,8 +18,6 @@ type UpdateReturn = Update.ReturnWithOutMessage<
 >;
 
 type Step = Update.Step<Model, Message, StdApi>;
-
-const PAGE_SIZE = 25;
 
 const load = (model: Model): UpdateReturn => ({
   commands: [
@@ -45,7 +44,7 @@ export const init = (id: number): UpdateReturn =>
     deliveries: Deliveries.Idle(),
     dialog: Dialog.init({ id: "dead-letter-confirmation" }),
     id,
-    limit: PAGE_SIZE,
+    limit: DEFAULT_PAGE_SIZE,
     offset: 0,
     operation: Operation.Idle(),
     requestId: 0,
@@ -63,41 +62,29 @@ const foldDialogOutMessage = Dialog.OutMessage.match<Step>({
   Opened: () => (model) => ({ model }),
 });
 
-const readDialog = (model: Model) => Option.some(model.dialog);
-
-const writeDialog = (model: Model, nextDialog: Dialog.Model): Model =>
-  modifyFields(model, { dialog: () => nextDialog });
-
-const toGotDialogMessage = (message: Dialog.Message) =>
-  Message.GotDialogMessage({ message });
+const dialogChild = {
+  foldOutMessage: foldDialogOutMessage,
+  read: (model: Model) => Option.some(model.dialog),
+  toParentMessage: (message: Dialog.Message) =>
+    Message.GotDialogMessage({ message }),
+  write: (model: Model, nextDialog: Dialog.Model): Model =>
+    modifyFields(model, { dialog: () => nextDialog }),
+};
 
 const foldDialog = Update.foldChild({
-  foldOutMessage: foldDialogOutMessage,
-  read: readDialog,
-  toParentMessage: toGotDialogMessage,
+  ...dialogChild,
   update: Dialog.update,
-  write: writeDialog,
 });
 
 const openDialog = Update.foldChildStep({
-  foldOutMessage: foldDialogOutMessage,
-  read: readDialog,
-  toParentMessage: toGotDialogMessage,
+  ...dialogChild,
   update: Dialog.open,
-  write: writeDialog,
 });
 
 const closeDialog = Update.foldChildStep({
-  foldOutMessage: foldDialogOutMessage,
-  read: readDialog,
-  toParentMessage: toGotDialogMessage,
+  ...dialogChild,
   update: Dialog.close,
-  write: writeDialog,
 });
-
-const isBusy = (model: Model) =>
-  AsyncData.isPending(model.deliveries) ||
-  Operation.guards.Executing(model.operation);
 
 const failure = (model: Model, error: string): UpdateReturn => ({
   model: modifyFields(model, { operation: () => Operation.Failed({ error }) }),
@@ -215,7 +202,7 @@ export const update = (model: Model, message: Message) =>
         : { model },
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
     SelectedPageSize: ({ value }) =>
-      isBusy(model) || !["10", "25", "100"].includes(value)
+      isBusy(model) || !PAGE_SIZES.includes(value)
         ? { model }
         : load(
             modifyFields(model, { limit: () => Number(value), offset: () => 0 })

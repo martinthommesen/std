@@ -99,6 +99,15 @@ const failureText = (error: typeof TmfError.Type): string => {
   );
 };
 
+const errorTextOf = (
+  decoded: Result.Result<typeof TmfError.Type, Schema.SchemaError>
+): string =>
+  Result.match(decoded, {
+    onFailure: () =>
+      "STD's response could not be confirmed. Check your connection and refresh before trying again.",
+    onSuccess: failureText,
+  });
+
 const TotalCount = Schema.FiniteFromString.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0)
@@ -147,14 +156,7 @@ export const LoadDeadLetters = Command.define("LoadDeadLetters", {
           isTmfError("Unauthenticated")(error)
             ? Message.LoadDeadLettersSessionEnded({ requestId })
             : Message.FailedLoadDeadLetters({
-                error: Result.match(
-                  Schema.decodeUnknownResult(TmfError)(error),
-                  {
-                    onFailure: () =>
-                      "STD's response could not be confirmed. Check your connection and refresh before trying again.",
-                    onSuccess: failureText,
-                  }
-                ),
+                error: errorTextOf(Schema.decodeUnknownResult(TmfError)(error)),
                 requestId,
               }),
         onSuccess: (message) => message,
@@ -184,14 +186,7 @@ export const OperateDeadDelivery = Command.define("OperateDeadDelivery", {
           isTmfError("Unauthenticated")(error)
             ? Message.OperateDeadDeliverySessionEnded()
             : Message.FailedOperateDeadDelivery({
-                error: Result.match(
-                  Schema.decodeUnknownResult(TmfError)(error),
-                  {
-                    onFailure: () =>
-                      "STD's response could not be confirmed. Check your connection and refresh before trying again.",
-                    onSuccess: failureText,
-                  }
-                ),
+                error: errorTextOf(Schema.decodeUnknownResult(TmfError)(error)),
               }),
         onSuccess: (message) => message,
       })

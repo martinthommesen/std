@@ -114,7 +114,6 @@ const countText = (page: RecordPage): string =>
   });
 
 const relatedPagerView = (
-  listId: number,
   list: RelatedList,
   page: RecordPage,
   h: HtmlBuilder<Message>
@@ -130,7 +129,7 @@ const relatedPagerView = (
         {
           isDisabled:
             list.cursors.length < 2 || AsyncData.isPending(list.records),
-          onClick: Message.ClickedPreviousRelatedPage({ listId }),
+          onClick: Message.ClickedPreviousRelatedPage({ listId: list.id }),
           text: "Previous page",
           variant: "quiet",
         },
@@ -142,7 +141,7 @@ const relatedPagerView = (
           isDisabled:
             Option.isNone(page.maybeNextCursor) ||
             AsyncData.isPending(list.records),
-          onClick: Message.ClickedNextRelatedPage({ listId }),
+          onClick: Message.ClickedNextRelatedPage({ listId: list.id }),
           text: "Next page",
           variant: "quiet",
         },
@@ -171,41 +170,38 @@ const relatedFailureView = (listId: number, h: HtmlBuilder<Message>): Html =>
   );
 
 const relatedPageView = (
-  listId: number,
   list: RelatedList,
   table: MetaTable,
   page: RecordPage,
   h: HtmlBuilder<Message>
 ): readonly Html[] => [
-  relatedPagerView(listId, list, page, h),
+  relatedPagerView(list, page, h),
   page.records.length === 0
     ? h.p([h.Class("placeholder")], ["No records."])
     : relatedTableView(list, table, page, h),
 ];
 
 const relatedContentView = (
-  listId: number,
   list: RelatedList,
   h: HtmlBuilder<Message>
 ): readonly Html[] =>
   AsyncData.match(list.metadata, {
-    onFailure: () => [relatedFailureView(listId, h)],
+    onFailure: () => [relatedFailureView(list.id, h)],
     onIdle: () => [],
     onLoading: () => [h.p([h.Role("status")], ["Loading…"])],
     onRefreshing: () => [h.p([h.Role("status")], ["Loading…"])],
-    onStale: () => [relatedFailureView(listId, h)],
+    onStale: () => [relatedFailureView(list.id, h)],
     onSuccess: (meta) =>
       AsyncData.match(list.records, {
-        onFailure: () => [relatedFailureView(listId, h)],
+        onFailure: () => [relatedFailureView(list.id, h)],
         onIdle: () => [],
         onLoading: () => [h.p([h.Role("status")], ["Loading…"])],
-        onRefreshing: (page) =>
-          relatedPageView(listId, list, meta.table, page, h),
+        onRefreshing: (page) => relatedPageView(list, meta.table, page, h),
         onStale: ({ data }) => [
-          relatedFailureView(listId, h),
-          ...relatedPageView(listId, list, meta.table, data, h),
+          relatedFailureView(list.id, h),
+          ...relatedPageView(list, meta.table, data, h),
         ],
-        onSuccess: (page) => relatedPageView(listId, list, meta.table, page, h),
+        onSuccess: (page) => relatedPageView(list, meta.table, page, h),
       }),
   });
 
@@ -258,7 +254,7 @@ const relatedListView = (
                     h.Class("disclosure-panel"),
                     h.AriaBusy(isRelatedLoading(list)),
                   ],
-                  list.isOpen ? relatedContentView(list.id, list, h) : []
+                  list.isOpen ? relatedContentView(list, h) : []
                 ),
               ]
             ),

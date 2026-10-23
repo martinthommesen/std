@@ -12,7 +12,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { LoadDeadLetters, OperateDeadDelivery } from "./command.ts";
-import { delivery, loaded } from "./fixture.ts";
+import { delivery, emptyPage, executing, loaded } from "./fixture.ts";
 import { Message, OutMessage } from "./message.ts";
 import { Operation } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -54,13 +54,7 @@ describe("dead-letter page", () => {
           subscriptionId: "",
         })
       ),
-      Command.resolve(
-        LoadDeadLetters,
-        Message.SucceededLoadDeadLetters({
-          page: { deliveries: [], total: 0 },
-          requestId: 2,
-        })
-      ),
+      Command.resolve(LoadDeadLetters, emptyPage(2)),
       model((page) => {
         expect(
           Option.getOrThrow(AsyncData.getData(page.deliveries)).deliveries
@@ -84,32 +78,19 @@ describe("dead-letter page", () => {
     expect(
       update(cancelled.model, Message.ClickedConfirm()).commands
     ).toBeUndefined();
-    const executing = update(confirming, Message.ClickedConfirm()).model;
+    const executingPage = executing("discard");
     expect(
-      update(executing, Message.ClickedConfirm()).commands
+      update(executingPage, Message.ClickedConfirm()).commands
     ).toBeUndefined();
   });
 
   it("late reads are ignored and a failed task keeps the row and explains uncertainty", () => {
-    expect(
-      update(
-        loaded,
-        Message.SucceededLoadDeadLetters({
-          page: { deliveries: [], total: 0 },
-          requestId: 0,
-        })
-      ).model
-    ).toBe(loaded);
+    expect(update(loaded, emptyPage(0)).model).toBe(loaded);
 
-    const confirming = update(
-      loaded,
-      Message.ClickedAction({ action: "discard", delivery })
-    ).model;
-
-    const executing = update(confirming, Message.ClickedConfirm()).model;
+    const executingPage = executing("discard");
     story(
       update,
-      given(executing),
+      given(executingPage),
       message(
         Message.FailedOperateDeadDelivery({ error: "The response was lost." })
       ),
@@ -184,15 +165,10 @@ describe("dead-letter page", () => {
   });
 
   it("operation session expiry returns to the parent session flow", () => {
-    const confirming = update(
-      loaded,
-      Message.ClickedAction({ action: "retry", delivery })
-    ).model;
-
-    const executing = update(confirming, Message.ClickedConfirm()).model;
+    const executingPage = executing("retry");
     story(
       update,
-      given(executing),
+      given(executingPage),
       message(Message.OperateDeadDeliverySessionEnded()),
       expectOutMessage(OutMessage.SessionEnded()),
       model((page) => {

@@ -1,6 +1,7 @@
 import type { DeadDelivery } from "@std/api/dead-letters";
 
 import { Message } from "./message.ts";
+import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
 
 /** A disposable fixture delivery, containing identities and sanitized diagnostics only. */
@@ -28,3 +29,23 @@ export const loaded = update(
     requestId: 1,
   })
 ).model;
+
+/** A completed read of an empty operator page.
+ * @param requestId - The request being answered.
+ * @returns The successful empty-page reply.
+ */
+export const emptyPage = (requestId: number) =>
+  Message.SucceededLoadDeadLetters({
+    page: { deliveries: [], total: 0 },
+    requestId,
+  });
+
+/** A confirmed task awaiting the server's answer.
+ * @param action - The operation chosen for the fixture delivery.
+ * @returns The executing operator page.
+ */
+export const executing = (action: "retry" | "discard"): Model =>
+  update(
+    update(loaded, Message.ClickedAction({ action, delivery })).model,
+    Message.ClickedConfirm()
+  ).model;
