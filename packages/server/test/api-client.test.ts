@@ -309,6 +309,39 @@ describe("api-client", () => {
       })
     );
 
+    dbTest.effect("a write the caller may not make is a typed NotAllowed", () =>
+      Effect.gen(function* writeRefused() {
+        const http = yield* TestHttpClient;
+        const { alice } = yield* AcmeFixture;
+
+        const withFetch = fetchWith(http.fetch);
+
+        const bob = yield* withFetch(
+          makeStdClient({
+            baseUrl: BASE_URL,
+            token: Redacted.make(yield* http.signIn("bob", "bob-password")),
+          })
+        );
+
+        // Bob may create only assets he owns.
+        const refused = yield* withFetch(
+          bob.records.create({
+            params: { table: "acmeAsset" },
+            payload: {
+              name: "Not mine",
+              owner: { id: alice.id },
+              status: "spare",
+            },
+          })
+        ).pipe(Effect.flip);
+
+        assert.isTrue(
+          isTmfError("NotAllowed")(refused),
+          JSON.stringify(refused)
+        );
+      })
+    );
+
     dbTest.effect("the response headers carry the revision and the ETag", () =>
       Effect.gen(function* responseHeaders() {
         const http = yield* TestHttpClient;

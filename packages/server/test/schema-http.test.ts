@@ -64,6 +64,7 @@ import {
   PATCH_OTHER_OPERATIONS,
   updateOperations,
 } from "../src/http/definition-writes.ts";
+import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { StepBoundary } from "../src/schema/recovery-settings.ts";
 import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
@@ -3814,4 +3815,52 @@ describe("schema-http", () => {
       );
     }
   );
+
+  layer(
+    readsTestLayer().pipe(
+      Layer.provideMerge(Gate.at("definition-write:applied"))
+    ),
+    {
+      excludeTestServices: true,
+      timeout: 300_000,
+    }
+  )((dbTest) => {
+    dbTest.effect(
+      "a definition delete states its own committed revision when another change set commits before the answer",
+      () =>
+        Effect.gen(function* deleteRevisionRace() {
+          const admin = yield* adminToken;
+          const doomed = addRole("race_deleted");
+
+          yield* change([doomed.op]);
+
+          const gate = yield* armGate;
+
+          const deletion = yield* Effect.forkChild(
+            remove(admin, "core.role", doomed.id, 1)
+          );
+
+          // The delete committed; another change set commits before the
+          // answer is written.
+          yield* Deferred.await(gate.reached);
+
+          const committed = (yield* (yield* Catalog).refresh).key;
+
+          yield* change([addRole("race_later").op]);
+
+          const later = (yield* (yield* Catalog).refresh).key;
+
+          yield* Deferred.succeed(gate.release, true);
+
+          const response = yield* Fiber.join(deletion);
+
+          assert.strictEqual(response.status, 204, response.text);
+          assert.notStrictEqual(later.revision, committed.revision);
+          assert.strictEqual(
+            response.headers.get("std-schema-revision"),
+            revisionHeaderValue(committed)
+          );
+        })
+    );
+  });
 });

@@ -550,10 +550,13 @@ const mergedJsonColumns = (
   return Object.fromEntries(
     Object.entries(body).map(([column, value]): [string, JsonValue] => {
       const property = jsonProperties.get(column);
-      const before = property === undefined ? null : (stored[property] ?? null);
-      const merges = isJsonObject(value) && isJsonObject(before);
 
-      return merges ? [column, mergePatch(before, value)] : [column, value];
+      // RFC 7396 on every JSON-valued attribute: an object patch merges into
+      // an object and replaces anything else, its null members removed; any
+      // other patch replaces the value.
+      return property === undefined
+        ? [column, value]
+        : [column, mergePatch(stored[property] ?? null, value)];
     })
   );
 };
@@ -832,7 +835,7 @@ const prepare = Effect.fn("Http.definitionPrepare")(function* prepare(
  * @param table - The qualified table name.
  * @param kind - Its definition kind.
  * @param write - The write, keyed by definition column names.
- * @returns The definition's ID and the acting user.
+ * @returns The definition's ID, the acting user and the change set's result.
  */
 export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
   function* applyDefinitionWrite(
@@ -873,12 +876,16 @@ export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
       userId: prepared.actor.userId,
     });
 
-    yield* applyAsActor(prepared.actor, {
+    const result = yield* applyAsActor(prepared.actor, {
       authorize,
       operations: prepared.operations,
       source: { kind: "api", route: "records", table },
     });
 
-    return { actor: prepared.actor, id: prepared.id };
+    // Tests commit another change set here, after this one and before the
+    // answer (`StepBoundary`; nothing happens in production).
+    yield* stepBoundary("definition-write:applied");
+
+    return { actor: prepared.actor, id: prepared.id, result };
   }
 );

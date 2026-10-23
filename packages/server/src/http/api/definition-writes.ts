@@ -191,13 +191,17 @@ export const definitionWriteIn = Effect.fn("Api.definitionWriteIn")(
     );
 
     if (action === "delete") {
-      // The answer states the revision the change set committed, as every
-      // other answer states the one it was served at (6.2).
-      const latest = yield* (yield* Catalog).refresh.pipe(
-        Effect.catchTag("DatabaseError", Effect.die)
-      );
+      // The answer states the revision this change set committed (6.2),
+      // never one a later change set committed in between.
+      const { result } = applied;
+      const committed = result.completeRevision ?? result.revision;
 
-      recordServedRevision(input.request, latest.key);
+      if (result.changeSetId !== null && committed !== null) {
+        recordServedRevision(input.request, {
+          changeSetId: result.changeSetId,
+          revision: committed,
+        });
+      }
 
       return HttpServerResponse.empty({ status: 204 });
     }

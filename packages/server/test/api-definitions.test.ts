@@ -327,6 +327,52 @@ describe("api-definitions", () => {
     );
 
     dbTest.effect(
+      "a merge patch on a JSON attribute that is null or not an object replaces it, without the patch's null members",
+      () =>
+        Effect.gen(function* mergeNonObject() {
+          const http = yield* TestHttpClient;
+          const callers = yield* apiCallers;
+          const empty = addField(ACME.asset, "merge_empty", { kind: "json" });
+
+          const scalar = addField(
+            ACME.asset,
+            "merge_scalar",
+            { kind: "json" },
+            { default: 5 }
+          );
+
+          yield* change([empty.op, scalar.op]);
+
+          const patch = {
+            deep: { keep: 1, remove: null },
+            remove: null,
+          };
+
+          for (const field of [empty, scalar]) {
+            const path = `/api/v1/coreField/${field.id}`;
+            const before = yield* http.get(path, callers.admin);
+
+            assert.strictEqual(before.status, 200, before.text);
+
+            const merged = yield* http.request("PATCH", path, {
+              ...callers.admin,
+              headers: {
+                "content-type": MERGE_PATCH,
+                "if-match": before.headers.get("etag") ?? "",
+              },
+              rawBody: JSON.stringify({ defaultValue: patch }),
+            });
+
+            assert.strictEqual(merged.status, 200, merged.text);
+            assert.deepStrictEqual(asObject(merged.json).defaultValue, {
+              deep: { keep: 1 },
+            });
+          }
+        }),
+      { timeout: 120_000 }
+    );
+
+    dbTest.effect(
       "a definition table's OpenAPI document offers only the merge patch it takes",
       () =>
         Effect.gen(function* definitionDocument() {
