@@ -8,7 +8,8 @@ import { Effect } from "effect";
 import { alternativesOf } from "../api/query.ts";
 import { jsonAnswer } from "../api/records.ts";
 
-const CONTROL = new Set([
+/** TMF688 list directives, excluded from scalar resource filters. */
+export const CONTROL: ReadonlySet<string> = new Set([
   "fields",
   "offset",
   "limit",
@@ -20,6 +21,13 @@ const CONTROL = new Set([
 const COMPARISONS = new Set(["eq", "gt", "gte", "lt", "lte"]);
 const IDENTITY = new Set(["id", "href", "@type"]);
 const HUB_IDENTITY = new Set(["id", "href", "@type", "callback"]);
+
+/** A validated scalar filter on a published resource attribute. */
+export interface ResourceFilter {
+  readonly attribute: string;
+  readonly comparison: string;
+  readonly expected: readonly string[];
+}
 
 /**
  * Field selection after authorization preserves resource identity.
@@ -117,7 +125,7 @@ export const validateResourceFilters = Effect.fn(
   params: URLSearchParams,
   allowed: ReadonlySet<string>
 ) {
-  const filters = [];
+  const filters: ResourceFilter[] = [];
 
   for (const name of new Set(params.keys())) {
     if (CONTROL.has(name)) {
@@ -171,7 +179,21 @@ export const validateResourceFields = (
     : Effect.fail(new UnknownField({ field: unknown }));
 };
 
-/** Apply validated first-level scalar filters to authorized representations. */
+/**
+ * Whether an authorized representation satisfies all validated scalar filters.
+ * @param resource - The authorized representation.
+ * @param filters - Validated scalar filters.
+ * @returns Whether every filter matches.
+ */
+export const matchesResourceFilters = (
+  resource: JsonObject,
+  filters: readonly ResourceFilter[]
+): boolean =>
+  filters.every(({ attribute, comparison, expected }) =>
+    matches(resource[attribute], expected, comparison)
+  );
+
+/** Validate and apply first-level scalar filters to authorized representations. */
 export const filteredResources = Effect.fn("Tmf688.filterResources")(
   function* filteredResources(
     resources: readonly JsonObject[],
@@ -181,9 +203,7 @@ export const filteredResources = Effect.fn("Tmf688.filterResources")(
     const filters = yield* validateResourceFilters(params, allowed);
 
     return resources.filter((resource) =>
-      filters.every(({ attribute, comparison, expected }) =>
-        matches(resource[attribute], expected, comparison)
-      )
+      matchesResourceFilters(resource, filters)
     );
   }
 );
@@ -234,8 +254,6 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
     .map((resource) => selectFields(resource, fields));
 
   const headers = {
-    "cache-control": "no-store",
-    "content-type": "application/json;charset=utf-8",
     "x-result-count": String(page.length),
   };
 

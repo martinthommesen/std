@@ -85,8 +85,8 @@ const ITEM_METHODS: readonly OperationMethod[] = [
   ["delete", "DELETE"],
 ];
 
-/** The methods a resource path answers with its own `405` route when not offered. */
-const ROUTED_METHODS = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
+/** Resource methods, in `Allow` order, routed to `405` when not offered. */
+const RESOURCE_METHODS = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
 
 const offeredOf = (
   mapped: MappedResource,
@@ -105,9 +105,6 @@ const anyDeclared = (mapped: MappedResource): readonly number[] => [
   ...new Set(Object.values(mapped.resource.declaredStatuses).flat()),
 ];
 
-/** The order of methods in `Allow`. */
-const ALLOW_ORDER = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
-
 /**
  * `Allow` on a TMF route: the methods the path offers, and `HEAD` wherever
  * `GET` is (RFC 9110 §9.3.2). Unlike `/api/v1`'s, it never lists
@@ -123,7 +120,7 @@ export const tmfAllowOf = (offered: readonly string[]): string => {
     methods.add("HEAD");
   }
 
-  return ALLOW_ORDER.filter((method) => methods.has(method)).join(", ");
+  return RESOURCE_METHODS.filter((method) => methods.has(method)).join(", ");
 };
 
 /** One resource path: its resource and the methods it offers. */
@@ -255,7 +252,7 @@ const unofferedRoutes = (
   path: `/${string}`,
   pathResource: ResourcePath
 ) =>
-  ROUTED_METHODS.flatMap((method) =>
+  RESOURCE_METHODS.flatMap((method) =>
     serves(pathResource, method)
       ? []
       : [HttpRouter.route(method, path, notOffered(environment, pathResource))]

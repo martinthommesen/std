@@ -252,8 +252,8 @@ const pointerSegments = (pointer: string): readonly string[] =>
         .split("/")
         .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
 
-/** The pinned document of each specification, read once. */
-const pinnedFiles = new Map<string, string | undefined>();
+/** The pinned document files, loaded together on the first lookup. */
+let pinnedFiles: ReadonlyMap<string, string | undefined> | undefined;
 
 /**
  * The file of a pinned specification's OpenAPI document (`pins.json`).
@@ -262,7 +262,7 @@ const pinnedFiles = new Map<string, string | undefined>();
  * @returns The file, or undefined when it pins no document.
  */
 export const pinnedDocumentOf = (spec: string): string | undefined => {
-  if (!pinnedFiles.has(spec)) {
+  if (pinnedFiles === undefined) {
     const decoded = decodePinsFile(
       JSON.parse(readFileSync(path.join(SPECS_DIRECTORY, "pins.json"), "utf-8"))
     );
@@ -275,10 +275,8 @@ export const pinnedDocumentOf = (spec: string): string | undefined => {
       );
     }
 
-    pinnedFiles.set(
-      spec,
-      decoded.success.specifications.find((pin) => pin.spec === spec)?.openApi
-        ?.file
+    pinnedFiles = new Map(
+      decoded.success.specifications.map((pin) => [pin.spec, pin.openApi?.file])
     );
   }
 
