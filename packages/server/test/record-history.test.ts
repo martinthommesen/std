@@ -12,7 +12,6 @@ import { Cause, Effect, Exit } from "effect";
 import type {
   HistoryEntry,
   HistoryFilter,
-  HistorySelection,
 } from "../src/records/history-query.ts";
 import {
   createRecord,
@@ -21,6 +20,7 @@ import {
 } from "../src/records/save-pipeline.ts";
 import {
   asUser,
+  historyPage,
   recordsTestLayer,
   readHistory,
   setUpAcme,
@@ -37,15 +37,7 @@ const READABLE_WITHOUT_COST: ReadonlySet<string> = new Set([
 ]);
 
 // This fixture creates at most four versions; one lookahead belongs to SQL paging.
-const HISTORY_PAGE: HistorySelection = {
-  after: null,
-  before: null,
-  count: true,
-  kind: "page",
-  limit: 4,
-  range: null,
-  reversed: false,
-};
+const HISTORY_PAGE = historyPage(4);
 
 const POSTGRES_TEXT = [
   "duplicate key",

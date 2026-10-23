@@ -57,11 +57,7 @@ import {
   USER_CLASS_ID,
 } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import type { Scope } from "effect";
@@ -91,6 +87,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { tableOf } from "../src/catalog/definition-tables.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import { CHANGE_SETS } from "./schema-paths-support.ts";
@@ -265,35 +262,6 @@ const ROW_TOKENS = {
   dupTitle: "rvdupmkqw",
   oldValue: "rvoldnpgt",
 } as const;
-
-/**
- * A JSON value as an object.
- *
- * @param value - Any value.
- * @returns The object, or an empty one.
- */
-const objectOf = (value: JsonValue | undefined): JsonObject =>
-  value !== undefined && isJsonObject(value) ? value : {};
-
-/**
- * A JSON value as an array.
- *
- * @param value - Any value.
- * @returns The array, or an empty one.
- */
-const arrayOf = (value: JsonValue | undefined): readonly JsonValue[] =>
-  value !== undefined && isJsonArray(value) ? value : [];
-
-/**
- * A JSON value's text, for messages.
- *
- * @param value - Any value.
- * @returns Its text.
- */
-const textOf = (value: JsonValue | undefined): string =>
-  value !== undefined && isJsonString(value)
-    ? value
-    : JSON.stringify(value ?? null);
 
 /**
  * The outcomes of a response, for the coverage gate: `<status> <tag>`,
@@ -525,58 +493,74 @@ type IdChoice = "fresh" | "tombstone" | "visible" | "hidden";
 type TypeChoice = "text" | "integer" | "bogus";
 
 /** The fields of a new index. */
-type IndexFields =
-  | "code"
-  | "title"
-  | "qty"
-  | "titleAndQty"
-  | "missing"
-  | "none";
+const INDEX_FIELDS = [
+  "code",
+  "title",
+  "qty",
+  "titleAndQty",
+  "missing",
+  "none",
+] as const;
+
+type IndexFields = (typeof INDEX_FIELDS)[number];
 
 /** A role an access rule names. */
-type RoleChoice = "ruled" | "admin" | "hidden" | "missing";
+const ROLE_CHOICES = ["ruled", "admin", "hidden", "missing"] as const;
+
+type RoleChoice = (typeof ROLE_CHOICES)[number];
 
 /** A rule's condition. */
-type ConditionChoice = "none" | "valid" | "illTyped";
+const CONDITION_CHOICES = ["none", "valid", "illTyped"] as const;
+
+type ConditionChoice = (typeof CONDITION_CHOICES)[number];
 
 /** A definition a lifecycle step targets. */
-type Target =
-  | "ruledRole"
-  | "freeRole"
-  | "adminRole"
-  | "hiddenRole"
-  | "tombRole"
-  | "missingRole"
-  | "codeField"
-  | "titleField"
-  | "qtyField"
-  | "oldField"
-  | "coreUserName"
-  | "baseClass"
-  | "retiredChildClass"
-  | "coreUserClass"
-  | "changeEntry";
+const TARGETS = [
+  "ruledRole",
+  "freeRole",
+  "adminRole",
+  "hiddenRole",
+  "tombRole",
+  "missingRole",
+  "codeField",
+  "titleField",
+  "qtyField",
+  "oldField",
+  "coreUserName",
+  "baseClass",
+  "retiredChildClass",
+  "coreUserClass",
+  "changeEntry",
+] as const;
+
+type Target = (typeof TARGETS)[number];
 
 /** What a lifecycle step does. */
-type Action =
-  | "delete"
-  | "retire"
-  | "reactivate"
-  | "purge"
-  | "purgeBadConfirm"
-  | "rename"
-  | "relabel"
-  | "require";
+const ACTIONS = [
+  "delete",
+  "retire",
+  "reactivate",
+  "purge",
+  "purgeBadConfirm",
+  "rename",
+  "relabel",
+  "require",
+] as const;
+
+type Action = (typeof ACTIONS)[number];
 
 /** The version a step states. */
 type VersionChoice = "current" | "stale" | "missing" | "malformed";
 
 /** A generic body that is wrong as a body. */
-type Oddity =
-  | "unknownColumn"
-  | "readOnlyColumn"
-  | "malformedJson"
-  | "wrongTypes";
+const ODDITIES = [
+  "unknownColumn",
+  "readOnlyColumn",
+  "malformedJson",
+  "wrongTypes",
+] as const;
+
+type Oddity = (typeof ODDITIES)[number];
 
 /** One fuzz step. */
 type Step =
@@ -961,9 +945,9 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
   step: Step
 ) {
   const { world } = context;
-  const snapshot = yield* (yield* Catalog).refresh;
 
   if (step.op === "oddity") {
+    const snapshot = yield* (yield* Catalog).refresh;
     const id = idOf(world, step.target);
     const path = recordPath(tableOfTarget(step.target), id);
     const headers = { "if-match": `"${snapshot.get(id)?.version ?? 1}"` };
@@ -1014,6 +998,7 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
         } satisfies FuzzRequest);
   }
 
+  const snapshot = yield* (yield* Catalog).refresh;
   const id = idOf(world, step.target);
   const version = versionFor(snapshot.get(id), step.version);
 
@@ -1114,14 +1099,7 @@ const stepArb: Arbitrary<Step> = oneof(
   }),
   record({
     caller: callerArb,
-    fields: constantFrom<IndexFields>(
-      "code",
-      "title",
-      "qty",
-      "titleAndQty",
-      "missing",
-      "none"
-    ),
+    fields: constantFrom(...INDEX_FIELDS),
     id: idArb,
     op: constantFrom("addIndex" as const),
     unique: boolean(),
@@ -1136,43 +1114,18 @@ const stepArb: Arbitrary<Step> = oneof(
   }),
   record({
     caller: callerArb,
-    condition: constantFrom<ConditionChoice>("none", "valid", "illTyped"),
+    condition: constantFrom(...CONDITION_CHOICES),
     id: idArb,
     op: constantFrom("createRule" as const),
-    role: constantFrom<RoleChoice>("ruled", "admin", "hidden", "missing"),
+    role: constantFrom(...ROLE_CHOICES),
     via: viaArb,
   }),
   {
     arbitrary: record({
-      action: constantFrom<Action>(
-        "delete",
-        "retire",
-        "reactivate",
-        "purge",
-        "purgeBadConfirm",
-        "rename",
-        "relabel",
-        "require"
-      ),
+      action: constantFrom(...ACTIONS),
       caller: callerArb,
       op: constantFrom("lifecycle" as const),
-      target: constantFrom<Target>(
-        "ruledRole",
-        "freeRole",
-        "adminRole",
-        "hiddenRole",
-        "tombRole",
-        "missingRole",
-        "codeField",
-        "titleField",
-        "qtyField",
-        "oldField",
-        "coreUserName",
-        "baseClass",
-        "retiredChildClass",
-        "coreUserClass",
-        "changeEntry"
-      ),
+      target: constantFrom(...TARGETS),
       version: constantFrom<VersionChoice>(
         "current",
         "current",
@@ -1186,12 +1139,7 @@ const stepArb: Arbitrary<Step> = oneof(
   },
   record({
     caller: callerArb,
-    oddity: constantFrom<Oddity>(
-      "unknownColumn",
-      "readOnlyColumn",
-      "malformedJson",
-      "wrongTypes"
-    ),
+    oddity: constantFrom(...ODDITIES),
     op: constantFrom("oddity" as const),
     target: constantFrom<Target>("freeRole", "codeField", "baseClass"),
   })
@@ -1464,7 +1412,32 @@ const TARGETED: ReadonlyMap<string, Step> = new Map<string, Step>([
 ]);
 
 /** Outcomes every run must reach, through random or targeted steps. */
-const REQUIRED_OUTCOMES = [...TARGETED.keys()];
+const REQUIRED_OUTCOMES = [
+  "201",
+  "200",
+  "400 InvalidRequest",
+  "400 UnknownField",
+  "ValidationFailed:ReadOnlyField",
+  "403 NotAllowed",
+  "404 UnknownTable",
+  "404 NotFound",
+  "412 VersionConflict",
+  "428 VersionRequired",
+  "403 DefinitionProtected",
+  "409 DependencyConflict",
+  "409 UseRetireOrPurge",
+  "403 PermissionRequired",
+  "409 PurgeRefused",
+  "PurgeRefused:hasRecords",
+  "409 ExistingDataViolates",
+  "DefinitionInvalid:idInUse",
+  "DefinitionInvalid:invalidName",
+  "DefinitionInvalid:duplicateName",
+  "DefinitionInvalid:unknownDefinition",
+  "DefinitionInvalid:versionConflict",
+  "DefinitionInvalid:invalidCondition",
+  "DefinitionInvalid:invalidIndex",
+];
 
 /**
  * A read-deny rule hiding a role, by name, from admins: a core rule, the
@@ -1504,9 +1477,6 @@ const PAM = { login: "fuzz-pam", password: "fuzz-pam-password" } as const;
 
 const decodeRecordIds = Schema.decodeUnknownSync(Schema.Array(Schema.String));
 
-/** The worlds prepared in this file's database, by tag. */
-const prepared = new Map<string, World>();
-
 /** Whether the purging admin exists in this file's database. */
 let purgerCreated = false;
 
@@ -1544,12 +1514,6 @@ const createPurger = Effect.gen(function* createPurger() {
 const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
   worldTag: string
 ) {
-  const ready = prepared.get(worldTag);
-
-  if (ready !== undefined) {
-    return ready;
-  }
-
   const catalog = yield* Catalog;
 
   yield* ensureSite;
@@ -1632,7 +1596,7 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
     `SELECT id::text AS value FROM core."change" ORDER BY id LIMIT 1`
   );
 
-  const world = {
+  return {
     baseId: base.id,
     changeEntry,
     childId: child.id,
@@ -1681,10 +1645,6 @@ const prepare = Effect.fn("SchemaFuzz.prepare")(function* prepare(
     ]),
     tombRole: tomb.id,
   } satisfies World;
-
-  prepared.set(worldTag, world);
-
-  return world;
 });
 
 /**

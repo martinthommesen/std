@@ -65,6 +65,7 @@ import {
 import {
   ACME,
   addField,
+  addOverride,
   change,
   createClass,
   ensureSite,
@@ -318,72 +319,22 @@ const tableArb: Arbitrary<TableSpec> = array(fieldArb, {
   ).map(([autoNumber, bodies]) => ({ autoNumber, bodies, fields }))
 );
 
-/**
- * A safe valid value of a field, for base records.
- *
- * @param field - The field.
- * @param admin - The admin's user ID (a visible reference target).
- * @returns The value.
- */
-const safeValue = (field: FieldSpec, admin: string): JsonValue => {
-  switch (field.kind) {
-    case "text":
-    case "longText": {
-      return "a";
-    }
-
-    case "integer": {
-      return 5;
-    }
-
-    case "bigInteger": {
-      return "7";
-    }
-
-    case "decimal": {
-      return "1";
-    }
-
-    case "boolean": {
-      return true;
-    }
-
-    case "date": {
-      return "2024-02-29";
-    }
-
-    case "dateTime": {
-      return "2026-10-20T08:15:30.123Z";
-    }
-
-    case "choice": {
-      return "alpha";
-    }
-
-    case "reference": {
-      return admin;
-    }
-
-    case "uuid": {
-      return SOME_UUID;
-    }
-
-    case "password": {
-      return "secret";
-    }
-
-    case "json": {
-      return { a: 1 };
-    }
-
-    case "condition": {
-      return { op: "true" };
-    }
-
-    default: {
-      return field.kind satisfies never;
-    }
-  }
+/** Safe valid values under every generated field setting, for base records. */
+const SAFE_VALUES: Readonly<Record<Kind, JsonValue>> = {
+  bigInteger: "7",
+  boolean: true,
+  choice: "alpha",
+  condition: { op: "true" },
+  date: "2024-02-29",
+  dateTime: "2026-10-20T08:15:30.123Z",
+  decimal: "1",
+  integer: 5,
+  json: { a: 1 },
+  longText: "a",
+  password: "secret",
+  reference: "<admin>",
+  text: "a",
+  uuid: SOME_UUID,
 };
 
 // Constant defaults that are valid under every generated setting.
@@ -457,27 +408,12 @@ const buildTable = Effect.fn("RecordSchemaProperty.buildTable")(
       const narrow = field.childMaxLength;
 
       if (subset !== null || narrow !== null) {
-        operations.push({
-          definition: {
-            ...local,
+        operations.push(
+          addOverride(child.id, added.id, {
             choices: subset,
-            classId: child.id,
-            default: null,
-            fieldId: added.id,
-            helpText: null,
-            id: freshId(),
-            kind: "override",
-            label: null,
-            max: null,
             maxLength: narrow,
-            min: null,
-            numberPrefix: null,
-            readOnly: null,
-            required: null,
-          },
-          op: "setOverride",
-          version: null,
-        });
+          }).op
+        );
       }
 
       if (field.retire) {
@@ -771,7 +707,13 @@ const baseBody = (
   Object.fromEntries(
     spec.fields.flatMap((field, index) =>
       field.required
-        ? [[built.names[index] ?? "", safeValue(field, admin)]]
+        ? [
+            [
+              built.names[index] ?? "",
+              PLACEHOLDERS.get(SAFE_VALUES[field.kind])?.(admin) ??
+                SAFE_VALUES[field.kind],
+            ],
+          ]
         : []
     )
   );
@@ -998,43 +940,49 @@ const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
   const built = yield* buildTable(spec, context.testerRole);
   const { adminId, tokens } = context;
 
-  let childBaseId = "";
+  const compareTable = Effect.fn("RecordSchemaProperty.compareTable")(
+    function* compareTable(table: string) {
+      const base = yield* create(
+        tokens.admin,
+        table,
+        baseBody(spec, built, adminId)
+      );
 
-  for (const table of [built.root, built.child]) {
-    const base = yield* create(
-      tokens.admin,
-      table,
-      baseBody(spec, built, adminId)
-    );
+      assert.strictEqual(base.status, 201, `base record: ${base.text}`);
+      const baseId = textOf((yield* resourceOf(base)).id);
 
-    assert.strictEqual(base.status, 201, `base record: ${base.text}`);
+      const metadata = {
+        admin: yield* metadataOf(tokens.admin, table),
+        tester: yield* metadataOf(tokens.tester, table),
+      };
 
-    const baseId = textOf((yield* resourceOf(base)).id);
+      for (const who of ["admin", "tester"] as const) {
+        const meta = metadata[who];
 
-    childBaseId = baseId;
-
-    for (const who of ["admin", "tester"] as const) {
-      const meta = yield* metadataOf(tokens[who], table);
-
-      for (const body of spec.bodies) {
-        yield* compareBody(
-          context,
-          { baseId, table, who },
-          meta,
-          bodyOf(spec, built, body, meta, adminId)
-        );
+        for (const body of spec.bodies) {
+          yield* compareBody(
+            context,
+            { baseId, table, who },
+            meta,
+            bodyOf(spec, built, body, meta, adminId)
+          );
+        }
       }
-    }
-  }
 
-  // Updates of a child record through the parent endpoint: the server
-  // validates against the child's effective schema (its overrides), so the
-  // browser validates with the child's metadata and the parent's names.
+      return { baseId, metadata };
+    }
+  );
+
+  const parent = yield* compareTable(built.root);
+  const child = yield* compareTable(built.child);
+
+  // Updates of a child record through the parent endpoint use its effective
+  // schema (overrides) and the parent's names. Record writes do not change metadata.
   for (const who of ["admin", "tester"] as const) {
     yield* compareThroughParent(context, who, {
-      child: yield* metadataOf(tokens[who], built.child),
-      id: childBaseId,
-      parent: yield* metadataOf(tokens[who], built.root),
+      child: child.metadata[who],
+      id: child.baseId,
+      parent: parent.metadata[who],
       spec,
       tables: built,
     });
@@ -1045,27 +993,20 @@ const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
  * Runs the property: one generated table per run, each compared in full.
  *
  * @param run - Runs an effect with the test's services.
- * @param runOne - Builds and compares one table.
  * @param context - Tokens, IDs and the observations.
- * @param mismatches - Where disagreements are collected.
  * @returns fast-check's details.
  */
-const checkTables = async <E, R>(
-  run: (effect: Effect.Effect<void, E, R>) => Promise<void>,
-  runOne: (
-    spec: TableSpec,
-    context: Parameters<typeof runTable>[1]
-  ) => Effect.Effect<void, E, R>,
-  context: Parameters<typeof runTable>[1],
-  mismatches: readonly Mismatch[]
+const checkTables = async (
+  run: (effect: ReturnType<typeof runTable>) => Promise<void>,
+  context: RunContext
 ) =>
   await check(
     asyncProperty(tableArb, async (spec) => {
-      const before = mismatches.length;
+      const before = context.mismatches.length;
 
-      await run(runOne(spec, context));
+      await run(runTable(spec, context));
 
-      return mismatches.length === before;
+      return context.mismatches.length === before;
     }),
     { endOnFailure: true, numRuns: RUNS }
   );
@@ -1148,12 +1089,6 @@ const plainField = (
 });
 
 /**
- * The targeted phase: one fixed table whose bodies reach every verdict of
- * `REQUIRED_CODES`, compared like the random tables. Random runs reach most
- * of them; this makes the coverage gate independent of the seed, as the
- * error fuzz's targeted phase does (decision 0014).
- */
-/**
  * Regression for seed -936010053: a table whose every field the restricted
  * user cannot read. Its metadata has no fields, and the stored record of an
  * update must still be read (with the default selection, not `fields=`).
@@ -1171,6 +1106,12 @@ const ALL_HIDDEN_TABLE: TableSpec = {
   ],
 };
 
+/**
+ * The targeted phase: one fixed table whose bodies reach every verdict of
+ * `REQUIRED_CODES`, compared like the random tables. Random runs reach most
+ * of them; this makes the coverage gate independent of the seed, as the
+ * error fuzz's targeted phase does (decision 0014).
+ */
 const COVERAGE_TABLE: TableSpec = {
   autoNumber: false,
   bodies: [
@@ -1236,7 +1177,7 @@ describe("recordSchema property", () => {
           const run = Effect.runPromiseWith(services);
 
           const result = yield* Effect.promise(
-            async () => await checkTables(run, runTable, context, mismatches)
+            async () => await checkTables(run, context)
           );
 
           yield* runTable(COVERAGE_TABLE, context);

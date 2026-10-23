@@ -17,26 +17,22 @@ import { Plaintext } from "@std/values/write-only";
 import { Deferred, Duration, Effect, Fiber, Ref } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { SaveHooks } from "../src/records/save-hooks.ts";
 import { createRecord } from "../src/records/save-pipeline.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { lockWaiting } from "../src/sql/statement-marks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { recordsTestLayer, setUpAcme, TABLES } from "./records-support.ts";
-import { ACME, values } from "./schema-support.ts";
+import {
+  newMonitor,
+  operationIds,
+  withHook,
+  recordsTestLayer,
+  setUpAcme,
+  TABLES,
+} from "./records-support.ts";
+import { values } from "./schema-support.ts";
 
 // The `password` field of `core.user`.
 const HASHED_FIELD_ID = "e122cfbe-11ea-4469-8c9b-14f4eab4aa74";
-
-const newMonitor = (name: string) =>
-  createRecord({ body: { name }, endpointClassId: ACME.monitor });
-
-const operationIds = (ids: readonly string[]) =>
-  values(
-    `SELECT DISTINCT operation_id::text AS value FROM core."change"
-     WHERE record_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
-    [JSON.stringify(ids)]
-  );
 
 const setOperation = (value: string) =>
   SqlClient.SqlClient.pipe(
@@ -48,22 +44,12 @@ const setOperation = (value: string) =>
 // Runs an effect with a before-write hook that sets one field of users
 // (hooks follow the concrete class, Contracts 4.1; a user's create also
 // creates its individual).
-const withHookValue =
-  (fieldId: DefinitionId, value: DecodedInput) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* hooked() {
-      const hooks = yield* SaveHooks;
-
-      return yield* Effect.provideService(effect, SaveHooks, {
-        ...hooks,
-        beforeWrite: (input) =>
-          Effect.succeed(
-            input.classId === USER_CLASS_ID
-              ? new Map([...input.values, [fieldId, value]])
-              : input.values
-          ),
-      });
-    });
+const withHookValue = (fieldId: DefinitionId, value: DecodedInput) =>
+  withHook((input) =>
+    input.classId === USER_CLASS_ID
+      ? new Map([...input.values, [fieldId, value]])
+      : input.values
+  );
 
 const fakeHasher = WriteOnlyValues.of({
   hashPassword: () => Effect.succeed("hashed"),
