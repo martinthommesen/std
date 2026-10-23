@@ -29,7 +29,7 @@ import { sameTypeApartFromAllowedRecords } from "./allowed-records.ts";
 import { applyOperations } from "./apply.ts";
 import type { AppliedChangeSet, ApplyError } from "./apply.ts";
 import type { Definition, Owner } from "./definition.ts";
-import { dependenciesOf } from "./dependencies.ts";
+import { dependentsOf } from "./dependents.ts";
 import { effectiveJson } from "./effective-json.ts";
 import type { DefinitionId } from "./ids.ts";
 import { overridesByRecord, sameJson, shippedOf } from "./layers.ts";
@@ -166,7 +166,6 @@ interface Planning {
   readonly operations: Operation[];
   readonly removals: Operation[];
   readonly base: BaseRecord[];
-  readonly drops: DroppedOverride[];
   readonly conflicts: {
     readonly subject: Subject;
     readonly property: string;
@@ -436,7 +435,6 @@ const carryOverrides = (
         recordId: draft.id,
       });
     } else if (sameJson(next, override.value)) {
-      planning.drops.push({ property, recordId: draft.id });
       planning.converged.push({
         oldShipped: old ?? null,
         property,
@@ -640,15 +638,11 @@ const localDependents = (
   readonly definition: Definition;
   readonly dependency: string;
 }[] =>
-  installed
-    .definitions()
-    .flatMap((definition) =>
-      isLocal(definition) && definition.state !== "purged"
-        ? dependenciesOf(definition).flatMap((edge) =>
-            edge.toId === id ? [{ definition, dependency: edge.kind }] : []
-          )
-        : []
-    );
+  dependentsOf(installed, id).flatMap((edge) =>
+    isLocal(edge.definition)
+      ? [{ definition: edge.definition, dependency: edge.kind }]
+      : []
+  );
 
 /**
  * Active access rules that would still name a role after this set: rules
@@ -689,7 +683,7 @@ interface Deactivation {
   readonly action: ChangeAction;
 }
 
-const deactivation = (current: Definition): Deactivation => {
+const deactivation = (current: Definition): Deactivation | undefined => {
   // A removed choice is hidden (8.4): stored keys stay readable, new
   // writes refuse it.
   if (current.kind === "choice") {
@@ -734,10 +728,10 @@ const deactivation = (current: Definition): Deactivation => {
     };
   }
 
-  return {
-    action: "disabled",
-    op:
-      current.kind === "subscription" && current.enabled
+  if (current.kind === "subscription") {
+    return {
+      action: "disabled",
+      op: current.enabled
         ? {
             changes: { enabled: false },
             id: current.id,
@@ -745,24 +739,11 @@ const deactivation = (current: Definition): Deactivation => {
             version: current.version,
           }
         : undefined,
-  };
-};
+    };
+  }
 
-/**
- * The kinds a removal switches off or deletes instead of retiring them
- * through the lifecycle operations (`deactivation`).
- */
-const SWITCHED_OFF: ReadonlySet<Definition["kind"]> = new Set<
-  Definition["kind"]
->([
-  "accessRule",
-  "subscription",
-  "choice",
-  "layout",
-  "savedFilter",
-  "recordRule",
-  "formRule",
-]);
+  return undefined;
+};
 
 const planRemoval = (
   planning: Planning,
@@ -771,9 +752,10 @@ const planRemoval = (
 ): void => {
   const { installed } = planning.input;
   const name = displayName(installed, current);
+  const switchedOff = deactivation(current);
 
-  if (SWITCHED_OFF.has(current.kind)) {
-    const { action, op } = deactivation(current);
+  if (switchedOff !== undefined) {
+    const { action, op } = switchedOff;
 
     if (op !== undefined) {
       planning.removals.push(op);
@@ -971,7 +953,6 @@ const newPlanning = (input: SetUpgradeInput): Planning => ({
   conflicts: [],
   converged: [],
   drafts: new Map(input.resolved.drafts.map((draft) => [draft.id, draft])),
-  drops: [],
   input,
   kept: [],
   lifecycle: input.lifecycle ?? NO_LIFECYCLE,
@@ -1103,7 +1084,10 @@ const writesOf = (planning: Planning, named: ConfigSnapshot): LayerWrites => ({
     recordId: entry.subject.id,
     value: entry.value,
   })),
-  dropOverrides: planning.drops,
+  dropOverrides: planning.converged.map((entry) => ({
+    property: entry.property,
+    recordId: entry.subject.id,
+  })),
   set: setRowOf(planning.input),
 });
 
