@@ -579,11 +579,18 @@ const enters =
     statusOfImage(change.before) !== undefined &&
     statusOfImage(change.before) !== status;
 
+/**
+ * What a ticket's status events carry: the status with its date and
+ * reason (TMF630 v5.0.0 Part 1 §11.6.3 p.203).
+ */
+const STATUS_PAYLOAD = ["status", "statusChangeDate", "statusChangeReason"];
+
 /** The TroubleTicket event types (TMF621 UG v5.0.1 pp.38-39). */
 const TICKET_EVENTS: readonly EventRule[] = [
   ...standardEvents({ type: TROUBLE_TICKET }),
   {
     on: "update",
+    payload: STATUS_PAYLOAD,
     triggers: STATUS_SOURCES,
     type: "TroubleTicketStatusChangeEvent",
     when: (change) => {
@@ -600,12 +607,14 @@ const TICKET_EVENTS: readonly EventRule[] = [
   },
   {
     on: "update",
+    payload: STATUS_PAYLOAD,
     triggers: STATUS_SOURCES,
     type: "TroubleTicketResolvedEvent",
     when: enters("resolved"),
   },
   {
     on: "update",
+    payload: STATUS_PAYLOAD,
     triggers: STATUS_SOURCES,
     type: "TroubleTicketInformationRequiredEvent",
     when: enters("pending"),
@@ -706,7 +715,7 @@ export const TROUBLE_TICKET_SPECIFICATION_RESOURCE: TmfResourceMapping = {
   classId: C.specification,
   declaredStatuses: DECLARED_STATUSES,
   events: standardEvents({
-    status: { sources: [S.lifecycleStatus] },
+    status: { payload: ["lifecycleStatus"], sources: [S.lifecycleStatus] },
     type: TROUBLE_TICKET_SPECIFICATION,
   }),
   name: "troubleTicketSpecification",

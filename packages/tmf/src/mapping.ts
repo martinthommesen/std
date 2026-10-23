@@ -392,6 +392,13 @@ export interface EventRule {
    * trigger fields); empty for Create and Delete.
    */
   readonly triggers: readonly SourceKey[];
+  /**
+   * The attributes the event's resource carries besides the identity ones
+   * (a StatusChange's status, TMF630 v5.0.0 Part 1 §11.6.3 p.203); absent:
+   * a Create's whole resource, an AttributeValueChange's changed
+   * attributes, a Delete's identity only.
+   */
+  readonly payload?: readonly string[];
   /** Whether the change gives the event; absent: every such change. */
   readonly when?: (change: ChangeView) => boolean;
 }

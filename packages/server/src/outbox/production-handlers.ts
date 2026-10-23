@@ -17,6 +17,7 @@ import { Effect, Layer } from "effect";
 
 import { CallbackTransport } from "../events/callback.ts";
 import { renderHubEvents } from "../events/render.ts";
+import { prepareMappedEvents } from "../events/tmf-event-arrays.ts";
 import { authorizeEventTopic } from "../events/topic-authorization.ts";
 import { runAfterCommitRule } from "../hooks/after-commit-rules.ts";
 import { ruleCarriers } from "../records/outbox-producer.ts";
@@ -71,6 +72,7 @@ export const ProductionDeliveryHandlers = Layer.effect(
           : {
               authorize: authorizeEventTopic,
               kind: "external",
+              prepare: prepareMappedEvents,
               render: renderHubEvents,
               run: Effect.fn("Hubs.deliver")(function* deliverHub(
                 delivery: Delivery

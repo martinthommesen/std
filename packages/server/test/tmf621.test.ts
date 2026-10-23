@@ -35,6 +35,7 @@ import {
   bodyOf,
   characteristicsWith,
   etagOf,
+  individualOf,
   itemsOf,
   SPECIFICATIONS,
   TICKETS,
@@ -89,22 +90,6 @@ const stored = Effect.fn("Tmf621Test.stored")(function* stored(
 });
 
 /** The individual of a helpdesk user, as the admin reads it. */
-const individualOf = Effect.fn("Tmf621Test.individualOf")(
-  function* individualOf(userId: string) {
-    const http = yield* TestHttpClient;
-    const fixture = yield* HelpdeskFixture;
-
-    const token = yield* http.signIn(
-      fixture.admin.login,
-      fixture.admin.password
-    );
-
-    const user = yield* http.get(`/api/v1/coreUser/${userId}`, { token });
-
-    return textOf(asObject(asObject(user.json).individual).id);
-  }
-);
-
 /**
  * A TMF `Error`'s status and code, as `"<status> <code>"`.
  *

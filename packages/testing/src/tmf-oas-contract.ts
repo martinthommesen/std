@@ -57,6 +57,9 @@ const SPECS = SPECS_DIRECTORY;
 const asObject = (value: JsonValue | undefined): JsonObject =>
   value !== undefined && isJsonObject(value) ? value : {};
 
+const asArray = (value: JsonValue | undefined): readonly JsonValue[] =>
+  value !== undefined && isJsonArray(value) ? value : [];
+
 const textOf = (value: JsonValue | undefined): string | undefined =>
   value !== undefined && isJsonString(value) ? value : undefined;
 
@@ -239,6 +242,106 @@ export const schemaValueProblem = (
   return validate(value)
     ? undefined
     : `${spec} ${schemaName}: ${loaded.ajv.errorsText(validate.errors)}`;
+};
+
+/**
+ * Every member a schema of a pinned document marks required, through its
+ * `allOf` chain (`TroubleTicket`: `@type`, from `Extensible`).
+ *
+ * @param loaded - The document.
+ * @param schemaName - A schema of its `#/components/schemas`.
+ * @returns The required members.
+ */
+const requiredMembersOf = (
+  loaded: LoadedDocument,
+  schemaName: string
+): ReadonlySet<string> => {
+  const prefix =
+    loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
+
+  const schemas = asObject(
+    loaded.document.swagger === "2.0"
+      ? loaded.document.definitions
+      : asObject(loaded.document.components).schemas
+  );
+
+  const required = new Set<string>();
+  const pending: JsonValue[] = [schemas[schemaName] ?? null];
+  const seen = new Set<string>();
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const schema = asObject(next);
+    const ref = textOf(schema.$ref);
+
+    if (ref?.startsWith(prefix) === true && !seen.has(ref)) {
+      seen.add(ref);
+      pending.push(schemas[ref.slice(prefix.length)] ?? null);
+    }
+
+    for (const member of asArray(schema.required)) {
+      if (isJsonString(member)) {
+        required.add(member);
+      }
+    }
+
+    pending.push(...asArray(schema.allOf));
+  }
+
+  return required;
+};
+
+/**
+ * What is wrong with an AttributeValueChange event whose resource is a
+ * JSON merge patch (TMF630 v5.0.0 Part 1 §11.6.2 pp.202-203, pp.105-106):
+ * a `null` member of the resource clears it, so it is allowed only where
+ * the resource's schema does not require the member; the event with those
+ * members left out must fit the event's schema.
+ *
+ * @param spec - The pinned specification (`TMF621`).
+ * @param schemaName - The event's schema.
+ * @param value - The event body.
+ * @param resourceName - The resource's member of `event` (`troubleTicket`).
+ * @returns A description of the mismatch, or undefined.
+ */
+export const mergePatchEventProblem = (
+  spec: string,
+  schemaName: string,
+  value: JsonValue,
+  resourceName: string
+): string | undefined => {
+  const body = asObject(value);
+  const event = asObject(body.event);
+  const resource = asObject(event[resourceName]);
+  const type = textOf(resource["@type"]);
+
+  if (type === undefined) {
+    return `${spec} ${schemaName}: event/${resourceName} has no @type`;
+  }
+
+  const required = requiredMembersOf(
+    loadDocument(contractAt(spec, "/").file),
+    type
+  );
+
+  const cleared = Object.keys(resource).filter(
+    (member) => resource[member] === null
+  );
+
+  const refused = cleared.filter((member) => required.has(member));
+
+  if (refused.length > 0) {
+    return `${spec} ${schemaName}: event/${resourceName}/${refused.join(", ")} is required by ${type} and cannot be cleared with null`;
+  }
+
+  return schemaValueProblem(spec, schemaName, {
+    ...body,
+    event: {
+      ...event,
+      [resourceName]: Object.fromEntries(
+        Object.entries(resource).filter(([, member]) => member !== null)
+      ),
+    },
+  });
 };
 
 /** A response as the contract check sees it. */

@@ -94,7 +94,7 @@ const RESOURCE: TmfResourceMapping = {
     retrieve: [200, 400, 404],
   },
   events: standardEvents({
-    status: { sources: [F.status, F.holdReason] },
+    status: { payload: ["status"], sources: [F.status, F.holdReason] },
     type: "TroubleTicket",
   }),
   name: "troubleTicket",

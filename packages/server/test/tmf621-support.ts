@@ -112,6 +112,28 @@ export const tmf621As = Effect.fn("Tmf621.as")(function* tmf621As(
 });
 
 /**
+ * The individual (TMF632 party) of a helpdesk user, read as the admin.
+ *
+ * @param userId - The user.
+ * @returns The individual's ID.
+ */
+export const individualOf = Effect.fn("Tmf621.individualOf")(
+  function* individualOf(userId: string) {
+    const http = yield* TestHttpClient;
+    const fixture = yield* HelpdeskFixture;
+
+    const token = yield* http.signIn(
+      fixture.admin.login,
+      fixture.admin.password
+    );
+
+    const user = yield* http.get(`/api/v1/coreUser/${userId}`, { token });
+
+    return textOf(asObject(asObject(user.json).individual).id);
+  }
+);
+
+/**
  * A response's JSON object body (empty when it is not one).
  *
  * @param response - The response.

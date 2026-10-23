@@ -142,14 +142,14 @@ rows:
     status: tested
     tests:
       - "packages/server/test/tmf621.test.ts#tickets, incidents and problems created through /api/v1, the record service and the Step 2 upgrade render every mandatory attribute through TMF621"
-      - "packages/server/test/tmf621.test.ts#characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority"
+      - "packages/server/test/tmf621.test.ts#characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given"
   - id: TMF621@5.0.1/CP/attributes/characteristicRelationship
     source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
     level: mandatory
     requirement: "A characteristicRelationship item of a characteristic carries @type, id and relationshipType. (Mandatory only when the parent is present.)"
     status: tested
     tests:
-      - "packages/server/test/tmf621.test.ts#characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority"
+      - "packages/server/test/tmf621.test.ts#characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given"
   - id: TMF621@5.0.1/CP/attributes/troubleTicketRelationship
     source: "TMF621 CP v5.0.0 TroubleTicket Resource Mandatory Attributes pp.3-4"
     level: mandatory
@@ -454,14 +454,14 @@ rows:
     requirement: "A characteristic in a write carries name, and value in its typed subtypes."
     status: tested
     tests:
-      - "packages/server/test/tmf621.test.ts#characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority"
+      - "packages/server/test/tmf621.test.ts#characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given"
   - id: TMF621@5.0.1/OAS/required/CharacteristicRelationship_FVO
     source: "TMF621 OAS v5.0.1 #/components/schemas/CharacteristicRelationship_FVO/allOf/1/required"
     level: mandatory
     requirement: "A characteristic relationship in a write carries id and relationshipType."
     status: tested
     tests:
-      - "packages/server/test/tmf621.test.ts#characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority"
+      - "packages/server/test/tmf621.test.ts#characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given"
   - id: TMF621@5.0.1/OAS/required/ExternalIdentifier_FVO
     source: "TMF621 OAS v5.0.1 #/components/schemas/ExternalIdentifier_FVO/allOf/1/required"
     level: mandatory

@@ -13,12 +13,18 @@
  *   identity, so a hidden field never contributes.
  * - Payloads per kind (12.1): a Create carries the resource as the
  *   identity may read it, an AttributeValueChange the attributes whose
- *   sources changed, a status event the status and its date and reason, a
- *   Delete `id`, `href` and `@type` only. The resource is rendered by the
- *   mapping, with TMF hrefs and `@type`; reference labels and parts are
- *   not read at delivery, so references carry their `id` and arrays of
- *   parts are left out [judgment: an event reports the change entry, and
- *   the resource itself is one GET away].
+ *   sources changed and every array the change touched, whole (TMF630
+ *   v5.0.0 Part 1 §11.6.2 pp.202-203), a status event the attributes its
+ *   rule declares (`EventRule.payload`, §11.6.3 p.203), a Delete `id`,
+ *   `href` and `@type` only. The resource is rendered by the mapping, with
+ *   TMF hrefs and `@type`, from the change's image and what the
+ *   preparation read (`prepareMappedEvents`: arrays of parts and reference
+ *   paths); reference labels are not read at delivery, so references carry
+ *   their `id` [judgment: an event reports the change entry, and the
+ *   resource itself is one GET away].
+ * - An AttributeValueChange's resource is a JSON merge patch (§11.6.2,
+ *   Part 1 pp.105-106): an attribute the change cleared, which the
+ *   identity can still read, is `null`.
  * - A hub's `eventType` query names these types; a change none of whose
  *   possible types it names makes no delivery (`acceptsHubEvent`).
  */
@@ -30,11 +36,12 @@ import type {
   ChangeView,
   EventRule,
   SourceKey,
+  SourceRecord,
   SourceValue,
   SourceValues,
 } from "@std/tmf/mapping";
 import { pathOf } from "@std/tmf/mapping";
-import { renderResource } from "@std/tmf/render";
+import { readableOn, renderResource } from "@std/tmf/render";
 import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -47,16 +54,9 @@ import {
   typeAttributesFor,
 } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
-import type { Delivery } from "../outbox/delivery-effects.ts";
+import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import type { ChangeKind } from "../records/change-entry.ts";
 import { eventIdOf } from "./event-id.ts";
-
-/** The attributes a status event carries (Contracts 12.1). */
-const STATUS_ATTRIBUTES: ReadonlySet<string> = new Set([
-  "status",
-  "statusChangeDate",
-  "statusChangeReason",
-]);
 
 /**
  * The mapped resource a hub was registered on, when its API is a shipped
@@ -105,17 +105,18 @@ const sourceValueOf = (
  *
  * @param snapshot - The configuration.
  * @param image - Field ID to value.
- * @param readable - The fields the identity can read on that image.
+ * @param readable - The fields the identity can read on that image;
+ *   absent: every field the image holds.
  * @returns The values.
  */
-const valuesOf = (
+export const sourceValuesOf = (
   snapshot: ConfigSnapshot,
   image: JsonObject,
-  readable: ReadonlySet<string>
+  readable?: ReadonlySet<string>
 ): SourceValues =>
   new Map(
     Object.entries(image).flatMap(([fieldId, value]) =>
-      readable.has(fieldId) && value !== undefined
+      (readable === undefined || readable.has(fieldId)) && value !== undefined
         ? [[fieldId, sourceValueOf(snapshot, fieldId, value)] as const]
         : []
     )
@@ -141,7 +142,7 @@ const changeViewOf = (
   beforeReadable: ReadonlySet<string>
 ): ChangeView => {
   const { payload, snapshot } = delivery;
-  const image = valuesOf(snapshot, payload.image, readable);
+  const image = sourceValuesOf(snapshot, payload.image, readable);
 
   if (payload.kind === "create") {
     return { action: "create", after: image };
@@ -154,16 +155,17 @@ const changeViewOf = (
   return {
     action: "update",
     after: image,
-    before: valuesOf(snapshot, beforeImageOf(delivery), beforeReadable),
+    before: sourceValuesOf(snapshot, beforeImageOf(delivery), beforeReadable),
   };
 };
 
+// The owner fields an attribute renders from (an array's: its owner
+// items'), a path source by its reference.
 const sourcesOf = (attribute: Attribute): readonly SourceKey[] =>
-  attribute.kind === "parts"
-    ? []
-    : [...attribute.sources, ...(attribute.optionalSources ?? [])].map(
-        (source) => pathOf(source)?.reference ?? source
-      );
+  (attribute.kind === "parts"
+    ? (attribute.ownerItems ?? []).flatMap((owner) => owner.sources)
+    : [...attribute.sources, ...(attribute.optionalSources ?? [])]
+  ).map((source) => pathOf(source)?.reference ?? source);
 
 /**
  * The attributes a payload renders for one event type (Contracts 12.1).
@@ -171,13 +173,19 @@ const sourcesOf = (attribute: Attribute): readonly SourceKey[] =>
  * @param rule - The event type.
  * @param attributes - The record's attributes.
  * @param changed - The readable changed fields.
+ * @param arrays - The arrays of parts the change touched.
  * @returns The selection, or null for the whole resource.
  */
 const selectionFor = (
   rule: EventRule,
   attributes: readonly Attribute[],
-  changed: ReadonlySet<string>
+  changed: ReadonlySet<string>,
+  arrays: ReadonlySet<string>
 ): ReadonlySet<string> | null => {
+  if (rule.payload !== undefined) {
+    return new Set(rule.payload);
+  }
+
   if (rule.on === "create") {
     return null;
   }
@@ -186,17 +194,42 @@ const selectionFor = (
     return new Set();
   }
 
-  if (rule.triggers.length > 0) {
-    return STATUS_ATTRIBUTES;
-  }
-
   return new Set(
     attributes.flatMap((attribute) =>
+      arrays.has(attribute.name) ||
       sourcesOf(attribute).some((source) => changed.has(source))
         ? [attribute.name]
         : []
     )
   );
+};
+
+/**
+ * An AttributeValueChange's resource as a JSON merge patch (TMF630 v5.0.0
+ * Part 1 §11.6.2 pp.202-203, pp.105-106): each selected attribute the
+ * identity can read but the version leaves empty is `null`.
+ *
+ * @param rendered - The rendered resource.
+ * @param attributes - The record's attributes.
+ * @param selected - The selection.
+ * @param record - The record as rendered.
+ * @returns The resource.
+ */
+const withClears = (
+  rendered: JsonObject,
+  attributes: readonly Attribute[],
+  selected: ReadonlySet<string>,
+  record: SourceRecord
+): JsonObject => {
+  const cleared = attributes.flatMap((attribute) =>
+    selected.has(attribute.name) &&
+    rendered[attribute.name] === undefined &&
+    readableOn(attribute, record)
+      ? [[attribute.name, null] as const]
+      : []
+  );
+
+  return { ...rendered, ...Object.fromEntries(cleared) };
 };
 
 /** What rendering a mapped hub's events needs from the generic path. */
@@ -214,6 +247,8 @@ export interface MappedEventInput {
   readonly identityOnly: boolean;
   /** When the delivery is rendered (epoch milliseconds). */
   readonly renderedAt: number;
+  /** What the preparation read (`prepareMappedEvents`); null if it did not run. */
+  readonly prepared: RenderPrepared | null;
 }
 
 /**
@@ -247,13 +282,27 @@ export const mappedHubEvents = (
       triggersReadable(rule) && (wanted.size === 0 || wanted.has(rule.type))
   );
 
-  const record = {
+  const arrays = input.prepared?.parts ?? new Map();
+
+  const base: SourceRecord = {
     classId: payload.classId,
     id: payload.recordId,
-    parts: new Map(),
-    values: view.after ?? view.before ?? new Map(),
+    parts: arrays,
+    values: new Map([
+      ...(view.after ?? view.before ?? new Map()),
+      ...[...(input.prepared?.paths ?? [])].map(
+        ([key, value]) => [key, { value }] as const
+      ),
+    ]),
     version: payload.recordVersion,
   };
+
+  const history = input.prepared?.history;
+
+  const record: SourceRecord =
+    history === undefined ? base : { ...base, history };
+
+  const touched = new Set(arrays.keys());
 
   const context = {
     ...renderContextOf(snapshot, SHIPPED_TMF_APIS, hub.origin),
@@ -267,18 +316,26 @@ export const mappedHubEvents = (
   };
 
   return rules.flatMap((rule) => {
-    const selected = selectionFor(rule, attributes, changed);
-    const attributeChange = rule.on === "update" && rule.triggers.length === 0;
+    const selected = selectionFor(rule, attributes, changed, touched);
+
+    const attributeChange = rule.on === "update" && rule.payload === undefined;
 
     // An attribute change no mapped attribute shows is no event.
     if (attributeChange && selected?.size === 0) {
       return [];
     }
 
-    const resource = renderResource(mapped.resource, record, {
+    const fields = input.identityOnly ? new Set<string>() : selected;
+
+    const rendered = renderResource(mapped.resource, record, {
       ...context,
-      fields: input.identityOnly ? new Set<string>() : selected,
+      fields,
     });
+
+    const resource =
+      attributeChange && fields !== null
+        ? withClears(rendered, attributes, fields, record)
+        : rendered;
 
     const eventId = eventIdOf(delivery.changeId, rule.type);
 

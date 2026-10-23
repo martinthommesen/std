@@ -411,11 +411,9 @@ export const renderHubEvents = (
     return [];
   }
 
-  if (delivery.payload.kind === "update" && changed.length === 0) {
-    return [];
-  }
-
-  // A hub on a mapped TMF API gets that API's own events (decision 0035).
+  // A hub on a mapped TMF API gets that API's own events (decision 0035);
+  // an owner's aggregate save that changed none of its fields can still
+  // change its arrays.
   const mapped = hub.api === "TMF688" ? undefined : mappedResourceOfHub(hub);
 
   if (mapped !== undefined) {
@@ -426,9 +424,14 @@ export const renderHubEvents = (
       hub,
       identityOnly: options.identityOnly === true,
       mapped,
+      prepared: context.prepared,
       readable,
       renderedAt: context.now,
     });
+  }
+
+  if (delivery.payload.kind === "update" && changed.length === 0) {
+    return [];
   }
 
   const payloadFields =
