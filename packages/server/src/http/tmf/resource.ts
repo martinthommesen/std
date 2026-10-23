@@ -699,10 +699,12 @@ const saveParts = Effect.fn("Tmf.saveParts")(function* saveParts(
 });
 
 /**
- * Checks, after a write and under the aggregate's lock, that the caller
+ * Checks, after a write and its aggregate finalization, still in the
+ * request transaction and under the aggregate's lock, that the caller
  * reads each array in the body's order (decision 0033): the positions a
  * write stores can be withheld from the caller by a mask whose condition
- * the same write sets or lifts, so only the state written can tell. Parts
+ * the same write sets or lifts, or moved or masked by the aggregate rules
+ * that settle the owner, so only the state committed can tell. Parts
  * the caller cannot see after the write are left out of the comparison.
  * A different order fails the whole write, which rolls back, with the
  * refusal that names only the array.
@@ -808,13 +810,15 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
 
       const written = yield* saveParts(snapshot, owner.id, plan);
 
-      yield* checkReadOrder(scope, input.mapped, owner.id, written);
-
-      return owner;
+      return { owner, written };
     })
   );
 
-  return yield* resourceAnswer(input, created.id, 201, fields);
+  // After finalization (aggregate rules may move or mask parts), still in
+  // the request transaction: a mismatch rolls everything back.
+  yield* checkReadOrder(scope, input.mapped, created.owner.id, created.written);
+
+  return yield* resourceAnswer(input, created.owner.id, 201, fields);
 });
 
 /** A `PATCH` as read before the transaction. */
@@ -1014,7 +1018,7 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
     queryOf(input.request)
   );
 
-  yield* aggregateOperation(
+  const patched = yield* aggregateOperation(
     Effect.gen(function* patchOwnerAndParts() {
       const { current, scope } = yield* lockedCurrent(
         input,
@@ -1085,8 +1089,18 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
 
       const written = yield* saveParts(snapshot, current.id, plan, current);
 
-      yield* checkReadOrder(scope, input.mapped, current.id, written);
+      return { id: current.id, scope, written };
     })
+  );
+
+  // After finalization (aggregate rules may move or mask parts), still in
+  // the request transaction and under the aggregate's lock: a mismatch
+  // rolls everything back.
+  yield* checkReadOrder(
+    patched.scope,
+    input.mapped,
+    patched.id,
+    patched.written
   );
 
   return yield* resourceAnswer(input, id.toLowerCase(), 200, fields);

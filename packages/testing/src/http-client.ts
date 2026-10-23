@@ -72,8 +72,10 @@ export interface TestHttpClientApi {
   ) => Effect.Effect<TestResponse>;
   /**
    * A `fetch` over the same application, for typed clients built with
-   * `FetchHttpClient` (`FetchHttpClient.Fetch`). Responses are not checked
-   * against the `/api/v1` contract; the typed client decodes them itself.
+   * `FetchHttpClient` (`FetchHttpClient.Fetch`). Every response is checked
+   * as `request`'s are (an `/api/v1` answer against the shared definition,
+   * a TMF API answer against its pinned OpenAPI document), on a clone, so
+   * callers keep normal `Response` semantics; a mismatch rejects the call.
    */
   readonly fetch: typeof globalThis.fetch;
   /** Signs in and returns the session token; dies when sign-in fails. */

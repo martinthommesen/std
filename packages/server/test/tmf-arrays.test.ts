@@ -26,8 +26,8 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { count, entriesOf, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
-import { values } from "./schema-support.ts";
-import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
+import { addRecordRule, change, values } from "./schema-support.ts";
+import { FF, FIXTURE_TICKETS, FX, tmfTestLayer } from "./tmf-fixture.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const NOTES = '"tmffx"."note"';
@@ -64,6 +64,53 @@ const newTicket = (caller: TestRequestOptions, body: JsonObject = {}) =>
 
 const noteTexts = (resource: JsonObject): string[] =>
   asArray(resource.note).map((note) => textOf(asObject(note).text));
+
+/**
+ * An aggregate rule of the ticket (Contracts 4.9, 4.10): when the owner's
+ * description becomes `description`, settling sets `values` on the note
+ * whose text is "b".
+ * @param description - The owner's description that triggers it.
+ * @param fieldId - The note field it sets.
+ * @param value - The value.
+ * @returns The rule.
+ */
+const settlingRule = (description: string, fieldId: string, value: JsonValue) =>
+  addRecordRule(FX.ticket.id, {
+    actions: [
+      {
+        classId: FX.note.id,
+        type: "setParts",
+        values: [{ fieldId, value: { value } }],
+        where: {
+          left: { path: [FF.noteText.id] },
+          op: "eq",
+          right: { value: "b" },
+        },
+      },
+    ],
+    condition: {
+      left: { path: [FF.description.id] },
+      op: "eq",
+      right: { value: description },
+    },
+    operations: [],
+    phase: "aggregate",
+    ruleKind: null,
+  });
+
+/** Settling moves note "b" to the end. */
+const SETTLE_POSITION = settlingRule(
+  "settle-position",
+  FF.notePosition.id,
+  100
+);
+
+/** Settling masks note "b"'s position from the asset manager. */
+const SETTLE_MASK = settlingRule(
+  "settle-mask",
+  FF.noteText.id,
+  "masked position"
+);
 
 describe("tmf-arrays", () => {
   it("the notes of a resource are listed by their text", () => {
@@ -836,6 +883,107 @@ describe("tmf-arrays", () => {
           assert.strictEqual(reordered.status, 400, reordered.text);
           assert.strictEqual(asObject(reordered.json).code, "ValidationFailed");
           assert.notInclude(reordered.text, textOf(first.id));
+        })
+    );
+
+    dbTest.effect(
+      "the order is compared after the aggregate settles: a rule that moves or masks a part refuses a create and a patch, rolled back",
+      () =>
+        Effect.gen(function* afterSettling() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* apiCallers;
+
+          yield* change([SETTLE_POSITION.op, SETTLE_MASK.op]);
+
+          for (const description of ["settle-position", "settle-mask"]) {
+            const before = yield* count(
+              `SELECT count(*)::text AS value FROM ${TICKETS} WHERE description = $1`,
+              [description]
+            );
+
+            const created = yield* http.request("POST", FIXTURE_TICKETS, {
+              ...alice,
+              body: {
+                "@type": "TroubleTicket",
+                description,
+                note: [
+                  { "@type": "Note", text: "b" },
+                  { "@type": "Note", text: "a" },
+                ],
+              },
+            });
+
+            assert.strictEqual(
+              created.status,
+              400,
+              `${description}: ${created.text}`
+            );
+            assert.strictEqual(asObject(created.json).code, "ValidationFailed");
+
+            assert.strictEqual(
+              yield* count(
+                `SELECT count(*)::text AS value FROM ${TICKETS} WHERE description = $1`,
+                [description]
+              ),
+              before
+            );
+
+            const ticket = yield* newTicket(alice, {
+              note: [
+                { "@type": "Note", text: "a" },
+                { "@type": "Note", text: "b" },
+              ],
+            });
+
+            const path = `${FIXTURE_TICKETS}/${textOf(ticket.id)}`;
+            const read = yield* http.get(path, alice);
+
+            const [a = {}, b = {}] = asArray(asObject(read.json).note).map(
+              asObject
+            );
+
+            const patched = yield* http.request(
+              "PATCH",
+              path,
+              patchOptions(alice, "application/merge-patch+json", {
+                description,
+                note: [b, a],
+              })
+            );
+
+            assert.strictEqual(
+              patched.status,
+              400,
+              `${description}: ${patched.text}`
+            );
+            assert.strictEqual(asObject(patched.json).code, "ValidationFailed");
+            assert.notInclude(patched.text, textOf(b.id));
+
+            const after = yield* http.get(path, alice);
+
+            assert.strictEqual(
+              after.headers.get("etag"),
+              read.headers.get("etag")
+            );
+            assert.strictEqual(asObject(after.json).description, "Arrays");
+            assert.deepStrictEqual(noteTexts(asObject(after.json)), ["a", "b"]);
+          }
+
+          // Settling that keeps the body's order passes.
+          const kept = yield* http.request("POST", FIXTURE_TICKETS, {
+            ...alice,
+            body: {
+              "@type": "TroubleTicket",
+              description: "settle-position",
+              note: [
+                { "@type": "Note", text: "a" },
+                { "@type": "Note", text: "b" },
+              ],
+            },
+          });
+
+          assert.strictEqual(kept.status, 201, kept.text);
+          assert.deepStrictEqual(noteTexts(asObject(kept.json)), ["a", "b"]);
         })
     );
   });
