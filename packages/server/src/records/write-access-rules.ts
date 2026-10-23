@@ -24,6 +24,9 @@
  *   a record the caller can no longer see is only `{ id, version }`.
  * - `nameable`: the fields of the endpoint's lineage that the caller can
  *   read or write there.
+ * - `ownerDecisions`: for the owners of a part being written, visibility
+ *   and the record rule for `update` on each, in one statement (decision
+ *   0039).
  */
 import type { FieldAction } from "@std/access/rules";
 import { NotAllowed } from "@std/api/errors/not-allowed";
@@ -60,7 +63,11 @@ import {
 import { recordRelation } from "./relation.ts";
 import { readRows } from "./sql-run.ts";
 import { WriteAccess } from "./write-access.ts";
-import type { ProposedCheck, WriteAccessApi } from "./write-access.ts";
+import type {
+  OwnerDecision,
+  ProposedCheck,
+  WriteAccessApi,
+} from "./write-access.ts";
 
 const ALIAS = "r";
 
@@ -197,6 +204,59 @@ ${"candidate" in check.source ? check.source.candidate : byId(check.snapshot, ch
           isNameable(scope, input.endpointClassId, input.action, field.id)
         );
     },
+    ownerDecisions: Effect.fn("WriteAccess.ownerDecisions")(
+      function* ownerDecisions(input) {
+        const scope = scopeOf(input.snapshot);
+
+        // One branch per owner, each over its concrete class's relation;
+        // an owner with no row gives no row and counts as hidden.
+        const branches = input.owners.map(
+          (owner) =>
+            sql`SELECT ${identSql(ALIAS, "id")}::text AS "owner_id", ${truthColumn(
+              scope.view(owner.classId, true).visibility(ALIAS),
+              "owner_visible"
+            )}, ${truthColumn(
+              recordPredicate(
+                input.snapshot,
+                actor,
+                "update",
+                [owner.classId],
+                ALIAS,
+                context
+              ).predicate,
+              "owner_updatable"
+            )}
+${byId(input.snapshot, owner.classId, owner.id)}`
+        );
+
+        const rows =
+          branches.length === 0
+            ? []
+            : yield* readRows(joinSql(branches, "\nUNION ALL\n"));
+
+        const decided = new Map(
+          rows.map((row): [string | null | undefined, OwnerDecision] => {
+            if (row.owner_visible !== "true") {
+              return [row.owner_id, "hidden"];
+            }
+
+            return [
+              row.owner_id,
+              row.owner_updatable === "true" ? "updatable" : "readOnly",
+            ];
+          })
+        );
+
+        const decisions: ReadonlyMap<string, OwnerDecision> = new Map(
+          input.owners.map((owner): [string, OwnerDecision] => [
+            owner.id,
+            decided.get(owner.id) ?? "hidden",
+          ])
+        );
+
+        return decisions;
+      }
+    ),
     project: Effect.fn("WriteAccess.project")(function* project(input) {
       const table = input.snapshot.qualifiedNameOf(input.endpointClassId);
 

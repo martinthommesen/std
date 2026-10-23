@@ -95,6 +95,24 @@ export interface ProjectionInput {
   readonly record: StoredRecord;
 }
 
+/**
+ * How the acting user stands to an owner of a part they write (Contracts
+ * 4.9, decision 0039): `updatable` when they see it and its record rule
+ * for `update` allows on its existing state, `readOnly` when they see it
+ * but may not update it, `hidden` when they cannot see it.
+ */
+export type OwnerDecision = "updatable" | "readOnly" | "hidden";
+
+/** Owners of a part, to decide in one statement. */
+export interface OwnerCheck {
+  readonly snapshot: ConfigSnapshot;
+  /** Each owner's ID and concrete class. */
+  readonly owners: readonly {
+    readonly id: string;
+    readonly classId: DefinitionId;
+  }[];
+}
+
 /** Which fields a write body may name (3.4). */
 export interface NameableInput {
   readonly snapshot: ConfigSnapshot;
@@ -156,6 +174,20 @@ export interface WriteAccessApi {
       readonly written: ReadonlySet<DefinitionId>;
     }
   ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
+  /**
+   * The owner check of a part write (4.9, decision 0039): for each owner,
+   * whether the caller sees it and may update it as it now is, by the
+   * record rule alone (the part write names no owner field). One
+   * statement for all of them; the pipeline caches the answers per
+   * transaction.
+   */
+  readonly ownerDecisions: (
+    input: OwnerCheck
+  ) => Effect.Effect<
+    ReadonlyMap<string, OwnerDecision>,
+    SqlError,
+    InTransaction
+  >;
   /**
    * The IDs among `ids` that exist, that the caller can see (3.6) and that
    * satisfy the allowed-records condition in the caller's view; a
@@ -220,6 +252,15 @@ const ALLOW_ALL: WriteAccessApi = {
   conditionView: classViewOf,
   forActor: () => ALLOW_ALL,
   nameable: (input) => input.snapshot.fields(input.endpointClassId),
+  ownerDecisions: (input) =>
+    Effect.succeed(
+      new Map(
+        input.owners.map((owner): [string, OwnerDecision] => [
+          owner.id,
+          "updatable",
+        ])
+      )
+    ),
   project: (input) => Effect.succeed(projectAll(input)),
   readableOnProposal: (input) =>
     Effect.succeed(
@@ -243,7 +284,11 @@ const userAccess = new WeakMap<WriteAccessApi, WriteAccessApi>();
  * the acting user. They name and see every field of the record, every
  * existing reference target is allowed, and neither access check refuses;
  * the result is still validated, and responses and validation errors keep
- * the acting user's read rights.
+ * the acting user's read rights. Its owner check allows too: persistence
+ * writes only what settling proposed after the acting user's own saves
+ * passed their owner checks (decision 0039), so it never stands in for
+ * the check of a caller's part write, which runs in that caller's save
+ * with the caller's own access layer.
  *
  * @param base - The acting user's access layer.
  * @returns The system effect's.
