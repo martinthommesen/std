@@ -1,5 +1,6 @@
 /** Non-persisting derived proposals and caller-masked form verdicts (decision 0036). */
 import { formRulesFor } from "@std/access/form-rules";
+import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
@@ -11,6 +12,7 @@ import { checkCondition } from "@std/conditions/check";
 import { evaluateCondition } from "@std/conditions/evaluate";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
+import { ownerReferenceOf } from "@std/definitions/aggregates";
 import { conditionPaths } from "@std/definitions/condition";
 import { classViewOf } from "@std/definitions/condition-view";
 import type { EffectiveField } from "@std/definitions/effective-schema";
@@ -22,7 +24,7 @@ import { invalidValue } from "@std/definitions/field-errors";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { MetaFormRule } from "@std/definitions/table-metadata";
 import { encodeOut } from "@std/values/codec";
-import type { DecodedInput } from "@std/values/field-value";
+import type { DecodedInput, StoredValue } from "@std/values/field-value";
 import { isBoolean, isString } from "@std/values/field-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext, isPlaintext } from "@std/values/write-only";
@@ -30,6 +32,9 @@ import { Effect, Option, Result, Schema } from "effect";
 
 import { applyDeriveRules } from "../hooks/before-rules.ts";
 import { imageOf } from "../hooks/rule-condition.ts";
+import { readChain } from "./aggregate-chain.ts";
+import { authorizeOwners } from "./part-owner-access.ts";
+import type { OwnersOutcome } from "./part-owner-access.ts";
 import { deriveIndividualName } from "./party-rules.ts";
 import { hookChanges, writtenFields } from "./proposal-changes.ts";
 import { rulesById } from "./proposal-rules.ts";
@@ -37,6 +42,7 @@ import { currentReadScope } from "./read-records.ts";
 import type { ReadScope } from "./read-view.ts";
 import { readableOnProposal, readableOnRecord } from "./record-access.ts";
 import { loadRecord, loadRoot } from "./save-sql.ts";
+import type { StoredRecord } from "./stored-record.ts";
 import type { ProposalCheck } from "./write-access.ts";
 import { WriteAccess } from "./write-access.ts";
 import { resolveWriteBody } from "./write-body.ts";
@@ -48,6 +54,56 @@ export interface FormProposal {
   readonly revision: number | null;
   readonly values: JsonObject;
 }
+
+const formOwners = Effect.fn("Forms.owners")(function* formOwners(
+  scope: ReadScope,
+  classId: string,
+  values: ReadonlyMap<string, DecodedInput | StoredValue | null>
+) {
+  const reference = ownerReferenceOf(scope.snapshot, classId);
+  const ownerId = reference === undefined ? null : values.get(reference.id);
+
+  if (reference?.type.kind !== "reference" || !isString(ownerId)) {
+    return "allowed" satisfies OwnersOutcome;
+  }
+
+  const chain = yield* readChain(
+    scope.snapshot,
+    reference.type.targetClassId,
+    ownerId
+  );
+
+  return Option.isNone(chain)
+    ? ("hidden" satisfies OwnersOutcome)
+    : yield* authorizeOwners(scope.snapshot, chain.value, scope.context.me);
+});
+
+const authorizeFormCreate = Effect.fn("Forms.authorizeCreate")(
+  function* authorizeFormCreate(
+    scope: ReadScope,
+    classId: string,
+    values: ReadonlyMap<string, DecodedInput>,
+    existing: StoredRecord | null
+  ) {
+    const ownerReference = ownerReferenceOf(scope.snapshot, classId);
+
+    if (existing === null && ownerReference !== undefined) {
+      const owners = yield* formOwners(scope, classId, values);
+
+      if (owners === "hidden") {
+        return yield* new InvalidReference({
+          field: ownerReference.name,
+        });
+      }
+
+      if (owners === "refused") {
+        return yield* new NotAllowed({ refusedOn: "owner" });
+      }
+    }
+
+    return yield* Effect.void;
+  }
+);
 
 const existingFor = Effect.fn("Forms.existing")(function* existingFor(
   scope: ReadScope,
@@ -84,10 +140,6 @@ const existingFor = Effect.fn("Forms.existing")(function* existingFor(
     return yield* new NotFound();
   }
 
-  if (request.revision !== root.value.version) {
-    return yield* new VersionConflict({ currentVersion: root.value.version });
-  }
-
   const loaded = yield* loadRecord(
     scope.snapshot,
     root.value.classId,
@@ -98,7 +150,25 @@ const existingFor = Effect.fn("Forms.existing")(function* existingFor(
     return yield* new NotFound();
   }
 
-  return loaded.value;
+  const owners = yield* formOwners(
+    scope,
+    loaded.value.classId,
+    loaded.value.values
+  );
+
+  if (owners === "hidden") {
+    return yield* new NotFound();
+  }
+
+  if (owners === "refused" && Object.keys(request.values).length > 0) {
+    return yield* new NotAllowed({ refusedOn: "owner" });
+  }
+
+  if (request.revision !== root.value.version) {
+    return yield* new VersionConflict({ currentVersion: root.value.version });
+  }
+
+  return { owners, record: loaded.value };
 });
 
 const maskImage = (
@@ -395,7 +465,8 @@ const proposeForm = Effect.fn("Forms.propose")(function* proposeForm(
 ) {
   const { snapshot } = scope;
 
-  const existing = yield* existingFor(scope, endpointClassId, request);
+  const checked = yield* existingFor(scope, endpointClassId, request);
+  const existing = checked?.record ?? null;
 
   if (
     snapshot.class(endpointClassId)?.storage === "platform" ||
@@ -456,6 +527,7 @@ const proposeForm = Effect.fn("Forms.propose")(function* proposeForm(
     classId,
     existing,
     fields,
+    owners: checked?.owners ?? "allowed",
     proposal,
     resolved: resolved.success,
     rules,
@@ -552,22 +624,24 @@ const readOnlyFormState = Effect.fn("Forms.readOnlyState")(
 
     const access = yield* WriteAccess;
 
-    const mayUpdate = yield* access
-      .checkExisting({
-        action: "update",
-        endpointClassId,
-        record: existing,
-        snapshot: scope.snapshot,
-        written,
-      })
-      .pipe(
-        Effect.as(true),
-        Effect.catchTag("NotAllowed", (error) =>
-          resolved.entries.size === 0
-            ? Effect.succeed(false)
-            : Effect.fail(error)
-        )
-      );
+    const mayUpdate =
+      form.owners !== "refused" &&
+      (yield* access
+        .checkExisting({
+          action: "update",
+          endpointClassId,
+          record: existing,
+          snapshot: scope.snapshot,
+          written,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.catchTag("NotAllowed", (error) =>
+            resolved.entries.size === 0
+              ? Effect.succeed(false)
+              : Effect.fail(error)
+          )
+        ));
 
     if (mayUpdate) {
       return Option.none();
@@ -675,6 +749,8 @@ export const formState = Effect.fn("Forms.state")(function* formState(
     new Map([...proposal.values, ...derived.set]),
     existing?.values ?? null
   );
+
+  yield* authorizeFormCreate(scope, classId, values, existing);
 
   const proposedImage = { ...derived.image, ...Object.fromEntries(values) };
 

@@ -48,6 +48,12 @@ The form-state oracle tests vary a masked value and compare field states, masked
 
 A colleague's readable incident returns a successful, masked read-only verdict for an empty proposal, while a non-empty edit remains denied. Story tests prove that the read-only verdict blocks edit and Save Messages without Commands; scene tests prove values, a neutral note and no editable controls or Save. The default-v3 browser case opens the seeded colleague's incident and checks the verdict, rendering and absence of failed responses and browser errors. The compose smoke retains its original first-row scope and adds the explicit colleague case. Invalid form-state envelopes report key paths only, with no submitted values in their error text.
 
+## Round 4 verification scope
+
+Form-state reuses the owner-chain reader and `authorizeOwners` (decision 0039). Creates check the resolved, derived owner reference before proposal access/validation; updates check the stored owner chain after the part's visibility and before its version. Hidden owners produce the save's `InvalidReference` on create and `NotFound` on update. A visible refusing owner produces the save's exact `NotAllowed` body with `refusedOn: "owner"` for non-empty proposals; an empty proposal returns the same masked read-only verdict as an ordinary record-level update refusal, without derives or form-rule evaluation.
+
+HTTP oracle tests compare note and party create/edit refusals byte for byte with saves on a colleague's ticket, including stale revisions and empty-save refusals alongside read-only empty proposals. The three-level `pown` fixture covers both a refusing immediate owner and a refusing root, and hidden-root create/update/empty proposals. A default-v3 browser case opens a colleague's ticket note as read-only with no failed request, then selects the colleague's ticket in New Ticket note and requires a form-state refusal, disabled Create and no write request.
+
 ## Evidence and remaining handoff
 
 - `definitions/test/form-rules`: inheritance/order, profile/lineage validation, stable references on rename and local override surface.

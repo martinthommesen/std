@@ -32,7 +32,9 @@ import {
   createClass,
   ensureSite,
   change,
+  values as sqlValues,
 } from "./schema-support.ts";
+import { create, patch, savedOf } from "./writes-support.ts";
 
 const preview = Effect.fn("FormTest.preview")(function* preview(
   values: Readonly<Record<string, JsonValue>>,
@@ -46,6 +48,136 @@ const preview = Effect.fn("FormTest.preview")(function* preview(
 });
 
 describe("form-state", () => {
+  it.effect(
+    "part proposals match save owner refusals for notes and parties, and empty proposals are read-only",
+    () =>
+      Effect.gen(function* partOwnerOracle() {
+        const fixture = yield* HelpdeskFixture;
+        const http = yield* TestHttpClient;
+
+        const admin = yield* http.signIn(
+          fixture.admin.login,
+          fixture.admin.password
+        );
+
+        const agent = yield* http.signIn(
+          fixture.agent.login,
+          fixture.agent.password
+        );
+
+        const ticket = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent2.id },
+        });
+
+        const [party] = yield* sqlValues(
+          'SELECT individual::text AS value FROM core."user" WHERE id = $1::uuid',
+          [fixture.agent2.id]
+        );
+
+        for (const part of [
+          {
+            body: { text: "Admin's note", ticket: { id: textOf(ticket.id) } },
+            edit: { text: "Agent's edit" },
+            name: "helpdesk.ticket_note",
+            table: "helpdeskTicketNote",
+          },
+          {
+            body: {
+              party: { id: party ?? "" },
+              role: "reporter",
+              ticket: { id: textOf(ticket.id) },
+            },
+            edit: { role: "contact" },
+            name: "helpdesk.ticket_party",
+            table: "helpdeskTicketParty",
+          },
+        ]) {
+          const created = yield* create(admin, part.name, part.body);
+          assert.strictEqual(created.status, 201, created.text);
+          const record = yield* savedOf(created);
+
+          const checkedCreate = yield* http.request(
+            "POST",
+            "/api/v1/checkFormState",
+            {
+              body: {
+                id: null,
+                revision: null,
+                table: part.table,
+                values: part.body,
+              },
+              token: agent,
+            }
+          );
+
+          const savedCreate = yield* create(agent, part.name, part.body);
+          assert.strictEqual(checkedCreate.status, 403, checkedCreate.text);
+          assert.strictEqual(savedCreate.status, checkedCreate.status);
+          assert.strictEqual(checkedCreate.text, savedCreate.text);
+          assert.strictEqual(asObject(checkedCreate.json).refusedOn, "owner");
+
+          // A stale revision still refuses the owner before revealing a version.
+          for (const revision of [record.version, record.version + 1]) {
+            const checkedEdit = yield* http.request(
+              "POST",
+              "/api/v1/checkFormState",
+              {
+                body: {
+                  id: record.id,
+                  revision,
+                  table: part.table,
+                  values: part.edit,
+                },
+                token: agent,
+              }
+            );
+
+            const savedEdit = yield* patch(
+              agent,
+              part.name,
+              record.id,
+              revision,
+              part.edit
+            );
+
+            assert.strictEqual(checkedEdit.status, 403, checkedEdit.text);
+            assert.strictEqual(savedEdit.status, checkedEdit.status);
+            assert.strictEqual(checkedEdit.text, savedEdit.text);
+          }
+
+          const emptySave = yield* patch(
+            agent,
+            part.name,
+            record.id,
+            record.version,
+            {}
+          );
+
+          assert.strictEqual(emptySave.text, checkedCreate.text);
+          const client = yield* clientFor("agent");
+
+          const verdict = yield* client.records.formState({
+            payload: {
+              id: record.id,
+              revision: record.version,
+              table: part.table,
+              values: {},
+            },
+          });
+
+          assert.isNotEmpty(Object.keys(verdict.fields));
+          assert.isTrue(
+            Object.values(verdict.fields).every((field) => field.readOnly)
+          );
+          assert.deepStrictEqual(verdict.messages, [
+            "You can view this record but not change it.",
+          ]);
+          assert.strictEqual(verdict.revision, record.version);
+          assert.strictEqual(verdict.values.ticket, textOf(ticket.id));
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
   it.effect(
     "an empty proposal for a colleague's incident returns masked read-only states, while an edit is still refused",
     () =>

@@ -7,7 +7,7 @@ import {
 } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import { Effect, Result, Schema } from "effect";
-import type { Page, Response } from "playwright";
+import type { Browser, Page, Response } from "playwright";
 import { inject } from "vitest";
 
 import {
@@ -25,6 +25,7 @@ import {
   formFieldState,
   formFieldText,
   openNewRecordForm,
+  pickReference,
   saveRecordForm,
   signIn,
 } from "./app.ts";
@@ -55,6 +56,99 @@ const watchBrowserErrors = (page: Page): string[] => {
 const isFormCheck = (response: Response): boolean =>
   new URL(response.url()).pathname === "/api/v1/checkFormState";
 
+const colleagueNoteForms = async (
+  browser: Browser,
+  origin: string,
+  fixture: HelpdeskFixture["Service"]
+): Promise<void> => {
+  const admin = await bearerToken(origin, fixture.admin);
+
+  const created = await apiCall(origin, admin, {
+    body: {
+      text: "Colleague's note",
+      ticket: { id: fixture.records.password },
+    },
+    method: "POST",
+    path: "/helpdeskTicketNote",
+  });
+
+  assert.strictEqual(created.status, 201, created.text);
+
+  const note = Schema.decodeSync(
+    Schema.fromJsonString(Schema.Struct({ id: Schema.String }))
+  )(created.text);
+
+  const page = await browser.newPage();
+  await captureResponses(page);
+  await signIn(page, origin, fixture.agent);
+  const errors = watchBrowserErrors(page);
+  const checked = page.waitForResponse(isFormCheck);
+  await openRecordForm(page, origin, {
+    id: note.id,
+    table: "helpdesk.ticket_note",
+  });
+  await page
+    .getByText("You can view this record but not change it.", {
+      exact: true,
+    })
+    .waitFor();
+  const checkedResponse = await checked;
+  assert.strictEqual(checkedResponse.status(), 200);
+  assert.strictEqual(await formFieldState(page, "text"), "value");
+  assert.strictEqual(await formFieldText(page, "text"), "Colleague's note");
+  await page
+    .getByRole("button", { exact: true, name: "Save" })
+    .waitFor({ state: "detached" });
+  assert.strictEqual(
+    await page.getByRole("button", { exact: true, name: "Save" }).count(),
+    0
+  );
+  assert.strictEqual(
+    await page
+      .locator(
+        "[data-field] input, [data-field] textarea, [data-field] select, [data-field] [role=combobox], [data-field] [role=checkbox]"
+      )
+      .count(),
+    0
+  );
+  assert.deepStrictEqual(errors, []);
+
+  await openNewRecordForm(page, origin, "helpdesk.ticket_note", "Ticket note");
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (
+      new URL(request.url()).pathname === "/api/v1/helpdeskTicketNote" &&
+      request.method() === "POST"
+    ) {
+      writes.push(request.url());
+    }
+  });
+
+  const refused = page.waitForResponse(
+    (response) => isFormCheck(response) && response.status() === 403
+  );
+
+  await pickReference(
+    page,
+    "Ticket",
+    "Password reset for payroll",
+    "Password reset for payroll"
+  );
+  await page
+    .getByRole("paragraph")
+    .filter({
+      hasText: /^You are not allowed to make this proposed change\.$/u,
+    })
+    .waitFor();
+  const refusedResponse = await refused;
+  assert.strictEqual(refusedResponse.status(), 403);
+  assert.isFalse(
+    await page.getByRole("button", { exact: true, name: "Create" }).isEnabled()
+  );
+  assert.deepStrictEqual(writes, []);
+  await page.close();
+};
+
 describe("incident form v3", () => {
   it("rejects a form verdict missing the field-state contract", () => {
     assert.isTrue(
@@ -68,6 +162,20 @@ describe("incident form v3", () => {
     );
   });
   layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a colleague's ticket note opens read-only and a new note refuses its owner before Save",
+      () =>
+        Effect.gen(function* colleagueNote() {
+          const fixture = yield* HelpdeskFixture;
+          const database = yield* TestDatabase;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+          yield* Effect.promise(async () => {
+            await colleagueNoteForms(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+
     dbTest.effect(
       "an agent opens a colleague's incident read-only with no failed request",
       () =>
