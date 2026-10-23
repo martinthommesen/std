@@ -9,65 +9,18 @@ import { Effect } from "effect";
 import { ACME, AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
-import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { keyExpression } from "../src/records/read-cursor.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import {
+  bulkRecords,
+  CURSOR_ROWS as ROWS,
+  CURSOR_SORTS as SORTS,
+  sequence,
+} from "./authz-support.ts";
 import { allPages, listOf, listPath, readsTestLayer } from "./reads-support.ts";
 
-const ROWS = 1000;
 const PAGE = "7";
-const MULTIPLIER = 1_103_515_245;
-const INCREMENT = 12_345;
-const MODULUS = 2 ** 31;
-const DAYS = 28;
-const NULL_SHARE = 0.1;
-const MAX_COST = 3000;
-const LOST_SHARE = 0.5;
-
-/**
- * A deterministic sequence of pseudo-random numbers.
- * @param seed - The start.
- * @returns The next number from 0 to 1.
- */
-const sequence = (seed: number) => {
-  let state = seed;
-
-  return (): number => {
-    state = (state * MULTIPLIER + INCREMENT) % MODULUS;
-
-    return state / MODULUS;
-  };
-};
-
-/**
- * Bob's bulk assets: half lost (their purchased_on is hidden from him),
- * some without a date, many with equal dates.
- * @param bob - Bob's user ID.
- * @param random - The number source.
- * @returns The records.
- */
-const bulkRecords = (bob: string, random: () => number): OwnerRecord[] =>
-  Array.from({ length: ROWS }, (_, index) => ({
-    by: bob,
-    values: {
-      cost: String(Math.floor(random() * MAX_COST)),
-      name: `bulk-${String(index).padStart(4, "0")}`,
-      owner: bob,
-      purchased_on:
-        random() < NULL_SHARE
-          ? null
-          : `2024-01-${String(1 + Math.floor(random() * DAYS)).padStart(2, "0")}`,
-      status: random() < LOST_SHARE ? "lost" : "in_use",
-    },
-  }));
-
-const SORTS = [
-  "purchasedOn",
-  "-purchasedOn",
-  "status,-purchasedOn",
-  "-status,purchasedOn,name",
-];
 
 describe("cursor-nulls", () => {
   it("sorts text in code point order through a collation, never a row comparison", () => {

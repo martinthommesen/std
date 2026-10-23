@@ -101,49 +101,67 @@ const listeningOrigin = (child: ChildProcess, log: () => string) =>
   );
 
 /**
- * Starts `std serve` on a port the system picks, against a database, and
- * waits until it listens. The process belongs to the scope: closing the
- * scope, on success, failure or interruption, kills it and waits for it
- * to exit.
+ * Starts a CLI process with scoped cleanup and captured output.
+ * @param url - The database.
+ * @param command - The long-running command.
+ * @param env - Command-specific environment variables.
+ * @returns The child and its accumulated output.
+ */
+const startCli = Effect.fn("CliSupport.startCli")(function* startCli(
+  url: string,
+  command: "serve" | "worker",
+  env: Readonly<Record<string, string>> = {}
+) {
+  const chunks: string[] = [];
+  const log = () => chunks.join("");
+
+  const keep = (chunk: Uint8Array) => {
+    chunks.push(String(chunk));
+  };
+
+  const child = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const spawned = spawn(process.execPath, [CLI_SCRIPT, command], {
+        env: {
+          ...process.env,
+          STD_DATABASE_DIRECT_URL: url,
+          STD_DATABASE_URL: url,
+          ...env,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      spawned.stdout.on("data", keep);
+      spawned.stderr.on("data", keep);
+
+      return spawned;
+    }),
+    killAndAwait
+  );
+
+  return { child, log };
+});
+
+/**
+ * Starts `std serve` on a system-picked port and waits until it listens.
+ * The scope kills the process and waits for it to exit.
  * @param url - The database.
  * @returns The running server.
  */
-export const startServe = (url: string) =>
-  Effect.gen(function* startServeProcess() {
-    const chunks: string[] = [];
-    const log = () => chunks.join("");
-
-    const keep = (chunk: Uint8Array) => {
-      chunks.push(String(chunk));
-    };
-
-    const child = yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const spawned = spawn(process.execPath, [CLI_SCRIPT, "serve"], {
-          env: {
-            ...process.env,
-            STD_DATABASE_DIRECT_URL: url,
-            STD_DATABASE_URL: url,
-            STD_HTTP_HOST: "127.0.0.1",
-            STD_HTTP_PORT: "0",
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-
-        spawned.stdout.on("data", keep);
-        spawned.stderr.on("data", keep);
-
-        return spawned;
-      }),
-      killAndAwait
-    );
+export const startServe = Effect.fn("CliSupport.startServe")(
+  function* startServe(url: string) {
+    const { child, log } = yield* startCli(url, "serve", {
+      STD_HTTP_HOST: "127.0.0.1",
+      STD_HTTP_PORT: "0",
+    });
 
     const origin = yield* listeningOrigin(child, log);
 
     const server: ServeProcess = { child, log, origin };
 
     return server;
-  });
+  }
+);
 
 /**
  * Runs `std <args>` against a database. Interrupting it kills the command
@@ -198,31 +216,6 @@ export const runCli = (
  */
 export const startWorker = Effect.fn("CliSupport.startWorker")(
   function* startWorker(url: string) {
-    const chunks: string[] = [];
-
-    const keep = (chunk: Uint8Array) => {
-      chunks.push(String(chunk));
-    };
-
-    const child = yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const spawned = spawn(process.execPath, [CLI_SCRIPT, "worker"], {
-          env: {
-            ...process.env,
-            STD_DATABASE_DIRECT_URL: url,
-            STD_DATABASE_URL: url,
-          },
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-
-        spawned.stdout.on("data", keep);
-        spawned.stderr.on("data", keep);
-
-        return spawned;
-      }),
-      killAndAwait
-    );
-
-    return { child, log: () => chunks.join("") };
+    return yield* startCli(url, "worker");
   }
 );

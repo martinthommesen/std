@@ -48,6 +48,7 @@ import { withBranchTuning } from "../src/records/read-tuning.ts";
 import { readRows } from "../src/records/sql-run.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { sequence } from "./authz-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { change, createRole } from "./schema-support.ts";
 
@@ -58,9 +59,6 @@ const COST = "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717";
 const ROWS = 240;
 const RUNS = 20;
 const SEED = 8008;
-const MULTIPLIER = 1_103_515_245;
-const INCREMENT = 12_345;
-const MODULUS = 2 ** 31;
 
 const rule = (
   roleId: string,
@@ -142,21 +140,6 @@ const auditorRules = (roleId: string): Operation[] => [
     }
   ),
 ];
-
-/**
- * A deterministic number source.
- * @param seed - The start.
- * @returns The next number from 0 to 1.
- */
-const sequence = (seed: number) => {
-  let state = seed;
-
-  return (): number => {
-    state = (state * MULTIPLIER + INCREMENT) % MODULUS;
-
-    return state / MODULUS;
-  };
-};
 
 const pick = <A>(random: () => number, values: readonly [A, ...A[]]): A =>
   values[Math.floor(random() * values.length)] ?? values[0];

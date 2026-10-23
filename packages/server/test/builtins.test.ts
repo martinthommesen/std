@@ -31,6 +31,7 @@ import {
 import type { JsonObject } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
 import { Effect, Exit } from "effect";
+import { forEach } from "effect/Effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
@@ -41,7 +42,8 @@ import {
   deleteOperation,
   updateOperations,
 } from "../src/http/definition-writes.ts";
-import { observe, signInAll } from "./authz-support.ts";
+import { DatabaseConfig } from "../src/sql/database-config.ts";
+import { observe } from "./authz-support.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   committedState,
@@ -329,7 +331,7 @@ describe("built-ins", () => {
       Effect.gen(function* authenticated() {
         const http = yield* TestHttpClient;
         const snapshot = yield* (yield* Catalog).refresh;
-        const { tokens } = yield* signInAll;
+        const token = yield* http.signIn("ada", "ada-password");
 
         assert.deepStrictEqual(effectiveRoles(snapshot, true, []), [
           BUILT_IN_ROLE_IDS.authenticated,
@@ -345,7 +347,7 @@ describe("built-ins", () => {
         );
 
         const me = yield* http.get("/api/v1/session/current", {
-          token: tokens.admin,
+          token,
         });
 
         assert.include(me.text, BUILT_IN_ROLE_IDS.admin);
@@ -422,7 +424,7 @@ describe("built-ins", () => {
       () =>
         Effect.gen(function* protectedRules() {
           const http = yield* TestHttpClient;
-          const { tokens } = yield* signInAll;
+          const token = yield* http.signIn("ada", "ada-password");
 
           for (const id of Object.keys(BUILT_IN_RULES)) {
             const [version = "1"] = yield* values(
@@ -436,14 +438,14 @@ describe("built-ins", () => {
               {
                 body: { active: false },
                 headers: { "if-match": `"${version}"` },
-                token: tokens.admin,
+                token,
               }
             );
 
             const remove = yield* http.request(
               "DELETE",
               recordPath("core.access_rule", id),
-              { headers: { "if-match": `"${version}"` }, token: tokens.admin }
+              { headers: { "if-match": `"${version}"` }, token }
             );
 
             // These are one-operation change sets (1A), refused by the
@@ -469,126 +471,147 @@ describe("built-ins", () => {
 
     dbTest.effect(
       "every protected definition refuses every operation but label and help text through both HTTP paths; pg_catalog unchanged",
-      () =>
-        Effect.gen(function* protectedMatrix() {
-          const http = yield* TestHttpClient;
-          const token = yield* http.signIn("ada", "ada-password");
-          const snapshot = yield* (yield* Catalog).refresh;
-          const before = yield* committedState;
+      Effect.fn("Builtins.protectedMatrix")(function* protectedMatrix() {
+        const http = yield* TestHttpClient;
+        const token = yield* http.signIn("ada", "ada-password");
+        const snapshot = yield* (yield* Catalog).refresh;
+        const before = yield* committedState;
 
-          const guarded = snapshot
-            .definitions()
-            .filter((definition) => definition.protected && isLive(definition));
+        const guarded = snapshot
+          .definitions()
+          .filter((definition) => definition.protected && isLive(definition));
 
-          assert.isAbove(guarded.length, 100);
+        assert.isAbove(guarded.length, 100);
 
-          // `<path> <kind> <op>` per case tried, and `<path> <tag>` counts.
-          const tried = new Set<string>();
-          const outcomes = new Map<string, number>();
+        // `<path> <kind> <op>` per case tried, and `<path> <tag>` counts.
+        const tried = new Set<string>();
+        const outcomes = new Map<string, number>();
 
-          const refused = (
-            path: string,
-            label: string,
-            response: TestResponse
-          ) => {
-            const { status, tag = response.text } = observe(response);
+        const refused = (
+          path: string,
+          label: string,
+          response: TestResponse
+        ) => {
+          const { status, tag = response.text } = observe(response);
 
-            assert.strictEqual(
-              PROTECTED_REFUSALS.get(tag),
-              status,
-              `${path} ${label}: ${status} ${tag}`
+          assert.strictEqual(
+            PROTECTED_REFUSALS.get(tag),
+            status,
+            `${path} ${label}: ${status} ${tag}`
+          );
+          outcomes.set(
+            `${path} ${tag}`,
+            (outcomes.get(`${path} ${tag}`) ?? 0) + 1
+          );
+        };
+
+        const cases: {
+          readonly definition: Definition;
+          readonly operation: Operation;
+        }[] = [];
+
+        for (const definition of guarded) {
+          for (const operation of refusedOperations(definition)) {
+            cases.push({ definition, operation });
+          }
+        }
+
+        const database = yield* DatabaseConfig;
+
+        yield* forEach(
+          cases,
+          Effect.fn("Builtins.refusedOperation")(function* refusedOperation({
+            definition,
+            operation,
+          }) {
+            const label = `${definition.kind} ${operation.op} ${definition.id}`;
+
+            refused(
+              "endpoint",
+              label,
+              yield* postChangeSet(token, [operation])
             );
-            outcomes.set(
-              `${path} ${tag}`,
-              (outcomes.get(`${path} ${tag}`) ?? 0) + 1
-            );
-          };
+            tried.add(`endpoint ${definition.kind} ${operation.op}`);
 
-          for (const definition of guarded) {
-            for (const operation of refusedOperations(definition)) {
-              const label = `${definition.kind} ${operation.op} ${definition.id}`;
+            const form = genericFormOf(definition, operation);
+
+            if (form !== undefined) {
+              const routed = yield* Effect.exit(routedTags(definition, form));
+
+              assert.deepStrictEqual(
+                Exit.isSuccess(routed) ? routed.value : [],
+                [operation.op],
+                `routing ${label}`
+              );
 
               refused(
-                "endpoint",
+                "generic",
                 label,
-                yield* postChangeSet(token, [operation])
+                yield* sendGeneric(token, definition, form)
               );
-              tried.add(`endpoint ${definition.kind} ${operation.op}`);
-
-              const form = genericFormOf(definition, operation);
-
-              if (form !== undefined) {
-                const routed = yield* Effect.exit(routedTags(definition, form));
-
-                assert.deepStrictEqual(
-                  Exit.isSuccess(routed) ? routed.value : [],
-                  [operation.op],
-                  `routing ${label}`
-                );
-
-                refused(
-                  "generic",
-                  label,
-                  yield* sendGeneric(token, definition, form)
-                );
-                tried.add(`generic ${definition.kind} ${operation.op}`);
-              }
+              tried.add(`generic ${definition.kind} ${operation.op}`);
             }
+          }),
+          {
+            // Match SignInAdmission's half-pool reservation (decision 0038).
+            concurrency: Math.floor(database.maxConnections / 2),
+            discard: true,
           }
+        );
 
-          assertMatrixCovered(guarded, tried);
+        assertMatrixCovered(guarded, tried);
 
-          for (const path of ["endpoint", "generic"]) {
-            for (const tag of PROTECTED_REFUSALS.keys()) {
-              assert.isAbove(
-                outcomes.get(`${path} ${tag}`) ?? 0,
-                0,
-                `${path} ${tag}`
-              );
-            }
+        for (const path of ["endpoint", "generic"]) {
+          for (const tag of PROTECTED_REFUSALS.keys()) {
+            assert.isAbove(
+              outcomes.get(`${path} ${tag}`) ?? 0,
+              0,
+              `${path} ${tag}`
+            );
           }
+        }
 
-          assert.deepStrictEqual(yield* committedState, before);
+        assert.deepStrictEqual(yield* committedState, before);
 
-          // A label change through the generic path and a help-text change
-          // through the endpoint succeed and change no catalog object.
-          const userClass = snapshot.get(USER_CLASS_ID);
+        // A label change through the generic path and a help-text change
+        // through the endpoint succeed and change no catalog object.
+        const userClass = snapshot.get(USER_CLASS_ID);
 
-          assert.isDefined(userClass);
+        assert.isDefined(userClass);
 
-          if (userClass === undefined) {
-            return;
-          }
+        if (userClass === undefined) {
+          return;
+        }
 
-          const relabeled = yield* sendGeneric(token, userClass, {
-            body: { label: "Person" },
-            method: "PATCH",
-            table: "core.class",
-          });
+        const relabeled = yield* sendGeneric(token, userClass, {
+          body: { label: "Person" },
+          method: "PATCH",
+          table: "core.class",
+        });
 
-          assert.strictEqual(relabeled.status, 200, relabeled.text);
+        assert.strictEqual(relabeled.status, 200, relabeled.text);
 
-          const helped = yield* postChangeSet(token, [
-            {
-              changes: { helpText: "Everyone who signs in." },
-              id: USER_CLASS_ID,
-              op: "update",
-              version:
-                (yield* (yield* Catalog).refresh).get(USER_CLASS_ID)?.version ??
-                0,
-            },
-          ]);
+        const helped = yield* postChangeSet(token, [
+          {
+            changes: { helpText: "Everyone who signs in." },
+            id: USER_CLASS_ID,
+            op: "update",
+            version:
+              (yield* (yield* Catalog).refresh).get(USER_CLASS_ID)?.version ??
+              0,
+          },
+        ]);
 
-          assert.strictEqual(helped.status, 201, helped.text);
+        assert.strictEqual(helped.status, 201, helped.text);
 
-          const after = (yield* (yield* Catalog).refresh).get(USER_CLASS_ID);
+        const after = (yield* (yield* Catalog).refresh).get(USER_CLASS_ID);
 
-          assert.deepStrictEqual(
-            after?.kind === "class" ? [after.label, after.helpText] : [],
-            ["Person", "Everyone who signs in."]
-          );
-          assert.strictEqual((yield* committedState).catalog, before.catalog);
-        }),
+        assert.deepStrictEqual(
+          after?.kind === "class" ? [after.label, after.helpText] : [],
+          ["Person", "Everyone who signs in."]
+        );
+        assert.strictEqual((yield* committedState).catalog, before.catalog);
+      }),
       600_000
     );
   });

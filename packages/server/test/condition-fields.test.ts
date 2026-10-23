@@ -25,13 +25,14 @@ import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { signInAll } from "./authz-support.ts";
 import {
   codeOf,
   readsTestLayer,
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
-import { postChangeSet } from "./schema-paths-support.ts";
+import { definitionVersion, postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -75,19 +76,6 @@ const applied = Effect.fn("ConditionFields.applied")(function* applied(
 
   return response;
 });
-
-/**
- * A definition's current version.
- * @param id - The definition.
- * @returns Its version.
- */
-const definitionVersion = Effect.fn("ConditionFields.definitionVersion")(
-  function* definitionVersion(id: string) {
-    const snapshot = yield* (yield* Catalog).refresh;
-
-    return snapshot.get(id)?.version ?? 0;
-  }
-);
 
 /**
  * A `PATCH` of an asset at its current version.
@@ -174,17 +162,6 @@ const eq = (fieldId: string, value: JsonValue): JsonValue => ({
   right: { value },
 });
 
-/** Sign-in of every caller the tests use. */
-const callers = Effect.gen(function* signInAll() {
-  const http = yield* TestHttpClient;
-
-  return {
-    admin: yield* http.signIn("ada", "ada-password"),
-    alice: yield* http.signIn("alice", "alice-password"),
-    bob: yield* http.signIn("bob", "bob-password"),
-  };
-});
-
 describe("condition-fields", () => {
   it("names the field the tests add", () => {
     assert.strictEqual(MATCHES, "matches");
@@ -195,7 +172,7 @@ describe("condition-fields", () => {
       "a condition value is checked against the field's class and profile on every write",
       () =>
         Effect.gen(function* checkedOnSave() {
-          const tokens = yield* callers;
+          const { tokens } = yield* signInAll;
           const { alice: aliceUser, records } = yield* AcmeFixture;
 
           yield* addMatches(tokens.admin);
@@ -333,7 +310,7 @@ describe("condition-fields", () => {
       "a field the caller cannot read is unknown in his conditions, exactly like one that does not exist",
       () =>
         Effect.gen(function* hiddenField() {
-          const tokens = yield* callers;
+          const { tokens } = yield* signInAll;
           const { records } = yield* AcmeFixture;
           const id = records.M;
 
@@ -375,7 +352,7 @@ describe("condition-fields", () => {
       "a rename changes no stored condition; a retired field's conditions stay until the field is written again",
       () =>
         Effect.gen(function* renameAndRetire() {
-          const tokens = yield* callers;
+          const { tokens } = yield* signInAll;
           const http = yield* TestHttpClient;
           const { records } = yield* AcmeFixture;
           const id = records.K;
@@ -450,7 +427,7 @@ describe("condition-fields", () => {
       "through the change-set endpoint a condition field keeps its class from being retired",
       () =>
         Effect.gen(function* conditionOn() {
-          const tokens = yield* callers;
+          const { tokens } = yield* signInAll;
 
           yield* ensureSite;
 

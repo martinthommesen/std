@@ -30,7 +30,7 @@ import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { arrayOf, objectOf, textOf } from "./authz-support.ts";
+import { arrayOf, objectOf, sequence, textOf } from "./authz-support.ts";
 import {
   allPages,
   listOf,
@@ -756,9 +756,6 @@ const BULK_ROWS = {
 } as const;
 
 const PAGE = "7";
-const MULTIPLIER = 1_103_515_245;
-const INCREMENT = 12_345;
-const MODULUS = 2 ** 31;
 const DAYS = 9;
 const SERIALS = 40;
 const MAX_COST = 3000;
@@ -767,21 +764,6 @@ const DOCKED_SHARE = 0.6;
 const UNDATED_SHARE = 0.15;
 const MIN_SIZE = 19;
 const SIZES = 16;
-
-/**
- * A deterministic sequence of pseudo-random numbers.
- * @param seed - The start.
- * @returns The next number from 0 to 1.
- */
-const sequence = (seed: number) => {
-  let state = seed;
-
-  return (): number => {
-    state = (state * MULTIPLIER + INCREMENT) % MODULUS;
-
-    return state / MODULUS;
-  };
-};
 
 const pick = (random: () => number, count: number): number =>
   Math.floor(random() * count);

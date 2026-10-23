@@ -18,11 +18,12 @@ import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
-import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
+import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import {
   codeOf,
@@ -170,9 +171,9 @@ describe("choice fields", () => {
         Effect.gen(function* subsets() {
           const ids = yield* setup;
           const http = yield* TestHttpClient;
-          const { fixture, tokens } = yield* signInAll;
+          const fixture = yield* AcmeFixture;
           const { K } = fixture.records;
-          const token = tokens.admin;
+          const token = yield* http.signIn("ada", "ada-password");
 
           // Creates: a laptop only takes keys of its subset; a plain asset
           // takes every active key of the field.
@@ -341,8 +342,7 @@ describe("choice fields", () => {
       () =>
         Effect.gen(function* filters() {
           const http = yield* TestHttpClient;
-          const { tokens } = yield* signInAll;
-          const token = tokens.admin;
+          const token = yield* http.signIn("ada", "ada-password");
 
           const filtered = (table: string, filter: string) =>
             http.get(listPath(table, { condition: filter }), { token });

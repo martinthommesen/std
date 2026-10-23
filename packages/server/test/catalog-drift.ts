@@ -33,37 +33,33 @@ const SYSTEM_COLUMNS: ReadonlySet<string> = new Set([
   "updated_by",
 ]);
 
-const decodeColumns = decodeRows(
+const decodeTables = decodeRows(
   Schema.Struct({
-    name: Schema.String,
-    not_null: Schema.Boolean,
-    type: Schema.String,
+    columns: Schema.fromJsonString(
+      Schema.Array(
+        Schema.Struct({
+          name: Schema.String,
+          not_null: Schema.Boolean,
+          type: Schema.String,
+        })
+      )
+    ),
+    present: Schema.Boolean,
+    table_name: Schema.String,
   })
 );
 
-const decodeExists = decodeRows(Schema.Struct({ present: Schema.Boolean }));
-
-const decodeIndex = decodeRows(Schema.Struct({ valid: Schema.Boolean }));
+const decodeIndexes = decodeRows(
+  Schema.Struct({
+    name: Schema.String,
+    valid: Schema.NullOr(Schema.Boolean),
+  })
+);
 
 const nullability = (notNull: boolean): string => (notNull ? " NOT NULL" : "");
 
 const expectedNotNull = (field: FieldDefinition): boolean =>
   field.type.kind === "boolean" || (field.state === "active" && field.required);
-
-const tableExists = (sql: SqlClient.SqlClient, table: string) =>
-  sql.unsafe("SELECT to_regclass($1) IS NOT NULL AS present", [table]).pipe(
-    Effect.flatMap(decodeExists),
-    Effect.map(([row]) => row?.present === true)
-  );
-
-const columnsOf = (sql: SqlClient.SqlClient, table: string) =>
-  sql
-    .unsafe(
-      `SELECT attname AS name, format_type(atttypid, atttypmod) AS type, attnotnull AS not_null
-       FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped`,
-      [table]
-    )
-    .pipe(Effect.flatMap(decodeColumns));
 
 const fieldDrift = (
   snapshot: ConfigSnapshot,
@@ -109,45 +105,47 @@ const fieldDrift = (
   return [...missing, ...extra];
 };
 
-const indexState = (sql: SqlClient.SqlClient, schema: string, name: string) =>
-  sql
-    .unsafe(
-      `SELECT i.indisvalid AS valid FROM pg_index i
-       JOIN pg_class c ON c.oid = i.indexrelid
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = $1 AND c.relname = $2`,
-      [schema, name]
-    )
-    .pipe(
-      Effect.flatMap(decodeIndex),
-      Effect.map(([row]) => row?.valid)
-    );
-
 const indexDrift = Effect.fn("indexDrift")(function* indexDrift(
   sql: SqlClient.SqlClient,
   snapshot: ConfigSnapshot
 ) {
   const problems: string[] = [];
 
-  for (const index of snapshot.all("index")) {
+  const indexes = snapshot.all("index").flatMap((index) => {
     const owner = snapshot.class(index.classId);
     const namespace = snapshot.namespace(owner?.namespaceId ?? "");
 
-    if (owner?.storage === "standard" && namespace !== undefined) {
-      const name = generatedName("ix", index.id);
-      const valid = yield* indexState(sql, namespace.name, name);
+    return owner?.storage === "standard" && namespace !== undefined
+      ? [{ index, name: generatedName("ix", index.id), schema: namespace.name }]
+      : [];
+  });
 
-      const expected =
-        index.state === "purged" || index.enforcement === "failed"
-          ? "absent"
-          : "valid";
+  const rows = yield* sql
+    .unsafe(
+      `SELECT wanted.name, i.indisvalid AS valid
+       FROM unnest($1::text[], $2::text[]) AS wanted(schema, name)
+       LEFT JOIN pg_namespace n ON n.nspname = wanted.schema
+       LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = wanted.name
+       LEFT JOIN pg_index i ON i.indexrelid = c.oid`,
+      [indexes.map((index) => index.schema), indexes.map((index) => index.name)]
+    )
+    .pipe(Effect.flatMap(decodeIndexes));
 
-      const validity = valid === true ? "valid" : "invalid";
-      const actual = valid === undefined ? "absent" : validity;
+  const byName = new Map(rows.map((row) => [row.name, row.valid ?? undefined]));
 
-      if (actual !== expected && index.enforcement !== "pending") {
-        problems.push(`index ${name} is ${actual}, expected ${expected}`);
-      }
+  for (const { index, name } of indexes) {
+    const valid = byName.get(name);
+
+    const expected =
+      index.state === "purged" || index.enforcement === "failed"
+        ? "absent"
+        : "valid";
+
+    const validity = valid === true ? "valid" : "invalid";
+    const actual = valid === undefined ? "absent" : validity;
+
+    if (actual !== expected && index.enforcement !== "pending") {
+      problems.push(`index ${name} is ${actual}, expected ${expected}`);
     }
   }
 
@@ -164,22 +162,37 @@ export const catalogDrift = Effect.gen(function* compareCatalog() {
   const sql = yield* SqlClient.SqlClient;
   const problems: string[] = [];
 
-  for (const definition of snapshot.all("class")) {
-    if (definition.storage === "standard") {
-      const table = tableName(snapshot, definition.id);
-      const exists = yield* tableExists(sql, table);
+  const definitions = snapshot
+    .all("class")
+    .filter((definition) => definition.storage === "standard");
 
-      if (definition.state === "purged") {
-        if (exists) {
-          problems.push(`${table} is purged but exists`);
-        }
-      } else if (exists) {
-        problems.push(
-          ...fieldDrift(snapshot, definition, yield* columnsOf(sql, table))
-        );
-      } else {
-        problems.push(`${table} is missing`);
+  const tables = yield* sql
+    .unsafe(
+      `SELECT wanted.table_name, wanted.relation IS NOT NULL AS present,
+            coalesce(jsonb_agg(jsonb_build_object(
+              'name', a.attname, 'type', format_type(a.atttypid, a.atttypmod), 'not_null', a.attnotnull
+            ) ORDER BY a.attnum) FILTER (WHERE a.attname IS NOT NULL), '[]'::jsonb) AS columns
+       FROM (SELECT DISTINCT name AS table_name, to_regclass(name) AS relation FROM unnest($1::text[]) AS names(name)) AS wanted
+       LEFT JOIN pg_attribute a ON a.attrelid = wanted.relation AND a.attnum > 0 AND NOT a.attisdropped
+       GROUP BY wanted.table_name, wanted.relation`,
+      [definitions.map((definition) => tableName(snapshot, definition.id))]
+    )
+    .pipe(Effect.flatMap(decodeTables));
+
+  const byName = new Map(tables.map((table) => [table.table_name, table]));
+
+  for (const definition of definitions) {
+    const table = tableName(snapshot, definition.id);
+    const actual = byName.get(table);
+
+    if (definition.state === "purged") {
+      if (actual?.present === true) {
+        problems.push(`${table} is purged but exists`);
       }
+    } else if (actual?.present === true) {
+      problems.push(...fieldDrift(snapshot, definition, actual.columns));
+    } else {
+      problems.push(`${table} is missing`);
     }
   }
 

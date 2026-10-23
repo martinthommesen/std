@@ -1,9 +1,7 @@
 /**
- * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate: they
- * pass on v1 and v2): the two-user example of 3.3 with v2's paths, API
- * names and TMF shapes. The v1 suites (`read-authorization`,
- * `write-authorization`, `two-user-write`, `record-history`,
- * `platform-tables`, `session-cookie`) keep running unchanged on v1.
+ * The Contracts 3 acceptance tests through `/api/v1` (Step 3 gate):
+ * the two-user example of 3.3 with TMF630 paths, API names and shapes,
+ * alongside the standalone authorization, history and session suites.
  */
 import { randomUUID } from "node:crypto";
 
@@ -13,7 +11,7 @@ import type { Operation } from "@std/definitions/operation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import type { SqlClient } from "effect/sql";
 import {
   array,
@@ -45,7 +43,6 @@ import type {
   TestResponse,
 } from "../../testing/src/http-client.ts";
 import { insertAsOwner } from "../../testing/src/owner-records.ts";
-import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -58,7 +55,15 @@ import {
   apiCallers,
   withQuery,
 } from "./api-support.ts";
-import { deliveries, freshAsset } from "./authz-support.ts";
+import type { ApiCallers } from "./api-support.ts";
+import {
+  bulkRecords,
+  CURSOR_ROWS as BULK_ROWS,
+  CURSOR_SORTS as BULK_SORTS,
+  deliveries,
+  freshAsset,
+  sequence,
+} from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { allPagesV2, nextOf } from "./paging.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -69,6 +74,16 @@ import {
   freshId,
   values,
 } from "./schema-support.ts";
+
+class SignedInCallers extends Context.Service<SignedInCallers, ApiCallers>()(
+  "std/test/Contracts3Callers"
+) {
+  static readonly layer = Layer.effect(SignedInCallers, apiCallers);
+}
+
+const callersTestLayer = SignedInCallers.layer.pipe(
+  Layer.provideMerge(readsTestLayer())
+);
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
@@ -112,38 +127,24 @@ describe("contracts3", () => {
     );
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "rows-count: Bob lists exactly his assets, counted, never with cost",
       () =>
         Effect.gen(function* rowsCount() {
-          const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
-          const seen: string[] = [];
-          let path: string = withQuery(API.asset, [["limit", "2"]]);
-          let total = "";
 
-          for (let page = 0; page < 5 && path !== ""; page += 1) {
-            const response = yield* http.get(path, callers.bob);
+          const { ids, texts, total } = yield* allPagesV2(
+            withQuery(API.asset, [["limit", "2"]]),
+            callers.bob
+          );
 
-            total = response.headers.get("x-total-count") ?? total;
-            seen.push(...idsOf(response));
-            assert.notInclude(response.text, '"cost"');
-
-            const next = (response.headers.get("link") ?? "")
-              .split(", ")
-              .find((entry) => entry.endsWith('rel="next"'));
-
-            path =
-              next === undefined
-                ? ""
-                : next
-                    .replace(/^<http:\/\/localhost/u, "")
-                    .replace(/>;.*$/u, "");
+          for (const text of texts) {
+            assert.notInclude(text, '"cost"');
           }
 
-          assert.sameMembers(seen, [records.L, records.M, records.S]);
+          assert.sameMembers(ids, [records.L, records.M, records.S]);
           assert.strictEqual(total, "3");
         })
     );
@@ -153,7 +154,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* hiddenNames() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
 
           for (const [parameter, value] of [
             ["condition", "X > 0"],
@@ -188,7 +189,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* invisible() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const random = yield* http.get(
@@ -228,7 +229,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* maskedFilter() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const after = yield* http.get(
@@ -254,7 +255,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* hiddenRuleInput() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const lost = asObject(
@@ -289,7 +290,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* childFields() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const serial = yield* http.request(
@@ -313,7 +314,7 @@ describe("contracts3", () => {
     dbTest.effect("platform-tables: core.change is unknown to Bob in v2", () =>
       Effect.gen(function* platformTables() {
         const http = yield* TestHttpClient;
-        const callers = yield* apiCallers;
+        const callers = yield* SignedInCallers;
 
         for (const path of ["/api/v1/coreChange", "/api/v1/coreAccessRule"]) {
           const response = yield* http.get(path, callers.bob);
@@ -355,13 +356,13 @@ describe("contracts3", () => {
     );
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "ownership: Bob cannot give his laptop to Alice, nor create for her",
       () =>
         Effect.gen(function* ownership() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { alice, bob, records } = yield* AcmeFixture;
           const path = `${API.laptop}/${records.L}`;
 
@@ -396,7 +397,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* childRule() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const monitor = yield* http.request(
@@ -433,7 +434,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* references() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const monitor = yield* revisionOf(
@@ -472,7 +473,7 @@ describe("contracts3", () => {
       () =>
         Effect.gen(function* history() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const path = `${API.laptop}/${records.L}`;
           const revision = yield* revisionOf(path, callers.alice);
@@ -742,12 +743,12 @@ describe("noninterference", () => {
     assert.isFalse(sameOutcomes(base, { ...base, costS: 1500 }));
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "noninterference: Bob's v2 lists depend only on what he can read and on rule outcomes",
       () =>
         Effect.gen(function* noninterference() {
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
 
           const services = yield* Effect.context<
             AcmeFixture | SqlClient.SqlClient | TestHttpClient
@@ -793,61 +794,7 @@ describe("noninterference", () => {
 
 // ---- cursor-nulls-v2 ---------------------------------------------------
 
-const BULK_ROWS = 1000;
 const BULK_PAGE = "7";
-const MULTIPLIER = 1_103_515_245;
-const INCREMENT = 12_345;
-const MODULUS = 2 ** 31;
-const DAYS = 28;
-const NULL_SHARE = 0.1;
-const BULK_MAX_COST = 3000;
-const LOST_SHARE = 0.5;
-
-/**
- * A deterministic sequence of pseudo-random numbers.
- *
- * @param seed - The start.
- * @returns The next number from 0 to 1.
- */
-const sequence = (seed: number) => {
-  let state = seed;
-
-  return (): number => {
-    state = (state * MULTIPLIER + INCREMENT) % MODULUS;
-
-    return state / MODULUS;
-  };
-};
-
-/**
- * Bob's bulk assets: half lost (their purchasedOn is hidden from him), some
- * without a date, many with equal dates.
- *
- * @param bob - Bob's user ID.
- * @param random - The number source.
- * @returns The records.
- */
-const bulkRecords = (bob: string, random: () => number): OwnerRecord[] =>
-  Array.from({ length: BULK_ROWS }, (_, index) => ({
-    by: bob,
-    values: {
-      cost: String(Math.floor(random() * BULK_MAX_COST)),
-      name: `bulk-${String(index).padStart(4, "0")}`,
-      owner: bob,
-      purchased_on:
-        random() < NULL_SHARE
-          ? null
-          : `2024-01-${String(1 + Math.floor(random() * DAYS)).padStart(2, "0")}`,
-      status: random() < LOST_SHARE ? "lost" : "in_use",
-    },
-  }));
-
-const BULK_SORTS = [
-  "purchasedOn",
-  "-purchasedOn",
-  "status,-purchasedOn",
-  "-status,purchasedOn,name",
-];
 
 describe("cursor-nulls", () => {
   it("pages with after cursors from the Link header", () => {
@@ -858,14 +805,14 @@ describe("cursor-nulls", () => {
     assert.strictEqual(nextOf(null), undefined);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "cursor-nulls: 1,000 rows, half the sort keys hidden, paged 7 at a time with after cursors",
       () =>
         Effect.gen(function* cursorNulls() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const catalog = yield* Catalog;
           const { request } = yield* Transactions;
           const random = sequence(7);
@@ -1009,13 +956,13 @@ describe("hidden-rule-input", () => {
     });
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "hidden-rule-input: rule 10 reads cost; only whether dockedTo is withheld changes",
       () =>
         Effect.gen(function* hiddenRuleInput() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const read = () => http.get(`${API.asset}/${records.S}`, callers.bob);
 
@@ -1058,13 +1005,13 @@ describe("hidden-rule-input", () => {
 });
 
 describe("written-fields", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "written-fields: unchanged readable fields are accepted; no-ops keep the revision; hidden values answer alike",
       () =>
         Effect.gen(function* writtenFields() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const laptop = `${API.laptop}/${records.L}`;
           const lost = `${API.asset}/${records.S}`;
@@ -1124,13 +1071,13 @@ describe("written-fields", () => {
 });
 
 describe("field-rule-states", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "field-rule-states: with rule 7 replaced for name, both the existing and the proposed state must pass",
       () =>
         Effect.gen(function* fieldRuleStates() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const path = `${API.asset}/${records.M}`;
 
@@ -1182,13 +1129,13 @@ describe("two-user-write", () => {
     assert.deepStrictEqual(revisions(3), [1, 2, 3]);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "two-user-write: Bob and Alice write L through different endpoints at revisions n, n+1, n+2",
       () =>
         Effect.gen(function* twoUserWrite() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const laptop = `${API.laptop}/${records.L}`;
           const asset = `${API.asset}/${records.L}`;
@@ -1286,13 +1233,13 @@ const bodyObject = (response: TestResponse): JsonObject =>
   asObject(response.json);
 
 describe("history", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "history and history-endpoint: Bob sees the status and serial changes through either endpoint, never cost",
       () =>
         Effect.gen(function* histories() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
           const path = `${API.laptop}/${records.L}`;
           const n = yield* revisionOf(path, callers.alice);
@@ -1352,13 +1299,13 @@ describe("history", () => {
 });
 
 describe("references", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "references: Bob sees dockedTo without a label, Alice with one; a hidden target is InvalidReference on update and create alike",
       () =>
         Effect.gen(function* references() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { bob, records } = yield* AcmeFixture;
 
           const asBob = asObject(
@@ -1424,7 +1371,7 @@ describe("references", () => {
       () =>
         Effect.gen(function* referenced() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const refused = yield* http.request(
@@ -1778,13 +1725,13 @@ describe("platform-tables", () => {
     assert.strictEqual(collectionOf("core.access_rule"), "coreAccessRule");
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "platform-tables: Bob's coreChange and coreAccessRule are UnknownTable, like a missing table",
       () =>
         Effect.gen(function* bobsView() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
 
           const missing = yield* http.get(
             `/api/v1/${collectionOf(MISSING)}`,
@@ -1813,7 +1760,7 @@ describe("platform-tables", () => {
       "platform-tables: every platform, config and internal table is unknown on every route to every non-admin",
       () =>
         Effect.gen(function* everyTable() {
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const snapshot = yield* (yield* Catalog).refresh;
           const platform = platformTables(snapshot);
 
@@ -1847,7 +1794,7 @@ describe("platform-tables", () => {
       () =>
         Effect.gen(function* adminWrites() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const caller = callers.admin;
 
           const changes = yield* http.get(
@@ -2030,14 +1977,14 @@ describe("no-bypass", () => {
     assert.strictEqual(ALLOW_ALL.length, 2);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "no-bypass: without the allow-all rules admin is refused on every v2 path; another role with them is not",
       () =>
         Effect.gen(function* noBypass() {
           const http = yield* TestHttpClient;
           const catalog = yield* Catalog;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { alice, carol, records } = yield* AcmeFixture;
           const { admin } = callers;
 
@@ -2357,13 +2304,13 @@ describe("invisible-identity", () => {
     assert.deepStrictEqual([...methods].toSorted(), ["DELETE", "GET", "PATCH"]);
   });
 
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(callersTestLayer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "invisible-identity: an invisible record and an unknown ID give byte-identical v2 responses",
       () =>
         Effect.gen(function* identical() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           for (const probe of probes(callers.bob)) {
@@ -2390,7 +2337,7 @@ describe("invisible-identity", () => {
       () =>
         Effect.gen(function* visible() {
           const http = yield* TestHttpClient;
-          const callers = yield* apiCallers;
+          const callers = yield* SignedInCallers;
           const { records } = yield* AcmeFixture;
 
           const unknownField = yield* http.get(

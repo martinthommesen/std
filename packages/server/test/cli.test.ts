@@ -8,11 +8,8 @@ import { Effect, Schema } from "effect";
 
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { runCli } from "./cli-support.ts";
-import {
-  catalogFingerprint,
-  configFingerprint,
-  FIXTURE,
-} from "./config-support.ts";
+import { committedState } from "./committed-state.ts";
+import { FIXTURE } from "./config-support.ts";
 import { currentRevision, schemaTestLayer, values } from "./schema-support.ts";
 
 const PlanJson = Schema.fromJsonString(
@@ -72,13 +69,7 @@ describe("cli", () => {
           const database = yield* TestDatabase;
           const revision = yield* currentRevision;
 
-          const fingerprint = Effect.all([
-            catalogFingerprint,
-            configFingerprint,
-            currentRevision,
-          ]);
-
-          const before = yield* fingerprint;
+          const before = yield* committedState;
 
           const jsonOnly = yield* runCli(database.url, [
             "upgrade",
@@ -93,7 +84,7 @@ describe("cli", () => {
             ["core", "fx"]
           );
           assert.deepStrictEqual(
-            yield* fingerprint,
+            yield* committedState,
             before,
             "--json alone plans and changes nothing"
           );
