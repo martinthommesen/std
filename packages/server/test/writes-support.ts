@@ -4,17 +4,13 @@
  * a merge patch), history requests, and table-owner reads of the state a
  * write left behind.
  */
-import {
-  isJsonArray,
-  isJsonNumber,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
+import { isJsonArray, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
+import { asObject, numberOf, textOf } from "./api-support.ts";
 import { listPath, recordPath } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 
@@ -99,11 +95,8 @@ export const remove = Effect.fn("WritesSupport.remove")(function* remove(
   });
 });
 
-const objectOf = (value: JsonValue | undefined): JsonObject =>
-  value !== undefined && isJsonObject(value) ? value : {};
-
 /** One change entry as the tests read it. */
-export interface HistoryEntry {
+interface HistoryEntry {
   /** The acting user's ID. */
   readonly actor: string;
   /** The changes by API name, as the caller may see them. */
@@ -114,21 +107,19 @@ export interface HistoryEntry {
 }
 
 /** A history as the tests read it. */
-export interface HistoryBody {
+interface HistoryBody {
   readonly entries: readonly HistoryEntry[];
 }
 
 // A `ChangeEntry` resource (Contracts 10.4) as a history entry.
 const entryOf = (value: JsonValue): HistoryEntry => {
-  const entry = objectOf(value);
-  const { id } = objectOf(entry.actor);
-  const { kind, revision } = entry;
+  const entry = asObject(value);
 
   return {
-    actor: id !== undefined && isJsonString(id) ? id : "",
-    changes: objectOf(entry.changes),
-    kind: kind !== undefined && isJsonString(kind) ? kind : "",
-    version: revision !== undefined && isJsonNumber(revision) ? revision : 0,
+    actor: textOf(asObject(entry.actor).id),
+    changes: asObject(entry.changes),
+    kind: textOf(entry.kind),
+    version: numberOf(entry.revision),
   };
 };
 
@@ -162,7 +153,7 @@ export const history = Effect.fn("WritesSupport.history")(function* history(
 });
 
 /** A saved resource as the tests read it. */
-export interface Saved {
+interface Saved {
   readonly id: string;
   /** The resource's revision. */
   readonly version: number;
@@ -177,7 +168,7 @@ export interface Saved {
  * @returns The saved resource.
  */
 export const savedOf = (response: TestResponse) => {
-  const resource = objectOf(response.json);
+  const resource = asObject(response.json);
   const { id, revision } = resource;
   const saved = response.status === 200 || response.status === 201;
 
@@ -185,8 +176,7 @@ export const savedOf = (response: TestResponse) => {
     ? Effect.succeed<Saved>({
         id,
         values: resource,
-        version:
-          revision !== undefined && isJsonNumber(revision) ? revision : 0,
+        version: numberOf(revision),
       })
     : Effect.die(
         new Error(

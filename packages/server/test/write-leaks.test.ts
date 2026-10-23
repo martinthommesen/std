@@ -21,12 +21,12 @@ import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Actor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
 import { RuleWriteAccess } from "../src/records/write-access-rules.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { statedRevision } from "./api-support.ts";
 import { objectOf } from "./authz-support.ts";
 import {
   codeOf,
@@ -34,27 +34,14 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
+import { rootVersion } from "./records-support.ts";
 import { ACME, addOverride, change, values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
-import {
-  ASSET,
-  create,
-  history,
-  LAPTOP,
-  patch,
-  versionOf,
-} from "./writes-support.ts";
+import { ASSET, create, history, LAPTOP, patch } from "./writes-support.ts";
 
 const COST = ACME.cost;
 const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
 const SECRET_DATE = "2001-02-03";
-
-/** The stated revision of the current configuration. */
-const currentRevision = Effect.gen(function* statedNow() {
-  const built = yield* (yield* Catalog).refresh;
-
-  return revisionHeaderValue(built);
-});
 
 // An update of one definition's properties, at its current version.
 const updateDefinition = (
@@ -91,7 +78,7 @@ describe("write-leaks", () => {
           const { request } = yield* Transactions;
           const bob = yield* http.signIn("bob", "bob-password");
           const { M } = fixture.records;
-          const version = (yield* versionOf(M)) ?? 0;
+          const version = (yield* rootVersion(M)) ?? 0;
           const changed = yield* Deferred.make<boolean>();
           const release = yield* Deferred.make<boolean>();
 
@@ -215,7 +202,7 @@ describe("write-leaks", () => {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
           const alice = yield* http.signIn("alice", "alice-password");
-          const stated = yield* currentRevision;
+          const stated = yield* statedRevision;
 
           yield* updateDefinition(ACME.status, { required: true });
 
@@ -263,7 +250,7 @@ describe("write-leaks", () => {
           ]);
 
           const bob = yield* http.signIn("bob", "bob-password");
-          const stated = yield* currentRevision;
+          const stated = yield* statedRevision;
           const { L } = fixture.records;
 
           yield* updateDefinition(COST, { readOnly: true });
@@ -271,7 +258,7 @@ describe("write-leaks", () => {
           const response = yield* http.request("PATCH", recordPath(LAPTOP, L), {
             body: { cost: "1100.00" },
             headers: {
-              "if-match": `"${(yield* versionOf(L)) ?? 0}"`,
+              "if-match": `"${(yield* rootVersion(L)) ?? 0}"`,
               "std-schema-revision": stated,
             },
             token: bob,
@@ -282,7 +269,7 @@ describe("write-leaks", () => {
           assert.include(response.text, '"readOnlyChanged"');
           assert.isDefined(yield* history(bob, LAPTOP, L));
           assert.strictEqual(
-            (yield* patch(bob, LAPTOP, L, (yield* versionOf(L)) ?? 0, {
+            (yield* patch(bob, LAPTOP, L, (yield* rootVersion(L)) ?? 0, {
               cost: "1100.00",
             })).status,
             422

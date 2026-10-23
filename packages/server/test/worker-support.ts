@@ -6,7 +6,7 @@
  */
 import type { DefinitionId } from "@std/definitions/ids";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
@@ -31,8 +31,42 @@ import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { ACME } from "./schema-support.ts";
 
-/** The effects the tests registered, by subscription ID. */
-const served = new Map<string, DeliveryEffect>();
+/** Handler selection owned by one worker test layer. */
+class TestHandlers extends Context.Service<
+  TestHandlers,
+  {
+    readonly serveOnly: (
+      subscriptionId: string,
+      effect: DeliveryEffect
+    ) => Effect.Effect<void>;
+  }
+>()("@std/server/test/worker-support/TestHandlers") {
+  static readonly layer = Layer.syncContext(() => {
+    const served = new Map<string, DeliveryEffect>();
+
+    const control = TestHandlers.of({
+      serveOnly: (subscriptionId, effect) =>
+        Effect.sync(() => {
+          served.clear();
+          served.set(subscriptionId, effect);
+        }),
+    });
+
+    return Context.make(TestHandlers, control).pipe(
+      Context.add(
+        DeliveryHandlers,
+        DeliveryHandlers.of({
+          handlers: [
+            {
+              effectFor: (subscription) => served.get(subscription.id),
+              name: "test",
+            },
+          ],
+        })
+      )
+    );
+  });
+}
 
 /**
  * Makes the test worker serve this subscription with an effect, and no
@@ -41,19 +75,12 @@ const served = new Map<string, DeliveryEffect>();
  * @param effect - Its effect.
  * @returns Nothing.
  */
-export const serveOnly = (subscriptionId: string, effect: DeliveryEffect) =>
-  Effect.sync(() => {
-    served.clear();
-    served.set(subscriptionId, effect);
-  });
-
-/** Handlers that serve exactly the registered subscriptions. */
-const TestHandlers = DeliveryHandlers.layerOf([
-  {
-    effectFor: (subscription) => served.get(subscription.id),
-    name: "test",
-  },
-]);
+export const serveOnly = Effect.fn("WorkerTest.serveOnly")(function* serveOnly(
+  subscriptionId: string,
+  effect: DeliveryEffect
+) {
+  yield* (yield* TestHandlers).serveOnly(subscriptionId, effect);
+});
 
 /**
  * The worker test layer: the acme fixture, the outbox producer as
@@ -68,7 +95,7 @@ export const workerTestLayer = (
   options: TestDatabaseOptions = {}
 ) =>
   Layer.mergeAll(
-    TestHandlers,
+    Layer.fresh(TestHandlers.layer),
     WorkerSettings.layerOf(settings),
     OutboxSaveHooks,
     WriteOnlyValues.scrypt,

@@ -338,7 +338,7 @@ const recordHolds = Effect.fn("HttpInvariant.recordHolds")(
 
     // The image status of each version: after the save, before a delete.
     let status: string | null = null;
-    const expected = new Map<string, string>();
+    const expected = new Map<string, readonly string[]>();
 
     for (const entry of entries) {
       if (entry.kind !== "delete" && entry.has_status) {
@@ -347,7 +347,9 @@ const recordHolds = Effect.fn("HttpInvariant.recordHolds")(
 
       expected.set(
         entry.change_id,
-        `${entry.record_version}:${expectedFor(entry.kind, item.classId, status).join(",")}`
+        expectedFor(entry.kind, item.classId, status).map(
+          (name) => `${entry.record_version}/${name}`
+        )
       );
     }
 
@@ -364,17 +366,11 @@ const recordHolds = Effect.fn("HttpInvariant.recordHolds")(
 
     const deliveriesHold =
       [...actual.keys()].every((changeId) => expected.has(changeId)) &&
-      [...expected].every(([changeId, wanted]) => {
-        const [version, names] = wanted.split(":");
-        const got = (actual.get(changeId) ?? []).toSorted();
-
-        return (
-          JSON.stringify(got) ===
-          JSON.stringify(
-            (names ?? "").split(",").map((name) => `${version}/${name}`)
-          )
-        );
-      });
+      [...expected].every(
+        ([changeId, wanted]) =>
+          JSON.stringify((actual.get(changeId) ?? []).toSorted()) ===
+          JSON.stringify(wanted)
+      );
 
     return versionsHold && deliveriesHold;
   }

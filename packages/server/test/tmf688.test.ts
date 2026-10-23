@@ -8,24 +8,100 @@ import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { decodePinsFile } from "@std/tmf/pins";
 import { parseJson } from "@std/values/json";
-import { Result, Effect } from "effect";
+import { Result, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import {
   checkTmfExchange,
   contractAt,
 } from "../../testing/src/tmf-oas-contract.ts";
 import { checkTmf688Notification } from "../../testing/src/tmf688-contract.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import { DeliveryHandlers, effectFor } from "../src/outbox/delivery-effects.ts";
+import type { DeliveryEffect } from "../src/outbox/delivery-effects.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener } from "./hub-support.ts";
-import { change, createClass, ensureSite } from "./schema-support.ts";
+import { subscribe } from "./outbox-support.ts";
+import { ACME, change, createClass, ensureSite } from "./schema-support.ts";
+import { serveOnly, workerTestLayer } from "./worker-support.ts";
 
 const BASE = TMF688_PREFIX;
 
 // The alias remains Effect-aware and lets Sonar recognize the test file.
 const test = it.effect;
+
+describe("worker-test-handlers", () => {
+  it.live("keeps handler selection local to each worker test layer", () =>
+    Effect.gen(function* isolatedHandlers() {
+      const memoMap = yield* Layer.makeMemoMap;
+      const scope = yield* Effect.scope;
+
+      const first = yield* Layer.buildWithMemoMap(
+        workerTestLayer(),
+        memoMap,
+        scope
+      );
+
+      const second = yield* Layer.buildWithMemoMap(
+        workerTestLayer(),
+        memoMap,
+        scope
+      );
+
+      const fixture = yield* AcmeFixture.pipe(Effect.provide(first));
+
+      const id = yield* subscribe({
+        classId: ACME.asset,
+        identityId: fixture.alice.id,
+      }).pipe(Effect.provide(first));
+
+      const snapshot = yield* Catalog.pipe(
+        Effect.flatMap((catalog) => catalog.refresh),
+        Effect.provide(first)
+      );
+
+      const subscription = snapshot.getKind("subscription", id);
+
+      assert.isDefined(subscription, "Test subscription is missing");
+
+      const firstHandlers = yield* DeliveryHandlers.pipe(Effect.provide(first));
+
+      const secondHandlers = yield* DeliveryHandlers.pipe(
+        Effect.provide(second)
+      );
+
+      const firstEffect: DeliveryEffect = {
+        kind: "external",
+        run: () => Effect.void,
+      };
+
+      const secondEffect: DeliveryEffect = {
+        kind: "external",
+        run: () => Effect.void,
+      };
+
+      yield* serveOnly(id, firstEffect).pipe(Effect.provide(first));
+      assert.strictEqual(
+        effectFor(firstHandlers, subscription, snapshot),
+        firstEffect
+      );
+      assert.isUndefined(effectFor(secondHandlers, subscription, snapshot));
+
+      yield* serveOnly(id, secondEffect).pipe(Effect.provide(second));
+      assert.strictEqual(
+        effectFor(firstHandlers, subscription, snapshot),
+        firstEffect
+      );
+      assert.strictEqual(
+        effectFor(secondHandlers, subscription, snapshot),
+        secondEffect
+      );
+    })
+  );
+});
 
 describe("tmf688-topics", () => {
   test("pending client events are suppressed when topic read rights are revoked", () =>
@@ -77,7 +153,7 @@ describe("tmf688-topics", () => {
       ]);
       yield* workerPass();
       assert.lengthOf(callback.calls, 1);
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer), TestClock.withLive));
 
   it.effect(
     "the served path matches the pinned TMF688 swagger and pin record",
@@ -158,7 +234,7 @@ describe("tmf688-topics", () => {
           ["id", "href", "@type"]
         );
         assert.strictEqual((yield* http.get(topicPath, admin)).status, 404);
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
   it.effect(
     "client topics store events through the record service and deliver the same event to their hubs",
@@ -248,7 +324,7 @@ describe("tmf688-topics", () => {
           )).status,
           405
         );
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
 });
 
@@ -401,7 +477,7 @@ describe("tmf-oas-contract", () => {
             }
           }
         }
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
   it.effect(
     "TMF688 validates required references and scalar filters combine with AND across paged projections",
@@ -468,7 +544,7 @@ describe("tmf-oas-contract", () => {
 
           assert.strictEqual(response.status, 400, response.text);
         }
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
   it.effect(
     "TMF688 topic, event and hub operations return only pinned statuses and valid schemas",
@@ -572,7 +648,7 @@ describe("tmf-oas-contract", () => {
           (yield* http.request("DELETE", `${BASE}/topic/${id}`, admin)).status,
           204
         );
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
 
   it.effect(
@@ -650,6 +726,6 @@ describe("tmf-oas-contract", () => {
             assert.isUndefined(checkTmf688Notification(type, call.body));
           }
         }
-      }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive)
+      }).pipe(Effect.provide(hubTestLayer), TestClock.withLive)
   );
 });

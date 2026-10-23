@@ -14,17 +14,16 @@ import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { objectOf } from "./authz-support.ts";
 import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
+import { rootVersion, changeLog } from "./records-support.ts";
 import {
   ASSET,
   create,
-  entriesOf,
   history,
   LAPTOP,
   MONITOR,
   patch,
   remove,
   savedOf,
-  versionOf,
 } from "./writes-support.ts";
 
 /** Sign-in for both fixture users. */
@@ -52,7 +51,7 @@ describe("write-authorization", () => {
       Effect.gen(function* ownership() {
         const { alice, bob, fixture } = yield* tokens;
         const { L } = fixture.records;
-        const before = yield* versionOf(L);
+        const before = yield* rootVersion(L);
 
         const handOver = yield* patch(bob, LAPTOP, L, before ?? 0, {
           owner: fixture.alice.id,
@@ -60,8 +59,8 @@ describe("write-authorization", () => {
 
         assert.strictEqual(handOver.status, 403);
         assert.strictEqual(yield* codeOf(handOver), "NotAllowed");
-        assert.strictEqual(yield* versionOf(L), before);
-        assert.lengthOf(yield* entriesOf(L), 1);
+        assert.strictEqual(yield* rootVersion(L), before);
+        assert.lengthOf(yield* changeLog(L), 1);
 
         const forAlice = yield* create(bob, ASSET, {
           name: "for Alice",
@@ -90,7 +89,7 @@ describe("write-authorization", () => {
           bob,
           ASSET,
           M,
-          (yield* versionOf(M)) ?? 0,
+          (yield* rootVersion(M)) ?? 0,
           { status: "spare" }
         );
 
@@ -100,7 +99,7 @@ describe("write-authorization", () => {
           bob,
           ASSET,
           L,
-          (yield* versionOf(L)) ?? 0,
+          (yield* rootVersion(L)) ?? 0,
           { status: "spare" }
         );
 
@@ -113,7 +112,7 @@ describe("write-authorization", () => {
       Effect.gen(function* childFields() {
         const { bob, fixture } = yield* tokens;
         const { L } = fixture.records;
-        const version = (yield* versionOf(L)) ?? 0;
+        const version = (yield* rootVersion(L)) ?? 0;
 
         const serialViaAsset = yield* patch(bob, ASSET, L, version, {
           serial: "X",
@@ -136,7 +135,7 @@ describe("write-authorization", () => {
           diskKey.text.replace("diskKey", "?"),
           misspelled.text.replace("diskKee", "?")
         );
-        assert.strictEqual(yield* versionOf(L), version);
+        assert.strictEqual(yield* rootVersion(L), version);
       })
     );
 
@@ -144,7 +143,7 @@ describe("write-authorization", () => {
       Effect.gen(function* writtenFields() {
         const { bob, fixture } = yield* tokens;
         const { L, S } = fixture.records;
-        const version = (yield* versionOf(L)) ?? 0;
+        const version = (yield* rootVersion(L)) ?? 0;
 
         // serial is readable to Bob but not writable; unchanged it is
         // not written.
@@ -154,18 +153,18 @@ describe("write-authorization", () => {
         });
 
         assert.strictEqual(unchanged.status, 200);
-        assert.strictEqual(yield* versionOf(L), version + 1);
+        assert.strictEqual(yield* rootVersion(L), version + 1);
 
         const noOp = yield* patch(bob, LAPTOP, L, version + 1, {
           name: "L renamed",
         });
 
         assert.strictEqual(noOp.status, 200);
-        assert.strictEqual(yield* versionOf(L), version + 1);
+        assert.strictEqual(yield* rootVersion(L), version + 1);
 
         // purchasedOn is hidden on lost S: an equal value and a different
         // one have the same effect.
-        const sVersion = (yield* versionOf(S)) ?? 0;
+        const sVersion = (yield* rootVersion(S)) ?? 0;
 
         const equal = yield* patch(bob, ASSET, S, sVersion, {
           purchasedOn: "2023-03-10",
@@ -177,7 +176,7 @@ describe("write-authorization", () => {
 
         assert.strictEqual(equal.status, different.status);
         assert.strictEqual(equal.text, different.text);
-        assert.strictEqual(yield* versionOf(S), sVersion);
+        assert.strictEqual(yield* rootVersion(S), sVersion);
       })
     );
 
@@ -185,7 +184,7 @@ describe("write-authorization", () => {
       Effect.gen(function* references() {
         const { bob, fixture } = yield* tokens;
         const { AM, M } = fixture.records;
-        const version = (yield* versionOf(M)) ?? 0;
+        const version = (yield* rootVersion(M)) ?? 0;
 
         const hidden = yield* patch(bob, ASSET, M, version, {
           dockedTo: AM,
@@ -206,7 +205,7 @@ describe("write-authorization", () => {
         });
 
         assert.strictEqual(created.text, hidden.text);
-        assert.strictEqual(yield* versionOf(M), version);
+        assert.strictEqual(yield* rootVersion(M), version);
       })
     );
 
@@ -214,7 +213,7 @@ describe("write-authorization", () => {
       Effect.gen(function* histories() {
         const { alice, bob, fixture } = yield* tokens;
         const { L } = fixture.records;
-        const version = (yield* versionOf(L)) ?? 0;
+        const version = (yield* rootVersion(L)) ?? 0;
 
         const costAndStatus = yield* patch(alice, ASSET, L, version, {
           cost: "1250.00",
@@ -368,12 +367,12 @@ describe("write-authorization", () => {
       Effect.gen(function* referenced() {
         const { alice, fixture } = yield* tokens;
         const { AM } = fixture.records;
-        const version = (yield* versionOf(AM)) ?? 0;
+        const version = (yield* rootVersion(AM)) ?? 0;
         const response = yield* remove(alice, MONITOR, AM, version);
 
         assert.strictEqual(response.status, 409);
         assert.strictEqual(yield* codeOf(response), "Referenced");
-        assert.strictEqual(yield* versionOf(AM), version);
+        assert.strictEqual(yield* rootVersion(AM), version);
       })
     );
 
@@ -381,7 +380,7 @@ describe("write-authorization", () => {
       Effect.gen(function* invisible() {
         const { bob, fixture } = yield* tokens;
         const { K } = fixture.records;
-        const version = (yield* versionOf(K)) ?? 0;
+        const version = (yield* rootVersion(K)) ?? 0;
         const random = randomUUID();
 
         for (const table of [LAPTOP, ASSET]) {
@@ -398,7 +397,7 @@ describe("write-authorization", () => {
         const stale = yield* patch(bob, LAPTOP, K, version + 7, { name: "x" });
 
         assert.strictEqual(stale.status, 404, "never VersionConflict");
-        assert.strictEqual(yield* versionOf(K), version);
+        assert.strictEqual(yield* rootVersion(K), version);
       })
     );
 
@@ -408,7 +407,7 @@ describe("write-authorization", () => {
         Effect.gen(function* ifMatch() {
           const { alice, fixture } = yield* tokens;
           const { K } = fixture.records;
-          const version = (yield* versionOf(K)) ?? 0;
+          const version = (yield* rootVersion(K)) ?? 0;
 
           const missing = yield* patch(alice, LAPTOP, K, undefined, {
             name: "K2",
@@ -424,7 +423,7 @@ describe("write-authorization", () => {
           assert.strictEqual(stale.status, 412);
           assert.strictEqual(yield* codeOf(stale), "VersionConflict");
           assert.strictEqual(objectOf(stale.json).currentVersion, version);
-          assert.strictEqual(yield* versionOf(K), version);
+          assert.strictEqual(yield* rootVersion(K), version);
         })
     );
 
@@ -435,7 +434,7 @@ describe("write-authorization", () => {
           const { alice, fixture } = yield* tokens;
           const http = yield* TestHttpClient;
           const { K } = fixture.records;
-          const version = (yield* versionOf(K)) ?? 0;
+          const version = (yield* rootVersion(K)) ?? 0;
 
           const malformed = yield* http.request(
             "PATCH",

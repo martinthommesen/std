@@ -253,7 +253,7 @@ describe("users", () => {
     dbTest.effect("admins create users; the password is never returned", () =>
       Effect.gen(function* createUser() {
         const http = yield* TestHttpClient;
-        const { tokens } = yield* signInAll;
+        const { fixture, tokens } = yield* signInAll;
 
         const created = yield* http.request("POST", listPath(USERS), {
           body: {
@@ -277,8 +277,6 @@ describe("users", () => {
         assert.notInclude(me.text, BUILT_IN_ROLE_IDS.admin);
 
         // Bob may read users' names but not change them, even his own.
-        const { fixture } = yield* signInAll;
-
         const own = yield* http.request(
           "PATCH",
           recordPath(USERS, fixture.bob.id),
