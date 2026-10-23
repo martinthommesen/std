@@ -82,6 +82,8 @@ Licence: the OpenAPI documents and the [APIS] repositories are Apache-2.0; user 
 
 The record service stays the only place that reads and writes records, enforcing access rules, masks, history, the outbox and stale checks (Contracts 2 to 6). Above it sit three surfaces, each a thin adapter:
 
+> **Superseded paths (decision 56, 2026-10-23).** The original `/api/v1` is deleted and the TMF630 API built as `/api/v2` is now STD's only generic API at `/api/v1`. Read `/api/v2` in this record as today's `/api/v1`, and drop the frozen row below; this record keeps the paths as they were decided.
+
 | Surface | Path | Contracts | Shapes |
 | --- | --- | --- | --- |
 | Generic API v2 | `/api/v2` | 10 | every table, TMF630 shape, STD names and classes |
