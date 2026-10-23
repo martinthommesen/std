@@ -346,7 +346,8 @@ describe("list page", () => {
         "aria-expanded",
         "true"
       ),
-      click(role("button", { name: "Add condition" })),
+      // Opened on an empty filter, the builder starts its first condition.
+      expect(role("group", { name: "Condition 2" })).not.toExist(),
       inside(
         role("group", { name: "Condition 1" }),
         change(label("Field"), ASSET_FIELDS.sizeInches),

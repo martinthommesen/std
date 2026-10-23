@@ -5,6 +5,7 @@ import {
   click,
   expect,
   given,
+  keydown,
   Mount,
   label,
   role,
@@ -19,6 +20,8 @@ import { describe, it } from "vitest";
 
 import {
   FocusMain,
+  FocusNavigation,
+  FocusNavigationToggle,
   LoadCurrentUser,
   LoadTables,
   ReplaceUrl,
@@ -113,6 +116,35 @@ describe("app", () => {
       ...openUserMenu,
       expect(role("menu")).toContainText("Signed in as"),
       expect(signOutItem).toBeEnabled()
+    );
+  });
+
+  it("the navigation drawer opens from its button and closes with Escape", () => {
+    const drawer = role("complementary", { name: "Navigation" });
+
+    scene(
+      { update, view },
+      given(adaAtHome),
+      expect(role("button", { name: "Navigation" })).toHaveAttr(
+        "aria-expanded",
+        "false"
+      ),
+      click(role("button", { name: "Navigation" })),
+      Command.resolve(FocusNavigation, Message.CompletedFocusNavigation()),
+      expect(role("button", { name: "Navigation" })).toHaveAttr(
+        "aria-expanded",
+        "true"
+      ),
+      expect(drawer).toHaveAttr("data-open", ""),
+      keydown(drawer, "Escape"),
+      Command.resolve(
+        FocusNavigationToggle,
+        Message.CompletedFocusNavigationToggle()
+      ),
+      expect(role("button", { name: "Navigation" })).toHaveAttr(
+        "aria-expanded",
+        "false"
+      )
     );
   });
 

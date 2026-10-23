@@ -343,6 +343,24 @@ const addCondition = (
     },
   });
 
+/**
+ * Starts an empty filter with its first condition, as "Add condition"
+ * does, so whoever opens the builder picks a field straight away; a
+ * filter that holds anything is left as it is.
+ *
+ * @param model - The builder.
+ * @param scope - The tables the filter can name.
+ * @returns The builder, and the request for a target table the first
+ *   field may need.
+ */
+export const startFilter = (
+  model: Model,
+  scope: ConditionScope
+): UpdateReturn =>
+  isEmptyFilter(model.root)
+    ? addCondition(model, model.root.id, scope)
+    : { model };
+
 const addGroup = (model: Model, groupId: number): UpdateReturn => {
   const ids = takeIds(model, 2);
 

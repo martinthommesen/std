@@ -40,6 +40,7 @@ import {
   OutMessage as FilterBuilderOutMessage,
   init as filterBuilderInit,
   load as loadFilterBuilder,
+  startFilter,
   update as filterBuilderUpdate,
   withToday,
 } from "../../filter-builder/filter-builder.ts";
@@ -921,22 +922,61 @@ const submitFilter =
       modifyFields(model.query, { maybeCondition: () => maybeCondition })
     )(modifyFields(model, { maybeNotice: () => Option.none() }));
 
+const foldFilterBuilderOutMessage = FilterBuilderOutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  RequestedTable: ({ table }) => requestTarget(table),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  SubmittedFilter: ({ maybeCondition }) => submitFilter(maybeCondition),
+});
+
+const readFilterBuilder = (model: Model): Option.Option<FilterBuilderModel> =>
+  Option.some(model.builder);
+
+const writeFilterBuilder = (
+  model: Model,
+  nextBuilder: FilterBuilderModel
+): Model => modifyFields(model, { builder: () => nextBuilder });
+
+const toGotFilterBuilderMessage = (message: FilterBuilderMessage): Message =>
+  Message.GotFilterBuilderMessage({ message });
+
 const foldFilterBuilder = (scope: ConditionScope) =>
   Update.foldChild({
-    foldOutMessage: FilterBuilderOutMessage.match<Step>({
-      // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-      RequestedTable: ({ table }) => requestTarget(table),
-      // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
-      SubmittedFilter: ({ maybeCondition }) => submitFilter(maybeCondition),
-    }),
-    read: (model: Model): Option.Option<FilterBuilderModel> =>
-      Option.some(model.builder),
-    toParentMessage: (message) => Message.GotFilterBuilderMessage({ message }),
+    foldOutMessage: foldFilterBuilderOutMessage,
+    read: readFilterBuilder,
+    toParentMessage: toGotFilterBuilderMessage,
     update: (builder: FilterBuilderModel, message: FilterBuilderMessage) =>
       filterBuilderUpdate(builder, message, scope),
-    write: (model: Model, nextBuilder: FilterBuilderModel): Model =>
-      modifyFields(model, { builder: () => nextBuilder }),
+    write: writeFilterBuilder,
   });
+
+/**
+ * Shows or hides the filter builder. Opened on an empty filter, it starts
+ * with its first condition, so the user picks a field right away: one
+ * click fewer than "Filter", then "Add condition".
+ *
+ * @param model - The page.
+ * @param isOpen - Whether the builder is to be shown.
+ * @returns The page.
+ */
+const toggleFilter = (model: Model, isOpen: boolean): UpdateReturn => {
+  const toggled = modifyFields(model, { isFilterOpen: () => isOpen });
+
+  return isOpen
+    ? Option.match(scopeOf(toggled), {
+        onNone: () => ({ model: toggled }),
+        onSome: (scope) =>
+          Update.foldChildStep({
+            foldOutMessage: foldFilterBuilderOutMessage,
+            read: readFilterBuilder,
+            toParentMessage: toGotFilterBuilderMessage,
+            update: (builder: FilterBuilderModel) =>
+              startFilter(builder, scope),
+            write: writeFilterBuilder,
+          })(toggled),
+      })
+    : { model: toggled };
+};
 
 const decodeSavedCondition = Schema.decodeUnknownOption(ExprSchema);
 
@@ -1124,7 +1164,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         target: TargetMetadata.Success({ data: table }),
       }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ToggledFilter: ({ isOpen }) => ({
-      model: modifyFields(model, { isFilterOpen: () => isOpen }),
-    }),
+    ToggledFilter: ({ isOpen }) => toggleFilter(model, isOpen),
   });

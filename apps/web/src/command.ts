@@ -180,6 +180,18 @@ export const FocusNavigation = Command.define("FocusNavigation", {
   messages: [Message.CompletedFocusNavigation],
 });
 
+/**
+ * Moves focus back to the button that shows the navigation once the
+ * drawer closes, so keyboard users continue from where they opened it.
+ */
+export const FocusNavigationToggle = Command.define("FocusNavigationToggle", {
+  execute: Dom.focus(`#${NAVIGATION_TOGGLE_ID}-button`).pipe(
+    Effect.ignore,
+    Effect.as(Message.CompletedFocusNavigationToggle())
+  ),
+  messages: [Message.CompletedFocusNavigationToggle],
+});
+
 /** Follows an in-app link. */
 export const NavigateInternal = Command.define("NavigateInternal", {
   args: { url: Schema.String },

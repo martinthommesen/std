@@ -7,6 +7,7 @@ import { toString as urlToString } from "foldkit/url";
 import {
   FocusMain,
   FocusNavigation,
+  FocusNavigationToggle,
   LoadCurrentUser,
   LoadExternal,
   LoadTables,
@@ -877,6 +878,8 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedFocusNavigation: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    CompletedFocusNavigationToggle: () => ({ model }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedLoadExternal: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedNavigateInternal: () => ({ model }),
@@ -975,8 +978,11 @@ export const update = (model: Model, message: Message) =>
           isNavigationOpen: () => isOpen,
         });
 
-        return isOpen
-          ? { commands: [FocusNavigation()], model: toggled }
-          : { model: toggled };
+        // NOTE: focus goes into the drawer when it opens, and back to its
+        // button when it closes (by the button, Escape or the scrim).
+        return {
+          commands: [isOpen ? FocusNavigation() : FocusNavigationToggle()],
+          model: toggled,
+        };
       }),
   });

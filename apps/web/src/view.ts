@@ -65,7 +65,7 @@ interface ShellConfig {
   readonly header: readonly Html[];
   readonly mainClass: string;
   readonly page: Html;
-  readonly side?: Html;
+  readonly side?: readonly Html[];
 }
 
 const shellView = (config: ShellConfig, h: HtmlBuilder<Message>): Html =>
@@ -87,7 +87,7 @@ const shellView = (config: ShellConfig, h: HtmlBuilder<Message>): Html =>
             [h.Id(MAIN_ID), h.Class(config.mainClass), h.Tabindex(-1)],
             [config.page]
           ),
-          config.side ?? h.empty,
+          ...(config.side ?? []),
         ]
       ),
     ]
@@ -258,13 +258,51 @@ const navigationDisclosure = (model: SignedInModel) => ({
   onToggle: (isOpen: boolean) => Message.ToggledNavigation({ isOpen }),
 });
 
+/**
+ * Escape closes the navigation drawer when it is open.
+ *
+ * @param isOpen - Whether the drawer is open.
+ * @returns The key handler's Message, if any.
+ */
+const closeOnEscape =
+  (isOpen: boolean) =>
+  (key: string): Option.Option<Message> =>
+    isOpen && key === "Escape"
+      ? Option.some(Message.ToggledNavigation({ isOpen: false }))
+      : Option.none();
+
+/**
+ * Behind the open drawer on a narrow screen: a scrim over the page, which
+ * closes the drawer when clicked (the stylesheet shows it only there).
+ *
+ * @param model - The signed-in state.
+ * @param h - The builder.
+ * @returns The scrim, or nothing while the drawer is closed.
+ */
+const navigationScrimView = (
+  model: SignedInModel,
+  h: HtmlBuilder<Message>
+): Html =>
+  model.isNavigationOpen
+    ? h.div([
+        h.Class("nav-scrim"),
+        h.AriaHidden(true),
+        h.OnClick(Message.ToggledNavigation({ isOpen: false })),
+      ])
+    : h.empty;
+
 const sidebarView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
   Disclosure.view(
     {
       ...navigationDisclosure(model),
       toView: ({ panel }) =>
         h.aside(
-          [...panel, h.Class("sidebar"), h.AriaLabel("Navigation")],
+          [
+            ...panel,
+            h.Class("sidebar"),
+            h.AriaLabel("Navigation"),
+            h.OnKeyDownPreventDefault(closeOnEscape(model.isNavigationOpen)),
+          ],
           [
             primaryNavView(model.route, h),
             tablesNavView(model, h),
@@ -431,7 +469,7 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
       ],
       mainClass: MAIN_CLASS,
       page: signedInPageView(model, h),
-      side: sidebarView(model, h),
+      side: [navigationScrimView(model, h), sidebarView(model, h)],
     },
     h
   );

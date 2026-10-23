@@ -173,6 +173,32 @@ body {
   font-size: var(--text-md);
 }
 
+/* Keep what gets focus clear of the sticky header and the form's
+   floating action bar (WCAG 2.2, 2.4.11): the header's height, and the
+   bar's 3 rem plus its 0.75 rem gap from the window's edge, with room. */
+html {
+  scroll-padding-top: calc(var(--header-height) + var(--space-2));
+  scroll-padding-bottom: 5rem;
+}
+
+.nav-scrim {
+  display: none;
+}
+
+/* Touch screens: controls grow to 44 px, the size WCAG 2.5.5 and the
+   platforms' guidelines (Apple HIG: 44 pt) give for a finger. */
+@media (pointer: coarse) {
+  :root {
+    --control-height: 2.75rem;
+  }
+
+  .nav-link,
+  .nav-group-button,
+  .sort-button {
+    min-height: 2.75rem;
+  }
+}
+
 ::selection {
   background: var(--color-selection);
 }
@@ -267,7 +293,7 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  height: var(--header-height);
+  min-height: var(--header-height);
   padding: 0 var(--space-4);
   color: var(--color-header-text);
   background: var(--color-header);
@@ -1905,8 +1931,21 @@ th[aria-sort="descending"] .sort-icon {
     visibility: visible;
   }
 
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: var(--header-height) 0 0;
+    z-index: 24;
+    background: var(--color-backdrop);
+  }
+
   .main {
     padding: var(--space-4) var(--space-3) var(--space-8);
+  }
+
+  .page-heading .button {
+    max-width: 100%;
+    white-space: normal;
   }
 
   .action-bar {
@@ -1940,10 +1979,18 @@ th[aria-sort="descending"] .sort-icon {
       color var(--duration-fast) ease;
   }
 
+  /* Hidden only once the drawer has slid out; shown at once when it
+     opens, so focus can move into it on the same frame. */
   .sidebar {
     transition:
       transform var(--duration) var(--ease-out),
-      visibility var(--duration);
+      visibility 0s linear var(--duration);
+  }
+
+  .sidebar[data-open] {
+    transition:
+      transform var(--duration) var(--ease-out),
+      visibility 0s;
   }
 
   .skip-link {

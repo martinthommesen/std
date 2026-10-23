@@ -19,6 +19,7 @@ export const Message = defineMessageUnion({
   ClickedRetrySessionCheck: {},
   CompletedFocusMain: {},
   CompletedFocusNavigation: {},
+  CompletedFocusNavigationToggle: {},
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},

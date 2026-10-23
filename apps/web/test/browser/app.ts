@@ -1267,7 +1267,20 @@ export const buildCondition = async (
  * @returns Nothing.
  */
 export const addCondition = async (page: Page): Promise<void> => {
+  const conditions = page.getByRole("group", {
+    includeHidden: true,
+    name: /^Condition \d+$/u,
+  });
+
+  const before = await conditions.count();
+
   await showFilter(page);
+
+  // Opening the builder on an empty filter starts its first condition.
+  if ((await conditions.count()) > before) {
+    return;
+  }
+
   await page
     .getByRole("button", { exact: true, name: "Add condition" })
     .click();

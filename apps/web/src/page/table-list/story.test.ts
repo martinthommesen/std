@@ -1772,6 +1772,15 @@ const statusIs = (value: string): Expr => ({
   right: { value },
 });
 
+/**
+ * How many conditions and groups the builder's outermost group holds.
+ *
+ * @param page - The page.
+ * @returns The count (1 when the root is a single node).
+ */
+const conditionsOf = (page: Model): number =>
+  page.builder.root._tag === "Group" ? page.builder.root.children.length : 1;
+
 describe("the filter's disclosure", () => {
   it("starts closed and opens and closes with the Filter button", () => {
     story(
@@ -1788,6 +1797,23 @@ describe("the filter's disclosure", () => {
       message(Message.ToggledFilter({ isOpen: false })),
       model((page) => {
         expect(page.isFilterOpen).toBeFalsy();
+      })
+    );
+  });
+
+  it("opened on an empty filter, starts its first condition; opened again, adds none", () => {
+    story(
+      update,
+      given(opened.model),
+      ...metadataLoaded,
+      message(Message.ToggledFilter({ isOpen: true })),
+      model((page) => {
+        expect(conditionsOf(page)).toBe(1);
+      }),
+      message(Message.ToggledFilter({ isOpen: false })),
+      message(Message.ToggledFilter({ isOpen: true })),
+      model((page) => {
+        expect(conditionsOf(page)).toBe(1);
       })
     );
   });

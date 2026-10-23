@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   FocusMain,
   FocusNavigation,
+  FocusNavigationToggle,
   LoadCurrentUser,
   LoadTables,
   LoadExternal,
@@ -790,6 +791,15 @@ describe("navigation", () => {
       model((app) => {
         expect(signedIn(app).isNavigationOpen).toBeTruthy();
       }),
+      // Closed by its button, Escape or the scrim: focus goes back.
+      message(Message.ToggledNavigation({ isOpen: false })),
+      Command.expectExact(FocusNavigationToggle()),
+      Command.resolve(
+        FocusNavigationToggle,
+        Message.CompletedFocusNavigationToggle()
+      ),
+      message(Message.ToggledNavigation({ isOpen: true })),
+      Command.resolve(FocusNavigation, Message.CompletedFocusNavigation()),
       message(Message.ChangedUrl({ url: urlOf("/no/such/page") })),
       model((app) => {
         expect(signedIn(app).isNavigationOpen).toBeFalsy();
