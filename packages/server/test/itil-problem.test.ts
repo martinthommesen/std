@@ -4,12 +4,17 @@ import { HELPDESK_CASCADE_USER_ID } from "@std/definitions/well-known";
 import { Effect } from "effect";
 import { TestClock } from "effect/testing";
 
-import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
+import {
+  HELPDESK,
+  HelpdeskFixture,
+} from "../../testing/src/helpdesk-fixture.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
 import { asObject, textOf } from "./api-support.ts";
 import {
   createTicket,
+  fieldId,
+  localIncidentWrite,
   clientFor,
   itilLayer,
   patchResponse,
@@ -17,7 +22,7 @@ import {
   reference,
   recordServices,
 } from "./itil-support.ts";
-import { values } from "./schema-support.ts";
+import { change, values } from "./schema-support.ts";
 
 const TRANSITIONS = {
   assess: ["root_cause_analysis", "canceled"],
@@ -228,6 +233,120 @@ describe("itil-problem", () => {
               [record.status, record.revision]
             );
           }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect(
+    "problem cascades run implicit local writes as the agent without cascade-only rights",
+    () =>
+      Effect.gen(function* localProblemCascade() {
+        const fixture = yield* HelpdeskFixture;
+        const client = yield* clientFor();
+
+        const problem = yield* createTicket(
+          "helpdeskProblem",
+          { status: "root_cause_analysis" },
+          "agent"
+        );
+
+        const waiting = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent2.id },
+          holdReason: "awaiting_problem",
+          problem: reference(problem),
+          status: "on_hold",
+        });
+
+        const target = yield* createTicket();
+
+        const rule = localIncidentWrite(
+          textOf(waiting.number),
+          textOf(target.number),
+          yield* fieldId("description"),
+          "Agent customization"
+        );
+
+        yield* change([rule.op]);
+
+        const response = yield* patchResponse(
+          problem,
+          { status: "resolved" },
+          "helpdeskProblem",
+          "agent"
+        );
+
+        assert.strictEqual(response.status, 200, response.text);
+        assert.deepStrictEqual(
+          yield* values(
+            `SELECT c.actor_id::text AS value FROM core.change c
+           JOIN core.change trigger ON trigger.id::text = c.cause ->> 'parentChangeId'
+           WHERE c.record_id = $1::uuid AND c.cause ->> 'hookId' = $2
+             AND c.cause ->> 'kind' = 'hook' AND trigger.record_id = $3::uuid`,
+            [textOf(target.id), rule.id, textOf(waiting.id)]
+          ),
+          [fixture.agent.id]
+        );
+        assert.strictEqual(
+          (yield* client.records.get({
+            params: { id: textOf(target.id), table: "helpdeskIncident" },
+            query: {},
+          })).description,
+          "Agent customization"
+        );
+
+        const deniedProblem = yield* createTicket(
+          "helpdeskProblem",
+          { status: "root_cause_analysis" },
+          "agent"
+        );
+
+        const deniedWaiting = yield* createTicket("helpdeskIncident", {
+          holdReason: "awaiting_problem",
+          problem: reference(deniedProblem),
+          status: "on_hold",
+        });
+
+        const protectedTarget = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent2.id },
+        });
+
+        // The cascade may change this colleague's status; the originating agent may not.
+        const deniedRule = localIncidentWrite(
+          textOf(deniedWaiting.number),
+          textOf(protectedTarget.number),
+          HELPDESK.fields.status,
+          "in_progress"
+        );
+
+        yield* change([deniedRule.op]);
+
+        const denied = yield* patchResponse(
+          deniedProblem,
+          { status: "resolved" },
+          "helpdeskProblem",
+          "agent"
+        );
+
+        assert.strictEqual(denied.status, 403, denied.text);
+
+        for (const [record, table] of [
+          [deniedProblem, "helpdeskProblem"],
+          [deniedWaiting, "helpdeskIncident"],
+          [protectedTarget, "helpdeskIncident"],
+        ] as const) {
+          const current = yield* client.records.get({
+            params: { id: textOf(record.id), table },
+            query: {},
+          });
+
+          assert.strictEqual(current.revision, record.revision);
+          assert.strictEqual(current.status, record.status);
+          assert.deepStrictEqual(
+            yield* values(
+              "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND kind = 'update'",
+              [textOf(record.id)]
+            ),
+            []
+          );
         }
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );

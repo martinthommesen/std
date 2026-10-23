@@ -38,21 +38,24 @@ const localServiceIdentityFindings = (snapshot: ConfigSnapshot): Finding[] => {
       continue;
     }
 
-    let identity: string | null = null;
+    const identity =
+      definition.kind === "recordRule"
+        ? runIdentityOf(snapshot, definition)
+        : definition.identityId;
 
-    if (definition.kind === "recordRule") {
-      identity = runIdentityOf(snapshot, definition);
-    } else if (definition.kind === "subscription") {
-      identity = definition.identityId;
-    }
+    const running =
+      definition.state === "active" &&
+      (definition.kind === "recordRule"
+        ? definition.active
+        : definition.enabled);
 
     if (identity !== null && SERVICE_USER_IDS.has(identity)) {
       findings.push(
         finding(
           18,
-          "error",
+          running ? "error" : "warning",
           "localServiceIdentity",
-          `Local ${definition.kind} ${definition.id} (${definition.name}) names reserved service identity ${identity}; change its run identity to an ordinary user, or disable it and remove the reserved identity. Runtime execution is refused.`,
+          `Local ${definition.kind} ${definition.id} (${definition.name}) names reserved service identity ${identity}; change its run identity to an ordinary user, or keep it disabled or retired. Runtime execution with this identity is refused; inactive definitions do not execute.`,
           definition.id
         )
       );

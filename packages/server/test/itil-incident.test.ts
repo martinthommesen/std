@@ -21,11 +21,13 @@ import {
   createTicket,
   fieldId,
   itilLayer,
+  localIncidentWrite,
   patchResponse,
   patchTicket,
   recordServices,
   reference,
 } from "./itil-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import { addRecordRule, change, values } from "./schema-support.ts";
 
 const TRANSITIONS = {
@@ -358,9 +360,83 @@ describe("itil-incident", () => {
   );
 
   it.effect(
-    "a local after rule without runAs cannot inherit a shipped cascade identity",
+    "major cascades retain the manager through two levels for implicit local writes",
     () =>
-      Effect.gen(function* localCascadeRefusal() {
+      Effect.gen(function* localCascadeOrigin() {
+        const parent = yield* createTicket(
+          "helpdeskIncident",
+          { majorIncident: true },
+          "manager"
+        );
+
+        const child = yield* createTicket(
+          "helpdeskIncident",
+          {
+            majorIncident: true,
+            parentIncident: reference(parent),
+          },
+          "manager"
+        );
+
+        const grandchild = yield* createTicket("helpdeskIncident", {
+          parentIncident: reference(child),
+        });
+
+        const target = yield* createTicket();
+        const description = yield* fieldId("description");
+
+        const rule = localIncidentWrite(
+          textOf(grandchild.number),
+          textOf(target.number),
+          description,
+          "Manager customization"
+        );
+
+        yield* change([rule.op]);
+
+        const response = yield* patchResponse(
+          parent,
+          { status: "resolved" },
+          "helpdeskIncident",
+          "manager"
+        );
+
+        assert.strictEqual(response.status, 200, response.text);
+        const client = yield* clientFor();
+
+        for (const record of [child, grandchild]) {
+          assert.strictEqual(
+            (yield* readIncident(client, textOf(record.id))).status,
+            "resolved"
+          );
+        }
+
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(target.id))).description,
+          "Manager customization"
+        );
+        assert.deepStrictEqual(
+          yield* values(
+            `SELECT c.actor_id::text AS value FROM core.change c
+           JOIN core.change trigger ON trigger.id::text = c.cause ->> 'parentChangeId'
+           WHERE c.record_id = $1::uuid AND c.cause ->> 'hookId' = $2
+             AND c.cause ->> 'kind' = 'hook' AND trigger.record_id = $3::uuid`,
+            [textOf(target.id), rule.id, textOf(grandchild.id)]
+          ),
+          yield* values(
+            "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND kind = 'create'",
+            [textOf(parent.id)]
+          )
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a manager's denied local write rolls back the entire major cascade",
+    () =>
+      Effect.gen(function* deniedLocalCascade() {
+        const fixture = yield* HelpdeskFixture;
+
         const parent = yield* createTicket(
           "helpdeskIncident",
           { majorIncident: true },
@@ -371,41 +447,16 @@ describe("itil-incident", () => {
           parentIncident: reference(parent),
         });
 
-        const description = yield* fieldId("description");
-
-        const parentIncident = yield* fieldId(
-          "parent_incident",
-          "helpdesk.incident"
-        );
-
-        const rule = addRecordRule(HELPDESK.incident, {
-          actions: [
-            {
-              forEach: { classId: HELPDESK.incident, where: null },
-              target: "self",
-              type: "updateEach",
-              values: [
-                {
-                  fieldId: description,
-                  value: { value: "Must not run as cascade" },
-                },
-              ],
-            },
-          ],
-          condition: {
-            args: [
-              {
-                left: { path: [HELPDESK.fields.status] },
-                op: "eq",
-                right: { value: "resolved" },
-              },
-              { arg: { path: [parentIncident] }, op: "notEmpty" },
-            ],
-            op: "and",
-          },
-          phase: "after",
-          ruleKind: null,
+        const target = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent.id },
         });
+
+        const rule = localIncidentWrite(
+          textOf(child.number),
+          textOf(target.number),
+          yield* fieldId("description"),
+          "Denied customization"
+        );
 
         yield* change([rule.op]);
 
@@ -418,20 +469,75 @@ describe("itil-incident", () => {
 
         assert.strictEqual(response.status, 403, response.text);
         const client = yield* clientFor();
-        assert.strictEqual(
-          (yield* readIncident(client, textOf(parent.id))).status,
-          "new"
+
+        for (const record of [parent, child, target]) {
+          const current = yield* readIncident(client, textOf(record.id));
+          assert.strictEqual(current.revision, record.revision);
+          assert.strictEqual(current.status, "new");
+          assert.strictEqual(current.description, record.description);
+          assert.deepStrictEqual(
+            yield* values(
+              "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND kind = 'update'",
+              [textOf(record.id)]
+            ),
+            []
+          );
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "an explicit local runAs keeps its own authority inside a cascade",
+    () =>
+      Effect.gen(function* explicitLocalCascade() {
+        const fixture = yield* HelpdeskFixture;
+
+        const parent = yield* createTicket(
+          "helpdeskIncident",
+          { majorIncident: true },
+          "manager"
         );
-        assert.strictEqual(
-          (yield* readIncident(client, textOf(child.id))).status,
-          "new"
+
+        const child = yield* createTicket("helpdeskIncident", {
+          parentIncident: reference(parent),
+        });
+
+        const target = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent.id },
+        });
+
+        const rule = localIncidentWrite(
+          textOf(child.number),
+          textOf(target.number),
+          yield* fieldId("description"),
+          "Explicit administrator",
+          fixture.admin.id
         );
+
+        const http = yield* TestHttpClient;
+
+        const token = yield* http.signIn(
+          fixture.admin.login,
+          fixture.admin.password
+        );
+
+        const written = yield* postChangeSet(token, [rule.op]);
+        assert.strictEqual(written.status, 201, written.text);
+
+        const response = yield* patchResponse(
+          parent,
+          { status: "resolved" },
+          "helpdeskIncident",
+          "manager"
+        );
+
+        assert.strictEqual(response.status, 200, response.text);
         assert.deepStrictEqual(
           yield* values(
-            "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND kind = 'update'",
-            [textOf(child.id)]
+            "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND cause ->> 'hookId' = $2",
+            [textOf(target.id), rule.id]
           ),
-          []
+          [fixture.admin.id]
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );

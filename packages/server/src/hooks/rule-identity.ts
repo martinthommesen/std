@@ -2,8 +2,9 @@
  * Who a rule's nested saves run as (Contracts 4.1, 4.10, decision 0022):
  *
  * - an `after` rule without `runAs`: the acting user, so access rules
- *   apply to its writes exactly as to the user's own. Local rules are
- *   refused when that actor is a reserved service identity;
+ *   apply to its writes exactly as to the user's own. Local rules under a
+ *   reserved service identity reload the originating human's current roles;
+ *   a system-only chain without that origin is refused;
  * - an `after` rule with `runAs`, or an `afterCommit` rule (its
  *   subscription's identity): that user, with the roles they hold now.
  *   This needs the rule's author to hold `rules.run_as`: definition
@@ -107,7 +108,18 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
 ) {
   if (identityId === null) {
     if (rule.owner.layer === "local" && SERVICE_USER_IDS.has(acting.userId)) {
-      return yield* new NotAllowed();
+      if (acting.origin === undefined) {
+        yield* Effect.logWarning(
+          `Local rule ${rule.id} cannot run under reserved identity ${acting.userId} without a human origin`
+        );
+
+        return yield* new NotAllowed();
+      }
+
+      return {
+        ...(yield* loadActor(snapshot, acting.origin.userId)),
+        origin: acting.origin,
+      };
     }
 
     return acting;
@@ -117,5 +129,11 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
 
   const actor: ActingUser = yield* loadActor(snapshot, identityId);
 
-  return actor;
+  const origin =
+    acting.origin ??
+    (SERVICE_USER_IDS.has(acting.userId)
+      ? undefined
+      : { userId: acting.userId });
+
+  return origin === undefined ? actor : { ...actor, origin };
 });

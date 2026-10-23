@@ -726,6 +726,50 @@ describe("helpdesk-service-identity", () => {
         });
 
         assert.strictEqual(refused.status, 403, refused.text);
+
+        for (const entry of findings) {
+          assert.strictEqual(entry.severity, "error");
+        }
+
+        // Disabled definitions never execute; retirement has the same runtime gate.
+        for (const state of ["active", "retired"] as const) {
+          yield* values(
+            "UPDATE core.record_rule SET active = ($2 = 'retired'), state = $2 WHERE id = $1::uuid RETURNING id::text AS value",
+            [rule.id, state]
+          );
+          yield* values(
+            "UPDATE core.subscription SET enabled = ($2 = 'retired'), state = $2 WHERE id = $1::uuid RETURNING id::text AS value",
+            [subscription, state]
+          );
+          yield* (yield* Catalog).refresh;
+
+          const inactiveFindings = (yield* runDoctor()).findings.filter(
+            (entry) => entry.code === "localServiceIdentity"
+          );
+
+          assert.sameMembers(
+            inactiveFindings.map((entry) => entry.subject),
+            [rule.id, subscription]
+          );
+
+          for (const entry of inactiveFindings) {
+            assert.strictEqual(entry.severity, "warning");
+          }
+
+          const freshCatalog = Catalog.of(yield* makeCatalog);
+
+          const allowed = yield* patchTicket(ticket, {
+            description: `Inactive ${state} rules do not execute`,
+          }).pipe(
+            Effect.provide(Layer.fresh(TestHttpClient.layer)),
+            Effect.provideService(Catalog, freshCatalog)
+          );
+
+          assert.strictEqual(
+            allowed.description,
+            `Inactive ${state} rules do not execute`
+          );
+        }
       }).pipe(
         Effect.provide(
           TestHttpClient.layer.pipe(

@@ -10,6 +10,7 @@ import { HttpApiClient } from "effect/http-api";
 import {
   HelpdeskFixture,
   helpdeskTestLayer,
+  HELPDESK,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
@@ -21,6 +22,7 @@ import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { asObject, textOf, numberOf } from "./api-support.ts";
+import { addRecordRule } from "./schema-support.ts";
 
 const account = (login: string, fixture: HelpdeskFixture["Service"]) => {
   if (login === "manager") {
@@ -221,3 +223,45 @@ export const patchResponse = Effect.fn("Itil.patchResponse")(
     });
   }
 );
+
+/**
+ * A local after rule writing a separate incident when one named incident changes.
+ * @param triggerNumber - The triggering incident's stable ticket number.
+ * @param targetNumber - The incident to update.
+ * @param field - The field to write.
+ * @param value - The assigned value.
+ * @param runAsId - An explicit identity, or null for the acting user.
+ * @returns The local rule's creation operation and ID.
+ */
+export const localIncidentWrite = (
+  triggerNumber: string,
+  targetNumber: string,
+  field: string,
+  value: JsonValue,
+  runAsId: string | null = null
+) =>
+  addRecordRule(HELPDESK.incident, {
+    actions: [
+      {
+        forEach: {
+          classId: HELPDESK.incident,
+          where: {
+            left: { path: [HELPDESK.fields.number] },
+            op: "eq",
+            right: { value: targetNumber },
+          },
+        },
+        target: "self",
+        type: "updateEach",
+        values: [{ fieldId: field, value: { value } }],
+      },
+    ],
+    condition: {
+      left: { path: [HELPDESK.fields.number] },
+      op: "eq",
+      right: { value: triggerNumber },
+    },
+    phase: "after",
+    ruleKind: null,
+    runAsId,
+  });

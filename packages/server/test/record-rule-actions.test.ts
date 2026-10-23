@@ -34,16 +34,18 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   BUILT_IN_ROLE_IDS,
   HELPDESK_CASCADE_USER_ID,
+  HELPDESK_CASCADE_ROLE_ID,
   PERMISSION_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Result } from "effect";
+import { Effect, Logger, Result } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { Actor } from "../src/auth/actor.ts";
+import { Actor, loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { ruleActor } from "../src/hooks/rule-identity.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import {
@@ -926,6 +928,213 @@ describe("record-rule-actions", () => {
 
           assert.strictEqual(allowed.status, 200, allowed.text);
           assert.strictEqual(yield* statusOf(K), "docked");
+        })
+    );
+
+    dbTest.effect(
+      "changing ordinary run identities to reserved ones is refused while unrelated legacy edits remain valid",
+      () =>
+        Effect.gen(function* changedReservedIdentities() {
+          const fixture = yield* AcmeFixture;
+          const current = yield* (yield* Catalog).refresh;
+
+          const requester: Requester = {
+            roleIds: [BUILT_IN_ROLE_IDS.admin],
+            userId: fixture.alice.id,
+          };
+
+          const permissionSnapshot = current.with(current, [
+            {
+              id: freshId(),
+              kind: "grant",
+              owner: { layer: "local" },
+              permissionId: PERMISSION_IDS["rules.run_as"],
+              protected: false,
+              roleId: BUILT_IN_ROLE_IDS.admin,
+              state: "active",
+              version: 1,
+            },
+          ]);
+
+          const rule = dockLaptops("legacy", fixture.alice.id);
+          const subscriptionId = freshId();
+
+          const created = applyOperations(
+            permissionSnapshot,
+            [rule.op, carrier(subscriptionId)],
+            { changeSetId: freshId(), revision: current.revision + 1 },
+            { origin: LOCAL_ORIGIN, requester }
+          );
+
+          assert.isTrue(Result.isSuccess(created));
+
+          if (Result.isFailure(created)) {
+            return;
+          }
+
+          const { after: snapshot } = created.success;
+          const ordinaryRule = snapshot.get(rule.id);
+          const ordinarySubscription = snapshot.get(subscriptionId);
+          assert.isDefined(ordinaryRule);
+          assert.isDefined(ordinarySubscription);
+
+          if (
+            ordinaryRule?.kind !== "recordRule" ||
+            ordinarySubscription?.kind !== "subscription"
+          ) {
+            return;
+          }
+
+          for (const identityId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            assert.deepStrictEqual(
+              outcomeOf(
+                snapshot,
+                [
+                  {
+                    changes: { runAsId: identityId },
+                    id: rule.id,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              ["invalidRecordRule"]
+            );
+            assert.deepStrictEqual(
+              outcomeOf(
+                snapshot,
+                [
+                  {
+                    changes: { identityId },
+                    id: subscriptionId,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              ["invalidSubscription"]
+            );
+
+            const legacy = snapshot.with(snapshot, [
+              { ...ordinaryRule, runAsId: identityId },
+              { ...ordinarySubscription, identityId },
+            ]);
+
+            assert.deepStrictEqual(
+              outcomeOf(
+                legacy,
+                [
+                  {
+                    changes: { description: "Legacy rule edit" },
+                    id: rule.id,
+                    op: "update",
+                    version: 1,
+                  },
+                  {
+                    changes: { maxAttempts: 11 },
+                    id: subscriptionId,
+                    op: "update",
+                    version: 1,
+                  },
+                ],
+                requester
+              ),
+              []
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "implicit local rules reload origin roles; without origin they are NotAllowed and log the rule ID",
+      () =>
+        Effect.gen(function* noHumanOrigin() {
+          const current = yield* (yield* Catalog).refresh;
+          const draft = dockLaptops("no_origin", null);
+
+          const created = applyOperations(
+            current,
+            [draft.op],
+            { changeSetId: freshId(), revision: current.revision + 1 },
+            { origin: LOCAL_ORIGIN, requester: LOCAL_REQUESTER }
+          );
+
+          assert.isTrue(Result.isSuccess(created));
+
+          if (Result.isFailure(created)) {
+            return;
+          }
+
+          const rule = created.success.after.get(draft.id);
+          assert.isDefined(rule);
+
+          if (rule?.kind !== "recordRule") {
+            return;
+          }
+
+          const logs: string[] = [];
+
+          const logger = Logger.make(({ message }) => {
+            logs.push(String(message));
+          });
+
+          for (const userId of [SYSTEM_USER_ID, HELPDESK_CASCADE_USER_ID]) {
+            const refused = yield* ruleActor(current, rule, null, {
+              roleIds: [],
+              userId,
+            }).pipe(Effect.flip, Effect.provide(Logger.layer([logger])));
+
+            assert.strictEqual(refused._tag, "NotAllowed");
+          }
+
+          assert.lengthOf(logs, 2);
+
+          for (const message of logs) {
+            assert.include(message, rule.id);
+            assert.include(message, "without a human origin");
+          }
+
+          const fixture = yield* AcmeFixture;
+          const origin = { userId: fixture.bob.id };
+
+          const acting = {
+            origin,
+            roleIds: [HELPDESK_CASCADE_ROLE_ID],
+            userId: HELPDESK_CASCADE_USER_ID,
+          };
+
+          const reloaded = yield* ruleActor(current, rule, null, acting);
+          assert.deepStrictEqual(reloaded, {
+            ...(yield* loadActor(current, fixture.bob.id)),
+            origin,
+          });
+          assert.notInclude(reloaded.roleIds, HELPDESK_CASCADE_ROLE_ID);
+          yield* values(
+            'UPDATE core."user" SET active = false WHERE id = $1::uuid RETURNING id::text AS value',
+            [fixture.bob.id]
+          );
+
+          const deactivated = yield* ruleActor(
+            current,
+            rule,
+            null,
+            acting
+          ).pipe(
+            Effect.ensuring(
+              values(
+                'UPDATE core."user" SET active = true WHERE id = $1::uuid RETURNING id::text AS value',
+                [fixture.bob.id]
+              ).pipe(Effect.orDie)
+            )
+          );
+
+          assert.deepStrictEqual(deactivated, {
+            origin,
+            roleIds: [],
+            userId: fixture.bob.id,
+          });
         })
     );
 
