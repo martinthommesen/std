@@ -414,11 +414,15 @@ const submissionStatusText = (model: Model): string =>
     Match.orElse(() => "")
   );
 
+/** The action bar's button that moves focus to the alert at the top. */
+const SHOW_THE_REASON = "Show the reason";
+
 /** The action bar's notes that are not announced. */
 const ACTION_STATUS_QUIET_CLASS = "action-status-quiet";
 
 /** What the action bar's status shows, for its look (`data-state`). */
 type ActionState =
+  | "checkFailed"
   | "checking"
   | "dirty"
   | "failed"
@@ -427,16 +431,19 @@ type ActionState =
   | "saving";
 
 /**
- * Before a save: Save waits for the form rules' first verdict
- * ("checking"), or there are edits a save would send ("dirty", form
- * rules' effective edits), or neither.
+ * Before a save: Save waits for the form rules' verdict, while the check
+ * runs ("checking") or because it failed ("checkFailed", whose alert with
+ * "Check form again" is at the top of the form), or there are edits
+ * leaving would lose ("dirty", form rules' effective edits), or neither.
  *
  * @param model - The page.
  * @returns The state.
  */
 const idleStateOf = (model: Model): ActionState => {
   if (isFormStatePending(model)) {
-    return "checking";
+    return Option.isSome(AsyncData.getError(model.formState))
+      ? "checkFailed"
+      : "checking";
   }
 
   return hasUnsavedEdits(model) ? "dirty" : "idle";
@@ -487,7 +494,7 @@ const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
       buttonView(
         {
           onClick: Message.ClickedShowRefusal(),
-          text: "Show the reason",
+          text: SHOW_THE_REASON,
           variant: "ghost",
         },
         h
@@ -498,6 +505,20 @@ const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
     ]),
     Match.when("checking", () => [
       h.span([h.Class(ACTION_STATUS_QUIET_CLASS)], ["Checking form rules…"]),
+    ]),
+    Match.when("checkFailed", () => [
+      h.span(
+        [h.Class(ACTION_STATUS_QUIET_CLASS)],
+        ["Save waits: the form check failed."]
+      ),
+      buttonView(
+        {
+          onClick: Message.ClickedShowRefusal(),
+          text: SHOW_THE_REASON,
+          variant: "ghost",
+        },
+        h
+      ),
     ]),
     Match.orElse((): readonly Html[] => [])
   );

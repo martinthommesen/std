@@ -225,7 +225,7 @@ Dense rows (36 px), a sticky header row with sort buttons (`aria-sort` on the he
 
 ### The record bar
 
-See Overview. Its status is a live region; "Unsaved changes", "Checking form rules…" and the refusal note are not announced (the alert at the top, and form rules' own live region, are). "Unsaved changes" means edits a save would send, as form rules build them (hidden and read-only fields left out). While Save waits for the first form-state verdict the bar says "Checking form rules…", which is why Save is disabled. After a refusal, "Show the reason" moves focus to the alert, and so into view.
+See Overview. Its status is a live region; "Unsaved changes", "Checking form rules…" and the refusal note are not announced (the alert at the top, and form rules' own live region, are). "Unsaved changes" means edits a save would send, as form rules build them (hidden and read-only fields left out). While Save waits for the first form-state verdict the bar says "Checking form rules…", which is why Save is disabled; if the check failed, it says "Save waits: the form check failed." in the danger colour, with "Show the reason", which moves focus to the alert and its "Check form again". After a refusal, "Show the reason" moves focus to the alert, and so into view.
 
 A read-only record (the caller may read it but not change it) keeps a reduced bar: no status and no Save, only "Back to the list" and Delete, in place at the form's end rather than floating.
 
@@ -237,7 +237,7 @@ A read-only record (the caller may read it but not change it) keeps a reduced ba
 
 ### Leaving with unsaved edits
 
-An in-app link from a form with unsaved edits opens "Leave without saving?" (Foldkit UI Dialog), on "Keep editing", the choice that loses nothing; "Discard changes" (danger) follows the link. A reload, a typed address, closing the tab or an external link get the browser's own question (`beforeunload`, only while edits are unsaved). The browser's Back and Forward buttons move this single-page app's history without unloading it and cannot be held back, so they leave without asking.
+An in-app link or "Sign out" from a form with unsaved edits opens "Leave without saving?" (Foldkit UI Dialog), on "Keep editing", the choice that loses nothing (no sign-out request goes out); "Discard changes" (danger) follows the link or signs out, once. Unsaved edits include a value that does not convert yet (incomplete JSON, a number with a letter in it): a save cannot send it, but the user typed it. A reload, a typed address, closing the tab or an external link get the browser's own question (`beforeunload`, only while edits are unsaved). The browser's Back and Forward buttons move this single-page app's history without unloading it and cannot be held back, so they leave without asking.
 
 ### Filter
 

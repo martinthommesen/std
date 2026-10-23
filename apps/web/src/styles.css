@@ -1700,7 +1700,8 @@ th[aria-sort="descending"] .sort-icon {
   font-weight: var(--weight-medium);
 }
 
-.action-status[data-state="failed"] {
+.action-status[data-state="failed"],
+.action-status[data-state="checkFailed"] {
   color: var(--color-danger);
   font-weight: var(--weight-medium);
 }

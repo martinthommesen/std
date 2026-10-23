@@ -348,7 +348,7 @@ describe("signing in", () => {
           "_tag",
           "leaveDialog",
           "maybeDeadLetters",
-          "maybeLeaveUrl",
+          "maybeLeaveIntent",
           "maybePreferenceProblem",
           "maybeRecordForm",
           "maybeRevision",
@@ -596,7 +596,7 @@ describe("answers of an earlier session", () => {
   const bobEntering = Model.SignedIn({
     leaveDialog: initLeaveDialog(),
     maybeDeadLetters: Option.none(),
-    maybeLeaveUrl: Option.none(),
+    maybeLeaveIntent: Option.none(),
     maybePreferenceProblem: Option.none(),
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),

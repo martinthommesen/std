@@ -13,6 +13,20 @@ import { Model as TableListModel } from "./page/table-list/model.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
 import { PreferenceProblem, ShellPreferences } from "./shell-preferences.ts";
 
+/**
+ * What the user asked for that would leave a form with unsaved edits, held
+ * while the leave confirmation asks: to follow an in-app link (its
+ * address), or to sign out.
+ */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const LeaveIntent = defineTaggedUnion({
+  FollowLink: { url: Schema.String },
+  SignOut: {},
+});
+
+/** What the user asked for that would leave a form with unsaved edits. */
+export type LeaveIntent = typeof LeaveIntent.Type;
+
 /** Where a sign-out request stands. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const SignOutRequest = defineTaggedUnion({
@@ -75,9 +89,9 @@ export type Tables = typeof Tables.schema.Type;
  *   browser could not read or store them (`maybePreferenceProblem`), which
  *   the navigation says. Signed in, the shell also holds the navigation
  *   drawer of narrow screens (Foldkit UI Dialog), the user menu (Foldkit
- *   UI Menu), and the leave confirmation (Foldkit UI Dialog) with the
- *   address a link would have opened while the form held unsaved edits
- *   (`maybeLeaveUrl`).
+ *   UI Menu), and the leave confirmation (Foldkit UI Dialog) with what the
+ *   user asked for while the form held unsaved edits (`maybeLeaveIntent`):
+ *   to follow a link, or to sign out.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
@@ -94,7 +108,7 @@ export const Model = defineTaggedUnion({
   SignedIn: {
     leaveDialog: Dialog.Model,
     maybeDeadLetters: Schema.Option(DeadLettersModel),
-    maybeLeaveUrl: Schema.Option(Schema.String),
+    maybeLeaveIntent: Schema.Option(LeaveIntent),
     maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),

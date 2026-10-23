@@ -79,7 +79,8 @@ export const init: Runtime.RoutingApplicationInit<
  * While the form page holds unsaved edits, the browser asks before the
  * page unloads (a reload, a typed address, closing the tab, an external
  * link): the `beforeunload` event is cancelled, and the browser shows its
- * own question. In-app links ask through the leave confirmation instead.
+ * own question. In-app links and Sign out ask through the leave
+ * confirmation instead.
  * The browser's Back and Forward buttons change the address of this
  * single-page app without unloading it, and a history move cannot be held
  * back, so they leave the form without asking.

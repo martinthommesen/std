@@ -29,7 +29,7 @@ import {
 } from "./form-rules-fixture.ts";
 import { Message } from "./message.ts";
 import { FormStateVerdict, WriteError } from "./model.ts";
-import { update } from "./update.ts";
+import { FORM_MESSAGES_ID, update } from "./update.ts";
 import { view } from "./view.ts";
 
 /** The action bar's Mount, which keeps focused fields clear of it. */
@@ -110,6 +110,27 @@ describe("accessible form rules", () => {
       expect(label("Tracking")).toBeAbsent(),
       click(role("button", { name: "Create" })),
       expect(text("This field is required.")).toExist(),
+      Command.resolve(FocusField, Message.CompletedFocusField())
+    );
+  });
+
+  it("while Save waits on a failed check, the action bar says so and leads to the alert", () => {
+    scene(
+      { update, view },
+      given(
+        modifyFields(pendingForm, {
+          formState: () =>
+            FormStateVerdict.Failure({ error: WriteError.Unavailable() }),
+          maybeFormStateInFlight: () => Option.none(),
+        })
+      ),
+      acknowledgeActionBar,
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
+      expect(text("Save waits: the form check failed.")).toExist(),
+      expect(text("Checking form rules…")).toBeAbsent(),
+      expect(role("button", { name: "Create" })).toBeDisabled(),
+      click(role("button", { name: "Show the reason" })),
+      Command.expectExact(FocusField({ elementId: FORM_MESSAGES_ID })),
       Command.resolve(FocusField, Message.CompletedFocusField())
     );
   });

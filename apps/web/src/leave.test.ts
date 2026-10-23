@@ -4,7 +4,7 @@
  * "Keep editing" stays, and the page asks the browser to confirm an
  * unload only while edits are unsaved.
  */
-import { Dialog } from "@foldkit/ui";
+import { Dialog, Menu } from "@foldkit/ui";
 import { Option } from "effect";
 import { UrlRequest } from "foldkit/navigation";
 import { Command, given, message, model, story } from "foldkit/story";
@@ -12,7 +12,7 @@ import { modifyFields } from "foldkit/struct";
 import { toString as urlToString } from "foldkit/url";
 import { describe, expect, it } from "vitest";
 
-import { NavigateInternal } from "./command.ts";
+import { NavigateInternal, SignOut } from "./command.ts";
 import { adaAtHome, urlOf } from "./fixture.ts";
 import {
   REVISION_5,
@@ -24,6 +24,7 @@ import {
 } from "./form-fixture.ts";
 import { subscriptions } from "./main.ts";
 import { Message } from "./message.ts";
+import { LeaveIntent } from "./model.ts";
 import type { Model, SignedInModel } from "./model.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
@@ -86,6 +87,32 @@ const withUnsavedEdits = onTicket(
   )
 );
 
+/** Ada on the ticket's form, with Points and Tracking typed but not convertible. */
+const withMalformedInput = onTicket(
+  formAfter(
+    loadedTicket,
+    RecordFormMessage.UpdatedText({
+      fieldId: TICKET_FIELDS.points,
+      text: "12x",
+    })
+  )
+);
+
+const withIncompleteJson = onTicket(
+  formAfter(
+    loadedTicket,
+    RecordFormMessage.UpdatedText({
+      fieldId: TICKET_FIELDS.tracking,
+      text: '{ "carrier": ',
+    })
+  )
+);
+
+/** Choosing "Sign out" in the user menu. */
+const selectedSignOut = Message.GotUserMenuMessage({
+  message: Menu.Message.SelectedItem({ index: 0, item: "SignOut" }),
+});
+
 const linkTo = (pathname: string) =>
   Message.ClickedLink({
     request: UrlRequest.Internal({ url: urlOf(pathname) }),
@@ -121,8 +148,8 @@ describe("leaving a form with unsaved edits", () => {
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
       model((app) => {
         expect(signedIn(app).leaveDialog.isOpen).toBeTruthy();
-        expect(signedIn(app).maybeLeaveUrl).toStrictEqual(
-          Option.some(LIST_URL)
+        expect(signedIn(app).maybeLeaveIntent).toStrictEqual(
+          Option.some(LeaveIntent.FollowLink({ url: LIST_URL }))
         );
         // Nothing has navigated: the form and its edits are still there.
         expect(signedIn(app).route._tag).toBe("Record");
@@ -137,7 +164,7 @@ describe("leaving a form with unsaved edits", () => {
         [NavigateInternal, Message.CompletedNavigateInternal()]
       ),
       model((app) => {
-        expect(signedIn(app).maybeLeaveUrl).toStrictEqual(Option.none());
+        expect(signedIn(app).maybeLeaveIntent).toStrictEqual(Option.none());
       })
     );
   });
@@ -160,7 +187,7 @@ describe("leaving a form with unsaved edits", () => {
       ),
       model((app) => {
         expect(signedIn(app).leaveDialog.isOpen).toBeFalsy();
-        expect(signedIn(app).maybeLeaveUrl).toStrictEqual(Option.none());
+        expect(signedIn(app).maybeLeaveIntent).toStrictEqual(Option.none());
         expect(signedIn(app).maybeRecordForm).toStrictEqual(
           withUnsavedEdits.maybeRecordForm
         );
@@ -194,13 +221,137 @@ describe("leaving a form with unsaved edits", () => {
     );
   });
 
-  it("the page asks the browser to confirm an unload only while edits are unsaved", () => {
+  it("the page asks the browser to confirm an unload only while edits are unsaved, malformed ones too", () => {
     const { modelToDependencies } = subscriptions.unsavedEdits;
 
     expect(
-      [withUnsavedEdits, onTicket(loadedTicket), adaAtHome].map(
-        (app) => modelToDependencies(app).isLeavingUnsavedEdits
+      [
+        withUnsavedEdits,
+        withMalformedInput,
+        withIncompleteJson,
+        onTicket(loadedTicket),
+        adaAtHome,
+      ].map((app) => modelToDependencies(app).isLeavingUnsavedEdits)
+    ).toStrictEqual([true, true, true, false, false]);
+  });
+
+  it.each([
+    ["a number with a letter in it", withMalformedInput],
+    ["incomplete JSON", withIncompleteJson],
+  ])(
+    "a link from a form holding %s, which a save cannot send, still asks",
+    (_case, start) => {
+      story(
+        update,
+        given(start),
+        message(linkTo(LIST)),
+        Command.expectExact(
+          Dialog.ShowDialog({
+            focusSelector: "[data-foldkit-dialog-initial-focus]",
+            id: "leave-confirmation",
+          })
+        ),
+        Command.resolve(
+          Dialog.ShowDialog,
+          Dialog.Message.SucceededShowDialog()
+        ),
+        model((app) => {
+          expect(signedIn(app).maybeLeaveIntent).toStrictEqual(
+            Option.some(LeaveIntent.FollowLink({ url: LIST_URL }))
+          );
+        })
+      );
+    }
+  );
+
+  it("Sign out from a form with unsaved edits asks first; Keep editing sends nothing", () => {
+    story(
+      update,
+      given(withUnsavedEdits),
+      message(selectedSignOut),
+      Command.expectHas(
+        Dialog.ShowDialog({
+          focusSelector: "[data-foldkit-dialog-initial-focus]",
+          id: "leave-confirmation",
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).maybeLeaveIntent).toStrictEqual(
+          Option.some(LeaveIntent.SignOut())
+        );
+        expect(signedIn(app).signOutRequest._tag).toBe("Idle");
+      }),
+      Command.resolveAll(
+        [Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()],
+        [Menu.FocusButton, Menu.Message.CompletedFocusButton()]
+      ),
+      message(
+        Message.GotLeaveDialogMessage({
+          message: Dialog.Message.RequestedClose(),
+        })
+      ),
+      Command.expectExact(Dialog.CloseDialog({ id: "leave-confirmation" })),
+      Command.resolve(
+        Dialog.CloseDialog,
+        Dialog.Message.CompletedCloseDialog()
+      ),
+      model((app) => {
+        expect(signedIn(app).signOutRequest._tag).toBe("Idle");
+        expect(signedIn(app).maybeLeaveIntent).toStrictEqual(Option.none());
+      })
+    );
+  });
+
+  it("Discard changes signs out, once", () => {
+    story(
+      update,
+      given(withUnsavedEdits),
+      message(selectedSignOut),
+      Command.resolveAll(
+        [Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()],
+        [Menu.FocusButton, Menu.Message.CompletedFocusButton()]
+      ),
+      message(Message.ClickedDiscardChanges()),
+      Command.expectExact(
+        Dialog.CloseDialog({ id: "leave-confirmation" }),
+        SignOut({
+          maybeRevision: withUnsavedEdits.maybeRevision,
+          sessionId: withUnsavedEdits.sessionId,
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).signOutRequest._tag).toBe("Pending");
+        // A second Discard changes, while the first sign-out runs, sends
+        // nothing more.
+        expect(
+          update(app, Message.ClickedDiscardChanges()).commands ?? []
+        ).toStrictEqual([]);
+      }),
+      Command.resolveAll(
+        [Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()],
+        [SignOut, Message.FailedSignOut({ sessionId: 1 })]
       )
-    ).toStrictEqual([true, false, false]);
+    );
+  });
+
+  it("Sign out without unsaved edits goes at once", () => {
+    story(
+      update,
+      given(onTicket(loadedTicket)),
+      message(selectedSignOut),
+      Command.expectHas(
+        SignOut({
+          maybeRevision: adaAtHome.maybeRevision,
+          sessionId: adaAtHome.sessionId,
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).leaveDialog.isOpen).toBeFalsy();
+      }),
+      Command.resolveAll(
+        [SignOut, Message.FailedSignOut({ sessionId: 1 })],
+        [Menu.FocusButton, Menu.Message.CompletedFocusButton()]
+      )
+    );
   });
 });

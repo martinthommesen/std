@@ -26,7 +26,7 @@ import type {
   SignedInModel,
   SignedOutModel,
 } from "./model.ts";
-import { Model, SignOutRequest, Tables } from "./model.ts";
+import { LeaveIntent, Model, SignOutRequest, Tables } from "./model.ts";
 import { initLeaveDialog, initNavigationDrawer } from "./navigation-drawer.ts";
 import { OutMessage as DeadLettersOutMessage } from "./page/dead-letters/message.ts";
 import type { Message as DeadLettersMessage } from "./page/dead-letters/message.ts";
@@ -193,7 +193,7 @@ const initSignedIn =
     Model.SignedIn({
       leaveDialog: initLeaveDialog(),
       maybeDeadLetters: Option.none(),
-      maybeLeaveUrl: Option.none(),
+      maybeLeaveIntent: Option.none(),
       maybePreferenceProblem: carried.maybePreferenceProblem,
       maybeRecordForm: Option.none(),
       maybeRevision,
@@ -796,7 +796,7 @@ const ignoreLeaveOutMessage = Dialog.OutMessage.match<Step>({
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
   Closed: () => (model) => ({
     model: Model.guards.SignedIn(model)
-      ? modifyFields(model, { maybeLeaveUrl: () => Option.none() })
+      ? modifyFields(model, { maybeLeaveIntent: () => Option.none() })
       : model,
   }),
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
@@ -867,30 +867,13 @@ const followInternalLink = (model: Model, url: Url): UpdateReturn => {
     isLeavingUnsavedEdits(model) &&
     !isSamePage(urlToAppRoute(url), model.route)
     ? openLeaveDialog(
-        modifyFields(model, { maybeLeaveUrl: () => Option.some(address) })
+        modifyFields(model, {
+          maybeLeaveIntent: () =>
+            Option.some(LeaveIntent.FollowLink({ url: address })),
+        })
       )
     : { commands: [NavigateInternal({ url: address })], model };
 };
-
-/**
- * "Discard changes": closes the leave confirmation and follows the link
- * it kept.
- *
- * @param signedInModel - The signed-in state.
- * @returns The closed confirmation and the navigation.
- */
-const discardChanges = (signedInModel: SignedInModel): UpdateReturn =>
-  Option.match(signedInModel.maybeLeaveUrl, {
-    onNone: () => ({ model: signedInModel }),
-    onSome: (url) =>
-      Update.combine(signedInModel, [
-        closeLeaveDialog,
-        (stepModel) => ({
-          commands: [NavigateInternal({ url })],
-          model: stepModel,
-        }),
-      ]),
-  });
 
 /**
  * Applies a new address, and moves focus when another page appears.
@@ -1072,6 +1055,50 @@ const requestSignOut: Step = (model) =>
         }
   );
 
+/**
+ * "Sign out" from the user menu: while the form holds unsaved edits, the
+ * leave confirmation asks first and keeps the request; otherwise the
+ * sign-out goes out at once.
+ *
+ * @param model - The state.
+ * @returns The confirmation, or the sign-out request.
+ */
+const signOutUnlessLeavingEdits: Step = (model) =>
+  isLeavingUnsavedEdits(model) && Model.guards.SignedIn(model)
+    ? openLeaveDialog(
+        modifyFields(model, {
+          maybeLeaveIntent: () => Option.some(LeaveIntent.SignOut()),
+        })
+      )
+    : requestSignOut(model);
+
+/**
+ * "Discard changes": closes the leave confirmation and does what it kept:
+ * follows the link, or signs out.
+ *
+ * @param signedInModel - The signed-in state.
+ * @returns The closed confirmation and the navigation or the sign-out.
+ */
+const discardChanges = (signedInModel: SignedInModel): UpdateReturn =>
+  Option.match(signedInModel.maybeLeaveIntent, {
+    onNone: () => ({ model: signedInModel }),
+    onSome: (intent) =>
+      Update.combine(signedInModel, [
+        closeLeaveDialog,
+        LeaveIntent.match<Step>(intent, {
+          // oxlint-disable-next-line sonarjs/function-name -- a match case is keyed by its case's tag
+          FollowLink:
+            ({ url }) =>
+            (stepModel) => ({
+              commands: [NavigateInternal({ url })],
+              model: stepModel,
+            }),
+          // oxlint-disable-next-line sonarjs/function-name -- a match case is keyed by its case's tag
+          SignOut: () => requestSignOut,
+        }),
+      ]),
+  });
+
 const foldUserMenuOutMessage = Menu.OutMessage.match<
   Step,
   Menu.OutMessage<UserMenuItem>
@@ -1079,7 +1106,7 @@ const foldUserMenuOutMessage = Menu.OutMessage.match<
   // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
   Selected: ({ value }) =>
     Match.value(value).pipe(
-      Match.when("SignOut", () => requestSignOut),
+      Match.when("SignOut", () => signOutUnlessLeavingEdits),
       Match.exhaustive
     ),
 });

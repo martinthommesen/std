@@ -11,7 +11,7 @@ import {
   navigationGroupsOf,
 } from "./domain/navigation.ts";
 import { Message } from "./message.ts";
-import { SignOutRequest } from "./model.ts";
+import { LeaveIntent, SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";
 import { view as deadLettersView } from "./page/dead-letters/view.ts";
 import { tableHref, view as homeView } from "./page/home.ts";
@@ -460,7 +460,12 @@ const leaveDialogView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
                     h.p(
                       [...description],
                       [
-                        "This record has changes that are not saved. If you leave, they are lost.",
+                        Option.exists(
+                          model.maybeLeaveIntent,
+                          LeaveIntent.guards.SignOut
+                        )
+                          ? "This record has changes that are not saved. If you sign out, they are lost."
+                          : "This record has changes that are not saved. If you leave, they are lost.",
                       ]
                     ),
                     h.div(

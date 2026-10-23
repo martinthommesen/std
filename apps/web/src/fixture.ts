@@ -31,7 +31,7 @@ export const ada: CurrentUser = {
 export const adaAtHome = Model.SignedIn({
   leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
-  maybeLeaveUrl: Option.none(),
+  maybeLeaveIntent: Option.none(),
   maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
@@ -53,7 +53,7 @@ export const adaAtHome = Model.SignedIn({
 export const adaEnteringHome = Model.SignedIn({
   leaveDialog: initLeaveDialog(),
   maybeDeadLetters: Option.none(),
-  maybeLeaveUrl: Option.none(),
+  maybeLeaveIntent: Option.none(),
   maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
