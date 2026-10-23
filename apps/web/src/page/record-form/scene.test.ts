@@ -188,6 +188,7 @@ describe("the record form", () => {
         UpdateRecord({
           fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},

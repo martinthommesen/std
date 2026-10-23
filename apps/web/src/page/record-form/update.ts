@@ -2380,6 +2380,7 @@ const save = (model: Model): UpdateReturn => {
           UpdateRecord({
             fields: meta.table.fields.map(wireFieldOf),
             generation,
+            isDefinitionTable: meta.table.definitionTable === true,
             recordId: record.id,
             revision: meta.revision,
             secrets: check.body.secrets,

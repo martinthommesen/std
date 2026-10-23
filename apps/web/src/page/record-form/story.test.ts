@@ -130,6 +130,7 @@ const updateRequest = (
   UpdateRecord({
     fields: TICKET_WIRE,
     generation: 2,
+    isDefinitionTable: false,
     recordId: TICKET_ID,
     revision: REVISION_5,
     secrets: {},
@@ -362,6 +363,20 @@ describe("opening a form", () => {
     );
   });
 });
+
+/**
+ * Whether the save a click on Save sends is a definition table's.
+ *
+ * @param page - A form with an edit.
+ * @returns The flag of each Command sent.
+ */
+const isDefinitionTableOf = (page: Model) =>
+  (update(page, Message.ClickedSave()).commands ?? []).map(
+    (command) =>
+      command.args !== undefined &&
+      "isDefinitionTable" in command.args &&
+      command.args.isDefinitionTable
+  );
 
 describe("editing and saving", () => {
   it("sends only the changed fields with If-Match and the form's revision; a cleared field is null", () => {
@@ -842,6 +857,36 @@ describe("editing and saving", () => {
     expect(own.maybeEditsFrom).toStrictEqual(Option.none());
   });
 
+  it("updates a definition table with a merge patch, as its metadata says (definitionTable)", () => {
+    const definitionForm = after(
+      editing.model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: { ...ticketTable, definitionTable: true },
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Open",
+        record: ticketRecord,
+      }),
+      Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" })
+    );
+
+    expect(isDefinitionTableOf(definitionForm)).toStrictEqual([true]);
+    expect(
+      isDefinitionTableOf(
+        after(
+          ready,
+          Message.UpdatedText({
+            fieldId: TICKET_FIELDS.description,
+            text: "Mine",
+          })
+        )
+      )
+    ).toStrictEqual([false]);
+  });
+
   it("ignores the answer to a save the page no longer waits for", () => {
     story(
       update,
@@ -1127,6 +1172,7 @@ describe("creating", () => {
         UpdateRecord({
           fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: NEW_ID,
           revision: REVISION_5,
           secrets: {},

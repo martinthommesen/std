@@ -437,41 +437,6 @@ const BodyArgs = {
 };
 
 /**
- * The platform's definition tables (Contracts 1.4): a write to one of them
- * runs as a one-operation change set, and an update takes a merge patch
- * only (Contracts 10.5; a JSON Patch is `415`), whose json values replace
- * the stored ones.
- */
-const DEFINITION_TABLES: ReadonlySet<string> = new Set([
-  "core.access_rule",
-  "core.choice",
-  "core.class",
-  "core.field",
-  "core.field_override",
-  "core.index",
-  "core.layout",
-  "core.namespace",
-  "core.permission",
-  "core.record_rule",
-  "core.role",
-  "core.role_permission",
-  "core.saved_filter",
-  "core.subscription",
-]);
-
-/**
- * Whether an update is a merge patch: on a definition table, yes; on any
- * other table it is a JSON Patch with one `add` per changed attribute,
- * because a merge patch would merge an object into a json attribute's
- * stored value instead of replacing it (Contracts 10.5).
- *
- * @param table - The qualified name.
- * @returns True for a definition table.
- */
-export const isDefinitionTable = (table: string): boolean =>
-  DEFINITION_TABLES.has(table);
-
-/**
  * What a write returned. A record of the endpoint's own class is read
  * from the answer, which holds the endpoint's default selection. Any
  * other answer is read again with the endpoint's fields named
@@ -573,15 +538,22 @@ export const CreateRecord = Command.define("CreateRecord", {
 });
 
 /**
- * Updates a record (`PATCH {collection}/{id}`, a merge patch or a JSON
- * Patch, `isDefinitionTable`) with
- * `If-Match` naming the version the edits were made on, at the form's
- * revision. A refusal is never retried: the user decides (Contracts 6.4).
+ * Updates a record (`PATCH {collection}/{id}`) with `If-Match` naming the
+ * version the edits were made on, at the form's revision. A refusal is
+ * never retried: the user decides (Contracts 6.4).
+ *
+ * On a definition table (metadata's `definitionTable`) the body is a
+ * merge patch: the write runs as a change set (Contracts 1.4), takes no
+ * JSON Patch (`415`), and replaces json values whole. On any other table
+ * it is a JSON Patch with one `add` per changed attribute, because a
+ * merge patch would merge an object into a json attribute's stored value
+ * instead of replacing it (Contracts 10.5).
  */
 export const UpdateRecord = Command.define("UpdateRecord", {
   args: {
     ...BodyArgs,
     generation: Schema.Int,
+    isDefinitionTable: Schema.Boolean,
     recordId: Schema.String,
     revision: SchemaRevision,
     table: Schema.String,
@@ -590,6 +562,7 @@ export const UpdateRecord = Command.define("UpdateRecord", {
   execute: ({
     fields,
     generation,
+    isDefinitionTable,
     recordId,
     revision,
     secrets,
@@ -610,7 +583,7 @@ export const UpdateRecord = Command.define("UpdateRecord", {
       const changed = sentBody({ secrets, values });
 
       const [patched, response] = yield* (
-        isDefinitionTable(table)
+        isDefinitionTable
           ? client.records.patch({
               ...request,
               payload: resourceBodyOf(changed, fields),
