@@ -93,6 +93,7 @@ import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
 import { writeChangeImage } from "./change-image.ts";
+import { authorizeOwners, noteOwnerSave } from "./part-owner-access.ts";
 import {
   deriveIndividualName,
   individualOf,
@@ -628,6 +629,15 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     snapshot,
   };
 
+  // Later part writes of this transaction decide this owner again, and may
+  // write the parts of an owner their acting user created (decision 0039).
+  yield* noteOwnerSave(snapshot, {
+    actorId: entry.actorId,
+    classId: change.classId,
+    kind: change.kind,
+    recordId: change.recordId,
+  });
+
   // The touched set (4.9): the owners this save changes, or `AggregateNotSettled`
   // for one this transaction already persisted.
   yield* noteAggregateWrite({
@@ -790,9 +800,11 @@ const createIndividual = (
 
 /**
  * Reads and locks the owner chain of a part to be created, aggregate root
- * first, before anything is written (4.9). A missing owner, also one
- * deleted concurrently, is `InvalidReference` on the owner reference, like
- * any unknown target.
+ * first, before anything is written (4.9), then authorizes the create
+ * against every owner of it (decision 0039). A missing owner, also one
+ * deleted concurrently, and an owner the caller cannot see are
+ * `InvalidReference` on the owner reference, like any unknown target; an
+ * owner the caller sees but may not update is `NotAllowed`.
  *
  * @param snapshot - The configuration.
  * @param classId - The new record's class.
@@ -815,9 +827,23 @@ const lockOwnersForCreate = Effect.fn("Records.lockOwnersForCreate")(
 
     const chain = yield* lockChainForCreate(snapshot, classId, ownerId);
 
-    return Option.isSome(chain)
-      ? chain.value
-      : yield* new InvalidReference({ field: reference.name });
+    if (Option.isNone(chain)) {
+      return yield* new InvalidReference({ field: reference.name });
+    }
+
+    const owners = yield* authorizeOwners(
+      snapshot,
+      chain.value,
+      (yield* Actor).userId
+    );
+
+    if (owners === "hidden") {
+      return yield* new InvalidReference({ field: reference.name });
+    }
+
+    return owners === "refused"
+      ? yield* new NotAllowed({ refusedOn: "owner" })
+      : chain.value;
   }
 );
 
@@ -1016,7 +1042,13 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
 /**
  * Steps 2 of 4.1: lock the root row alone, then (next statements) load the
- * record, check visibility and the version.
+ * record, check visibility, the owners of a part (decision 0039) and the
+ * version. A part whose owner the caller cannot see is `NotFound` like an
+ * unknown ID, before its version is compared; a visible owner the caller
+ * may not update is `NotAllowed`, also before the version, so a stale
+ * write learns nothing more than a current one. The owner check comes
+ * after the part's own visibility, so a hidden part is `NotFound` whatever
+ * its owner.
  */
 const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   snapshot: ConfigSnapshot,
@@ -1024,7 +1056,8 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
     readonly id: string;
     readonly expectedVersion: number | null;
   },
-  lock: RootLock
+  lock: RootLock,
+  chain: OwnerChain
 ) {
   const access = yield* WriteAccess;
   const stack = yield* SaveStack;
@@ -1069,6 +1102,16 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
 
   if (Option.isNone(readable)) {
     return yield* new NotFound();
+  }
+
+  const owners = yield* authorizeOwners(snapshot, chain, (yield* Actor).userId);
+
+  if (owners === "hidden") {
+    return yield* new NotFound();
+  }
+
+  if (owners === "refused") {
+    return yield* new NotAllowed({ refusedOn: "owner" });
   }
 
   // After visibility, so a hidden record stays an identical NotFound.
@@ -1214,7 +1257,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     ]);
 
     const chain = yield* lockOwnersOf(snapshot, input);
-    const locked = yield* lockExisting(snapshot, input, lock);
+    const locked = yield* lockExisting(snapshot, input, lock, chain);
     const { readable, record } = locked;
     const { classId } = record;
 
@@ -1469,7 +1512,13 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const chain = yield* lockOwnersOf(snapshot, input);
-    const { record } = yield* lockExisting(snapshot, input, "FOR UPDATE");
+
+    const { record } = yield* lockExisting(
+      snapshot,
+      input,
+      "FOR UPDATE",
+      chain
+    );
 
     yield* refusePlatformTable(snapshot, record.classId);
     yield* protectServiceIdentity(
