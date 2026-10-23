@@ -16,6 +16,7 @@ import { tmfStatusFor } from "@std/tmf/status";
 import { TMF621_API } from "@std/tmf/tmf621";
 import type { JsonValue } from "@std/values/json-value";
 import { Cause, Effect, Exit, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { parse } from "yaml";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -592,73 +593,70 @@ describe("tmf-oas-contract-tmf621", () => {
     });
   });
 
-  layer(itilLayer, { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "every TMF621 operation's success and error responses validate against the pinned document",
-      () =>
-        Effect.gen(function* everyTmf621Response() {
-          const http = yield* TestHttpClient;
-          const admin = yield* tmf621As("admin");
-          const agent = yield* tmf621As("agent");
+  it.effect(
+    "every TMF621 operation's success and error responses validate against the pinned document",
+    () =>
+      Effect.gen(function* everyTmf621Response() {
+        const http = yield* TestHttpClient;
+        const admin = yield* tmf621As("admin");
+        const agent = yield* tmf621As("agent");
 
-          // The client fails the test on any response the document does
-          // not declare or whose body is off its schema.
-          const created = yield* admin.post(
-            TMF621_TICKETS,
-            ticketBody({ note: [{ text: "first" }] })
-          );
+        // The client fails the test on any response the document does
+        // not declare or whose body is off its schema.
+        const created = yield* admin.post(
+          TMF621_TICKETS,
+          ticketBody({ note: [{ text: "first" }] })
+        );
 
-          const id = textOf(bodyOf(created).id);
-          const item = `${TMF621_TICKETS}/${id}`;
+        const id = textOf(bodyOf(created).id);
+        const item = `${TMF621_TICKETS}/${id}`;
 
-          const specification = yield* admin.post(TMF621_SPECIFICATIONS, {
-            "@type": "TroubleTicketSpecification",
-            name: "Contract sweep",
-          });
+        const specification = yield* admin.post(TMF621_SPECIFICATIONS, {
+          "@type": "TroubleTicketSpecification",
+          name: "Contract sweep",
+        });
 
-          const specificationItem = `${TMF621_SPECIFICATIONS}/${textOf(bodyOf(specification).id)}`;
+        const specificationItem = `${TMF621_SPECIFICATIONS}/${textOf(bodyOf(specification).id)}`;
 
-          const statuses = [
-            created.status,
-            specification.status,
-            (yield* admin.get(TMF621_TICKETS)).status,
-            (yield* admin.get(`${TMF621_TICKETS}?fields=severity&limit=2`))
-              .status,
-            (yield* admin.get(item)).status,
-            (yield* admin.patch(item, { status: "inProgress" })).status,
-            (yield* admin.patch(
-              item,
-              [{ op: "replace", path: "/name", value: "swept" }],
-              { contentType: JSON_PATCH }
-            )).status,
-            (yield* admin.get(TMF621_SPECIFICATIONS)).status,
-            (yield* admin.get(specificationItem)).status,
-            (yield* admin.patch(specificationItem, {
-              lifecycleStatus: "active",
-            })).status,
-            // Errors: 400, 401, 403, 404, 409, 501.
-            (yield* admin.post(TMF621_TICKETS, { "@type": "TroubleTicket" }))
-              .status,
-            (yield* admin.get(`${TMF621_TICKETS}?status.gt=x`)).status,
-            (yield* http.get(TMF621_TICKETS)).status,
-            (yield* agent.del(item)).status,
-            (yield* admin.get(`${TMF621_TICKETS}/${TICKET_ID}`)).status,
-            (yield* admin.patch(item, { name: "x" }, { ifMatch: '"1"' }))
-              .status,
-            (yield* admin.del(item, { ifMatch: '"1"' })).status,
-            (yield* admin.get(`${TMF621_TICKETS}?filter=$.x`)).status,
-            (yield* admin.del(item)).status,
-            (yield* admin.del(specificationItem)).status,
-          ];
+        const statuses = [
+          created.status,
+          specification.status,
+          (yield* admin.get(TMF621_TICKETS)).status,
+          (yield* admin.get(`${TMF621_TICKETS}?fields=severity&limit=2`))
+            .status,
+          (yield* admin.get(item)).status,
+          (yield* admin.patch(item, { status: "inProgress" })).status,
+          (yield* admin.patch(
+            item,
+            [{ op: "replace", path: "/name", value: "swept" }],
+            { contentType: JSON_PATCH }
+          )).status,
+          (yield* admin.get(TMF621_SPECIFICATIONS)).status,
+          (yield* admin.get(specificationItem)).status,
+          (yield* admin.patch(specificationItem, {
+            lifecycleStatus: "active",
+          })).status,
+          // Errors: 400, 401, 403, 404, 409, 501.
+          (yield* admin.post(TMF621_TICKETS, { "@type": "TroubleTicket" }))
+            .status,
+          (yield* admin.get(`${TMF621_TICKETS}?status.gt=x`)).status,
+          (yield* http.get(TMF621_TICKETS)).status,
+          (yield* agent.del(item)).status,
+          (yield* admin.get(`${TMF621_TICKETS}/${TICKET_ID}`)).status,
+          (yield* admin.patch(item, { name: "x" }, { ifMatch: '"1"' })).status,
+          (yield* admin.del(item, { ifMatch: '"1"' })).status,
+          (yield* admin.get(`${TMF621_TICKETS}?filter=$.x`)).status,
+          (yield* admin.del(item)).status,
+          (yield* admin.del(specificationItem)).status,
+        ];
 
-          assert.deepStrictEqual(
-            statuses,
-            [
-              201, 201, 200, 200, 200, 200, 200, 200, 200, 200, 400, 400, 401,
-              403, 404, 409, 409, 501, 204, 204,
-            ]
-          );
-        })
-    );
-  });
+        assert.deepStrictEqual(
+          statuses,
+          [
+            201, 201, 200, 200, 200, 200, 200, 200, 200, 200, 400, 400, 401,
+            403, 404, 409, 409, 501, 204, 204,
+          ]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 });

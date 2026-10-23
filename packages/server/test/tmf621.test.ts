@@ -6,7 +6,7 @@
  * TMF621 document by the test client (`tmf-oas-contract`), so each test
  * also proves its statuses are declared ones.
  */
-import { assert, describe, it, layer } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
@@ -170,7 +170,7 @@ describe("tmf621", () => {
     );
   });
 
-  it.live(
+  it.effect(
     "answers 404 on every TroubleTicket operation before the helpdesk set is installed",
     () =>
       Effect.gen(function* notInstalled() {
@@ -195,1227 +195,1195 @@ describe("tmf621", () => {
       }).pipe(
         Effect.provide(
           TestHttpClient.layer.pipe(Layer.provideMerge(acmeTestLayer()))
-        )
+        ),
+        TestClock.withLive
       )
   );
 
-  layer(itilLayer, { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "creates, retrieves, lists, patches and deletes a trouble ticket",
-      () =>
-        Effect.gen(function* crud() {
-          const admin = yield* tmf621As("admin");
+  it.effect(
+    "creates, retrieves, lists, patches and deletes a trouble ticket",
+    () =>
+      Effect.gen(function* crud() {
+        const admin = yield* tmf621As("admin");
 
-          const created = yield* admin.post(
-            TICKETS,
-            ticketBody({ name: "CRUD" })
+        const created = yield* admin.post(
+          TICKETS,
+          ticketBody({ name: "CRUD" })
+        );
+
+        const ticket = bodyOf(created);
+        const id = textOf(ticket.id);
+
+        assert.strictEqual(created.status, 201);
+        assert.strictEqual(
+          created.headers.get("location"),
+          `http://localhost${TICKETS}/${id}`
+        );
+        assert.strictEqual(ticket.href, created.headers.get("location"));
+        assert.strictEqual(
+          etagOf(created),
+          `"${numberOf((yield* stored(ticket)).revision)}"`
+        );
+
+        assert.deepStrictEqual(
+          [
+            ticket["@type"],
+            ticket.ticketType,
+            ticket.severity,
+            ticket.status,
+            ticket.priority,
+            ticket.name,
+          ],
+          ["TroubleTicket", "incident", "Major", "acknowledged", "Low", "CRUD"]
+        );
+
+        const read = yield* admin.get(`${TICKETS}/${id}`);
+
+        assert.strictEqual(read.status, 200);
+        assert.deepStrictEqual(bodyOf(read), ticket);
+
+        const listed = yield* admin.get(`${TICKETS}?name=CRUD`);
+
+        assert.deepStrictEqual(
+          itemsOf(listed).map((item) => item.id),
+          [id]
+        );
+
+        const patched = yield* patch(admin, ticket, {
+          description: "Still rejected.",
+        });
+
+        assert.strictEqual(patched.description, "Still rejected.");
+
+        const deleted = yield* admin.del(`${TICKETS}/${id}`);
+
+        assert.strictEqual(deleted.status, 204);
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}/${id}`)),
+          "404 NotFound"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "ticketType makes the ITIL class on create and is patchable only within it",
+    () =>
+      Effect.gen(function* ticketTypes() {
+        const admin = yield* tmf621As("admin");
+        const incident = yield* open(admin, { ticketType: "Incident" });
+        const problem = yield* open(admin, { ticketType: "problem" });
+        const request = yield* open(admin, { ticketType: "Request" });
+
+        assert.deepStrictEqual(
+          [incident.ticketType, problem.ticketType, request.ticketType],
+          ["incident", "problem", "Request"]
+        );
+
+        assert.strictEqual((yield* stored(incident)).ticketType ?? null, null);
+        assert.strictEqual(
+          (yield* stored(problem, "helpdeskProblem")).id,
+          problem.id
+        );
+
+        assert.strictEqual((yield* stored(request)).ticketType, "Request");
+
+        // Within its class: a plain ticket's type is free text.
+        const complaint = yield* patch(admin, request, {
+          ticketType: "complaint",
+        });
+
+        assert.strictEqual(complaint.ticketType, "complaint");
+
+        // Its own class's type changes nothing; another class is refused.
+        const same = yield* patch(admin, incident, {
+          ticketType: "incident",
+        });
+
+        assert.strictEqual(same.ticketType, "incident");
+
+        for (const [ticket, type] of [
+          [incident, "problem"],
+          [problem, "incident"],
+          [request, "incident"],
+          [incident, "complaint"],
+        ] as const) {
+          const refused = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            { ticketType: type }
           );
-
-          const ticket = bodyOf(created);
-          const id = textOf(ticket.id);
-
-          assert.strictEqual(created.status, 201);
-          assert.strictEqual(
-            created.headers.get("location"),
-            `http://localhost${TICKETS}/${id}`
-          );
-          assert.strictEqual(ticket.href, created.headers.get("location"));
-          assert.strictEqual(
-            etagOf(created),
-            `"${numberOf((yield* stored(ticket)).revision)}"`
-          );
-
-          assert.deepStrictEqual(
-            [
-              ticket["@type"],
-              ticket.ticketType,
-              ticket.severity,
-              ticket.status,
-              ticket.priority,
-              ticket.name,
-            ],
-            [
-              "TroubleTicket",
-              "incident",
-              "Major",
-              "acknowledged",
-              "Low",
-              "CRUD",
-            ]
-          );
-
-          const read = yield* admin.get(`${TICKETS}/${id}`);
-
-          assert.strictEqual(read.status, 200);
-          assert.deepStrictEqual(bodyOf(read), ticket);
-
-          const listed = yield* admin.get(`${TICKETS}?name=CRUD`);
-
-          assert.deepStrictEqual(
-            itemsOf(listed).map((item) => item.id),
-            [id]
-          );
-
-          const patched = yield* patch(admin, ticket, {
-            description: "Still rejected.",
-          });
-
-          assert.strictEqual(patched.description, "Still rejected.");
-
-          const deleted = yield* admin.del(`${TICKETS}/${id}`);
-
-          assert.strictEqual(deleted.status, 204);
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}/${id}`)),
-            "404 NotFound"
-          );
-        })
-    );
-
-    dbTest.effect(
-      "ticketType makes the ITIL class on create and is patchable only within it",
-      () =>
-        Effect.gen(function* ticketTypes() {
-          const admin = yield* tmf621As("admin");
-          const incident = yield* open(admin, { ticketType: "Incident" });
-          const problem = yield* open(admin, { ticketType: "problem" });
-          const request = yield* open(admin, { ticketType: "Request" });
-
-          assert.deepStrictEqual(
-            [incident.ticketType, problem.ticketType, request.ticketType],
-            ["incident", "problem", "Request"]
-          );
-
-          assert.strictEqual(
-            (yield* stored(incident)).ticketType ?? null,
-            null
-          );
-          assert.strictEqual(
-            (yield* stored(problem, "helpdeskProblem")).id,
-            problem.id
-          );
-
-          assert.strictEqual((yield* stored(request)).ticketType, "Request");
-
-          // Within its class: a plain ticket's type is free text.
-          const complaint = yield* patch(admin, request, {
-            ticketType: "complaint",
-          });
-
-          assert.strictEqual(complaint.ticketType, "complaint");
-
-          // Its own class's type changes nothing; another class is refused.
-          const same = yield* patch(admin, incident, {
-            ticketType: "incident",
-          });
-
-          assert.strictEqual(same.ticketType, "incident");
-
-          for (const [ticket, type] of [
-            [incident, "problem"],
-            [problem, "incident"],
-            [request, "incident"],
-            [incident, "complaint"],
-          ] as const) {
-            const refused = yield* admin.patch(
-              `${TICKETS}/${textOf(ticket.id)}`,
-              { ticketType: type }
-            );
-
-            assert.strictEqual(outcome(refused), "400 ValidationFailed");
-          }
-        })
-    );
-
-    dbTest.effect(
-      "a create without description, severity or ticketType is refused, naming each",
-      () =>
-        Effect.gen(function* required() {
-          const admin = yield* tmf621As("admin");
-
-          const refused = yield* admin.post(TICKETS, {
-            "@type": "TroubleTicket",
-          });
 
           assert.strictEqual(outcome(refused), "400 ValidationFailed");
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-          const fields = arrayOf(bodyOf(refused), "fieldErrors").map(
-            (error) => `${textOf(error.field)}:${textOf(error["@type"])}`
+  it.effect(
+    "a create without description, severity or ticketType is refused, naming each",
+    () =>
+      Effect.gen(function* required() {
+        const admin = yield* tmf621As("admin");
+
+        const refused = yield* admin.post(TICKETS, {
+          "@type": "TroubleTicket",
+        });
+
+        assert.strictEqual(outcome(refused), "400 ValidationFailed");
+
+        const fields = arrayOf(bodyOf(refused), "fieldErrors").map(
+          (error) => `${textOf(error.field)}:${textOf(error["@type"])}`
+        );
+
+        for (const name of ["description", "severity", "ticketType"]) {
+          assert.isTrue(
+            fields.some((field) => field.startsWith(`${name}:`)),
+            `${name} in ${fields.join(", ")}`
           );
-
-          for (const name of ["description", "severity", "ticketType"]) {
-            assert.isTrue(
-              fields.some((field) => field.startsWith(`${name}:`)),
-              `${name} in ${fields.join(", ")}`
-            );
-          }
-        })
-    );
-
-    dbTest.effect(
-      "severity is free text: Critical, Major and Minor set impact, any other value is kept as given",
-      () =>
-        Effect.gen(function* severities() {
-          const admin = yield* tmf621As("admin");
-
-          for (const [given, impact, rendered] of [
-            ["Critical", "1", "Critical"],
-            ["major", "2", "Major"],
-            ["MINOR", "3", "Minor"],
-          ] as const) {
-            const ticket = yield* open(admin, { severity: given });
-            const record = yield* stored(ticket);
-
-            assert.deepStrictEqual(
-              [record.impact, record.severityLabel ?? null, ticket.severity],
-              [impact, null, rendered]
-            );
-          }
-
-          const labelled = yield* open(admin, { severity: "Sev-A" });
-          const kept = yield* stored(labelled);
-
-          assert.deepStrictEqual(
-            [labelled.severity, kept.impact, kept.severityLabel],
-            ["Sev-A", "3", "Sev-A"]
-          );
-
-          const filtered = yield* admin.get(`${TICKETS}?severity=Sev-A`);
-
-          assert.deepStrictEqual(
-            itemsOf(filtered).map((item) => item.id),
-            [labelled.id]
-          );
-
-          const major = yield* patch(admin, labelled, { severity: "Major" });
-          const cleared = yield* stored(labelled);
-
-          assert.deepStrictEqual(
-            [major.severity, cleared.impact, cleared.severityLabel ?? null],
-            ["Major", "2", null]
-          );
-
-          const blank = yield* admin.patch(
-            `${TICKETS}/${textOf(labelled.id)}`,
-            {
-              severity: " ",
-            }
-          );
-
-          assert.strictEqual(outcome(blank), "400 ValidationFailed");
-        })
-    );
-
-    dbTest.effect(
-      "priority is free text and patchable: the five labels set priority, others are kept",
-      () =>
-        Effect.gen(function* priorities() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin, { priority: "High" });
-
-          assert.deepStrictEqual(
-            [ticket.priority, (yield* stored(ticket)).priority],
-            ["High", "2"]
-          );
-
-          const labelled = yield* patch(admin, ticket, {
-            priority: "P1-urgent",
-          });
-
-          const kept = yield* stored(ticket);
-
-          assert.deepStrictEqual(
-            [labelled.priority, kept.priority, kept.priorityLabel],
-            ["P1-urgent", "2", "P1-urgent"]
-          );
-
-          const planning = yield* patch(admin, ticket, {
-            priority: "planning",
-          });
-
-          assert.deepStrictEqual(
-            [planning.priority, (yield* stored(ticket)).priorityLabel ?? null],
-            ["Planning", null]
-          );
-
-          const filtered = itemsOf(
-            yield* admin.get(`${TICKETS}?priority=Planning&severity=Major`)
-          ).map((item) => item.id);
-
-          assert.include(filtered, ticket.id);
-        })
-    );
-
-    dbTest.effect(
-      "statuses follow TMF621's life cycle onto the incident state model, and stored states read back",
-      () =>
-        Effect.gen(function* lifeCycle() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin);
-          const id = textOf(ticket.id);
-
-          const steps: readonly [string, string, string | null][] = [
-            ["inProgress", "in_progress", null],
-            ["pending", "on_hold", "awaiting_caller"],
-            ["inProgress", "in_progress", null],
-            ["held", "on_hold", "awaiting_vendor"],
-            ["resolved", "resolved", null],
-            ["inProgress", "in_progress", null],
-            ["resolved", "resolved", null],
-            ["closed", "closed", null],
-          ];
-
-          for (const [status, state, hold] of steps) {
-            const patched = yield* patch(admin, { id }, { status });
-            const record = yield* stored(ticket);
-
-            assert.deepStrictEqual(
-              [patched.status, record.status, record.holdReason ?? null],
-              [status, state, hold]
-            );
-          }
-
-          // TMF621's life cycle ends at closed; ITIL's model refuses more.
-          const refused = yield* admin.patch(`${TICKETS}/${id}`, {
-            status: "inProgress",
-          });
-
-          assert.strictEqual(outcome(refused), "400 InvalidTransition");
-
-          // TM Forum over ITIL: a resolve without resolution code or notes.
-          const resolved = yield* patch(admin, yield* open(admin), {
-            status: "resolved",
-          });
-
-          assert.strictEqual(resolved.status, "resolved");
-          assert.isString(resolved.resolutionDate);
-
-          const rejected = yield* patch(admin, yield* open(admin), {
-            status: "rejected",
-          });
-
-          assert.strictEqual(rejected.status, "rejected");
-          assert.strictEqual(rejected.statusChangeReason, "rejected");
-
-          const cancelled = yield* patch(admin, yield* open(admin), {
-            status: "cancelled",
-          });
-
-          assert.strictEqual(cancelled.status, "cancelled");
-
-          const unknown = yield* admin.patch(
-            `${TICKETS}/${textOf(cancelled.id)}`,
-            {
-              status: "done",
-            }
-          );
-
-          assert.strictEqual(outcome(unknown), "400 ValidationFailed");
-        })
-    );
-
-    dbTest.effect(
-      "held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller",
-      () =>
-        Effect.gen(function* holds() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin);
-
-          const held = yield* patch(admin, ticket, {
-            status: "held",
-            troubleTicketCharacteristic: [
-              { name: "holdReason", value: "awaiting_change" },
-            ],
-          });
-
-          assert.strictEqual(held.status, "held");
-          assert.strictEqual(
-            (yield* stored(ticket)).holdReason,
-            "awaiting_change"
-          );
-
-          const contradicted = yield* admin.patch(
-            `${TICKETS}/${textOf(ticket.id)}`,
-            {
-              status: "pending",
-              troubleTicketCharacteristic: [
-                { name: "holdReason", value: "awaiting_vendor" },
-              ],
-            }
-          );
-
-          assert.strictEqual(outcome(contradicted), "400 ValidationFailed");
-
-          const filtered = yield* admin.get(`${TICKETS}?status=held`);
-
-          assert.include(
-            itemsOf(filtered).map((item) => item.id),
-            ticket.id
-          );
-        })
-    );
-
-    dbTest.effect(
-      "problems map acknowledged and inProgress onto their state groups",
-      () =>
-        Effect.gen(function* problems() {
-          const admin = yield* tmf621As("admin");
-          const problem = yield* open(admin, { ticketType: "problem" });
-
-          const progress = yield* patch(admin, problem, {
-            status: "inProgress",
-          });
-
-          assert.strictEqual(progress.status, "inProgress");
-          assert.strictEqual(
-            (yield* stored(problem, "helpdeskProblem")).status,
-            "root_cause_analysis"
-          );
-
-          // Already in the group: the state is kept.
-          yield* patch(admin, problem, { status: "inProgress" });
-
-          assert.strictEqual(
-            (yield* stored(problem, "helpdeskProblem")).status,
-            "root_cause_analysis"
-          );
-        })
-    );
-
-    dbTest.effect(
-      "statusChangeHistory renders the recorded status changes, after a written value",
-      () =>
-        Effect.gen(function* history() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin);
-
-          yield* patch(admin, ticket, { status: "inProgress" });
-
-          const resolved = yield* patch(admin, ticket, { status: "resolved" });
-
-          assert.deepStrictEqual(statuses(resolved), [
-            "acknowledged",
-            "inProgress",
-            "resolved",
-          ]);
-
-          const written = yield* patch(admin, ticket, {
-            statusChangeHistory: [
-              {
-                status: "acknowledged",
-                statusChangeDate: "2026-01-01T00:00:00Z",
-              },
-            ],
-          });
-
-          assert.deepStrictEqual(statuses(written), ["acknowledged"]);
-          assert.strictEqual(
-            arrayOf(written, "statusChangeHistory")[0]?.["@type"],
-            "StatusChange"
-          );
-
-          const closed = yield* patch(admin, ticket, { status: "closed" });
-
-          assert.deepStrictEqual(statuses(closed), ["acknowledged", "closed"]);
-
-          const resolutionDate = "2026-02-03T04:05:06Z";
-
-          const dated = yield* patch(admin, ticket, { resolutionDate });
-
-          assert.strictEqual(dated.resolutionDate, "2026-02-03T04:05:06.000Z");
-        })
-    );
-
-    dbTest.effect(
-      "fields selects first-level attributes on list and retrieve",
-      () =>
-        Effect.gen(function* selected() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin, { name: "fields" });
-
-          for (const name of ["description", "severity", "ticketType"]) {
-            const read = bodyOf(
-              yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
-            );
-
-            assert.deepStrictEqual(
-              Object.keys(read).toSorted(),
-              ["@type", "href", "id", name].toSorted()
-            );
-
-            const listed = itemsOf(
-              yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
-            );
-
-            assert.deepStrictEqual(
-              listed.map((item) => Object.keys(item).toSorted()),
-              [["@type", "href", "id", name].toSorted()]
-            );
-          }
-
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
-            "400 UnknownField"
-          );
-        })
-    );
-
-    dbTest.effect(
-      "filters combine with AND, by status group, ticketType and @type, and page with counts",
-      () =>
-        Effect.gen(function* filters() {
-          const admin = yield* tmf621As("admin");
-          const tag = "filters";
-          const incident = yield* open(admin, { name: tag });
-
-          const problem = yield* open(admin, {
-            name: tag,
-            ticketType: "problem",
-          });
-
-          const plain = yield* open(admin, {
-            name: tag,
-            ticketType: "request",
-          });
-
-          yield* patch(admin, incident, { status: "pending" });
-
-          const ids = (path: string) => Effect.map(admin.get(path), sortedIds);
-
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&status=pending`),
-            sorted(incident.id)
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&status=acknowledged`),
-            sorted(problem.id, plain.id)
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&ticketType=problem`),
-            sorted(problem.id)
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&ticketType=request`),
-            sorted(plain.id)
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&ticketType=incident,problem`),
-            sorted(incident.id, problem.id)
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&status=bogus`),
-            []
-          );
-          assert.deepStrictEqual(
-            yield* ids(`${TICKETS}?name=${tag}&@type=TroubleTicket`),
-            sorted(incident.id, problem.id, plain.id)
-          );
-
-          const page = yield* admin.get(
-            `${TICKETS}?name=${tag}&limit=2&offset=1&sort=creationDate`
-          );
-
-          assert.deepStrictEqual(
-            [
-              page.headers.get("x-total-count"),
-              page.headers.get("x-result-count"),
-              itemsOf(page).map((item) => item.id),
-            ],
-            ["3", "2", [problem.id, plain.id]]
-          );
-
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}?note=x`)),
-            "400 InvalidFilter"
-          );
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}?filter=$.x`)),
-            "501 NotImplemented"
-          );
-        })
-    );
-
-    dbTest.effect(
-      "notes are parts: a merge-patch array replaces them and the author is the acting user",
-      () =>
-        Effect.gen(function* notes() {
-          const agent = yield* tmf621As("agent");
-          const fixture = yield* HelpdeskFixture;
-          const ticket = yield* open(agent, { note: [{ text: "first" }] });
-          const [first] = arrayOf(ticket, "note");
-
-          assert.deepStrictEqual(
-            [first?.["@type"], first?.text, first?.author],
-            ["Note", "first", fixture.agent.name]
-          );
-
-          // Sending back what was read, authors included, changes nothing.
-          const resent = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
-            note: arrayOf(ticket, "note"),
-          });
-
-          assert.strictEqual(resent.status, 200);
-          assert.deepStrictEqual(
-            arrayOf(bodyOf(resent), "note"),
-            arrayOf(ticket, "note")
-          );
-
-          // A new note may name its own author, not anyone else.
-          const added = yield* patch(agent, ticket, {
-            note: [
-              ...arrayOf(ticket, "note"),
-              { author: fixture.agent.name, text: "second" },
-            ],
-          });
-
-          assert.deepStrictEqual(
-            arrayOf(added, "note").map((note) => note.text),
-            ["first", "second"]
-          );
-
-          const forged = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
-            note: [
-              ...arrayOf(added, "note"),
-              { author: "Somebody Else", text: "x" },
-            ],
-          });
-
-          assert.strictEqual(outcome(forged), "400 ValidationFailed");
-
-          // Strict RFC 7396: the array replaces the notes; omitted ones go.
-          const [, second] = arrayOf(added, "note");
-
-          const replaced = yield* patch(agent, ticket, {
-            note: [{ ...second, text: "second, edited" }, { text: "third" }],
-          });
-
-          assert.deepStrictEqual(
-            arrayOf(replaced, "note").map((note) => [note.text, note.author]),
-            [
-              ["second, edited", fixture.agent.name],
-              ["third", fixture.agent.name],
-            ]
-          );
-
-          const emptied = yield* patch(agent, ticket, { note: [] });
-
-          assert.isUndefined(emptied.note);
-        })
-    );
-
-    dbTest.effect(
-      "relatedParty maps reporter to caller, assignee to the assigned user's individual, other roles to parts",
-      () =>
-        Effect.gen(function* parties() {
-          const admin = yield* tmf621As("admin");
-          const fixture = yield* HelpdeskFixture;
-          const agentIndividual = yield* individualOf(fixture.agent.id);
-          const agent2Individual = yield* individualOf(fixture.agent2.id);
-
-          const ticket = yield* open(admin, {
-            relatedParty: [
-              {
-                "@type": "RelatedPartyRefOrPartyRoleRef",
-                partyOrPartyRole: { "@type": "PartyRef", id: agent2Individual },
-                role: "reporter",
-              },
-              {
-                partyOrPartyRole: { id: agentIndividual },
-                role: "assignee",
-              },
-              { partyOrPartyRole: { id: agent2Individual }, role: "customer" },
-            ],
-          });
-
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "severity is free text: Critical, Major and Minor set impact, any other value is kept as given",
+    () =>
+      Effect.gen(function* severities() {
+        const admin = yield* tmf621As("admin");
+
+        for (const [given, impact, rendered] of [
+          ["Critical", "1", "Critical"],
+          ["major", "2", "Major"],
+          ["MINOR", "3", "Minor"],
+        ] as const) {
+          const ticket = yield* open(admin, { severity: given });
           const record = yield* stored(ticket);
 
           assert.deepStrictEqual(
-            [
-              textOf(asObject(record.caller).id),
-              textOf(asObject(record.assignedTo).id),
-            ],
-            [agent2Individual, fixture.agent.id]
+            [record.impact, record.severityLabel ?? null, ticket.severity],
+            [impact, null, rendered]
           );
+        }
 
-          assert.deepStrictEqual(
-            arrayOf(ticket, "relatedParty").map((party) => [
-              party.role,
-              asObject(party.partyOrPartyRole).id,
-              asObject(party.partyOrPartyRole)["@referredType"],
-              asObject(party.partyOrPartyRole).name,
-            ]),
-            [
-              ["reporter", agent2Individual, "Individual", fixture.agent2.name],
-              ["assignee", agentIndividual, "Individual", fixture.agent.name],
-              ["customer", agent2Individual, "Individual", fixture.agent2.name],
-            ]
-          );
+        const labelled = yield* open(admin, { severity: "Sev-A" });
+        const kept = yield* stored(labelled);
 
-          // Strict RFC 7396: leaving the assignee out unassigns.
-          const kept = arrayOf(ticket, "relatedParty").filter(
-            (party) => party.role !== "assignee"
-          );
+        assert.deepStrictEqual(
+          [labelled.severity, kept.impact, kept.severityLabel],
+          ["Sev-A", "3", "Sev-A"]
+        );
 
-          const unassigned = yield* patch(admin, ticket, {
-            relatedParty: kept,
-          });
+        const filtered = yield* admin.get(`${TICKETS}?severity=Sev-A`);
 
-          assert.deepStrictEqual(
-            arrayOf(unassigned, "relatedParty").map((party) => party.role),
-            ["reporter", "customer"]
-          );
-          assert.strictEqual((yield* stored(ticket)).assignedTo ?? null, null);
+        assert.deepStrictEqual(
+          itemsOf(filtered).map((item) => item.id),
+          [labelled.id]
+        );
 
-          for (const item of [
-            { role: "customer" },
-            { partyOrPartyRole: { id: agentIndividual } },
-            { partyOrPartyRole: {}, role: "reporter" },
-          ]) {
-            const refused = yield* admin.patch(
-              `${TICKETS}/${textOf(ticket.id)}`,
-              {
-                relatedParty: [item],
-              }
-            );
+        const major = yield* patch(admin, labelled, { severity: "Major" });
+        const cleared = yield* stored(labelled);
 
-            assert.strictEqual(outcome(refused), "400 ValidationFailed");
-          }
+        assert.deepStrictEqual(
+          [major.severity, cleared.impact, cleared.severityLabel ?? null],
+          ["Major", "2", null]
+        );
 
-          const unknown = yield* admin.patch(
-            `${TICKETS}/${textOf(ticket.id)}`,
-            {
-              relatedParty: [
-                { partyOrPartyRole: { id: RANDOM_ID }, role: "assignee" },
-              ],
-            }
-          );
+        const blank = yield* admin.patch(`${TICKETS}/${textOf(labelled.id)}`, {
+          severity: " ",
+        });
 
-          assert.strictEqual(outcome(unknown), "400 InvalidReference");
-        })
-    );
+        assert.strictEqual(outcome(blank), "400 ValidationFailed");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-    dbTest.effect(
-      "characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority",
-      () =>
-        Effect.gen(function* mappedCharacteristics() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin, { severity: "Critical" });
+  it.effect(
+    "priority is free text and patchable: the five labels set priority, others are kept",
+    () =>
+      Effect.gen(function* priorities() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin, { priority: "High" });
 
-          assert.strictEqual(ticket.priority, "Medium");
+        assert.deepStrictEqual(
+          [ticket.priority, (yield* stored(ticket)).priority],
+          ["High", "2"]
+        );
 
-          const urgent = yield* patch(admin, ticket, {
-            troubleTicketCharacteristic: [
-              { "@type": "IntegerCharacteristic", name: "urgency", value: 1 },
-              { name: "resolutionNotes", value: "Restarted the relay." },
-              { name: "region", value: "north" },
-            ],
-          });
+        const labelled = yield* patch(admin, ticket, {
+          priority: "P1-urgent",
+        });
 
-          assert.strictEqual(urgent.priority, "Critical");
+        const kept = yield* stored(ticket);
 
+        assert.deepStrictEqual(
+          [labelled.priority, kept.priority, kept.priorityLabel],
+          ["P1-urgent", "2", "P1-urgent"]
+        );
+
+        const planning = yield* patch(admin, ticket, {
+          priority: "planning",
+        });
+
+        assert.deepStrictEqual(
+          [planning.priority, (yield* stored(ticket)).priorityLabel ?? null],
+          ["Planning", null]
+        );
+
+        const filtered = itemsOf(
+          yield* admin.get(`${TICKETS}?priority=Planning&severity=Major`)
+        ).map((item) => item.id);
+
+        assert.include(filtered, ticket.id);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "statuses follow TMF621's life cycle onto the incident state model, and stored states read back",
+    () =>
+      Effect.gen(function* lifeCycle() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin);
+        const id = textOf(ticket.id);
+
+        const steps: readonly [string, string, string | null][] = [
+          ["inProgress", "in_progress", null],
+          ["pending", "on_hold", "awaiting_caller"],
+          ["inProgress", "in_progress", null],
+          ["held", "on_hold", "awaiting_vendor"],
+          ["resolved", "resolved", null],
+          ["inProgress", "in_progress", null],
+          ["resolved", "resolved", null],
+          ["closed", "closed", null],
+        ];
+
+        for (const [status, state, hold] of steps) {
+          const patched = yield* patch(admin, { id }, { status });
           const record = yield* stored(ticket);
 
           assert.deepStrictEqual(
-            [record.urgency, record.resolutionNotes],
-            ["1", "Restarted the relay."]
+            [patched.status, record.status, record.holdReason ?? null],
+            [status, state, hold]
           );
+        }
 
-          const characteristics = arrayOf(
-            urgent,
-            "troubleTicketCharacteristic"
-          );
+        // TMF621's life cycle ends at closed; ITIL's model refuses more.
+        const refused = yield* admin.patch(`${TICKETS}/${id}`, {
+          status: "inProgress",
+        });
 
-          assert.deepStrictEqual(
-            characteristics.map((item) => [
-              item["@type"],
-              item.id,
-              item.name,
-              item.value,
-            ]),
-            [
-              ["IntegerCharacteristic", "urgency", "urgency", 1],
-              [
-                "BooleanCharacteristic",
-                "majorIncident",
-                "majorIncident",
-                false,
-              ],
-              [
-                "StringCharacteristic",
-                "resolutionNotes",
-                "resolutionNotes",
-                "Restarted the relay.",
-              ],
-              ["StringCharacteristic", "region", "region", "north"],
-            ]
-          );
+        assert.strictEqual(outcome(refused), "400 InvalidTransition");
 
-          for (const characteristic of [
-            { name: "urgency", value: 9 },
-            { value: "nameless" },
+        // TM Forum over ITIL: a resolve without resolution code or notes.
+        const resolved = yield* patch(admin, yield* open(admin), {
+          status: "resolved",
+        });
+
+        assert.strictEqual(resolved.status, "resolved");
+        assert.isString(resolved.resolutionDate);
+
+        const rejected = yield* patch(admin, yield* open(admin), {
+          status: "rejected",
+        });
+
+        assert.strictEqual(rejected.status, "rejected");
+        assert.strictEqual(rejected.statusChangeReason, "rejected");
+
+        const cancelled = yield* patch(admin, yield* open(admin), {
+          status: "cancelled",
+        });
+
+        assert.strictEqual(cancelled.status, "cancelled");
+
+        const unknown = yield* admin.patch(
+          `${TICKETS}/${textOf(cancelled.id)}`,
+          {
+            status: "done",
+          }
+        );
+
+        assert.strictEqual(outcome(unknown), "400 ValidationFailed");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller",
+    () =>
+      Effect.gen(function* holds() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin);
+
+        const held = yield* patch(admin, ticket, {
+          status: "held",
+          troubleTicketCharacteristic: [
+            { name: "holdReason", value: "awaiting_change" },
+          ],
+        });
+
+        assert.strictEqual(held.status, "held");
+        assert.strictEqual(
+          (yield* stored(ticket)).holdReason,
+          "awaiting_change"
+        );
+
+        const contradicted = yield* admin.patch(
+          `${TICKETS}/${textOf(ticket.id)}`,
+          {
+            status: "pending",
+            troubleTicketCharacteristic: [
+              { name: "holdReason", value: "awaiting_vendor" },
+            ],
+          }
+        );
+
+        assert.strictEqual(outcome(contradicted), "400 ValidationFailed");
+
+        const filtered = yield* admin.get(`${TICKETS}?status=held`);
+
+        assert.include(
+          itemsOf(filtered).map((item) => item.id),
+          ticket.id
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "problems map acknowledged and inProgress onto their state groups",
+    () =>
+      Effect.gen(function* problems() {
+        const admin = yield* tmf621As("admin");
+        const problem = yield* open(admin, { ticketType: "problem" });
+
+        const progress = yield* patch(admin, problem, {
+          status: "inProgress",
+        });
+
+        assert.strictEqual(progress.status, "inProgress");
+        assert.strictEqual(
+          (yield* stored(problem, "helpdeskProblem")).status,
+          "root_cause_analysis"
+        );
+
+        // Already in the group: the state is kept.
+        yield* patch(admin, problem, { status: "inProgress" });
+
+        assert.strictEqual(
+          (yield* stored(problem, "helpdeskProblem")).status,
+          "root_cause_analysis"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "statusChangeHistory renders the recorded status changes, after a written value",
+    () =>
+      Effect.gen(function* history() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin);
+
+        yield* patch(admin, ticket, { status: "inProgress" });
+
+        const resolved = yield* patch(admin, ticket, { status: "resolved" });
+
+        assert.deepStrictEqual(statuses(resolved), [
+          "acknowledged",
+          "inProgress",
+          "resolved",
+        ]);
+
+        const written = yield* patch(admin, ticket, {
+          statusChangeHistory: [
             {
-              characteristicRelationship: [{ id: "x" }],
+              status: "acknowledged",
+              statusChangeDate: "2026-01-01T00:00:00Z",
+            },
+          ],
+        });
+
+        assert.deepStrictEqual(statuses(written), ["acknowledged"]);
+        assert.strictEqual(
+          arrayOf(written, "statusChangeHistory")[0]?.["@type"],
+          "StatusChange"
+        );
+
+        const closed = yield* patch(admin, ticket, { status: "closed" });
+
+        assert.deepStrictEqual(statuses(closed), ["acknowledged", "closed"]);
+
+        const resolutionDate = "2026-02-03T04:05:06Z";
+
+        const dated = yield* patch(admin, ticket, { resolutionDate });
+
+        assert.strictEqual(dated.resolutionDate, "2026-02-03T04:05:06.000Z");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect("fields selects first-level attributes on list and retrieve", () =>
+    Effect.gen(function* selected() {
+      const admin = yield* tmf621As("admin");
+      const ticket = yield* open(admin, { name: "fields" });
+
+      for (const name of ["description", "severity", "ticketType"]) {
+        const read = bodyOf(
+          yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
+        );
+
+        assert.deepStrictEqual(
+          Object.keys(read).toSorted(),
+          ["@type", "href", "id", name].toSorted()
+        );
+
+        const listed = itemsOf(
+          yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
+        );
+
+        assert.deepStrictEqual(
+          listed.map((item) => Object.keys(item).toSorted()),
+          [["@type", "href", "id", name].toSorted()]
+        );
+      }
+
+      assert.strictEqual(
+        outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
+        "400 UnknownField"
+      );
+    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "filters combine with AND, by status group, ticketType and @type, and page with counts",
+    () =>
+      Effect.gen(function* filters() {
+        const admin = yield* tmf621As("admin");
+        const tag = "filters";
+        const incident = yield* open(admin, { name: tag });
+
+        const problem = yield* open(admin, {
+          name: tag,
+          ticketType: "problem",
+        });
+
+        const plain = yield* open(admin, {
+          name: tag,
+          ticketType: "request",
+        });
+
+        yield* patch(admin, incident, { status: "pending" });
+
+        const ids = (path: string) => Effect.map(admin.get(path), sortedIds);
+
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&status=pending`),
+          sorted(incident.id)
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&status=acknowledged`),
+          sorted(problem.id, plain.id)
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&ticketType=problem`),
+          sorted(problem.id)
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&ticketType=request`),
+          sorted(plain.id)
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&ticketType=incident,problem`),
+          sorted(incident.id, problem.id)
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&status=bogus`),
+          []
+        );
+        assert.deepStrictEqual(
+          yield* ids(`${TICKETS}?name=${tag}&@type=TroubleTicket`),
+          sorted(incident.id, problem.id, plain.id)
+        );
+
+        const page = yield* admin.get(
+          `${TICKETS}?name=${tag}&limit=2&offset=1&sort=creationDate`
+        );
+
+        assert.deepStrictEqual(
+          [
+            page.headers.get("x-total-count"),
+            page.headers.get("x-result-count"),
+            itemsOf(page).map((item) => item.id),
+          ],
+          ["3", "2", [problem.id, plain.id]]
+        );
+
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}?note=x`)),
+          "400 InvalidFilter"
+        );
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}?filter=$.x`)),
+          "501 NotImplemented"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "notes are parts: a merge-patch array replaces them and the author is the acting user",
+    () =>
+      Effect.gen(function* notes() {
+        const agent = yield* tmf621As("agent");
+        const fixture = yield* HelpdeskFixture;
+        const ticket = yield* open(agent, { note: [{ text: "first" }] });
+        const [first] = arrayOf(ticket, "note");
+
+        assert.deepStrictEqual(
+          [first?.["@type"], first?.text, first?.author],
+          ["Note", "first", fixture.agent.name]
+        );
+
+        // Sending back what was read, authors included, changes nothing.
+        const resent = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
+          note: arrayOf(ticket, "note"),
+        });
+
+        assert.strictEqual(resent.status, 200);
+        assert.deepStrictEqual(
+          arrayOf(bodyOf(resent), "note"),
+          arrayOf(ticket, "note")
+        );
+
+        // A new note may name its own author, not anyone else.
+        const added = yield* patch(agent, ticket, {
+          note: [
+            ...arrayOf(ticket, "note"),
+            { author: fixture.agent.name, text: "second" },
+          ],
+        });
+
+        assert.deepStrictEqual(
+          arrayOf(added, "note").map((note) => note.text),
+          ["first", "second"]
+        );
+
+        const forged = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
+          note: [
+            ...arrayOf(added, "note"),
+            { author: "Somebody Else", text: "x" },
+          ],
+        });
+
+        assert.strictEqual(outcome(forged), "400 ValidationFailed");
+
+        // Strict RFC 7396: the array replaces the notes; omitted ones go.
+        const [, second] = arrayOf(added, "note");
+
+        const replaced = yield* patch(agent, ticket, {
+          note: [{ ...second, text: "second, edited" }, { text: "third" }],
+        });
+
+        assert.deepStrictEqual(
+          arrayOf(replaced, "note").map((note) => [note.text, note.author]),
+          [
+            ["second, edited", fixture.agent.name],
+            ["third", fixture.agent.name],
+          ]
+        );
+
+        const emptied = yield* patch(agent, ticket, { note: [] });
+
+        assert.isUndefined(emptied.note);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "relatedParty maps reporter to caller, assignee to the assigned user's individual, other roles to parts",
+    () =>
+      Effect.gen(function* parties() {
+        const admin = yield* tmf621As("admin");
+        const fixture = yield* HelpdeskFixture;
+        const agentIndividual = yield* individualOf(fixture.agent.id);
+        const agent2Individual = yield* individualOf(fixture.agent2.id);
+
+        const ticket = yield* open(admin, {
+          relatedParty: [
+            {
+              "@type": "RelatedPartyRefOrPartyRoleRef",
+              partyOrPartyRole: { "@type": "PartyRef", id: agent2Individual },
+              role: "reporter",
+            },
+            {
+              partyOrPartyRole: { id: agentIndividual },
+              role: "assignee",
+            },
+            { partyOrPartyRole: { id: agent2Individual }, role: "customer" },
+          ],
+        });
+
+        const record = yield* stored(ticket);
+
+        assert.deepStrictEqual(
+          [
+            textOf(asObject(record.caller).id),
+            textOf(asObject(record.assignedTo).id),
+          ],
+          [agent2Individual, fixture.agent.id]
+        );
+
+        assert.deepStrictEqual(
+          arrayOf(ticket, "relatedParty").map((party) => [
+            party.role,
+            asObject(party.partyOrPartyRole).id,
+            asObject(party.partyOrPartyRole)["@referredType"],
+            asObject(party.partyOrPartyRole).name,
+          ]),
+          [
+            ["reporter", agent2Individual, "Individual", fixture.agent2.name],
+            ["assignee", agentIndividual, "Individual", fixture.agent.name],
+            ["customer", agent2Individual, "Individual", fixture.agent2.name],
+          ]
+        );
+
+        // Strict RFC 7396: leaving the assignee out unassigns.
+        const kept = arrayOf(ticket, "relatedParty").filter(
+          (party) => party.role !== "assignee"
+        );
+
+        const unassigned = yield* patch(admin, ticket, {
+          relatedParty: kept,
+        });
+
+        assert.deepStrictEqual(
+          arrayOf(unassigned, "relatedParty").map((party) => party.role),
+          ["reporter", "customer"]
+        );
+        assert.strictEqual((yield* stored(ticket)).assignedTo ?? null, null);
+
+        for (const item of [
+          { role: "customer" },
+          { partyOrPartyRole: { id: agentIndividual } },
+          { partyOrPartyRole: {}, role: "reporter" },
+        ]) {
+          const refused = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            {
+              relatedParty: [item],
+            }
+          );
+
+          assert.strictEqual(outcome(refused), "400 ValidationFailed");
+        }
+
+        const unknown = yield* admin.patch(`${TICKETS}/${textOf(ticket.id)}`, {
+          relatedParty: [
+            { partyOrPartyRole: { id: RANDOM_ID }, role: "assignee" },
+          ],
+        });
+
+        assert.strictEqual(outcome(unknown), "400 InvalidReference");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "characteristics write urgency and the ITIL fields, keep others as given, and urgency derives priority",
+    () =>
+      Effect.gen(function* mappedCharacteristics() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin, { severity: "Critical" });
+
+        assert.strictEqual(ticket.priority, "Medium");
+
+        const urgent = yield* patch(admin, ticket, {
+          troubleTicketCharacteristic: [
+            { "@type": "IntegerCharacteristic", name: "urgency", value: 1 },
+            { name: "resolutionNotes", value: "Restarted the relay." },
+            { name: "region", value: "north" },
+          ],
+        });
+
+        assert.strictEqual(urgent.priority, "Critical");
+
+        const record = yield* stored(ticket);
+
+        assert.deepStrictEqual(
+          [record.urgency, record.resolutionNotes],
+          ["1", "Restarted the relay."]
+        );
+
+        const characteristics = arrayOf(urgent, "troubleTicketCharacteristic");
+
+        assert.deepStrictEqual(
+          characteristics.map((item) => [
+            item["@type"],
+            item.id,
+            item.name,
+            item.value,
+          ]),
+          [
+            ["IntegerCharacteristic", "urgency", "urgency", 1],
+            ["BooleanCharacteristic", "majorIncident", "majorIncident", false],
+            [
+              "StringCharacteristic",
+              "resolutionNotes",
+              "resolutionNotes",
+              "Restarted the relay.",
+            ],
+            ["StringCharacteristic", "region", "region", "north"],
+          ]
+        );
+
+        for (const characteristic of [
+          { name: "urgency", value: 9 },
+          { value: "nameless" },
+          {
+            characteristicRelationship: [{ id: "x" }],
+            name: "region",
+            value: "south",
+          },
+        ]) {
+          const invalid = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            { troubleTicketCharacteristic: [characteristic] }
+          );
+
+          assert.strictEqual(outcome(invalid), "400 ValidationFailed");
+        }
+
+        const related = yield* patch(admin, ticket, {
+          troubleTicketCharacteristic: [
+            {
+              characteristicRelationship: [
+                { id: "c-1", relationshipType: "dependsOn" },
+              ],
               name: "region",
               value: "south",
             },
-          ]) {
-            const invalid = yield* admin.patch(
-              `${TICKETS}/${textOf(ticket.id)}`,
-              { troubleTicketCharacteristic: [characteristic] }
-            );
+          ],
+        });
 
-            assert.strictEqual(outcome(invalid), "400 ValidationFailed");
-          }
+        assert.deepStrictEqual(
+          arrayOf(related, "troubleTicketCharacteristic").find(
+            (item) => item.name === "region"
+          )?.characteristicRelationship,
+          [
+            {
+              "@type": "CharacteristicRelationship",
+              id: "c-1",
+              relationshipType: "dependsOn",
+            },
+          ]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-          const related = yield* patch(admin, ticket, {
-            troubleTicketCharacteristic: [
-              {
-                characteristicRelationship: [
-                  { id: "c-1", relationshipType: "dependsOn" },
-                ],
-                name: "region",
-                value: "south",
-              },
-            ],
-          });
+  it.effect(
+    "troubleTicketRelationship maps causedBy and parent onto an incident's references",
+    () =>
+      Effect.gen(function* relationships() {
+        const admin = yield* tmf621As("admin");
+        const problem = yield* open(admin, { ticketType: "problem" });
+        const parent = yield* open(admin);
 
-          assert.deepStrictEqual(
-            arrayOf(related, "troubleTicketCharacteristic").find(
-              (item) => item.name === "region"
-            )?.characteristicRelationship,
-            [
-              {
-                "@type": "CharacteristicRelationship",
-                id: "c-1",
-                relationshipType: "dependsOn",
-              },
-            ]
-          );
-        })
-    );
+        const child = yield* open(admin, {
+          troubleTicketRelationship: [
+            { id: textOf(problem.id), relationshipType: "causedBy" },
+            { id: textOf(parent.id), relationshipType: "parent" },
+            { id: RANDOM_ID, relationshipType: "duplicates" },
+          ],
+        });
 
-    dbTest.effect(
-      "troubleTicketRelationship maps causedBy and parent onto an incident's references",
-      () =>
-        Effect.gen(function* relationships() {
-          const admin = yield* tmf621As("admin");
-          const problem = yield* open(admin, { ticketType: "problem" });
-          const parent = yield* open(admin);
+        const record = yield* stored(child, "helpdeskIncident");
 
-          const child = yield* open(admin, {
-            troubleTicketRelationship: [
-              { id: textOf(problem.id), relationshipType: "causedBy" },
-              { id: textOf(parent.id), relationshipType: "parent" },
-              { id: RANDOM_ID, relationshipType: "duplicates" },
-            ],
-          });
+        assert.deepStrictEqual(
+          [
+            textOf(asObject(record.problem).id),
+            textOf(asObject(record.parentIncident).id),
+          ],
+          [problem.id, parent.id]
+        );
 
-          const record = yield* stored(child, "helpdeskIncident");
+        assert.deepStrictEqual(
+          arrayOf(child, "troubleTicketRelationship").map((item) => [
+            item["@type"],
+            item.relationshipType,
+            item.id,
+            item.href,
+          ]),
+          [
+            ["TroubleTicketRelationship", "causedBy", problem.id, problem.href],
+            ["TroubleTicketRelationship", "parent", parent.id, parent.href],
+            ["TroubleTicketRelationship", "duplicates", RANDOM_ID, undefined],
+          ]
+        );
 
-          assert.deepStrictEqual(
-            [
-              textOf(asObject(record.problem).id),
-              textOf(asObject(record.parentIncident).id),
-            ],
-            [problem.id, parent.id]
-          );
+        const cleared = yield* patch(admin, child, {
+          troubleTicketRelationship: [],
+        });
 
-          assert.deepStrictEqual(
-            arrayOf(child, "troubleTicketRelationship").map((item) => [
-              item["@type"],
-              item.relationshipType,
-              item.id,
-              item.href,
-            ]),
-            [
-              [
-                "TroubleTicketRelationship",
-                "causedBy",
-                problem.id,
-                problem.href,
-              ],
-              ["TroubleTicketRelationship", "parent", parent.id, parent.href],
-              ["TroubleTicketRelationship", "duplicates", RANDOM_ID, undefined],
-            ]
-          );
+        assert.isUndefined(cleared.troubleTicketRelationship);
+        assert.strictEqual(
+          (yield* stored(child, "helpdeskIncident")).problem ?? null,
+          null
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-          const cleared = yield* patch(admin, child, {
-            troubleTicketRelationship: [],
-          });
+  it.effect(
+    "externalIdentifier starts with the read-only number; attachments and related entities need their attributes",
+    () =>
+      Effect.gen(function* valueObjects() {
+        const admin = yield* tmf621As("admin");
 
-          assert.isUndefined(cleared.troubleTicketRelationship);
-          assert.strictEqual(
-            (yield* stored(child, "helpdeskIncident")).problem ?? null,
-            null
-          );
-        })
-    );
+        const ticket = yield* open(admin, {
+          attachment: [
+            {
+              "@type": "AttachmentRef",
+              attachmentType: "screenshot",
+              id: "a1",
+              mimeType: "image/png",
+              url: "https://files.example/a1.png",
+            },
+          ],
+          externalIdentifier: [{ id: "CRM-7", owner: "CRM" }],
+          relatedEntity: [
+            {
+              entity: { "@type": "Product", id: "p-1" },
+              role: "affectedProduct",
+            },
+          ],
+        });
 
-    dbTest.effect(
-      "externalIdentifier starts with the read-only number; attachments and related entities need their attributes",
-      () =>
-        Effect.gen(function* valueObjects() {
-          const admin = yield* tmf621As("admin");
+        const [number, external] = arrayOf(ticket, "externalIdentifier");
 
-          const ticket = yield* open(admin, {
+        assert.deepStrictEqual(
+          [number?.owner, number?.externalIdentifierType, external?.id],
+          ["STD", "number", "CRM-7"]
+        );
+
+        // Sending the list back as read keeps it.
+        const resent = yield* patch(admin, ticket, {
+          externalIdentifier: arrayOf(ticket, "externalIdentifier"),
+        });
+
+        assert.deepStrictEqual(
+          arrayOf(resent, "externalIdentifier"),
+          arrayOf(ticket, "externalIdentifier")
+        );
+
+        for (const body of [
+          { externalIdentifier: [{ ...number, id: "INC9999999" }] },
+          { attachment: [{ "@type": "AttachmentRef", id: "a2" }] },
+          {
             attachment: [
               {
-                "@type": "AttachmentRef",
-                attachmentType: "screenshot",
-                id: "a1",
-                mimeType: "image/png",
-                url: "https://files.example/a1.png",
+                "@type": "Attachment",
+                attachmentType: "log",
+                content: "aGVsbG8=",
+                id: "a3",
+                mimeType: "text/plain",
               },
             ],
-            externalIdentifier: [{ id: "CRM-7", owner: "CRM" }],
-            relatedEntity: [
-              {
-                entity: { "@type": "Product", id: "p-1" },
-                role: "affectedProduct",
-              },
-            ],
-          });
-
-          const [number, external] = arrayOf(ticket, "externalIdentifier");
-
-          assert.deepStrictEqual(
-            [number?.owner, number?.externalIdentifierType, external?.id],
-            ["STD", "number", "CRM-7"]
-          );
-
-          // Sending the list back as read keeps it.
-          const resent = yield* patch(admin, ticket, {
-            externalIdentifier: arrayOf(ticket, "externalIdentifier"),
-          });
-
-          assert.deepStrictEqual(
-            arrayOf(resent, "externalIdentifier"),
-            arrayOf(ticket, "externalIdentifier")
-          );
-
-          for (const body of [
-            { externalIdentifier: [{ ...number, id: "INC9999999" }] },
-            { attachment: [{ "@type": "AttachmentRef", id: "a2" }] },
-            {
-              attachment: [
-                {
-                  "@type": "Attachment",
-                  attachmentType: "log",
-                  content: "aGVsbG8=",
-                  id: "a3",
-                  mimeType: "text/plain",
-                },
-              ],
-            },
-            { relatedEntity: [{ role: "x" }] },
-            { externalIdentifier: [{ owner: "CRM" }] },
-            { troubleTicketRelationship: [{ id: RANDOM_ID }] },
-            { troubleTicketRelationship: [{ relationshipType: "parent" }] },
-          ]) {
-            const refused = yield* admin.patch(
-              `${TICKETS}/${textOf(ticket.id)}`,
-              body
-            );
-
-            assert.strictEqual(outcome(refused), "400 ValidationFailed");
-          }
-        })
-    );
-
-    dbTest.effect(
-      "troubleTicketSpecification is served: create with name, patch, reference and delete",
-      () =>
-        Effect.gen(function* specifications() {
-          const admin = yield* tmf621As("admin");
-
-          assert.strictEqual(
-            outcome(
-              yield* admin.post(SPECIFICATIONS, {
-                "@type": "TroubleTicketSpecification",
-              })
-            ),
-            "400 ValidationFailed"
-          );
-
-          const created = yield* admin.post(SPECIFICATIONS, {
-            "@type": "TroubleTicketSpecification",
-            lifecycleStatus: "inDesign",
-            name: "Network outage",
-            version: "1.0",
-          });
-
-          const specification = bodyOf(created);
-
-          assert.strictEqual(created.status, 201);
-          assert.deepStrictEqual(
-            [
-              specification.name,
-              specification.lifecycleStatus,
-              specification.version,
-            ],
-            ["Network outage", "inDesign", "1.0"]
-          );
-
-          const patched = yield* admin.patch(
-            `${SPECIFICATIONS}/${textOf(specification.id)}`,
-            { lifecycleStatus: "active" }
-          );
-
-          assert.strictEqual(bodyOf(patched).lifecycleStatus, "active");
-
-          const ticket = yield* open(admin, {
-            troubleTicketSpecification: { id: textOf(specification.id) },
-          });
-
-          assert.deepStrictEqual(
-            [
-              asObject(ticket.troubleTicketSpecification)["@type"],
-              asObject(ticket.troubleTicketSpecification).id,
-              asObject(ticket.troubleTicketSpecification)["@referredType"],
-              asObject(ticket.troubleTicketSpecification).name,
-            ],
-            [
-              "TroubleTicketSpecificationRef",
-              specification.id,
-              "TroubleTicketSpecification",
-              "Network outage",
-            ]
-          );
-
-          assert.strictEqual(
-            outcome(
-              yield* admin.del(`${SPECIFICATIONS}/${textOf(specification.id)}`)
-            ),
-            "409 Referenced"
-          );
-
-          yield* admin.del(`${TICKETS}/${textOf(ticket.id)}`);
-
-          assert.strictEqual(
-            (yield* admin.del(`${SPECIFICATIONS}/${textOf(specification.id)}`))
-              .status,
-            204
-          );
-
-          const agent = yield* tmf621As("agent");
-
-          assert.strictEqual(
-            outcome(
-              yield* agent.post(SPECIFICATIONS, {
-                "@type": "TroubleTicketSpecification",
-                name: "Agents read specifications only",
-              })
-            ),
-            "403 NotAllowed"
-          );
-        })
-    );
-
-    dbTest.effect(
-      "DELETE is allowed to the user who opened the ticket and to admins, parts first",
-      () =>
-        Effect.gen(function* deletes() {
-          const agent = yield* tmf621As("agent");
-          const agent2 = yield* tmf621As("agent2");
-          const admin = yield* tmf621As("admin");
-          const own = yield* open(agent, { note: [{ text: "mine" }] });
-          const other = yield* open(agent2);
-
-          assert.strictEqual(
-            outcome(yield* agent.del(`${TICKETS}/${textOf(other.id)}`)),
-            "403 NotAllowed"
-          );
-          assert.strictEqual(
-            (yield* agent.del(`${TICKETS}/${textOf(own.id)}`)).status,
-            204
-          );
-          assert.strictEqual(
-            (yield* admin.del(`${TICKETS}/${textOf(other.id)}`)).status,
-            204
-          );
-
-          const record = yield* stored(yield* open(agent));
-          const fixture = yield* HelpdeskFixture;
-
-          assert.strictEqual(
-            textOf(asObject(record.openedBy).id),
-            fixture.agent.id
-          );
-        })
-    );
-
-    dbTest.effect(
-      "If-Match is optional; a stale one answers 409 with the current ETag on PATCH and DELETE",
-      () =>
-        Effect.gen(function* preconditions() {
-          const admin = yield* tmf621As("admin");
-          const created = yield* admin.post(TICKETS, ticketBody());
-          const id = textOf(bodyOf(created).id);
-          const stale = etagOf(created);
-
-          const changed = yield* admin.patch(
-            `${TICKETS}/${id}`,
-            { name: "first" },
-            { ifMatch: stale }
-          );
-
-          assert.strictEqual(changed.status, 200);
-
-          const conflict = yield* admin.patch(
-            `${TICKETS}/${id}`,
-            { name: "second" },
-            { ifMatch: stale }
-          );
-
-          assert.deepStrictEqual(
-            [outcome(conflict), conflict.headers.get("etag")],
-            ["409 VersionConflict", etagOf(changed)]
-          );
-
-          const refused = yield* admin.del(`${TICKETS}/${id}`, {
-            ifMatch: stale,
-          });
-
-          assert.strictEqual(outcome(refused), "409 VersionConflict");
-          assert.strictEqual(
-            (yield* admin.del(`${TICKETS}/${id}`, { ifMatch: etagOf(changed) }))
-              .status,
-            204
-          );
-        })
-    );
-
-    dbTest.effect(
-      "a JSON Patch changes attributes and arrays as the merge-patch would",
-      () =>
-        Effect.gen(function* jsonPatch() {
-          const admin = yield* tmf621As("admin");
-          const ticket = yield* open(admin, { note: [{ text: "one" }] });
-
-          const patched = yield* admin.patch(
+          },
+          { relatedEntity: [{ role: "x" }] },
+          { externalIdentifier: [{ owner: "CRM" }] },
+          { troubleTicketRelationship: [{ id: RANDOM_ID }] },
+          { troubleTicketRelationship: [{ relationshipType: "parent" }] },
+        ]) {
+          const refused = yield* admin.patch(
             `${TICKETS}/${textOf(ticket.id)}`,
-            [
-              { op: "replace", path: "/status", value: "inProgress" },
-              { op: "add", path: "/note/-", value: { text: "two" } },
-              { op: "test", path: "/severity", value: "Major" },
-            ],
+            body
+          );
+
+          assert.strictEqual(outcome(refused), "400 ValidationFailed");
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "troubleTicketSpecification is served: create with name, patch, reference and delete",
+    () =>
+      Effect.gen(function* specifications() {
+        const admin = yield* tmf621As("admin");
+
+        assert.strictEqual(
+          outcome(
+            yield* admin.post(SPECIFICATIONS, {
+              "@type": "TroubleTicketSpecification",
+            })
+          ),
+          "400 ValidationFailed"
+        );
+
+        const created = yield* admin.post(SPECIFICATIONS, {
+          "@type": "TroubleTicketSpecification",
+          lifecycleStatus: "inDesign",
+          name: "Network outage",
+          version: "1.0",
+        });
+
+        const specification = bodyOf(created);
+
+        assert.strictEqual(created.status, 201);
+        assert.deepStrictEqual(
+          [
+            specification.name,
+            specification.lifecycleStatus,
+            specification.version,
+          ],
+          ["Network outage", "inDesign", "1.0"]
+        );
+
+        const patched = yield* admin.patch(
+          `${SPECIFICATIONS}/${textOf(specification.id)}`,
+          { lifecycleStatus: "active" }
+        );
+
+        assert.strictEqual(bodyOf(patched).lifecycleStatus, "active");
+
+        const ticket = yield* open(admin, {
+          troubleTicketSpecification: { id: textOf(specification.id) },
+        });
+
+        assert.deepStrictEqual(
+          [
+            asObject(ticket.troubleTicketSpecification)["@type"],
+            asObject(ticket.troubleTicketSpecification).id,
+            asObject(ticket.troubleTicketSpecification)["@referredType"],
+            asObject(ticket.troubleTicketSpecification).name,
+          ],
+          [
+            "TroubleTicketSpecificationRef",
+            specification.id,
+            "TroubleTicketSpecification",
+            "Network outage",
+          ]
+        );
+
+        assert.strictEqual(
+          outcome(
+            yield* admin.del(`${SPECIFICATIONS}/${textOf(specification.id)}`)
+          ),
+          "409 Referenced"
+        );
+
+        yield* admin.del(`${TICKETS}/${textOf(ticket.id)}`);
+
+        assert.strictEqual(
+          (yield* admin.del(`${SPECIFICATIONS}/${textOf(specification.id)}`))
+            .status,
+          204
+        );
+
+        const agent = yield* tmf621As("agent");
+
+        assert.strictEqual(
+          outcome(
+            yield* agent.post(SPECIFICATIONS, {
+              "@type": "TroubleTicketSpecification",
+              name: "Agents read specifications only",
+            })
+          ),
+          "403 NotAllowed"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "DELETE is allowed to the user who opened the ticket and to admins, parts first",
+    () =>
+      Effect.gen(function* deletes() {
+        const agent = yield* tmf621As("agent");
+        const agent2 = yield* tmf621As("agent2");
+        const admin = yield* tmf621As("admin");
+        const own = yield* open(agent, { note: [{ text: "mine" }] });
+        const other = yield* open(agent2);
+
+        assert.strictEqual(
+          outcome(yield* agent.del(`${TICKETS}/${textOf(other.id)}`)),
+          "403 NotAllowed"
+        );
+        assert.strictEqual(
+          (yield* agent.del(`${TICKETS}/${textOf(own.id)}`)).status,
+          204
+        );
+        assert.strictEqual(
+          (yield* admin.del(`${TICKETS}/${textOf(other.id)}`)).status,
+          204
+        );
+
+        const record = yield* stored(yield* open(agent));
+        const fixture = yield* HelpdeskFixture;
+
+        assert.strictEqual(
+          textOf(asObject(record.openedBy).id),
+          fixture.agent.id
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "If-Match is optional; a stale one answers 409 with the current ETag on PATCH and DELETE",
+    () =>
+      Effect.gen(function* preconditions() {
+        const admin = yield* tmf621As("admin");
+        const created = yield* admin.post(TICKETS, ticketBody());
+        const id = textOf(bodyOf(created).id);
+        const stale = etagOf(created);
+
+        const changed = yield* admin.patch(
+          `${TICKETS}/${id}`,
+          { name: "first" },
+          { ifMatch: stale }
+        );
+
+        assert.strictEqual(changed.status, 200);
+
+        const conflict = yield* admin.patch(
+          `${TICKETS}/${id}`,
+          { name: "second" },
+          { ifMatch: stale }
+        );
+
+        assert.deepStrictEqual(
+          [outcome(conflict), conflict.headers.get("etag")],
+          ["409 VersionConflict", etagOf(changed)]
+        );
+
+        const refused = yield* admin.del(`${TICKETS}/${id}`, {
+          ifMatch: stale,
+        });
+
+        assert.strictEqual(outcome(refused), "409 VersionConflict");
+        assert.strictEqual(
+          (yield* admin.del(`${TICKETS}/${id}`, { ifMatch: etagOf(changed) }))
+            .status,
+          204
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a JSON Patch changes attributes and arrays as the merge-patch would",
+    () =>
+      Effect.gen(function* jsonPatch() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin, { note: [{ text: "one" }] });
+
+        const patched = yield* admin.patch(
+          `${TICKETS}/${textOf(ticket.id)}`,
+          [
+            { op: "replace", path: "/status", value: "inProgress" },
+            { op: "add", path: "/note/-", value: { text: "two" } },
+            { op: "test", path: "/severity", value: "Major" },
+          ],
+          { contentType: "application/json-patch+json" }
+        );
+
+        const body = bodyOf(patched);
+
+        assert.strictEqual(patched.status, 200, patched.text);
+        assert.deepStrictEqual(
+          [body.status, arrayOf(body, "note").map((note) => note.text)],
+          ["inProgress", ["one", "two"]]
+        );
+
+        const failed = yield* admin.patch(
+          `${TICKETS}/${textOf(ticket.id)}`,
+          [{ op: "test", path: "/severity", value: "Minor" }],
+          { contentType: "application/json-patch+json" }
+        );
+
+        assert.strictEqual(outcome(failed), "409 PatchTestFailed");
+
+        for (const operations of [
+          [{ op: "rename", path: "/name", value: "x" }],
+          [{ op: "replace", value: "x" }],
+          [{ path: "/name", value: "x" }],
+        ]) {
+          const malformed = yield* admin.patch(
+            `${TICKETS}/${textOf(ticket.id)}`,
+            operations,
             { contentType: "application/json-patch+json" }
           );
 
-          const body = bodyOf(patched);
+          assert.strictEqual(malformed.status, 400, malformed.text);
+        }
 
-          assert.strictEqual(patched.status, 200, patched.text);
-          assert.deepStrictEqual(
-            [body.status, arrayOf(body, "note").map((note) => note.text)],
-            ["inProgress", ["one", "two"]]
-          );
+        // application/json is applied as a merge-patch.
+        const plain = yield* admin.patch(
+          `${TICKETS}/${textOf(ticket.id)}`,
+          { name: "plain JSON" },
+          { contentType: "application/json" }
+        );
 
-          const failed = yield* admin.patch(
-            `${TICKETS}/${textOf(ticket.id)}`,
-            [{ op: "test", path: "/severity", value: "Minor" }],
-            { contentType: "application/json-patch+json" }
-          );
+        assert.strictEqual(bodyOf(plain).name, "plain JSON");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-          assert.strictEqual(outcome(failed), "409 PatchTestFailed");
+  it.effect(
+    "pages with after and before cursors as the Link header names them",
+    () =>
+      Effect.gen(function* cursors() {
+        const admin = yield* tmf621As("admin");
+        const tag = "cursors";
 
-          for (const operations of [
-            [{ op: "rename", path: "/name", value: "x" }],
-            [{ op: "replace", value: "x" }],
-            [{ path: "/name", value: "x" }],
-          ]) {
-            const malformed = yield* admin.patch(
-              `${TICKETS}/${textOf(ticket.id)}`,
-              operations,
-              { contentType: "application/json-patch+json" }
-            );
+        const opened = [
+          yield* open(admin, { name: tag }),
+          yield* open(admin, { name: tag }),
+          yield* open(admin, { name: tag }),
+        ].map((ticket) => textOf(ticket.id));
 
-            assert.strictEqual(malformed.status, 400, malformed.text);
-          }
+        const first = yield* admin.get(
+          `${TICKETS}?name=${tag}&limit=2&sort=creationDate`
+        );
 
-          // application/json is applied as a merge-patch.
-          const plain = yield* admin.patch(
-            `${TICKETS}/${textOf(ticket.id)}`,
-            { name: "plain JSON" },
-            { contentType: "application/json" }
-          );
+        const next = linkOf(first, "next");
 
-          assert.strictEqual(bodyOf(plain).name, "plain JSON");
-        })
-    );
+        assert.deepStrictEqual(
+          itemsOf(first).map((item) => item.id),
+          opened.slice(0, 2)
+        );
+        assert.include(next, "after=");
 
-    dbTest.effect(
-      "pages with after and before cursors as the Link header names them",
-      () =>
-        Effect.gen(function* cursors() {
-          const admin = yield* tmf621As("admin");
-          const tag = "cursors";
+        const second = yield* admin.get(next);
 
-          const opened = [
-            yield* open(admin, { name: tag }),
-            yield* open(admin, { name: tag }),
-            yield* open(admin, { name: tag }),
-          ].map((ticket) => textOf(ticket.id));
+        assert.deepStrictEqual(
+          itemsOf(second).map((item) => item.id),
+          opened.slice(2)
+        );
 
-          const first = yield* admin.get(
-            `${TICKETS}?name=${tag}&limit=2&sort=creationDate`
-          );
+        const previous = linkOf(second, "prev");
 
-          const next = linkOf(first, "next");
+        assert.include(previous, "before=");
+        assert.deepStrictEqual(
+          itemsOf(yield* admin.get(previous)).map((item) => item.id),
+          opened.slice(0, 2)
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 
-          assert.deepStrictEqual(
-            itemsOf(first).map((item) => item.id),
-            opened.slice(0, 2)
-          );
-          assert.include(next, "after=");
+  it.effect(
+    "answers only statuses the pinned document declares: 401, 404, 400 and the TMF Error",
+    () =>
+      Effect.gen(function* errors() {
+        const http = yield* TestHttpClient;
+        const admin = yield* tmf621As("admin");
 
-          const second = yield* admin.get(next);
+        assert.strictEqual((yield* http.get(TICKETS)).status, 401);
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}/${RANDOM_ID}`)),
+          "404 NotFound"
+        );
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}/not-a-uuid`)),
+          "404 NotFound"
+        );
 
-          assert.deepStrictEqual(
-            itemsOf(second).map((item) => item.id),
-            opened.slice(2)
-          );
+        const media = yield* admin.patch(
+          `${TICKETS}/${RANDOM_ID}`,
+          {},
+          { contentType: "text/plain" }
+        );
 
-          const previous = linkOf(second, "prev");
-
-          assert.include(previous, "before=");
-          assert.deepStrictEqual(
-            itemsOf(yield* admin.get(previous)).map((item) => item.id),
-            opened.slice(0, 2)
-          );
-        })
-    );
-
-    dbTest.effect(
-      "answers only statuses the pinned document declares: 401, 404, 405, 400 and the TMF Error",
-      () =>
-        Effect.gen(function* errors() {
-          const http = yield* TestHttpClient;
-          const admin = yield* tmf621As("admin");
-
-          assert.strictEqual((yield* http.get(TICKETS)).status, 401);
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}/${RANDOM_ID}`)),
-            "404 NotFound"
-          );
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}/not-a-uuid`)),
-            "404 NotFound"
-          );
-
-          const media = yield* admin.patch(
-            `${TICKETS}/${RANDOM_ID}`,
-            {},
-            { contentType: "text/plain" }
-          );
-
-          assert.strictEqual(outcome(media), "400 InvalidRequest");
-          assert.strictEqual(
-            outcome(yield* admin.get(`${TICKETS}?limit=x`)),
-            "400 InvalidRequest"
-          );
-        })
-    );
-  });
+        assert.strictEqual(outcome(media), "400 InvalidRequest");
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}?limit=x`)),
+          "400 InvalidRequest"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
 });
 
 /** The attributes Contracts 11.2 requires of each sub-resource item. */
