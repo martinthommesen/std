@@ -99,7 +99,9 @@ Every profile raises the six Effect diagnostics (`unstableApiUsage`, `experiment
 | `pnpm ci:local` | Every `run:` step of `.github/workflows/ci.yml`, in order |
 | `pnpm release-compat:ci` | Release compatibility, below |
 | `pnpm oda-probe:summary` | Summarizes the last runs of the `oda-canvas-probe` workflow (downloaded with `gh`) or local probe results as Markdown (decision 0027) |
-| `pnpm ctk <api> --url <base URL> --token <bearer>` | The CTK runner (Contracts 11.1, decision 0033): downloads the pinned TM Forum kit (SHA-256 checked, cached outside the repository), checks the image digest, runs the kit against a running STD and passes only under the runner's criteria |
+| `pnpm ctk <api> --url <base URL> --token-file <file>` | The CTK runner (Contracts 11.1, decisions 0033 and 0035): reads the bearer token from a file only its owner may read (never an argument), downloads the pinned TM Forum kit (SHA-256 checked, cached outside the repository), checks the image digest, runs the kit against a running STD and passes only under the runner's criteria |
+| `pnpm ctk:ci` | The CTK CI job (decision 0035): STD with helpdesk v3 on a disposable database, a self-check of the kit's payloads through TMF621, and only under GitHub Actions `pnpm ctk tmf621` against it (reports in `ctk-reports/`) |
+| `pnpm tmf621-example:ci` | Runs `examples/helpdesk/tmf621.sh` twice against `std serve` with helpdesk v3, under the quickstart's execve trace (decision 0035) |
 
 The fixture packages in `tooling/canaries/` are not workspace packages and are excluded from `pnpm typecheck`; they resolve `effect` and `@effect/vitest` from the root `node_modules`. CI (`.github/workflows/ci.yml`) runs Node 26.12.0, pnpm 12.14.0 and a Postgres 18 service on port 54329; `pnpm ci:local` runs the same steps here, where GitHub Actions cannot run.
 

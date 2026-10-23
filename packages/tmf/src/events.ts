@@ -63,10 +63,12 @@ export interface StandardEvents {
   /**
    * The fields a TMF status or state is derived from, when the resource has
    * one: a change of any gives `<Type>StatusChangeEvent` (or the given
-   * name, `StateChangeEvent` for inventories).
+   * name, `StateChangeEvent` for inventories), carrying the `payload`
+   * attributes (`EventRule.payload`).
    */
   readonly status?: {
     readonly sources: readonly SourceKey[];
+    readonly payload: readonly string[];
     readonly event?: string;
   };
 }
@@ -93,6 +95,7 @@ export const standardEvents = (spec: StandardEvents): readonly EventRule[] => {
       : [
           {
             on: "update" as const,
+            payload: status.payload,
             triggers: status.sources,
             type: status.event ?? `${spec.type}StatusChangeEvent`,
             when: (change: ChangeView) => changedAny(change, status.sources),

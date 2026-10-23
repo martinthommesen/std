@@ -62,6 +62,44 @@ export const hubRateLimitResponse = () =>
     { "retry-after": "60" }
   );
 
+/**
+ * The resource a hub on a mapped TMF API listens to: the one `resource=`
+ * names; without it, the one whose type starts every event type the query
+ * names, else the API's first (TMF621's `troubleTicket`) [judgment,
+ * decision 0035: TMF clients register with only `eventType` queries].
+ *
+ * @param api - The mapping.
+ * @param query - The hub's query.
+ * @returns The resource, or undefined when `resource=` names none.
+ */
+const hubResourceOf = (
+  api: TmfApiMapping,
+  query: string | null
+): TmfApiMapping["resources"][number] | undefined => {
+  const params = new URLSearchParams(query ?? "");
+  const selector = params.get("resource");
+
+  if (selector !== null) {
+    return api.resources.find((resource) => resource.name === selector);
+  }
+
+  const types = params.getAll("eventType").flatMap((value) => value.split(","));
+
+  const byType = api.resources.find(
+    (resource) =>
+      types.length > 0 &&
+      types.every((type) => type.startsWith(resource.type)) &&
+      !api.resources.some(
+        (other) =>
+          other !== resource &&
+          other.type.startsWith(resource.type) &&
+          types.every((type) => type.startsWith(other.type))
+      )
+  );
+
+  return byType ?? api.resources[0];
+};
+
 const prepareHubRequest = Effect.fn("Http.prepareHub")(
   function* prepareHubRequest(
     request: HttpServerRequest,
@@ -92,13 +130,8 @@ const prepareHubRequest = Effect.fn("Http.prepareHub")(
         )
       );
 
-      const selector = new URLSearchParams(body.query ?? "").get("resource");
-
-      const mapped = api?.resources.find(
-        (resource) =>
-          (selector === null && api.resources.length === 1) ||
-          resource.name === selector
-      );
+      const mapped =
+        api === undefined ? undefined : hubResourceOf(api, body.query ?? null);
 
       const mappedTarget: HubTarget | undefined =
         mapped === undefined || api === undefined

@@ -281,7 +281,11 @@ const failed = () => new DeliveryFailed({ reason: "Callback request failed." });
 
 // A transport adapter uses node:http to pin the checked DNS result while TLS
 // verifies the original host. The signal closes the socket on interruption.
-const send = (destination: Destination, body: JsonObject, changeId: string) =>
+const send = (
+  destination: Destination,
+  body: JsonObject,
+  idempotencyKey: string
+) =>
   Effect.callback<boolean, DeliveryFailed>((resume, signal) => {
     const bytes = Buffer.from(JSON.stringify(body));
 
@@ -295,7 +299,7 @@ const send = (destination: Destination, body: JsonObject, changeId: string) =>
         headers: {
           "content-length": String(bytes.length),
           "content-type": "application/json",
-          "idempotency-key": changeId,
+          "idempotency-key": idempotencyKey,
         },
         lookup: destination.lookup,
         method: "POST",
@@ -338,7 +342,7 @@ export class CallbackTransport extends Context.Service<
     readonly post: (
       callback: string,
       body: JsonObject,
-      changeId: string
+      idempotencyKey: string
     ) => Effect.Effect<void, DeliveryFailed>;
   }
 >()("std/events/CallbackTransport") {
@@ -354,7 +358,11 @@ export class CallbackTransport extends Context.Service<
       }
 
       const post = Effect.fn("CallbackTransport.post")(
-        function* post(callback: string, body: JsonObject, changeId: string) {
+        function* post(
+          callback: string,
+          body: JsonObject,
+          idempotencyKey: string
+        ) {
           const url = yield* parseCallbackUrl(callback).pipe(
             Effect.mapError(failed)
           );
@@ -383,7 +391,7 @@ export class CallbackTransport extends Context.Service<
               url,
             },
             body,
-            changeId
+            idempotencyKey
           ).pipe(Effect.asVoid);
         },
         Effect.timeout(CALLBACK_TIMEOUT_MS),

@@ -94,7 +94,7 @@ const RESOURCE: TmfResourceMapping = {
     retrieve: [200, 400, 404],
   },
   events: standardEvents({
-    status: { sources: [F.status, F.holdReason] },
+    status: { payload: ["status"], sources: [F.status, F.holdReason] },
     type: "TroubleTicket",
   }),
   name: "troubleTicket",
@@ -185,9 +185,6 @@ const without = (record: SourceRecord, ...hidden: string[]): SourceRecord => ({
   ...record,
   values: new Map([...record.values].filter(([key]) => !hidden.includes(key))),
 });
-
-// A value of type `undefined`, for a field that is absent.
-const ABSENT = new Map<string, SourceRecord["values"]>().get("");
 
 const withNullId = (item: {
   readonly existingId: string | undefined;
@@ -723,7 +720,7 @@ describe("tmf-mapping", () => {
     expect(types({ action: "update", after: renamed, before })).toStrictEqual([
       "TroubleTicketAttributeValueChangeEvent",
     ]);
-    expect(types({ action: "create", after, before: ABSENT })).toStrictEqual([
+    expect(types({ action: "create", after })).toStrictEqual([
       "TroubleTicketCreateEvent",
     ]);
   });

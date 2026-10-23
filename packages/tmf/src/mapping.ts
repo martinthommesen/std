@@ -51,6 +51,38 @@ export const SYSTEM_SOURCES = {
   updatedBy: "system:updated_by",
 } as const;
 
+/**
+ * A source one hop through a reference: the field `target` of the record
+ * the reference `reference` names (`assigned_to.individual`), read with
+ * the caller's access to both. A write to it sets the reference to the
+ * one record of the reference's target class, visible to the caller, whose
+ * `target` field holds the value (the server resolves it; decision 0035).
+ *
+ * @param reference - The reference field.
+ * @param target - The field of the reference's target class.
+ * @returns The source key.
+ */
+export const pathSource = (
+  reference: DefinitionId,
+  target: DefinitionId
+): SourceKey => `${reference}.${target}`;
+
+/**
+ * The two fields of a path source, or undefined for a plain one.
+ *
+ * @param source - A source key.
+ * @returns The reference and the target field.
+ */
+export const pathOf = (
+  source: SourceKey
+): { readonly reference: string; readonly target: string } | undefined => {
+  const [reference, target, ...rest] = source.split(".");
+
+  return reference === undefined || target === undefined || rest.length > 0
+    ? undefined
+    : { reference, target };
+};
+
 /** What the caller may know of a reference's target (Contracts 3.6, 10.2). */
 export interface ReferenceValue {
   readonly id: string;
@@ -85,6 +117,26 @@ export interface SourceRecord {
   readonly version: number;
   readonly values: SourceValues;
   readonly parts: ReadonlyMap<string, readonly SourceRecord[]>;
+  /**
+   * The record's change entries (Contracts 3.7, 4.2) for the history
+   * sources of the attributes that need them (`ValueAttribute.history`),
+   * only those the caller can read on the record, in version order; absent
+   * when no selected attribute needs history.
+   */
+  readonly history?: readonly HistoryStep[];
+}
+
+/**
+ * One change entry of a record as a history-backed attribute sees it: the
+ * new values of the history sources it changed (Contracts 4.2).
+ */
+export interface HistoryStep {
+  readonly version: number;
+  readonly kind: "create" | "update" | "delete";
+  /** When the change committed, RFC 3339. */
+  readonly occurredAt: string;
+  /** The new value of each readable history source the change wrote. */
+  readonly changes: ReadonlyMap<SourceKey, JsonValue>;
 }
 
 /** Why a value of one attribute cannot be written. */
@@ -102,6 +154,35 @@ export interface RenderContext {
   readonly typeOf: (classId: string) => string | undefined;
   /** The `href` of a record of a class, when an API serves it. */
   readonly hrefOf: (classId: string, id: string) => string | undefined;
+  /**
+   * A class and its ancestors, the class first; absent: the class alone
+   * (a mapping that needs the hierarchy, such as TMF621's `ticketType`,
+   * gets it from the server).
+   */
+  readonly lineageOf?: (classId: string) => readonly string[];
+}
+
+/** What an attribute's `render` knows of the one record it renders. */
+export interface RecordContext extends RenderContext {
+  /** The record's concrete class and its ancestors, the class first. */
+  readonly lineage: readonly string[];
+  /** The record's change entries, when an attribute needs them. */
+  readonly history: readonly HistoryStep[] | undefined;
+}
+
+/** What an attribute's `write` knows of the record it writes. */
+export interface WriteTarget {
+  /** The record's concrete class and its ancestors, the class first. */
+  readonly lineage: readonly string[];
+}
+
+/** What a custom filter knows of the configuration. */
+export interface FilterContext {
+  /**
+   * The qualified names of a class and its descendants, as the `class`
+   * system field (`system:class`) holds them.
+   */
+  readonly subtreeNamesOf: (classId: string) => readonly string[];
 }
 
 /** A filter on a single field, whose values convert through `toStored`. */
@@ -123,11 +204,15 @@ export interface CustomFilter {
   readonly kind: "custom";
   /**
    * The condition (paths are source keys) for the values, ORed; the
-   * caller must be able to read every source of the attribute.
+   * caller must be able to read every source of the attribute. Which paths
+   * the condition tests must not depend on the values, only the constants
+   * it compares with: a hub decides whether it can filter on the attribute
+   * from the condition built for a sample value (decision 0035).
    */
   readonly build: (
     comparison: FilterComparison,
-    values: readonly string[]
+    values: readonly string[],
+    context: FilterContext
   ) => Result.Result<Expr, AttributeIssue>;
 }
 
@@ -157,21 +242,44 @@ export interface ValueAttribute extends AttributeCommon {
   /** The fields a write may set; by default the sources. */
   readonly writes: readonly SourceKey[];
   /**
+   * Fields of some classes of the subtree only (an incident's `problem`):
+   * read when the record's class has them and the caller can read them
+   * there, but needed neither for the attribute to render nor for the
+   * caller to know it. A write naming one is planned only when the caller
+   * may name it on the record's class (else `unknownAttribute`).
+   */
+  readonly optionalSources?: readonly SourceKey[];
+  /**
+   * Sources whose change history the attribute renders from (TMF621's
+   * `statusChangeHistory`, Contracts 11.2); each is one of `sources`. The
+   * server reads the record's change entries for them
+   * (`SourceRecord.history`).
+   */
+  readonly history?: readonly SourceKey[];
+  /**
+   * The fields a TMF value writes only as a default: another attribute of
+   * the same body that writes the field wins without a conflict (TMF621's
+   * `held` defaults the hold reason, which the `holdReason` characteristic
+   * may name).
+   */
+  readonly softWrites?: (value: JsonValue) => readonly SourceKey[];
+  /**
    * The TMF value, or undefined to leave the attribute out (an empty value
    * is left out, never null: TMF630 v5.0.0 Part 1 §4.1 p.39).
    */
   readonly render: (
     values: SourceValues,
-    context: RenderContext
+    context: RecordContext
   ) => JsonValue | undefined;
   /**
    * The field values a TMF value writes (`null` clears), given the
-   * caller's current values on an update (undefined on a create); absent
-   * for a read-only attribute.
+   * caller's current values on an update (undefined on a create) and the
+   * record's class; absent for a read-only attribute.
    */
   readonly write?: (
     value: JsonValue,
-    current: SourceValues | undefined
+    current: SourceValues | undefined,
+    target: WriteTarget
   ) => Result.Result<ReadonlyMap<SourceKey, JsonValue>, AttributeIssue>;
   /** How a TMF filter on it compiles; absent: not filterable (E16). */
   readonly filter?: FieldFilter | CustomFilter;
@@ -201,6 +309,39 @@ export interface ItemMapping {
    */
   readonly orderField?: SourceKey;
   readonly attributes: readonly Attribute[];
+  /**
+   * How a new item would render its read-only attributes, so a client may
+   * send back what it would read (a note's `author` is the acting user,
+   * decision 0035): given what the caller may know of its own user record.
+   */
+  readonly newItemRendering?: (actor: ReferenceValue | undefined) => JsonObject;
+}
+
+/**
+ * An item of an array that is no part but fields of the owner (TMF621's
+ * `relatedParty` with role `reporter` is the ticket's `caller`, Contracts
+ * 11.2). It renders before the parts when the caller can read its sources
+ * on the owner; in a write, the body item it `matches` writes the owner's
+ * fields, and when the array leaves it out its fields are cleared (strict
+ * RFC 7396, decision 0021, decision 41).
+ */
+export interface OwnerItem {
+  /** A name for issues (`reporter`). */
+  readonly name: string;
+  /** The owner fields it renders from; all must be readable. */
+  readonly sources: readonly SourceKey[];
+  /** The owner fields it writes; all must be nameable to write it. */
+  readonly writes: readonly SourceKey[];
+  /** Whether a body item is this owner item. */
+  readonly matches: (item: JsonObject) => boolean;
+  readonly render: (
+    values: SourceValues,
+    context: RecordContext
+  ) => JsonObject | undefined;
+  /** The owner field values of a body item, or of none (`null`: clear). */
+  readonly write: (
+    item: JsonObject | null
+  ) => Result.Result<ReadonlyMap<SourceKey, JsonValue>, AttributeIssue>;
 }
 
 /**
@@ -211,6 +352,8 @@ export interface ItemMapping {
 export interface PartsAttribute extends AttributeCommon {
   readonly kind: "parts";
   readonly item: ItemMapping;
+  /** Items backed by fields of the owner, rendered before the parts. */
+  readonly ownerItems?: readonly OwnerItem[];
 }
 
 /** One TMF attribute. */
@@ -237,9 +380,9 @@ export type TmfOperation = "list" | "retrieve" | "create" | "patch" | "delete";
 export interface ChangeView {
   readonly action: "create" | "update" | "delete";
   /** The values before (absent on a create). */
-  readonly before: SourceValues | undefined;
+  readonly before?: SourceValues;
   /** The values after (absent on a delete). */
-  readonly after: SourceValues | undefined;
+  readonly after?: SourceValues;
 }
 
 /** One TMF event type of a resource (Contracts 12.1). */
@@ -252,6 +395,13 @@ export interface EventRule {
    * trigger fields); empty for Create and Delete.
    */
   readonly triggers: readonly SourceKey[];
+  /**
+   * The attributes the event's resource carries besides the identity ones
+   * (a StatusChange's status, TMF630 v5.0.0 Part 1 §11.6.3 p.203); absent:
+   * a Create's whole resource, an AttributeValueChange's changed
+   * attributes, a Delete's identity only.
+   */
+  readonly payload?: readonly string[];
   /** Whether the change gives the event; absent: every such change. */
   readonly when?: (change: ChangeView) => boolean;
 }
@@ -559,6 +709,11 @@ export interface DerivedSpec {
   readonly filter?: CustomFilter;
   readonly readOnly?: boolean;
   readonly requiredOnCreate?: boolean;
+  readonly optionalSources?: readonly SourceKey[];
+  readonly history?: readonly SourceKey[];
+  readonly softWrites?: (value: JsonValue) => readonly SourceKey[];
+  /** The field a `sort` on it orders by, if sortable. */
+  readonly sort?: SourceKey;
 }
 
 /**
@@ -589,29 +744,73 @@ export const derivedAttribute = (spec: DerivedSpec): ValueAttribute => {
     attribute.filter = spec.filter;
   }
 
+  if (spec.optionalSources !== undefined) {
+    attribute.optionalSources = spec.optionalSources;
+  }
+
+  if (spec.history !== undefined) {
+    attribute.history = spec.history;
+  }
+
+  if (spec.softWrites !== undefined) {
+    attribute.softWrites = spec.softWrites;
+  }
+
+  if (spec.sort !== undefined) {
+    attribute.sort = spec.sort;
+  }
+
   return attribute;
 };
+
+/**
+ * A read-only TMF string rendered as the label the caller may see of a
+ * reference's target (3.6): a note's `author`, the name of its user.
+ *
+ * @param name - The TMF attribute.
+ * @param source - The reference field.
+ * @returns The attribute.
+ */
+export const referenceLabelAttribute = (
+  name: string,
+  source: SourceKey
+): ValueAttribute =>
+  singleField(name, source, { readOnly: true }, (values) => {
+    const label = values.get(source)?.reference?.label;
+
+    return label === null ? undefined : label;
+  });
 
 /**
  * An array of parts (Contracts 4.9, 11.1).
  *
  * @param name - The TMF attribute (`note`).
  * @param item - The item type, part class, owner reference and attributes.
- * @param options - Read-only.
+ * @param options - Read-only, and the items backed by owner fields.
  * @returns The attribute.
  */
 export const partsAttribute = (
   name: string,
   item: ItemMapping,
-  options: AttributeOptions = {}
-): PartsAttribute => ({
-  item,
-  kind: "parts",
-  name,
-  readOnly: options.readOnly ?? false,
-  requiredOnCreate: options.requiredOnCreate ?? false,
-  sources: [],
-});
+  options: AttributeOptions & {
+    readonly ownerItems?: readonly OwnerItem[];
+  } = {}
+): PartsAttribute => {
+  const attribute: Draft<PartsAttribute> = {
+    item,
+    kind: "parts",
+    name,
+    readOnly: options.readOnly ?? false,
+    requiredOnCreate: options.requiredOnCreate ?? false,
+    sources: [],
+  };
+
+  if (options.ownerItems !== undefined) {
+    attribute.ownerItems = options.ownerItems;
+  }
+
+  return attribute;
+};
 
 /** Every TMF operation, in route order. */
 export const ALL_OPERATIONS: readonly TmfOperation[] = [

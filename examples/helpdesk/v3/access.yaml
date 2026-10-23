@@ -318,3 +318,32 @@ accessRules:
     fields:
       - parent_incident
       - problem
+  - id: 1c82eea5-4634-5856-8959-084929c008c6
+    description: Agents and managers delete the tickets they opened (decision 0035); admins delete any.
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: helpdesk.ticket
+    target: records
+    actions:
+      - delete
+    condition:
+      op: eq
+      left:
+        path:
+          - 6a37ae7b-db15-5598-a745-51207619fc35
+      right:
+        ctx: me
+  - id: d65607c7-ee17-53ed-bae5-b86ae1aa128b
+    description: Agents and managers read a user's individual, for the assignee in TMF621 relatedParty (decision 0035).
+    effect: allow
+    roles:
+      - agent
+      - major_incident_manager
+    table: core.user
+    target: fields
+    actions:
+      - read
+    fields:
+      - individual

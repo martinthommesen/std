@@ -15,7 +15,8 @@ import {
   USER_ROLE_CLASS_ID,
   BUILT_IN_ROLE_IDS,
 } from "@std/definitions/well-known";
-import type { JsonValue } from "@std/values/json-value";
+import { isJsonString } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Plaintext } from "@std/values/write-only";
 import { Schema, Effect, Layer, Redacted } from "effect";
 import { TestClock } from "effect/testing";
@@ -68,6 +69,7 @@ import {
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
+import { itemsOf, TICKETS, tmf621As } from "./tmf621-support.ts";
 
 const edit = Effect.fn("HelpdeskUpgrade.edit")(function* edit(
   id: string,
@@ -133,6 +135,80 @@ const definitionsByCategory = (
       ]),
     ])
   );
+
+const TMF621_STATUS_VALUES: readonly string[] = [
+  "acknowledged",
+  "rejected",
+  "pending",
+  "held",
+  "inProgress",
+  "cancelled",
+  "closed",
+  "resolved",
+];
+
+/** The most one TMF621 page returns (`MAX_LIMIT`, Contracts 11.1). */
+const TMF621_PAGE = 1000;
+
+const MANDATORY_OUTPUT = [
+  "@type",
+  "href",
+  "description",
+  "severity",
+  "ticketType",
+] as const;
+
+/**
+ * Asserts that every incident in the database is readable through TMF621
+ * as the admin, with Contracts 11.2's mandatory output.
+ *
+ * @returns Nothing.
+ */
+const everyIncidentReadableThroughTmf621 = Effect.fn(
+  "HelpdeskV3Upgrade.tmf621Readable"
+)(function* everyIncidentReadableThroughTmf621() {
+  const admin = yield* tmf621As("admin");
+
+  const expected = yield* values(
+    "SELECT id::text AS value FROM helpdesk.incident"
+  );
+
+  const seen: JsonObject[] = [];
+  let offset = 0;
+  let exhausted = false;
+
+  while (!exhausted) {
+    const page = yield* admin.get(
+      `${TICKETS}?ticketType=incident&limit=${TMF621_PAGE}&offset=${offset}`
+    );
+
+    assert.strictEqual(page.status, 200, page.text);
+    const items = itemsOf(page);
+
+    seen.push(...items);
+    offset += TMF621_PAGE;
+    exhausted = items.length < TMF621_PAGE;
+  }
+
+  assert.isAtLeast(seen.length, 1000);
+  assert.deepStrictEqual(
+    seen.map((item) => textOf(item.id)).toSorted(),
+    expected.toSorted()
+  );
+
+  for (const item of seen) {
+    for (const name of MANDATORY_OUTPUT) {
+      const value = item[name];
+
+      assert.isTrue(
+        value !== undefined && isJsonString(value) && value.trim() !== "",
+        `${textOf(item.id)} has a non-blank ${name}`
+      );
+    }
+
+    assert.include(TMF621_STATUS_VALUES, textOf(item.status));
+  }
+});
 
 describe("helpdesk-v3-upgrade", () => {
   it("declares the old-key rewrite in contract rather than expand", () => {
@@ -272,6 +348,12 @@ describe("helpdesk-v3-upgrade", () => {
         assert.deepStrictEqual(yield* countChanges, beforeRerun);
         assert.strictEqual(yield* currentRevision, revision);
         assert.strictEqual((yield* runDoctor()).exitCode, 0);
+
+        // The upgraded incidents are all readable through TMF621 (a fresh
+        // HTTP app over the refreshed catalog).
+        yield* everyIncidentReadableThroughTmf621().pipe(
+          Effect.provide(Layer.fresh(TestHttpClient.layer))
+        );
       }).pipe(
         Effect.provide(helpdeskTestLayer({ version: "v1" })),
         TestClock.withLive

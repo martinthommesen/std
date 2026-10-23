@@ -27,16 +27,26 @@
  * locks (exclusion E27).
  */
 import { knowsTable } from "@std/access/rules";
+import { InvalidReference } from "@std/api/errors/invalid-reference";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotFound } from "@std/api/errors/not-found";
 import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import type { ItemMapping, SourceKey, SourceRecord } from "@std/tmf/mapping";
+import { USER_CLASS_ID } from "@std/definitions/well-known";
+import { pathOf, SYSTEM_SOURCES } from "@std/tmf/mapping";
+import type {
+  Attribute,
+  ItemMapping,
+  ReferenceValue,
+  SourceKey,
+  SourceRecord,
+} from "@std/tmf/mapping";
 import { renderItem } from "@std/tmf/render";
 import { mergeBodyOf, planWrite, reorderRefusal } from "@std/tmf/write";
 import type { WritePlan } from "@std/tmf/write";
+import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
@@ -44,12 +54,16 @@ import { Effect, Option, Result } from "effect";
 import { HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { Actor } from "../../auth/actor.ts";
+import { storedImageOf } from "../../records/change-image.ts";
 import { compileFilterExpr } from "../../records/read-query.ts";
 import {
   currentReadScope,
+  readByIds,
   readOne,
   readPage,
 } from "../../records/read-records.ts";
+import type { DecodedRecord } from "../../records/read-records.ts";
 import type { ReadScope } from "../../records/read-view.ts";
 import {
   aggregateOperation,
@@ -58,6 +72,7 @@ import {
   lockAggregates,
   updateRecord,
 } from "../../records/save-pipeline.ts";
+import { loadRecord } from "../../records/save-sql.ts";
 import type { ConfigState } from "../../sql/request-revision.ts";
 import {
   applyJsonPatch,
@@ -74,6 +89,7 @@ import {
   checkUnscopedRevision,
 } from "../stale-request.ts";
 import {
+  ancestryOf,
   attributesOf,
   classAccessOf,
   extensionsOf,
@@ -85,8 +101,15 @@ import {
 } from "./context.ts";
 import type { MappedResource, TmfRegistry } from "./context.ts";
 import { writeIssuesError } from "./errors.ts";
+import { pinnedDocumentOf, schemaProblemOf } from "./pinned-schemas.ts";
 import { parseTmfListQuery, parseTmfReadQuery } from "./query.ts";
-import { readSourceRecords, selectionOf, sourceKeysOf } from "./sources.ts";
+import {
+  readSourceRecords,
+  selectionOf,
+  sourceKeysOf,
+  sourceValuesOf,
+  withHistory,
+} from "./sources.ts";
 
 const MERGE_PATCH = "application/merge-patch+json";
 const JSON_PATCH = "application/json-patch+json";
@@ -239,22 +262,25 @@ const notAnObject = () =>
  * @param scope - The caller's scope.
  * @param mapped - The resource.
  * @param id - The record ID.
+ * @param fields - The `fields` selection (null: all), for the
+ *   history-backed attributes it reads.
  * @returns The record.
  */
 const readCurrent = Effect.fn("Tmf.readCurrent")(function* readCurrent(
   scope: ReadScope,
   mapped: MappedResource,
-  id: string
+  id: string,
+  fields: ReadonlySet<string> | null = null
 ) {
   const { resource } = mapped;
   const view = scope.view(resource.classId);
 
   const decoded = yield* readOne(scope, view, id, {
     ...READ_OPTIONS,
-    selection: selectionOf(view, sourceKeysOf(resource.attributes)),
+    selection: selectionOf(scope, view, sourceKeysOf(resource.attributes)),
   });
 
-  const [record] = yield* readSourceRecords(
+  const records = yield* readSourceRecords(
     {
       attributes: resource.attributes,
       extraKeys: extraKeysOf(scope.snapshot, resource),
@@ -262,6 +288,14 @@ const readCurrent = Effect.fn("Tmf.readCurrent")(function* readCurrent(
     },
     view,
     [decoded]
+  );
+
+  // History-backed attributes (Contracts 11.2), for every selected one.
+  const [record] = yield* withHistory(
+    resource.attributes,
+    records,
+    (name) => fields === null || fields.has(name),
+    scope
   );
 
   return record ?? (yield* new NotFound());
@@ -286,7 +320,7 @@ const resourceAnswer = Effect.fn("Tmf.resourceAnswer")(function* resourceAnswer(
 ) {
   const scope = yield* currentReadScope();
 
-  const current = yield* readCurrent(scope, input.mapped, id).pipe(
+  const current = yield* readCurrent(scope, input.mapped, id, fields).pipe(
     Effect.asSome,
     Effect.catchTag("NotFound", () =>
       Effect.succeed(Option.none<SourceRecord>())
@@ -356,12 +390,16 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     form: null,
     limit: parsed.limit,
     offset: parsed.offset,
-    selection: selectionOf(view, sourceKeysOf(mapped.resource.attributes)),
+    selection: selectionOf(
+      scope,
+      view,
+      sourceKeysOf(mapped.resource.attributes)
+    ),
     sortKeys: parsed.sortKeys,
     withCount: true,
   });
 
-  const records = yield* readSourceRecords(
+  const read = yield* readSourceRecords(
     {
       attributes: mapped.resource.attributes,
       extraKeys: extraKeysOf(scope.snapshot, mapped.resource),
@@ -369,6 +407,13 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     },
     view,
     page.records
+  );
+
+  const records = yield* withHistory(
+    mapped.resource.attributes,
+    read,
+    (name) => parsed.fields === null || parsed.fields.has(name),
+    scope
   );
 
   const classes = classesOf(records);
@@ -386,6 +431,11 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
       selectedLocalNames(scope, mapped, classId, parsed.fields)
     );
   }
+
+  // Records the concrete re-read no longer sees (hidden or deleted since
+  // the page was read) are left out: the counts are of what is returned
+  // (Contracts 10.4), and the links stay those of the page as read.
+  const dropped = page.records.length - records.length;
 
   const render = {
     fields: parsed.fields,
@@ -409,8 +459,8 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
         query,
         request: input.request,
       }),
-      "x-result-count": String(page.records.length),
-      "x-total-count": String(page.count ?? 0),
+      "x-result-count": String(records.length),
+      "x-total-count": String(Math.max(0, (page.count ?? 0) - dropped)),
     }
   );
 });
@@ -435,7 +485,7 @@ export const retrieveTmf = Effect.fn("Tmf.retrieve")(function* retrieveTmf(
     queryOf(input.request)
   );
 
-  const current = yield* readCurrent(scope, input.mapped, id);
+  const current = yield* readCurrent(scope, input.mapped, id, fields);
 
   yield* checkLocalNames(
     input,
@@ -478,6 +528,100 @@ const saveBody = (
       return field === undefined ? [] : [[field.name, value]];
     })
   );
+
+/**
+ * The record a path source's value names: the one record of the
+ * reference's target class, visible to the caller, whose target field
+ * holds the value (decision 0035); else `InvalidReference`, the answer for
+ * a reference to a missing or hidden record (3.6).
+ *
+ * @param scope - The caller's scope.
+ * @param reference - The reference field's name and target class.
+ * @param targetFieldId - The field of the target class.
+ * @param value - The value written to the path.
+ * @returns The record's ID.
+ */
+const resolveTarget = Effect.fn("Tmf.resolveTarget")(function* resolveTarget(
+  scope: ReadScope,
+  reference: { readonly name: string; readonly targetClassId: DefinitionId },
+  targetFieldId: DefinitionId,
+  value: JsonValue
+) {
+  const view = scope.view(reference.targetClassId);
+  const field = view.byId(targetFieldId);
+  const refused = new InvalidReference({ field: reference.name });
+
+  if (field === undefined || !isJsonString(value)) {
+    return yield* refused;
+  }
+
+  const filter = yield* compileFilterExpr(scope, view, {
+    left: { path: [field.id] },
+    op: "eq",
+    right: { value },
+  });
+
+  const page = yield* readPage(scope, view, {
+    after: Option.getOrUndefined(Option.none()),
+    before: null,
+    filters: [filter],
+    form: null,
+    limit: 2,
+    offset: 0,
+    selection: [],
+    sortKeys: [],
+    withCount: false,
+    withLabels: false,
+    withTargets: false,
+  });
+
+  const [found, ...others] = page.records;
+
+  return found === undefined || others.length > 0 ? yield* refused : found.id;
+});
+
+/**
+ * A plan's values with every path source resolved to its reference
+ * (`pathSource`): `null` clears the reference, any other value names the
+ * target record by the target's field.
+ *
+ * @param scope - The caller's scope.
+ * @param values - Values by mapping key.
+ * @returns Values by field key.
+ */
+const resolvePaths = Effect.fn("Tmf.resolvePaths")(function* resolvePaths(
+  scope: ReadScope,
+  values: ReadonlyMap<SourceKey, JsonValue>
+) {
+  const resolved = new Map<SourceKey, JsonValue>();
+
+  for (const [key, value] of values) {
+    const path = pathOf(key);
+
+    const field =
+      path === undefined ? undefined : scope.snapshot.field(path.reference);
+
+    if (path === undefined) {
+      resolved.set(key, value);
+    } else if (field?.type.kind === "reference") {
+      resolved.set(
+        path.reference,
+        value === null
+          ? null
+          : yield* resolveTarget(
+              scope,
+              { name: field.name, targetClassId: field.type.targetClassId },
+              path.target,
+              value
+            )
+      );
+    } else {
+      return yield* Effect.die(new Error(`${key} is no reference path`));
+    }
+  }
+
+  return resolved;
+});
 
 const invalidType = (parameter: string) =>
   new InvalidRequest({
@@ -591,6 +735,49 @@ const withoutTypeMembers = (body: JsonObject): JsonObject =>
  * @param current - For an update, the record under the lock.
  * @returns The plan.
  */
+/**
+ * What the caller may know of its own user record (3.6): its ID, and its
+ * display field's value when the caller can read it there. A new note's
+ * `author` renders it (decision 0035).
+ *
+ * @param scope - The caller's scope.
+ * @returns The reference.
+ */
+const actorReference = Effect.fn("Tmf.actorReference")(function* actorReference(
+  scope: ReadScope
+) {
+  const { userId } = yield* Actor;
+  const view = scope.view(USER_CLASS_ID);
+
+  const displayId = scope.snapshot
+    .lineage(USER_CLASS_ID)
+    .toReversed()
+    .find((level) => level.displayFieldId !== null)?.displayFieldId;
+
+  const display =
+    displayId === undefined || displayId === null
+      ? undefined
+      : view.byId(displayId);
+
+  const found =
+    display === undefined
+      ? new Map<string, DecodedRecord>()
+      : yield* readByIds(scope, view, [userId], {
+          selection: [{ field: display, key: display.name }],
+          withLabels: false,
+          withTargets: false,
+        });
+
+  const [entry] = found.get(userId)?.entries ?? [];
+  const label = entry?.withheld === false ? entry.value : null;
+
+  return {
+    id: userId,
+    label: label !== null && isJsonString(label) ? label : null,
+    targetClassId: found.has(userId) ? USER_CLASS_ID : null,
+  } satisfies ReferenceValue;
+});
+
 const planFor = Effect.fn("Tmf.planFor")(function* planFor(
   scope: ReadScope,
   mapped: MappedResource,
@@ -605,9 +792,12 @@ const planFor = Effect.fn("Tmf.planFor")(function* planFor(
     access: classAccessOf(scope, classId, [
       current === undefined ? "create" : "update",
     ]),
+    // What a new part's read-only attributes would render from.
+    actor: yield* actorReference(scope),
     attributes: attributesOf(snapshot, mapped.resource, classId),
     body,
     jsonMerge,
+    lineage: ancestryOf(snapshot, classId),
     // An existing part is updated as its own concrete class; a new one is
     // created as the item's class.
     partAccess: (item: ItemMapping, existing: SourceRecord | undefined) =>
@@ -757,6 +947,115 @@ const checkReadOrder = Effect.fn("Tmf.checkReadOrder")(function* checkReadOrder(
 });
 
 /**
+ * Checks, after a write and still in its transaction, that every member
+ * the body wrote renders as the pinned OpenAPI document's schema of the
+ * resource requires, discriminated subtypes included (a characteristic's
+ * `value` must fit its `@type`; decision 0035): the value objects STD
+ * keeps as given (statuses in a status history, characteristics,
+ * a specification's related parties) are validated whole. A misfit fails
+ * the whole write, which rolls back, with `ValidationFailed` naming the
+ * member's path, so nothing is stored. The values checked are the
+ * stored ones, as the system sees them before any read mask: a member the
+ * caller may write but not read is checked too, and the error names its
+ * path and the schema's rule, never its value.
+ *
+ * @param input - The request.
+ * @param scope - The caller's scope.
+ * @param id - The record written.
+ * @param members - The body's attribute members.
+ * @returns Nothing, or `ValidationFailed`.
+ */
+const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
+  function* checkWrittenMembers(
+    input: TmfInput,
+    scope: ReadScope,
+    id: string,
+    members: readonly string[]
+  ) {
+    const { snapshot } = scope;
+
+    const file = yield* Effect.sync(() =>
+      pinnedDocumentOf(input.mapped.api.spec)
+    );
+
+    const stored = yield* loadRecord(
+      snapshot,
+      input.mapped.resource.classId,
+      id
+    );
+
+    if (file === undefined || Option.isNone(stored)) {
+      return yield* Effect.void;
+    }
+
+    // What the caller reads adds labels, reference paths, parts and
+    // history; the stored values underneath are the system's, unmasked.
+    const read = yield* readCurrent(scope, input.mapped, id).pipe(
+      Effect.asSome,
+      Effect.catchTag("NotFound", () => Effect.succeedNone)
+    );
+
+    const record = stored.value;
+    const caller = Option.getOrUndefined(read);
+
+    const unmasked: SourceRecord = {
+      ...(caller ?? { parts: new Map() }),
+      classId: record.classId,
+      id,
+      values: new Map([
+        ...sourceValuesOf(snapshot, storedImageOf(snapshot, record)),
+        [SYSTEM_SOURCES.createdAt, { value: formatDateTime(record.createdAt) }],
+        [SYSTEM_SOURCES.updatedAt, { value: formatDateTime(record.updatedAt) }],
+        ...(caller?.values ?? new Map()),
+      ]),
+      version: record.version,
+    };
+
+    const rendered = renderFor(
+      {
+        fields: null,
+        mapped: input.mapped,
+        origin: input.origin,
+        registry: input.registry,
+        scope,
+      },
+      unmasked
+    );
+
+    for (const member of members) {
+      const value = rendered[member];
+
+      const problem =
+        value === undefined
+          ? undefined
+          : schemaProblemOf(file, input.mapped.resource.type, {
+              "@type": rendered["@type"] ?? null,
+              href: rendered.href ?? null,
+              id: rendered.id ?? null,
+              [member]: value,
+            });
+
+      // The path and the schema's rule only: never the value, which the
+      // caller may not be able to read.
+      if (problem !== undefined) {
+        return yield* new ValidationFailed({
+          errors: [
+            {
+              _tag: "InvalidValue",
+              field: problem.path.join("."),
+              message: `${problem.path.join(".")} does not fit the pinned ${input.mapped.api.spec} schema: ${problem.message}`,
+              reason: "invalidFormat",
+            },
+          ],
+        });
+      }
+    }
+
+    return yield* Effect.void;
+  }
+);
+
+/**
  * `POST /{resource}`.
  *
  * @param input - The request.
@@ -804,7 +1103,7 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
   const created = yield* aggregateOperation(
     Effect.gen(function* createOwnerAndParts() {
       const owner = yield* createRecord({
-        body: saveBody(snapshot, plan.values),
+        body: saveBody(snapshot, yield* resolvePaths(scope, plan.values)),
         endpointClassId: classId,
       }).pipe(writeFailures);
 
@@ -817,6 +1116,13 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
   // After finalization (aggregate rules may move or mask parts), still in
   // the request transaction: a mismatch rolls everything back.
   yield* checkReadOrder(scope, input.mapped, created.owner.id, created.written);
+
+  yield* checkWrittenMembers(
+    input,
+    scope,
+    created.owner.id,
+    Object.keys(withoutTypeMembers(body))
+  );
 
   return yield* resourceAnswer(input, created.owner.id, 201, fields);
 });
@@ -921,11 +1227,26 @@ const patchNames = Effect.fn("Tmf.patchNames")(function* patchNames(
   return [...names.written, ...names.read];
 });
 
-// The merge-patch body of a PATCH: the body itself, or a JSON Patch
-// applied to the resource as the caller reads it under the lock.
+/**
+ * The merge-patch body of a PATCH: the body itself, or a JSON Patch
+ * applied to the resource as the caller reads it under the lock. A JSON
+ * Patch supplies every value attribute an operation writes (`add`,
+ * `replace` or `remove` of it, the destination of `copy` or `move`), even
+ * when the result equals the current value, exactly as a merge-patch that
+ * names it does; a `test` and the source of a `copy` supply nothing
+ * (Contracts 14.2: an explicit `priority` wins over the matrix rules).
+ * Arrays of parts and identity and type members are written only when
+ * they change.
+ *
+ * @param patch - The PATCH.
+ * @param rendered - The resource as the caller reads it under the lock.
+ * @param attributes - The record's attributes.
+ * @returns The merge-patch body.
+ */
 const patchBody = Effect.fn("Tmf.patchBody")(function* patchBody(
   patch: TmfPatch,
-  rendered: JsonObject
+  rendered: JsonObject,
+  attributes: readonly Attribute[]
 ) {
   if (!patch.jsonPatch) {
     return isJsonObject(patch.body) ? patch.body : yield* notAnObject();
@@ -939,9 +1260,25 @@ const patchBody = Effect.fn("Tmf.patchBody")(function* patchBody(
 
   const patched = applyJsonPatch(rendered, operations.success);
 
-  return Result.isFailure(patched)
-    ? yield* patched.failure
-    : mergeBodyOf(rendered, patched.success);
+  if (Result.isFailure(patched)) {
+    return yield* patched.failure;
+  }
+
+  const body = mergeBodyOf(rendered, patched.success);
+  const { written } = namesOfPatch(operations.success);
+
+  const supplied = attributes.flatMap((attribute): [string, JsonValue][] => {
+    const value = patched.success[attribute.name];
+    const writes = attribute.kind === "value" && written.has(attribute.name);
+
+    if (value === undefined || attribute.name in body) {
+      return [];
+    }
+
+    return writes ? [[attribute.name, value]] : [];
+  });
+
+  return { ...body, ...Object.fromEntries(supplied) };
 });
 
 // The type members of a merge-patch may only repeat the current ones.
@@ -1042,7 +1379,11 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
         { action: "update" }
       );
 
-      const body = yield* patchBody(patch, image.rendered);
+      const body = yield* patchBody(
+        patch,
+        image.rendered,
+        attributesOf(snapshot, input.mapped.resource, current.classId)
+      );
 
       yield* checkTypeMembers(body, image.rendered);
 
@@ -1058,7 +1399,10 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
       );
 
       if (plan.values.size > 0) {
-        const values = saveBody(snapshot, plan.values);
+        const values = saveBody(
+          snapshot,
+          yield* resolvePaths(scope, plan.values)
+        );
 
         const merged = new Set(
           [...plan.mergeJson].map((key) => snapshot.field(key)?.name ?? "")
@@ -1089,7 +1433,12 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
 
       const written = yield* saveParts(snapshot, current.id, plan, current);
 
-      return { id: current.id, scope, written };
+      return {
+        id: current.id,
+        members: Object.keys(withoutTypeMembers(body)),
+        scope,
+        written,
+      };
     })
   );
 
@@ -1102,6 +1451,8 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
     patched.id,
     patched.written
   );
+
+  yield* checkWrittenMembers(input, patched.scope, patched.id, patched.members);
 
   return yield* resourceAnswer(input, id.toLowerCase(), 200, fields);
 });

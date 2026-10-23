@@ -412,11 +412,22 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
       return yield* new EventFiltered();
     }
 
+    const prepared =
+      served.effect.prepare === undefined
+        ? null
+        : yield* served.effect
+            .prepare(delivery)
+            .pipe(
+              Effect.provide(RuleWriteAccess),
+              Effect.provideService(Actor, actor)
+            );
+
     const events = served.effect.render(delivery, {
       actor,
       entries,
       now,
       origins,
+      prepared,
       timeZone,
     });
 

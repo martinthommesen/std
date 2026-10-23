@@ -380,7 +380,10 @@ export const FIXTURE_RESOURCE: TmfResourceMapping = {
     retrieve: [200, 400, 401, 403, 404, 405, 500, 501, 503],
   },
   events: standardEvents({
-    status: { sources: [FF.status.id, FF.holdReason.id] },
+    status: {
+      payload: ["status"],
+      sources: [FF.status.id, FF.holdReason.id],
+    },
     type: "TroubleTicket",
   }),
   name: "troubleTicket",

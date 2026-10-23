@@ -17,9 +17,14 @@
  *    copies the reports to `--reports` (a CI artifact), and removes its
  *    working directory.
  *
- * Usage: `pnpm ctk API --url URL --token TOKEN` with the optional flags
+ * Usage: `pnpm ctk API --url URL --token-file FILE` with the optional flags
  * `--payloads FILE`, `--network DOCKER_NETWORK` and `--reports DIR`, for
- * example `pnpm ctk tmf621 --url http://127.0.0.1:8080/tmf-api/troubleTicket/v5 --token "$TOKEN" --network host`.
+ * example `pnpm ctk tmf621 --url http://127.0.0.1:8080/tmf-api/troubleTicket/v5 --token-file "$TOKEN_FILE" --network host`.
+ *
+ * The bearer token is read from a file only its owner may read (mode 0600
+ * or stricter), never from an argument: arguments show in `ps` and in
+ * pnpm's echo of the command it runs (decision 0035). No message of the
+ * runner contains it.
  */
 import { createHash } from "node:crypto";
 import {
@@ -28,6 +33,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -173,6 +179,34 @@ const pulledImage = async (kit: ConformanceKit): Promise<string> => {
 const readIfPresent = (file: string): string | undefined =>
   existsSync(file) ? readFileSync(file, "utf-8") : undefined;
 
+/**
+ * The permission bits for group and others sit below this place value of
+ * a mode: `mode % OWNER_PLACE` is the bits a token file must leave unset.
+ */
+const OWNER_PLACE = 0o100;
+
+/**
+ * The bearer token in a file only its owner may read.
+ *
+ * @param file - The token file.
+ * @returns The token, without surrounding white space.
+ */
+const readToken = (file: string): string => {
+  if (statSync(file).mode % OWNER_PLACE !== 0) {
+    throw new Error(
+      `the token file ${file} is readable by others; make it mode 0600`
+    );
+  }
+
+  const token = readFileSync(file, "utf-8").trim();
+
+  if (token === "") {
+    throw new Error(`the token file ${file} is empty`);
+  }
+
+  return token;
+};
+
 const main = async (): Promise<void> => {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -180,20 +214,21 @@ const main = async (): Promise<void> => {
       network: { default: "host", type: "string" },
       payloads: { type: "string" },
       reports: { type: "string" },
-      token: { type: "string" },
+      "token-file": { type: "string" },
       url: { type: "string" },
     },
   });
 
   const [api] = positionals;
-  const { network, reports: keep, token, url } = values;
+  const { network, reports: keep, "token-file": tokenFile, url } = values;
 
-  if (api === undefined || url === undefined || token === undefined) {
+  if (api === undefined || url === undefined || tokenFile === undefined) {
     throw new Error(
-      "usage: pnpm ctk <api> --url <base URL> --token <bearer token>"
+      "usage: pnpm ctk <api> --url <base URL> --token-file <file holding the bearer token, mode 0600>"
     );
   }
 
+  const token = readToken(tokenFile);
   const pin = pinOf(api);
   const expectedCases = expectedCasesOf(pin);
   const zip = await cachedZip(pin.ctk);

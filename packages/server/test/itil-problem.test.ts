@@ -23,6 +23,50 @@ import {
   recordServices,
 } from "./itil-support.ts";
 import { change, values } from "./schema-support.ts";
+import { bodyOf, TICKETS, ticketBody, tmf621As } from "./tmf621-support.ts";
+
+/** TMF621's status values (OAS v5.0.1 `TroubleTicketStatusType`). */
+const TMF621_STATUSES = [
+  "acknowledged",
+  "inProgress",
+  "pending",
+  "held",
+  "resolved",
+  "closed",
+  "cancelled",
+  "rejected",
+] as const;
+
+/** The groups of problem states a TMF621 status keeps (Contracts 11.2). */
+const GROUPS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["acknowledged", ["new", "assess"]],
+  ["inProgress", ["root_cause_analysis", "fix_in_progress"]],
+]);
+
+/** The problem state a TMF621 status writes from a source state. */
+const WRITES: ReadonlyMap<string, string> = new Map([
+  ["acknowledged", "new"],
+  ["cancelled", "canceled"],
+  ["closed", "closed"],
+  ["held", "on_hold"],
+  ["inProgress", "root_cause_analysis"],
+  ["pending", "on_hold"],
+  ["rejected", "canceled"],
+  ["resolved", "resolved"],
+]);
+
+/**
+ * The problem state a TMF621 status write asks for (Contracts 11.2's
+ * status table): a state of the status's group is kept.
+ *
+ * @param status - The TMF621 status.
+ * @param source - The problem's state.
+ * @returns The state written.
+ */
+const problemStateOf = (status: string, source: string): string =>
+  (GROUPS.get(status) ?? []).includes(source)
+    ? source
+    : (WRITES.get(status) ?? "");
 
 const TRANSITIONS = {
   assess: ["root_cause_analysis", "canceled"],
@@ -380,5 +424,84 @@ describe("itil-problem", () => {
 
       assert.strictEqual(asObject(saved.record?.values).status, "new");
     }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "every TMF621 status write is an allowed problem transition or is refused with no write",
+    () =>
+      Effect.gen(function* tmfProblemTransitions() {
+        const admin = yield* tmf621As("admin");
+
+        for (const [source, allowed] of Object.entries<readonly string[]>(
+          TRANSITIONS
+        )) {
+          for (const status of TMF621_STATUSES) {
+            const target = problemStateOf(status, source);
+
+            const record = yield* createTicket("helpdeskProblem", {
+              status: source,
+            });
+
+            const path = `${TICKETS}/${textOf(record.id)}`;
+            const before = yield* admin.get(path);
+            const response = yield* admin.patch(path, { status });
+            const accepted = source === target || allowed.includes(target);
+
+            assert.strictEqual(
+              response.status,
+              accepted ? 200 : 400,
+              `${source} -> ${status}: ${response.text}`
+            );
+
+            if (accepted) {
+              assert.strictEqual(bodyOf(response).status, status);
+            } else {
+              assert.strictEqual(
+                asObject(response.json).code,
+                "InvalidTransition"
+              );
+              assert.deepStrictEqual(
+                bodyOf(yield* admin.get(path)),
+                bodyOf(before)
+              );
+            }
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "an incident names its problem as the TMF621 relationship causedBy",
+    () =>
+      Effect.gen(function* causedBy() {
+        const admin = yield* tmf621As("admin");
+        const problem = yield* createTicket("helpdeskProblem");
+
+        const incident = yield* admin.post(
+          TICKETS,
+          ticketBody({
+            troubleTicketRelationship: [
+              { id: textOf(problem.id), relationshipType: "causedBy" },
+            ],
+          })
+        );
+
+        assert.strictEqual(incident.status, 201, incident.text);
+
+        const client = yield* clientFor();
+
+        const stored = yield* client.records.get({
+          params: {
+            id: textOf(bodyOf(incident).id),
+            table: "helpdeskIncident",
+          },
+          query: {},
+        });
+
+        assert.strictEqual(
+          textOf(asObject(asObject(stored).problem).id),
+          problem.id
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 });

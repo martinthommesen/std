@@ -29,6 +29,7 @@ rows:
     level: mandatory
     requirement: "Each incident and problem behavior below holds the same through the API, TMF621 and, where a form exists, the browser."
     status: pending
+    note: "The generic API and TMF621 surfaces are tested row by row (decision 0035); the browser surface belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.1/concrete-class
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
@@ -40,7 +41,12 @@ rows:
     source: "Contracts 14.1 (TM Forum takes priority over ITIL; decision 0021, decision 34)"
     level: mandatory
     requirement: "Where TMF621 allows a write that an ITIL behavior would refuse, every API accepts it: the ITIL behavior is a default (a derive rule) and, for people, a form rule; no guard or invariant refuses what TMF621 allows."
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/itil-incident.test.ts#TMF621 accepts a resolve without resolution code and notes and renders the major flag as a characteristic"
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
+      - "packages/server/test/itil-problem.test.ts#known errors work in every state without API-only workaround or root-cause restrictions"
   - id: STD-ITIL@14/C14/14.2/impact-urgency
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
@@ -49,6 +55,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -56,6 +63,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -63,6 +71,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -70,6 +79,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-1-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -77,6 +87,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -84,6 +95,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-1
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -91,6 +103,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-2-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -98,6 +111,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-2
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -105,6 +119,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority/impact-3-urgency-3
     source: "Contracts 14.2 (first bullet), priority matrix"
     level: mandatory
@@ -112,11 +127,15 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through the generic API
+      - "packages/server/test/itil-incident.test.ts#all nine shipped matrix cells derive priority through TMF621 severity and the urgency characteristic"
   - id: STD-ITIL@14/C14/14.2/priority-explicit-wins
     source: "Contracts 14.2 (first bullet); decision 0021, decision 53"
     level: mandatory
     requirement: "A write that names priority (1 critical to 5 planning), even with its current value, keeps it when the same write changes impact or urgency (the matrix rules keep supplied fields), through every API."
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/itil-incident.test.ts#explicit priority wins even equal to the previous value and JSON Patch preserves supplied-field provenance"
+      - "packages/server/test/itil-incident.test.ts#an explicit TMF621 priority wins over the matrix, by merge-patch and JSON Patch, and a test of /priority supplies nothing"
   - id: STD-ITIL@14/C14/14.2/priority-form-read-only
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
@@ -139,11 +158,13 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/hold-reason
     source: "Contracts 14.2 (second bullet); Contracts 14.4 rule kinds (incident derive)"
     level: mandatory
     requirement: "Entering on_hold without a hold_reason (awaiting_caller, awaiting_change, awaiting_problem, awaiting_vendor) sets awaiting_vendor, leaving on_hold clears it, and the form requires it while on hold."
     status: pending
+    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.2/transitions/from-new
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -151,6 +172,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/transitions/from-in-progress
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -158,6 +180,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/transitions/from-on-hold
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -165,6 +188,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/transitions/from-resolved
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -172,6 +196,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/transitions/final
     source: "Contracts 14.2 (second bullet)"
     level: mandatory
@@ -179,6 +204,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#every incident transition is accepted or refused with no write exactly as Contracts 14 specifies
+      - "packages/server/test/itil-incident.test.ts#every TMF621 status write is an allowed incident transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.2/transition-guards-kind
     source: "Contracts 14.4 rule kinds (incident guard)"
     level: mandatory
@@ -190,8 +216,8 @@ rows:
     source: "Contracts 14.2 (third bullet); Contracts 14.1"
     level: mandatory
     requirement: "The incident form requires resolution_code and resolution_notes to resolve; every API accepts a resolve without them."
-    note: "ITIL 4 incident management practice: resolution records how service was restored, so it can be confirmed and reused."
     status: pending
+    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.2/resolved-at
     source: "Contracts 14.2 (third bullet); Contracts 14.4 rule kinds (ticket derive)"
     level: mandatory
@@ -212,16 +238,24 @@ rows:
     level: mandatory
     requirement: "The incident form offers major_incident only while priority is 1; when a form edit drops priority below 1 with the flag set, the form clears it for a user who may write it and otherwise keeps it with a notice and lists the incident in the shipped filter of major incidents not at priority 1; the APIs accept the flag at any priority and never clear it."
     status: pending
+    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.2/form-vs-api
     source: "Contracts 14.1; Contracts 5.10"
     level: mandatory
     requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v1 and TMF621."
-    status: pending
+    status: tested
+    tests:
+      - apps/web/test/browser/incident-form.test.ts#incident form v3
+      - "packages/server/test/form-vs-api.test.ts#resolving without code/notes is accepted by the API while the form requires both"
+      - "packages/server/test/form-vs-api.test.ts#through TMF621, resolving without resolution code and notes is accepted while the form requires both"
+    note: "The browser suite's resolution case requires both fields; the API and TMF621 accept the same resolve (decisions 0035, 0036)."
   - id: STD-ITIL@14/C14/14.2/major-incident-tmf621
     source: "Contracts 14.2 (fourth bullet); Contracts 11.2 troubleTicketCharacteristic"
     level: mandatory
     requirement: "TMF621 renders major_incident as the majorIncident characteristic."
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/itil-incident.test.ts#TMF621 accepts a resolve without resolution code and notes and renders the major flag as a characteristic"
   - id: STD-ITIL@14/C14/14.2/major-incident-filter
     source: "Contracts 14.2 (fourth bullet)"
     level: mandatory
@@ -244,6 +278,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-new
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -251,6 +286,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-assess
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -258,6 +294,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-root-cause-analysis
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -265,6 +302,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-fix-in-progress
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -272,6 +310,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-on-hold
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -279,6 +318,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/from-resolved
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -286,6 +326,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transitions/final
     source: "Contracts 14.3 (first bullet)"
     level: mandatory
@@ -293,6 +334,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/itil-problem.test.ts#every problem transition including TMF621 allowances is accepted or refused without a write
+      - "packages/server/test/itil-problem.test.ts#every TMF621 status write is an allowed problem transition or is refused with no write"
   - id: STD-ITIL@14/C14/14.3/transition-guards-kind
     source: "Contracts 14.4 rule kinds (problem guard)"
     level: mandatory
@@ -304,8 +346,8 @@ rows:
     source: "Contracts 14.3 (second bullet); Contracts 14.1"
     level: mandatory
     requirement: "The problem form requires a non-empty workaround while known_error is set; the APIs accept the flag without one."
-    note: "STD records an understood fault separately from its permanent repair and keeps temporary recovery guidance available. Concept reference: PeopleCert, ITIL 4 Practitioner Problem Management, https://www.peoplecert.org/browse-certifications/it-governance-and-service-management/ITIL-1/itil4-practices-problem-management-3688."
     status: pending
+    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.3/known-error-any-state
     source: "Contracts 14.3 (second bullet)"
     level: mandatory
@@ -318,11 +360,14 @@ rows:
     level: mandatory
     requirement: "The problem form requires root_cause to enter fix_in_progress and resolved; the APIs accept both without it."
     status: pending
+    note: "The API and TMF621 parts are tested (decision 0035); the browser form part belongs to workstream 3C."
   - id: STD-ITIL@14/C14/14.3/incident-link
     source: "Contracts 14.3 (third bullet); Contracts 11.2 troubleTicketRelationship"
     level: mandatory
     requirement: "An incident names its problem through problem (TMF621 relationshipType causedBy)."
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/itil-problem.test.ts#an incident names its problem as the TMF621 relationship causedBy"
   - id: STD-ITIL@14/C14/14.3/resolve-returns-incidents
     source: "Contracts 14.3 (third bullet)"
     level: mandatory
