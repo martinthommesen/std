@@ -13,6 +13,7 @@ import { Layer } from "effect";
 
 import { HubSettings } from "../events/hubs.ts";
 import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
+import { ProductionDeliveryHandlers } from "../outbox/production-handlers.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
 import { ApiRoutesLayer } from "./api/routes.ts";
@@ -49,7 +50,9 @@ export const tmfRoutes = (registry: TmfRegistry) =>
 export const HttpAppLayer = Layer.mergeAll(
   HubRoutes,
   Tmf688Routes.pipe(Layer.provide(SaveServices)),
-  ApiRoutesLayer.pipe(Layer.provide(SaveServices)),
+  ApiRoutesLayer.pipe(
+    Layer.provide(Layer.merge(SaveServices, ProductionDeliveryHandlers))
+  ),
   tmfRoutes(SHIPPED_TMF_APIS),
   SchemaRevisionHeaderLayer,
   ApiNoStoreLayer

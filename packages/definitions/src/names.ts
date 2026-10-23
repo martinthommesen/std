@@ -196,6 +196,9 @@ export const FIXED_RESOURCE_NAMES: ReadonlySet<string> = new Set([
   "listener",
   "checkFormState",
   "applyChangeSet",
+  "deadDelivery",
+  "retryDeadDelivery",
+  "discardDeadDelivery",
   "openapi",
 ]);
 

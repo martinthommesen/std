@@ -8,6 +8,7 @@ import type { MetaTableSummary } from "./domain/metadata.ts";
 import { Message } from "./message.ts";
 import { SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";
+import { view as deadLettersView } from "./page/dead-letters/view.ts";
 import { tableHref, view as homeView } from "./page/home.ts";
 import { view as notFoundView } from "./page/not-found.ts";
 import {
@@ -19,7 +20,7 @@ import {
   title as tableListTitle,
   view as tableListView,
 } from "./page/table-list/view.ts";
-import { homeRouter, signInRouter } from "./route.ts";
+import { deadLettersRouter, homeRouter, signInRouter } from "./route.ts";
 import type { AppRoute } from "./route.ts";
 
 const APP_NAME = "STD";
@@ -29,16 +30,19 @@ const WIDE_MAIN_CLASS = "main";
 const NARROW_MAIN_CLASS = "main main-narrow";
 
 /** The links of the primary navigation, by route tag. */
-const NAV_ITEMS = ["Home"] as const;
+const NAV_ITEMS = ["Home", "DeadLetters"] as const;
 
 type NavItem = (typeof NAV_ITEMS)[number];
 
-const NAV_LABELS = { Home: "Home" } as const satisfies Record<NavItem, string>;
+const NAV_LABELS = {
+  DeadLetters: "Dead letters",
+  Home: "Home",
+} as const satisfies Record<NavItem, string>;
 
-const NAV_HREFS = { Home: homeRouter } as const satisfies Record<
-  NavItem,
-  () => string
->;
+const NAV_HREFS = {
+  DeadLetters: deadLettersRouter,
+  Home: homeRouter,
+} as const satisfies Record<NavItem, () => string>;
 
 /**
  * What every state renders: a header, a `main` holding the page and, when
@@ -74,11 +78,16 @@ const brandLinkView = (href: string, h: HtmlBuilder<Message>): Html =>
 const brandView = (h: HtmlBuilder<Message>): Html =>
   h.span([h.Class("brand")], [APP_NAME]);
 
-const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
-  Nav.view<NavItem>({
+const navView = (model: SignedInModel, h: HtmlBuilder<Message>): Html => {
+  const canOpenDeadLetters = Option.exists(
+    AsyncData.getData(model.tables),
+    ({ tables }) => tables.some(({ name }) => name === "core.subscription")
+  );
+
+  return Nav.view<NavItem>({
     ariaLabel: "Primary",
-    isItemCurrent: (item) => current._tag === item,
-    items: NAV_ITEMS,
+    isItemCurrent: (item) => model.route._tag === item,
+    items: NAV_ITEMS.filter((item) => item === "Home" || canOpenDeadLetters),
     toHref: (item) => NAV_HREFS[item](),
     toView: ({ items, nav }) =>
       h.nav(
@@ -102,6 +111,7 @@ const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
         ]
       ),
   });
+};
 
 const currentTable = (route: AppRoute): Option.Option<string> =>
   Match.value(route).pipe(
@@ -243,6 +253,19 @@ const signedInPageView = (
 ): Html =>
   Match.value(model.route).pipe(
     Match.tag("Home", () => homeView(model.user, model.tables, h)),
+    Match.tag("DeadLetters", () =>
+      Option.match(model.maybeDeadLetters, {
+        onNone: () => h.empty,
+        onSome: (page) =>
+          h.submodel({
+            model: page,
+            slotId: "dead-letters",
+            toParentMessage: (message) =>
+              Message.GotDeadLettersMessage({ message, pageId: page.id }),
+            view: deadLettersView,
+          }),
+      })
+    ),
     Match.tag("NotFound", ({ path }) =>
       notFoundView(path, { href: homeRouter(), text: "Go to the home page" }, h)
     ),
@@ -280,10 +303,13 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
     {
       header: [
         brandLinkView(homeRouter(), h),
-        navView(model.route, h),
+        navView(model, h),
         accountView(model, h),
       ],
-      mainClass: WIDE_MAIN_CLASS,
+      mainClass:
+        model.route._tag === "DeadLetters"
+          ? `${WIDE_MAIN_CLASS} dead-letters-main`
+          : WIDE_MAIN_CLASS,
       page: signedInPageView(model, h),
       side: tablesNavView(model, h),
     },
@@ -376,6 +402,7 @@ const routeTitle = (
 ): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => "Home"),
+    Match.tag("DeadLetters", () => "Dead letters"),
     Match.tag("NotFound", () => "Page not found"),
     Match.tag("Record", "NewRecord", ({ table }) =>
       Option.match(maybeRecordForm, {

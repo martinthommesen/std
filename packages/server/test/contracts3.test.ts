@@ -1843,7 +1843,7 @@ describe("platform-tables", () => {
     );
 
     dbTest.effect(
-      "platform-tables: admins read platform tables but never write them generically",
+      "platform-tables: admins read platform tables, refuse journal writes and validate stored actions",
       () =>
         Effect.gen(function* adminWrites() {
           const http = yield* TestHttpClient;
@@ -1943,8 +1943,8 @@ describe("platform-tables", () => {
             );
 
             // An empty create on a definition table is an incomplete
-            // change set (ValidationFailed); every other platform table is
-            // refused (NotAllowed).
+            // change set (ValidationFailed). Every other platform table
+            // is refused (NotAllowed).
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
 
             assert.strictEqual(

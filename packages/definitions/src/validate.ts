@@ -68,6 +68,7 @@ import { recordRuleProblems, runIdentityOf } from "./rule-validation.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 import {
   CONFIG_SUBSCRIPTION_CLASS_IDS,
+  PLATFORM_CLASS_IDS,
   SERVICE_USER_IDS,
   USER_FIELD_IDS,
 } from "./well-known.ts";
@@ -1196,16 +1197,18 @@ const checkSubscription = (
   // never through the save pipeline, so a subscription on one would never
   // receive a delivery (Contracts 4.6). The config kinds `role` and
   // `accessRule` are the exception: change sets write their deliveries
-  // (config subscriptions, Step 3).
+  // (config subscriptions, Step 3). core.dead_delivery_action is data
+  // saved through the record service (decision 0037).
   if (
     snapshot.class(subscription.classId)?.storage === "platform" &&
-    !CONFIG_SUBSCRIPTION_CLASS_IDS.has(subscription.classId)
+    !CONFIG_SUBSCRIPTION_CLASS_IDS.has(subscription.classId) &&
+    subscription.classId !== PLATFORM_CLASS_IDS.dead_delivery_action
   ) {
     problems.push(
       problem(
         "invalidSubscription",
         subscription.id,
-        "A subscription cannot watch a platform table other than core.role and core.access_rule: its rows are not saved through the record service."
+        "A subscription cannot watch this platform table: only core.role, core.access_rule and core.dead_delivery_action produce deliveries."
       )
     );
   }

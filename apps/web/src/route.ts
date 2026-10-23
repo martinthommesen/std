@@ -16,6 +16,7 @@ import { defineRouteUnion, literal, slash, string } from "foldkit/route";
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const AppRoute = defineRouteUnion({
+  DeadLetters: {},
   Home: {},
   NewRecord: { table: Schema.String },
   NotFound: { path: Schema.String },
@@ -39,6 +40,7 @@ export type TableListRoute = typeof AppRoute.TableList.Type;
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const SignedInRoute = AppRoute.subset([
   "Home",
+  "DeadLetters",
   "NewRecord",
   "NotFound",
   "Record",
@@ -57,6 +59,13 @@ export type SignedOutRoute = typeof SignedOutRoute.Type;
 
 /** `/`: the home page. */
 export const homeRouter = pipe(Route.root, Route.mapTo(AppRoute.Home));
+
+/** The outbox operator page under the admin area. */
+export const deadLettersRouter = pipe(
+  literal("administration"),
+  slash(literal("dead-letters")),
+  Route.mapTo(AppRoute.DeadLetters)
+);
 
 /** `/sign-in`: the sign-in page. */
 export const signInRouter = pipe(
@@ -98,6 +107,7 @@ export const newRecordRouter = pipe(
 /** The route of a URL; an unknown path is `NotFound`. */
 export const urlToAppRoute = Route.parseUrlWithFallback(
   Route.oneOf(
+    deadLettersRouter,
     newRecordRouter,
     recordRouter,
     tableListRouter,
@@ -116,6 +126,7 @@ export const urlToAppRoute = Route.parseUrlWithFallback(
 export const signedInRouteToUrl = (route: SignedInRoute): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => homeRouter()),
+    Match.tag("DeadLetters", () => deadLettersRouter()),
     Match.tag("NewRecord", ({ table }) => newRecordRouter({ table })),
     Match.tag("NotFound", ({ path }) => path),
     Match.tag("Record", ({ id, table }) => recordRouter({ id, table })),

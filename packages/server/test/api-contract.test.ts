@@ -21,6 +21,7 @@ import {
   API_ENDPOINTS,
   apiEndpointOf,
 } from "../../testing/src/api-contract.ts";
+import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -321,6 +322,35 @@ describe("api-contract", () => {
             { ...callers.alice, headers: { "if-match": '"3"' } },
             204
           );
+
+          const dead = yield* seedDeadLetters(callers.admin);
+          yield* exchange("GET", "/api/v1/deadDelivery", callers.admin, 200);
+          yield* exchange("GET", "/api/v1/deadDelivery", callers.bob, 404);
+          yield* exchange(
+            "GET",
+            `/api/v1/deadDelivery/${dead.firstId}`,
+            callers.admin,
+            200
+          );
+          yield* exchange(
+            "GET",
+            "/api/v1/deadDelivery/9223372036854775807",
+            callers.admin,
+            404
+          );
+
+          for (const [taskPath, deliveryId] of [
+            ["retryDeadDelivery", dead.firstId],
+            ["discardDeadDelivery", dead.secondId],
+          ]) {
+            const options = {
+              ...callers.admin,
+              body: { deliveryId: deliveryId ?? "" },
+            };
+
+            yield* exchange("POST", `/api/v1/${taskPath}`, options, 201);
+            yield* exchange("POST", `/api/v1/${taskPath}`, options, 404);
+          }
 
           const hubPath = `${API_PREFIX}/hub`;
 
