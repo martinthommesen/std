@@ -46,7 +46,6 @@
   --color-danger-solid-hover: #8f1d17;
   --color-danger-solid-text: #ffffff;
   --color-success: #1b6a3a;
-  --color-success-surface: #e7f4ec;
   --color-warning: #7d5200;
   --color-warning-surface: #fdf3dc;
   --color-warning-border: #e9cf8f;
@@ -147,7 +146,6 @@
     --color-danger-surface: #3a1917;
     --color-danger-border: #7a3a35;
     --color-success: #80d39e;
-    --color-success-surface: #132c1d;
     --color-warning: #efc161;
     --color-warning-surface: #33270d;
     --color-warning-border: #6b5520;
@@ -606,13 +604,6 @@ a {
   min-width: 0;
 }
 
-.page-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .form-facts,
 .page-subtitle {
   color: var(--color-text-muted);
@@ -826,12 +817,11 @@ select.control-input {
   font-size: var(--text-sm);
 }
 
-/* Messages: an alert (refused or failed), a notice (information), a
-   success note. Each sits where its cause is. */
+/* Messages: an alert (refused or failed) and a notice (information),
+   each where its cause is; a save's success shows in the action bar. */
 
 .form-alert,
-.notice,
-.success-note {
+.notice {
   padding: var(--space-2) var(--space-3);
   border: 1px solid;
   border-radius: var(--radius);
@@ -847,12 +837,6 @@ select.control-input {
   color: var(--color-text);
   background: var(--color-warning-surface);
   border-color: var(--color-warning-border);
-}
-
-.success-note {
-  color: var(--color-success);
-  background: var(--color-success-surface);
-  border-color: transparent;
 }
 
 .list-failure {
@@ -1298,11 +1282,6 @@ th[aria-sort="descending"] .sort-icon {
 
 /* Filter builder */
 
-.filter-heading {
-  margin-bottom: var(--space-2);
-  font-size: var(--text-md);
-}
-
 .filter-group,
 .filter-condition,
 .choice-set {
@@ -1661,12 +1640,6 @@ th[aria-sort="descending"] .sort-icon {
   font-weight: var(--weight-medium);
 }
 
-.shortcut {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-text-muted);
-}
-
 .form-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1959,10 +1932,6 @@ th[aria-sort="descending"] .sort-icon {
 
   .toolbar-end {
     margin-left: 0;
-  }
-
-  .shortcut {
-    display: none;
   }
 }
 
