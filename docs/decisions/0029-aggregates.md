@@ -42,6 +42,16 @@ Innermost first: each changed or proposed part not itself in the settling set is
 
 `AggregateNotSettled` is a new `@std/api` error, 422 like `RecordInSave` [judgment: 3.8 lists no status], in every write route's errors. The cause carries `kind: "system"` so that a previous release decodes it as a system change, as decision 0023 did for role bumps.
 
+## Review round 1
+
+1. **Poisoning on every cause.** Finalization poisons the transaction with `Effect.onError`, which runs uninterruptibly on a typed error, a defect or an interruption alike (`poisonOnAnyFailure`), where `tapError` saw typed errors only; an after-commit effect's actions and their finalization are one unit under the same guard, because its saves complete (and join) before finalization starts. A caller that catches a settling defect or a timeout therefore commits nothing.
+2. **Responses after finalization.** `createRecord`, `updateRecord` and `deleteRecord` reload the saved record after finalization whenever it settled anything and project it with the acting user's access (`reloadSaved`): the version and values are the committed ones, and a record settling made invisible answers with its ID and version only (3.9). Inside an `aggregateOperation` the saves' results predate finalization; its callers project with `reloadSaved` after it completes.
+3. **Errors of system writes.** A system-effect save has no caller body, so `failIfInvalid` treats none of its fields as caller-supplied: errors name only fields the acting user can read on the proposed record, and an error on one they cannot read is `ValidationFailed` with an empty list (3.8). The caller learns only that the aggregate their write touched could not be saved valid. `InvalidReference` from a system write still names its field; settling writes only references copied from records it read, so it arises only for a target deleted in between [judgment].
+4. **Live reference targets.** A path a rule follows to a record of the settling set reads that record's settling image, the object proposals change, in every pass; the derive rules settling runs read the same images (`RuleImages.live`). Only records outside the settling set come from SQL, cached for the settling.
+5. **Part conditions are their own type.** `checkPartCondition` returns a `CheckedPartCondition` (`stage: "checkedPart"`), resolved by `resolvePartCondition`; neither is a `CheckedCondition` or `ResolvedCondition`, so neither reaches `compileCondition` or `evaluateCondition` by type. Both also refuse owner-scoped paths and quantifier nodes at run time (`owner-scope.ts`), in `compileNodeToSql` too, so a tree taken out of a part condition is a defect, never compiled as the part's own field.
+
+Merging main (3G's `/api/v2`): `AggregateNotSettled` is a declared `422` TMF Error subtype on `/api/v2`; the reference type in table metadata carries `aggregate: true` (v2's `tableMetadata` shows field types as metadata does; its `schema.json` shows no per-field write rules, so nothing more is added there); `/api/v1` shows the three aggregate problem codes as their nearest `v0.0.2` codes (`extendsCycle`, `invalidType`), and its frozen OpenAPI document gains `AggregateNotSettled` among the write 422s, the optional `aggregate` of reference metadata and the aggregate condition members (the `v1-frozen` hash and its list of additions). Persistence evaluates no JSON Patch, so its `PatchTestFailed` is a defect.
+
 ## Rolling upgrades (8.8)
 
 No platform migration. `aggregate` on a reference type and the new condition operators are new definition properties (RU11): a release before this one would refuse to decode a stored condition with `anyPart` and would not know owner references. Step 3's upgrade from `v0.0.2` is offline (RU12), and `v0.0.3` ships them, so nothing more is needed now; Step 5's RU11 release tags must list them.
@@ -67,6 +77,12 @@ No platform migration. `aggregate` on a reference type and the new condition ope
 | item approval settles item then request | `aggregate-finalize.test.ts#an approval of a request item settles the item and then the request, each persisted once` |
 | cascades | `aggregate-finalize.test.ts#cascades: an after-write rule of an aggregate save writes another aggregate, which is finalized in turn` |
 | after-commit effects | `aggregate-finalize.test.ts#an after-commit effect's writes into an aggregate are finalized in its delivery transaction` |
+| poisoning on every cause (review 1) | `aggregate-finalize.test.ts#a caught defect in finalization and an interrupted settling poison the transaction: nothing commits` |
+| responses after finalization (review 2) | `aggregate-finalize.test.ts#a save answers with the committed state after finalization, projected with the caller's read rights` |
+| system-write errors (review 3) | `aggregate-finalize.test.ts#a system write's validation errors name only fields the acting user can read` |
+| live reference targets (review 4) | `aggregate-finalize.test.ts#a reference a rule follows reads the settling image, also a change an earlier pass proposed` |
+| part conditions refused by SQL (review 5) | `packages/conditions/test/quantifier-profiles.test.ts#a part condition's owner paths never reach the SQL compiler or the plain evaluator` |
+| `/api/v2` | `packages/server/test/aggregate-v2.test.ts#an owner reference shows in the table metadata, and an aggregate that does not settle is a 422 TMF Error` |
 | persisted at most once | `aggregate-finalize.test.ts#a write into an owner this transaction already persisted is AggregateNotSettled, and nothing commits` |
 | no fixed point | `aggregate-finalize.test.ts#an aggregate rule that keeps changing a part ends in AggregateNotSettled with nothing committed` |
 | aggregate actions and audit | `packages/server/test/record-rule-actions.test.ts#aggregate actions write nothing until persistence, and their change entries name the acting user and the proposing rules` |
