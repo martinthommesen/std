@@ -11,3 +11,6 @@ coverage/
 bench/results/raw/
 .claude/worktrees/
 ctk-reports/
+
+# Local UI screenshots and recordings (never committed)
+/screenshots/

@@ -51,11 +51,7 @@ import { checkCondition } from "@std/conditions/check";
 import { evaluateCondition } from "@std/conditions/evaluate";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
-import {
-  arrayParameter,
-  sql,
-  textParameter,
-} from "@std/conditions/sql-fragment";
+import { arrayParameter, sql } from "@std/conditions/sql-fragment";
 import { classViewOf } from "@std/definitions/condition-view";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -69,6 +65,7 @@ import {
 } from "@std/values/postgres-text";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Schema } from "effect";
+import { SqlClient } from "effect/sql";
 
 import { definitionOf } from "../catalog/definition-revisions.ts";
 import type { AccessContext } from "../records/access-sql.ts";
@@ -77,6 +74,7 @@ import type { ChangeKind } from "../records/change-entry.ts";
 import { readRows } from "../records/sql-run.ts";
 import type { TextRow } from "../records/sql-run.ts";
 import { isWriteOnly } from "../records/stored-values.ts";
+import { decodeRows } from "../sql/rows.ts";
 
 /** What a delivery carries about its change, as its identity may see it. */
 export interface DeliveryPayload {
@@ -142,6 +140,10 @@ export interface StoredEntry {
   readonly schemaRevision: number;
   /** Field ID to `{ before, after }` or `{ changed: true }`. */
   readonly fields: JsonObject;
+  /** A complete non-secret image saved atomically with this entry. */
+  readonly image?: JsonObject;
+  /** Set-based legacy reconstruction proved history continuous from create. */
+  readonly completeFromCreate?: boolean;
 }
 
 /** How a field came to exist, from its first definition revision. */
@@ -166,7 +168,17 @@ const EntryTextSchema = Schema.Struct({
   version_text: Schema.FiniteFromString,
 });
 
-const decodeEntryText = Schema.decodeUnknownEffect(EntryTextSchema);
+const imageRows = decodeRows(
+  Schema.Struct({
+    ...EntryTextSchema.fields,
+    after_image: Schema.NullOr(Schema.String),
+    before_image: Schema.NullOr(Schema.String),
+  })
+);
+
+const legacyRows = decodeRows(
+  Schema.Struct({ ...EntryTextSchema.fields, complete: Schema.Boolean })
+);
 
 const OriginTextSchema = Schema.Struct({
   effective: Schema.String,
@@ -178,11 +190,9 @@ const decodeOriginText = Schema.decodeUnknownEffect(OriginTextSchema);
 
 const unreadable = (reason: string) => new PayloadUnreadable({ reason });
 
-const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
-  const text = yield* decodeEntryText(row).pipe(
-    Effect.mapError(() => unreadable("A change entry row does not decode."))
-  );
-
+const entryOf = Effect.fnUntraced(function* entryOf(
+  text: typeof EntryTextSchema.Type
+) {
   const fields = parseJsonbText(text.fields);
   const occurredAt = parseTimestamptzText(text.occurred_at);
 
@@ -205,32 +215,145 @@ const entryOf = Effect.fnUntraced(function* entryOf(row: TextRow) {
   return entry;
 });
 
+const imageEntries = Effect.fnUntraced(function* imageEntries(
+  entry: StoredEntry,
+  currentText: string,
+  previousText: string | null
+) {
+  const current = parseJsonbText(currentText);
+  const previous = parseJsonbText(previousText ?? "null");
+
+  if (!current.ok || !isJsonObject(current.value) || !previous.ok) {
+    return yield* unreadable(`Change image ${entry.changeId} is not readable.`);
+  }
+
+  const entries: StoredEntry[] = [];
+
+  if (entry.recordVersion > 1) {
+    // Retention can remove v-1 while v is pending: undo only changed fields.
+    const derived = new Map(Object.entries(current.value));
+
+    for (const [fieldId, change] of Object.entries(entry.fields)) {
+      if (isJsonObject(change) && Object.hasOwn(change, "before")) {
+        derived.set(fieldId, change.before ?? null);
+      } else {
+        derived.delete(fieldId);
+      }
+    }
+
+    entries.push({
+      ...entry,
+      fields: {},
+      image: isJsonObject(previous.value)
+        ? previous.value
+        : Object.fromEntries(derived),
+      kind: "update",
+      recordVersion: entry.recordVersion - 1,
+    });
+  }
+
+  entries.push({ ...entry, image: current.value });
+
+  return entries;
+});
+
 /**
- * The change entries of a record up to and including a version, in version
- * order.
- *
+ * Read a version and its preceding image with constant round trips. New saves
+ * carry complete images; legacy history is reduced in SQL to at most three
+ * entries (create, accumulated previous, requested), never one query per entry.
  * @param recordId - The record.
  * @param version - The delivery's version.
- * @returns The entries, the delivery's own last.
+ * @returns Image-bearing or compressed entries, the requested entry last.
  */
 export const readEntries = Effect.fn("Outbox.readEntries")(
   function* readEntries(recordId: string, version: number) {
-    const rows = yield* readRows(
-      sql`SELECT "id"::text AS "id", "operation_id"::text AS "operation_id",
-  "record_class_id"::text AS "record_class_id",
-  "record_version"::text AS "version_text", "kind",
-  "actor_id"::text AS "actor_id", "occurred_at"::text AS "occurred_at",
-  "schema_revision"::text AS "schema_revision", "fields"::text AS "fields"
-FROM core."change" AS "c"
-WHERE "record_id" = ${textParameter(recordId, "uuid")}
-  AND "record_version" <= ${textParameter(String(version), "int8")}
-ORDER BY "c"."record_version"`
-    );
+    const client = yield* SqlClient.SqlClient;
+
+    const rows = yield* client`
+      SELECT c.id::text AS id, c.operation_id::text AS operation_id,
+        c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
+        c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+        c.schema_revision::text AS schema_revision, c.fields::text AS fields,
+        i.before_image::text AS before_image, i.after_image::text AS after_image
+      FROM core."change" AS "c" LEFT JOIN core.change_image i ON i.change_id = c.id
+      WHERE c.record_id = ${recordId}::uuid AND c.record_version IN (${version - 1}, ${version})
+      ORDER BY c.record_version`.pipe(Effect.flatMap(imageRows));
+
+    const row = rows.find((candidate) => candidate.version_text === version);
+
+    if (row === undefined) {
+      return [];
+    }
+
+    const previousImage =
+      row.before_image ??
+      rows.find((candidate) => candidate.version_text === version - 1)
+        ?.after_image ??
+      null;
+
+    const currentImage =
+      row.kind === "delete" ? previousImage : row.after_image;
+
+    if (currentImage !== null) {
+      return yield* imageEntries(
+        yield* entryOf(row),
+        currentImage,
+        previousImage
+      );
+    }
+
+    // Finalize walks versions in order: reuse the image the previous
+    // batch/iteration just wrote instead of reducing the history again.
+    if (previousImage !== null) {
+      const previous = parseJsonbText(previousImage);
+
+      const predecessor = rows.find(
+        (candidate) => candidate.version_text === version - 1
+      );
+
+      if (
+        !previous.ok ||
+        !isJsonObject(previous.value) ||
+        predecessor === undefined
+      ) {
+        return yield* unreadable(
+          `Previous image of ${row.id} is not readable.`
+        );
+      }
+
+      return [
+        { ...(yield* entryOf(predecessor)), image: previous.value },
+        yield* entryOf(row),
+      ];
+    }
+
+    const legacy = yield* client`
+      WITH history AS MATERIALIZED (
+        SELECT * FROM core.change WHERE record_id = ${recordId}::uuid AND record_version <= ${version}
+      ), mentioned AS (
+        SELECT DISTINCT ON (f.key) f.key, f.value
+        FROM history h CROSS JOIN LATERAL jsonb_each(h.fields) f
+        WHERE h.record_version < ${version}
+        ORDER BY f.key, h.record_version DESC
+      )
+      SELECT c.id::text AS id, c.operation_id::text AS operation_id,
+        c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
+        c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+        c.schema_revision::text AS schema_revision,
+        (CASE WHEN c.record_version = (SELECT max(record_version) FROM history WHERE record_version < ${version}) THEN
+          COALESCE((SELECT jsonb_object_agg(key, value) FROM mentioned), '{}'::jsonb)
+          ELSE c.fields END)::text AS fields,
+        ((SELECT count(*) FROM history h WHERE h.record_version <= c.record_version) = c.record_version) AS complete
+      FROM history c WHERE c.record_version IN (1, (SELECT max(record_version) FROM history WHERE record_version < ${version}), ${version})
+      ORDER BY c.record_version`.pipe(Effect.flatMap(legacyRows));
 
     const entries: StoredEntry[] = [];
 
-    for (const row of rows) {
-      entries.push(yield* entryOf(row));
+    for (const stored of legacy) {
+      entries.push({
+        ...(yield* entryOf(stored)),
+        completeFromCreate: stored.complete,
+      });
     }
 
     return entries;
@@ -379,6 +502,73 @@ const unmentionedValue = (input: Unmentioned): JsonValue | undefined => {
   return reconstructible ? addedValue(field, origin) : undefined;
 };
 
+const unmentionedWithImage = (
+  input: Unmentioned,
+  previous: StoredEntry | undefined
+): JsonValue | undefined => {
+  const { at, origin, platform, field } = input;
+
+  if (
+    previous?.image === undefined ||
+    origin === undefined ||
+    platform ||
+    origin.numbered
+  ) {
+    return unmentionedValue(input);
+  }
+
+  if (
+    previous.schemaRevision < origin.revision &&
+    at.schemaRevision >= origin.revision
+  ) {
+    return addedValue(field, origin);
+  }
+
+  return unmentionedValue(input);
+};
+
+const savedVersionImage = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId,
+  image: JsonObject
+): VersionImage => {
+  const known = new Map<DefinitionId, JsonValue>();
+  const unknown = new Set<DefinitionId>();
+
+  for (const field of payloadFields(snapshot, classId)) {
+    const value = image[field.id];
+
+    if (value === undefined) {
+      unknown.add(field.id);
+    } else {
+      known.set(field.id, value);
+    }
+  }
+
+  return { known, unknown };
+};
+
+const mentionedValues = (
+  entries: readonly StoredEntry[],
+  at: StoredEntry
+): ReadonlyMap<DefinitionId, JsonValue> => {
+  const mentioned = new Map<DefinitionId, JsonValue>();
+  const applied = at.kind === "delete" ? [at] : entries;
+  const side = at.kind === "delete" ? "before" : "after";
+
+  for (const entry of applied) {
+    for (const [fieldId, value] of Object.entries(entry.image ?? {})) {
+      mentioned.set(fieldId, value);
+    }
+
+    for (const [fieldId, change] of Object.entries(entry.fields)) {
+      mentioned.set(fieldId, sideOf(change, side));
+    }
+  }
+
+  return mentioned;
+};
+
 /**
  * The version's own image in canonical JSON, from the record's entries up
  * to and including it (the last entry is the delivery's) and its fields'
@@ -402,35 +592,39 @@ export const versionImage = (
     return { known, unknown };
   }
 
+  if (at.image !== undefined && at.kind !== "delete") {
+    return savedVersionImage(snapshot, at.recordClassId, at.image);
+  }
+
   const [first] = entries;
 
   const startsWithCreate =
     first?.kind === "create" &&
     first.recordVersion === 1 &&
-    entries.length === at.recordVersion;
+    (at.completeFromCreate ?? entries.length === at.recordVersion);
 
-  const mentioned = new Map<DefinitionId, JsonValue>();
-  const applied = at.kind === "delete" ? [at] : entries;
-  const side = at.kind === "delete" ? "before" : "after";
-
-  for (const entry of applied) {
-    for (const [fieldId, change] of Object.entries(entry.fields)) {
-      mentioned.set(fieldId, sideOf(change, side));
-    }
-  }
+  const mentioned = mentionedValues(entries, at);
 
   const platform = snapshot.class(at.recordClassId)?.storage === "platform";
 
   for (const field of payloadFields(snapshot, at.recordClassId)) {
-    const value = mentioned.has(field.id)
-      ? mentioned.get(field.id)
-      : unmentionedValue({
+    let value = at.image?.[field.id];
+
+    if (mentioned.has(field.id)) {
+      value = mentioned.get(field.id);
+    } else if (value === undefined) {
+      // A legacy delete proves its empty fields even when v-1's image is partial.
+      value = unmentionedWithImage(
+        {
           at,
           created: startsWithCreate ? first : undefined,
           field,
           origin: origins.get(field.id),
           platform,
-        });
+        },
+        entries.at(-2)
+      );
+    }
 
     if (value === undefined) {
       unknown.add(field.id);
@@ -451,7 +645,7 @@ export const versionImage = (
  * @param json - The known values in canonical JSON.
  * @returns The image, or `PayloadUnreadable`.
  */
-const decodedImage = (
+export const decodedImage = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId,
   json: ReadonlyMap<DefinitionId, JsonValue>

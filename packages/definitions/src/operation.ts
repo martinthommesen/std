@@ -369,6 +369,7 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
   role: ["helpText", "label", "name"],
   savedFilter: ["condition", "label", "name"],
   subscription: [
+    "hub",
     "classId",
     "condition",
     "deadLetter",

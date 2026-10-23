@@ -18,6 +18,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { runPlatformMigrations } from "@std/server/platform/runner";
 import { CLI_APPLICATION_PREFIX } from "@std/server/sql/database-config";
 import { Transactions } from "@std/server/sql/transactions";
 import { TestDatabase, testDatabaseLayer } from "@std/testing/test-database";
@@ -322,6 +323,10 @@ describe("party-foundation", () => {
               yield* count(`SELECT count(*)::text AS value FROM core."user"`),
               OLD_USERS
             );
+
+            // Finish concurrent indexes before opening the history-write barrier;
+            // otherwise the index builder waits here before data migration 0012.
+            yield* runPlatformMigrations();
 
             // A barrier in the eighth batch: an uncommitted change entry
             // with the key (user, version 2) that the backfill's update of

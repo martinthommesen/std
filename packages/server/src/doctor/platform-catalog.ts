@@ -7,8 +7,8 @@
  * indexes by method, key columns, included columns, predicate, uniqueness
  * and validity; triggers by
  * function, type bits, enabled state and `WHEN` condition. Everything is
- * structural or names no relation, so the record does not depend on the
- * session's `search_path`.
+ * structural; diagnostic setup pins `search_path` to `pg_catalog`, so
+ * application functions in index expressions keep their schema qualification.
  * The ledger's checksums prove which migrations ran, not that their objects
  * are intact; `doctor` compares the live catalog with this record.
  *

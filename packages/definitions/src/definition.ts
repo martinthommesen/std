@@ -32,6 +32,7 @@ import type { Codec } from "effect/Schema";
 import { passthrough, transformOptional } from "effect/SchemaGetter";
 
 import { ConditionSchema } from "./condition.ts";
+import { HubConfigurationSchema } from "./hub.ts";
 import { DefinitionIdSchema } from "./ids.ts";
 import {
   RuleActionSchema,
@@ -428,6 +429,7 @@ const subscriptionFields = {
   condition: NullOr(ConditionSchema),
   deadLetter: Literals(["block", "skip"]),
   enabled: SchemaBoolean,
+  hub: optionalKey(NullOr(HubConfigurationSchema)),
   identityId: DefinitionIdSchema,
   kind: Literal("subscription"),
   maxAttempts: Int.check(isGreaterThanOrEqualTo(1)),

@@ -106,6 +106,7 @@ export const RULES_RUN_AS_PERMISSION_ID: DefinitionId =
 
 /** Built-in permissions (Contracts 3.1), checked by ID. */
 export const PERMISSION_IDS = {
+  "events.subscribe": "482cfac8-dc92-4637-a8cb-ce4eaf01233d",
   "rules.run_as": RULES_RUN_AS_PERMISSION_ID,
   "schema.purge": SCHEMA_PURGE_PERMISSION_ID,
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",

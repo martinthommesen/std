@@ -839,5 +839,6 @@ export const applyAsActor = (actor: ActingUser, changeSet: ActorChangeSet) =>
       SchemaBusy: schemaBusy,
       SchemaLockTimeout: schemaLockTimeout,
       SchemaNeedsAttention: schemaNeedsAttention,
+      TooManyRequests: Effect.die,
     })
   );

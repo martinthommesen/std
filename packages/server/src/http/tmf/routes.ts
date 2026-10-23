@@ -17,9 +17,8 @@
  *   v5.0.0 Part 1 §3.3.3 p.31), decided by the path's shape before any
  *   record is looked up; the TMF documents declare no `OPTIONS`, so it is
  *   answered the same way, and `Allow` never lists it [judgment].
- * - `/hub` and `/hub/{id}` are the hub seam (Contracts 12.2): workstream 3H
- *   wires its hub service there (`HUB_PATHS`); until then they answer
- *   `404`, as every resource an API does not serve (11.1).
+ * - `/hub` and `/hub/{id}` use the shared subscription registration
+ *   adapter (Contracts 12.2), with the mapping's declared hub statuses.
  * - Any other path under a base path is `404`.
  */
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
@@ -43,6 +42,7 @@ import type { TransactionsApi } from "../../sql/transactions.ts";
 import { getAndHead, withoutBody } from "../api/methods.ts";
 import { jsonBodyOf, withSession } from "../api/request.ts";
 import { originOf } from "../api/resource.ts";
+import { hubRoutesLayer } from "../hubs.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { parseRequestRevision } from "../stale-request.ts";
 import type { MappedResource, TmfRegistry } from "./context.ts";
@@ -82,9 +82,6 @@ const ITEM_METHODS: readonly OperationMethod[] = [
 
 /** The methods a resource path answers with its own `405` route when not offered. */
 const ROUTED_METHODS = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
-
-/** The hub paths of an API (Contracts 12.2), the seam for workstream 3H. */
-export const HUB_PATHS = ["/hub", "/hub/:id"] as const;
 
 const offeredOf = (
   mapped: MappedResource,
@@ -342,36 +339,39 @@ const catchAll =
  * @returns The routes layer.
  */
 export const tmfRoutesLayer = (registry: TmfRegistry) =>
-  Layer.unwrap(
-    Effect.gen(function* buildTmfRoutes() {
-      // An ambiguous mapping is a programming error: no route is served.
-      const problems = registry.flatMap(mappingProblems);
+  Layer.mergeAll(
+    Layer.unwrap(
+      Effect.gen(function* buildTmfRoutes() {
+        // An ambiguous mapping is a programming error: no route is served.
+        const problems = registry.flatMap(mappingProblems);
 
-      if (problems.length > 0) {
-        return yield* Effect.die(
-          new Error(`invalid TMF mappings: ${problems.join("; ")}`)
+        if (problems.length > 0) {
+          return yield* Effect.die(
+            new Error(`invalid TMF mappings: ${problems.join("; ")}`)
+          );
+        }
+
+        const environment: RouteEnvironment = {
+          registry,
+          services: yield* Effect.context<RouteServices>(),
+          transactions: yield* Transactions,
+        };
+
+        const mappedOf = registry.flatMap((api) =>
+          api.resources.map((resource): MappedResource => ({ api, resource }))
         );
-      }
 
-      const environment: RouteEnvironment = {
-        registry,
-        services: yield* Effect.context<RouteServices>(),
-        transactions: yield* Transactions,
-      };
-
-      const mappedOf = registry.flatMap((api) =>
-        api.resources.map((resource): MappedResource => ({ api, resource }))
-      );
-
-      return HttpRouter.addAll([
-        ...mappedOf.flatMap((mapped) => resourceRoutes(environment, mapped)),
-        ...registry.map((api) =>
-          HttpRouter.route(
-            "*",
-            `${api.basePath}/*`,
-            catchAll(environment, mappedOf, api)
-          )
-        ),
-      ]);
-    })
+        return HttpRouter.addAll([
+          ...mappedOf.flatMap((mapped) => resourceRoutes(environment, mapped)),
+          ...registry.map((api) =>
+            HttpRouter.route(
+              "*",
+              `${api.basePath}/*`,
+              catchAll(environment, mappedOf, api)
+            )
+          ),
+        ]);
+      })
+    ),
+    ...registry.map((api) => hubRoutesLayer(api))
   );

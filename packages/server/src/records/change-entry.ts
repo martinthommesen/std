@@ -22,6 +22,7 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
+import { eventIdOf, recordEventType } from "../events/event-id.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
@@ -272,6 +273,8 @@ export const writeChangeEntry = Effect.fn("Records.writeChangeEntry")(
     if (row === undefined) {
       return yield* Effect.die(new Error("core.change returned no row"));
     }
+
+    yield* sql`INSERT INTO core.resource_event (event_id, change_id) VALUES (${eventIdOf(row.id, recordEventType(input.kind))}::uuid, ${row.id}::uuid)`;
 
     const entry: ChangeEntry = {
       ...input,

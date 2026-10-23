@@ -23,6 +23,16 @@ import { migration0015 } from "./migrations/0015-delivery-done.ts";
 import { migration0016 } from "./migrations/0016-system-user-history.ts";
 import { migration0017 } from "./migrations/0017-rolling-groundwork.ts";
 import { migration0018 } from "./migrations/0018-helpdesk-v3.ts";
+import { migration0019 } from "./migrations/0019-hubs.ts";
+import { migration0020 } from "./migrations/0020-event-lookups.ts";
+import { migration0021 } from "./migrations/0021-change-topic-page.ts";
+import { migration0022 } from "./migrations/0022-event-lookup-backfill.ts";
+import { migration0023 } from "./migrations/0023-event-images-cursors.ts";
+import { migration0024 } from "./migrations/0024-record-event-id.ts";
+import { migration0025 } from "./migrations/0025-change-event-key.ts";
+import { migration0026 } from "./migrations/0026-client-event-key.ts";
+import { migration0027 } from "./migrations/0027-client-event-record.ts";
+import { migration0028 } from "./migrations/0028-change-image-backfill.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -45,4 +55,14 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0016,
     migration0017,
     migration0018,
+    migration0019,
+    migration0020,
+    migration0021,
+    migration0022,
+    migration0023,
+    migration0024,
+    migration0025,
+    migration0026,
+    migration0027,
+    migration0028,
   ]);
