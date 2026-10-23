@@ -31,7 +31,7 @@ import { isString } from "@std/values/field-value";
 import { Effect, Option } from "effect";
 
 import { tableName } from "../schema/sql-text.ts";
-import { lockRoot, rootTable } from "./save-sql.ts";
+import { loadRoot, rootTable } from "./save-sql.ts";
 import { readRows } from "./sql-run.ts";
 
 /** One owner of a chain. */
@@ -157,7 +157,7 @@ export const readChain = Effect.fn("Records.readOwnerChain")(
 export const lockChain = Effect.fn("Records.lockOwnerChain")(
   function* lockChain(snapshot: ConfigSnapshot, chain: OwnerChain) {
     for (const link of chain.toReversed()) {
-      const locked = yield* lockRoot(
+      const locked = yield* loadRoot(
         snapshot,
         link.classId,
         link.id,

@@ -35,6 +35,7 @@ import { DeadLetterRoutes } from "./dead-letters.ts";
 import { definitionWriteIn } from "./definition-writes.ts";
 import type { DefinitionAction } from "./definition-writes.ts";
 import { FixedRoutes } from "./fixed.ts";
+import { formStateIn } from "./form-state.ts";
 import { historyEntryIn, historyIn } from "./history.ts";
 import {
   allowOf,
@@ -316,6 +317,11 @@ const RecordRoutes = Layer.unwrap(
                 });
           })
         )
+      ),
+      HttpRouter.route(
+        "POST",
+        `${API_PREFIX}/checkFormState`,
+        route(formStateIn)
       ),
       ...getAndHead(
         `${API_PREFIX}/:collection/:id`,

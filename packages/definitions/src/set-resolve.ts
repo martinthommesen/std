@@ -27,6 +27,7 @@ import type {
   Owner,
   PermissionDraft,
   RecordRuleDraft,
+  FormRuleDraft,
   RoleDraft,
   SubscriptionDraft,
 } from "./definition.ts";
@@ -67,7 +68,8 @@ export type Draft =
   | ChoiceDraft
   | LayoutDraft
   | SavedFilterDraft
-  | RecordRuleDraft;
+  | RecordRuleDraft
+  | FormRuleDraft;
 
 /** A set with every name resolved. */
 export interface ResolvedSet {
@@ -655,7 +657,7 @@ const roleId = (
 
 const ruleField = (
   resolution: Resolution,
-  rule: AccessRuleEntry,
+  rule: Pick<AccessRuleEntry, "id" | "table">,
   name: string
 ): readonly DefinitionId[] => {
   const table = resolution.tables.get(rule.table);
@@ -784,6 +786,35 @@ const resolveRecordRule = (
   }
 };
 
+const resolveFormRule = (
+  resolution: Resolution,
+  rule: NonNullable<SetFile["formRules"]>[number]
+): void => {
+  const classId = tableId(resolution, rule.id, rule.table);
+
+  const fieldId =
+    classId === undefined
+      ? undefined
+      : ruleField(resolution, rule, rule.field)[0];
+
+  if (classId !== undefined && fieldId !== undefined) {
+    resolution.drafts.push({
+      ...flagsOf(resolution, rule),
+      active: rule.active ?? true,
+      classId,
+      clearHidden: rule.clearHidden ?? null,
+      condition: rule.condition ?? null,
+      fieldId,
+      kind: "formRule",
+      message: rule.message ?? null,
+      name: rule.name,
+      order: rule.order ?? 0,
+      property: rule.property,
+      value: rule.value ?? true,
+    });
+  }
+};
+
 const resolveAccess = (resolution: Resolution, file: SetFile): void => {
   for (const entry of file.roles ?? []) {
     resolution.drafts.push({
@@ -857,6 +888,10 @@ const resolveFile = (resolution: Resolution, file: SetFile): void => {
     resolveTable(resolution, table);
   }
 
+  for (const rule of file.formRules ?? []) {
+    resolveFormRule(resolution, rule);
+  }
+
   resolveAccess(resolution, file);
 };
 
@@ -880,6 +915,7 @@ const allIds = (file: SetFile): readonly DefinitionId[] => [
   ...(file.grants ?? []).map((entry) => entry.id),
   ...(file.accessRules ?? []).map((entry) => entry.id),
   ...(file.subscriptions ?? []).map((entry) => entry.id),
+  ...(file.formRules ?? []).map((entry) => entry.id),
   ...(file.recordRules ?? []).map((entry) => entry.id),
 ];
 

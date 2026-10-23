@@ -19,14 +19,13 @@ import {
 import { Effect } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { readHistory } from "../src/records/history-query.ts";
 import {
   createRecord,
   deleteRecord,
   updateRecord,
 } from "../src/records/save-pipeline.ts";
 import { openChangeSets } from "../src/schema/recovery.ts";
-import { recordsTestLayer, setUpAcme } from "./records-support.ts";
+import { readHistory, recordsTestLayer, setUpAcme } from "./records-support.ts";
 import { ACME, values } from "./schema-support.ts";
 
 const UPDATES = 10;
@@ -52,9 +51,18 @@ const deletedHistory = Effect.gen(function* deletedHistoryTest() {
     id: created.id,
   });
 
-  const entries = yield* readHistory({
+  const { entries } = yield* readHistory({
     readable: new Set(),
     recordId: created.id,
+    selection: {
+      after: null,
+      before: null,
+      count: true,
+      kind: "page",
+      limit: UPDATES + 2,
+      range: null,
+      reversed: false,
+    },
   });
 
   assert.deepStrictEqual(

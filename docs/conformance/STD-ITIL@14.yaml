@@ -121,7 +121,9 @@ rows:
     source: "Contracts 14.2 (first bullet)"
     level: mandatory
     requirement: "The incident form shows priority read-only by default (a form rule)."
-    status: pending
+    status: tested
+    tests:
+      - apps/web/test/browser/incident-form.test.ts#incident form v3
   - id: STD-ITIL@14/C14/14.2/priority-cell-override
     source: "Contracts 14.2 (first bullet)"
     level: mandatory

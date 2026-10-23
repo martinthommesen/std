@@ -1,8 +1,8 @@
 import type { ConcurrentIndexMigration } from "../migration.ts";
 
 /** Add the session expiry index without blocking existing writers. */
-export const migration0031: ConcurrentIndexMigration = {
-  id: 31,
+export const migration0032: ConcurrentIndexMigration = {
+  id: 32,
   index: "session_expiry",
   kind: "concurrent_index",
   name: "session-expiry",

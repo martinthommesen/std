@@ -155,7 +155,7 @@ accessRules:
     actions:
       - read
   - id: cbe6ca72-1855-51d8-aa5c-88029ad2aeae
-    description: Agents and managers write ticket notes; owner-assignment checks remain open in decision 0034.
+    description: Agents and managers write ticket notes; each write also needs the right to update the ticket (decision 0039).
     effect: allow
     roles:
       - agent
@@ -190,7 +190,7 @@ accessRules:
     actions:
       - read
   - id: ba32c76b-60a3-5055-ad04-b16cb0148eb0
-    description: Agents and managers write ticket party links; owner-assignment checks remain open in decision 0034.
+    description: Agents and managers write ticket party links; each write also needs the right to update the ticket (decision 0039).
     effect: allow
     roles:
       - agent

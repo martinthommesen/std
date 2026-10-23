@@ -1,6 +1,6 @@
 # 0038. HTTP edge limits
 
-Status: implemented with expand migrations 0030–0032, 2026-10-23; E30 remains **proposed** for Martin. Contracts 3.1, 3.8, request body handling and 12.2.
+Status: implemented with expand migrations 0031–0033, 2026-10-23; E30 remains **proposed** for Martin. Contracts 3.1, 3.8, request body handling and 12.2.
 
 The HTTP module rejects excessive Content-Length before reading and bounds streaming reads, including DELETE and TMF routes; its paused Node reader preserves the socket long enough to send an actionable TMF 413, whereas Effect's default overflowing reader destroys it. Preliminary authentication protects change-set and definition body reads while execution keeps its own authentication; sign-in admission runs before request transactions and retains capacity until native scrypt and counter commits finish, including on disconnect. Numeric callback classification requires `2000::/3`, excludes IANA non-global special ranges and honors explicitly global suballocations; IPv4, all-answer checks, socket pinning and private opt-in protections stay intact ([IANA registry](https://www.iana.org/assignments/iana-ipv6-special-registry/), read 2026-10-23).
 

@@ -277,4 +277,55 @@ describe("table metadata", () => {
       { field: "cost", fieldId: COST, kind: "field" },
     ]);
   });
+
+  it("delivers inherited form rules with never-readable condition fields simplified away", () => {
+    const changed = snapshot.with(
+      { changeSetId: snapshot.changeSetId, revision: 2 },
+      [
+        {
+          active: true,
+          classId: CLASS.asset,
+          condition: { arg: { path: [COST] }, op: "empty" },
+          fieldId: NAME,
+          id: "00000000-0000-4000-8000-0000000000f1",
+          kind: "formRule",
+          name: "name_when_cost_empty",
+          order: 10,
+          owner: { layer: "local" },
+          property: "required",
+          protected: false,
+          state: "active",
+          value: true,
+          version: 1,
+        },
+        {
+          active: true,
+          classId: CLASS.asset,
+          condition: null,
+          fieldId: COST,
+          id: "00000000-0000-4000-8000-0000000000f2",
+          kind: "formRule",
+          name: "hidden_cost_rule",
+          order: 20,
+          owner: { layer: "local" },
+          property: "readOnly",
+          protected: false,
+          state: "active",
+          value: true,
+          version: 1,
+        },
+      ]
+    );
+
+    const bobRules = metadataOf(bob, CLASS.laptop, changed).formRules;
+    assert.strictEqual(bobRules.length, 1);
+    assert.deepStrictEqual(bobRules[0]?.condition, { op: "true" });
+    assert.notInclude(JSON.stringify(bobRules), COST);
+    const aliceRules = metadataOf(alice, CLASS.laptop, changed).formRules;
+    assert.strictEqual(aliceRules.length, 2);
+    assert.deepStrictEqual(aliceRules[0]?.condition, {
+      arg: { path: [COST] },
+      op: "empty",
+    });
+  });
 });

@@ -26,6 +26,7 @@ import {
 import { PLATFORM_MIGRATIONS } from "../src/platform/migrations.ts";
 import { migration0001 } from "../src/platform/migrations/0001-core.ts";
 import { migration0018 } from "../src/platform/migrations/0018-helpdesk-v3.ts";
+import { migration0030 } from "../src/platform/migrations/0030-form-rules.ts";
 import {
   applyPendingMigrations,
   checkPlatformMigrations,
@@ -188,12 +189,16 @@ describe("platform-migrations", () => {
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
       [
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
       ]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
       "b424af160a6c54634b7dbda0cba9e24c350c59b8a3aed3dc3ee18150de105534"
+    );
+    assert.strictEqual(
+      migrationChecksum(migration0030),
+      "90cc45b86ea10ed368b6b01eba6b6b1f0faaf517821b5b1de66c17f1368afc00"
     );
     assert.throws(() => {
       validateMigrations([migration0001, { ...migration0001, id: 3 }]);
@@ -297,7 +302,7 @@ describe("platform-migrations", () => {
               stateRefusal(errorOf(empty))?.pending,
               [
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19,
-                20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+                20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
               ]
             );
 

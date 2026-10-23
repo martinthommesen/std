@@ -829,20 +829,22 @@ describe("the UI shows the API's values: structured, write-only, related lists a
     assert.strictEqual(cellJsonText("x".repeat(90)), `"${"x".repeat(79)}…`);
   });
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "2B: json, condition, password, big integer and UUID values, a related list and the history show the API's values, as the admin and as an agent",
-      () =>
-        Effect.gen(function* extendedValuesTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "2B: json, condition, password, big integer and UUID values, a related list and the history show the API's values, as the admin and as an agent",
+        () =>
+          Effect.gen(function* extendedValuesTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await sameValuesForBothUsers(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await sameValuesForBothUsers(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 });

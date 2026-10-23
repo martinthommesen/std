@@ -1,8 +1,8 @@
 import type { TxMigration } from "../migration.ts";
 
 /** Persistent sign-in admission and indexed session expiry; additive only. */
-export const migration0030: TxMigration = {
-  id: 30,
+export const migration0031: TxMigration = {
+  id: 31,
   kind: "tx",
   name: "http-edge",
   phase: "expand",
