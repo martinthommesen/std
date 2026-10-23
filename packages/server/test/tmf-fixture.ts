@@ -1,3 +1,4 @@
+import { assert } from "@effect/vitest";
 import type { Expr } from "@std/conditions/ast";
 import type { Condition } from "@std/definitions/condition";
 import type {
@@ -49,16 +50,18 @@ import {
   isJsonObject,
   isJsonString,
 } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Result } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import {
   contractAt,
   declaredStatusesOf,
 } from "../../testing/src/tmf-oas-contract.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { asObject } from "./api-support.ts";
 import {
   addField,
   change,
@@ -585,3 +588,41 @@ export const tmfTestLayer = () =>
       )
     )
   );
+
+/**
+ * Fixture merge-patch options, with explicit headers overriding the media type.
+ * @param caller - The caller's request options.
+ * @param body - The merge-patch body.
+ * @param headers - Header overrides.
+ * @returns The request options.
+ */
+export const mergeOptions = (
+  caller: TestRequestOptions,
+  body: JsonValue,
+  headers: Readonly<Record<string, string>> = {}
+): TestRequestOptions => ({
+  ...caller,
+  headers: { "content-type": "application/merge-patch+json", ...headers },
+  rawBody: JSON.stringify(body),
+});
+
+/**
+ * Creates a fixture ticket through its TMF API, asserting 201.
+ * @param caller - The caller's request options.
+ * @param body - The create body, which may override the default type.
+ * @returns The created resource.
+ */
+export const createFixtureTicket = Effect.fn("TmfFixture.createTicket")(
+  function* createFixtureTicket(caller: TestRequestOptions, body: JsonObject) {
+    const http = yield* TestHttpClient;
+
+    const created = yield* http.request("POST", FIXTURE_TICKETS, {
+      ...caller,
+      body: { "@type": "TroubleTicket", ...body },
+    });
+
+    assert.strictEqual(created.status, 201, created.text);
+
+    return asObject(created.json);
+  }
+);

@@ -27,7 +27,13 @@ import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { count, entriesOf, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { addRecordRule, change, values } from "./schema-support.ts";
-import { FF, FIXTURE_TICKETS, FX, tmfTestLayer } from "./tmf-fixture.ts";
+import {
+  createFixtureTicket,
+  FF,
+  FIXTURE_TICKETS,
+  FX,
+  tmfTestLayer,
+} from "./tmf-fixture.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const NOTES = '"tmffx"."note"';
@@ -49,18 +55,7 @@ const patchOptions = (
 });
 
 const newTicket = (caller: TestRequestOptions, body: JsonObject = {}) =>
-  Effect.gen(function* newTicketWork() {
-    const http = yield* TestHttpClient;
-
-    const created = yield* http.request("POST", FIXTURE_TICKETS, {
-      ...caller,
-      body: { "@type": "TroubleTicket", description: "Arrays", ...body },
-    });
-
-    assert.strictEqual(created.status, 201, created.text);
-
-    return asObject(created.json);
-  });
+  createFixtureTicket(caller, { description: "Arrays", ...body });
 
 const noteTexts = (resource: JsonObject): string[] =>
   asArray(resource.note).map((note) => textOf(asObject(note).text));

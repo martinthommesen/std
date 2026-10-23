@@ -312,7 +312,16 @@ const RESOURCE = {
   id: "1",
 } as const;
 
+const compiled = new Map<string, Schemas>();
+
 const compile = (field: MetaField): Schemas => {
+  const key = stringifyJson(field);
+  const cached = compiled.get(key);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const document = tableOpenApi(
     tableOf(field),
     {
@@ -333,12 +342,16 @@ const compile = (field: MetaField): Schemas => {
     return (value: JsonValue) => validate(value);
   };
 
-  return {
+  const schemas: Schemas = {
     create: validator("ResourceCreate"),
     read: validator("Resource"),
     text: JSON.stringify(document),
     update: validator("ResourcePatch"),
   };
+
+  compiled.set(key, schemas);
+
+  return schemas;
 };
 
 // The canonical JSON a read returns for an accepted value.

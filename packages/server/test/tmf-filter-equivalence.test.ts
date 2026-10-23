@@ -62,8 +62,6 @@ interface Filter {
   readonly parameter: readonly [string, string];
   /** The condition in API names (v2 `condition`). */
   readonly apiCondition: string | null;
-  /** The condition in definition names (v1 `filter`). */
-  readonly definitionCondition: string;
 }
 
 type Comparison = "gt" | "gte" | "lt" | "lte";
@@ -81,14 +79,12 @@ const quoted = (value: string): string => JSON.stringify(value);
  * An equality filter: `=` for one value, `in` for several.
  *
  * @param api - The attribute's API name.
- * @param definition - The attribute's definition name.
  * @param values - The values.
  * @param literal - Renders a value as condition text.
  * @returns The filter.
  */
 export const equality = (
   api: string,
-  definition: string,
   values: readonly string[],
   literal: (value: string) => string
 ): Filter => {
@@ -99,20 +95,17 @@ export const equality = (
 
   return {
     apiCondition: condition(api),
-    definitionCondition: condition(definition),
     parameter: [api, values.join(",")],
   };
 };
 
 const comparison = (
   api: string,
-  definition: string,
   operator: Comparison,
   value: string,
   literal: (value: string) => string
 ): Filter => ({
   apiCondition: `${api} ${SYMBOLS[operator]} ${literal(value)}`,
-  definitionCondition: `${definition} ${SYMBOLS[operator]} ${literal(value)}`,
   parameter: [`${api}.${operator}`, value],
 });
 
@@ -134,21 +127,12 @@ const COMPARISONS = constantFrom<Comparison>("gt", "gte", "lt", "lte");
 
 const plain = (value: string): string => value;
 
-/** A collection and its v1 table. */
-interface Target {
-  readonly collection: string;
-  readonly table: string;
-}
-
-const ASSETS: Target = { collection: API.asset, table: "acme.asset" };
-const MONITORS: Target = { collection: API.monitor, table: "acme.monitor" };
-
 /** A query: a collection, some filters and a sort. */
 interface Query {
-  readonly target: Target;
+  readonly target: string;
   readonly filters: readonly Filter[];
-  /** The sort in API names, and in definition names. */
-  readonly sort: readonly [string, string];
+  /** The sort in API names. */
+  readonly sort: string;
   readonly caller: string;
 }
 
@@ -167,11 +151,7 @@ const COSTS = ["0", "300", "400", "1200", "1800", "2500", "999.99"];
 const SIZES = ["0", "24", "25", "27", "100"];
 const BIG_COUNTS = ["0", "5", "9007199254740993", "9223372036854775807"];
 
-const TYPES: readonly (readonly [string, string])[] = [
-  ["AcmeAsset", "acme.asset"],
-  ["AcmeLaptop", "acme.laptop"],
-  ["AcmeMonitor", "acme.monitor"],
-];
+const TYPES = ["AcmeAsset", "AcmeLaptop", "AcmeMonitor"];
 
 const DATES = [
   "2023-03-10",
@@ -181,18 +161,10 @@ const DATES = [
   "2025-03-01",
 ];
 
-const classFilter = (types: readonly (readonly [string, string])[]): Filter => {
-  const definition = types.map(([, name]) => quoted(name));
-
-  return {
-    apiCondition: null,
-    definitionCondition:
-      definition.length === 1
-        ? `class = ${definition.join("")}`
-        : `class in (${definition.join(", ")})`,
-    parameter: ["@type", types.map(([name]) => name).join(",")],
-  };
-};
+const classFilter = (types: readonly string[]): Filter => ({
+  apiCondition: null,
+  parameter: ["@type", types.join(",")],
+});
 
 const subset = <T>(values: readonly T[], maxLength = 2): Arbitrary<T[]> =>
   subarray([...values], { maxLength, minLength: 1 });
@@ -201,7 +173,7 @@ const costFilters = (hasCost: boolean): Arbitrary<Filter>[] =>
   hasCost
     ? [
         tuple(COMPARISONS, constantFrom(...COSTS)).map(([operator, value]) =>
-          comparison("cost", "cost", operator, value, plain)
+          comparison("cost", operator, value, plain)
         ),
       ]
     : [];
@@ -216,43 +188,37 @@ const costFilters = (hasCost: boolean): Arbitrary<Filter>[] =>
  */
 const assetFilter = (values: Values, hasCost: boolean): Arbitrary<Filter> =>
   oneof(
-    subset(NAMES, 3).map((names) => equality("name", "name", names, quoted)),
-    subset(STATUSES).map((names) =>
-      equality("status", "status", names, quoted)
-    ),
+    subset(NAMES, 3).map((names) => equality("name", names, quoted)),
+    subset(STATUSES).map((names) => equality("status", names, quoted)),
     tuple(COMPARISONS, constantFrom(...DATES)).map(([operator, value]) =>
-      comparison("purchasedOn", "purchased_on", operator, value, quoted)
+      comparison("purchasedOn", operator, value, quoted)
     ),
     tuple(
       COMPARISONS,
       constantFrom(...values.dateTimes, ...values.dayOnly)
     ).map(([operator, value]) =>
-      comparison("creationDate", "created_at", operator, value, firstInstant)
+      comparison("creationDate", operator, value, firstInstant)
     ),
-    subset(values.users).map((ids) => equality("owner", "owner", ids, quoted)),
-    subset(values.users).map((ids) =>
-      equality("owner.id", "owner.id", ids, quoted)
-    ),
+    subset(values.users).map((ids) => equality("owner", ids, quoted)),
+    subset(values.users).map((ids) => equality("owner.id", ids, quoted)),
     subset(["Alice monitor", "L"]).map((names) =>
-      equality("dockedTo.name", "docked_to.name", names, quoted)
+      equality("dockedTo.name", names, quoted)
     ),
-    subset(values.ids, 3).map((ids) => equality("id", "id", ids, quoted)),
+    subset(values.ids, 3).map((ids) => equality("id", ids, quoted)),
     subset(TYPES).map(classFilter),
     constantFrom("true", "false").map((flag) =>
-      equality("flag", "flag", [flag], plain)
+      equality("flag", [flag], plain)
     ),
     tuple(COMPARISONS, constantFrom(...BIG_COUNTS)).map(([operator, value]) =>
-      comparison("bigCount", "big_count", operator, value, plain)
+      comparison("bigCount", operator, value, plain)
     ),
     ...costFilters(hasCost)
   );
 
 const sizeFilters: Arbitrary<Filter>[] = [
-  subset(SIZES, 3).map((sizes) =>
-    equality("sizeInches", "size_inches", sizes, plain)
-  ),
+  subset(SIZES, 3).map((sizes) => equality("sizeInches", sizes, plain)),
   tuple(COMPARISONS, constantFrom(...SIZES)).map(([operator, value]) =>
-    comparison("sizeInches", "size_inches", operator, value, plain)
+    comparison("sizeInches", operator, value, plain)
   ),
 ];
 
@@ -264,34 +230,25 @@ const sizeFilters: Arbitrary<Filter>[] = [
  */
 const monitorFilter = (hasCost: boolean): Arbitrary<Filter> =>
   oneof(
-    subset(MONITOR_NAMES).map((names) =>
-      equality("name", "name", names, quoted)
-    ),
+    subset(MONITOR_NAMES).map((names) => equality("name", names, quoted)),
     // Bob reads no monitor field beyond the asset's, so no size for him.
     ...(hasCost ? sizeFilters : []),
     ...costFilters(hasCost)
   );
 
 const ALICE_ASSET_SORTS = [
-  ["name", "name"],
-  ["-cost", "-cost"],
-  ["purchasedOn", "purchased_on"],
-  ["-status,name", "-status,name"],
-  ["creationDate,name", "created_at,name"],
+  "name",
+  "-cost",
+  "purchasedOn",
+  "-status,name",
+  "creationDate,name",
 ] as const;
 
-const BOB_ASSET_SORTS = [
-  ["name", "name"],
-  ["purchasedOn", "purchased_on"],
-  ["-status,name", "-status,name"],
-] as const;
+const BOB_ASSET_SORTS = ["name", "purchasedOn", "-status,name"] as const;
 
-const BOB_MONITOR_SORTS = [["name", "name"]] as const;
+const BOB_MONITOR_SORTS = ["name"] as const;
 
-const MONITOR_SORTS = [
-  ["name", "name"],
-  ["-sizeInches,name", "-size_inches,name"],
-] as const;
+const MONITOR_SORTS = ["name", "-sizeInches,name"] as const;
 
 const distinctFilters = (filters: Arbitrary<Filter>): Arbitrary<Filter[]> =>
   // One filter per parameter: repeats of a parameter are OR (10.3).
@@ -313,7 +270,7 @@ const queryOf = (values: Values): Arbitrary<Query> =>
         caller,
         filters,
         sort,
-        target: ASSETS,
+        target: API.asset,
       }));
 
       const monitors = tuple(
@@ -323,7 +280,7 @@ const queryOf = (values: Values): Arbitrary<Query> =>
         caller,
         filters,
         sort,
-        target: MONITORS,
+        target: API.monitor,
       }));
 
       return [assets, monitors];
@@ -368,25 +325,26 @@ const observe = Effect.fn("TmfFilterEquivalence.observe")(function* observe(
   token: string
 ) {
   const http = yield* TestHttpClient;
-  const [apiSort] = query.sort;
 
-  const tmf = yield* http.get(
-    withQuery(query.target.collection, [
-      ...query.filters.map((filter) => filter.parameter),
-      ["sort", apiSort],
-    ]),
-    { token }
+  return yield* Effect.all(
+    {
+      condition: http.get(
+        withQuery(query.target, [
+          ...conditionParameters(query.filters),
+          ["sort", query.sort],
+        ]),
+        { token }
+      ),
+      tmf: http.get(
+        withQuery(query.target, [
+          ...query.filters.map((filter) => filter.parameter),
+          ["sort", query.sort],
+        ]),
+        { token }
+      ),
+    },
+    { concurrency: "unbounded" }
   );
-
-  const condition = yield* http.get(
-    withQuery(query.target.collection, [
-      ...conditionParameters(query.filters),
-      ["sort", apiSort],
-    ]),
-    { token }
-  );
-
-  return { condition, tmf };
 });
 
 /** What a property run saw. */
@@ -516,11 +474,11 @@ const lowerCased = (value: string): string => value.toLowerCase();
 describe("tmf-filter-equivalence", () => {
   it("equality renders one value as = and several as in", () => {
     assert.strictEqual(
-      equality("name", "name", ["S"], quoted).apiCondition,
+      equality("name", ["S"], quoted).apiCondition,
       'name = "S"'
     );
     assert.strictEqual(
-      equality("name", "name", ["S", "K"], quoted).apiCondition,
+      equality("name", ["S", "K"], quoted).apiCondition,
       'name in ("S", "K")'
     );
   });
@@ -606,39 +564,26 @@ describe("tmf-filter-equivalence", () => {
 
           const filters = oneof(
             subset(["new", "in_progress", "on_hold", "resolved"], 3).map(
-              (keys) => equality("status", "status", keys, quoted)
+              (keys) => equality("status", keys, quoted)
             ),
             subset(["critical", "high", "moderate", "low"], 3).map((keys) =>
-              equality("priority", "priority", keys, quoted)
+              equality("priority", keys, quoted)
             ),
             subset(Object.values(records), 3).map((ids) =>
-              equality("id", "id", ids, quoted)
+              equality("id", ids, quoted)
             ),
-            subset([
-              ["HelpdeskTicket", "helpdesk.ticket"],
-              ["HelpdeskIncident", "helpdesk.incident"],
-            ] as const).map(classFilter)
+            subset(["HelpdeskTicket", "HelpdeskIncident"]).map(classFilter)
           );
-
-          const ticket: Target = {
-            collection: "/api/v1/helpdeskTicket",
-            table: "helpdesk.ticket",
-          };
 
           const queries = tuple(
             constantFrom("admin", "agent"),
             distinctFilters(filters),
-            constantFrom(
-              ...([
-                ["shortDescription", "short_description"],
-                ["-priority,shortDescription", "-priority,short_description"],
-              ] as const)
-            )
+            constantFrom("shortDescription", "-priority,shortDescription")
           ).map(([caller, drawn, sort]): Query => ({
             caller,
             filters: drawn,
             sort,
-            target: ticket,
+            target: "/api/v1/helpdeskTicket",
           }));
 
           const tally = yield* runSamples(queries, tokens);
@@ -853,9 +798,19 @@ const assertFilterMatchesRendering = Effect.fn(
     ...rendered.map((item) => textOf(item[attribute])),
   ]);
 
-  for (const value of candidates) {
+  const results = yield* Effect.all(
+    [...candidates].map((value) =>
+      Effect.map(idsFiltered(admin, attribute, value), (ids) => ({
+        ids,
+        value,
+      }))
+    ),
+    { concurrency: "unbounded" }
+  );
+
+  for (const { ids, value } of results) {
     assert.deepStrictEqual(
-      yield* idsFiltered(admin, attribute, value),
+      ids,
       idsWhere(rendered, attribute, value),
       `${attribute}=${value}`
     );
