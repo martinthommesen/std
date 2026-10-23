@@ -668,19 +668,30 @@ describe("change images", () => {
       });
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
 
-  test("readEntriesAt reads two versions of one record across a history gap as readEntries does each, in two statements", () =>
+  test("readEntriesAt rebuilds versions across a history gap with the values each had, in two statements", () =>
     Effect.gen(function* entriesAtGap() {
       const sql = yield* SqlClient.SqlClient;
       const log = yield* StatementLog;
-      const { id, update } = yield* asset;
+      const { fixture, id, update } = yield* asset;
 
-      for (const version of [1, 2, 3, 4, 5]) {
+      // v2 sets cost, date and status; v3 to v5 rename; v3 is then lost.
+      yield* updateRecord({
+        body: { cost: "12.00", purchased_on: "2026-01-02", status: "lost" },
+        endpointClassId: ACME.asset,
+        expectedVersion: 1,
+        id,
+      }).pipe(actingAs(fixture.admin.id));
+
+      for (const version of [2, 3, 4]) {
         yield* update(version);
       }
 
       yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
       yield* sql`DELETE FROM core.resource_event WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version = 3)`;
       yield* sql`DELETE FROM core.change WHERE record_id = ${id}::uuid AND record_version = 3`;
+
+      const snapshot = yield* (yield* Catalog).refresh;
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
 
       const targets = [5, 4, 6, 2].map((version) => ({
         recordId: id,
@@ -692,10 +703,86 @@ describe("change images", () => {
 
       assert.lengthOf(yield* log.texts, 2);
 
-      for (const target of targets) {
+      const valuesAt = (version: number) => {
+        const { known } = versionImage(
+          snapshot,
+          batch.get(entryTargetKey({ recordId: id, version })) ?? [],
+          origins
+        );
+
+        return [ACME.name, ACME.status, ACME.cost, ACME.purchasedOn].map(
+          (field) => known.get(field)
+        );
+      };
+
+      assert.deepStrictEqual(valuesAt(5), [
+        "version-5",
+        "lost",
+        "12.00",
+        "2026-01-02",
+      ]);
+      assert.deepStrictEqual(valuesAt(4), [
+        "version-4",
+        "lost",
+        "12.00",
+        "2026-01-02",
+      ]);
+      assert.deepStrictEqual(valuesAt(2), [
+        "one",
+        "lost",
+        "12.00",
+        "2026-01-02",
+      ]);
+      // Version 6 does not exist.
+      assert.deepStrictEqual(
+        batch.get(entryTargetKey({ recordId: id, version: 6 })),
+        []
+      );
+    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+
+  test("readEntriesAt rebuilds a deleted record's last image from its delete, with images kept, missing or partly missing", () =>
+    Effect.gen(function* entriesAtDelete() {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshot = yield* (yield* Catalog).refresh;
+      const origins = yield* readFieldOrigins(snapshot, ACME.asset);
+
+      for (const missing of ["none", "all", "even", "odd"] as const) {
+        const { id, remove, update } = yield* asset;
+
+        yield* update(1);
+        yield* update(2);
+        yield* remove(3);
+
+        if (missing === "all") {
+          yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid)`;
+        }
+
+        if (missing === "even" || missing === "odd") {
+          const parity = missing === "even" ? 0 : 1;
+
+          yield* sql`DELETE FROM core.change_image WHERE change_id IN (SELECT id FROM core.change WHERE record_id = ${id}::uuid AND record_version % 2 = ${parity})`;
+        }
+
+        const targets = [4, 3].map((version) => ({ recordId: id, version }));
+        const batch = yield* readEntriesAt(targets);
+
+        const nameAt = (version: number) =>
+          versionImage(
+            snapshot,
+            batch.get(entryTargetKey({ recordId: id, version })) ?? [],
+            origins
+          ).known.get(ACME.name);
+
+        // The delete (v4) shows the image it removed, v3's.
         assert.deepStrictEqual(
-          batch.get(entryTargetKey(target)),
-          yield* readEntries(id, target.version)
+          [nameAt(4), nameAt(3)],
+          ["version-3", "version-3"],
+          missing
+        );
+        assert.strictEqual(
+          batch.get(entryTargetKey({ recordId: id, version: 4 }))?.at(-1)?.kind,
+          "delete",
+          missing
         );
       }
     }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));

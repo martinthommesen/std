@@ -599,8 +599,9 @@ export const prepareMappedEvents = Effect.fn("Events.prepareMappedEvents")(
     const { attributes } = mapped.resource;
     const paths = yield* pathsOf(scope, delivery, attributes);
 
-    // The history-backed attributes' entries up to the change, as a GET
-    // reads them (`withHistory`).
+    // The history-backed attributes' entries up to the change, readable
+    // as the payload decided at its version (`withHistory` without a live
+    // read).
     const [own] = yield* withHistory(
       attributes,
       [
@@ -615,9 +616,7 @@ export const prepareMappedEvents = Effect.fn("Events.prepareMappedEvents")(
       () => true
     );
 
-    const history = own?.history?.filter(
-      (step) => step.version <= payload.recordVersion
-    );
+    const { history } = own ?? {};
 
     const prepared = history === undefined ? { paths } : { history, paths };
 

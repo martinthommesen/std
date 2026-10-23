@@ -12,6 +12,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { HELPDESK_CLASS_IDS, TICKET_FIELD_IDS } from "@std/tmf/helpdesk-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
+import { Statement } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
@@ -101,6 +102,32 @@ const stored = Effect.fn("Tmf621Test.stored")(function* stored(
 
   return asObject(read.json);
 });
+
+/** What runs once, just before the next history read's statement. */
+interface HistoryInterleave {
+  next: (() => Promise<void>) | null;
+}
+
+const historyInterleave: HistoryInterleave = { next: null };
+
+/** `itilLayer`, whose SQL client runs `historyInterleave` at a history read. */
+const historyRaceLayer = itilLayer.pipe(
+  Layer.provide(
+    Layer.succeed(Statement.CurrentTransformer, (statement) =>
+      Effect.gen(function* interleaveHistory() {
+        const [text] = statement.compile();
+        const { next } = historyInterleave;
+
+        if (text.includes("jsonb_exists_any(c.fields,") && next !== null) {
+          historyInterleave.next = null;
+          yield* Effect.promise(next);
+        }
+
+        return statement;
+      })
+    )
+  )
+);
 
 /**
  * A TMF `Error`'s status and code, as `"<status> <code>"`.
@@ -680,6 +707,78 @@ describe("tmf621", () => {
           ["creator content"]
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a status history read never shows a value a write committed between the resource read and the history read made unreadable",
+    () =>
+      Effect.gen(function* historyRace() {
+        // Agents may not read the status reason of a resolved ticket.
+        yield* change([
+          {
+            definition: {
+              actions: ["read"],
+              active: true,
+              classId: HELPDESK_CLASS_IDS.ticket,
+              condition: {
+                left: { path: [TICKET_FIELD_IDS.status] },
+                op: "eq",
+                right: { value: "resolved" },
+              },
+              description: null,
+              effect: "deny",
+              id: randomUUID(),
+              kind: "accessRule",
+              name: null,
+              owner: { layer: "local" },
+              protected: false,
+              roleIds: [HELPDESK.agentRole],
+              target: {
+                fields: [TICKET_FIELD_IDS.statusReason],
+                kind: "fields",
+              },
+            },
+            op: "createAccessRule",
+          },
+        ]);
+
+        const admin = yield* tmf621As("admin");
+        const agent = yield* tmf621As("agent");
+        const ticket = yield* open(admin);
+        const path = `${TICKETS}/${textOf(ticket.id)}`;
+
+        const run = Effect.runPromiseWith(yield* Effect.context());
+
+        // The admin's resolve commits just before the agent's history read.
+        historyInterleave.next = async () => {
+          const resolved = await run(
+            admin.patch(path, {
+              status: "resolved",
+              statusChangeReason: "private resolution reason",
+            })
+          );
+
+          assert.strictEqual(resolved.status, 200, resolved.text);
+        };
+
+        const raced = yield* agent.get(path);
+
+        assert.isNull(historyInterleave.next, "the interleave ran");
+        assert.strictEqual(raced.status, 200, raced.text);
+        assert.notInclude(raced.text, "private resolution reason");
+
+        // The history matches the version returned: no resolve in it.
+        assert.deepStrictEqual(
+          arrayOf(bodyOf(raced), "statusChangeHistory").map(
+            (item) => item.status
+          ),
+          [bodyOf(raced).status]
+        );
+
+        const fresh = yield* agent.get(path);
+
+        assert.notInclude(fresh.text, "private resolution reason");
+      }).pipe(Effect.provide(historyRaceLayer), TestClock.withLive)
   );
 
   it.effect(

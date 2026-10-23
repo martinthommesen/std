@@ -17,9 +17,12 @@
 import type { Expr } from "@std/conditions/ast";
 import {
   arrayParameter,
+  identSql,
+  joinSql,
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
+import type { SqlFragment, SqlParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { pathOf, pathSource } from "@std/tmf/mapping";
@@ -45,6 +48,7 @@ import type { SelectedValue, SortKey } from "../../records/read-query.ts";
 import { readByIds, readPage } from "../../records/read-records.ts";
 import type { DecodedRecord, Page } from "../../records/read-records.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
+import { recordRelation } from "../../records/relation.ts";
 import { readRows } from "../../records/sql-run.ts";
 
 const SYSTEM_PREFIX = "system:";
@@ -479,23 +483,105 @@ const stepOf = (entry: HistoryEntry): HistoryStep => {
   };
 };
 
+const ENTRY_COLUMNS = sql`c.id::text AS id, c.operation_id::text AS operation_id,
+  c.record_version::text AS version_text, c.kind::text AS kind,
+  c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+  c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields`;
+
+// The entries of a record up to its version that changed one of the
+// fields, in version order.
+const entriesSql = (
+  record: SqlFragment | SqlParameter,
+  version: number,
+  fieldIds: readonly string[]
+) => sql`SELECT ${ENTRY_COLUMNS}
+FROM core."change" c
+WHERE c.record_id = ${record}
+  AND c.record_version <= ${textParameter(String(version), "int8")}
+  AND jsonb_exists_any(c.fields, ${arrayParameter(fieldIds, "text")})
+ORDER BY c.record_version`;
+
+const LIVE = "r";
+
+/**
+ * A record's history rows for some fields and the fields the caller may
+ * still read: with a scope, read with the live record's visibility and
+ * field predicates in the same statement, so one snapshot decides both (as
+ * the history endpoint's read does); without one (a delivery, whose
+ * payload decided readability at its version), the entries alone.
+ *
+ * @param record - The record as read.
+ * @param fieldIds - The history fields readable on it.
+ * @param scope - The caller's scope, for a live read.
+ * @returns The entry rows and the readable fields.
+ */
+const historyRows = Effect.fnUntraced(function* historyRows(
+  record: SourceRecord,
+  fieldIds: readonly string[],
+  scope: ReadScope | undefined
+) {
+  if (scope === undefined) {
+    return {
+      readable: new Set(fieldIds),
+      rows: yield* readRows(
+        entriesSql(textParameter(record.id, "uuid"), record.version, fieldIds)
+      ),
+    };
+  }
+
+  const view = scope.view(record.classId, true);
+
+  const predicates = fieldIds.map((fieldId, index) => {
+    const field = view.byId(fieldId);
+    const holds = field === undefined ? sql`FALSE` : view.readable(LIVE, field);
+
+    const column = identSql(`f${index}`);
+
+    return sql`(${view.visibility(LIVE)} AND ${holds})::text AS ${column}`;
+  });
+
+  const rows = yield* readRows(
+    sql`SELECT ${joinSql(predicates, ", ")}, "h".*
+FROM ${recordRelation(scope.snapshot, record.classId)} AS ${identSql(LIVE)}
+LEFT JOIN LATERAL (${entriesSql(identSql(LIVE, "id"), record.version, fieldIds)}) AS "h" ON true
+WHERE ${identSql(LIVE, "id")} = ${textParameter(record.id, "uuid")}
+ORDER BY "h"."version_text"::bigint`
+  );
+
+  const [first] = rows;
+
+  return {
+    readable: new Set(
+      fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
+    ),
+    rows: rows.filter((row) => row.id !== null && row.id !== undefined),
+  };
+});
+
 /**
  * Adds to each record the change entries its selected history-backed
  * attributes render from (`ValueAttribute.history`; TMF621's
- * `statusChangeHistory`, Contracts 11.2), through the record service's
- * history read: only the history sources the caller can read on the
- * record (3.7), and only for records where it can read every source of
- * the attribute, since the attribute renders only then.
+ * `statusChangeHistory`, Contracts 11.2): the entries up to the version
+ * the record was read at, so the history matches the resource returned,
+ * with only the history sources the caller can read (3.7). With a scope,
+ * those are the sources it could read on the record as read and can still
+ * read on the live record, decided in the history's own statement, so a
+ * mask that a concurrent write turned on is never bypassed. Only records
+ * where the caller can read every source of the attribute are read, since
+ * the attribute renders only then. The attribute renders every entry, so
+ * no page bounds them (TMF621 UG v5.0.1: an embedded history).
  *
  * @param attributes - The resource's attributes.
  * @param records - The records as read.
  * @param selected - Whether `fields` selects an attribute.
+ * @param scope - The caller's scope, for a live read; none for a delivery.
  * @returns The records, with their history where an attribute needs it.
  */
 export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
   attributes: readonly Attribute[],
   records: readonly SourceRecord[],
-  selected: (name: string) => boolean
+  selected: (name: string) => boolean,
+  scope?: ReadScope
 ) {
   const needing = attributes.flatMap((attribute) =>
     attribute.kind === "value" &&
@@ -512,7 +598,7 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
   const result: SourceRecord[] = [];
 
   for (const record of records) {
-    const readable = [
+    const fieldIds = [
       ...new Set(
         needing.flatMap((attribute) =>
           attribute.sources.every((source) => record.values.has(source))
@@ -522,29 +608,16 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
       ),
     ];
 
-    if (readable.length === 0) {
+    if (fieldIds.length === 0) {
       result.push(record);
     } else {
-      // The entries that changed a readable history source, in version
-      // order: the attribute renders every one (TMF621's whole
-      // statusChangeHistory), so no page bounds them.
-      const rows = yield* readRows(
-        sql`SELECT c.id::text AS id, c.operation_id::text AS operation_id,
-  c.record_version::text AS version_text, c.kind::text AS kind,
-  c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
-  c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields
-FROM core."change" c
-WHERE c.record_id = ${textParameter(record.id, "uuid")}
-  AND jsonb_exists_any(c.fields, ${arrayParameter(readable, "text")})
-ORDER BY c.record_version`
-      );
-
+      const { readable, rows } = yield* historyRows(record, fieldIds, scope);
       const steps: HistoryStep[] = [];
 
       for (const row of rows) {
         const entry = yield* entryOfRow(
           yield* decodeEntryRow(row).pipe(Effect.orDie),
-          new Set(readable)
+          readable
         );
 
         steps.push(stepOf(entry));

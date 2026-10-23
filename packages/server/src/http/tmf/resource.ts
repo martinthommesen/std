@@ -294,7 +294,8 @@ const readCurrent = Effect.fn("Tmf.readCurrent")(function* readCurrent(
   const [record] = yield* withHistory(
     resource.attributes,
     records,
-    (name) => fields === null || fields.has(name)
+    (name) => fields === null || fields.has(name),
+    scope
   );
 
   return record ?? (yield* new NotFound());
@@ -411,7 +412,8 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
   const records = yield* withHistory(
     mapped.resource.attributes,
     read,
-    (name) => parsed.fields === null || parsed.fields.has(name)
+    (name) => parsed.fields === null || parsed.fields.has(name),
+    scope
   );
 
   const classes = classesOf(records);
