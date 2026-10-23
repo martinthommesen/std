@@ -12,39 +12,76 @@ const canary = (name: string): string =>
 const runCanary = async (name: string) =>
   await runTool("check-migration-phases.ts", ["--migrations", canary(name)]);
 
+const Expectations = Schema.Struct({
+  PLATFORM_MIGRATIONS: Schema.Array(
+    Schema.Struct({
+      expectedProblems: Schema.Array(Schema.NonEmptyString),
+      expectedStatement: Schema.optionalKey(Schema.Int),
+      extraProblems: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            message: Schema.NonEmptyString,
+            statement: Schema.Int,
+          })
+        )
+      ),
+      id: Schema.Int,
+    })
+  ),
+});
+
 describe("migration-phases", () => {
   it("checks the registered migrations and their file inventory", async () => {
     const result = await runTool("check-migration-phases.ts");
     expect(result.code).toBe(0);
-    expect(result.output).toContain("every migration declares a phase");
+    expect(result.output).toBe(
+      "migration-phases: every migration declares a phase; expand SQL passes the conservative check\n"
+    );
   });
 
-  it.each(["allowed", "contract"])("accepts %s SQL", async (name) => {
-    const result = await runCanary(name);
-    expect(result.code).toBe(0);
-  });
-
-  it("refuses every destructive, rewriting or unsupported SQL canary", async () => {
-    const result = await runCanary("refused");
-    expect(result.code).toBe(1);
-
-    const { PLATFORM_MIGRATIONS } = Schema.decodeUnknownSync(
-      Schema.Struct({
-        PLATFORM_MIGRATIONS: Schema.Array(
-          Schema.Struct({
-            expectedProblem: Schema.NonEmptyString,
-            id: Schema.Int,
-          })
-        ),
-      })
-    )(JSON.parse(readFileSync(canary("refused"), "utf-8")));
-
-    for (const { id, expectedProblem } of PLATFORM_MIGRATIONS) {
-      expect(result.output.split("\n")).toContain(
-        `${id} statement 1: ${expectedProblem}`
+  it.each(["allowed", "contract", "historical"])(
+    "accepts %s SQL",
+    async (name) => {
+      const result = await runCanary(name);
+      expect(result.code).toBe(0);
+      expect(result.output).toBe(
+        "migration-phases: every migration declares a phase; expand SQL passes the conservative check\n"
       );
     }
-  });
+  );
+
+  it.each(["refused", "ast-rules", "historical-altered"])(
+    "checks every exact diagnostic and acceptance in %s",
+    async (name) => {
+      const result = await runCanary(name);
+      expect(result.code).toBe(1);
+
+      const { PLATFORM_MIGRATIONS } = Schema.decodeUnknownSync(Expectations)(
+        JSON.parse(readFileSync(canary(name), "utf-8"))
+      );
+
+      const expected = PLATFORM_MIGRATIONS.flatMap(
+        ({
+          id,
+          expectedProblems,
+          expectedStatement = 1,
+          extraProblems = [],
+        }) => [
+          ...expectedProblems.map(
+            (problem) => `${id} statement ${expectedStatement}: ${problem}`
+          ),
+          ...extraProblems.map(
+            ({ statement, message }) =>
+              `${id} statement ${statement}: ${message}`
+          ),
+        ]
+      );
+
+      expect(result.output).toBe(
+        `${expected.join("\n")}\nmigration-phases: ${expected.length} problems\n`
+      );
+    }
+  );
 
   it("requires a recognized phase for every migration kind", async () => {
     const result = await runCanary("phases");

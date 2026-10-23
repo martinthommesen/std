@@ -62,7 +62,7 @@ await runCheck("migration-phases", async () => {
 
   report(
     "migration-phases",
-    [...missing, ...migrationPhaseProblems(PLATFORM_MIGRATIONS)],
+    [...missing, ...(await migrationPhaseProblems(PLATFORM_MIGRATIONS))],
     "every migration declares a phase; expand SQL passes the conservative check"
   );
 });

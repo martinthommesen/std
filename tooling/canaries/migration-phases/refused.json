@@ -8,7 +8,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN required text NOT NULL DEFAULT NULL"
       ],
-      "expectedProblem": "NOT NULL column without a constant default"
+      "previousExpectedProblem": "NOT NULL column without a constant default",
+      "expectedProblems": ["NOT NULL column without a constant default"]
     },
     {
       "id": 18,
@@ -18,7 +19,10 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DROP TABLE core.old; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 19,
@@ -28,7 +32,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS 'BEGIN EXECUTE ''DROP TABLE core.old''; END'"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 20,
@@ -36,7 +44,11 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE UNIQUE INDEX CONCURRENTLY uq ON core.sample (id)"],
-      "expectedProblem": "unique index on an existing table constrains old writers"
+      "previousExpectedProblem": "unique index on an existing table constrains old writers",
+      "expectedProblems": [
+        "CONCURRENTLY requires concurrent_index kind",
+        "unique index on an existing table constrains old writers"
+      ]
     },
     {
       "id": 21,
@@ -44,7 +56,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.copy AS SELECT * FROM core.sample"],
-      "expectedProblem": "CREATE TABLE AS requires a data migration"
+      "previousExpectedProblem": "CREATE TABLE AS requires a data migration",
+      "expectedProblems": ["CREATE TABLE AS requires a data migration"]
     },
     {
       "id": 22,
@@ -52,7 +65,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["DROP TABLE core.sample"],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 23,
@@ -60,7 +76,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample RENAME COLUMN old TO new"],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 24,
@@ -68,7 +87,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ALTER COLUMN value TYPE bigint"],
-      "expectedProblem": "nullability/type/storage change"
+      "previousExpectedProblem": "nullability/type/storage change",
+      "expectedProblems": [
+        "unrecognized ALTER TABLE action: AT_AlterColumnType"
+      ]
     },
     {
       "id": 25,
@@ -78,7 +100,10 @@
       "statements": [
         "ALTER TABLE core.sample ALTER value SET DATA TYPE bigint"
       ],
-      "expectedProblem": "nullability/type/storage change"
+      "previousExpectedProblem": "nullability/type/storage change",
+      "expectedProblems": [
+        "unrecognized ALTER TABLE action: AT_AlterColumnType"
+      ]
     },
     {
       "id": 26,
@@ -86,7 +111,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ALTER COLUMN value SET NOT NULL"],
-      "expectedProblem": "nullability/type/storage change"
+      "previousExpectedProblem": "nullability/type/storage change",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_SetNotNull"]
     },
     {
       "id": 27,
@@ -94,7 +120,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN value text NOT NULL"],
-      "expectedProblem": "NOT NULL column without a constant default"
+      "previousExpectedProblem": "NOT NULL column without a constant default",
+      "expectedProblems": ["NOT NULL column without a constant default"]
     },
     {
       "id": 28,
@@ -104,7 +131,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN value text NOT NULL, ADD COLUMN other text DEFAULT 'x'"
       ],
-      "expectedProblem": "NOT NULL column without a constant default"
+      "previousExpectedProblem": "NOT NULL column without a constant default",
+      "expectedProblems": ["NOT NULL column without a constant default"]
     },
     {
       "id": 29,
@@ -114,7 +142,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD CONSTRAINT c CHECK (value > 0)"
       ],
-      "expectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      "previousExpectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)",
+      "expectedProblems": [
+        "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      ]
     },
     {
       "id": 30,
@@ -122,7 +153,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD CONSTRAINT c UNIQUE (value)"],
-      "expectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      "previousExpectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)",
+      "expectedProblems": [
+        "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      ]
     },
     {
       "id": 31,
@@ -132,7 +166,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD FOREIGN KEY (id) REFERENCES core.parent (id)"
       ],
-      "expectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      "previousExpectedProblem": "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)",
+      "expectedProblems": [
+        "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)"
+      ]
     },
     {
       "id": 32,
@@ -142,7 +179,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN value int CHECK (value > 0)"
       ],
-      "expectedProblem": "constraint on an existing table requires NOT VALID"
+      "previousExpectedProblem": "constraint on an existing table requires NOT VALID",
+      "expectedProblems": ["constraint on an existing table requires NOT VALID"]
     },
     {
       "id": 33,
@@ -152,7 +190,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN value uuid DEFAULT gen_random_uuid()"
       ],
-      "expectedProblem": "nonconstant or unrecognized column default may rewrite the table"
+      "previousExpectedProblem": "nonconstant or unrecognized column default may rewrite the table",
+      "expectedProblems": [
+        "nonconstant or unrecognized column default may rewrite the table"
+      ]
     },
     {
       "id": 34,
@@ -162,7 +203,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN value timestamptz DEFAULT now()"
       ],
-      "expectedProblem": "nonconstant or unrecognized column default may rewrite the table"
+      "previousExpectedProblem": "nonconstant or unrecognized column default may rewrite the table",
+      "expectedProblems": [
+        "nonconstant or unrecognized column default may rewrite the table"
+      ]
     },
     {
       "id": 35,
@@ -172,7 +216,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN value integer GENERATED ALWAYS AS IDENTITY"
       ],
-      "expectedProblem": "generated/identity column may rewrite the table"
+      "previousExpectedProblem": "generated/identity column may rewrite the table",
+      "expectedProblems": ["generated/identity column may rewrite the table"]
     },
     {
       "id": 36,
@@ -180,7 +225,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample SET TABLESPACE other"],
-      "expectedProblem": "nullability/type/storage change"
+      "previousExpectedProblem": "nullability/type/storage change",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_SetTableSpace"]
     },
     {
       "id": 37,
@@ -188,7 +234,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample SET UNLOGGED"],
-      "expectedProblem": "nullability/type/storage change"
+      "previousExpectedProblem": "nullability/type/storage change",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_SetUnLogged"]
     },
     {
       "id": 38,
@@ -196,7 +243,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CLUSTER core.sample"],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 39,
@@ -204,7 +254,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["VACUUM FULL core.sample"],
-      "expectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      "previousExpectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 40,
@@ -214,7 +267,10 @@
       "statements": [
         "CREATE OR REPLACE FUNCTION core.old_fn() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$"
       ],
-      "expectedProblem": "CREATE OR REPLACE may change existing function behavior; use a new name"
+      "previousExpectedProblem": "CREATE OR REPLACE may change existing function behavior; use a new name",
+      "expectedProblems": [
+        "CREATE OR REPLACE may change existing function behavior; use a new name"
+      ]
     },
     {
       "id": 41,
@@ -222,7 +278,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["DO $$ BEGIN EXECUTE 'DROP TABLE core.sample'; END $$"],
-      "expectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      "previousExpectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 42,
@@ -230,7 +289,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CALL core.change_tables()"],
-      "expectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      "previousExpectedProblem": "unrecognized expand statement; use reviewed additive SQL or a contract/data migration",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 43,
@@ -240,7 +302,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN note text; DROP TABLE core.other"
       ],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 44,
@@ -250,7 +315,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD CONSTRAINT c CHECK (a <> E'\\'') NOT VALID, ALTER COLUMN v TYPE bigint -- ') NOT VALID"
       ],
-      "expectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations"
+      "previousExpectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations",
+      "expectedProblems": [
+        "unrecognized ALTER TABLE action: AT_AlterColumnType"
+      ]
     },
     {
       "id": 45,
@@ -260,7 +328,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN a$x$ text, DROP COLUMN old, ADD COLUMN b$x$ text"
       ],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_DropColumn"]
     },
     {
       "id": 46,
@@ -270,7 +339,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN a text DEFAULT U&'d\\0061t'"
       ],
-      "expectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations"
+      "previousExpectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations",
+      "expectedProblems": []
     },
     {
       "id": 47,
@@ -278,7 +348,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN U&\"d\\0061t\" text"],
-      "expectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations"
+      "previousExpectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations",
+      "expectedProblems": []
     },
     {
       "id": 48,
@@ -288,7 +359,8 @@
       "statements": [
         "/* outer /* inner */ still outer */ ALTER TABLE core.sample DROP COLUMN old"
       ],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_DropColumn"]
     },
     {
       "id": 49,
@@ -298,7 +370,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN a text DEFAULT '--'; DROP TABLE core.sample"
       ],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 50,
@@ -306,7 +381,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["-- comment\rDROP TABLE core.sample"],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
     },
     {
       "id": 51,
@@ -316,7 +394,10 @@
       "statements": [
         "CREATE TRIGGER t BEFORE INSERT ON core.delivery EXECUTE FUNCTION core.wipe()"
       ],
-      "expectedProblem": "trigger on an existing table changes old writers' behavior"
+      "previousExpectedProblem": "trigger on an existing table changes old writers' behavior",
+      "expectedProblems": [
+        "trigger on an existing table changes old writers' behavior"
+      ]
     },
     {
       "id": 52,
@@ -324,7 +405,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE INDEX ix ON core.sample (id)"],
-      "expectedProblem": "index on an existing table requires CONCURRENTLY and concurrent_index kind"
+      "previousExpectedProblem": "index on an existing table requires CONCURRENTLY and concurrent_index kind",
+      "expectedProblems": [
+        "index on an existing table requires CONCURRENTLY and concurrent_index kind"
+      ]
     },
     {
       "id": 53,
@@ -332,7 +416,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.child () INHERITS (core.sample)"],
-      "expectedProblem": "INHERITS requires parents created in this migration"
+      "previousExpectedProblem": "INHERITS requires parents created in this migration",
+      "expectedProblems": [
+        "INHERITS requires parents created in this migration"
+      ]
     },
     {
       "id": 54,
@@ -342,7 +429,10 @@
       "statements": [
         "CREATE TABLE core.child PARTITION OF core.sample FOR VALUES FROM (1) TO (2)"
       ],
-      "expectedProblem": "PARTITION OF requires a parent created in this migration"
+      "previousExpectedProblem": "PARTITION OF requires a parent created in this migration",
+      "expectedProblems": [
+        "PARTITION OF requires a parent created in this migration"
+      ]
     },
     {
       "id": 55,
@@ -352,7 +442,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DELETE FROM core.config_base; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 56,
@@ -362,7 +456,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE core.config_base SET removed = true; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 57,
@@ -372,7 +470,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO core.config_base DEFAULT VALUES; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 58,
@@ -382,7 +484,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN MERGE INTO core.config_base USING core.config_set ON false WHEN MATCHED THEN DO NOTHING; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 59,
@@ -392,7 +498,11 @@
       "statements": [
         "CREATE FUNCTION core.new_fn() RETURNS void LANGUAGE plpgsql AS $$ BEGIN COPY core.config_base TO STDOUT; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature",
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 60,
@@ -400,7 +510,8 @@
       "phase": "expand",
       "name": "fixture",
       "statements": ["CREATE INDEX ix ON core.sample (concurrently)"],
-      "expectedProblem": "index on an existing table requires CONCURRENTLY and concurrent_index kind"
+      "previousExpectedProblem": "index on an existing table requires CONCURRENTLY and concurrent_index kind",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \")\""]
     },
     {
       "id": 61,
@@ -410,7 +521,8 @@
       "statements": [
         "CREATE FUNCTION core.f() RETURNS text LANGUAGE sql AS $$ SELECT E'\\x41' $$"
       ],
-      "expectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations"
+      "previousExpectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations",
+      "expectedProblems": []
     },
     {
       "id": 62,
@@ -420,7 +532,10 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN a text DEFAULT 'unterminated"
       ],
-      "expectedProblem": "Unterminated SQL quoted value"
+      "previousExpectedProblem": "Unterminated SQL quoted value",
+      "expectedProblems": [
+        "SQL parse refused: unterminated quoted string at or near \"'unterminated\""
+      ]
     },
     {
       "id": 63,
@@ -428,7 +543,10 @@
       "phase": "expand",
       "name": "fixture",
       "statements": ["/* unterminated /* nested */"],
-      "expectedProblem": "Unterminated SQL comment"
+      "previousExpectedProblem": "Unterminated SQL comment",
+      "expectedProblems": [
+        "SQL parse refused: unterminated /* comment at or near \"/* unterminated /* nested */\""
+      ]
     },
     {
       "id": 64,
@@ -438,7 +556,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN a$x$ text, DROP COLUMN old, ADD COLUMN b$x$ text -- trailing comment"
       ],
-      "expectedProblem": "DROP, RENAME or rewrite command"
+      "previousExpectedProblem": "DROP, RENAME or rewrite command",
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_DropColumn"]
     },
     {
       "id": 65,
@@ -448,7 +567,10 @@
       "statements": [
         "CREATE FUNCTION core.end_user_sessions() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN DELETE FROM core.session WHERE user_id = NEW.id; RETURN NULL; END $$"
       ],
-      "expectedProblem": "destructive or dynamic SQL in a function body"
+      "previousExpectedProblem": "destructive or dynamic SQL in a function body",
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 66,
@@ -458,7 +580,10 @@
       "statements": [
         "CREATE TABLE core.ss (id int); CREATE TRIGGER t BEFORE INSERT ON core.ß EXECUTE FUNCTION core.fn()"
       ],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 67,
@@ -468,7 +593,10 @@
       "statements": [
         "CREATE TABLE core.fresh (c text DEFAULT $é$'$é$); ALTER TABLE core.sample ALTER COLUMN v TYPE bigint; -- ')"
       ],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 68,
@@ -478,7 +606,10 @@
       "statements": [
         "COMMENT ON TABLE core.sample IS $é$'$é$; DROP TABLE core.sample; -- '"
       ],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 69,
@@ -488,7 +619,10 @@
       "statements": [
         "CREATE FUNCTION core.unicode_body() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM $é$'$é$; DELETE FROM core.session; -- '\nEND $$"
       ],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
     },
     {
       "id": 70,
@@ -496,7 +630,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["COMMENT ON TABLE core.sample IS 'é'"],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": []
     },
     {
       "id": 71,
@@ -504,7 +639,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.\"é\" (id int)"],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": []
     },
     {
       "id": 72,
@@ -512,7 +648,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["-- é\nCREATE TABLE core.fresh (id int)"],
-      "expectedProblem": "Non-ASCII characters are unsupported in expand SQL"
+      "previousExpectedProblem": "Non-ASCII characters are unsupported in expand SQL",
+      "expectedProblems": []
     },
     {
       "id": 73,
@@ -522,7 +659,10 @@
       "statements": [
         "CREATE TABLE core.fresh (c text DEFAULT 1$$'$$); ALTER TABLE core.sample ALTER COLUMN v TYPE bigint; -- ')"
       ],
-      "expectedProblem": "A SQL digit must not be immediately followed by $"
+      "previousExpectedProblem": "A SQL digit must not be immediately followed by $",
+      "expectedProblems": [
+        "SQL parse refused: syntax error at or near \"$$'$$\""
+      ]
     },
     {
       "id": 74,
@@ -530,7 +670,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["COMMENT ON TABLE core.sample IS 1$tag$anything$tag$"],
-      "expectedProblem": "A SQL digit must not be immediately followed by $"
+      "previousExpectedProblem": "A SQL digit must not be immediately followed by $",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"1\""]
     },
     {
       "id": 75,
@@ -538,7 +679,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["COMMENT ON TABLE core.sample IS $missing"],
-      "expectedProblem": "Unrecognized SQL dollar delimiter"
+      "previousExpectedProblem": "Unrecognized SQL dollar delimiter",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"$\""]
     },
     {
       "id": 76,
@@ -546,7 +688,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.fresh (id int $)"],
-      "expectedProblem": "Unrecognized SQL dollar delimiter"
+      "previousExpectedProblem": "Unrecognized SQL dollar delimiter",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"$\""]
     },
     {
       "id": 77,
@@ -556,7 +699,10 @@
       "statements": [
         "CREATE TABLE core.fresh (id int); CREATE TABLE core.other (id int)"
       ],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 78,
@@ -564,7 +710,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.fresh (id int);;"],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": []
     },
     {
       "id": 79,
@@ -572,7 +719,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["; CREATE TABLE core.fresh (id int)"],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": []
     },
     {
       "id": 80,
@@ -580,7 +728,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["CREATE TABLE core.fresh (id int;)"],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \";\""]
     },
     {
       "id": 81,
@@ -588,7 +737,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": [""],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": ["SQL parse refused: Query cannot be empty"]
     },
     {
       "id": 82,
@@ -596,7 +746,10 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["-- only a comment"],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 83,
@@ -604,7 +757,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s serial"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 84,
@@ -612,7 +766,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s serial2"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 85,
@@ -620,7 +775,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s serial4"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 86,
@@ -628,7 +784,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s serial8"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 87,
@@ -636,7 +793,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s smallserial"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 88,
@@ -644,7 +802,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s bigserial"],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 89,
@@ -652,7 +811,8 @@
       "name": "fixture",
       "phase": "expand",
       "statements": ["ALTER TABLE core.sample ADD COLUMN s \"serial\""],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 90,
@@ -662,7 +822,8 @@
       "statements": [
         "ALTER TABLE core.sample ADD COLUMN IF NOT EXISTS s bigserial"
       ],
-      "expectedProblem": "serial pseudo-type may rewrite the table"
+      "previousExpectedProblem": "serial pseudo-type may rewrite the table",
+      "expectedProblems": ["serial pseudo-type may rewrite the table"]
     },
     {
       "id": 91,
@@ -670,7 +831,8 @@
       "name": "fixture",
       "phase": "contract",
       "statements": ["COMMENT ON TABLE core.sample IS E'escaped'"],
-      "expectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations"
+      "previousExpectedProblem": "Escape and Unicode SQL quotes are unsupported in checked migrations",
+      "expectedProblems": []
     },
     {
       "id": 92,
@@ -680,7 +842,10 @@
       "statements": [
         "CREATE TABLE core.fresh (id int); DROP TABLE core.sample"
       ],
-      "expectedProblem": "Each migration string must contain exactly one SQL statement"
+      "previousExpectedProblem": "Each migration string must contain exactly one SQL statement",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
     },
     {
       "id": 93,
@@ -688,7 +853,8 @@
       "name": "fixture",
       "phase": "contract",
       "statements": ["COMMENT ON TABLE core.sample IS $missing"],
-      "expectedProblem": "Unrecognized SQL dollar delimiter"
+      "previousExpectedProblem": "Unrecognized SQL dollar delimiter",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"$\""]
     },
     {
       "id": 94,
@@ -696,7 +862,8 @@
       "name": "fixture",
       "phase": "contract",
       "statements": ["COMMENT ON TABLE core.sample IS 1$$anything$$"],
-      "expectedProblem": "A SQL digit must not be immediately followed by $"
+      "previousExpectedProblem": "A SQL digit must not be immediately followed by $",
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"1\""]
     },
     {
       "id": 95,
@@ -706,7 +873,10 @@
       "statements": [
         "CREATE TABLE core.fresh (c text DEFAULT 1e1$$'$$); ALTER TABLE core.sample ALTER COLUMN v TYPE bigint; -- ')"
       ],
-      "expectedProblem": "Unsupported SQL numeric token boundary"
+      "previousExpectedProblem": "Unsupported SQL numeric token boundary",
+      "expectedProblems": [
+        "SQL parse refused: trailing junk after numeric literal at or near \"1e1$$\""
+      ]
     },
     {
       "id": 96,
@@ -716,7 +886,10 @@
       "statements": [
         "CREATE TABLE core.fresh (c text DEFAULT 0x1$$'$$); ALTER TABLE core.sample ALTER COLUMN v TYPE bigint; -- ')"
       ],
-      "expectedProblem": "Unsupported SQL numeric token boundary"
+      "previousExpectedProblem": "Unsupported SQL numeric token boundary",
+      "expectedProblems": [
+        "SQL parse refused: trailing junk after numeric literal at or near \"0x1$$\""
+      ]
     }
   ]
 }

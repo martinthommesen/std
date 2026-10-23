@@ -1,0 +1,944 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 100,
+      "name": "round4-30-function-set",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.hidden_delete() RETURNS void LANGUAGE sql SET standard_conforming_strings = off AS $$ SELECT 'a\\'; DELETE FROM core.sample; SELECT 'x' $$"
+      ],
+      "expectedProblems": [
+        "function SET clauses are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 101,
+      "name": "round4-schema-inherits",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE SCHEMA s CREATE TABLE t (id int) INHERITS (core.sample)"
+      ],
+      "expectedProblems": [
+        "CREATE SCHEMA elements are not allowed; use separate statements"
+      ]
+    },
+    {
+      "id": 102,
+      "name": "round4-composite-attribute",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TYPE core.sample ADD ATTRIBUTE add value CASCADE, ALTER ATTRIBUTE a TYPE bigint CASCADE"
+      ],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 103,
+      "name": "round4-nbsp-contract",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": ["CREATE TABLE t (id int); DROP TABLE core.sample"],
+      "expectedProblems": [
+        "SQL parse refused: syntax error at or near \" DROP\""
+      ]
+    },
+    {
+      "id": 104,
+      "name": "schema-empty",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA s"],
+      "expectedProblems": []
+    },
+    {
+      "id": 105,
+      "name": "schema-nested-index",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE SCHEMA s CREATE TABLE t (id int) CREATE INDEX ix ON t(id)"
+      ],
+      "expectedProblems": [
+        "CREATE SCHEMA elements are not allowed; use separate statements"
+      ]
+    },
+    {
+      "id": 106,
+      "name": "table-like-fresh",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.base (id int)",
+        "CREATE TABLE core.copy (LIKE core.base INCLUDING ALL)"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 107,
+      "name": "table-like-existing",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.copy (LIKE core.sample INCLUDING ALL)"],
+      "expectedProblems": ["LIKE requires a table created in this migration"]
+    },
+    {
+      "id": 108,
+      "name": "inherit-second-existing-parent",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.parent (id int)",
+        "CREATE TABLE core.child () INHERITS (core.parent, core.sample)"
+      ],
+      "expectedProblems": [
+        "INHERITS requires parents created in this migration"
+      ],
+      "expectedStatement": 2
+    },
+    {
+      "id": 109,
+      "name": "self-inheritance",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.self () INHERITS (core.self)"],
+      "expectedProblems": [
+        "INHERITS requires parents created in this migration"
+      ]
+    },
+    {
+      "id": 110,
+      "name": "if-not-exists-not-fresh",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TABLE IF NOT EXISTS core.sample(id int)"],
+      "expectedProblems": [
+        "CREATE TABLE must create a new table, without OF or IF NOT EXISTS"
+      ]
+    },
+    {
+      "id": 111,
+      "name": "typed-table",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.typed OF core.record_type"],
+      "expectedProblems": [
+        "CREATE TABLE must create a new table, without OF or IF NOT EXISTS"
+      ]
+    },
+    {
+      "id": 112,
+      "name": "enum-create",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TYPE core.status AS ENUM ('new', 'old')"],
+      "expectedProblems": []
+    },
+    {
+      "id": 113,
+      "name": "composite-create",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE TYPE core.row AS (id int)"],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 114,
+      "name": "enum-add-before",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TYPE core.status ADD VALUE IF NOT EXISTS 'fresh' BEFORE 'old'"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 115,
+      "name": "enum-rename",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TYPE core.status RENAME VALUE 'old' TO 'new'"],
+      "expectedProblems": ["ALTER TYPE permits only ADD VALUE"]
+    },
+    {
+      "id": 116,
+      "name": "constant-casts",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a numeric DEFAULT CAST(-1.5 AS numeric)",
+        "ALTER TABLE core.sample ADD COLUMN b timestamp DEFAULT TIMESTAMP '2026-10-23'",
+        "ALTER TABLE core.sample ADD COLUMN c numeric DEFAULT 1e2",
+        "ALTER TABLE core.sample ADD COLUMN d int NOT NULL DEFAULT ((1))::int"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 117,
+      "name": "null-cast",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a int NOT NULL DEFAULT NULL::int"
+      ],
+      "expectedProblems": ["NOT NULL column without a constant default"]
+    },
+    {
+      "id": 118,
+      "name": "function-cast",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a text DEFAULT lower('A')::text"
+      ],
+      "expectedProblems": [
+        "nonconstant or unrecognized column default may rewrite the table"
+      ]
+    },
+    {
+      "id": 119,
+      "name": "compound-default",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN a int DEFAULT 1+2"],
+      "expectedProblems": [
+        "nonconstant or unrecognized column default may rewrite the table"
+      ]
+    },
+    {
+      "id": 120,
+      "name": "constraint-validate",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample VALIDATE CONSTRAINT c"],
+      "expectedProblems": []
+    },
+    {
+      "id": 121,
+      "name": "fresh-column-and-constraints",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (id int)",
+        "ALTER TABLE core.fresh ADD COLUMN x int, ADD CONSTRAINT u UNIQUE(id), ADD CONSTRAINT c CHECK(x>0)"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 122,
+      "name": "column-foreign-key",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN x int REFERENCES core.parent(id)"
+      ],
+      "expectedProblems": ["constraint on an existing table requires NOT VALID"]
+    },
+    {
+      "id": 123,
+      "name": "generated",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN x int GENERATED ALWAYS AS (1) STORED"
+      ],
+      "expectedProblems": ["generated/identity column may rewrite the table"]
+    },
+    {
+      "id": 124,
+      "name": "serial-fresh-alter",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (id int)",
+        "ALTER TABLE core.fresh ADD COLUMN x serial"
+      ],
+      "expectedProblems": ["serial pseudo-type may rewrite the table"],
+      "expectedStatement": 2
+    },
+    {
+      "id": 125,
+      "name": "drop-constraint",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample DROP CONSTRAINT c"],
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_DropConstraint"]
+    },
+    {
+      "id": 126,
+      "name": "inherit-attachment",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample INHERIT core.parent"],
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_AddInherit"]
+    },
+    {
+      "id": 127,
+      "name": "partition-attachment",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ATTACH PARTITION core.child FOR VALUES FROM(1) TO(2)"
+      ],
+      "expectedProblems": [
+        "unrecognized ALTER TABLE action: AT_AttachPartition"
+      ]
+    },
+    {
+      "id": 128,
+      "name": "storage-params",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample SET (fillfactor=50)"],
+      "expectedProblems": ["unrecognized ALTER TABLE action: AT_SetRelOptions"]
+    },
+    {
+      "id": 129,
+      "name": "column-storage",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN x text STORAGE EXTERNAL"
+      ],
+      "expectedProblems": ["column storage options are not allowed"]
+    },
+    {
+      "id": 130,
+      "name": "alter-view",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER VIEW core.v ALTER COLUMN x SET DEFAULT 1"],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 131,
+      "name": "comment",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "COMMENT ON COLUMN core.sample.x IS 'ALTER TYPE DROP DELETE'"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 132,
+      "name": "comment-reset",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["COMMENT ON TABLE core.sample IS NULL"],
+      "expectedProblems": []
+    },
+    {
+      "id": 133,
+      "name": "concurrent-index",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "expectedProblems": [],
+      "statement": "CREATE INDEX CONCURRENTLY ix ON core.sample(id)"
+    },
+    {
+      "id": 134,
+      "name": "unique-concurrent-index",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "expectedProblems": [
+        "unique index on an existing table constrains old writers"
+      ],
+      "statement": "CREATE UNIQUE INDEX CONCURRENTLY ix ON core.sample(id)"
+    },
+    {
+      "id": 135,
+      "name": "fresh-unique-index",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (id int)",
+        "CREATE UNIQUE INDEX ix ON core.fresh(id)"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 136,
+      "name": "fresh-index-expression-not-keyword",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (\"concurrently\" int)",
+        "CREATE INDEX ix ON core.fresh(\"concurrently\")"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 137,
+      "name": "fresh-trigger",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (id int)",
+        "CREATE TRIGGER t BEFORE INSERT ON core.fresh FOR EACH ROW EXECUTE FUNCTION core.fn()"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 138,
+      "name": "sql-atomic",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.atomic_fn() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; END"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 139,
+      "name": "sql-return",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.return_fn() RETURNS int LANGUAGE sql RETURN 1"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 140,
+      "name": "sql-atomic-write",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.atomic_write() RETURNS void LANGUAGE sql BEGIN ATOMIC DELETE FROM core.sample; END"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 141,
+      "name": "sql-nested-cte",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.nested_write() RETURNS int LANGUAGE sql AS $$ WITH x AS (DELETE FROM core.sample RETURNING id) SELECT id FROM x $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 142,
+      "name": "sql-select-into",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.into_write() RETURNS int LANGUAGE sql AS $$ SELECT 1 INTO core.sample $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 143,
+      "name": "sql-dynamic",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.dynamic_write() RETURNS int LANGUAGE sql AS $$ EXECUTE prepared $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 144,
+      "name": "sql-string-decoded",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.escaped_body() RETURNS text LANGUAGE sql AS E'SELECT ''DELETE\\\\text''' "
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 145,
+      "name": "sql-invalid",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.invalid_sql() RETURNS int LANGUAGE sql AS $$ SELECT ( $$"
+      ],
+      "expectedProblems": [
+        "function body refused: syntax error at end of input"
+      ]
+    },
+    {
+      "id": 146,
+      "name": "plpgsql-invalid",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.invalid_pl() RETURNS int LANGUAGE plpgsql AS $$ BEGIN IF; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: missing \"THEN\" at end of SQL expression"
+      ]
+    },
+    {
+      "id": 147,
+      "name": "plpgsql-read",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_read() RETURNS int LANGUAGE plpgsql AS $$ DECLARE x int := 1; BEGIN IF x > 0 THEN PERFORM 1; END IF; RETURN x; END $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 148,
+      "name": "plpgsql-literal",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_literal() RETURNS text LANGUAGE plpgsql AS $$ BEGIN RETURN E'DELETE\\\\text'; END $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 149,
+      "name": "plpgsql-return-execute",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_dynamic() RETURNS SETOF int LANGUAGE plpgsql AS $$ BEGIN RETURN QUERY EXECUTE 'SELECT 1'; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 150,
+      "name": "plpgsql-nested-expression",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_nested() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF true THEN PERFORM (WITH x AS (DELETE FROM core.sample RETURNING id) SELECT id FROM x); END IF; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 151,
+      "name": "plpgsql-truncate",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_truncate() RETURNS void LANGUAGE plpgsql AS $$ BEGIN TRUNCATE core.sample; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 152,
+      "name": "plpgsql-body-set",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_set() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET standard_conforming_strings = off; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 153,
+      "name": "plpgsql-function-set",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_options() RETURNS void LANGUAGE plpgsql SET search_path=core AS $$ BEGIN RETURN; END $$"
+      ],
+      "expectedProblems": [
+        "function SET clauses are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 154,
+      "name": "plpgsql-assignment",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.pl_assign() RETURNS int LANGUAGE plpgsql AS $$ DECLARE x int; BEGIN x := 1; RETURN x; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: unsupported PL/pgSQL statement: PLpgSQL_stmt_assign"
+      ]
+    },
+    {
+      "id": 155,
+      "name": "unsupported-language",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.c_fn() RETURNS int AS 'library', 'entry' LANGUAGE c"
+      ],
+      "expectedProblems": ["expand functions require LANGUAGE sql or plpgsql"]
+    },
+    {
+      "id": 156,
+      "name": "procedure",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE PROCEDURE core.proc() LANGUAGE sql AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 157,
+      "name": "grants",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["GRANT SELECT ON core.sample TO PUBLIC"],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 158,
+      "name": "default-grants",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC"
+      ],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 159,
+      "name": "extension",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE EXTENSION hstore"],
+      "expectedProblems": [
+        "unrecognized expand statement; use reviewed additive SQL or a contract/data migration"
+      ]
+    },
+    {
+      "id": 160,
+      "name": "function-reused-within-migration",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.reused() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION core.\"reused\"(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ],
+      "expectedStatement": 2
+    },
+    {
+      "id": 161,
+      "name": "function-distinct-quoted-name",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION \"a.b\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION a.b() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 162,
+      "name": "null-byte-expand",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "COMMENT ON TABLE core.sample IS 'x'\u0000; DELETE FROM core.sample"
+      ],
+      "expectedProblems": ["SQL parse refused: SQL contains a NUL byte"]
+    },
+    {
+      "id": 163,
+      "name": "null-byte-contract",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": [
+        "COMMENT ON TABLE core.sample IS 'x'\u0000; DELETE FROM core.sample"
+      ],
+      "expectedProblems": ["SQL parse refused: SQL contains a NUL byte"]
+    },
+    {
+      "id": 164,
+      "name": "contract-invalid",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": ["ALTER TABLE"],
+      "expectedProblems": ["SQL parse refused: syntax error at end of input"]
+    },
+    {
+      "id": 165,
+      "name": "contract-escapes-and-unicode",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": [
+        "COMMENT ON TABLE core.sample IS E'escaped'",
+        "COMMENT ON TABLE core.sample IS U&'d\\0061t'",
+        "COMMENT ON TABLE core.sample IS 'é'"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 166,
+      "name": "fresh-does-not-leak",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE INDEX ix ON core.fresh(id)"],
+      "expectedProblems": [
+        "index on an existing table requires CONCURRENTLY and concurrent_index kind"
+      ]
+    },
+    {
+      "id": 167,
+      "name": "fresh-not-from-rejected-statement",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS core.sample(id int)",
+        "CREATE INDEX ix ON core.sample(id)"
+      ],
+      "expectedProblems": [
+        "CREATE TABLE must create a new table, without OF or IF NOT EXISTS"
+      ],
+      "extraProblems": [
+        {
+          "statement": 2,
+          "message": "index on an existing table requires CONCURRENTLY and concurrent_index kind"
+        }
+      ]
+    },
+    {
+      "id": 168,
+      "name": "unqualified-function-history",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION unresolved() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION public.unresolved(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ],
+      "expectedStatement": 2
+    },
+    {
+      "id": 169,
+      "name": "qualified-function-history",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.resolved() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION resolved(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ],
+      "expectedStatement": 2
+    },
+    {
+      "id": 170,
+      "name": "escaped-sql-write",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.escaped_delete() RETURNS void LANGUAGE sql AS E'\\u0044ELETE FROM core.sample'"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 171,
+      "name": "unicode-sql-write",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.unicode_delete() RETURNS void LANGUAGE sql AS U&'\\0044ELETE FROM core.sample'"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 172,
+      "name": "escaped-plpgsql-write",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.escaped_pl_delete() RETURNS void LANGUAGE plpgsql AS E'BEGIN \\u0044ELETE FROM core.sample; END'"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 173,
+      "name": "unicode-function-delimiter",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.unicode_safe() RETURNS int LANGUAGE sql AS $é$ SELECT 1 $é$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 174,
+      "name": "unicode-identifier-collision",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.U&\"d\\0061t\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION core.dat(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ],
+      "expectedStatement": 2
+    },
+    {
+      "id": 175,
+      "name": "plpgsql-declaration-write",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.declaration_write() RETURNS int LANGUAGE plpgsql AS $$ DECLARE x int := (WITH d AS (DELETE FROM core.sample RETURNING id) SELECT id FROM d); BEGIN RETURN x; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 176,
+      "name": "plpgsql-merge",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.pl_merge() RETURNS void LANGUAGE plpgsql AS $$ BEGIN MERGE INTO core.sample USING core.other ON false WHEN MATCHED THEN DELETE; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 177,
+      "name": "plpgsql-copy",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.pl_copy() RETURNS void LANGUAGE plpgsql AS $$ BEGIN COPY core.sample FROM STDIN; END $$"
+      ],
+      "expectedProblems": [
+        "function body refused: destructive or dynamic SQL in a function body"
+      ]
+    },
+    {
+      "id": 178,
+      "name": "sql-empty-body",
+      "phase": "expand",
+      "kind": "tx",
+      "statements": [
+        "CREATE FUNCTION core.empty_sql() RETURNS int LANGUAGE sql AS $$ --empty $$"
+      ],
+      "expectedProblems": [
+        "function body refused: SQL function body has no statements"
+      ]
+    },
+    {
+      "id": 179,
+      "name": "escaped-null-byte",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.null_body() RETURNS void LANGUAGE sql AS E'\\000DELETE FROM core.sample'"
+      ],
+      "expectedProblems": [
+        "SQL parse refused: invalid byte sequence for encoding \"UTF8\": 0x00"
+      ]
+    },
+    {
+      "id": 180,
+      "name": "contract-function-rename",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": [
+        "ALTER FUNCTION core.before_rename() RENAME TO after_rename"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 181,
+      "name": "expand-renamed-function",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.after_rename() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ]
+    },
+    {
+      "id": 182,
+      "name": "contract-function-schema",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": ["ALTER FUNCTION core.moved_function() SET SCHEMA moved"],
+      "expectedProblems": []
+    },
+    {
+      "id": 183,
+      "name": "expand-moved-function",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION moved.moved_function() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ]
+    },
+    {
+      "id": 184,
+      "name": "contract-routine-rename",
+      "kind": "tx",
+      "phase": "contract",
+      "statements": [
+        "ALTER ROUTINE core.before_routine() RENAME TO after_routine"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 185,
+      "name": "expand-renamed-routine",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.after_routine() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "existing function name; use a new name even for a new signature"
+      ]
+    }
+  ]
+}
