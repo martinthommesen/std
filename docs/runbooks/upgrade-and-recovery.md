@@ -61,7 +61,7 @@ Use this for every STD release and every new version of an app set.
 
    Exit 0 or 2 is fine to start (2 means warnings, such as orphan columns); fix errors first. Open conflicts are informational: the local value stays effective until an admin resolves them as `keep_local`, `take_shipped` or `replace`.
 
-Legacy local rules or subscriptions that name a reserved service identity do not block unrelated change sets or helpdesk v3 loads. Doctor reports each as `localServiceIdentity`: an active rule or enabled subscription is an error; a disabled or retired definition is a warning; purged definitions are omitted. Change its run identity to an ordinary user, or keep it disabled or retired. Inactive definitions do not execute; runtime refuses execution with a reserved local run identity if re-enabled. Implicit local after rules inside a shipped cascade instead use the initiating human's current roles; a system-only chain with no human origin is refused and logs the rule ID.
+Legacy local rules or subscriptions that name a reserved service identity do not block unrelated change sets or helpdesk v3 loads. Doctor reports each as `localServiceIdentity`: an active rule or enabled subscription is an error; a disabled or retired definition is a warning; purged definitions are omitted. Change its run identity to an ordinary user, or keep it disabled or retired. Inactive definitions do not execute; runtime refuses execution with a reserved local run identity if re-enabled. Implicit local after rules inside a shipped cascade instead use the current roles of the chain's origin, the first non-reserved actor (a session user or an ordinary subscription identity); a chain without one is refused and logs the rule ID.
 
 ### Reserved-role recovery
 
