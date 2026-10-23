@@ -148,7 +148,7 @@ const renderTicketType = (
     return own.type;
   }
 
-  return stored === null || stored.trim() === "" ? PLAIN_TICKET_TYPE : stored;
+  return stored === null || stored === "" ? PLAIN_TICKET_TYPE : stored;
 };
 
 const writeTicketType = (
@@ -215,12 +215,11 @@ const filterTicketType = (
     op: "not",
   };
 
+  // Values compare as rendered, exactly (decision 0025, D4): an ITIL
+  // class's own type also selects plain tickets that a generic write gave
+  // that `ticket_type`, which render it too.
   const atoms = values.map((value): Expr => {
-    const named = classTypeOf(value);
-
-    if (named !== undefined) {
-      return classIn(named.classId);
-    }
+    const named = CLASS_TYPES.find((entry) => entry.type === value);
 
     const stored: Expr = {
       left: { path: [F.ticketType] },
@@ -228,7 +227,7 @@ const filterTicketType = (
       right: { value },
     };
 
-    return {
+    const plainOfType: Expr = {
       args: [
         plain,
         value === PLAIN_TICKET_TYPE
@@ -240,6 +239,10 @@ const filterTicketType = (
       ],
       op: "and",
     };
+
+    return named === undefined
+      ? plainOfType
+      : { args: [classIn(named.classId), plainOfType], op: "or" };
   });
 
   return Result.succeed({ args: atoms, op: "or" });

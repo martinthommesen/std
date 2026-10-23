@@ -14,6 +14,7 @@
  * (masks and hidden fields apply, so his queries leave `cost` out).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 import {
   assert as check,
@@ -41,8 +42,16 @@ import {
   API,
   withQuery,
 } from "./api-support.ts";
+import { createTicket, itilLayer } from "./itil-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
+import {
+  ACME,
+  addField,
+  change,
+  values as sqlValues,
+} from "./schema-support.ts";
+import { itemsOf, TICKETS, tmf621As } from "./tmf621-support.ts";
+import type { Tmf621Client } from "./tmf621-support.ts";
 
 const RUNS = 60;
 const SEED = 20_261_022;
@@ -633,6 +642,287 @@ describe("tmf-filter-equivalence", () => {
           assert.isAbove(tally.nonEmpty, 0);
         }),
       { timeout: 300_000 }
+    );
+  });
+});
+
+/** A stored state combination of one ticket. */
+interface StoredState {
+  readonly status: string;
+  readonly holdReason: string | null;
+  readonly statusReason: string | null;
+}
+
+const NO_HOLD: readonly (string | null)[] = [
+  null,
+  "awaiting_caller",
+  "awaiting_change",
+  "awaiting_problem",
+  "awaiting_vendor",
+];
+
+/** Every on-hold and canceled combination, which statuses can share. */
+const HOLD_AND_CANCEL: readonly StoredState[] = [
+  ...NO_HOLD.map((holdReason) => ({
+    holdReason,
+    status: "on_hold",
+    statusReason: null,
+  })),
+  { holdReason: null, status: "canceled", statusReason: null },
+  { holdReason: null, status: "canceled", statusReason: "rejected" },
+  { holdReason: null, status: "canceled", statusReason: "duplicate" },
+];
+
+const plainStates = (statuses: readonly string[]): readonly StoredState[] => [
+  ...statuses.map((status) => ({
+    holdReason: null,
+    status,
+    statusReason: null,
+  })),
+  ...HOLD_AND_CANCEL,
+];
+
+const INCIDENT_STATES = plainStates([
+  "new",
+  "in_progress",
+  "resolved",
+  "closed",
+]);
+
+const PROBLEM_STATES = plainStates([
+  "new",
+  "assess",
+  "root_cause_analysis",
+  "fix_in_progress",
+  "resolved",
+  "closed",
+]);
+
+const TICKET_STATES = plainStates([
+  "new",
+  "in_progress",
+  "awaiting_approval",
+  "resolved",
+  "closed",
+]);
+
+/**
+ * Stored `ticket_type` values, which only a plain ticket renders,
+ * `incident` and `problem` included (writable through `/api/v1` only):
+ * `ticketType=incident` selects them with the incidents.
+ */
+const STORED_TYPES: readonly (string | null)[] = [
+  null,
+  "request",
+  "ticket",
+  "other",
+  "Request",
+  "incident",
+  "problem",
+];
+
+const SEVERITY_LABELS: readonly (string | null)[] = [null, null, "Sev-X"];
+const PRIORITY_LABELS: readonly (string | null)[] = [null, null, null, "P0"];
+const TAG = "filter-equivalence";
+const SEVERITIES = ["Critical", "Major", "Minor"];
+const PRIORITIES = ["Critical", "High", "Medium", "Low", "Planning"];
+const TICKET_TYPES = ["incident", "problem", "ticket", "other"];
+
+const TMF621_STATUSES = [
+  "acknowledged",
+  "inProgress",
+  "pending",
+  "held",
+  "resolved",
+  "closed",
+  "cancelled",
+  "rejected",
+] as const;
+
+/**
+ * Creates the tickets through `/api/v1` and stores their state
+ * combinations, a `ticket_type`, and the free-text labels directly (the
+ * stored shapes a read must render whatever way they came about).
+ *
+ * @returns Nothing.
+ */
+const seedTickets = Effect.fn("TmfFilterEquivalence.seedTickets")(
+  function* seedTickets() {
+    const tables = [
+      ["helpdeskIncident", INCIDENT_STATES],
+      ["helpdeskProblem", PROBLEM_STATES],
+      ["helpdeskTicket", TICKET_STATES],
+    ] as const;
+
+    let index = 0;
+
+    for (const [table, states] of tables) {
+      for (const state of states) {
+        const record = yield* createTicket(table, {
+          impact: String((index % 3) + 1),
+          priority: String((index % 5) + 1),
+          shortDescription: TAG,
+        });
+
+        yield* sqlValues(
+          `UPDATE helpdesk.ticket
+             SET status = $2, hold_reason = $3, status_reason = $4,
+                 ticket_type = $5, severity_label = $6, priority_label = $7
+           WHERE id = $1::uuid`,
+          [
+            textOf(record.id),
+            state.status,
+            state.holdReason,
+            state.statusReason,
+            STORED_TYPES[index % STORED_TYPES.length],
+            SEVERITY_LABELS[index % SEVERITY_LABELS.length],
+            PRIORITY_LABELS[index % PRIORITY_LABELS.length],
+          ]
+        );
+        index += 1;
+      }
+    }
+  }
+);
+
+/**
+ * The ids of the rendered tickets whose attribute equals a value.
+ *
+ * @param rendered - The unfiltered listing.
+ * @param attribute - The attribute.
+ * @param value - The value.
+ * @returns The sorted ids.
+ */
+const idsWhere = (
+  rendered: readonly JsonObject[],
+  attribute: string,
+  value: string
+): readonly string[] =>
+  rendered
+    .flatMap((item) => (item[attribute] === value ? [textOf(item.id)] : []))
+    .toSorted();
+
+/**
+ * The ids a `GET troubleTicket?<attribute>=<value>` returns, among the
+ * test's tickets.
+ *
+ * @param admin - The client.
+ * @param attribute - The attribute.
+ * @param value - The value.
+ * @returns The sorted ids.
+ */
+const idsFiltered = Effect.fn("TmfFilterEquivalence.idsFiltered")(
+  function* idsFiltered(admin: Tmf621Client, attribute: string, value: string) {
+    const response = yield* admin.get(
+      `${TICKETS}?name=${TAG}&${attribute}=${encodeURIComponent(value)}&limit=1000`
+    );
+
+    assert.strictEqual(response.status, 200, response.text);
+
+    return itemsOf(response)
+      .map((item) => textOf(item.id))
+      .toSorted();
+  }
+);
+
+/**
+ * Asserts that one attribute's filter selects exactly the tickets that
+ * render each of the named values and each value rendered.
+ *
+ * @param admin - The client.
+ * @param rendered - The unfiltered listing.
+ * @param attribute - The attribute.
+ * @param named - Values to check besides the rendered ones.
+ * @returns Nothing.
+ */
+const assertFilterMatchesRendering = Effect.fn(
+  "TmfFilterEquivalence.assertFilterMatchesRendering"
+)(function* assertFilterMatchesRendering(
+  admin: Tmf621Client,
+  rendered: readonly JsonObject[],
+  attribute: string,
+  named: readonly string[]
+) {
+  const candidates = new Set([
+    ...named,
+    ...rendered.map((item) => textOf(item[attribute])),
+  ]);
+
+  for (const value of candidates) {
+    assert.deepStrictEqual(
+      yield* idsFiltered(admin, attribute, value),
+      idsWhere(rendered, attribute, value),
+      `${attribute}=${value}`
+    );
+  }
+});
+
+describe("tmf-filter-equivalence-tmf621", () => {
+  layer(itilLayer, { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "TMF621 status, severity, priority and ticketType filters select exactly the tickets whose rendered value they name",
+      () =>
+        Effect.gen(function* tmf621Filters() {
+          const admin = yield* tmf621As("admin");
+
+          yield* seedTickets();
+
+          const listing = yield* admin.get(`${TICKETS}?name=${TAG}&limit=1000`);
+
+          assert.strictEqual(listing.status, 200, listing.text);
+          const rendered = itemsOf(listing);
+
+          assert.lengthOf(
+            rendered,
+            INCIDENT_STATES.length +
+              PROBLEM_STATES.length +
+              TICKET_STATES.length
+          );
+
+          yield* assertFilterMatchesRendering(
+            admin,
+            rendered,
+            "status",
+            TMF621_STATUSES
+          );
+          yield* assertFilterMatchesRendering(
+            admin,
+            rendered,
+            "severity",
+            SEVERITIES
+          );
+          yield* assertFilterMatchesRendering(
+            admin,
+            rendered,
+            "priority",
+            PRIORITIES
+          );
+          yield* assertFilterMatchesRendering(
+            admin,
+            rendered,
+            "ticketType",
+            TICKET_TYPES
+          );
+
+          // The test is not vacuous: every status and ticketType value is
+          // rendered by some ticket.
+          for (const status of TMF621_STATUSES) {
+            assert.isAbove(
+              idsWhere(rendered, "status", status).length,
+              0,
+              status
+            );
+          }
+
+          for (const type of TICKET_TYPES) {
+            assert.isAbove(
+              idsWhere(rendered, "ticketType", type).length,
+              0,
+              type
+            );
+          }
+        }),
+      { timeout: 120_000 }
     );
   });
 });
