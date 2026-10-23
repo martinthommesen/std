@@ -432,6 +432,11 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     );
   }
 
+  // Records the concrete re-read no longer sees (hidden or deleted since
+  // the page was read) are left out: the counts are of what is returned
+  // (Contracts 10.4), and the links stay those of the page as read.
+  const dropped = page.records.length - records.length;
+
   const render = {
     fields: parsed.fields,
     mapped,
@@ -454,8 +459,8 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
         query,
         request: input.request,
       }),
-      "x-result-count": String(page.records.length),
-      "x-total-count": String(page.count ?? 0),
+      "x-result-count": String(records.length),
+      "x-total-count": String(Math.max(0, (page.count ?? 0) - dropped)),
     }
   );
 });

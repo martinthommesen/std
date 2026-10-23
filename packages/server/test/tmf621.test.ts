@@ -103,24 +103,46 @@ const stored = Effect.fn("Tmf621Test.stored")(function* stored(
   return asObject(read.json);
 });
 
-/** What runs once, just before the next history read's statement. */
-interface HistoryInterleave {
-  next: (() => Promise<void>) | null;
+/** A write to run once, just before the next statement it matches. */
+interface MidRead {
+  next: {
+    readonly matches: (text: string) => boolean;
+    readonly run: () => Promise<void>;
+  } | null;
 }
 
-const historyInterleave: HistoryInterleave = { next: null };
+const midRead: MidRead = { next: null };
 
-/** `itilLayer`, whose SQL client runs `historyInterleave` at a history read. */
-const historyRaceLayer = itilLayer.pipe(
+/**
+ * Whether a statement is the history read (`withHistory`).
+ *
+ * @param text - The statement.
+ * @returns True for the history read.
+ */
+const isHistoryRead = (text: string) =>
+  text.includes("jsonb_exists_any(c.fields,");
+
+/**
+ * Whether a statement re-reads a ticket through its concrete class, an
+ * incident.
+ *
+ * @param text - The statement.
+ * @returns True for that re-read.
+ */
+const isIncidentRead = (text: string) =>
+  text.includes('JOIN "helpdesk"."incident" AS "t1"') && !isHistoryRead(text);
+
+/** `itilLayer`, whose SQL client runs `midRead` before a statement. */
+const midReadLayer = itilLayer.pipe(
   Layer.provide(
     Layer.succeed(Statement.CurrentTransformer, (statement) =>
-      Effect.gen(function* interleaveHistory() {
+      Effect.gen(function* interleave() {
         const [text] = statement.compile();
-        const { next } = historyInterleave;
+        const { next } = midRead;
 
-        if (text.includes("jsonb_exists_any(c.fields,") && next !== null) {
-          historyInterleave.next = null;
-          yield* Effect.promise(next);
+        if (next?.matches(text) === true) {
+          midRead.next = null;
+          yield* Effect.promise(next.run);
         }
 
         return statement;
@@ -750,20 +772,23 @@ describe("tmf621", () => {
         const run = Effect.runPromiseWith(yield* Effect.context());
 
         // The admin's resolve commits just before the agent's history read.
-        historyInterleave.next = async () => {
-          const resolved = await run(
-            admin.patch(path, {
-              status: "resolved",
-              statusChangeReason: "private resolution reason",
-            })
-          );
+        midRead.next = {
+          matches: isHistoryRead,
+          run: async () => {
+            const resolved = await run(
+              admin.patch(path, {
+                status: "resolved",
+                statusChangeReason: "private resolution reason",
+              })
+            );
 
-          assert.strictEqual(resolved.status, 200, resolved.text);
+            assert.strictEqual(resolved.status, 200, resolved.text);
+          },
         };
 
         const raced = yield* agent.get(path);
 
-        assert.isNull(historyInterleave.next, "the interleave ran");
+        assert.isNull(midRead.next, "the interleave ran");
         assert.strictEqual(raced.status, 200, raced.text);
         assert.notInclude(raced.text, "private resolution reason");
 
@@ -778,7 +803,7 @@ describe("tmf621", () => {
         const fresh = yield* agent.get(path);
 
         assert.notInclude(fresh.text, "private resolution reason");
-      }).pipe(Effect.provide(historyRaceLayer), TestClock.withLive)
+      }).pipe(Effect.provide(midReadLayer), TestClock.withLive)
   );
 
   it.effect(
@@ -844,18 +869,21 @@ describe("tmf621", () => {
 
           const run = Effect.runPromiseWith(yield* Effect.context());
 
-          historyInterleave.next = async () => {
-            const resolved = await run(
-              admin.patch(path, { status: "resolved" })
-            );
+          midRead.next = {
+            matches: isHistoryRead,
+            run: async () => {
+              const resolved = await run(
+                admin.patch(path, { status: "resolved" })
+              );
 
-            assert.strictEqual(resolved.status, 200, resolved.text);
+              assert.strictEqual(resolved.status, 200, resolved.text);
+            },
           };
 
           const raced = yield* agent.get(path);
           const fresh = yield* agent.get(path);
 
-          assert.isNull(historyInterleave.next, "the interleave ran");
+          assert.isNull(midRead.next, "the interleave ran");
           assert.strictEqual(raced.status, 200, raced.text);
           // The raced read is of the version before the resolve.
           assert.strictEqual(etagOf(raced), etagOf(before));
@@ -863,7 +891,83 @@ describe("tmf621", () => {
           assert.notInclude(raced.text, secret);
           assert.notInclude(fresh.text, secret);
         }
-      }).pipe(Effect.provide(historyRaceLayer), TestClock.withLive)
+      }).pipe(Effect.provide(midReadLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a ticket a write hides between the read and the re-read through its concrete class is not found, and lists leave it out of the items and counts",
+    () =>
+      Effect.gen(function* hiddenBetweenReads() {
+        // Agents may not see resolved tickets.
+        yield* change([
+          {
+            definition: {
+              actions: ["read"],
+              active: true,
+              classId: HELPDESK_CLASS_IDS.ticket,
+              condition: {
+                left: { path: [TICKET_FIELD_IDS.status] },
+                op: "eq",
+                right: { value: "resolved" },
+              },
+              description: null,
+              effect: "deny",
+              id: randomUUID(),
+              kind: "accessRule",
+              name: null,
+              owner: { layer: "local" },
+              protected: false,
+              roleIds: [HELPDESK.agentRole],
+              target: { kind: "records" },
+            },
+            op: "createAccessRule",
+          },
+        ]);
+
+        const admin = yield* tmf621As("admin");
+        const agent = yield* tmf621As("agent");
+
+        const run = Effect.runPromiseWith(yield* Effect.context());
+
+        for (const list of [false, true]) {
+          const name = `hidden between reads ${String(list)}`;
+          const ticket = yield* open(admin, { name });
+          const path = `${TICKETS}/${textOf(ticket.id)}`;
+
+          assert.strictEqual((yield* agent.get(path)).status, 200);
+
+          midRead.next = {
+            matches: isIncidentRead,
+            run: async () => {
+              const resolved = await run(
+                admin.patch(path, { status: "resolved" })
+              );
+
+              assert.strictEqual(resolved.status, 200, resolved.text);
+            },
+          };
+
+          const raced = yield* agent.get(
+            list ? `${TICKETS}?name=${encodeURIComponent(name)}` : path
+          );
+
+          assert.isNull(midRead.next, "the re-read was reached");
+
+          if (list) {
+            assert.deepStrictEqual(
+              [
+                raced.status,
+                raced.json,
+                raced.headers.get("x-result-count"),
+                raced.headers.get("x-total-count"),
+              ],
+              [200, [], "0", "0"]
+            );
+          } else {
+            assert.strictEqual(outcome(raced), "404 NotFound");
+          }
+        }
+      }).pipe(Effect.provide(midReadLayer), TestClock.withLive)
   );
 
   it.effect(
