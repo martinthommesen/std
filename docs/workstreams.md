@@ -50,7 +50,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1); decision 0033 | merged |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |
 | 6 | `ws/3i-helpdesk-v3` | 3I part A | helpdesk v3: ITIL incident and problem, cascade service identity, v2→v3 upgrade (decision 0034) | merged |
-| 6 | `ws/3i-itil-helpdesk` | 3I part B | TMF621 on the framework, CTK CI job, `v0.0.3` | planned |
+| 6 | `ws/3i-tmf621` | 3I part B | TMF621 v5 on the TMF framework over helpdesk v3 (`/tmf-api/troubleTicket/v5`), TMF621 hub events, the `ctk-tmf621` CI job (44/44), form-vs-api through TMF621 (decision 0035) | merged |
 | 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6): 10 of 10 runs succeeded | merged |
 | 6 | `ws/ci-pin-actions` | CI follow-up | `ci.yml` and `quickstart-compose.yml` pin every action by commit SHA | merged |
 | 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | merged |

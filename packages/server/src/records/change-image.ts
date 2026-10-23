@@ -10,14 +10,18 @@ import type { ChangeEntry } from "./change-entry.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { isWriteOnly } from "./stored-values.ts";
 
-const imageOf = (
+/**
+ * A stored record's canonical image: every live field but passwords and
+ * secrets, field ID to canonical JSON, unmasked.
+ *
+ * @param snapshot - The configuration.
+ * @param record - The record.
+ * @returns The image.
+ */
+export const storedImageOf = (
   snapshot: ConfigSnapshot,
-  record: StoredRecord | null
-): JsonObject | null => {
-  if (record === null) {
-    return null;
-  }
-
+  record: StoredRecord
+): JsonObject => {
   const image: Record<string, JsonValue> = {};
 
   for (const field of snapshot.fields(record.classId)) {
@@ -31,6 +35,12 @@ const imageOf = (
 
   return image;
 };
+
+const imageOf = (
+  snapshot: ConfigSnapshot,
+  record: StoredRecord | null
+): JsonObject | null =>
+  record === null ? null : storedImageOf(snapshot, record);
 
 /** Insert canonical non-secret images, bridging a missing predecessor in one statement. */
 export const writeChangeImageValues = Effect.fn(

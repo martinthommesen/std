@@ -11,10 +11,13 @@
  *
  * Workstream 3H adds the hub callbacks here.
  */
+import { isJsonString } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 
 import { CallbackTransport } from "../events/callback.ts";
 import { renderHubEvents } from "../events/render.ts";
+import { prepareMappedEvents } from "../events/tmf-event-arrays.ts";
 import { authorizeEventTopic } from "../events/topic-authorization.ts";
 import { runAfterCommitRule } from "../hooks/after-commit-rules.ts";
 import { ruleCarriers } from "../records/outbox-producer.ts";
@@ -24,6 +27,21 @@ import type {
   DeliveryEffect,
   DeliveryHandler,
 } from "./delivery-effects.ts";
+
+/**
+ * A hub event's `Idempotency-Key`: its own stable `eventId` (decision 0032,
+ * amended by decision 0035). One change can give several events (TMF621's
+ * AttributeValueChange, StatusChange and Resolved), each a distinct
+ * notification, while a redelivery of the same event repeats its key.
+ *
+ * @param event - The rendered event.
+ * @returns The key; a defect when the event has no `eventId`, which every
+ *   rendered event and client-topic event carries.
+ */
+const idempotencyKeyOf = (event: JsonObject) =>
+  event.eventId !== undefined && isJsonString(event.eventId)
+    ? Effect.succeed(event.eventId)
+    : Effect.die(new Error("A rendered hub event has no eventId"));
 
 const runRule: DeliveryEffect = {
   kind: "record",
@@ -54,6 +72,7 @@ export const ProductionDeliveryHandlers = Layer.effect(
           : {
               authorize: authorizeEventTopic,
               kind: "external",
+              prepare: prepareMappedEvents,
               render: renderHubEvents,
               run: Effect.fn("Hubs.deliver")(function* deliverHub(
                 delivery: Delivery
@@ -62,7 +81,7 @@ export const ProductionDeliveryHandlers = Layer.effect(
                   yield* transport.post(
                     subscription.hub?.callback ?? "",
                     event,
-                    delivery.changeId
+                    yield* idempotencyKeyOf(event)
                   );
                 }
               }),

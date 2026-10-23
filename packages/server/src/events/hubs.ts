@@ -14,8 +14,19 @@ import {
   PERMISSION_IDS,
   PLATFORM_CLASS_IDS,
 } from "@std/definitions/well-known";
+import { pathOf } from "@std/tmf/mapping";
+import type { Attribute } from "@std/tmf/mapping";
 import type { JsonObject } from "@std/values/json-value";
-import { Clock, Config, Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Clock,
+  Config,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Result,
+  Schema,
+} from "effect";
 import type { Redacted } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -25,16 +36,21 @@ import { authenticate } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { parseListQuery } from "../http/api/query.ts";
 import { collectionNameOf } from "../http/api/table-names.ts";
+import { knownOn } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
 import { parseTmfListQuery } from "../http/tmf/query.ts";
 import { uuidv7At } from "../records/change-entry.ts";
 import { currentReadScope } from "../records/read-records.ts";
+import type { ReadScope } from "../records/read-view.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { callbackUrl } from "./callback.ts";
 import { TooManyRequests } from "./too-many-requests.ts";
 
 const REGISTRATION_WINDOW = "1 minute";
+
+/** A value a custom filter builds its condition for, to see its fields. */
+const SAMPLE_VALUE = "sample";
 const REGISTRATIONS_PER_WINDOW = 10;
 const DEFAULT_MAX_ACTIVE_HUBS = 20;
 const DEFAULT_MAX_ACTIVE_HUBS_PER_HOST = 10;
@@ -101,6 +117,92 @@ export interface Registration {
   readonly eventTypes: readonly string[];
   readonly queryFieldIds: readonly string[];
 }
+
+/**
+ * Whether an attribute's filter compiles to a condition on stored fields
+ * only, which a hub's subscription condition can test (Contracts 5.10: the
+ * version's own image, no reference hops; the class and system fields are
+ * not in it). Pure: a field filter by its source, a custom filter by the
+ * condition it builds for a sample value.
+ *
+ * @param scope - The caller's scope.
+ * @param attribute - The attribute.
+ * @returns True when a hub can filter on it.
+ */
+const filtersStoredFields = (
+  scope: ReadScope,
+  attribute: Attribute
+): boolean => {
+  const { snapshot } = scope;
+
+  const stored = (key: string) =>
+    pathOf(key) === undefined && snapshot.field(key) !== undefined;
+
+  if (attribute.kind !== "value" || attribute.filter === undefined) {
+    return false;
+  }
+
+  if (attribute.filter.kind === "field") {
+    return stored(attribute.filter.source);
+  }
+
+  const built = attribute.filter.build("eq", [SAMPLE_VALUE], {
+    subtreeNamesOf: (classId) =>
+      snapshot
+        .subtreeIds(classId)
+        .flatMap((id) => snapshot.qualifiedNameOf(id) ?? []),
+  });
+
+  return (
+    Result.isSuccess(built) &&
+    Schema.is(ConditionSchema)(built.success) &&
+    conditionFieldIds(built.success).every(stored)
+  );
+};
+
+/**
+ * Refuses a TMF hub filter, after the query parsed (so a hidden attribute
+ * has already answered exactly as a missing one, `UnknownField`), on an
+ * attribute that is not stored in fields (TMF621's `ticketType`, derived
+ * from the record's class; `creationDate`, a system field): a hub's
+ * condition tests stored fields only. The error names the attribute and
+ * the attributes the caller can filter a hub on.
+ *
+ * @param scope - The caller's scope.
+ * @param classId - The hub's class.
+ * @param mapped - The mapped resource.
+ * @param filters - The query's attribute filters, which parsed.
+ * @returns Nothing, or `InvalidRequest`.
+ */
+const refuseUnstoredFilters = Effect.fnUntraced(function* refuseUnstoredFilters(
+  scope: ReadScope,
+  classId: string,
+  mapped: MappedResource,
+  filters: readonly (readonly [string, string])[]
+) {
+  const { attributes } = mapped.resource;
+  const byName = new Map(attributes.map((entry) => [entry.name, entry]));
+
+  for (const [name] of filters) {
+    const attributeName = name.split(".")[0] ?? name;
+    const attribute = byName.get(attributeName);
+
+    if (attribute !== undefined && !filtersStoredFields(scope, attribute)) {
+      const supported = attributes.flatMap((entry) =>
+        knownOn(scope, classId, entry) && filtersStoredFields(scope, entry)
+          ? [entry.name]
+          : []
+      );
+
+      return yield* new InvalidRequest({
+        message: `A ${mapped.api.spec} hub query cannot filter on ${attributeName}: hub filters test the record's stored fields, and ${attributeName} is derived from its class or system fields. A hub query takes eventType and filters on ${supported.join(", ")}.`,
+        parameter: "query",
+      });
+    }
+  }
+
+  return yield* Effect.void;
+});
 
 /** Parse event selection and resource filters using the shared TMF630 grammar. */
 export const prepareRegistration = Effect.fn("Hubs.prepare")(
@@ -172,6 +274,10 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
             tmf: parsedQuery.filter,
           }))
         );
+
+    if (mapped !== undefined) {
+      yield* refuseUnstoredFilters(scope, target.classId, mapped, filters);
+    }
 
     const conditions = [
       Option.getOrUndefined(parsed.tmf),

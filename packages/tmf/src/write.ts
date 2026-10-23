@@ -48,10 +48,13 @@ import { Result } from "effect";
 import type {
   Attribute,
   ItemMapping,
+  OwnerItem,
   PartsAttribute,
+  ReferenceValue,
   SourceKey,
   SourceRecord,
   ValueAttribute,
+  WriteTarget,
 } from "./mapping.ts";
 
 /** Why a write body cannot be written. */
@@ -130,6 +133,16 @@ export interface WriteInput {
    */
   readonly jsonMerge?: boolean;
   /**
+   * The record's concrete class and its ancestors, the class first (for a
+   * create, the class it creates); absent: unknown to the attributes.
+   */
+  readonly lineage?: readonly string[];
+  /**
+   * What the caller may know of its own user record, for the read-only
+   * attributes a new item renders from it (`ItemMapping.newItemRendering`).
+   */
+  readonly actor?: ReferenceValue;
+  /**
    * For a merge-patch: the record as the caller reads it under the lock,
    * and its rendering (read-only attributes may repeat their value).
    * Absent for a create.
@@ -180,23 +193,38 @@ class ValueCollector {
 
   readonly merge = new Set<SourceKey>();
 
+  /** Fields whose value is only a default another attribute may replace. */
+  readonly soft = new Set<SourceKey>();
+
   /**
-   * Adds an attribute's field values.
+   * Adds an attribute's field values. A value the attribute writes only as
+   * a default (`softWrites`) gives way to another attribute's value; two
+   * other values for one field must agree.
    *
-   * @param attribute - The attribute.
+   * @param attribute - The attribute (its name).
    * @param written - Its field values.
    * @param mergeJson - Whether they merge into stored json values.
+   * @param soft - The fields it writes only as a default.
    * @returns The issue when another attribute wrote a different value.
    */
   add(
-    attribute: ValueAttribute,
+    attribute: Pick<ValueAttribute, "name">,
     written: ReadonlyMap<SourceKey, JsonValue>,
-    mergeJson: boolean
+    mergeJson: boolean,
+    soft: ReadonlySet<SourceKey> = new Set()
   ): WriteIssue | null {
     for (const [source, value] of written) {
       const before = this.values.get(source);
+      const yields = soft.has(source);
+      const replaces = before !== undefined && this.soft.has(source);
+      const kept = before !== undefined && yields && !replaces;
 
-      if (before !== undefined && !jsonbEquals(before, value)) {
+      if (
+        before !== undefined &&
+        !replaces &&
+        !yields &&
+        !jsonbEquals(before, value)
+      ) {
         return {
           attribute: attribute.name,
           kind: "invalidValue",
@@ -204,7 +232,15 @@ class ValueCollector {
         };
       }
 
-      this.values.set(source, value);
+      if (!kept) {
+        this.values.set(source, value);
+
+        if (yields) {
+          this.soft.add(source);
+        } else {
+          this.soft.delete(source);
+        }
+      }
 
       if (mergeJson) {
         this.merge.add(source);
@@ -223,6 +259,8 @@ interface MemberInput {
   readonly rendered: JsonObject | undefined;
   readonly collector: ValueCollector;
   readonly jsonMerge: boolean;
+  readonly access: ClassAccess;
+  readonly target: WriteTarget;
 }
 
 // A value attribute's member: read-only repeats, then the attribute's own
@@ -234,12 +272,12 @@ const valueMember = (
   const { current, name, rendered, value } = input;
 
   if (attribute.readOnly || attribute.write === undefined) {
-    return current !== undefined && sameJson(rendered?.[name], value)
+    return rendered !== undefined && sameJson(rendered[name], value)
       ? null
       : { attribute: name, kind: "readOnly" };
   }
 
-  const written = attribute.write(value, current?.values);
+  const written = attribute.write(value, current?.values, input.target);
 
   if (Result.isFailure(written)) {
     return {
@@ -252,13 +290,30 @@ const valueMember = (
     };
   }
 
+  // A field of only some classes (`optionalSources`) is written only when
+  // the caller may name it on the record's class.
+  const declared = new Set(attribute.writes);
+
+  const unnameable = [...written.success.keys()].some(
+    (source) => !declared.has(source) && !input.access.canName(source)
+  );
+
+  if (unnameable) {
+    return { attribute: name, kind: "unknownAttribute" };
+  }
+
   const merging =
     input.jsonMerge &&
     attribute.mergeJson === true &&
     current !== undefined &&
     isJsonObject(value);
 
-  return input.collector.add(attribute, written.success, merging);
+  return input.collector.add(
+    attribute,
+    written.success,
+    merging,
+    new Set(attribute.softWrites?.(value))
+  );
 };
 
 /** What planning the members of one object needs. */
@@ -275,8 +330,14 @@ interface MembersInput {
   readonly prefix: string;
   /** Whether json objects merge into stored values (a merge-patch). */
   readonly jsonMerge: boolean;
-  readonly onParts?: (attribute: PartsAttribute, value: JsonValue) => void;
-  /** Whether the caller knows an array's part class. */
+  /** The record's class, for the attributes' writers. */
+  readonly target: WriteTarget;
+  readonly onParts?: (
+    attribute: PartsAttribute,
+    value: JsonValue,
+    collector: ValueCollector
+  ) => void;
+  /** Whether the caller knows an array (its part class or an owner item). */
   readonly partsKnown?: (attribute: PartsAttribute) => boolean;
 }
 
@@ -320,7 +381,7 @@ const clearAbsent = (
 
     const cleared =
       clearable && attribute.kind === "value"
-        ? attribute.write?.(null, input.current?.values)
+        ? attribute.write?.(null, input.current?.values, input.target)
         : undefined;
 
     if (cleared !== undefined && attribute.kind === "value") {
@@ -371,14 +432,16 @@ const planMembers = (input: MembersInput): ValueCollector => {
     if (attribute === undefined) {
       issues.push({ attribute: `${prefix}${name}`, kind: "unknownAttribute" });
     } else if (attribute.kind === "parts") {
-      input.onParts?.(attribute, value);
+      input.onParts?.(attribute, value, collector);
     } else {
       const issue = valueMember(attribute, {
+        access: input.access,
         collector,
         current: input.current,
         jsonMerge: input.jsonMerge,
         name,
         rendered: input.rendered,
+        target: input.target,
         value,
       });
 
@@ -438,9 +501,113 @@ const planItem = (input: ItemInput): ItemPlan => {
     jsonMerge: false,
     prefix: `${attribute.name}.`,
     rendered: input.rendered,
+    target: { lineage: [existing?.classId ?? attribute.item.classId] },
   });
 
   return { existingId: existing?.id, values: values.values };
+};
+
+/**
+ * The owner items of one array in one write (`PartsAttribute.ownerItems`):
+ * a body item an owner item matches writes the owner's fields, at most
+ * once per owner item; an owner item the array leaves out is cleared
+ * (strict RFC 7396), among those the caller may name. An item matching an
+ * owner item the caller may not name is `unknownAttribute`, never a part.
+ */
+interface OwnerItems {
+  /** Plans a body item an owner item matches; false for any other. */
+  readonly take: (entry: JsonObject) => boolean;
+  /** Clears the owner items the array left out. */
+  readonly clearUnnamed: () => void;
+}
+
+/**
+ * The owner items of one array in one write.
+ *
+ * @param attribute - The array attribute.
+ * @param input - The write (the caller's access to the owner).
+ * @param issues - Collects issues.
+ * @param collector - The owner's field values.
+ * @returns Their planner.
+ */
+const ownerItemsOf = (
+  attribute: PartsAttribute,
+  input: WriteInput,
+  issues: WriteIssue[],
+  collector: ValueCollector
+): OwnerItems => {
+  const all = attribute.ownerItems ?? [];
+
+  const nameable = (owner: OwnerItem) =>
+    owner.writes.every((source) => input.access.canName(source));
+
+  const known = all.filter(nameable);
+  const unknown = all.filter((owner) => !nameable(owner));
+  const taken = new Set<OwnerItem>();
+  const where = (owner: OwnerItem) => `${attribute.name}.${owner.name}`;
+
+  const write = (owner: OwnerItem, entry: JsonObject | null) => {
+    const written = owner.write(entry);
+
+    if (Result.isFailure(written)) {
+      issues.push({
+        attribute: where(owner),
+        kind: "invalidValue",
+        message:
+          written.failure.kind === "notFilterable"
+            ? `${where(owner)} cannot be written.`
+            : written.failure.message,
+      });
+
+      return;
+    }
+
+    const issue = collector.add({ name: where(owner) }, written.success, false);
+
+    if (issue !== null) {
+      issues.push(issue);
+    }
+  };
+
+  const take = (entry: JsonObject): boolean => {
+    const hidden = unknown.find((owner) => owner.matches(entry));
+    const owner = known.find((candidate) => candidate.matches(entry));
+
+    if (hidden !== undefined) {
+      issues.push({ attribute: where(hidden), kind: "unknownAttribute" });
+
+      return true;
+    }
+
+    if (owner === undefined) {
+      return false;
+    }
+
+    if (taken.has(owner)) {
+      issues.push({
+        attribute: where(owner),
+        kind: "invalidValue",
+        message: `${attribute.name} names ${owner.name} more than once.`,
+      });
+
+      return true;
+    }
+
+    taken.add(owner);
+    write(owner, entry);
+
+    return true;
+  };
+
+  const clearUnnamed = () => {
+    for (const owner of known) {
+      if (!taken.has(owner)) {
+        write(owner, null);
+      }
+    }
+  };
+
+  return { clearUnnamed, take };
 };
 
 /** One planned item with the access it was planned under. */
@@ -662,13 +829,15 @@ const ordered = (
  * @param value - Its value in the body.
  * @param input - The write.
  * @param issues - Collects issues.
+ * @param collector - The owner's field values (for owner items).
  * @returns The plan, or null when the value is not an array.
  */
 const planItems = (
   attribute: PartsAttribute,
   value: JsonValue,
   input: WriteInput,
-  issues: WriteIssue[]
+  issues: WriteIssue[],
+  collector: ValueCollector
 ): PartsPlan | null => {
   const visible = input.current?.record.parts.get(attribute.name) ?? [];
   const byId = new Map(visible.map((part) => [part.id, part]));
@@ -682,9 +851,12 @@ const planItems = (
 
   const planned: PlannedItem[] = [];
   const kept = new Set<string>();
+  const owned = ownerItemsOf(attribute, input, issues, collector);
 
   for (const entry of items) {
-    if (isJsonObject(entry)) {
+    if (isJsonObject(entry) && owned.take(entry)) {
+      // An owner item: its fields are the owner's.
+    } else if (isJsonObject(entry)) {
       const { id } = entry;
 
       const existing =
@@ -708,7 +880,7 @@ const planItems = (
           issues,
           rendered:
             existing === undefined
-              ? undefined
+              ? attribute.item.newItemRendering?.(input.actor)
               : input.current?.renderedParts.get(existing.id),
         }),
       });
@@ -716,6 +888,8 @@ const planItems = (
       issues.push(notAnArray(attribute));
     }
   }
+
+  owned.clearUnnamed();
 
   return {
     attribute,
@@ -762,10 +936,10 @@ export const planWrite = (
     current: current?.record,
     issues,
     jsonMerge: input.jsonMerge === true,
-    onParts: (attribute, value) => {
+    onParts: (attribute, value, owner) => {
       const planned = attribute.readOnly
         ? null
-        : planItems(attribute, value, input, issues);
+        : planItems(attribute, value, input, issues, owner);
 
       if (attribute.readOnly) {
         issues.push({ attribute: attribute.name, kind: "readOnly" });
@@ -775,9 +949,14 @@ export const planWrite = (
         parts.push(planned);
       }
     },
-    partsKnown: (attribute) => input.partAccess(attribute.item).knows,
+    partsKnown: (attribute) =>
+      input.partAccess(attribute.item).knows ||
+      (attribute.ownerItems ?? []).some((owner) =>
+        owner.writes.every((source) => input.access.canName(source))
+      ),
     prefix: "",
     rendered: current?.rendered,
+    target: { lineage: input.lineage ?? [] },
   });
 
   return issues.length > 0

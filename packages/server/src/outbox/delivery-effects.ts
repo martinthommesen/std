@@ -36,7 +36,8 @@
  */
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import type { JsonObject } from "@std/values/json-value";
+import type { HistoryStep, SourceRecord } from "@std/tmf/mapping";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Context, Layer } from "effect";
 import type { Effect } from "effect";
 
@@ -99,6 +100,25 @@ export type RecordEffectServices =
   | WriteOnlyValues
   | TransactionServices;
 
+/**
+ * What a delivery's preparation read for its rendering, as the
+ * subscription's identity may read it (decision 0035).
+ */
+export interface RenderPrepared {
+  /**
+   * The arrays of parts the change touched, by attribute: each part as the
+   * identity may read it at the change's version.
+   */
+  readonly parts: ReadonlyMap<string, readonly SourceRecord[]>;
+  /** The values of reference paths (`assigned_to.individual`), by source. */
+  readonly paths: ReadonlyMap<string, JsonValue>;
+  /**
+   * The record's change entries up to the change, for its history-backed
+   * attributes (`statusChangeHistory`); absent when none is readable.
+   */
+  readonly history?: readonly HistoryStep[];
+}
+
 /** An effect that writes through the record service only. */
 export interface RecordDeliveryEffect {
   readonly kind: "record";
@@ -114,6 +134,14 @@ export interface ExternalDeliveryEffect {
   readonly authorize?: (
     delivery: Delivery
   ) => Effect.Effect<void, EffectFailure, RecordEffectServices>;
+  /**
+   * Reads, as the subscription's identity in the preparation transaction,
+   * what `render` needs beyond the change entry (a mapped TMF API's
+   * arrays of parts and reference paths, decision 0035).
+   */
+  readonly prepare?: (
+    delivery: Delivery
+  ) => Effect.Effect<RenderPrepared, EffectFailure, RecordEffectServices>;
   /** Optional pure rendering while the worker still holds its current snapshot. */
   readonly render?: (
     delivery: Delivery,
@@ -123,6 +151,8 @@ export interface ExternalDeliveryEffect {
       readonly origins: ReadonlyMap<string, FieldOrigin>;
       readonly now: number;
       readonly timeZone: string;
+      /** What `prepare` read; null when the effect has none. */
+      readonly prepared: RenderPrepared | null;
     }
   ) => readonly JsonObject[];
   readonly run: (delivery: Delivery) => Effect.Effect<void, EffectFailure>;

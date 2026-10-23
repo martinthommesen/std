@@ -15,16 +15,32 @@
  *   renders neither them nor any attribute derived from them.
  */
 import type { Expr } from "@std/conditions/ast";
+import {
+  arrayParameter,
+  identSql,
+  joinSql,
+  sql,
+  textParameter,
+} from "@std/conditions/sql-fragment";
+import type { SqlFragment, SqlParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { pathOf, pathSource } from "@std/tmf/mapping";
 import type {
   Attribute,
+  HistoryStep,
   SourceKey,
   SourceRecord,
   SourceValue,
+  SourceValues,
 } from "@std/tmf/mapping";
-import { isJsonString } from "@std/values/json-value";
-import { Effect } from "effect";
+import { formatDateTime } from "@std/values/date-time";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { Effect, Schema } from "effect";
 
+import { EntryRowSchema, entryOfRow } from "../../records/history-query.ts";
+import type { HistoryEntry } from "../../records/history-query.ts";
 import { decodeCursor } from "../../records/read-cursor.ts";
 import type { ReadField } from "../../records/read-field.ts";
 import { compileFilterExpr, MAX_LIMIT } from "../../records/read-query.ts";
@@ -32,8 +48,12 @@ import type { SelectedValue, SortKey } from "../../records/read-query.ts";
 import { readByIds, readPage } from "../../records/read-records.ts";
 import type { DecodedRecord, Page } from "../../records/read-records.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
+import { recordRelation } from "../../records/relation.ts";
+import { readRows } from "../../records/sql-run.ts";
 
 const SYSTEM_PREFIX = "system:";
+
+const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
 
 /**
  * The mapping's key of a readable field.
@@ -60,8 +80,61 @@ export const readFieldOf = (
     : view.byId(key);
 
 /**
+ * The selected value a path source names in a view: the reference field,
+ * when the caller can read it, and the target's field, when the caller can
+ * read it on the reference's target class (Contracts 3.6).
+ *
+ * @param scope - The caller's scope.
+ * @param view - The view of the record's class.
+ * @param key - A path source (`pathSource`).
+ * @returns The selection entry, or undefined.
+ */
+const pathSelectionOf = (
+  scope: ReadScope,
+  view: ReadView,
+  key: SourceKey
+): SelectedValue | undefined => {
+  const path = pathOf(key);
+  const field = path === undefined ? undefined : view.byId(path.reference);
+
+  if (path === undefined || field?.type.kind !== "reference") {
+    return undefined;
+  }
+
+  const target = scope.view(field.type.targetClassId);
+  const targetField = target.byId(path.target);
+
+  return targetField === undefined
+    ? undefined
+    : {
+        field,
+        key: `${field.name}.${targetField.name}`,
+        through: { field: targetField, view: target },
+      };
+};
+
+/**
+ * Whether the caller can read a source in a view: a field (or system
+ * field) in its visible schema, or both hops of a path source.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The view.
+ * @param key - The source.
+ * @returns True when readable.
+ */
+export const readsSource = (
+  scope: ReadScope,
+  view: ReadView,
+  key: SourceKey
+): boolean =>
+  pathOf(key) === undefined
+    ? readFieldOf(view, key) !== undefined
+    : pathSelectionOf(scope, view, key) !== undefined;
+
+/**
  * Every field key the attributes render from or write, value attributes
- * only (parts are read separately).
+ * and the owner items of arrays (parts are read separately), with the
+ * fields only some classes have (`optionalSources`).
  *
  * @param attributes - The attributes.
  * @returns The keys.
@@ -71,26 +144,69 @@ export const sourceKeysOf = (
 ): ReadonlySet<SourceKey> =>
   new Set(
     attributes.flatMap((attribute) =>
-      attribute.kind === "parts" ? [] : [...attribute.sources]
+      attribute.kind === "parts"
+        ? (attribute.ownerItems ?? []).flatMap((owner) => owner.sources)
+        : [...attribute.sources, ...(attribute.optionalSources ?? [])]
     )
   );
 
 /**
  * The selection that reads every source the caller can read in a view.
  *
+ * @param scope - The caller's scope (for path sources' targets).
  * @param view - The view.
  * @param keys - The sources.
  * @returns The selection.
  */
 export const selectionOf = (
+  scope: ReadScope,
   view: ReadView,
   keys: ReadonlySet<SourceKey>
 ): readonly SelectedValue[] =>
   [...keys].flatMap((key) => {
+    if (pathOf(key) !== undefined) {
+      const path = pathSelectionOf(scope, view, key);
+
+      return path === undefined ? [] : [path];
+    }
+
     const field = readFieldOf(view, key);
 
     return field === undefined ? [] : [{ field, key: field.name }];
   });
+
+const sourceValueOf = (
+  snapshot: ConfigSnapshot,
+  fieldId: string,
+  value: JsonValue
+): SourceValue =>
+  snapshot.field(fieldId)?.type.kind === "reference" && isJsonString(value)
+    ? { reference: { id: value, label: null, targetClassId: null }, value }
+    : { value };
+
+/**
+ * An image (field ID to canonical JSON, a change entry's or a stored
+ * record's) as the mapping reads it, readable fields only: references
+ * carry their ID, without a label or target class.
+ *
+ * @param snapshot - The configuration.
+ * @param image - Field ID to value.
+ * @param readable - The fields the identity can read on that image;
+ *   absent: every field the image holds.
+ * @returns The values.
+ */
+export const sourceValuesOf = (
+  snapshot: ConfigSnapshot,
+  image: JsonObject,
+  readable?: ReadonlySet<string>
+): SourceValues =>
+  new Map(
+    Object.entries(image).flatMap(([fieldId, value]) =>
+      (readable === undefined || readable.has(fieldId)) && value !== undefined
+        ? [[fieldId, sourceValueOf(snapshot, fieldId, value)] as const]
+        : []
+    )
+  );
 
 const READ_OPTIONS = { withLabels: true, withTargets: true } as const;
 
@@ -106,6 +222,14 @@ const valuesOf = (record: DecodedRecord): Map<SourceKey, SourceValue> => {
 
   for (const entry of record.entries) {
     const { field, through } = entry.item;
+
+    // A path source's value: null when the target is hidden, its field
+    // unreadable there, or empty (Contracts 3.6).
+    if (!entry.withheld && through !== undefined) {
+      values.set(pathSource(field.id, through.field.id), {
+        value: entry.value,
+      });
+    }
 
     if (!entry.withheld && through === undefined) {
       const reference =
@@ -176,6 +300,7 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
       const found = yield* readByIds(read.scope, own, ids, {
         ...READ_OPTIONS,
         selection: selectionOf(
+          read.scope,
           own,
           new Set([...keys, ...read.extraKeys(classId)])
         ),
@@ -186,7 +311,17 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
       }
     }
 
-    return records.map((record) => concrete.get(record.id) ?? record);
+    // A record the second read no longer sees (hidden or deleted between
+    // the two statements) is left out, never served from the first read.
+    return records.flatMap((record) => {
+      if (!byClass.has(record.classId)) {
+        return [record];
+      }
+
+      const own = concrete.get(record.id);
+
+      return own === undefined ? [] : [own];
+    });
   }
 );
 
@@ -227,6 +362,7 @@ const partsByOwner = Effect.fn("Tmf.partsByOwner")(function* partsByOwner(
   );
 
   const selection = selectionOf(
+    scope,
     view,
     // The order field too: a write keeps positions it can see unchanged.
     new Set([
@@ -336,3 +472,224 @@ export const readSourceRecords = Effect.fn("Tmf.readSourceRecords")(
     });
   }
 );
+
+// One change entry as a history-backed attribute sees it: the new values
+// of the readable history sources it wrote (a secret's `changed` marker
+// carries no value and is left out).
+const stepOf = (entry: HistoryEntry): HistoryStep => {
+  const changes = new Map<SourceKey, JsonValue>();
+
+  for (const [fieldId, change] of Object.entries(entry.fields)) {
+    if (isJsonObject(change) && "after" in change) {
+      changes.set(fieldId, change.after ?? null);
+    }
+  }
+
+  return {
+    changes,
+    kind: entry.kind,
+    occurredAt: formatDateTime(entry.occurredAt),
+    version: entry.version,
+  };
+};
+
+const ENTRY_COLUMNS = sql`c.id::text AS id, c.operation_id::text AS operation_id,
+  c.record_version::text AS version_text, c.kind::text AS kind,
+  c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+  c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields`;
+
+// The entries of a record up to its version that changed one of the
+// fields, in version order.
+const entriesSql = (
+  record: SqlFragment | SqlParameter,
+  version: number,
+  fieldIds: readonly string[]
+) => sql`SELECT ${ENTRY_COLUMNS}
+FROM core."change" c
+WHERE c.record_id = ${record}
+  AND c.record_version <= ${textParameter(String(version), "int8")}
+  AND jsonb_exists_any(c.fields, ${arrayParameter(fieldIds, "text")})
+ORDER BY c.record_version`;
+
+const LIVE = "r";
+
+/**
+ * A record's history rows for some fields, and which of the record's
+ * fields the caller may still read: with a scope, read with the live
+ * record's visibility and field predicates in the same statement, so one
+ * snapshot decides both (as the history endpoint's read does); without one
+ * (a delivery, whose payload decided readability at its version), the
+ * entries alone, every field as read.
+ *
+ * @param record - The record as read.
+ * @param historyFields - The history fields readable on it.
+ * @param scope - The caller's scope, for a live read.
+ * @returns The entry rows and the fields still readable (null: all).
+ */
+const historyRows = Effect.fnUntraced(function* historyRows(
+  record: SourceRecord,
+  historyFields: readonly string[],
+  scope: ReadScope | undefined
+) {
+  if (scope === undefined) {
+    return {
+      live: null,
+      rows: yield* readRows(
+        entriesSql(
+          textParameter(record.id, "uuid"),
+          record.version,
+          historyFields
+        )
+      ),
+    };
+  }
+
+  const view = scope.view(record.classId, true);
+
+  // Every stored field the record was read with, and the history fields.
+  const fieldIds = [
+    ...new Set([
+      ...historyFields,
+      ...[...record.values.keys()].flatMap((key) =>
+        view.byId(key) === undefined ? [] : [key]
+      ),
+    ]),
+  ];
+
+  const predicates = fieldIds.map((fieldId, index) => {
+    const field = view.byId(fieldId);
+    const holds = field === undefined ? sql`FALSE` : view.readable(LIVE, field);
+    const column = identSql(`f${index}`);
+
+    return sql`(${view.visibility(LIVE)} AND ${holds})::text AS ${column}`;
+  });
+
+  const rows = yield* readRows(
+    sql`SELECT ${joinSql(predicates, ", ")}, "h".*
+FROM ${recordRelation(scope.snapshot, record.classId)} AS ${identSql(LIVE)}
+LEFT JOIN LATERAL (${entriesSql(identSql(LIVE, "id"), record.version, historyFields)}) AS "h" ON true
+WHERE ${identSql(LIVE, "id")} = ${textParameter(record.id, "uuid")}
+ORDER BY "h"."version_text"::bigint`
+  );
+
+  const [first] = rows;
+
+  // A record gone or hidden since: no field is readable any more.
+  const live: ReadonlySet<string> = new Set(
+    fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
+  );
+
+  return {
+    denied: new Set(fieldIds.filter((fieldId) => !live.has(fieldId))),
+    live,
+    rows: rows.filter((row) => row.id !== null && row.id !== undefined),
+  };
+});
+
+/**
+ * A record's values without the fields the live read denied, and without
+ * the paths through a denied reference: every attribute rendered from one
+ * is then dropped, as a source the caller cannot read.
+ *
+ * @param record - The record as read.
+ * @param denied - The fields denied on the live record.
+ * @returns The record.
+ */
+const withoutDenied = (
+  record: SourceRecord,
+  denied: ReadonlySet<string>
+): SourceRecord =>
+  denied.size === 0
+    ? record
+    : {
+        ...record,
+        values: new Map(
+          [...record.values].filter(
+            ([key]) => !denied.has(pathOf(key)?.reference ?? key)
+          )
+        ),
+      };
+
+/**
+ * Adds to each record the change entries its selected history-backed
+ * attributes render from (`ValueAttribute.history`; TMF621's
+ * `statusChangeHistory`, Contracts 11.2): the entries up to the version
+ * the record was read at, so the history matches the resource returned.
+ * With a scope (an HTTP read), the history's own statement also decides,
+ * on the live record, which of the record's fields the caller may still
+ * read: the history shows only those history sources, and every other
+ * field it denies leaves the record's values, so no attribute is rendered
+ * from it (decision 0035: a write committed between the resource's read
+ * and the history's turned a mask on). Only records where the caller can
+ * read every source of the attribute are read, since the attribute
+ * renders only then. The attribute renders every entry, so no page bounds
+ * them (TMF621 UG v5.0.1: an embedded history).
+ *
+ * @param attributes - The resource's attributes.
+ * @param records - The records as read.
+ * @param selected - Whether `fields` selects an attribute.
+ * @param scope - The caller's scope, for a live read; none for a delivery.
+ * @returns The records, with their history where an attribute needs it.
+ */
+export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
+  attributes: readonly Attribute[],
+  records: readonly SourceRecord[],
+  selected: (name: string) => boolean,
+  scope?: ReadScope
+) {
+  const needing = attributes.flatMap((attribute) =>
+    attribute.kind === "value" &&
+    attribute.history !== undefined &&
+    selected(attribute.name)
+      ? [attribute]
+      : []
+  );
+
+  if (needing.length === 0) {
+    return records;
+  }
+
+  const result: SourceRecord[] = [];
+
+  for (const record of records) {
+    const historyFields = [
+      ...new Set(
+        needing.flatMap((attribute) =>
+          attribute.sources.every((source) => record.values.has(source))
+            ? (attribute.history ?? [])
+            : []
+        )
+      ),
+    ];
+
+    if (historyFields.length === 0) {
+      result.push(record);
+    } else {
+      const read = yield* historyRows(record, historyFields, scope);
+
+      const readable = new Set(
+        historyFields.filter(
+          (fieldId) => read.live === null || read.live.has(fieldId)
+        )
+      );
+
+      const steps: HistoryStep[] = [];
+
+      for (const row of read.rows) {
+        const entry = yield* entryOfRow(
+          yield* decodeEntryRow(row).pipe(Effect.orDie),
+          readable
+        );
+
+        steps.push(stepOf(entry));
+      }
+
+      const live =
+        read.live === null ? record : withoutDenied(record, read.denied);
+
+      result.push({ ...live, history: steps });
+    }
+  }
+
+  return result;
+});

@@ -23,6 +23,7 @@ import {
   versionImage,
 } from "../outbox/delivery-payload.ts";
 import { eventIdOf } from "./event-id.ts";
+import { mappedHubEvents, mappedResourceOfHub } from "./tmf-events.ts";
 
 const topicClasses = new WeakMap<ConfigSnapshot, ReadonlyMap<string, string>>();
 
@@ -184,7 +185,13 @@ const allowedFields = (delivery: Delivery, context: RenderContext) => {
     (id) => readable.has(id) && sourcesReadable(id, before.fields, sources)
   );
 
-  return { changed, readable, visible: current.visible };
+  const beforeReadable = new Set(
+    [...before.fields].filter((id) =>
+      sourcesReadable(id, before.fields, sources)
+    )
+  );
+
+  return { beforeReadable, changed, readable, visible: current.visible };
 };
 
 const representedValue = (
@@ -395,10 +402,32 @@ export const renderHubEvents = (
     return [];
   }
 
-  const { readable, changed, visible } = allowedFields(delivery, context);
+  const { beforeReadable, readable, changed, visible } = allowedFields(
+    delivery,
+    context
+  );
 
   if (!visible || hub.queryFieldIds.some((id) => !readable.has(id))) {
     return [];
+  }
+
+  // A hub on a mapped TMF API gets that API's own events (decision 0035);
+  // an owner's aggregate save that changed none of its fields can still
+  // change its arrays.
+  const mapped = hub.api === "TMF688" ? undefined : mappedResourceOfHub(hub);
+
+  if (mapped !== undefined) {
+    return mappedHubEvents({
+      beforeReadable,
+      changed,
+      delivery,
+      hub,
+      identityOnly: options.identityOnly === true,
+      mapped,
+      prepared: context.prepared,
+      readable,
+      renderedAt: context.now,
+    });
   }
 
   if (delivery.payload.kind === "update" && changed.length === 0) {

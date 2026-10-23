@@ -19,7 +19,9 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import type {
   Attribute,
   ItemMapping,
+  OwnerItem,
   PartsAttribute,
+  RecordContext,
   RenderContext,
   SourceRecord,
   TmfResourceMapping,
@@ -78,6 +80,18 @@ export const typeAttributesOf = (
 };
 
 /**
+ * Whether the caller can read every source of an owner item on a record.
+ *
+ * @param owner - The owner item.
+ * @param record - The owner as read.
+ * @returns True when the item may render.
+ */
+export const ownerItemReadable = (
+  owner: OwnerItem,
+  record: SourceRecord
+): boolean => owner.sources.every((source) => record.values.has(source));
+
+/**
  * Whether the caller can read every source of an attribute on a record.
  *
  * @param attribute - The attribute.
@@ -89,8 +103,27 @@ export const readableOn = (
   record: SourceRecord
 ): boolean =>
   attribute.kind === "parts"
-    ? record.parts.has(attribute.name)
+    ? record.parts.has(attribute.name) ||
+      (attribute.ownerItems ?? []).some((owner) =>
+        ownerItemReadable(owner, record)
+      )
     : attribute.sources.every((source) => record.values.has(source));
+
+/**
+ * What an attribute's `render` knows of one record.
+ *
+ * @param context - The request's render context.
+ * @param record - The record.
+ * @returns The record context.
+ */
+export const recordContextOf = (
+  context: RenderContext,
+  record: SourceRecord
+): RecordContext => ({
+  ...context,
+  history: record.history,
+  lineage: context.lineageOf?.(record.classId) ?? [record.classId],
+});
 
 const renderValue = (
   attribute: ValueAttribute,
@@ -98,7 +131,7 @@ const renderValue = (
   context: RenderContext
 ): JsonValue | undefined =>
   readableOn(attribute, record)
-    ? attribute.render(record.values, context)
+    ? attribute.render(record.values, recordContextOf(context, record))
     : undefined;
 
 /**
@@ -143,17 +176,35 @@ export const renderItem = (
   return Object.fromEntries(rendered);
 };
 
+/**
+ * Renders an array: the owner items the caller can read, then the parts
+ * it can see; an empty array is left out.
+ *
+ * @param attribute - The array attribute.
+ * @param record - The owner as read.
+ * @param context - Type names and hrefs.
+ * @returns The items, or undefined.
+ */
 const renderParts = (
-  item: ItemMapping,
+  attribute: PartsAttribute,
   record: SourceRecord,
-  name: string,
   context: RenderContext
 ): JsonValue | undefined => {
-  const parts = record.parts.get(name) ?? [];
+  const owned = (attribute.ownerItems ?? []).flatMap((owner) => {
+    const rendered = ownerItemReadable(owner, record)
+      ? owner.render(record.values, recordContextOf(context, record))
+      : undefined;
 
-  return parts.length === 0
-    ? undefined
-    : parts.map((part) => renderItem(item, part, context));
+    return rendered === undefined ? [] : [rendered];
+  });
+
+  const parts = (record.parts.get(attribute.name) ?? []).map((part) =>
+    renderItem(attribute.item, part, context)
+  );
+
+  const items = [...owned, ...parts];
+
+  return items.length === 0 ? undefined : items;
 };
 
 /** What a resource's rendering needs besides the record. */
@@ -196,7 +247,7 @@ export const renderResource = (
     if (selected(attribute.name)) {
       const value =
         attribute.kind === "parts"
-          ? renderParts(attribute.item, record, attribute.name, context)
+          ? renderParts(attribute, record, context)
           : renderValue(attribute, record, context);
 
       if (value !== undefined) {

@@ -362,6 +362,11 @@
       "id": "d599d478-885b-5891-a76a-a3b4f98231d2",
       "category": "fields",
       "name": "characteristic_specification"
+    },
+    {
+      "id": "6a37ae7b-db15-5598-a745-51207619fc35",
+      "category": "fields",
+      "name": "opened_by"
     }
   ],
   "behavior": [
@@ -934,6 +939,26 @@
       "id": "8e851d58-c017-40c7-bda8-39e1fb2a138c",
       "category": "recordRules",
       "name": "note_author_immutable"
+    },
+    {
+      "id": "c5276894-63f2-55ab-ada4-965f96c1b45e",
+      "category": "recordRules",
+      "name": "opened_by"
+    },
+    {
+      "id": "92eca48e-ec7d-5ca3-9c69-c32f8afc3fa2",
+      "category": "recordRules",
+      "name": "opened_by_immutable"
+    },
+    {
+      "id": "1c82eea5-4634-5856-8959-084929c008c6",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "d65607c7-ee17-53ed-bae5-b86ae1aa128b",
+      "category": "accessRules",
+      "name": ""
     },
     {
       "id": "2f27cc72-d127-5cc8-a9ec-c2bf735b36eb",

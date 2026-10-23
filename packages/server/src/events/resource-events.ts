@@ -187,7 +187,7 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
               snapshot,
               subscription,
             },
-            { actor, entries, now, origins, timeZone },
+            { actor, entries, now, origins, prepared: null, timeZone },
             { identityOnly: index >= (options.fullPayloads ?? limit) }
           )
         );

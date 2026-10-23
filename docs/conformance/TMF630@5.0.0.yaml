@@ -2273,8 +2273,11 @@ rows:
     source: TMF630 v5.0.0 P1 §11.6.2 p.203
     level: mandatory
     requirement: Because AttributeValueChangeEvent follows JSON Merge Patch semantics, a server that reports any change to an array attribute includes the whole new array, which replaces the old one. (lowercase 'must' in the source)
-    status: pending
-    note: "hubs (3H, C12): 12.1 masks the payload on the after image (4.5), so a reported array attribute is rendered whole"
+    status: tested
+    tests:
+      - "packages/server/test/tmf621-events.test.ts#an AttributeValueChange sends a touched array whole, as the hub's identity may read it: notes added, a related party changed"
+      - "packages/server/test/tmf621-events.test.ts#an AttributeValueChange is a merge patch: a cleared attribute is null, which the pinned schema allows only on members it does not require"
+    note: "hubs (3H, C12) and TMF621 (3I-B, decision 0035): a touched array of parts is read whole at the change, masked for the hub's identity; a cleared attribute is null"
   - id: TMF630@5.0.0/P1/11.6.2/consumer-keeps-local-copy
     source: TMF630 v5.0.0 P1 §11.6.2 p.203
     level: mandatory
@@ -2297,8 +2300,11 @@ rows:
     source: TMF630 v5.0.0 P1 §11.6.3 p.203
     level: mandatory
     requirement: A server's StatusChangeEvent or StateChangeEvent payload includes the resource's status (or state).
-    status: pending
-    note: "hubs (3H, C12): TMF APIs only (the generic API emits no StatusChange); 12.1 sends the event only when the status sources are readable, so status is present"
+    status: tested
+    tests:
+      - "packages/server/test/tmf621-events.test.ts#a TMF621 hub receives TMF621's own events, valid against the pinned event schemas, selected by TMF621 event types"
+      - "packages/server/test/tmf621-events.test.ts#a hub on troubleTicketSpecification receives its Create, AttributeValueChange, StatusChange and Delete events"
+    note: "hubs (3H, C12): TMF APIs only (the generic API emits no StatusChange); each status rule declares its payload (EventRule.payload, decision 0035), and 12.1 sends the event only when the status sources are readable"
   - id: TMF630@5.0.0/P1/11.6.4/delete-event-addressable-only
     source: TMF630 v5.0.0 P1 §11.6.4 p.204
     level: mandatory

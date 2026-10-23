@@ -65,7 +65,6 @@ import {
 } from "@std/values/postgres-text";
 import { isPlaintext } from "@std/values/write-only";
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/sql";
 
 import { definitionOf } from "../catalog/definition-revisions.ts";
 import type { AccessContext } from "../records/access-sql.ts";
@@ -168,18 +167,6 @@ const EntryTextSchema = Schema.Struct({
   version_text: Schema.FiniteFromString,
 });
 
-const imageRows = decodeRows(
-  Schema.Struct({
-    ...EntryTextSchema.fields,
-    after_image: Schema.NullOr(Schema.String),
-    before_image: Schema.NullOr(Schema.String),
-  })
-);
-
-const legacyRows = decodeRows(
-  Schema.Struct({ ...EntryTextSchema.fields, complete: Schema.Boolean })
-);
-
 const OriginTextSchema = Schema.Struct({
   effective: Schema.String,
   id: Schema.String,
@@ -257,6 +244,254 @@ const imageEntries = Effect.fnUntraced(function* imageEntries(
   return entries;
 });
 
+/** A record and the version of it a payload is built at. */
+export interface EntryTarget {
+  readonly recordId: string;
+  readonly version: number;
+}
+
+/**
+ * The key of a target in `readEntriesAt`'s result.
+ *
+ * @param target - The record and version.
+ * @returns `<record ID>@<version>`.
+ */
+export const entryTargetKey = (target: EntryTarget): string =>
+  `${target.recordId}@${target.version}`;
+
+const targetFields = {
+  target_id: Schema.String,
+  target_version: Schema.FiniteFromString,
+};
+
+const targetImageRows = decodeRows(
+  Schema.Struct({
+    ...EntryTextSchema.fields,
+    ...targetFields,
+    after_image: Schema.NullOr(Schema.String),
+    before_image: Schema.NullOr(Schema.String),
+  })
+);
+
+const targetLegacyRows = decodeRows(
+  Schema.Struct({
+    ...EntryTextSchema.fields,
+    ...targetFields,
+    complete: Schema.Literals(["true", "false"]),
+  })
+);
+
+const ENTRY_COLUMNS = sql`"c"."id"::text AS "id", "c"."operation_id"::text AS "operation_id",
+  "c"."record_class_id"::text AS "record_class_id", "c"."record_version"::text AS "version_text",
+  "c"."kind", "c"."actor_id"::text AS "actor_id", "c"."occurred_at"::text AS "occurred_at",
+  "c"."schema_revision"::text AS "schema_revision"`;
+
+const targetsOf = (targets: readonly EntryTarget[]) =>
+  sql`unnest(${arrayParameter(
+    targets.map((target) => target.recordId),
+    "uuid"
+  )}, ${arrayParameter(
+    targets.map((target) => String(target.version)),
+    "int8"
+  )}) AS "t"("record_id", "version")`;
+
+const groupByTarget = <
+  Row extends { readonly target_id: string; readonly target_version: number },
+>(
+  rows: readonly Row[]
+): ReadonlyMap<string, readonly Row[]> => {
+  const grouped = new Map<string, Row[]>();
+
+  for (const row of rows) {
+    const key = entryTargetKey({
+      recordId: row.target_id,
+      version: row.target_version,
+    });
+
+    grouped.set(key, [...(grouped.get(key) ?? []), row]);
+  }
+
+  return grouped;
+};
+
+type TargetImageRow = Effect.Success<
+  ReturnType<typeof targetImageRows>
+>[number];
+
+/**
+ * One version's entries from its own and its predecessor's rows, when a
+ * saved image gives them (as `readEntries` always read them).
+ *
+ * @param target - The record and version.
+ * @param rows - Its rows at the version and the one before.
+ * @returns The entries (empty when the version has no entry), or null when
+ *   only the legacy reduction can rebuild it.
+ */
+const entriesFromImages = Effect.fnUntraced(function* entriesFromImages(
+  target: EntryTarget,
+  rows: readonly TargetImageRow[]
+) {
+  const row = rows.find(
+    (candidate) => candidate.version_text === target.version
+  );
+
+  const predecessor = rows.find(
+    (candidate) => candidate.version_text === target.version - 1
+  );
+
+  if (row === undefined) {
+    return [];
+  }
+
+  const previousImage = row.before_image ?? predecessor?.after_image ?? null;
+  const currentImage = row.kind === "delete" ? previousImage : row.after_image;
+
+  if (currentImage !== null) {
+    return yield* imageEntries(
+      yield* entryOf(row),
+      currentImage,
+      previousImage
+    );
+  }
+
+  if (previousImage === null) {
+    return null;
+  }
+
+  // Finalize walks versions in order: reuse the image the previous
+  // batch/iteration just wrote instead of reducing the history again.
+  const previous = parseJsonbText(previousImage);
+
+  if (
+    !previous.ok ||
+    !isJsonObject(previous.value) ||
+    predecessor === undefined
+  ) {
+    return yield* unreadable(`Previous image of ${row.id} is not readable.`);
+  }
+
+  const entries: readonly StoredEntry[] = [
+    { ...(yield* entryOf(predecessor)), image: previous.value },
+    yield* entryOf(row),
+  ];
+
+  return entries;
+});
+
+/**
+ * Several versions' entries with a constant number of statements, whatever
+ * their number, and bounded data per version: each version's entry with its
+ * predecessor's image when new saves carry them (Contracts 4.3: one
+ * statement for all), and for legacy history (entries the image backfill,
+ * migration 0028, has not reached) a reduction in SQL to at most three
+ * entries per version (create, the accumulated previous, the requested), in
+ * one more statement for all of them. Each version is keyed by record and
+ * version (`entryTargetKey`), so two versions of one record never mix.
+ *
+ * @param targets - The records and versions.
+ * @returns Each target's entries, the requested entry last; empty when the
+ *   version has no entry.
+ */
+export const readEntriesAt = Effect.fn("Outbox.readEntriesAt")(
+  function* readEntriesAt(targets: readonly EntryTarget[]) {
+    const result = new Map<string, readonly StoredEntry[]>();
+
+    const unique = [
+      ...new Map(
+        targets.map((target) => [entryTargetKey(target), target])
+      ).values(),
+    ];
+
+    if (unique.length === 0) {
+      return result;
+    }
+
+    const imaged = groupByTarget(
+      yield* readRows(
+        sql`SELECT "t"."record_id"::text AS "target_id", "t"."version"::text AS "target_version",
+  ${ENTRY_COLUMNS}, "c"."fields"::text AS "fields",
+  "i"."before_image"::text AS "before_image", "i"."after_image"::text AS "after_image"
+FROM core."change" AS "c"
+JOIN ${targetsOf(unique)} ON "c"."record_id" = "t"."record_id"
+  AND "c"."record_version" IN ("t"."version" - 1, "t"."version")
+LEFT JOIN core."change_image" AS "i" ON "i"."change_id" = "c"."id"
+ORDER BY "t"."record_id", "t"."version", "c"."record_version"`
+      ).pipe(Effect.flatMap(targetImageRows))
+    );
+
+    const legacy: EntryTarget[] = [];
+
+    for (const target of unique) {
+      const key = entryTargetKey(target);
+      const entries = yield* entriesFromImages(target, imaged.get(key) ?? []);
+
+      if (entries === null) {
+        legacy.push(target);
+      } else {
+        result.set(key, entries);
+      }
+    }
+
+    if (legacy.length === 0) {
+      return result;
+    }
+
+    const reduced = groupByTarget(
+      yield* readRows(
+        sql`WITH history AS MATERIALIZED (
+  SELECT "t"."record_id" AS "target_id", "t"."version" AS "target_version", "c".*
+  FROM ${targetsOf(legacy)}
+  JOIN core."change" AS "c" ON "c"."record_id" = "t"."record_id"
+    AND "c"."record_version" <= "t"."version"
+), "previous" AS (
+  SELECT "target_id", "target_version", max("record_version") AS "version"
+  FROM history WHERE "record_version" < "target_version"
+  GROUP BY "target_id", "target_version"
+), "mentioned" AS (
+  SELECT DISTINCT ON ("h"."target_id", "h"."target_version", "f"."key")
+    "h"."target_id", "h"."target_version", "f"."key", "f"."value"
+  FROM history AS "h" CROSS JOIN LATERAL jsonb_each("h"."fields") AS "f"
+  WHERE "h"."record_version" < "h"."target_version"
+  ORDER BY "h"."target_id", "h"."target_version", "f"."key", "h"."record_version" DESC
+), "accumulated" AS (
+  SELECT "target_id", "target_version", jsonb_object_agg("key", "value") AS "fields"
+  FROM "mentioned" GROUP BY "target_id", "target_version"
+)
+SELECT "c"."target_id"::text AS "target_id", "c"."target_version"::text AS "target_version",
+  ${ENTRY_COLUMNS},
+  (CASE WHEN "c"."record_version" = "p"."version"
+    THEN COALESCE("a"."fields", '{}'::jsonb) ELSE "c"."fields" END)::text AS "fields",
+  ((SELECT count(*) FROM history AS "h"
+    WHERE "h"."target_id" = "c"."target_id" AND "h"."target_version" = "c"."target_version"
+      AND "h"."record_version" <= "c"."record_version") = "c"."record_version")::text AS "complete"
+FROM history AS "c"
+LEFT JOIN "previous" AS "p" ON "p"."target_id" = "c"."target_id"
+  AND "p"."target_version" = "c"."target_version"
+LEFT JOIN "accumulated" AS "a" ON "a"."target_id" = "c"."target_id"
+  AND "a"."target_version" = "c"."target_version"
+WHERE "c"."record_version" IN (1, "p"."version", "c"."target_version")
+ORDER BY "c"."target_id", "c"."target_version", "c"."record_version"`
+      ).pipe(Effect.flatMap(targetLegacyRows))
+    );
+
+    for (const target of legacy) {
+      const key = entryTargetKey(target);
+      const entries: StoredEntry[] = [];
+
+      for (const row of reduced.get(key) ?? []) {
+        entries.push({
+          ...(yield* entryOf(row)),
+          completeFromCreate: row.complete === "true",
+        });
+      }
+
+      result.set(key, entries);
+    }
+
+    return result;
+  }
+);
+
 /**
  * Read a version and its preceding image with constant round trips. New saves
  * carry complete images; legacy history is reduced in SQL to at most three
@@ -267,96 +502,10 @@ const imageEntries = Effect.fnUntraced(function* imageEntries(
  */
 export const readEntries = Effect.fn("Outbox.readEntries")(
   function* readEntries(recordId: string, version: number) {
-    const client = yield* SqlClient.SqlClient;
+    const target = { recordId, version };
+    const entries = yield* readEntriesAt([target]);
 
-    const rows = yield* client`
-      SELECT c.id::text AS id, c.operation_id::text AS operation_id,
-        c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
-        c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
-        c.schema_revision::text AS schema_revision, c.fields::text AS fields,
-        i.before_image::text AS before_image, i.after_image::text AS after_image
-      FROM core."change" AS "c" LEFT JOIN core.change_image i ON i.change_id = c.id
-      WHERE c.record_id = ${recordId}::uuid AND c.record_version IN (${version - 1}, ${version})
-      ORDER BY c.record_version`.pipe(Effect.flatMap(imageRows));
-
-    const row = rows.find((candidate) => candidate.version_text === version);
-
-    if (row === undefined) {
-      return [];
-    }
-
-    const previousImage =
-      row.before_image ??
-      rows.find((candidate) => candidate.version_text === version - 1)
-        ?.after_image ??
-      null;
-
-    const currentImage =
-      row.kind === "delete" ? previousImage : row.after_image;
-
-    if (currentImage !== null) {
-      return yield* imageEntries(
-        yield* entryOf(row),
-        currentImage,
-        previousImage
-      );
-    }
-
-    // Finalize walks versions in order: reuse the image the previous
-    // batch/iteration just wrote instead of reducing the history again.
-    if (previousImage !== null) {
-      const previous = parseJsonbText(previousImage);
-
-      const predecessor = rows.find(
-        (candidate) => candidate.version_text === version - 1
-      );
-
-      if (
-        !previous.ok ||
-        !isJsonObject(previous.value) ||
-        predecessor === undefined
-      ) {
-        return yield* unreadable(
-          `Previous image of ${row.id} is not readable.`
-        );
-      }
-
-      return [
-        { ...(yield* entryOf(predecessor)), image: previous.value },
-        yield* entryOf(row),
-      ];
-    }
-
-    const legacy = yield* client`
-      WITH history AS MATERIALIZED (
-        SELECT * FROM core.change WHERE record_id = ${recordId}::uuid AND record_version <= ${version}
-      ), mentioned AS (
-        SELECT DISTINCT ON (f.key) f.key, f.value
-        FROM history h CROSS JOIN LATERAL jsonb_each(h.fields) f
-        WHERE h.record_version < ${version}
-        ORDER BY f.key, h.record_version DESC
-      )
-      SELECT c.id::text AS id, c.operation_id::text AS operation_id,
-        c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
-        c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
-        c.schema_revision::text AS schema_revision,
-        (CASE WHEN c.record_version = (SELECT max(record_version) FROM history WHERE record_version < ${version}) THEN
-          COALESCE((SELECT jsonb_object_agg(key, value) FROM mentioned), '{}'::jsonb)
-          ELSE c.fields END)::text AS fields,
-        ((SELECT count(*) FROM history h WHERE h.record_version <= c.record_version) = c.record_version) AS complete
-      FROM history c WHERE c.record_version IN (1, (SELECT max(record_version) FROM history WHERE record_version < ${version}), ${version})
-      ORDER BY c.record_version`.pipe(Effect.flatMap(legacyRows));
-
-    const entries: StoredEntry[] = [];
-
-    for (const stored of legacy) {
-      entries.push({
-        ...(yield* entryOf(stored)),
-        completeFromCreate: stored.complete,
-      });
-    }
-
-    return entries;
+    return entries.get(entryTargetKey(target)) ?? [];
   }
 );
 

@@ -16,14 +16,24 @@
  * reuses this path (workstream 3I).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonValue } from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { entriesOf, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { itilLayer } from "./itil-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
+import {
+  bodyOf,
+  etagOf,
+  TICKETS as TMF621_TICKETS,
+  ticketBody,
+  tmf621As,
+} from "./tmf621-support.ts";
+import type { Tmf621Client } from "./tmf621-support.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const RACERS = 6;
@@ -202,6 +212,166 @@ describe("aggregate-race-http", () => {
 
           assert.strictEqual(version, 2 + ok.length);
           assert.lengthOf(yield* entriesOf(ticket), version);
+        })
+    );
+  });
+});
+
+const HELPDESK_TICKETS = '"helpdesk"."ticket"';
+
+/** Creates a ticket through TMF621 and returns its id (201 asserted). */
+const newTmf621Ticket = Effect.fn("AggregateRace.newTmf621Ticket")(
+  function* newTmf621Ticket(client: Tmf621Client) {
+    const created = yield* client.post(TMF621_TICKETS, ticketBody());
+
+    assert.strictEqual(created.status, 201, created.text);
+
+    return textOf(bodyOf(created).id);
+  }
+);
+
+/** Adds a note through the generic API as the admin. */
+const addHelpdeskNote = Effect.fn("AggregateRace.addHelpdeskNote")(
+  function* addHelpdeskNote(ticket: string, text: string) {
+    const http = yield* TestHttpClient;
+    const fixture = yield* HelpdeskFixture;
+
+    const token = yield* http.signIn(
+      fixture.admin.login,
+      fixture.admin.password
+    );
+
+    return yield* http.request("POST", "/api/v1/helpdeskTicketNote", {
+      body: { text, ticket: { id: ticket } },
+      token,
+    });
+  }
+);
+
+describe("aggregate-race-http-tmf621", () => {
+  layer(itilLayer, { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "TMF621 If-Match on the version before a generic note is 409 VersionConflict with the current ETag",
+      () =>
+        Effect.gen(function* stalePatch() {
+          const admin = yield* tmf621As("admin");
+          const ticket = yield* newTmf621Ticket(admin);
+          const path = `${TMF621_TICKETS}/${ticket}`;
+          const before = etagOf(yield* admin.get(path));
+
+          const note = yield* addHelpdeskNote(ticket, "before the patch");
+
+          assert.strictEqual(note.status, 201, note.text);
+
+          const stale = yield* admin.patch(
+            path,
+            { description: "Stale" },
+            { ifMatch: before }
+          );
+
+          assert.strictEqual(stale.status, 409, stale.text);
+          assert.strictEqual(bodyOf(stale).code, "VersionConflict");
+
+          const current = etagOf(yield* admin.get(path));
+
+          assert.notStrictEqual(current, before);
+          assert.strictEqual(stale.headers.get("etag"), current);
+          assert.strictEqual(
+            current,
+            `"${String(yield* versionOf(HELPDESK_TICKETS, ticket))}"`
+          );
+        })
+    );
+
+    dbTest.effect(
+      "concurrent generic notes and TMF621 patches never deadlock and each give their versions and change entries",
+      () =>
+        Effect.gen(function* race() {
+          const admin = yield* tmf621As("admin");
+          const ticket = yield* newTmf621Ticket(admin);
+          const path = `${TMF621_TICKETS}/${ticket}`;
+          const created = yield* versionOf(HELPDESK_TICKETS, ticket);
+
+          const notes = Array.from({ length: RACERS }, (_, index) =>
+            addHelpdeskNote(ticket, `note ${index}`)
+          );
+
+          // Racer 0 also sends a note array: own attributes plus parts.
+          const patchBodies: JsonObject[] = Array.from(
+            { length: RACERS },
+            (_, index) => ({ name: `Racer ${index}` })
+          );
+
+          patchBodies[0] = {
+            name: "Racer 0",
+            note: [{ text: "patched note" }],
+          };
+
+          const patches = patchBodies.map((body) => admin.patch(path, body));
+
+          const answers = yield* Effect.all([...notes, ...patches], {
+            concurrency: "unbounded",
+          });
+
+          const noteAnswers = answers.slice(0, RACERS);
+          const patchAnswers = answers.slice(RACERS);
+
+          assert.deepStrictEqual(
+            answers.map((answer) => answer.status),
+            [
+              ...Array.from({ length: RACERS }, () => 201),
+              ...Array.from({ length: RACERS }, () => 200),
+            ],
+            answers.map((answer) => answer.text).join("\n")
+          );
+          assert.lengthOf(noteAnswers, RACERS);
+
+          // One version per note, one per patch of own attributes, and one
+          // more for the patch that also writes parts.
+          const expected = created + RACERS + RACERS + 1;
+          const entries = yield* entriesOf(ticket);
+
+          assert.strictEqual(
+            yield* versionOf(HELPDESK_TICKETS, ticket),
+            expected
+          );
+          assert.deepStrictEqual(
+            entries.map((entry) => entry.version),
+            Array.from({ length: expected }, (_, index) => index + 1)
+          );
+
+          const etags = patchAnswers.map((answer) => etagOf(answer));
+
+          assert.strictEqual(new Set(etags).size, RACERS);
+          assert.strictEqual(etagOf(yield* admin.get(path)), `"${expected}"`);
+        })
+    );
+
+    dbTest.effect(
+      "racing TMF621 patches with the same If-Match give at most one 200",
+      () =>
+        Effect.gen(function* raceIfMatch() {
+          const admin = yield* tmf621As("admin");
+          const ticket = yield* newTmf621Ticket(admin);
+          const path = `${TMF621_TICKETS}/${ticket}`;
+          const ifMatch = etagOf(yield* admin.get(path));
+
+          const answers = yield* Effect.all(
+            Array.from({ length: RACERS }, (_, index) =>
+              admin.patch(path, { name: `Racer ${index}` }, { ifMatch })
+            ),
+            { concurrency: "unbounded" }
+          );
+
+          const ok = answers.filter((answer) => answer.status === 200);
+          const conflicts = answers.filter((answer) => answer.status === 409);
+
+          assert.lengthOf(ok, 1);
+          assert.lengthOf(conflicts, RACERS - 1);
+
+          for (const conflict of conflicts) {
+            assert.strictEqual(bodyOf(conflict).code, "VersionConflict");
+          }
         })
     );
   });

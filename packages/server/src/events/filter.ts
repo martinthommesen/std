@@ -5,6 +5,7 @@ import { Schema } from "effect";
 
 import type { ChangeKind } from "../records/change-entry.ts";
 import { recordEventType } from "./event-id.ts";
+import { mappedResourceOfHub, possibleEventTypes } from "./tmf-events.ts";
 
 /** An event is outside the hub's type selection, independently of read rights. */
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
@@ -36,6 +37,19 @@ export const acceptsHubEvent = (
   }
 
   let eventType = recordEventType(kind);
+
+  // A mapped TMF API names its own types; the exact ones a change gives
+  // are decided when the delivery is rendered (decision 0035).
+  const mapped = hub.api === "TMF688" ? undefined : mappedResourceOfHub(hub);
+
+  if (mapped !== undefined) {
+    const wanted = new Set(hub.eventTypes);
+
+    return (
+      wanted.size === 0 ||
+      possibleEventTypes(mapped, kind).some((type) => wanted.has(type))
+    );
+  }
 
   if (hub.api === "TMF688") {
     if (classId === EVENT_CLASS_IDS.topic) {

@@ -24,6 +24,8 @@
     "spike:demo": "node examples/acme/src/main.ts",
     "helpdesk:seed": "node examples/helpdesk/src/seed.ts",
     "quickstart:ci": "node examples/quickstart/src/ci.ts",
+    "tmf621-example:ci": "node examples/quickstart/src/tmf621-ci.ts",
+    "ctk:ci": "node examples/quickstart/src/ctk-ci.ts",
     "release-compat:ci": "node examples/quickstart/src/release-compat.ts"
   },
   "devDependencies": {

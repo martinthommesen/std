@@ -26,6 +26,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import {
+  loadDocument,
+  SCHEMA_PREFIX,
+  SPECS_DIRECTORY,
+  SWAGGER_SCHEMA_PREFIX,
+  validatorOf,
+} from "@std/server/http/tmf/pinned-schemas";
+import type { LoadedDocument } from "@std/server/http/tmf/pinned-schemas";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   isJsonArray,
@@ -33,12 +41,7 @@ import {
   isJsonString,
   isJsonValue,
 } from "@std/values/json-value";
-import { Ajv } from "ajv";
-import type { ValidateFunction } from "ajv";
 import { Effect } from "effect";
-import { parse } from "yaml";
-
-import { isRfc3339DateTime } from "./rfc3339.ts";
 
 /** A TMF API whose responses are checked: its base path and document. */
 export interface TmfContract {
@@ -49,10 +52,13 @@ export interface TmfContract {
   readonly file: string;
 }
 
-const SPECS = path.join(import.meta.dirname, "..", "..", "tmf", "specs");
+const SPECS = SPECS_DIRECTORY;
 
 const asObject = (value: JsonValue | undefined): JsonObject =>
   value !== undefined && isJsonObject(value) ? value : {};
+
+const asArray = (value: JsonValue | undefined): readonly JsonValue[] =>
+  value !== undefined && isJsonArray(value) ? value : [];
 
 const textOf = (value: JsonValue | undefined): string | undefined =>
   value !== undefined && isJsonString(value) ? value : undefined;
@@ -110,150 +116,7 @@ export const contractAt = (spec: string, basePath: string): TmfContract => {
   return { ...pinned, basePath };
 };
 
-/** A parsed OpenAPI document with its compiled validators. */
-interface LoadedDocument {
-  readonly document: JsonObject;
-  readonly validators: Map<string, ValidateFunction>;
-  readonly ajv: Ajv;
-}
-
-const SCHEMA_PREFIX = "#/components/schemas/";
-const SWAGGER_SCHEMA_PREFIX = "#/definitions/";
-const PLAIN = "__plain";
-
-// Rewrites `$ref`s to the `$defs` of the combined schema (of the schema
-// with the given `$id` when `base` is set): a ref directly in an `allOf`
-// (inheritance) to the plain variant, any other to the polymorphic one.
-const rewrite = (
-  value: JsonValue,
-  inAllOf: boolean,
-  base?: string
-): JsonValue => {
-  if (isJsonArray(value)) {
-    return value.map((item) => rewrite(item, inAllOf, base));
-  }
-
-  if (!isJsonObject(value)) {
-    return value;
-  }
-
-  const ref = value.$ref;
-
-  if (
-    ref !== undefined &&
-    isJsonString(ref) &&
-    (ref.startsWith(SCHEMA_PREFIX) || ref.startsWith(SWAGGER_SCHEMA_PREFIX))
-  ) {
-    const name = ref.slice(
-      ref.startsWith(SCHEMA_PREFIX)
-        ? SCHEMA_PREFIX.length
-        : SWAGGER_SCHEMA_PREFIX.length
-    );
-
-    return { $ref: `${base ?? ""}#/$defs/${name}${inAllOf ? PLAIN : ""}` };
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, member]): [string, JsonValue][] =>
-      key === "discriminator"
-        ? []
-        : [[key, rewrite(member, key === "allOf", base)]]
-    )
-  );
-};
-
-const withoutBranches = (schema: JsonObject): JsonObject =>
-  Object.fromEntries(
-    Object.entries(schema).filter(([key]) => key !== "oneOf" && key !== "anyOf")
-  );
-
-// The polymorphic variant: a dispatch on the discriminator's mapping.
-const polymorphic = (name: string, schema: JsonObject): JsonValue => {
-  const discriminator = asObject(schema.discriminator);
-  const property = discriminator.propertyName;
-  const mapping = asObject(discriminator.mapping);
-  const plain = { $ref: `#/$defs/${name}${PLAIN}` };
-
-  if (property === undefined || !isJsonString(property)) {
-    return plain;
-  }
-
-  const self = rewrite(withoutBranches(schema), false);
-
-  // An unknown `@type` matches any branch of a oneOf.
-  const otherwise: JsonValue =
-    schema.oneOf === undefined
-      ? plain
-      : rewrite({ ...withoutBranches(schema), anyOf: schema.oneOf }, false);
-
-  let dispatch = otherwise;
-
-  // The first mapping entry is the outermost `if`.
-  for (const [type, target] of Object.entries(mapping).toReversed()) {
-    const targetName = isJsonString(target)
-      ? target.slice(SCHEMA_PREFIX.length)
-      : name;
-
-    dispatch = {
-      else: dispatch,
-      if: {
-        properties: { [property]: { const: type } },
-        required: [property],
-      },
-      // oxlint-disable-next-line unicorn/no-thenable -- `then` is a JSON Schema keyword
-      then: { allOf: [{ $ref: `#/$defs/${targetName}${PLAIN}` }, self] },
-    };
-  }
-
-  return dispatch;
-};
-
 const DECLARED_STATUS = /^\d{3}$/u;
-
-const documents = new Map<string, LoadedDocument>();
-
-const loadDocument = (file: string): LoadedDocument => {
-  const known = documents.get(file);
-
-  if (known !== undefined) {
-    return known;
-  }
-
-  const parsed: unknown = parse(readFileSync(path.join(SPECS, file), "utf-8"));
-  const document = asObject(isJsonValue(parsed) ? parsed : undefined);
-
-  const schemas = asObject(
-    document.swagger === "2.0"
-      ? document.definitions
-      : asObject(document.components).schemas
-  );
-
-  const defs = new Map<string, JsonValue>();
-
-  for (const [name, schema] of Object.entries(schemas)) {
-    const object = asObject(schema);
-
-    defs.set(`${name}${PLAIN}`, rewrite(object, false));
-    defs.set(name, polymorphic(name, object));
-  }
-
-  const ajv = new Ajv({ allErrors: false, strict: false });
-
-  ajv.addFormat("date-time", isRfc3339DateTime);
-  ajv.addFormat("uri", (text: string) => URL.canParse(text));
-  ajv.addFormat("float", true);
-  ajv.addFormat("base64", true);
-  ajv.addSchema({
-    $defs: Object.fromEntries(defs),
-    $id: `tmf:${encodeURIComponent(file)}`,
-  });
-
-  const loaded: LoadedDocument = { ajv, document, validators: new Map() };
-
-  documents.set(file, loaded);
-
-  return loaded;
-};
 
 /** One operation of a document. */
 interface Operation {
@@ -351,31 +214,134 @@ const responseSchema = (
   return asObject(asObject(resolved.content)["application/json"]).schema;
 };
 
-const validatorOf = (
-  loaded: LoadedDocument,
-  key: string,
-  schema: JsonValue
-): ValidateFunction => {
-  const known = loaded.validators.get(key);
+/**
+ * What is wrong with a value against one schema of a pinned document (an
+ * event body STD delivers to a listener, which the contract check of
+ * responses never sees: TMF621's `TroubleTicketCreateEvent`, ...).
+ *
+ * @param spec - The pinned specification (`TMF621`).
+ * @param schemaName - A schema of its `#/components/schemas`.
+ * @param value - The value.
+ * @returns A description of the mismatch, or undefined.
+ */
+export const schemaValueProblem = (
+  spec: string,
+  schemaName: string,
+  value: JsonValue
+): string | undefined => {
+  const { file } = contractAt(spec, "/");
+  const loaded = loadDocument(file);
 
-  if (known !== undefined) {
-    return known;
-  }
+  const prefix =
+    loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
 
-  const compiled = loaded.ajv.compile({
-    $id: `tmf-response:${encodeURIComponent(key)}`,
-    allOf: [
-      rewrite(
-        schema,
-        false,
-        `tmf:${encodeURIComponent(key.split("|")[0] ?? "")}`
-      ),
-    ],
+  const validate = validatorOf(loaded, `${file}|schema|${schemaName}`, {
+    $ref: `${prefix}${schemaName}`,
   });
 
-  loaded.validators.set(key, compiled);
+  return validate(value)
+    ? undefined
+    : `${spec} ${schemaName}: ${loaded.ajv.errorsText(validate.errors)}`;
+};
 
-  return compiled;
+/**
+ * Every member a schema of a pinned document marks required, through its
+ * `allOf` chain (`TroubleTicket`: `@type`, from `Extensible`).
+ *
+ * @param loaded - The document.
+ * @param schemaName - A schema of its `#/components/schemas`.
+ * @returns The required members.
+ */
+const requiredMembersOf = (
+  loaded: LoadedDocument,
+  schemaName: string
+): ReadonlySet<string> => {
+  const prefix =
+    loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
+
+  const schemas = asObject(
+    loaded.document.swagger === "2.0"
+      ? loaded.document.definitions
+      : asObject(loaded.document.components).schemas
+  );
+
+  const required = new Set<string>();
+  const pending: JsonValue[] = [schemas[schemaName] ?? null];
+  const seen = new Set<string>();
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const schema = asObject(next);
+    const ref = textOf(schema.$ref);
+
+    if (ref?.startsWith(prefix) === true && !seen.has(ref)) {
+      seen.add(ref);
+      pending.push(schemas[ref.slice(prefix.length)] ?? null);
+    }
+
+    for (const member of asArray(schema.required)) {
+      if (isJsonString(member)) {
+        required.add(member);
+      }
+    }
+
+    pending.push(...asArray(schema.allOf));
+  }
+
+  return required;
+};
+
+/**
+ * What is wrong with an AttributeValueChange event whose resource is a
+ * JSON merge patch (TMF630 v5.0.0 Part 1 §11.6.2 pp.202-203, pp.105-106):
+ * a `null` member of the resource clears it, so it is allowed only where
+ * the resource's schema does not require the member; the event with those
+ * members left out must fit the event's schema.
+ *
+ * @param spec - The pinned specification (`TMF621`).
+ * @param schemaName - The event's schema.
+ * @param value - The event body.
+ * @param resourceName - The resource's member of `event` (`troubleTicket`).
+ * @returns A description of the mismatch, or undefined.
+ */
+export const mergePatchEventProblem = (
+  spec: string,
+  schemaName: string,
+  value: JsonValue,
+  resourceName: string
+): string | undefined => {
+  const body = asObject(value);
+  const event = asObject(body.event);
+  const resource = asObject(event[resourceName]);
+  const type = textOf(resource["@type"]);
+
+  if (type === undefined) {
+    return `${spec} ${schemaName}: event/${resourceName} has no @type`;
+  }
+
+  const required = requiredMembersOf(
+    loadDocument(contractAt(spec, "/").file),
+    type
+  );
+
+  const cleared = Object.keys(resource).filter(
+    (member) => resource[member] === null
+  );
+
+  const refused = cleared.filter((member) => required.has(member));
+
+  if (refused.length > 0) {
+    return `${spec} ${schemaName}: event/${resourceName}/${refused.join(", ")} is required by ${type} and cannot be cleared with null`;
+  }
+
+  return schemaValueProblem(spec, schemaName, {
+    ...body,
+    event: {
+      ...event,
+      [resourceName]: Object.fromEntries(
+        Object.entries(resource).filter(([, member]) => member !== null)
+      ),
+    },
+  });
 };
 
 /** A response as the contract check sees it. */
