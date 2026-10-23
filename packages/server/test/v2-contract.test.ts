@@ -12,6 +12,7 @@
  *   document refuses is `400 InvalidRequest`.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { GENERIC_API_PREFIX } from "@std/api/v2/paths";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -271,6 +272,29 @@ describe("v2-contract", () => {
             { ...callers.alice, headers: { "if-match": '"3"' } },
             204
           );
+
+          const hubPath = `${GENERIC_API_PREFIX}/hub`;
+
+          const hub = yield* exchange(
+            "POST",
+            hubPath,
+            {
+              ...callers.admin,
+              body: {
+                "@type": "Hub",
+                callback: "https://example.com/events",
+                query: "resource=acmeAsset",
+              },
+            },
+            201
+          );
+
+          yield* exchange("POST", hubPath, {}, 401);
+          const registeredHubPath = `${hubPath}/${textOf(asObject(hub.json).id)}`;
+          yield* exchange("GET", registeredHubPath, callers.admin, 200);
+          yield* exchange("GET", `${hubPath}/${RANDOM_ID}`, callers.admin, 404);
+          yield* exchange("DELETE", registeredHubPath, callers.admin, 204);
+          yield* exchange("DELETE", registeredHubPath, callers.admin, 404);
 
           for (const endpoint of V2_ENDPOINTS) {
             assert.sameMembers(

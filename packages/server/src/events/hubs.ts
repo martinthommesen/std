@@ -1,0 +1,394 @@
+import { recordDecision, knowsTable, fieldDecision } from "@std/access/rules";
+import { InvalidRequest } from "@std/api/errors/invalid-request";
+import { NotAllowed } from "@std/api/errors/not-allowed";
+import { NotFound } from "@std/api/errors/not-found";
+import { UnknownField } from "@std/api/errors/unknown-field";
+import { ConditionSchema, conditionFieldIds } from "@std/definitions/condition";
+import type { Condition } from "@std/definitions/condition";
+import type { SubscriptionDefinition } from "@std/definitions/definition";
+import type { HubConfiguration } from "@std/definitions/hub";
+import { hasPermission } from "@std/definitions/requester";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import {
+  PERMISSION_IDS,
+  PLATFORM_CLASS_IDS,
+} from "@std/definitions/well-known";
+import type { JsonObject } from "@std/values/json-value";
+import { Clock, Effect, Option, Schema } from "effect";
+import type { Redacted } from "effect";
+import { SqlClient } from "effect/sql";
+
+import { Actor, loadActor } from "../auth/actor.ts";
+import type { ActingUser } from "../auth/actor.ts";
+import { authenticate } from "../auth/sessions.ts";
+import { Catalog } from "../catalog/catalog.ts";
+import { parseListQuery } from "../http/v2/query.ts";
+import { collectionNameOf } from "../http/v2/table-names.ts";
+import { uuidv7At } from "../records/change-entry.ts";
+import { currentReadScope } from "../records/read-records.ts";
+import { applyChangeSet } from "../schema/change-set.ts";
+import { decodeRows } from "../sql/rows.ts";
+import { callbackUrl } from "./callback.ts";
+
+/** Registration exceeded its serialized per-identity allowance. */
+// oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
+export class TooManyRequests extends Schema.TaggedError<
+  TooManyRequests,
+  { readonly brand: unique symbol }
+>()("TooManyRequests", {}) {}
+
+/** The API and resource a hub watches. */
+export interface HubTarget {
+  readonly api: string;
+  readonly classId: string;
+  readonly resource: string;
+  readonly topicId: string | null;
+}
+
+/** A prepared registration; persisted only after rechecking current authority. */
+export interface Registration {
+  readonly attributeCondition: Condition | null;
+  readonly standardCondition: Condition | null;
+  readonly target: HubTarget;
+  readonly callback: string;
+  readonly query: string | null;
+  readonly origin: string;
+  readonly condition: Condition | null;
+  readonly eventTypes: readonly string[];
+  readonly queryFieldIds: readonly string[];
+}
+
+/** Parse event selection and resource filters using the shared TMF630 grammar. */
+export const prepareRegistration = Effect.fn("Hubs.prepare")(
+  function* prepareRegistration(
+    target: HubTarget,
+    callback: string,
+    query: string | null,
+    origin: string
+  ) {
+    yield* callbackUrl(callback);
+    const scope = yield* currentReadScope();
+
+    if (!knowsTable(scope.snapshot, scope.caller, target.classId)) {
+      return yield* new NotFound();
+    }
+
+    const params = [...new URLSearchParams(query ?? "")];
+
+    const eventTypes = params.flatMap(([name, value]) =>
+      name === "eventType" ? value.split(",") : []
+    );
+
+    const filters = params.filter(
+      ([name]) => name !== "eventType" && name !== "resource"
+    );
+
+    if (
+      filters.some(([name]) =>
+        [
+          "offset",
+          "limit",
+          "fields",
+          "after",
+          "before",
+          "sort",
+          "count",
+        ].includes(name)
+      )
+    ) {
+      return yield* new InvalidRequest({
+        message:
+          "A hub query selects event types and resource attributes only.",
+        parameter: "query",
+      });
+    }
+
+    const parsed = yield* parseListQuery(
+      scope,
+      scope.view(target.classId),
+      filters
+    );
+
+    const conditions = [
+      Option.getOrUndefined(parsed.tmf),
+      Option.getOrUndefined(parsed.condition)?.expr,
+    ].filter((entry) => entry !== undefined);
+
+    const condition =
+      conditions.length === 0
+        ? null
+        : yield* Schema.decodeUnknownEffect(ConditionSchema)({
+            args: conditions,
+            op: "and",
+          }).pipe(Effect.orDie);
+
+    const queryFieldIds =
+      condition === null ? [] : [...conditionFieldIds(condition)];
+
+    const attributeCondition = Option.isNone(parsed.tmf)
+      ? null
+      : yield* Schema.decodeUnknownEffect(ConditionSchema)(
+          parsed.tmf.value
+        ).pipe(Effect.orDie);
+
+    const standardCondition = Option.isNone(parsed.condition)
+      ? null
+      : yield* Schema.decodeUnknownEffect(ConditionSchema)(
+          parsed.condition.value.expr
+        ).pipe(Effect.orDie);
+
+    for (const fieldId of queryFieldIds) {
+      for (const child of scope.snapshot.subtree(target.classId)) {
+        if (
+          fieldDecision(scope.snapshot, scope.caller, "read", child.id, fieldId)
+            .kind !== "always"
+        ) {
+          return yield* new UnknownField({
+            field: scope.snapshot.field(fieldId)?.name ?? "query",
+          });
+        }
+      }
+    }
+
+    return {
+      attributeCondition,
+      callback,
+      condition,
+      eventTypes,
+      origin,
+      query,
+      queryFieldIds,
+      standardCondition,
+      target,
+    } satisfies Registration;
+  }
+);
+
+/**
+ * Public hub representation.
+ * @param subscription - The authorized subscription.
+ * @param base - This hub collection's absolute URL.
+ * @returns The listener registration.
+ */
+export const hubResource = (
+  subscription: SubscriptionDefinition,
+  base: string
+): JsonObject & { readonly href: string } => {
+  const { hub } = subscription;
+
+  const resource = {
+    "@type": "Hub",
+    callback: hub?.callback ?? "",
+    href: `${base}/hub/${subscription.id}`,
+    id: subscription.id,
+  };
+
+  return hub?.query === null || hub?.query === undefined
+    ? resource
+    : { ...resource, query: hub.query };
+};
+
+/**
+ * Owner/admin lookup, shared by generic and TMF688 routes.
+ * @param snapshot - Current configuration.
+ * @param actor - Current identity and roles.
+ * @param id - Hub ID.
+ * @param api - Owning API.
+ * @param topicId - Optional topic restriction.
+ * @returns The hub, or undefined for every missing or hidden case.
+ */
+export const ownedHub = (
+  snapshot: ConfigSnapshot,
+  actor: ActingUser,
+  id: string,
+  api: string,
+  topicId: string | null
+) => {
+  const subscription = snapshot.getKind("subscription", id);
+
+  const admin =
+    recordDecision(snapshot, actor, "read", PLATFORM_CLASS_IDS.subscription)
+      .kind === "always";
+
+  const active = subscription?.state === "active" && subscription.enabled;
+
+  const sameApi =
+    subscription?.hub?.api === api && subscription.hub.topicId === topicId;
+
+  const owned = subscription?.identityId === actor.userId || admin;
+
+  return active && sameApi && owned ? subscription : undefined;
+};
+
+/** Create one config subscription in one authorized change set. */
+export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
+  registration: Registration,
+  session?: Redacted.Redacted
+) {
+  const actor = yield* Actor;
+  const id = uuidv7At(yield* Clock.currentTimeMillis);
+
+  const hub: HubConfiguration = {
+    api: registration.target.api,
+    attributeCondition: registration.attributeCondition,
+    callback: registration.callback,
+    eventTypes: [...registration.eventTypes],
+    origin: registration.origin,
+    query: registration.query,
+    queryFieldIds: [...registration.queryFieldIds],
+    resource: registration.target.resource,
+    standardCondition: registration.standardCondition,
+    topicId: registration.target.topicId,
+  };
+
+  const decodeCount = decodeRows(Schema.Struct({ total: Schema.Int }));
+  yield* applyChangeSet({
+    authorize: (snapshot) =>
+      Effect.gen(function* authorize() {
+        const current = yield* session === undefined
+          ? loadActor(snapshot, actor.userId)
+          : authenticate(snapshot, session);
+
+        if (current.userId !== actor.userId) {
+          return yield* new NotAllowed();
+        }
+
+        if (
+          !hasPermission(snapshot, current, PERMISSION_IDS["events.subscribe"])
+        ) {
+          return yield* new NotAllowed();
+        }
+
+        if (!knowsTable(snapshot, current, registration.target.classId)) {
+          return yield* new NotFound();
+        }
+
+        for (const fieldId of registration.queryFieldIds) {
+          if (
+            fieldDecision(
+              snapshot,
+              current,
+              "read",
+              registration.target.classId,
+              fieldId
+            ).kind !== "always"
+          ) {
+            return yield* new UnknownField({
+              field: snapshot.field(fieldId)?.name ?? "query",
+            });
+          }
+        }
+
+        const sql = yield* SqlClient.SqlClient;
+
+        const [count] =
+          yield* sql`SELECT count(*)::int AS total FROM core.subscription WHERE identity_id = ${actor.userId}::uuid AND hub IS NOT NULL AND created_at > now() - interval '1 minute'`.pipe(
+            Effect.flatMap(decodeCount)
+          );
+
+        if ((count?.total ?? 0) >= 10) {
+          return yield* new TooManyRequests();
+        }
+
+        return current;
+      }).pipe(Effect.catchTag("SqlError", Effect.die)),
+    operations: [
+      {
+        definition: {
+          classId: registration.target.classId,
+          condition: registration.condition,
+          deadLetter: "block",
+          enabled: true,
+          hub,
+          id,
+          identityId: actor.userId,
+          kind: "subscription",
+          maxAttempts: 10,
+          name: `hub_${id.replaceAll("-", "")}`,
+          operations: ["create", "update", "delete"],
+          owner: { layer: "local" },
+          protected: false,
+        },
+        op: "createSubscription",
+      },
+    ],
+    requester: actor,
+  });
+  const snapshot = yield* (yield* Catalog).refresh;
+  const created = snapshot.getKind("subscription", id);
+
+  if (created === undefined) {
+    return yield* Effect.die(new Error("Committed hub was not loaded"));
+  }
+
+  return created;
+});
+
+/** Tombstone a hub without deleting its outbox history or foreign keys. */
+export const unregisterHub = Effect.fn("Hubs.unregister")(
+  function* unregisterHub(
+    id: string,
+    api: string,
+    topicId: string | null,
+    session?: Redacted.Redacted
+  ) {
+    const actor = yield* Actor;
+    const snapshot = yield* (yield* Catalog).refresh;
+    const subscription = ownedHub(snapshot, actor, id, api, topicId);
+
+    if (subscription === undefined) {
+      return yield* new NotFound();
+    }
+
+    return yield* applyChangeSet({
+      authorize: (current) =>
+        Effect.gen(function* authorize() {
+          const latest = yield* session === undefined
+            ? loadActor(current, actor.userId)
+            : authenticate(current, session);
+
+          if (
+            latest.roleIds.length === 0 ||
+            ownedHub(current, latest, id, api, topicId) === undefined
+          ) {
+            return yield* new NotFound();
+          }
+
+          return latest;
+        }).pipe(Effect.catchTag("SqlError", Effect.die)),
+      operations: [{ id, op: "delete", version: subscription.version }],
+      requester: actor,
+    }).pipe(Effect.asVoid);
+  }
+);
+
+/**
+ * Resolve the generic hub's explicit resource selector.
+ * @param snapshot - Current table definitions.
+ * @param query - The registration query.
+ * @returns The watched table, or undefined if absent.
+ */
+export const genericTarget = (
+  snapshot: ConfigSnapshot,
+  query: string | null
+): HubTarget | undefined => {
+  const resource = new URLSearchParams(query ?? "").get("resource");
+
+  const table = snapshot
+    .all("class")
+    .find(
+      (entry) =>
+        entry.state === "active" &&
+        entry.storage === "standard" &&
+        collectionNameOf(snapshot, entry.id) === resource
+    );
+
+  return table === undefined
+    ? undefined
+    : {
+        api: "generic",
+        classId: table.id,
+        resource: resource ?? "",
+        topicId: null,
+      };
+};

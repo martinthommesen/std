@@ -658,6 +658,9 @@ importers:
       '@std/postgres':
         specifier: workspace:*
         version: link:../postgres
+      '@std/tmf':
+        specifier: workspace:*
+        version: link:../tmf
       '@std/values':
         specifier: workspace:*
         version: link:../values
@@ -713,9 +716,15 @@ importers:
       '@std/server':
         specifier: workspace:*
         version: link:../server
+      '@std/tmf':
+        specifier: workspace:*
+        version: link:../tmf
       '@std/values':
         specifier: workspace:*
         version: link:../values
+      ajv:
+        specifier: 'catalog:'
+        version: 8.18.0
       effect:
         specifier: 'catalog:'
         version: 4.0.5
@@ -732,6 +741,9 @@ importers:
 
   packages/tmf:
     dependencies:
+      '@std/values':
+        specifier: workspace:*
+        version: link:../values
       effect:
         specifier: 'catalog:'
         version: 4.0.5

@@ -43,10 +43,14 @@ import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
  * - the `owner` scope of a condition path, and the `anyPart`, `allParts`
  *   and `partsChanged` members of a condition.
  *
+ * Hubs (Contracts 12.2) add only optional subscription metadata and the
+ * corresponding optional configuration-update property. The old document
+ * inherits these shared definition schemas, as it does the additions above.
+ *
  * Any other change to the document fails this test.
  */
 const V1_DOCUMENT_SHA256 =
-  "f68b6d14a935a8d0261fd6a68a41135eec5bac1cdd290b9e723fa06774b2aa9f";
+  "267b1d5346e9c5b830a766f67d16f5b538633d6abdcb1b1dac4d3a0513f4ffc5";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 

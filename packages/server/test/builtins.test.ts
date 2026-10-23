@@ -221,13 +221,14 @@ const assertMatrixCovered = (
 };
 
 describe("built-ins", () => {
-  it("names three roles and three permissions by stable ID", () => {
+  it("names three roles and four permissions by stable ID", () => {
     assert.sameMembers(Object.keys(BUILT_IN_ROLE_IDS), [
       "admin",
       "authenticated",
       "schema_purger",
     ]);
     assert.sameMembers(Object.keys(PERMISSION_IDS), [
+      "events.subscribe",
       "rules.run_as",
       "schema.purge",
       "schema.snapshot",
@@ -274,6 +275,11 @@ describe("built-ins", () => {
               [
                 BUILT_IN_ROLE_IDS.schema_purger,
                 PERMISSION_IDS["schema.purge"],
+                true,
+              ],
+              [
+                BUILT_IN_ROLE_IDS.admin,
+                PERMISSION_IDS["events.subscribe"],
                 true,
               ],
             ]

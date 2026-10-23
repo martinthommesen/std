@@ -6,6 +6,7 @@
  */
 import { HttpApi, OpenApi } from "effect/http-api";
 
+import { HubGroup } from "./hub.ts";
 import { MetaGroup } from "./meta.ts";
 import { RecordsGroup } from "./records.ts";
 import { SessionGroup } from "./session.ts";
@@ -17,6 +18,7 @@ export const V2_API_DESCRIPTION =
 
 /** The generic API v2. */
 export class StdApiV2 extends HttpApi.make("std-v2")
+  .add(HubGroup)
   .add(SessionGroup)
   .add(TableMetadataGroup)
   .add(MetaGroup)

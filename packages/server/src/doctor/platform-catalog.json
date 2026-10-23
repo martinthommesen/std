@@ -10088,6 +10088,12 @@
         "name": "enabled",
         "notNull": true,
         "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "hub",
+        "notNull": false,
+        "type": "jsonb"
       }
     ],
     "constraints": [

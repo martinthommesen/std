@@ -451,7 +451,7 @@ export const versionImage = (
  * @param json - The known values in canonical JSON.
  * @returns The image, or `PayloadUnreadable`.
  */
-const decodedImage = (
+export const decodedImage = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId,
   json: ReadonlyMap<DefinitionId, JsonValue>

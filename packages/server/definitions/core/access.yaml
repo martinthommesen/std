@@ -13,6 +13,9 @@ roles:
     helpText: Holds schema.purge; admins do not.
 
 permissions:
+  - id: 482cfac8-dc92-4637-a8cb-ce4eaf01233d
+    name: events.subscribe
+    label: Register event listeners
   - id: ba9fb2e0-d28d-4f77-aeaf-dab447f3f8a9
     name: schema.purge
     label: Purge retired definitions
@@ -24,6 +27,9 @@ permissions:
     label: Let rules run as another identity
 
 grants:
+  - id: da9e139b-7421-4702-8d44-f184b173c1c9
+    role: admin
+    permission: events.subscribe
   - id: d8ef93f6-07e7-473b-87fa-1add0f89541e
     role: schema_purger
     permission: schema.purge

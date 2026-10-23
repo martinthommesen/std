@@ -229,7 +229,7 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* scenario2() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const ledger = yield* readLedger(yield* SqlClient.SqlClient);
-          assert.strictEqual(ledger.length, 17);
+          assert.strictEqual(ledger.length, PLATFORM_MIGRATIONS.length);
           assert.isTrue(ledger.every((entry) => entry.phase === "expand"));
         })
     );
@@ -352,7 +352,7 @@ describe("rolling-groundwork", () => {
           const migration: DataMigration = {
             batch: () => Effect.succeed({ changed: 0, next: null }),
             description: "No-op probe of a pre-phase data ledger",
-            id: 18,
+            id: PLATFORM_MIGRATIONS.length + 1,
             kind: "data",
             name: "pre-phase-probe",
             phase: "expand",
@@ -365,7 +365,7 @@ describe("rolling-groundwork", () => {
           const ledger = yield* readLedger(sql);
           assert.deepStrictEqual(ledger.at(-1), {
             checksum: migrationChecksum(migration),
-            id: 18,
+            id: migration.id,
             phase: "expand",
             progress: '{"changed": 0}',
             state: "applied",

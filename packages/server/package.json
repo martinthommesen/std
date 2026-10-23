@@ -19,6 +19,7 @@
     "@std/conditions": "workspace:*",
     "@std/definitions": "workspace:*",
     "@std/postgres": "workspace:*",
+    "@std/tmf": "workspace:*",
     "@std/values": "workspace:*",
     "effect": "catalog:",
     "yaml": "2.9.1"

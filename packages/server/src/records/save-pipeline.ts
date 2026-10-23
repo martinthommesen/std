@@ -212,7 +212,8 @@ export interface LockedImage {
 /** A delete, based on a version the caller read. */
 export interface DeleteInput extends SaveInput {
   readonly id: string;
-  readonly expectedVersion: number;
+  /** Null applies to the locked version (TMF); generic routes always supply one. */
+  readonly expectedVersion: number | null;
 }
 
 /** What a save did. */

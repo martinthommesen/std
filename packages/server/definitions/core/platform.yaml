@@ -405,6 +405,9 @@ tables:
     storage: platform
     displayField: name
     fields:
+      - id: bb6d2821-a4c4-43cf-a0ec-844c27332d36
+        name: hub
+        type: json
       - id: 9249757f-b40b-4854-9da2-9beb86e1aa27
         name: owner_layer
         type: text

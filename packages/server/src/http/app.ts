@@ -17,11 +17,13 @@ import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
 import { AuthenticationLayer } from "./authentication.ts";
 import { RecordHandlers, SessionHandlers, SignInHandlers } from "./handlers.ts";
+import { HubRoutes } from "./hubs.ts";
 import { MetaHandlers } from "./meta-handlers.ts";
 import { MetadataHandlers } from "./metadata-handlers.ts";
 import { RequestDecodingLayer } from "./request-decoding.ts";
 import { SchemaChangeHandlers } from "./schema-change-handlers.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
+import { Tmf688Routes } from "./tmf/tmf688.ts";
 import { V1DeprecationLayer } from "./v1-frozen.ts";
 import { V2RoutesLayer } from "./v2/routes.ts";
 
@@ -63,6 +65,8 @@ export const ApiRoutes = HttpApiBuilder.layer(StdApi).pipe(
  */
 export const HttpAppLayer = Layer.mergeAll(
   ApiRoutes,
+  HubRoutes,
+  Tmf688Routes.pipe(Layer.provide(SaveServices)),
   V2RoutesLayer.pipe(Layer.provide(SaveServices)),
   SchemaRevisionHeaderLayer,
   ApiNoStoreLayer,

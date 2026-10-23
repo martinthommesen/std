@@ -33,6 +33,7 @@ import { ConditionDefectError } from "@std/conditions/defect";
 import { evaluateCondition } from "@std/conditions/evaluate";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
+import type { Condition } from "@std/definitions/condition";
 import { classViewOf } from "@std/definitions/condition-view";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import { compareIds } from "@std/definitions/ids";
@@ -46,6 +47,7 @@ import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { WorkerWakeup } from "../sql/wake-up.ts";
 import { STD_VERSION } from "../version.ts";
 import type { ChangeKind } from "./change-entry.ts";
+import { exactTextView } from "./read-query.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { AfterWriteInput } from "./save-hooks.ts";
 import { NOW } from "./save-sql.ts";
@@ -71,21 +73,25 @@ export interface SubscribedChange {
 const imageOf = (record: StoredRecord): RecordImage =>
   Object.fromEntries(record.values);
 
-const conditionHolds = (
+const evaluateSubscriptionCondition = (
   snapshot: ConfigSnapshot,
   subscription: SubscriptionDefinition,
+  condition: Condition | null,
+  exactText: boolean,
   image: RecordImage,
   context: SubscriptionContext
 ): boolean => {
-  if (subscription.condition === null) {
+  if (condition === null) {
     return true;
   }
 
-  const checked = checkCondition(subscription.condition, {
+  const view = classViewOf(snapshot);
+
+  const checked = checkCondition(condition, {
     classId: subscription.classId,
     profile: "subscription",
     purpose: "evaluate",
-    view: classViewOf(snapshot),
+    view: exactText ? exactTextView(view) : view,
   });
 
   if (!checked.ok) {
@@ -106,6 +112,50 @@ const conditionHolds = (
   }
 
   return evaluateCondition(resolved.value, { record: image });
+};
+
+const conditionHolds = (
+  snapshot: ConfigSnapshot,
+  subscription: SubscriptionDefinition,
+  image: RecordImage,
+  context: SubscriptionContext
+): boolean => {
+  const { hub } = subscription;
+
+  if (
+    hub !== null &&
+    hub !== undefined &&
+    (hub.attributeCondition !== undefined ||
+      hub.standardCondition !== undefined)
+  ) {
+    return (
+      evaluateSubscriptionCondition(
+        snapshot,
+        subscription,
+        hub.standardCondition ?? null,
+        false,
+        image,
+        context
+      ) &&
+      evaluateSubscriptionCondition(
+        snapshot,
+        subscription,
+        hub.attributeCondition ?? null,
+        true,
+        image,
+        context
+      )
+    );
+  }
+
+  return evaluateSubscriptionCondition(
+    snapshot,
+    subscription,
+    subscription.condition,
+    false,
+    image,
+    context
+  );
 };
 
 /**

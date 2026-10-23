@@ -52,7 +52,9 @@
 import { PgClient } from "@effect/sql-pg";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
+import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { PERMISSION_IDS } from "@std/definitions/well-known";
 import {
   Cause,
   Clock,
@@ -76,6 +78,7 @@ import { Actor, effectiveRoles, readUserRoles } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { EventNotAuthorized } from "../events/not-authorized.ts";
 import type { ChangeCause } from "../records/change-entry.ts";
 import { RuleWriteAccess } from "../records/write-access-rules.ts";
 import { LISTEN_RETRY } from "../sql/config-listener.ts";
@@ -303,12 +306,17 @@ const IDENTITY_UNAVAILABLE =
  */
 const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
   snapshot: ConfigSnapshot,
-  identityId: DefinitionId
+  identityId: DefinitionId,
+  hub: boolean
 ) {
   const users = yield* readUserRoles(snapshot, [identityId]);
   const user = users.get(identityId);
 
   if (user === undefined || !user.active) {
+    if (hub) {
+      return yield* new EventNotAuthorized();
+    }
+
     return yield* new DeliveryFailed({ reason: IDENTITY_UNAVAILABLE });
   }
 
@@ -347,7 +355,21 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
   }
 
   const { subscription } = served;
-  const actor = yield* identityOf(snapshot, subscription.identityId);
+
+  const actor = yield* identityOf(
+    snapshot,
+    subscription.identityId,
+    subscription.hub !== null && subscription.hub !== undefined
+  );
+
+  if (
+    subscription.hub !== null &&
+    subscription.hub !== undefined &&
+    !hasPermission(snapshot, actor, PERMISSION_IDS["events.subscribe"])
+  ) {
+    return yield* new EventNotAuthorized();
+  }
+
   const { timeZone } = yield* InstanceSettings;
   const now = yield* Clock.currentTimeMillis;
   const entries = yield* readEntries(claimed.recordId, claimed.recordVersion);
@@ -389,6 +411,38 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
     snapshot,
     subscription,
   };
+
+  if (
+    served.effect.kind === "external" &&
+    served.effect.authorize !== undefined
+  ) {
+    yield* served.effect
+      .authorize(delivery)
+      .pipe(
+        Effect.provide(RuleWriteAccess),
+        Effect.provideService(Actor, actor)
+      );
+  }
+
+  if (served.effect.kind === "external" && served.effect.render !== undefined) {
+    const events = served.effect.render(delivery, {
+      actor,
+      entries,
+      now,
+      origins,
+      timeZone,
+    });
+
+    if (events.length === 0) {
+      return yield* new EventNotAuthorized();
+    }
+
+    return {
+      actor,
+      delivery: { ...delivery, events },
+      effect: served.effect,
+    } satisfies Prepared;
+  }
 
   return { actor, delivery, effect: served.effect } satisfies Prepared;
 });
@@ -631,6 +685,16 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
     }
 
     const failure = taggedFailure(exit.cause);
+
+    if (failure instanceof EventNotAuthorized) {
+      return yield* markDone(claimed, "notAuthorized").pipe(
+        Effect.as<AttemptOutcome>("done"),
+        Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
+        Effect.catchTag("DatabaseError", () =>
+          Effect.succeed<AttemptOutcome>("unrecorded")
+        )
+      );
+    }
 
     if (failure instanceof AttemptRefused) {
       return yield* refusedOutcome(failure, claimed);

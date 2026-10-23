@@ -26,6 +26,7 @@ import type { Scope } from "effect";
 import { HttpEffect, HttpRouter, HttpServer } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { checkTmf688Exchange } from "./tmf688-contract.ts";
 import { checkV2Exchange } from "./v2-contract.ts";
 
 /** A response as the client received it. */
@@ -108,6 +109,7 @@ export const setCookieValue = (
 };
 
 const BASE = "http://std.test";
+const CONTENT_TYPE_HEADER = "content-type";
 
 const decodeSignIn = Schema.decodeUnknownEffect(SignInResponseSchema);
 
@@ -128,8 +130,8 @@ const requestInit = (
     options.body === undefined ? options.rawBody : JSON.stringify(options.body);
 
   if (text !== undefined) {
-    if (!headers.has("content-type")) {
-      headers.set("content-type", "application/json");
+    if (!headers.has(CONTENT_TYPE_HEADER)) {
+      headers.set(CONTENT_TYPE_HEADER, "application/json");
     }
 
     init.body = text;
@@ -185,6 +187,17 @@ export class TestHttpClient extends Context.Service<
 
         const text = yield* Effect.promise(async () => await response.text());
         const json = bodyJson(text);
+        yield* checkTmf688Exchange({
+          contentType: response.headers.get(CONTENT_TYPE_HEADER),
+          json,
+          method,
+          path,
+          status: response.status,
+          text,
+        }).pipe(
+          Effect.mapError((problem) => new Error(problem)),
+          Effect.orDie
+        );
 
         // Every `/api/v2` answer must be what the shared definition (and so
         // `/api/v2/openapi.json`) documents for it.

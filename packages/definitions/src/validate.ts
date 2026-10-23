@@ -1219,11 +1219,21 @@ const checkSubscription = (
     );
   }
 
-  if (subscription.condition !== null) {
+  const conditions = [
+    subscription.condition,
+    subscription.hub?.attributeCondition,
+    subscription.hub?.standardCondition,
+  ];
+
+  for (const condition of conditions) {
+    if (condition === null || condition === undefined) {
+      continue;
+    }
+
     for (const message of conditionProblems(
       snapshot,
       subscription.classId,
-      subscription.condition,
+      condition,
       "subscription",
       purpose
     )) {
