@@ -71,7 +71,7 @@ import {
   sourceValuesOf,
   withHistory,
 } from "../http/tmf/sources.ts";
-import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
+import type { RenderPrepared } from "../outbox/delivery-effects.ts";
 import {
   entryTargetKey,
   PayloadUnreadable,
@@ -92,7 +92,8 @@ import type { ReadScope } from "../records/read-view.ts";
 import { recordRelation } from "../records/relation.ts";
 import { readRows } from "../records/sql-run.ts";
 import { decodeRows } from "../sql/rows.ts";
-import { mappedResourceOfHub } from "./tmf-events.ts";
+import type { EventDelivery } from "./tmf-events.ts";
+import { mappedResourceOfHub, sourcesOf } from "./tmf-events.ts";
 
 const NOTHING: RenderPrepared = { parts: new Map(), paths: new Map() };
 
@@ -138,7 +139,7 @@ const OWNER_VERSION = sql`("o"."cause" ? 'aggregate' OR "o"."kind" = 'delete')`;
 
 /** What reading one delivery's arrays shares. */
 interface ArrayRead {
-  readonly delivery: Delivery;
+  readonly delivery: EventDelivery;
   readonly scope: ReadScope;
 }
 
@@ -257,7 +258,7 @@ const partsAt = Effect.fnUntraced(function* partsAt(
 });
 
 const partClassesOf = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   arrays: readonly PartsAttribute[]
 ): readonly DefinitionId[] => [
   ...new Set(
@@ -268,7 +269,7 @@ const partClassesOf = (
 ];
 
 const arrayOfClass = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   arrays: readonly PartsAttribute[],
   classId: DefinitionId
 ): PartsAttribute | undefined => {
@@ -476,7 +477,11 @@ ORDER BY "p"."record_id", "p"."record_version" DESC`
  * @param key - A source.
  * @returns The target, or null (also for a plain field).
  */
-const pathTargetOf = (scope: ReadScope, delivery: Delivery, key: SourceKey) => {
+const pathTargetOf = (
+  scope: ReadScope,
+  delivery: EventDelivery,
+  key: SourceKey
+) => {
   const { image } = delivery.payload;
   const path = pathOf(key);
 
@@ -512,7 +517,7 @@ const pathTargetOf = (scope: ReadScope, delivery: Delivery, key: SourceKey) => {
  */
 const pathsOf = Effect.fnUntraced(function* pathsOf(
   scope: ReadScope,
-  delivery: Delivery,
+  delivery: EventDelivery,
   attributes: readonly Attribute[]
 ) {
   const paths = new Map<SourceKey, JsonValue>();
@@ -564,11 +569,7 @@ const arraysTouched = Effect.fnUntraced(function* arraysTouched(
   return arrays.filter(
     (array) =>
       written.has(array.name) ||
-      (array.ownerItems ?? []).some((owner) =>
-        owner.sources.some((source) =>
-          changes.has(pathOf(source)?.reference ?? source)
-        )
-      )
+      sourcesOf(array).some((source) => changes.has(source))
   );
 });
 
@@ -582,14 +583,12 @@ const arraysTouched = Effect.fnUntraced(function* arraysTouched(
  * @returns The arrays, paths and history.
  */
 export const prepareMappedEvents = Effect.fn("Events.prepareMappedEvents")(
-  function* prepareMappedEvents(delivery: Delivery) {
+  function* prepareMappedEvents(delivery: EventDelivery) {
     const { hub } = delivery.subscription;
     const { payload } = delivery;
 
     const mapped: MappedResource | undefined =
-      hub === undefined || hub === null || hub.api === "TMF688"
-        ? undefined
-        : mappedResourceOfHub(hub);
+      hub === undefined || hub === null ? undefined : mappedResourceOfHub(hub);
 
     if (mapped === undefined || !payload.visible || payload.kind === "delete") {
       return NOTHING;

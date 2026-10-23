@@ -10,16 +10,13 @@
  * defect, as for subscriptions: definition validation refuses such a rule,
  * so the save fails rather than silently skipping the rule.
  */
+import { pathsOfNode } from "@std/conditions/aggregate";
 import { checkCondition } from "@std/conditions/check";
 import { ConditionDefectError } from "@std/conditions/defect";
 import { evaluateCondition } from "@std/conditions/evaluate";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import { resolveCondition } from "@std/conditions/resolve";
-import type {
-  CheckedCondition,
-  CheckedNode,
-  TypedPath,
-} from "@std/conditions/typed";
+import type { CheckedCondition, TypedPath } from "@std/conditions/typed";
 import type { Condition } from "@std/definitions/condition";
 import { classViewOf } from "@std/definitions/condition-view";
 import type { DefinitionId } from "@std/definitions/ids";
@@ -52,6 +49,8 @@ export interface RuleImages {
    * `derive` rule run while settling reads what settling proposed.
    */
   readonly live?: ReadonlyMap<string, RecordImage>;
+  /** The current record takes precedence over its shared settling image. */
+  readonly liveRecordId?: string | null;
 }
 
 /**
@@ -62,6 +61,11 @@ export interface RuleImages {
  */
 export const imageOf = (record: StoredRecord): RecordImage =>
   Object.fromEntries(record.values);
+
+const checkedConditions = new WeakMap<
+  ConfigSnapshot,
+  WeakMap<Condition, Map<string, CheckedCondition>>
+>();
 
 /**
  * Checks a stored rule condition against a class, as it runs.
@@ -78,6 +82,27 @@ export const checkedRuleCondition = (
   condition: Condition,
   recordClassId?: DefinitionId
 ): CheckedCondition => {
+  let conditions = checkedConditions.get(snapshot);
+
+  if (conditions === undefined) {
+    conditions = new WeakMap();
+    checkedConditions.set(snapshot, conditions);
+  }
+
+  let classes = conditions.get(condition);
+
+  if (classes === undefined) {
+    classes = new Map();
+    conditions.set(condition, classes);
+  }
+
+  const key = `${classId}/${recordClassId ?? ""}`;
+  const known = classes.get(key);
+
+  if (known !== undefined) {
+    return known;
+  }
+
   const options = {
     classId,
     profile: "recordRule",
@@ -96,94 +121,78 @@ export const checkedRuleCondition = (
     );
   }
 
+  classes.set(key, checked.value);
+
   return checked.value;
 };
 
-const pathsOf = (node: CheckedNode): readonly TypedPath[] => {
-  switch (node.op) {
-    case "and":
-    case "or": {
-      return node.args.flatMap(pathsOf);
-    }
-
-    case "not": {
-      return pathsOf(node.arg);
-    }
-
-    case "compare": {
-      return node.right.kind === "path"
-        ? [node.left, node.right.path]
-        : [node.left];
-    }
-
-    case "in":
-    case "pattern":
-    case "inPeriod": {
-      return [node.left];
-    }
-
-    case "empty":
-    case "changed": {
-      return [node.arg];
-    }
-
-    case "const": {
-      return [];
-    }
-
-    default: {
-      return node satisfies never;
-    }
-  }
-};
-
 /**
- * Loads the reference targets a condition's paths cross, as system: a
- * missing target reads as an empty reference.
- *
+ * Preload the reference targets a path crosses, preferring live images.
  * @param snapshot - The configuration.
- * @param checked - The checked condition.
- * @param images - The images the paths start from.
- * @returns Target images by record ID.
+ * @param path - The checked or resolved path.
+ * @param start - The image the path starts from.
+ * @param live - Lookup of images proposed in the current transaction.
+ * @param targets - Shared cache of system-read target images, including missing records.
+ * @returns Nothing; targets are populated for evaluation.
  */
-const preloadTargets = Effect.fn("Rules.preloadTargets")(function* preload(
+export const preloadPath = Effect.fn("Rules.preloadPath")(function* preloadPath(
   snapshot: ConfigSnapshot,
-  checked: CheckedCondition,
-  images: RuleImages
+  path: TypedPath,
+  start: RecordImage | null,
+  live: (id: string) => RecordImage | undefined,
+  targets: Map<string, RecordImage | null>
 ) {
-  const targets = new Map<string, RecordImage | null>();
+  let image = start;
 
-  for (const path of pathsOf(checked.root)) {
-    let image: RecordImage | null =
-      path.image === "previous" ? images.previous : images.record;
+  for (const [index, field] of path.fields.slice(0, -1).entries()) {
+    const id = image?.[field.id];
 
-    for (const [index, field] of path.fields.slice(0, -1).entries()) {
-      const id = image?.[field.id];
-
-      if (image === null || !isString(id) || field.type.kind !== "reference") {
-        break;
-      }
-
-      const known = images.live?.get(id) ?? targets.get(id);
-
-      if (known === undefined) {
-        const loaded = yield* loadRecord(
-          snapshot,
-          path.classes[index + 1] ?? field.type.targetClassId,
-          id
-        );
-
-        image = Option.isSome(loaded) ? imageOf(loaded.value) : null;
-        targets.set(id, image);
-      } else {
-        image = known;
-        targets.set(id, known);
-      }
+    if (image === null || !isString(id) || field.type.kind !== "reference") {
+      return;
     }
-  }
 
-  return targets;
+    const known = live(id) ?? targets.get(id);
+
+    if (known === undefined) {
+      const loaded = yield* loadRecord(
+        snapshot,
+        path.classes[index + 1] ?? field.type.targetClassId,
+        id
+      );
+
+      image = Option.isSome(loaded) ? imageOf(loaded.value) : null;
+    } else {
+      image = known;
+    }
+
+    targets.set(id, image);
+  }
 });
+
+const preloadTargets = Effect.fn("Rules.preloadTargets")(
+  function* preloadTargets(
+    snapshot: ConfigSnapshot,
+    checked: CheckedCondition,
+    images: RuleImages
+  ) {
+    const targets = new Map<string, RecordImage | null>();
+
+    const live = (id: string) =>
+      id === images.liveRecordId ? images.record : images.live?.get(id);
+
+    for (const path of pathsOfNode(checked.root)) {
+      yield* preloadPath(
+        snapshot,
+        path,
+        path.image === "previous" ? images.previous : images.record,
+        live,
+        targets
+      );
+    }
+
+    return targets;
+  }
+);
 
 /**
  * Whether a rule's condition holds on images.

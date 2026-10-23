@@ -16,15 +16,35 @@ import { decodeRows } from "../sql/rows.ts";
 import { STD_VERSION } from "../version.ts";
 import { eventIdOf } from "./event-id.ts";
 
-const topicName = (snapshot: ConfigSnapshot, id: string): string | null => {
+/** The reserved namespace of synthetic record topics. */
+export const RESOURCE_TOPIC_PREFIX = "record:";
+
+/**
+ * The topic of an active class whose saves produce record events.
+ * @param snapshot - Current definitions.
+ * @param id - The represented class.
+ * @returns Its public topic name, or null when it has no topic.
+ */
+export const resourceTopicName = (
+  snapshot: ConfigSnapshot,
+  id: string
+): string | null => {
   const definition = snapshot.class(id);
 
   return definition?.state === "active" &&
     (definition.storage === "standard" ||
       definition.id === PLATFORM_CLASS_IDS.dead_delivery_action)
-    ? `record:${collectionNameOf(snapshot, id)}`
+    ? `${RESOURCE_TOPIC_PREFIX}${collectionNameOf(snapshot, id)}`
     : null;
 };
+
+/**
+ * Stable internal identity used to journal a synthetic topic's lifecycle.
+ * @param classId - The represented class.
+ * @returns The topic's internal record ID.
+ */
+export const resourceTopicRecordId = (classId: string): string =>
+  eventIdOf(classId, "TMF688.ResourceTopic");
 
 /**
  * Journal virtual resource topics in the same configuration commit that changes
@@ -56,14 +76,14 @@ export const writeResourceTopicChanges = Effect.fn(
   const { timeZone } = yield* InstanceSettings;
 
   for (const definition of changed.filter((entry) => entry.kind === "class")) {
-    const oldName = topicName(before, definition.id);
-    const newName = topicName(after, definition.id);
+    const oldName = resourceTopicName(before, definition.id);
+    const newName = resourceTopicName(after, definition.id);
 
     if (oldName === newName) {
       continue;
     }
 
-    const recordId = eventIdOf(definition.id, "TMF688.ResourceTopic");
+    const recordId = resourceTopicRecordId(definition.id);
 
     const [history] =
       yield* sql`SELECT record_version::text AS version FROM core.change WHERE record_id = ${recordId}::uuid ORDER BY record_version DESC LIMIT 1`.pipe(

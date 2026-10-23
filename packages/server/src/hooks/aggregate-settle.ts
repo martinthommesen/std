@@ -28,8 +28,6 @@
  *   wrote. Guards and invariants do not run while settling.
  */
 import { AggregateNotSettled } from "@std/api/errors/aggregate-not-settled";
-import { InvalidTransition } from "@std/api/errors/invalid-transition";
-import { RuleRefused } from "@std/api/errors/rule-refused";
 import {
   aggregatePaths,
   checkAggregateCondition,
@@ -43,7 +41,7 @@ import {
 import type { ResolvedAggregate } from "@std/conditions/aggregate";
 import { ConditionDefectError } from "@std/conditions/defect";
 import type { RecordImage } from "@std/conditions/evaluate-core";
-import type { ResolvedNode, TypedPath } from "@std/conditions/typed";
+import type { ResolvedNode } from "@std/conditions/typed";
 import { isPartClassOf, ownerReferenceOf } from "@std/definitions/aggregates";
 import type { Condition } from "@std/definitions/condition";
 import { classViewOf } from "@std/definitions/condition-view";
@@ -59,8 +57,7 @@ import type {
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { storedEquals } from "@std/values/compare";
 import type { StoredOrPlaintext } from "@std/values/compare";
-import { isString } from "@std/values/field-value";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 
 import { innermostFirst, partsOf } from "../records/aggregate-images.ts";
 import type {
@@ -69,15 +66,14 @@ import type {
   SettleSet,
 } from "../records/aggregate-images.ts";
 import type { SettleInput } from "../records/save-hooks.ts";
-import { loadRecord } from "../records/save-sql.ts";
 import { suppliedFieldsOf } from "../records/supplied-fields.ts";
-import { applyDeriveRules } from "./before-rules.ts";
-import { imageOf } from "./rule-condition.ts";
+import { applyDeriveRules, refusalError } from "./before-rules.ts";
+import { imageOf, preloadPath } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { selectForEach, sourceImage } from "./rule-for-each.ts";
 import type { RuleRecord } from "./rule-for-each.ts";
 import { selectRules } from "./rule-selection.ts";
-import { ruleValue } from "./rule-values.ts";
+import { assignedValue } from "./rule-values.ts";
 import type { ValueRecord } from "./rule-values.ts";
 
 /** The most passes of one settling (Contracts 4.9). [judgment] */
@@ -103,58 +99,6 @@ const defect = (message: string) =>
 
 const startImageOf = (owner: SettleOwner): RecordImage | null =>
   owner.entry.start === null ? null : imageOf(owner.entry.start);
-
-/**
- * Loads the reference targets a path crosses from an image, as system: a
- * missing target reads as an empty reference. A target in the settling
- * set is its settling image, the very object proposals change, so a rule
- * that follows a reference to an owner or part sees every proposal made
- * so far, in this pass and earlier ones; only records outside the
- * settling set are read from the database, once per settling.
- *
- * @param settling - The settling.
- * @param path - The path.
- * @param start - The image it starts from.
- * @returns Nothing; the targets are cached.
- */
-const preloadPath = Effect.fn("Aggregates.preloadPath")(function* preload(
-  settling: Settling,
-  path: TypedPath,
-  start: RecordImage | null
-) {
-  let image = start;
-
-  for (const [index, field] of path.fields.slice(0, -1).entries()) {
-    const id = image?.[field.id];
-
-    if (image === null || !isString(id) || field.type.kind !== "reference") {
-      return;
-    }
-
-    const live = settling.set.images.get(id);
-
-    if (live !== undefined) {
-      settling.targets.set(id, live.image);
-      ({ image } = live);
-      continue;
-    }
-
-    const known = settling.targets.get(id);
-
-    if (known === undefined) {
-      const loaded = yield* loadRecord(
-        settling.snapshot,
-        path.classes[index + 1] ?? field.type.targetClassId,
-        id
-      );
-
-      image = Option.isSome(loaded) ? imageOf(loaded.value) : null;
-      settling.targets.set(id, image);
-    } else {
-      image = known;
-    }
-  }
-});
 
 const ruleConditionOf = (
   settling: Settling,
@@ -209,11 +153,29 @@ const holds = Effect.fn("Aggregates.ruleHolds")(function* holds(
 
   for (const found of aggregatePaths(condition.root)) {
     if (found.on === "owner") {
-      yield* preloadPath(settling, found.path, owner.image.image);
-      yield* preloadPath(settling, found.path, previous);
+      yield* preloadPath(
+        settling.snapshot,
+        found.path,
+        owner.image.image,
+        (id) => settling.set.images.get(id)?.image,
+        settling.targets
+      );
+      yield* preloadPath(
+        settling.snapshot,
+        found.path,
+        previous,
+        (id) => settling.set.images.get(id)?.image,
+        settling.targets
+      );
     } else if (found.classId !== null) {
       for (const part of partsOf(settling.set, owner, found.classId)) {
-        yield* preloadPath(settling, found.path, part.image);
+        yield* preloadPath(
+          settling.snapshot,
+          found.path,
+          part.image,
+          (id) => settling.set.images.get(id)?.image,
+          settling.targets
+        );
       }
     }
   }
@@ -251,15 +213,8 @@ const assign = (
   sources: { readonly owner: ValueRecord; readonly source: ValueRecord | null },
   ruleId: DefinitionId
 ): boolean => {
-  const field = settling.snapshot.field(assignment.fieldId);
-
-  if (field === undefined) {
-    throw new RangeError(`Rule field ${assignment.fieldId} is unknown.`);
-  }
-
-  const value: StoredOrPlaintext = ruleValue(assignment, field.type, {
-    me: settling.context.me,
-    now: settling.context.now,
+  const { field, value } = assignedValue(settling.snapshot, assignment, {
+    ...settling.context,
     owner: sources.owner,
     record: sources.owner,
     source: sources.source,
@@ -345,7 +300,13 @@ const setParts = Effect.fn("Aggregates.setParts")(function* setParts(
           : parts.map((part) => part.image);
 
       for (const start of starts) {
-        yield* preloadPath(settling, path, start);
+        yield* preloadPath(
+          settling.snapshot,
+          path,
+          start,
+          (id) => settling.set.images.get(id)?.image,
+          settling.targets
+        );
       }
     }
   }
@@ -476,11 +437,6 @@ const createParts = Effect.fn("Aggregates.createParts")(function* createParts(
   return sources.length > 0;
 });
 
-const refusalOf = (action: Extract<RuleAction, { readonly type: "refuse" }>) =>
-  action.code === "InvalidTransition"
-    ? new InvalidTransition({ message: action.message })
-    : new RuleRefused({ message: action.message });
-
 /**
  * Runs one rule's actions on an owner.
  *
@@ -514,7 +470,7 @@ const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
       }
 
       case "refuse": {
-        return yield* refusalOf(action);
+        return yield* refusalError(action);
       }
 
       case "setParts": {
@@ -550,22 +506,20 @@ const runActions = Effect.fn("Aggregates.runActions")(function* runActions(
  *
  * @param settling - The settling.
  * @param image - The changed image.
+ * @param live - The pass's shared settling images.
  * @returns True when they changed it further.
  */
 const derive = Effect.fn("Aggregates.derive")(function* derive(
   settling: Settling,
-  image: SettleImage
+  image: SettleImage,
+  live: ReadonlyMap<string, RecordImage>
 ) {
   const derived = yield* applyDeriveRules({
     classId: image.classId,
     context: settling.context,
     image: image.image,
     live: {
-      images: new Map(
-        [...settling.set.images.values()].flatMap((other) =>
-          other.id === null ? [] : [[other.id, other.image] as const]
-        )
-      ),
+      images: live,
       recordId: image.id,
     },
     operation: image.stored === null ? "create" : "update",
@@ -621,11 +575,28 @@ const runPass = Effect.fn("Aggregates.pass")(function* runPass(
     }
   }
 
-  for (const key of settling.dirty) {
+  const deriving = [...settling.dirty].flatMap((key) => {
     const image = settling.set.images.get(key);
 
-    if (image !== undefined) {
-      proposed = (yield* derive(settling, image)) || proposed;
+    return image !== undefined &&
+      selectRules(settling.snapshot, image.classId, {
+        kind: "derive",
+        operation: image.stored === null ? "create" : "update",
+        phase: "before",
+      }).length > 0
+      ? [image]
+      : [];
+  });
+
+  if (deriving.length > 0) {
+    const live = new Map(
+      [...settling.set.images.values()].flatMap((image) =>
+        image.id === null ? [] : [[image.id, image.image] as const]
+      )
+    );
+
+    for (const image of deriving) {
+      proposed = (yield* derive(settling, image, live)) || proposed;
     }
   }
 

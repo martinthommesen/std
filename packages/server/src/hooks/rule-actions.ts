@@ -38,7 +38,7 @@ import { createRecord, updateRecord } from "../records/save-pipeline.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { rootOf, selectForEach, sourceImage } from "./rule-for-each.ts";
 import type { ForEachInput, RuleRecord, Selected } from "./rule-for-each.ts";
-import { bodyValue, ruleValue } from "./rule-values.ts";
+import { assignedValue, bodyValue } from "./rule-values.ts";
 import type { ValueRecord } from "./rule-values.ts";
 
 /** What an action runs with. */
@@ -75,37 +75,36 @@ const bodyOf = (
   const body: Record<string, JsonObject[string]> = {};
 
   for (const assignment of values) {
-    const field = input.snapshot.field(assignment.fieldId);
+    const { field, value } = assignedValue(input.snapshot, assignment, {
+      ...input.context,
+      record: input.record,
+      source,
+    });
 
-    if (field === undefined) {
-      throw new RangeError(`Rule field ${assignment.fieldId} is unknown.`);
-    }
-
-    body[field.name] = bodyValue(
-      field.type,
-      ruleValue(assignment, field.type, {
-        me: input.context.me,
-        now: input.context.now,
-        record: input.record,
-        source,
-      })
-    );
+    body[field.name] = bodyValue(field.type, value);
   }
 
   return body;
 };
+
+const readsSource = (values: readonly RuleAssignment[]): boolean =>
+  values.some(({ value }) => "copy" in value && value.copy.from === "source");
 
 const updateEach = Effect.fn("Rules.updateEach")(function* updateEach(
   input: ActionInput,
   action: Extract<RuleAction, { readonly type: "updateEach" }>
 ) {
   const saved = new Set<string>();
+  const needsSource = action.target !== "self" || readsSource(action.values);
 
   for (const selected of yield* selectForEach(
     forEachInput(input),
     action.forEach
   )) {
-    const source = yield* sourceImage(input.snapshot, selected);
+    const source = needsSource
+      ? yield* sourceImage(input.snapshot, selected)
+      : null;
+
     const { target } = action;
 
     let endpointClassId = action.forEach.classId;
@@ -144,11 +143,15 @@ const createEach = Effect.fn("Rules.createEach")(function* createEach(
   input: ActionInput,
   action: Extract<RuleAction, { readonly type: "createEach" }>
 ) {
+  const needsSource = readsSource(action.values);
+
   for (const selected of yield* selectForEach(
     forEachInput(input),
     action.forEach
   )) {
-    const source = yield* sourceImage(input.snapshot, selected);
+    const source = needsSource
+      ? yield* sourceImage(input.snapshot, selected)
+      : null;
 
     yield* createRecord({
       body: bodyOf(input, action.values, source),
