@@ -13,7 +13,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { Page } from "playwright";
 
-import { assertHiddenValuesAbsent, hiddenValuesIn } from "./app.ts";
+import {
+  assertHiddenValuesAbsent,
+  hiddenValuesIn,
+  recordLeavesOf,
+  sentAttributes,
+} from "./app.ts";
 import type { ReceivedResponse } from "./app.ts";
 import { launchBrowser } from "./support.ts";
 
@@ -38,12 +43,16 @@ const CHROME = `
 
 const CHROME_BODIES: readonly ReceivedResponse[] = [
   {
-    body: '{"records":[{"id":"r1","values":{"size":"Seventy"},"version":7}],"count":7}',
-    url: "https://app.test/api/v1/tables/x/records",
+    body: '[{"@type":"X","href":"https://app.test/api/v1/x/r1","id":"r1","revision":7,"size":"Seventy"}]',
+    url: "https://app.test/api/v1/x",
   },
   {
-    body: '{"table":{"fields":[{"name":"ab","choices":[{"key":"ab","order":7}]}]}}',
-    url: "https://app.test/api/v1/meta/tables/x",
+    body: '{"@type":"TableMetadata","href":"https://app.test/api/v1/tableMetadata/x","id":"x","fields":[{"name":"ab","apiName":"ab","choices":[{"key":"ab","order":7}]}],"schemaRevision":7}',
+    url: "https://app.test/api/v1/tableMetadata/x",
+  },
+  {
+    body: '[{"@type":"ChangeEntry","@baseType":"History","href":"https://app.test/api/v1/x/r1/history/c1","id":"c1","revision":7,"changes":{}}]',
+    url: "https://app.test/api/v1/x/r1/history",
   },
   {
     body: 'const ab="ab";export const n=[7,"ab"];',
@@ -104,6 +113,59 @@ const devToolsText = (
     JSON.stringify({ message: { records: [{ values }] } }, null, 2),
   ].join("\n");
 
+describe("reading what a request sent and a record holds", () => {
+  it("reads the form's JSON Patch as the attributes it sets, and refuses one that does more", () => {
+    assert.deepStrictEqual(
+      sentAttributes(
+        '[{"op":"add","path":"/priority","value":"critical"},{"op":"add","path":"/description","value":null}]'
+      ),
+      { description: null, priority: "critical" }
+    );
+    assert.deepStrictEqual(sentAttributes('{"shortDescription":"New"}'), {
+      shortDescription: "New",
+    });
+
+    for (const body of [
+      '[{"op":"add","path":"/priority","value":"critical"},{"op":"remove","path":"/description"}]',
+      '[{"op":"add","path":"/priority","value":"critical"},{"op":"add","path":"/priority","value":"low"}]',
+      '[{"op":"add","path":"/payload/tags","value":[]}]',
+      '[{"op":"add","path":"/priority"}]',
+    ]) {
+      assert.throws(
+        () => {
+          sentAttributes(body);
+        },
+        /patch/u,
+        body
+      );
+    }
+  });
+
+  it("takes every leaf of a json value, whatever its keys, and only an EntityRef's own values", () => {
+    assert.deepStrictEqual(
+      recordLeavesOf(
+        {
+          createdBy: {
+            "@type": "CoreUserRef",
+            href: "https://std/u9",
+            id: "u9",
+          },
+          owner: {
+            "@referredType": "CoreUser",
+            "@type": "CoreUserRef",
+            href: "https://std/api/coreUser/u1",
+            id: "u1",
+            name: "Kim",
+          },
+          payload: { "@secret": "private-token", href: "private-url" },
+        },
+        new Set(["owner"])
+      ),
+      ["u9", "u1", "Kim", "private-token", "private-url"]
+    );
+  });
+});
+
 describe("the hidden-value check", () => {
   it.effect(
     "finds short values only where they stand whole as a record value",
@@ -145,19 +207,19 @@ describe("the hidden-value check", () => {
           ),
           await checked(page, "", [
             {
-              body: '{"records":[{"values":{"n":7}}]}',
+              body: '[{"@type":"X","href":"https://app.test/l/r1","id":"r1","revision":1,"n":7}]',
               url: "https://app.test/l",
             },
           ]),
           await checked(page, "", [
             {
-              body: '{"record":{"labels":{"r":"ab"}}}',
+              body: '{"@type":"X","href":"https://app.test/l/r1","id":"r1","revision":1,"r":{"@type":"EntityRef","id":"r2","name":"ab"}}',
               url: "https://app.test/r",
             },
           ]),
           await checked(page, "", [
             {
-              body: '{"entries":[{"changes":{"n":{"old":7}}}]}',
+              body: '[{"@type":"ChangeEntry","href":"https://app.test/h/c1","id":"c1","revision":2,"changes":{"n":{"old":7}}}]',
               url: "https://app.test/h",
             },
           ]),

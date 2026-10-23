@@ -5,7 +5,6 @@
  * `validateRecord`'s on the body the request sends (Contracts 6.3).
  */
 import { validateRecord } from "@std/definitions/record-schema";
-import type { MetaField } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 import { Match, Option, Record, Redacted, Result, pipe } from "effect";
 import {
@@ -22,7 +21,6 @@ import type { Arbitrary } from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
-  INCIDENT,
   REVISION_5,
   TICKET,
   TICKET_FIELDS,
@@ -58,6 +56,7 @@ import {
   sentBody,
   toWriteOnlyValue,
 } from "./form-input.ts";
+import type { MetaField } from "./metadata.ts";
 import { valueText } from "./value-text.ts";
 
 const fieldOf = (id: string): MetaField => {
@@ -446,7 +445,7 @@ const openForm = (
           purpose: "Open",
           record: read,
         }),
-        ...(read.class === INCIDENT
+        ...(read.class === incidentTable.resourceType
           ? [
               Message.SucceededLoadClassMetadata({
                 revision: REVISION_5,
@@ -549,11 +548,18 @@ const verdictOfSentBody = (model: Model) => {
     {
       onNone: () => validateRecord(ticketTable, "create", sent),
       onSome: (record) =>
-        record.class === TICKET
-          ? validateRecord(ticketTable, "update", sent, record)
-          : validateRecord(incidentTable, "update", sent, record, {
-              through: ticketTable,
-            }),
+        record.class === ticketTable.resourceType
+          ? validateRecord(ticketTable, "update", sent, {
+              class: TICKET,
+              values: record.values,
+            })
+          : validateRecord(
+              incidentTable,
+              "update",
+              sent,
+              { class: incidentTable.name, values: record.values },
+              { through: ticketTable }
+            ),
     }
   );
 

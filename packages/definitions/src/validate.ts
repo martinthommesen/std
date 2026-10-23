@@ -1339,7 +1339,7 @@ const checkUniqueness = (
 };
 
 /**
- * The `/api/v2` table name rule (Contracts 10.1, Martin 2026-10-22): a
+ * The `/api/v1` table name rule (Contracts 10.1, Martin 2026-10-22): a
  * table's collection name (`apiTableNameOf`, `helpdesk.ticket_note` is
  * `helpdeskTicketNote`) must not equal a fixed resource's
  * (`FIXED_RESOURCE_NAMES`) or another live table's (`foo_bar.baz` and
@@ -1404,14 +1404,14 @@ export const apiTableNameProblems = (
 };
 
 /**
- * The `/api/v2` name rule (Contracts 10.2): a field's API name (its name in
+ * The `/api/v1` name rule (Contracts 10.2): a field's API name (its name in
  * lowerCamelCase) must not be a reserved attribute name (`href`,
  * `withheld`, ...) or equal the API name of another live field of its
  * hierarchy. Fields whose definition names are equal are `duplicateName`
  * already and are not reported again.
  *
  * Only the fields a change set creates or changes are checked, so a clash
- * that predates the rule never blocks an unrelated change set; `/api/v2`
+ * that predates the rule never blocks an unrelated change set; `/api/v1`
  * resolves neither of two clashing names instead.
  *
  * @param snapshot - The configuration after the change.
@@ -1427,7 +1427,7 @@ export const apiNameProblems = (
 
   const clashOf = (field: FieldDefinition): DefinitionProblem | undefined => {
     // A core platform field keeps its definition name and takes its
-    // platform v2 name (`type` is `fieldType`); any other field's v2 name
+    // platform API name (`type` is `fieldType`); any other field's API name
     // is checked as derived.
     const apiName =
       field.owner.layer === "core"

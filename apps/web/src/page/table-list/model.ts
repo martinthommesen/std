@@ -1,16 +1,16 @@
-/**
- * A table's list page: the table's metadata (with the revision it was
- * built at), the applied list state, the filter builder's draft, and the
- * current page of records.
- */
-import { RecordJsonSchema } from "@std/api/records";
 import { ExprSchema } from "@std/conditions/ast";
-import { MetaTableSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { ListQuery } from "../../domain/list-query.ts";
+import { MetaTableSchema } from "../../domain/metadata.ts";
+/**
+ * A table's list page: the table's metadata (with the revision it was
+ * built at), the applied list state, the filter builder's draft, and the
+ * current page of records.
+ */
+import { RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { Model as FilterBuilderModel } from "../../filter-builder/model.ts";
 

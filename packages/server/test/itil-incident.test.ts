@@ -1,6 +1,6 @@
 /** The incident part of Contracts 14, through the generic TMF630 API. */
 import { assert, describe, it } from "@effect/vitest";
-import { StdApiV2 } from "@std/api/v2/api";
+import { StdApi } from "@std/api/api";
 import { ConfigSnapshot } from "@std/definitions/snapshot";
 import { HELPDESK_CASCADE_USER_ID } from "@std/definitions/well-known";
 import { Effect, Exit } from "effect";
@@ -15,6 +15,7 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
 import { savedFiltersInApiNames } from "../src/records/saved-filter-names.ts";
+import { asArray, asObject, textOf } from "./api-support.ts";
 import {
   clientFor,
   createTicket,
@@ -26,7 +27,6 @@ import {
   reference,
 } from "./itil-support.ts";
 import { addRecordRule, change, values } from "./schema-support.ts";
-import { asArray, asObject, textOf } from "./v2-support.ts";
 
 const TRANSITIONS = {
   canceled: [],
@@ -652,7 +652,7 @@ describe("itil-incident", () => {
 
       const absent = yield* http.request(
         "POST",
-        StdApiV2.groups.records.endpoints.create.path.replace(
+        StdApi.groups.records.endpoints.create.path.replace(
           ":table",
           "helpdeskIncident"
         ),

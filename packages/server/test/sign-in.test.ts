@@ -13,10 +13,10 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { hashPassword, verifyPassword } from "../src/auth/password.ts";
 import {
+  codeOf,
   listPath,
   readsTestLayer,
   revisionOf,
-  tagOf,
 } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
@@ -24,6 +24,8 @@ import { waitUntil } from "./support.ts";
 const REVISION_HEADER = /^\d+\.[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/u;
 
 const ASSETS = listPath("acme.asset");
+
+const SESSION = "/api/v1/session";
 
 describe("sign-in", () => {
   it("hashes are scrypt PHC strings that verify only their password", async () => {
@@ -74,16 +76,20 @@ describe("sign-in", () => {
             { login: "carol", password: "carol-password" },
           ];
 
+          const texts: string[] = [];
+
           for (const body of bodies) {
-            const attempt = yield* http.request(
-              "POST",
-              "/api/v1/auth/sign-in",
-              { body }
-            );
+            const attempt = yield* http.request("POST", SESSION, {
+              body: { ...body, tokenDelivery: "body" },
+            });
 
             assert.strictEqual(attempt.status, 401);
-            assert.strictEqual(attempt.text, '{"_tag":"InvalidCredentials"}');
+            assert.strictEqual(yield* codeOf(attempt), "InvalidCredentials");
+            texts.push(attempt.text);
           }
+
+          // Byte-identical: nothing tells the reasons apart.
+          assert.sameMembers([...new Set(texts)], [texts[0] ?? ""]);
         })
     );
 
@@ -94,29 +100,22 @@ describe("sign-in", () => {
 
         const bodies = [
           { rawBody: "{not json" },
-          { body: { login: "bob" } },
-          { body: { login: "bob", password: 42 } },
+          { body: { login: "bob", tokenDelivery: "body" } },
+          { body: { login: "bob", password: 42, tokenDelivery: "body" } },
           { body: ["bob", "bob-password"] },
         ];
 
         for (const options of bodies) {
-          const response = yield* http.request(
-            "POST",
-            "/api/v1/auth/sign-in",
-            options
-          );
+          const response = yield* http.request("POST", SESSION, options);
 
           assert.strictEqual(response.status, 400);
-          assert.strictEqual(
-            response.text,
-            '{"_tag":"InvalidRequest","message":"The request body does not match this endpoint.","parameter":"body"}'
-          );
+          assert.strictEqual(yield* codeOf(response), "InvalidRequest");
         }
 
         const query = yield* http.get(`${ASSETS}?limit=1&limit=2`, { token });
 
         assert.strictEqual(query.status, 400);
-        assert.strictEqual(yield* tagOf(query), "InvalidRequest");
+        assert.strictEqual(yield* codeOf(query), "InvalidRequest");
         assert.notInclude(query.text, "limit=");
       })
     );
@@ -144,7 +143,7 @@ describe("sign-in", () => {
 
         for (const response of [none, bogus, malformed]) {
           assert.strictEqual(response.status, 401);
-          assert.strictEqual(yield* tagOf(response), "Unauthenticated");
+          assert.strictEqual(yield* codeOf(response), "Unauthenticated");
           assert.match(
             response.headers.get("std-schema-revision") ?? "",
             REVISION_HEADER
@@ -158,7 +157,7 @@ describe("sign-in", () => {
         const http = yield* TestHttpClient;
         const token = yield* http.signIn("bob", "bob-password");
 
-        const out = yield* http.request("POST", "/api/v1/auth/sign-out", {
+        const out = yield* http.request("DELETE", `${SESSION}/current`, {
           token,
         });
 
@@ -222,8 +221,12 @@ describe("sign-in", () => {
           );
 
           const signing = yield* http
-            .request("POST", "/api/v1/auth/sign-in", {
-              body: { login: "bob", password: "bob-password" },
+            .request("POST", SESSION, {
+              body: {
+                login: "bob",
+                password: "bob-password",
+                tokenDelivery: "body",
+              },
             })
             .pipe(Effect.forkChild);
 

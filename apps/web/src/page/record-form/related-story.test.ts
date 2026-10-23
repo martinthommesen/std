@@ -1,15 +1,15 @@
+import { Option } from "effect";
+import { AsyncData } from "foldkit";
+import { Command, given, message, model, story } from "foldkit/story";
+import { describe, expect, it } from "vitest";
+
 /**
  * Related lists (decision 0020, review round 1): a page's cursor moves
  * only when the page loads, and a page refused with `SchemaChanged`
  * reloads the endpoint's and the related table's metadata, then asks again
  * with the back-reference field's current name.
  */
-import type { MetaTable } from "@std/definitions/table-metadata";
-import { Option } from "effect";
-import { AsyncData } from "foldkit";
-import { Command, given, message, model, story } from "foldkit/story";
-import { describe, expect, it } from "vitest";
-
+import type { MetaTable } from "../../domain/metadata.ts";
 import {
   REVISION_5,
   REVISION_6,
@@ -18,6 +18,8 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TICKET_SELECTION,
+  TASK_COLUMNS,
 } from "../../form-fixture.ts";
 import { REVISION_3, revision } from "../../table-fixture.ts";
 import {
@@ -34,7 +36,7 @@ import { init, update } from "./update.ts";
 const LIST = 1;
 
 const COLUMNS =
-  "short_description,number,status,assignee,internal_cost,customer_email";
+  "shortDescription,number,status,assignee,internalCost,customerEmail";
 
 const TASKS: MetaTable = { ...ticketTable, label: "Task", name: "help.task" };
 
@@ -104,6 +106,7 @@ const pageRequest = (
   overrides: Partial<Parameters<typeof LoadRelatedRecords>[0]>
 ) =>
   LoadRelatedRecords({
+    columns: TASK_COLUMNS,
     cursor: Option.none(),
     fields: COLUMNS,
     filter: `parent = "${TICKET_ID}"`,
@@ -189,7 +192,9 @@ describe("a related list without columns", () => {
           table: BARE_TASKS,
         })
       ),
-      Command.expectExact(pageRequest({ fields: "id", generation: 1 })),
+      Command.expectExact(
+        pageRequest({ columns: [], fields: "id", generation: 1 })
+      ),
       Command.resolve(
         LoadRelatedRecords,
         Message.SucceededLoadRelatedRecords({
@@ -327,7 +332,7 @@ describe("a related list's page refused with SchemaChanged", () => {
       [
         "LoadRelatedRecords",
         pageRequest({
-          filter: `parent_ticket = "${TICKET_ID}"`,
+          filter: `parentTicket = "${TICKET_ID}"`,
           generation: 3,
           revision: REVISION_6,
         }).args,
@@ -393,7 +398,7 @@ describe("a related list's page refused with SchemaChanged", () => {
       ),
       Command.expectHas(
         pageRequest({
-          filter: `parent_ticket = "${TICKET_ID}"`,
+          filter: `parentTicket = "${TICKET_ID}"`,
           generation: 3,
           revision: REVISION_6,
         })
@@ -506,10 +511,11 @@ describe("a related list's page refused with SchemaChanged", () => {
           purpose: "Refresh",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: TICKET_SELECTION,
           table: TICKET,
         }),
         pageRequest({
-          filter: `parent_ticket = "${TICKET_ID}"`,
+          filter: `parentTicket = "${TICKET_ID}"`,
           generation: 3,
           listId: LIST,
           revision: REVISION_6,

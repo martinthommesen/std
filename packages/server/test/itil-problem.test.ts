@@ -7,6 +7,7 @@ import { TestClock } from "effect/testing";
 import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { updateRecord } from "../src/records/save-pipeline.ts";
+import { asObject, textOf } from "./api-support.ts";
 import {
   createTicket,
   clientFor,
@@ -17,7 +18,6 @@ import {
   recordServices,
 } from "./itil-support.ts";
 import { values } from "./schema-support.ts";
-import { asObject, textOf } from "./v2-support.ts";
 
 const TRANSITIONS = {
   assess: ["root_cause_analysis", "canceled"],

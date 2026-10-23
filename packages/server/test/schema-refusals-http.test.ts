@@ -11,6 +11,7 @@
  * purge refusal runs through the change-set endpoint.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import {
   CORE_NAMESPACE_ID,
@@ -29,7 +30,7 @@ import { tableOf } from "../src/catalog/definition-tables.ts";
 import { createOperation } from "../src/http/definition-writes.ts";
 import { observe, textOf } from "./authz-support.ts";
 import { subscribe } from "./outbox-support.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   committedState,
   definitionVersion,
@@ -72,6 +73,12 @@ interface Refusal {
   readonly detail?: JsonValue;
 }
 
+/** Refusals whose `reason` member is STD's own detail, not the fixed text. */
+const REASON_CODES: ReadonlySet<string> = new Set([
+  "DefinitionProtected",
+  "PurgeRefused",
+]);
+
 /**
  * What a refusal's body says beyond its tag: a `PurgeRefused` reason, the
  * sorted IDs a `DependencyConflict` names, a `ValidationFailed` error's tag
@@ -85,9 +92,9 @@ const detailOf = (json: JsonValue | undefined): JsonValue => {
     return null;
   }
 
-  const { dependents, errors, reason } = json;
+  const { code, dependents, fieldErrors, reason } = json;
 
-  if (reason !== undefined) {
+  if (REASON_CODES.has(textOf(code)) && reason !== undefined) {
     return reason;
   }
 
@@ -97,8 +104,8 @@ const detailOf = (json: JsonValue | undefined): JsonValue => {
       .toSorted();
   }
 
-  if (errors !== undefined && isJsonArray(errors)) {
-    return errors.map((entry) =>
+  if (fieldErrors !== undefined && isJsonArray(fieldErrors)) {
+    return fieldErrors.map((entry) =>
       isJsonObject(entry) ? `${textOf(entry._tag)}:${textOf(entry.field)}` : ""
     );
   }
@@ -322,13 +329,23 @@ const genericCreate = Effect.fn("SchemaRefusals.genericCreate")(
       `the generic body routes to ${operation.op}`
     );
 
-    return { body, table: `core.${entry.table}` };
+    const apiBody: Record<string, JsonValue> = Object.fromEntries(
+      Object.entries(body).map(([column, value]) => [
+        apiAttributeNameOf(column),
+        value,
+      ])
+    );
+
+    return { body: apiBody, table: `core.${entry.table}` };
   }
 );
 
 describe("schema-refusals-http", () => {
   it("names the refusals of gates 1.4 to 1.6", () => {
-    assert.deepStrictEqual(detailOf({ reason: "notRetired" }), "notRetired");
+    assert.deepStrictEqual(
+      detailOf({ code: "PurgeRefused", reason: "notRetired" }),
+      "notRetired"
+    );
   });
 
   layer(readsTestLayer(), { excludeTestServices: true, timeout: 300_000 })(
@@ -631,7 +648,7 @@ describe("schema-refusals-http", () => {
             const http = yield* TestHttpClient;
 
             const stored = yield* http.get(
-              `/api/v1/tables/core.role/records/${site.auditor}`,
+              recordPath("core.role", site.auditor),
               { token }
             );
 
@@ -667,7 +684,7 @@ describe("schema-refusals-http", () => {
             });
 
             const list = () =>
-              http.get("/api/v1/tables/site.drawer/records?sort=caption", {
+              http.get(listPath("site.drawer", { sort: "caption" }), {
                 token,
               });
 
@@ -738,7 +755,7 @@ describe("schema-refusals-http", () => {
             assert.notInclude(gone.text, '"size"');
 
             const selected = yield* http.get(
-              "/api/v1/tables/site.drawer/records?fields=caption&sort=caption",
+              listPath("site.drawer", { fields: "caption", sort: "caption" }),
               { token }
             );
 

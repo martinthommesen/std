@@ -7,12 +7,15 @@
  * by class ID), so in the browser a "class ID" is the table's qualified
  * name. The engine uses class IDs only as keys to look fields up again,
  * so the names serve as well; they never reach the server, which gets the
- * printed text with field names.
+ * printed text. The view names fields by their API names, the names the
+ * API's `condition` parameter resolves (Contracts 10.3), so what it prints
+ * is a request's text; conditions are held as ASTs with field IDs.
  */
 import type { ClassView, FieldInfo } from "@std/conditions/class-view";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import type { FieldType } from "@std/values/field-type";
 import { Option } from "effect";
+
+import type { MetaField, MetaTable } from "./metadata.ts";
 
 /** The tables a view knows, by qualified name. */
 export type TablesByName = ReadonlyMap<string, MetaTable>;
@@ -48,13 +51,14 @@ export const fieldTypeOf = (field: MetaField): FieldType => {
  *
  * @param table - The table the field was read on.
  * @param field - The field.
- * @returns Its field info, with its choices (hidden ones as retired).
+ * @returns Its field info, named by its API name, with its choices
+ *   (hidden ones as retired).
  */
 export const fieldInfoOf = (table: MetaTable, field: MetaField): FieldInfo => {
   const base = {
     classId: table.name,
     id: field.id,
-    name: field.name,
+    name: field.apiName,
     retired: field.state === "retired",
     type: fieldTypeOf(field),
   };
@@ -90,7 +94,7 @@ export const fieldById = (
   Option.fromNullishOr(table.fields.find((field) => field.id === fieldId));
 
 /**
- * A field of a table by name.
+ * A field of a table by its definition name.
  *
  * @param table - The table's metadata.
  * @param name - The field's name.
@@ -120,9 +124,13 @@ const lookUp =
  * no other field.
  *
  * @param tables - The tables, by name.
- * @returns The view.
+ * @returns The view, which finds fields by ID or by API name.
  */
 export const tableClassView = (tables: TablesByName): ClassView => ({
   field: lookUp(tables, fieldById),
-  fieldByName: lookUp(tables, fieldByName),
+  fieldByName: lookUp(tables, (table, apiName) =>
+    Option.fromNullishOr(
+      table.fields.find((field) => field.apiName === apiName)
+    )
+  ),
 });

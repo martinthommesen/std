@@ -1,5 +1,5 @@
 /**
- * `FieldsConflict` (Contracts 10.3, HTTP 409, `/api/v2` only): a `fields`
+ * `FieldsConflict` (Contracts 10.3, HTTP 409, `/api/v1` only): a `fields`
  * selection that both includes and excludes (`!name`) the same attribute
  * (TMF630 v5.0.0 Part 1 §4.3 pp.50-57).
  */

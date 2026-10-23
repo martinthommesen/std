@@ -18,7 +18,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { readsTestLayer, recordPath } from "./reads-support.ts";
+import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   ACME,
   addField,
@@ -115,7 +115,7 @@ const staleAfter = Effect.fn("StaleChoices.staleAfter")(function* staleAfter(
   const response = yield* saveTier(target, stated, "gold");
 
   assert.strictEqual(response.status, 409, `${what}: ${response.text}`);
-  assert.strictEqual(objectOf(response.json)._tag, "SchemaChanged", what);
+  assert.strictEqual(objectOf(response.json).code, "SchemaChanged", what);
   assert.deepStrictEqual(
     changesOf(response.json),
     ["tier/choicesChanged"],
@@ -247,7 +247,7 @@ describe("stale requests and choices", () => {
           ]);
 
           const createOn = (table: string) =>
-            http.request("POST", `/api/v1/tables/${table}/records`, {
+            http.request("POST", listPath(table), {
               body: { grade: "good", name: `stale ${table}` },
               headers: { "std-schema-revision": stated },
               token: tokens.admin,

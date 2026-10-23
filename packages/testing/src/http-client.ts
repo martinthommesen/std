@@ -7,12 +7,12 @@
  * ```ts
  * const http = yield* TestHttpClient;
  * const token = yield* http.signIn("bob", "bob-password");
- * const response = yield* http.get("/api/v1/tables/acme.asset/records", { token });
+ * const response = yield* http.get("/api/v1/acmeAsset", { token });
  * const cookie = yield* http.cookieSignIn("bob", "bob-password");
- * const viaCookie = yield* http.get("/api/v1/auth/me", { cookie });
+ * const viaCookie = yield* http.get("/api/v1/session/current", { cookie });
  * ```
  */
-import { SignInResponseSchema } from "@std/api/auth";
+import { Session } from "@std/api/session";
 import {
   SESSION_COOKIE,
   WEB_CLIENT,
@@ -26,7 +26,7 @@ import type { Scope } from "effect";
 import { HttpEffect, HttpRouter, HttpServer } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
-import { checkV2Exchange } from "./v2-contract.ts";
+import { checkApiExchange } from "./api-contract.ts";
 
 /** A response as the client received it. */
 export interface TestResponse {
@@ -67,10 +67,16 @@ export interface TestHttpClientApi {
     path: string,
     options?: TestRequestOptions
   ) => Effect.Effect<TestResponse>;
+  /**
+   * A `fetch` over the same application, for typed clients built with
+   * `FetchHttpClient` (`FetchHttpClient.Fetch`). Responses are not checked
+   * against the `/api/v1` contract; the typed client decodes them itself.
+   */
+  readonly fetch: typeof globalThis.fetch;
   /** Signs in and returns the session token; dies when sign-in fails. */
   readonly signIn: (login: string, password: string) => Effect.Effect<string>;
   /**
-   * Signs in as the web app does (`POST /auth/cookie-sign-in`) and returns
+   * Signs in as the web app does (`POST /api/v1/session` with the token in the cookie) and returns
    * the token from the session cookie it sets; dies when sign-in fails.
    */
   readonly cookieSignIn: (
@@ -109,7 +115,7 @@ export const setCookieValue = (
 
 const BASE = "http://std.test";
 
-const decodeSignIn = Schema.decodeUnknownEffect(SignInResponseSchema);
+const decodeSignIn = Schema.decodeUnknownEffect(Session);
 
 const bodyJson = (text: string): JsonValue | undefined => {
   const parsed = parseJson(text);
@@ -186,9 +192,9 @@ export class TestHttpClient extends Context.Service<
         const text = yield* Effect.promise(async () => await response.text());
         const json = bodyJson(text);
 
-        // Every `/api/v2` answer must be what the shared definition (and so
-        // `/api/v2/openapi.json`) documents for it.
-        yield* checkV2Exchange({
+        // Every `/api/v1` answer must be what the shared definition (and so
+        // `/api/v1/openapi.json`) documents for it.
+        yield* checkApiExchange({
           json,
           method,
           path,
@@ -211,8 +217,8 @@ export class TestHttpClient extends Context.Service<
         login: string,
         password: string
       ) {
-        const response = yield* request("POST", "/api/v1/auth/sign-in", {
-          body: { login, password },
+        const response = yield* request("POST", "/api/v1/session", {
+          body: { login, password, tokenDelivery: "body" },
         });
 
         const session = yield* decodeSignIn(response.json).pipe(
@@ -223,23 +229,19 @@ export class TestHttpClient extends Context.Service<
           Effect.orDie
         );
 
-        return session.token;
+        return session.token ?? "";
       });
 
       const cookieSignIn = Effect.fn("TestHttpClient.cookieSignIn")(
         function* cookieSignIn(login: string, password: string) {
-          const response = yield* request(
-            "POST",
-            "/api/v1/auth/cookie-sign-in",
-            {
-              body: { login, password },
-              headers: { [WEB_CLIENT_HEADER]: WEB_CLIENT },
-            }
-          );
+          const response = yield* request("POST", "/api/v1/session", {
+            body: { login, password, tokenDelivery: "cookie" },
+            headers: { [WEB_CLIENT_HEADER]: WEB_CLIENT },
+          });
 
           const token = setCookieValue(response, SESSION_COOKIE);
 
-          if (response.status !== 200 || token === undefined) {
+          if (response.status !== 201 || token === undefined) {
             return yield* Effect.die(
               new Error(
                 `cookie sign-in as ${login} failed with ${response.status}`
@@ -251,8 +253,12 @@ export class TestHttpClient extends Context.Service<
         }
       );
 
+      const fetchOver: typeof globalThis.fetch = async (input, init) =>
+        await handler(new Request(input, init));
+
       return TestHttpClient.of({
         cookieSignIn,
+        fetch: fetchOver,
         get: (path, options) => request("GET", path, options),
         request,
         signIn,

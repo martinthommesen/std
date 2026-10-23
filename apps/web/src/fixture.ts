@@ -1,14 +1,17 @@
-import type { CurrentUser } from "@std/api/session";
 import { Option } from "effect";
 import type { Url } from "foldkit/url";
 
+import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
 import { REVISION_3, adaTables } from "./table-fixture.ts";
 
-/** A signed-in user, as `auth/me` describes her. */
+/** A signed-in user, as `session/current` describes her. */
 export const ada: CurrentUser = {
+  "@type": "Session",
+  href: "http://localhost:5173/api/v1/session/current",
+  id: "current",
   name: "Ada Lovelace",
   roles: [
     {
@@ -18,7 +21,7 @@ export const ada: CurrentUser = {
     },
   ],
   schemaRevision: 3,
-  userId: "019a0000-0000-7000-8000-000000000001",
+  user: { "@type": "CoreUserRef", id: "019a0000-0000-7000-8000-000000000001" },
 };
 
 /** Ada, signed in, on the home page. */

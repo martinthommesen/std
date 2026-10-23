@@ -27,12 +27,12 @@ rows:
   - id: STD-ITIL@14/C14/14.1/every-surface
     source: "Contracts 14.1 (third bullet); plan Step 3 gate (ITIL)"
     level: mandatory
-    requirement: "Each incident and problem behavior below holds the same through the generic API v2, TMF621 and, where a form exists, the browser."
+    requirement: "Each incident and problem behavior below holds the same through the API, TMF621 and, where a form exists, the browser."
     status: pending
   - id: STD-ITIL@14/C14/14.1/concrete-class
     source: "Contracts 14.1; plan Step 3 gate (rules follow the concrete class)"
     level: mandatory
-    requirement: "Rules follow the record's concrete class: an incident saved through /api/v2/helpdeskTicket gets the incident's derived priority and resolved_at."
+    requirement: "Rules follow the record's concrete class: an incident saved through /api/v1/helpdeskTicket gets the incident's derived priority and resolved_at."
     status: tested
     tests:
       - packages/server/test/itil-incident.test.ts#labels clear after derivation, supplied labels survive, and parent endpoints use incident rules
@@ -213,7 +213,7 @@ rows:
   - id: STD-ITIL@14/C14/14.2/form-vs-api
     source: "Contracts 14.1; Contracts 5.10"
     level: mandatory
-    requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v2 and TMF621."
+    requirement: "Form rules are browser validation, not record-service acceptance: the incident form prevents a resolve without resolution code and notes, and the same payload is accepted through /api/v1 and TMF621."
     status: pending
   - id: STD-ITIL@14/C14/14.2/major-incident-tmf621
     source: "Contracts 14.2 (fourth bullet); Contracts 11.2 troubleTicketCharacteristic"

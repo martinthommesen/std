@@ -1,15 +1,23 @@
 /**
- * Helpers for the read-side authorization tests: the acme fixture with the
- * HTTP test client, record paths, and decoding of response bodies.
+ * Helpers for the read-side tests: the acme fixture with the HTTP test
+ * client, the API's paths for a qualified table name, and the parts of a
+ * response the tests read (Contracts 10).
  */
-import { RecordJsonSchema } from "@std/api/records";
-import type { RecordJson } from "@std/api/records";
-import type { JsonValue } from "@std/values/json-value";
-import { Effect, Layer, Schema } from "effect";
+import { apiTableNameOf } from "@std/definitions/names";
+import {
+  isJsonArray,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { Effect, Layer } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
+import type {
+  TestRequestOptions,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 
 /**
  * The acme fixture plus the HTTP client over the same test database.
@@ -18,62 +26,17 @@ import type { TestResponse } from "../../testing/src/http-client.ts";
 export const readsTestLayer = () =>
   TestHttpClient.layer.pipe(Layer.provideMerge(acmeTestLayer()));
 
-/** A list body as the tests read it. */
-const ListBodySchema = Schema.Struct({
-  count: Schema.optionalKey(Schema.Int),
-  nextCursor: Schema.NullOr(Schema.String),
-  records: Schema.Array(RecordJsonSchema),
-  schemaRevision: Schema.Int,
-});
-
-/** A list body. */
-export type ListBody = typeof ListBodySchema.Type;
-
-const RecordBodySchema = Schema.Struct({
-  record: RecordJsonSchema,
-  schemaRevision: Schema.Int,
-});
-
-const ErrorBodySchema = Schema.Struct({ _tag: Schema.String });
-
-const decodeList = Schema.decodeUnknownEffect(ListBodySchema);
-const decodeRecord = Schema.decodeUnknownEffect(RecordBodySchema);
-const decodeError = Schema.decodeUnknownEffect(ErrorBodySchema);
-
-const bodyOf = (response: TestResponse): JsonValue | undefined => response.json;
-
 /**
- * The list body of a 200 response; dies otherwise.
+ * A table's collection: its API name (`acme.asset` is `acmeAsset`).
  *
- * @param response - The response.
- * @returns The body.
+ * @param table - The qualified table name.
+ * @returns The collection.
  */
-export const listOf = (response: TestResponse) =>
-  decodeList(bodyOf(response)).pipe(Effect.orDie);
+export const collectionOf = (table: string): string => {
+  const dot = table.indexOf(".");
 
-/**
- * The record of a 200 single-record response; dies otherwise.
- *
- * @param response - The response.
- * @returns The record.
- */
-export const recordOf = (response: TestResponse) =>
-  decodeRecord(bodyOf(response)).pipe(
-    Effect.map((body): RecordJson => body.record),
-    Effect.orDie
-  );
-
-/**
- * The `_tag` of an error response; dies when the body has none.
- *
- * @param response - The response.
- * @returns The tag.
- */
-export const tagOf = (response: TestResponse) =>
-  decodeError(bodyOf(response)).pipe(
-    Effect.map((body) => body._tag),
-    Effect.orDie
-  );
+  return apiTableNameOf(table.slice(0, dot), table.slice(dot + 1));
+};
 
 const withQuery = (
   path: string,
@@ -84,25 +47,9 @@ const withQuery = (
   return search === "" ? path : `${path}?${search}`;
 };
 
-/** A body's `schemaRevision`. */
-const RevisionBodySchema = Schema.Struct({ schemaRevision: Schema.Int });
-
-const decodeRevision = Schema.decodeUnknownEffect(RevisionBodySchema);
-
 /**
- * The `schemaRevision` of a body; dies when it has none.
- *
- * @param response - The response.
- * @returns The revision number.
- */
-export const revisionOf = (response: TestResponse) =>
-  decodeRevision(response.json).pipe(
-    Effect.map((body) => body.schemaRevision),
-    Effect.orDie
-  );
-
-/**
- * The list path of a table with query parameters.
+ * The list path of a table with query parameters (`condition`, `fields`,
+ * `sort`, `limit`, `after`, attribute filters, ...).
  *
  * @param table - The qualified table name.
  * @param query - Parameters.
@@ -111,10 +58,10 @@ export const revisionOf = (response: TestResponse) =>
 export const listPath = (
   table: string,
   query: Readonly<Record<string, string>> = {}
-): string => withQuery(`/api/v1/tables/${table}/records`, query);
+): string => withQuery(`/api/v1/${collectionOf(table)}`, query);
 
 /**
- * The single-record path.
+ * The single-resource path.
  *
  * @param table - The qualified table name.
  * @param id - The record ID.
@@ -125,39 +72,138 @@ export const recordPath = (
   table: string,
   id: string,
   query: Readonly<Record<string, string>> = {}
-): string => withQuery(`/api/v1/tables/${table}/records/${id}`, query);
+): string => withQuery(`/api/v1/${collectionOf(table)}/${id}`, query);
+
+const objectOf = (value: JsonValue | undefined): JsonObject =>
+  value !== undefined && isJsonObject(value) ? value : {};
+
+/** A list as the tests read it. */
+export interface ListBody {
+  /** The resources, in order. */
+  readonly resources: readonly JsonObject[];
+  /** `X-Total-Count`, when the answer carries it. */
+  readonly total: number | undefined;
+  /** The `after` cursor of the next page (`Link: rel="next"`), if any. */
+  readonly next: string | undefined;
+}
+
+// The `after` cursor of a response's `rel="next"` link.
+const nextCursorOf = (response: TestResponse): string | undefined => {
+  const next = (response.headers.get("link") ?? "")
+    .split(", ")
+    .find((part) => part.endsWith('; rel="next"'));
+
+  const link = next?.slice(1, next.indexOf(">"));
+
+  return link === undefined
+    ? undefined
+    : (new URL(link).searchParams.get("after") ?? undefined);
+};
 
 /**
- * Every page of a list, following `nextCursor`.
+ * The list of a 200 response; dies otherwise.
  *
- * @param token - The session token.
- * @param table - The table.
- * @param query - Parameters (without `cursor`).
- * @returns The records of every page in order, and the count of the first page.
+ * @param response - The response.
+ * @returns The resources, the total and the next cursor.
+ */
+export const listOf = (response: TestResponse) =>
+  response.status === 200 &&
+  response.json !== undefined &&
+  isJsonArray(response.json)
+    ? Effect.succeed<ListBody>({
+        next: nextCursorOf(response),
+        resources: response.json.map((item) => objectOf(item)),
+        total:
+          response.headers.get("x-total-count") === null
+            ? undefined
+            : Number(response.headers.get("x-total-count")),
+      })
+    : Effect.die(
+        new Error(`expected a list, got ${response.status} ${response.text}`)
+      );
+
+/**
+ * The resource of a 200 or 201 single-resource response; dies otherwise.
+ *
+ * @param response - The response.
+ * @returns The resource.
+ */
+export const resourceOf = (response: TestResponse) => {
+  const answered = response.status === 200 || response.status === 201;
+
+  return answered && response.json !== undefined && isJsonObject(response.json)
+    ? Effect.succeed(response.json)
+    : Effect.die(
+        new Error(
+          `expected a resource, got ${response.status} ${response.text}`
+        )
+      );
+};
+
+/**
+ * The `code` of a TMF Error response; dies when the body has none.
+ *
+ * @param response - The response.
+ * @returns The code.
+ */
+export const codeOf = (response: TestResponse) => {
+  const { code } = objectOf(response.json);
+
+  return code !== undefined && isJsonString(code)
+    ? Effect.succeed(code)
+    : Effect.die(
+        new Error(`expected an error, got ${response.status} ${response.text}`)
+      );
+};
+
+/**
+ * The schema revision a response was served at (`STD-Schema-Revision`,
+ * `<n>.<change_set_id>`); dies when it has none.
+ *
+ * @param response - The response.
+ * @returns The revision number.
+ */
+export const revisionOf = (response: TestResponse) => {
+  const header = response.headers.get("std-schema-revision");
+
+  return header === null
+    ? Effect.die(new Error(`no STD-Schema-Revision on ${response.status}`))
+    : Effect.succeed(Number(header.split(".")[0]));
+};
+
+/**
+ * Every page of a list, following `Link: rel="next"`.
+ *
+ * @param caller - The caller's request options (token or cookie).
+ * @param table - The qualified table name.
+ * @param query - Parameters (without `after`).
+ * @returns The resources of every page in order, each page's text, and
+ *   the first page's total.
  */
 export const allPages = Effect.fn("ReadsSupport.allPages")(function* allPages(
-  token: string,
+  caller: TestRequestOptions,
   table: string,
   query: Readonly<Record<string, string>>
 ) {
   const http = yield* TestHttpClient;
-  const records: RecordJson[] = [];
+  const resources: JsonObject[] = [];
   const texts: string[] = [];
-  let cursor: string | null = null;
-  let count: number | undefined;
+  let after: string | undefined;
+  let total: number | undefined;
 
   do {
     const response: TestResponse = yield* http.get(
-      listPath(table, cursor === null ? query : { ...query, cursor }),
-      { token }
+      listPath(table, after === undefined ? query : { ...query, after }),
+      caller
     );
 
-    const page: ListBody = yield* listOf(response);
-    texts.push(response.text);
-    records.push(...page.records);
-    count ??= page.count;
-    cursor = page.nextCursor;
-  } while (cursor !== null);
+    const page = yield* listOf(response);
 
-  return { count, records, texts };
+    texts.push(response.text);
+    resources.push(...page.resources);
+    total ??= page.total;
+    after = page.next;
+  } while (after !== undefined);
+
+  return { resources, texts, total };
 });

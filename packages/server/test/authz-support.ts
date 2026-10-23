@@ -147,9 +147,9 @@ export const deliveries = () => deliveryCount;
 /** What a table of expected outcomes compares. */
 export interface Observation {
   readonly status: number;
-  /** The error's `_tag`. */
+  /** The error's `code` (its tag). */
   readonly tag?: string;
-  /** Record names (`values.name`), in response order. */
+  /** Resource names (`name`), in response order. */
   readonly names?: readonly string[];
   /** Anything else the row checks. */
   readonly detail?: JsonValue;
@@ -184,44 +184,45 @@ export const textOf = (value: JsonValue | undefined): string =>
     ? value
     : JSON.stringify(value ?? null);
 
+// A TMF Error's `code` (Contracts 10.6).
 const tagOfBody = (json: JsonValue | undefined): string | undefined => {
-  const tag = objectOf(json)._tag;
+  const { code } = objectOf(json);
 
-  return tag !== undefined && isJsonString(tag) ? tag : undefined;
+  return code !== undefined && isJsonString(code) ? code : undefined;
 };
 
 /**
- * The name of a record in a body: `values.name`, else its ID.
+ * The name of a resource: its `name`, else its ID.
  *
- * @param record - A record object.
+ * @param record - A resource.
  * @returns The name.
  */
 export const nameOf = (record: JsonValue): string => {
-  const { name } = objectOf(objectOf(record).values);
+  const { id, name } = objectOf(record);
 
-  return textOf(name ?? objectOf(record).id);
+  return textOf(name ?? id);
 };
 
 /**
- * The names of a list body's records, in order.
+ * The names of a list's resources, in order.
  *
- * @param json - A list body.
+ * @param json - A list body (an array of resources).
  * @returns The names.
  */
 export const listNames = (json: JsonValue | undefined): string[] =>
-  arrayOf(objectOf(json).records).map(nameOf);
+  arrayOf(json).map(nameOf);
 
 /**
- * The record of a single-record body.
+ * A single-resource body.
  *
- * @param json - A body with `record`.
- * @returns The record object, or an empty one.
+ * @param json - The body.
+ * @returns The resource, or an empty object.
  */
 export const recordIn = (json: JsonValue | undefined): JsonObject =>
-  objectOf(objectOf(json).record);
+  objectOf(json);
 
 /**
- * Reduces a response: its status, and its tag when it failed.
+ * Reduces a response: its status, and its error code when it failed.
  *
  * @param response - The response.
  * @param extra - Names and details of a success.

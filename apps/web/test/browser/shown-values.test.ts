@@ -54,7 +54,8 @@ import {
   formShowsTheApiValues,
   instantText,
   listShowsTheApiValues,
-  patchRecord,
+  definitionPath,
+  patchDefinition,
   timeInputText,
   visitorOf,
 } from "./shown.ts";
@@ -151,10 +152,10 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<Seeded> => {
   });
 
   // Hide `low` now that two incidents hold it: they still show its label.
-  await patchRecord(
+  await patchDefinition(
     origin,
     token,
-    `/tables/core.choice/records/${LOW_IMPACT_CHOICE}`,
+    definitionPath("core.choice", LOW_IMPACT_CHOICE),
     { hidden: true }
   );
 

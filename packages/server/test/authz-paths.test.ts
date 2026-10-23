@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
@@ -64,10 +65,12 @@ import type { Callers, Observation, Who } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import {
   allPages,
+  collectionOf,
   listPath,
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
 import { ACME, createRole, values } from "./schema-support.ts";
 import { versionOf } from "./writes-support.ts";
 
@@ -152,66 +155,76 @@ const getOne =
       )
     );
 
-// The labels of L.
-const labelsOfL = (callers: Callers, who: Who) =>
-  send(
-    callers,
-    who,
-    "GET",
-    recordPath(ASSET, callers.fixture.records.L, { labels: "true" })
-  ).pipe(
-    Effect.map((response) =>
-      observe(response, { detail: recordIn(response.json).labels ?? null })
-    )
+const REFERENCE_ATTRIBUTES = [
+  "createdBy",
+  "dockedTo",
+  "owner",
+  "updatedBy",
+] as const;
+
+// The names of L's references, where the caller may see the target's name.
+const namesOfL = (callers: Callers, who: Who) =>
+  send(callers, who, "GET", recordPath(ASSET, callers.fixture.records.L)).pipe(
+    Effect.map((response) => {
+      const resource = recordIn(response.json);
+
+      const names = REFERENCE_ATTRIBUTES.flatMap((attribute) => {
+        const { name } = objectOf(resource[attribute]);
+
+        return name === undefined ? [] : [[attribute, name] as const];
+      });
+
+      return observe(response, { detail: Object.fromEntries(names) });
+    })
   );
 
-// Which records list `docked_to` as withheld.
+// Which records list `dockedTo` as withheld.
 const dockedTo = (callers: Callers, who: Who) =>
   send(
     callers,
     who,
     "GET",
-    listPath(ASSET, { fields: "name,docked_to", sort: "name" })
+    listPath(ASSET, { fields: "name,dockedTo", sort: "name" })
   ).pipe(
     Effect.map((response) => {
-      const withheld = arrayOf(objectOf(response.json).records).flatMap(
-        (record) =>
-          arrayOf(objectOf(record).withheld).includes("docked_to")
-            ? [nameOf(record)]
-            : []
+      const withheld = arrayOf(response.json).flatMap((resource) =>
+        arrayOf(objectOf(resource).withheld).includes("dockedTo")
+          ? [nameOf(resource)]
+          : []
       );
 
       return observe(response, { detail: { withheld } });
     })
   );
 
-// The count of a list with `count=true`.
+// The total of a list (`X-Total-Count`).
 const counted = (callers: Callers, who: Who) =>
-  send(
-    callers,
-    who,
-    "GET",
-    listPath(ASSET, { count: "true", limit: "1" })
-  ).pipe(
+  send(callers, who, "GET", listPath(ASSET, { limit: "1" })).pipe(
     Effect.map((response) =>
-      observe(response, { detail: objectOf(response.json).count ?? null })
+      observe(response, {
+        detail: Number(response.headers.get("x-total-count")),
+      })
     )
   );
 
-// Every page of 1, following cursors.
+// Every page of 1, following `rel="next"` links.
 const paged = (callers: Callers, who: Who) =>
-  allPages(callers.tokens[who], ASSET, { limit: "1", sort: "-name" }).pipe(
+  allPages({ token: callers.tokens[who] }, ASSET, {
+    limit: "1",
+    sort: "-name",
+  }).pipe(
     Effect.map((pages): Observation => ({
-      names: pages.records.map((record) => textOf(record.values.name)),
+      names: pages.resources.map((resource) => textOf(resource.name)),
       status: 200,
     }))
   );
 
-// A history entry as `<version>:cost` when it shows `cost`, else `<version>:-`.
+// A history entry as `<revision>:cost` when it shows `cost`, else
+// `<revision>:-`.
 const versionAndCost = (entry: JsonValue): string => {
-  const { changes, version } = objectOf(entry);
+  const { changes, revision } = objectOf(entry);
 
-  return `${textOf(version)}:${"cost" in objectOf(changes) ? "cost" : "-"}`;
+  return `${textOf(revision)}:${"cost" in objectOf(changes) ? "cost" : "-"}`;
 };
 
 const historyOf =
@@ -228,10 +241,8 @@ const historyOf =
       `${recordPath(table, recordName(callers, name))}/history?${new URLSearchParams(query).toString()}`
     ).pipe(
       Effect.map((response) => {
-        // Per entry: its version and whether `cost` appears.
-        const entries = arrayOf(objectOf(response.json).entries).map(
-          versionAndCost
-        );
+        // Per entry: its revision and whether `cost` appears.
+        const entries = arrayOf(response.json).map(versionAndCost);
 
         return observe(response, { detail: entries });
       })
@@ -239,10 +250,15 @@ const historyOf =
 
 // Metadata of a table: its field names, sorted, and its read states.
 const metadataOf = (table: string) => (callers: Callers, who: Who) =>
-  send(callers, who, "GET", `/api/v1/meta/tables/${table}`).pipe(
+  send(
+    callers,
+    who,
+    "GET",
+    `/api/v1/tableMetadata/${collectionOf(table)}`
+  ).pipe(
     Effect.map((response) =>
       observe(response, {
-        detail: arrayOf(objectOf(objectOf(response.json).table).fields)
+        detail: arrayOf(objectOf(response.json).fields)
           .map((field) => {
             const { name, read } = objectOf(field);
 
@@ -253,24 +269,57 @@ const metadataOf = (table: string) => (callers: Callers, who: Who) =>
     )
   );
 
-// The per-table OpenAPI document: the record value names it describes.
+// The attributes every resource carries, left out of a schema's attributes.
+const SYSTEM_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "@baseType",
+  "@schemaLocation",
+  "@type",
+  "href",
+  "id",
+  "revision",
+  "withheld",
+]);
+
+// The per-table JSON Schema: the attribute names it describes.
+const tableSchemaOf = (table: string) => (callers: Callers, who: Who) =>
+  send(
+    callers,
+    who,
+    "GET",
+    `/api/v1/tableMetadata/${collectionOf(table)}/schema.json`
+  ).pipe(
+    Effect.map((response) =>
+      observe(response, {
+        detail: Object.keys(objectOf(objectOf(response.json).properties))
+          .filter((name) => !SYSTEM_ATTRIBUTES.has(name))
+          .toSorted(),
+      })
+    )
+  );
+
+// The per-table OpenAPI document: the attribute names its resource describes.
 const tableOpenApiOf = (table: string) => (callers: Callers, who: Who) =>
-  send(callers, who, "GET", `/api/v1/meta/tables/${table}/openapi.json`).pipe(
+  send(
+    callers,
+    who,
+    "GET",
+    `/api/v1/tableMetadata/${collectionOf(table)}/openapi.json`
+  ).pipe(
     Effect.map((response) => {
       const schemas = objectOf(
         objectOf(objectOf(response.json).components).schemas
       );
 
       return observe(response, {
-        detail: Object.keys(
-          objectOf(objectOf(schemas.Values).properties)
-        ).toSorted(),
+        detail: Object.keys(objectOf(objectOf(schemas.Resource).properties))
+          .filter((name) => !SYSTEM_ATTRIBUTES.has(name))
+          .toSorted(),
       });
     })
   );
 
 const me = (callers: Callers, who: Who) =>
-  send(callers, who, "GET", "/api/v1/auth/me").pipe(
+  send(callers, who, "GET", "/api/v1/session/current").pipe(
     Effect.map((response) =>
       observe(response, {
         detail: arrayOf(objectOf(response.json).roles)
@@ -295,9 +344,15 @@ const sessionLifecycle = (callers: Callers, who: Who) =>
     );
 
     const used = yield* http.get(listPath(ASSET), session);
-    const out = yield* http.request("POST", "/api/v1/auth/sign-out", session);
+
+    const out = yield* http.request(
+      "DELETE",
+      "/api/v1/session/current",
+      session
+    );
+
     const after = yield* http.get(listPath(ASSET), session);
-    const meAfter = yield* http.get("/api/v1/auth/me", session);
+    const meAfter = yield* http.get("/api/v1/session/current", session);
 
     return {
       detail: [used.status, out.status, after.status, meAfter.status],
@@ -480,24 +535,24 @@ const READ_ROWS: readonly PathRow[] = [
     alice: okNames(["K", "L"]),
     bob: okNames(["L"]),
     path: "GET /acme.laptop?allowedFor=acme.asset/docked_to (picker, no condition)",
-    run: list(LAPTOP, { allowedFor: "acme.asset/docked_to" }),
+    run: list(LAPTOP, { allowedFor: "acmeAsset/dockedTo" }),
   },
   {
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "GET /acme.asset?allowedFor=core.access_rule/condition (platform table)",
-    run: list(ASSET, { allowedFor: "core.access_rule/condition" }),
+    run: list(ASSET, { allowedFor: "coreAccessRule/condition" }),
   },
   {
     alice: refused(400, "InvalidRequest"),
     bob: refused(400, "UnknownField"),
     path: "GET /acme.asset?allowedFor=acme.asset/cost (not a reference; never readable by Bob)",
-    run: list(ASSET, { allowedFor: "acme.asset/cost" }),
+    run: list(ASSET, { allowedFor: "acmeAsset/cost" }),
   },
   {
     alice: okDetail(5),
     bob: okDetail(3),
-    path: "GET /acme.asset?count=true",
+    path: "GET /acme.asset (X-Total-Count)",
     run: counted,
   },
   {
@@ -539,20 +594,20 @@ const READ_ROWS: readonly PathRow[] = [
   {
     alice: okNames(["L"]),
     bob: okNames([]),
-    path: 'filter docked_to.name = "Alice monitor" (reference path)',
-    run: list(ASSET, { filter: 'docked_to.name = "Alice monitor"' }),
+    path: 'condition dockedTo.name = "Alice monitor" (reference path)',
+    run: list(ASSET, { condition: 'dockedTo.name = "Alice monitor"' }),
   },
   {
     alice: okNames(["Alice monitor", "K", "L", "M", "S"]),
     bob: refused(400, "UnknownField"),
-    path: "filter cost > 0 (never readable for Bob)",
-    run: list(ASSET, { filter: "cost > 0" }),
+    path: "condition cost > 0 (never readable for Bob)",
+    run: list(ASSET, { condition: "cost > 0" }),
   },
   {
     alice: okNames(["Alice monitor", "K", "L", "M", "S"]),
     bob: okNames(["L", "M"]),
-    path: 'filter purchased_on > "2000-01-01" (masked for Bob\'s lost S)',
-    run: list(ASSET, { filter: 'purchased_on > "2000-01-01"' }),
+    path: 'condition purchasedOn > "2000-01-01" (masked for Bob\'s lost S)',
+    run: list(ASSET, { condition: 'purchasedOn > "2000-01-01"' }),
   },
   {
     alice: okNames(["M", "Alice monitor", "L", "K", "S"]),
@@ -569,23 +624,23 @@ const READ_ROWS: readonly PathRow[] = [
   {
     alice: okDetail({ withheld: [] }),
     bob: okDetail({ withheld: ["S"] }),
-    path: "fields=name,docked_to (rule 10 withholds S's)",
+    path: "fields=name,dockedTo (rule 10 withholds S's)",
     run: dockedTo,
   },
   {
     alice: okDetail({
-      created_by: "Bob",
-      docked_to: "Alice monitor",
+      createdBy: "Bob",
+      dockedTo: "Alice monitor",
       owner: "Bob",
-      updated_by: "Bob",
+      updatedBy: "Bob",
     }),
     bob: okDetail({
-      created_by: "Bob",
+      createdBy: "Bob",
       owner: "Bob",
-      updated_by: "Bob",
+      updatedBy: "Bob",
     }),
-    path: "GET /acme.asset/{L}?labels=true (hidden target, audit labels)",
-    run: labelsOfL,
+    path: "GET /acme.asset/{L} (hidden target, audit names)",
+    run: namesOfL,
   },
   {
     alice: okDetail(["1:cost"]),
@@ -656,7 +711,7 @@ const READ_ROWS: readonly PathRow[] = [
   {
     alice: okDetail(["asset_manager", "authenticated"]),
     bob: okDetail(["authenticated", "employee"]),
-    path: "GET /auth/me",
+    path: "GET /session/current",
     run: me,
   },
   {
@@ -675,7 +730,7 @@ const READ_ROWS: readonly PathRow[] = [
       "purchased_on:perRecord",
       "status:yes",
     ]),
-    path: "GET /meta/tables/acme.asset",
+    path: "GET /tableMetadata/acmeAsset",
     run: metadataOf(ASSET),
   },
   {
@@ -697,46 +752,79 @@ const READ_ROWS: readonly PathRow[] = [
       "serial:yes",
       "status:yes",
     ]),
-    path: "GET /meta/tables/acme.laptop",
+    path: "GET /tableMetadata/acmeLaptop",
     run: metadataOf(LAPTOP),
   },
   {
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
-    path: "GET /meta/tables/core.change (platform table)",
+    path: "GET /tableMetadata/coreChange (platform table)",
     run: metadataOf("core.change"),
   },
   {
     alice: okDetail([
       "cost",
-      "created_at",
-      "created_by",
-      "docked_to",
+      "createdBy",
+      "creationDate",
+      "dockedTo",
+      "lastUpdate",
       "name",
       "owner",
-      "purchased_on",
+      "purchasedOn",
       "status",
-      "updated_at",
-      "updated_by",
+      "updatedBy",
     ]),
     bob: okDetail([
-      "created_at",
-      "created_by",
-      "docked_to",
+      "createdBy",
+      "creationDate",
+      "dockedTo",
+      "lastUpdate",
       "name",
       "owner",
-      "purchased_on",
+      "purchasedOn",
       "status",
-      "updated_at",
-      "updated_by",
+      "updatedBy",
     ]),
-    path: "GET /meta/tables/acme.asset/openapi.json",
+    path: "GET /tableMetadata/acmeAsset/schema.json",
+    run: tableSchemaOf(ASSET),
+  },
+  {
+    alice: refused(404, "UnknownTable"),
+    bob: refused(404, "UnknownTable"),
+    path: "GET /tableMetadata/coreAccessRule/schema.json (platform table)",
+    run: tableSchemaOf("core.access_rule"),
+  },
+  {
+    alice: okDetail([
+      "cost",
+      "createdBy",
+      "creationDate",
+      "dockedTo",
+      "lastUpdate",
+      "name",
+      "owner",
+      "purchasedOn",
+      "status",
+      "updatedBy",
+    ]),
+    bob: okDetail([
+      "createdBy",
+      "creationDate",
+      "dockedTo",
+      "lastUpdate",
+      "name",
+      "owner",
+      "purchasedOn",
+      "status",
+      "updatedBy",
+    ]),
+    path: "GET /tableMetadata/acmeAsset/openapi.json",
     run: tableOpenApiOf(ASSET),
   },
   {
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
-    path: "GET /meta/tables/core.access_rule/openapi.json (platform table)",
+    path: "GET /tableMetadata/coreAccessRule/openapi.json (platform table)",
     run: tableOpenApiOf("core.access_rule"),
   },
   {
@@ -769,13 +857,13 @@ const WRITE_ROWS: readonly PathRow[] = [
   {
     alice: { status: 201 },
     bob: refused(403, "NotAllowed"),
-    path: "POST /acme.laptop (Bob may not create purchased_on or serial)",
+    path: "POST /acme.laptop (Bob may not create purchasedOn or serial)",
     run: (callers, who) =>
       send(callers, who, "POST", listPath(LAPTOP), {
         body: {
           name: "laptop",
           owner: userOf(callers.fixture, who),
-          purchased_on: "2026-01-01",
+          purchasedOn: "2026-01-01",
         },
       }).pipe(Effect.map(writeStatus)),
   },
@@ -862,8 +950,8 @@ const WRITE_ROWS: readonly PathRow[] = [
       }),
   },
   {
-    alice: refused(409, "VersionConflict"),
-    bob: refused(409, "VersionConflict"),
+    alice: refused(412, "VersionConflict"),
+    bob: refused(412, "VersionConflict"),
     path: "PATCH with a stale If-Match",
     run: (callers, who) =>
       Effect.gen(function* stalePatch() {
@@ -891,7 +979,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       ).pipe(Effect.map(writeStatus)),
   },
   {
-    alice: { status: 200 },
+    alice: { status: 204 },
     bob: refused(403, "NotAllowed"),
     path: "DELETE /acme.asset/{own asset} (no delete rule for Bob)",
     run: (callers, who) =>
@@ -906,7 +994,7 @@ const WRITE_ROWS: readonly PathRow[] = [
       }),
   },
   {
-    alice: { status: 200 },
+    alice: { status: 204 },
     bob: refused(404, "NotFound"),
     path: "DELETE /acme.laptop/{someone else's laptop}",
     run: (callers, who) =>
@@ -952,8 +1040,6 @@ const WRITE_ROWS: readonly PathRow[] = [
 interface DefinitionRow extends PathRow {
   readonly admin: Observation;
 }
-
-const CHANGE_SETS = "/api/v1/schema/change-sets";
 
 /**
  * A definition write's outcome. A refusal must commit nothing: no
@@ -1012,9 +1098,7 @@ const freshRole = (callers: Callers) =>
 
     assert.strictEqual(response.status, 201, response.text);
 
-    const changeSet = objectOf(objectOf(response.json).changeSet).id;
-
-    return { changeSetId: textOf(changeSet), id };
+    return { changeSetId: textOf(objectOf(response.json).id), id };
   });
 
 /**
@@ -1035,7 +1119,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     admin: { status: 201 },
     alice: refused(403, "NotAllowed"),
     bob: refused(403, "NotAllowed"),
-    path: "POST /schema/change-sets (create a local role)",
+    path: "POST /applyChangeSet (create a local role)",
     run: (callers, who) =>
       postChangeSet(callers, who, [
         createRole(`role_${randomUUID().slice(0, 8)}`),
@@ -1045,7 +1129,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     admin: refused(403, "DefinitionProtected"),
     alice: refused(422, "DefinitionInvalid"),
     bob: refused(422, "DefinitionInvalid"),
-    path: "POST /schema/change-sets (rename an app table; hidden is missing)",
+    path: "POST /applyChangeSet (rename an app table; hidden is missing)",
     run: (callers, who) =>
       Effect.gen(function* renameApp() {
         const version = yield* definitionVersion("class", ACME.asset);
@@ -1061,7 +1145,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     admin: { status: 200 },
     alice: refused(404, "NotFound"),
     bob: refused(404, "NotFound"),
-    path: "GET /schema/change-sets/{id} (a committed change set)",
+    path: "GET /applyChangeSet/{id} (a committed change set)",
     run: (callers, who) =>
       Effect.gen(function* readChangeSet() {
         const { changeSetId } = yield* freshRole(callers);
@@ -1075,7 +1159,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
     admin: refused(404, "NotFound"),
     alice: refused(404, "NotFound"),
     bob: refused(404, "NotFound"),
-    path: "GET /schema/change-sets/{random ID}",
+    path: "GET /applyChangeSet/{random ID}",
     run: (callers, who) =>
       send(callers, who, "GET", `${CHANGE_SETS}/${randomUUID()}`).pipe(
         Effect.map(writeStatus)
@@ -1126,7 +1210,7 @@ const DEFINITION_ROWS: readonly DefinitionRow[] = [
       }),
   },
   {
-    admin: { status: 200 },
+    admin: { status: 204 },
     alice: refused(404, "UnknownTable"),
     bob: refused(404, "UnknownTable"),
     path: "DELETE /core.role/{local role}",
@@ -1215,7 +1299,7 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
     candidates: readonly string[]
   ) {
     const where = `${callers.transport} ${who}`;
-    const listed = yield* send(callers, who, "GET", "/api/v1/meta/tables");
+    const listed = yield* send(callers, who, "GET", "/api/v1/tableMetadata");
 
     assert.strictEqual(listed.status, 200, where);
 
@@ -1227,10 +1311,10 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
         callers,
         who,
         "GET",
-        `/api/v1/meta/tables/${name}`
+        `/api/v1/tableMetadata/${collectionOf(name)}`
       );
 
-      const table = objectOf(objectOf(meta.json).table);
+      const table = objectOf(meta.json);
 
       if (meta.status === 200) {
         opened.push({
@@ -1253,11 +1337,23 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
       }
     }
 
-    const { tables } = objectOf(listed.json);
+    const tables = arrayOf(listed.json).map((entry) => {
+      const { creatable, label, name } = objectOf(entry);
 
-    assert.deepStrictEqual(tables, opened.toSorted(byName), where);
+      return {
+        creatable: creatable ?? null,
+        label: label ?? null,
+        name: name ?? null,
+      };
+    });
 
-    const names = arrayOf(tables).map((entry) => textOf(objectOf(entry).name));
+    assert.deepStrictEqual(
+      tables.toSorted(byName),
+      opened.toSorted(byName),
+      where
+    );
+
+    const names = tables.map((entry) => textOf(entry.name));
 
     assert.include(names, ASSET, where);
 
@@ -1268,14 +1364,18 @@ const checkTableList = Effect.fn("AuthzPaths.checkTableList")(
 
     assert.isAbove(related.length, 0, where);
 
-    // The web app lists related records with this filter; every related
+    // The web app lists related records with this condition; every related
     // list the caller is shown must accept it.
     for (const entry of related) {
+      const attribute = apiAttributeNameOf(entry.field);
+
       const page = yield* send(
         callers,
         who,
         "GET",
-        listPath(entry.table, { filter: `${entry.field} = "${randomUUID()}"` })
+        listPath(entry.table, {
+          condition: `${attribute} = "${randomUUID()}"`,
+        })
       );
 
       assert.strictEqual(
@@ -1337,8 +1437,9 @@ describe("authz-paths", () => {
             assert.include(textOf(admin.detail), "condition:yes", transport);
 
             for (const path of [
-              "/api/v1/meta/tables/acme.asset",
-              "/api/v1/meta/tables/acme.asset/openapi.json",
+              "/api/v1/tableMetadata/acmeAsset",
+              "/api/v1/tableMetadata/acmeAsset/schema.json",
+              "/api/v1/tableMetadata/acmeAsset/openapi.json",
             ]) {
               assert.strictEqual((yield* http.get(path)).status, 401, path);
             }
@@ -1377,7 +1478,7 @@ describe("authz-paths", () => {
           ];
 
           assert.strictEqual(
-            (yield* http.get("/api/v1/meta/tables")).status,
+            (yield* http.get("/api/v1/tableMetadata")).status,
             401
           );
 

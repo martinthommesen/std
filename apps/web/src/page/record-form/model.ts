@@ -17,19 +17,16 @@
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
-import { HistoryEntrySchema, RecordJsonSchema } from "@std/api/records";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
-import {
-  MetaFieldSchema,
-  MetaRelatedListSchema,
-  MetaTableSchema,
-} from "@std/definitions/table-metadata";
+import { MetaRelatedListSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { CalendarDate } from "foldkit/calendar";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { FieldInput } from "../../domain/form-input.ts";
+import { MetaFieldSchema, MetaTableSchema } from "../../domain/metadata.ts";
+import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { DroppedEdit } from "../../domain/stale-edits.ts";
 import {
@@ -130,6 +127,9 @@ export type WriteError = typeof WriteError.Type;
  *   flight differ from them and survive its success (decision 0020).
  * - `Saved`: the last save succeeded; `isVisible` is false when the record
  *   is no longer visible to the caller (Contracts 3.9).
+ * - `SavedUnread`: the last save succeeded at `version`, but its record could not be
+ *   read back, so what it holds is unknown; the form offers to read it
+ *   again and holds Save back until a read succeeds (decision 0031).
  * - `Unchanged`: the user saved without changing anything; nothing was
  *   sent.
  * - `Failed`: the last save was refused; the edits are kept. After a
@@ -145,6 +145,7 @@ export const Submission = defineTaggedUnion({
   Idle: {},
   Outdated: {},
   Saved: { isVisible: Schema.Boolean },
+  SavedUnread: { version: Schema.Int },
   Saving: {
     generation: Schema.Int,
     revision: SchemaRevision,

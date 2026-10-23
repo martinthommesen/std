@@ -67,7 +67,7 @@ describe("helpdesk-seed", () => {
 
         for (const user of [fixture.admin, fixture.agent, fixture.agent2]) {
           const token = yield* http.signIn(user.login, user.password);
-          const me = yield* http.get("/api/v1/auth/me", { token });
+          const me = yield* http.get("/api/v1/session/current", { token });
 
           assert.strictEqual(me.status, 200, me.text);
           assert.include(me.text, user.name);

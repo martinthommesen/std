@@ -1,5 +1,5 @@
 /** Shared helpdesk v3 fixture and clients built from the live API definition. */
-import { StdApiV2 } from "@std/api/v2/api";
+import { StdApi } from "@std/api/api";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
@@ -20,7 +20,7 @@ import { runUpgrade } from "../src/config/upgrade.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
-import { asObject, textOf, numberOf } from "./v2-support.ts";
+import { asObject, textOf, numberOf } from "./api-support.ts";
 
 const account = (login: string, fixture: HelpdeskFixture["Service"]) => {
   if (login === "manager") {
@@ -47,7 +47,7 @@ const upgraded = Layer.effectDiscard(
     const role = snapshot.roleByName("major_incident_manager");
 
     if (role === undefined) {
-      throw new Error("Missing manager role");
+      return yield* Effect.die(new Error("Missing manager role"));
     }
 
     yield* ensureUser(
@@ -58,6 +58,8 @@ const upgraded = Layer.effectDiscard(
       },
       [role.id]
     );
+
+    return yield* Effect.void;
   })
 ).pipe(Layer.provideMerge(helpdeskTestLayer({ version: "v2" })));
 
@@ -109,7 +111,7 @@ export const clientFor = Effect.fn("Itil.client")(function* clientFor(
   const user = account(login ?? "admin", fixture);
   const token = yield* http.signIn(user.login, user.password);
 
-  return yield* HttpApiClient.makeWith(StdApiV2, {
+  return yield* HttpApiClient.makeWith(StdApi, {
     baseUrl: "http://std.test",
     httpClient: HttpClient.make((request, url) =>
       Effect.gen(function* httpClient() {
@@ -205,7 +207,7 @@ export const patchResponse = Effect.fn("Itil.patchResponse")(
     const user = account(login ?? "admin", fixture);
     const token = yield* http.signIn(user.login, user.password);
 
-    const path = StdApiV2.groups.records.endpoints.patch.path
+    const path = StdApi.groups.records.endpoints.patch.path
       .replace(":table", table ?? "helpdeskIncident")
       .replace(":id", textOf(record.id));
 

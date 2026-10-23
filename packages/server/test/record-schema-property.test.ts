@@ -12,8 +12,10 @@
  * wrong JSON types, system and unknown names) and, for an admin and the
  * tester, sends each through the HTTP API (`POST`, `PATCH`) and through
  * `validateRecord` on the metadata the endpoint served the same caller.
- * Per field, the server's `ValidationFailed` errors (none on success) must
- * equal the browser's, and unknown names must agree.
+ * Per field, the server's `ValidationFailed` `fieldErrors` (none on
+ * success) must equal the browser's, and unknown names must agree. The
+ * generated names are single lowercase words, so a definition name and its
+ * API name are the same.
  *
  * Only checks Contracts 6.3 leaves to the server may differ: a condition
  * value's check against the caller's view of its table
@@ -21,17 +23,17 @@
  * (`InvalidReference`, after validation passed).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { TableMetadata } from "@std/api/table-metadata";
 import type { AccessRuleDraft, ChoiceDraft } from "@std/definitions/definition";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import type { FieldError } from "@std/definitions/field-errors";
 import type { Operation } from "@std/definitions/operation";
 import { validateRecord } from "@std/definitions/record-schema";
 import type { RecordMode, StoredRecord } from "@std/definitions/record-schema";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
-import type { MetaTable } from "@std/definitions/table-metadata";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 import { parseJson } from "@std/values/json";
+import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import {
@@ -53,7 +55,13 @@ import {
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { readsTestLayer, recordOf, recordPath } from "./reads-support.ts";
+import { numberOf, textOf } from "./api-support.ts";
+import {
+  collectionOf,
+  readsTestLayer,
+  recordPath,
+  resourceOf,
+} from "./reads-support.ts";
 import {
   ACME,
   addField,
@@ -63,6 +71,9 @@ import {
   freshId,
 } from "./schema-support.ts";
 import { create, patch } from "./writes-support.ts";
+
+/** A table's metadata, as the caller reads it. */
+type MetaTable = typeof TableMetadata.Type;
 
 const RUNS = 25;
 const local = { owner: { layer: "local" }, protected: false } as const;
@@ -535,17 +546,18 @@ const buildTable = Effect.fn("RecordSchemaProperty.buildTable")(
   }
 );
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
 const metadataOf = Effect.fn("RecordSchemaProperty.metadataOf")(
   function* metadataOf(token: string, table: string) {
     const http = yield* TestHttpClient;
 
-    const response = yield* http.get(`/api/v1/meta/tables/${table}`, {
-      token,
-    });
+    const response = yield* http.get(
+      `/api/v1/tableMetadata/${collectionOf(table)}`,
+      { token }
+    );
 
-    return (yield* decodeMetadata(response.json).pipe(Effect.orDie)).table;
+    return yield* decodeMetadata(response.json).pipe(Effect.orDie);
   }
 );
 
@@ -636,18 +648,23 @@ const byField = (errors: readonly FieldError[]): Record<string, string> => {
 
 const ServerErrorSchema = Schema.Union([
   Schema.Struct({
-    _tag: Schema.Literal("ValidationFailed"),
-    errors: Schema.Array(Schema.Unknown),
+    code: Schema.Literal("ValidationFailed"),
+    fieldErrors: Schema.Array(Schema.Unknown),
   }),
-  Schema.Struct({ _tag: Schema.Literal("UnknownField"), field: Schema.String }),
-  Schema.Struct({ _tag: Schema.Literal("InvalidReference") }),
+  Schema.Struct({ code: Schema.Literal("UnknownField"), field: Schema.String }),
+  Schema.Struct({ code: Schema.Literal("InvalidReference") }),
   Schema.Struct({
-    _tag: Schema.Literal("InvalidRequest"),
+    code: Schema.Literal("InvalidRequest"),
     parameter: Schema.Literal("body"),
   }),
 ]);
 
 const FieldErrorsSchema = Schema.Array(FieldErrorSchema);
+
+// The API spells the system member `version` as `revision` (Contracts
+// 10.2); the browser knows it by its definition name.
+const definitionNamed = (error: FieldError): FieldError =>
+  error.field === "revision" ? { ...error, field: "version" } : error;
 
 const serverVerdict = (status: number, body: JsonValue | undefined) =>
   Effect.gen(function* verdictOfResponse() {
@@ -664,23 +681,26 @@ const serverVerdict = (status: number, body: JsonValue | undefined) =>
       Effect.orDie
     );
 
-    if (error._tag === "InvalidRequest") {
+    if (error.code === "InvalidRequest") {
       return { bodyRefused: true, fields: {}, unknown: [] } satisfies Verdict;
     }
 
-    if (error._tag === "UnknownField") {
+    if (error.code === "UnknownField") {
       return { fields: {}, unknown: [error.field] } satisfies Verdict;
     }
 
-    if (error._tag === "InvalidReference") {
+    if (error.code === "InvalidReference") {
       return { fields: {}, unknown: [] } satisfies Verdict;
     }
 
     const errors = yield* Schema.decodeUnknownEffect(FieldErrorsSchema)(
-      error.errors
+      error.fieldErrors
     ).pipe(Effect.orDie);
 
-    return { fields: byField(errors), unknown: [] } satisfies Verdict;
+    return {
+      fields: byField(errors.map(definitionNamed)),
+      unknown: [],
+    } satisfies Verdict;
   });
 
 const browserVerdict = (
@@ -756,6 +776,26 @@ const baseBody = (
     )
   );
 
+/** A stored record as the browser's `validateRecord` and the test read it. */
+interface Stored extends StoredRecord {
+  readonly id: string;
+  /** The resource's revision, for `If-Match`. */
+  readonly version: number;
+}
+
+// A reference as the browser's stored values hold it: the target's ID, not
+// the resource's EntityRef.
+const storedValueOf = (
+  field: MetaTable["fields"][number],
+  resource: JsonObject
+): JsonValue => {
+  const value = resource[field.apiName] ?? null;
+
+  return field.type.kind === "reference" && isJsonObject(value)
+    ? (value.id ?? null)
+    : value;
+};
+
 const storedOf = Effect.fn("RecordSchemaProperty.storedOf")(function* storedOf(
   token: string,
   table: string,
@@ -763,7 +803,7 @@ const storedOf = Effect.fn("RecordSchemaProperty.storedOf")(function* storedOf(
   meta: MetaTable
 ) {
   const http = yield* TestHttpClient;
-  const names = meta.fields.map((field) => field.name);
+  const names = meta.fields.map((field) => field.apiName);
 
   // Every field is selected explicitly, so retired ones are delivered too.
   // A caller who can read no field has nothing to select: an empty `fields`
@@ -778,7 +818,17 @@ const storedOf = Effect.fn("RecordSchemaProperty.storedOf")(function* storedOf(
     { token }
   );
 
-  return yield* recordOf(response);
+  const resource = yield* resourceOf(response);
+  const revision = numberOf(resource.revision);
+
+  return {
+    class: meta.name,
+    id,
+    values: Object.fromEntries(
+      meta.fields.map((field) => [field.name, storedValueOf(field, resource)])
+    ),
+    version: revision,
+  } satisfies Stored;
 });
 
 /** One disagreement, for the failure message. */
@@ -959,7 +1009,7 @@ const runTable = Effect.fn("RecordSchemaProperty.runTable")(function* runTable(
 
     assert.strictEqual(base.status, 201, `base record: ${base.text}`);
 
-    const baseId = (yield* recordOf(base)).id;
+    const baseId = textOf((yield* resourceOf(base)).id);
 
     childBaseId = baseId;
 

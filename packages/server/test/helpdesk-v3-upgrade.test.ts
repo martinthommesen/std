@@ -46,6 +46,7 @@ import {
   updateRecord,
   deleteRecord,
 } from "../src/records/save-pipeline.ts";
+import { textOf } from "./api-support.ts";
 import { overridesOf } from "./config-support.ts";
 import {
   HELPDESK_V3,
@@ -67,7 +68,6 @@ import {
   schemaTestLayer,
   values,
 } from "./schema-support.ts";
-import { textOf } from "./v2-support.ts";
 
 const edit = Effect.fn("HelpdeskUpgrade.edit")(function* edit(
   id: string,
@@ -1083,14 +1083,12 @@ describe("helpdesk-service-identity", () => {
         );
         const http = yield* TestHttpClient;
 
-        for (const path of [
-          "/api/v1/auth/sign-in",
-          "/api/v1/auth/cookie-sign-in",
-        ]) {
-          const response = yield* http.request("POST", path, {
+        for (const tokenDelivery of ["body", "cookie"]) {
+          const response = yield* http.request("POST", "/api/v1/session", {
             body: {
               login: account.login,
               password: "disposable-test-password",
+              tokenDelivery,
             },
             headers: { "STD-Client": "web" },
           });
@@ -1106,11 +1104,12 @@ describe("helpdesk-service-identity", () => {
           [digest, HELPDESK_CASCADE_USER_ID]
         );
         assert.strictEqual(
-          (yield* http.get("/api/v1/auth/me", { token })).status,
+          (yield* http.get("/api/v1/session/current", { token })).status,
           401
         );
         assert.strictEqual(
-          (yield* http.get("/api/v1/auth/me", { cookie: token })).status,
+          (yield* http.get("/api/v1/session/current", { cookie: token }))
+            .status,
           401
         );
         assert.strictEqual(

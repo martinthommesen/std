@@ -19,7 +19,7 @@ import { recordDecision } from "@std/access/rules";
  *   and is deleted with the other `done` rows after 7 days; the discard is
  *   logged with the operator's user ID.
  *
- * `/api/v1` is frozen and `/api/v2` comes from workstream 3G, so no HTTP
+ * `/api/v1` is frozen and `/api/v1` comes from workstream 3G, so no HTTP
  * route calls these yet; the admin endpoint and the Foldkit view follow
  * (decision 0023).
  */

@@ -1,3 +1,7 @@
+import { Match, Option } from "effect";
+import { Submodel } from "foldkit";
+import type { Html, HtmlBuilder } from "foldkit/html";
+
 /**
  * The filter builder's view: groups as fieldsets with an "all"/"any"
  * choice, conditions as fieldsets with a field, an operator and a value
@@ -7,11 +11,7 @@
  * dates). Every condition and group is a named group ("Condition 2",
  * "Group 1"), so its controls are found by role and label.
  */
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
-import { Match, Option } from "effect";
-import { Submodel } from "foldkit";
-import type { Html, HtmlBuilder } from "foldkit/html";
-
+import type { MetaField, MetaTable } from "../domain/metadata.ts";
 import {
   checkboxField,
   buttonView,
