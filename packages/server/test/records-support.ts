@@ -4,14 +4,22 @@
  * record visible and allowed, no hooks, no password hashing), with Alice
  * as the default acting user.
  */
+import { rawSql } from "@std/conditions/sql-fragment";
 import { SYSTEM_USER_ID, USER_CLASS_ID } from "@std/definitions/well-known";
 import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Actor } from "../src/auth/actor.ts";
+import {
+  historyStatement,
+  historyPageOfRows,
+} from "../src/records/history-query.ts";
+import type { HistoryInput } from "../src/records/history-query.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
+import { readRows } from "../src/records/sql-run.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
+import { Transactions } from "../src/sql/transactions.ts";
 import { loadCoreAndAcme, schemaTestLayer, values } from "./schema-support.ts";
 
 /** Fixed user IDs of the record tests. */
@@ -126,3 +134,26 @@ export const rootVersion = (id: string) =>
       version === undefined ? undefined : Number(version)
     )
   );
+
+/**
+ * Executes the history module's selection and decoding interfaces with a test's readable set.
+ * @param input - Record, readable fields, filters and explicit selection.
+ * @returns The selected entries and navigation.
+ */
+export const readHistory = Effect.fn("Test.readHistory")(function* readHistory(
+  input: HistoryInput
+) {
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    Effect.gen(function* readEntries() {
+      const rows = yield* readRows(
+        historyStatement(input, (id) =>
+          input.readable.has(id) ? rawSql("TRUE") : rawSql("FALSE")
+        )
+      );
+
+      return yield* historyPageOfRows(rows, input.readable, input.selection);
+    })
+  );
+});

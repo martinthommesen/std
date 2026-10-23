@@ -15,6 +15,11 @@
  *   renders neither them nor any attribute derived from them.
  */
 import type { Expr } from "@std/conditions/ast";
+import {
+  arrayParameter,
+  sql,
+  textParameter,
+} from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { pathOf, pathSource } from "@std/tmf/mapping";
@@ -29,9 +34,9 @@ import type {
 import { formatDateTime } from "@std/values/date-time";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
-import { readHistory } from "../../records/history-query.ts";
+import { EntryRowSchema, entryOfRow } from "../../records/history-query.ts";
 import type { HistoryEntry } from "../../records/history-query.ts";
 import { decodeCursor } from "../../records/read-cursor.ts";
 import type { ReadField } from "../../records/read-field.ts";
@@ -40,8 +45,11 @@ import type { SelectedValue, SortKey } from "../../records/read-query.ts";
 import { readByIds, readPage } from "../../records/read-records.ts";
 import type { DecodedRecord, Page } from "../../records/read-records.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
+import { readRows } from "../../records/sql-run.ts";
 
 const SYSTEM_PREFIX = "system:";
+
+const decodeEntryRow = Schema.decodeUnknownEffect(EntryRowSchema);
 
 /**
  * The mapping's key of a readable field.
@@ -517,13 +525,32 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
     if (readable.length === 0) {
       result.push(record);
     } else {
-      const entries = yield* readHistory({
-        filter: { fieldIds: readable },
-        readable: new Set(readable),
-        recordId: record.id,
-      });
+      // The entries that changed a readable history source, in version
+      // order: the attribute renders every one (TMF621's whole
+      // statusChangeHistory), so no page bounds them.
+      const rows = yield* readRows(
+        sql`SELECT c.id::text AS id, c.operation_id::text AS operation_id,
+  c.record_version::text AS version_text, c.kind::text AS kind,
+  c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
+  c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields
+FROM core."change" c
+WHERE c.record_id = ${textParameter(record.id, "uuid")}
+  AND jsonb_exists_any(c.fields, ${arrayParameter(readable, "text")})
+ORDER BY c.record_version`
+      );
 
-      result.push({ ...record, history: entries.map(stepOf) });
+      const steps: HistoryStep[] = [];
+
+      for (const row of rows) {
+        const entry = yield* entryOfRow(
+          yield* decodeEntryRow(row).pipe(Effect.orDie),
+          new Set(readable)
+        );
+
+        steps.push(stepOf(entry));
+      }
+
+      result.push({ ...record, history: steps });
     }
   }
 
