@@ -1,4 +1,3 @@
-import type { RecordJson } from "@std/api/records";
 import { Option } from "effect";
 import {
   Command,
@@ -17,6 +16,7 @@ import {
 } from "foldkit/scene";
 import { describe, it } from "vitest";
 
+import type { RecordJson } from "../../domain/record.ts";
 import {
   FocusProblem,
   Message as BuilderMessage,

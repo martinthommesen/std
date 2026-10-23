@@ -17,6 +17,7 @@ import {
 } from "foldkit/scene";
 import { describe, it } from "vitest";
 
+import { defaultSelectionOf } from "../../domain/wire.ts";
 import {
   REVISION_5,
   REVISION_6,
@@ -28,6 +29,8 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TICKET_WIRE,
+  TICKET_SELECTION,
 } from "../../form-fixture.ts";
 import { userTable } from "../../table-fixture.ts";
 import {
@@ -183,10 +186,12 @@ describe("the record form", () => {
       click(role("button", { name: "Save" })),
       Command.expectExact(
         UpdateRecord({
+          fields: TICKET_WIRE,
           generation: 2,
           recordId: TICKET_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { short_description: "Black screen" },
           version: 3,
@@ -427,7 +432,12 @@ describe("a stale form", () => {
     ...ticketTable,
     fields: ticketTable.fields.map((field) => {
       if (field.id === TICKET_FIELDS.shortDescription) {
-        return { ...field, label: "Summary", name: "summary" };
+        return {
+          ...field,
+          apiName: "summary",
+          label: "Summary",
+          name: "summary",
+        };
       }
 
       return field.id === TICKET_FIELDS.description
@@ -566,6 +576,7 @@ describe("a stale form", () => {
           purpose: "Refresh",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: defaultSelectionOf(renamedAndRetired),
           table: TICKET,
         })
       ),

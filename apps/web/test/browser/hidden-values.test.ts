@@ -38,12 +38,16 @@ const CHROME = `
 
 const CHROME_BODIES: readonly ReceivedResponse[] = [
   {
-    body: '{"records":[{"id":"r1","values":{"size":"Seventy"},"version":7}],"count":7}',
-    url: "https://app.test/api/v1/tables/x/records",
+    body: '[{"@type":"X","href":"https://app.test/api/v2/x/r1","id":"r1","revision":7,"size":"Seventy"}]',
+    url: "https://app.test/api/v2/x",
   },
   {
-    body: '{"table":{"fields":[{"name":"ab","choices":[{"key":"ab","order":7}]}]}}',
-    url: "https://app.test/api/v1/meta/tables/x",
+    body: '{"@type":"TableMetadata","href":"https://app.test/api/v2/tableMetadata/x","id":"x","fields":[{"name":"ab","apiName":"ab","choices":[{"key":"ab","order":7}]}],"schemaRevision":7}',
+    url: "https://app.test/api/v2/tableMetadata/x",
+  },
+  {
+    body: '[{"@type":"ChangeEntry","@baseType":"History","href":"https://app.test/api/v2/x/r1/history/c1","id":"c1","revision":7,"changes":{}}]',
+    url: "https://app.test/api/v2/x/r1/history",
   },
   {
     body: 'const ab="ab";export const n=[7,"ab"];',
@@ -145,19 +149,19 @@ describe("the hidden-value check", () => {
           ),
           await checked(page, "", [
             {
-              body: '{"records":[{"values":{"n":7}}]}',
+              body: '[{"@type":"X","href":"https://app.test/l/r1","id":"r1","revision":1,"n":7}]',
               url: "https://app.test/l",
             },
           ]),
           await checked(page, "", [
             {
-              body: '{"record":{"labels":{"r":"ab"}}}',
+              body: '{"@type":"X","href":"https://app.test/l/r1","id":"r1","revision":1,"r":{"@type":"EntityRef","id":"r2","name":"ab"}}',
               url: "https://app.test/r",
             },
           ]),
           await checked(page, "", [
             {
-              body: '{"entries":[{"changes":{"n":{"old":7}}}]}',
+              body: '[{"@type":"ChangeEntry","href":"https://app.test/h/c1","id":"c1","revision":2,"changes":{"n":{"old":7}}}]',
               url: "https://app.test/h",
             },
           ]),

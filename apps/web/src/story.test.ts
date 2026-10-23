@@ -1,4 +1,3 @@
-import type { CurrentUser } from "@std/api/session";
 import { Effect, Option } from "effect";
 import { AsyncData } from "foldkit";
 import { make as makeDate } from "foldkit/calendar";
@@ -18,7 +17,7 @@ import {
   SignOut,
 } from "./command.ts";
 import { FieldInput } from "./domain/form-input.ts";
-import { fakeStdApi } from "./fake-std-api.ts";
+import { fakeStdApi, tmfError } from "./fake-std-api.ts";
 import {
   ada,
   adaAtHome,
@@ -29,8 +28,8 @@ import {
 } from "./fixture.ts";
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
+import type { CurrentUser, SignedInModel } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
-import type { SignedInModel } from "./model.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
 import {
@@ -54,6 +53,7 @@ import {
   revision,
   adaTables,
   assetTable,
+  summaryOf,
 } from "./table-fixture.ts";
 import { update } from "./update.ts";
 
@@ -544,10 +544,13 @@ describe("answers of an earlier session", () => {
   const bob: CurrentUser = {
     ...ada,
     name: "Bob Builder",
-    userId: "019a0000-0000-7000-8000-000000000002",
+    user: {
+      "@type": "CoreUserRef",
+      id: "019a0000-0000-7000-8000-000000000002",
+    },
   };
 
-  const bobTables = [{ creatable: false, label: "Ticket", name: "hd.ticket" }];
+  const bobTables = [summaryOf("hd.ticket", "Ticket", false)];
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
   const bobEntering = Model.SignedIn({
@@ -732,11 +735,11 @@ describe("navigation", () => {
 });
 
 describe("the session requests", () => {
-  const ME = "/api/v1/auth/me";
+  const ME = "GET /api/v2/session/current";
 
-  const SIGN_OUT = "/api/v1/auth/sign-out";
+  const SIGN_OUT = "DELETE /api/v2/session/current";
 
-  it("auth/me: a user, no session, or an unreachable server", async () => {
+  it("session/current: a user, no session, or an unreachable server", async () => {
     const withUser = fakeStdApi({
       [ME]: {
         body: ada,
@@ -746,7 +749,7 @@ describe("the session requests", () => {
     });
 
     const withoutSession = fakeStdApi({
-      [ME]: { body: { _tag: "Unauthenticated" }, status: 401 },
+      [ME]: tmfError("Unauthenticated", 401),
     });
 
     const down = fakeStdApi({});
@@ -778,7 +781,7 @@ describe("the session requests", () => {
     const ended = fakeStdApi({ [SIGN_OUT]: { status: 204 } });
 
     const alreadyEnded = fakeStdApi({
-      [SIGN_OUT]: { body: { _tag: "Unauthenticated" }, status: 401 },
+      [SIGN_OUT]: tmfError("Unauthenticated", 401),
     });
 
     const down = fakeStdApi({});
@@ -801,7 +804,7 @@ describe("the session requests", () => {
       Message.FailedSignOut({ sessionId: 1 })
     );
     expect(ended.seen[0]?.headers["std-client"]).toBe("web");
-    expect(ended.seen[0]?.method).toBe("POST");
+    expect(ended.seen[0]?.method).toBe("DELETE");
   });
 });
 
@@ -922,11 +925,11 @@ describe("tables and revisions", () => {
   });
 
   it("the table list comes with the revision its response states, and a revision the database never had is dropped", async () => {
-    const PATH = "/api/v1/meta/tables";
+    const PATH = "/api/v2/tableMetadata";
 
     const listed = fakeStdApi({
       [PATH]: {
-        body: adaTables,
+        body: adaTables.tables,
         headers: { "std-schema-revision": REVISION_3 },
         status: 200,
       },
@@ -949,15 +952,11 @@ describe("tables and revisions", () => {
     expect(listed.seen[0]?.headers["std-schema-revision"]).toBe(REVISION_4);
 
     const unknownRevision = fakeStdApi({
-      [PATH]: {
-        body: {
-          _tag: "SchemaChanged",
-          changes: [],
-          currentRevision: REVISION_3,
-          requestRevision: REVISION_4,
-        },
-        status: 409,
-      },
+      [PATH]: tmfError("SchemaChanged", 409, {
+        changes: [],
+        currentRevision: REVISION_3,
+        requestRevision: REVISION_4,
+      }),
     });
 
     await expect(
@@ -1022,7 +1021,7 @@ describe("review fixes: pages and revisions", () => {
     );
   });
 
-  it("a deep link's first requests carry the revision auth/me stated", () => {
+  it("a deep link's first requests carry the revision session/current stated", () => {
     const entered = update(
       init(urlOf("/tables/acme.asset")).model,
       Message.SucceededLoadCurrentUser({

@@ -22,7 +22,7 @@ import { Effect } from "effect";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { inject } from "vitest";
 
-import { captureResponses } from "./app.ts";
+import { API_PREFIX, captureResponses } from "./app.ts";
 import {
   callWhenConnected,
   devToolsMcp,
@@ -184,7 +184,7 @@ const sessionInTheBrowser = async (
   assert.isUndefined(await sessionCookie(context));
 
   // The ended session stays ended, even replayed by hand.
-  const replayed = await fetch(`${origin}/api/v1/auth/me`, {
+  const replayed = await fetch(`${origin}${API_PREFIX}/session/current`, {
     headers: { cookie: `${SESSION_COOKIE}=${token}` },
   });
 
@@ -202,9 +202,8 @@ const sessionInTheBrowser = async (
 
     assert.includeMembers(paths, [
       "/sign-in",
-      "/api/v1/auth/cookie-sign-in",
-      "/api/v1/auth/me",
-      "/api/v1/auth/sign-out",
+      `${API_PREFIX}/session`,
+      `${API_PREFIX}/session/current`,
     ]);
   }
 
@@ -218,7 +217,8 @@ const sessionInTheBrowser = async (
  * whose cross-origin form post has a body on some hosts; the server tests
  * (`session-cookie.test.ts`) send the JSON-in-`text/plain` payload. A
  * refusal here is still meaningful: an accepted cookie would get the empty
- * create a 400 and the sign-out a 204, not a 401.
+ * create a 400 and the post to the session a 405 (its sign-out is
+ * `DELETE`, which no form can send), not a 401.
  *
  * @param action - Where the form posts.
  * @returns The page.
@@ -236,8 +236,8 @@ const autoPost = (action: string) => `<!doctype html>
  * @returns The pages, by path.
  */
 const forgingPages = (origin: string) => ({
-  "/create": autoPost(`${origin}/api/v1/tables/acme.asset/records`),
-  "/sign-out": autoPost(`${origin}/api/v1/auth/sign-out`),
+  "/create": autoPost(`${origin}${API_PREFIX}/acmeAsset`),
+  "/sign-out": autoPost(`${origin}${API_PREFIX}/session/current`),
 });
 
 /**
@@ -296,13 +296,13 @@ const forgedPosts = async (
   // The browser sends the SameSite=Strict cookie along (same site), and
   // only the missing STD-Client header gets the posts refused.
   for (const target of [
-    "/api/v1/tables/acme.asset/records",
-    "/api/v1/auth/sign-out",
+    `${API_PREFIX}/acmeAsset`,
+    `${API_PREFIX}/session/current`,
   ]) {
     // oxlint-disable-next-line no-await-in-loop -- one forged post after another, in the same tab
     const forged = await forgedPost(
       forging,
-      `${forgingOrigin}${target.endsWith("sign-out") ? "/sign-out" : "/create"}`,
+      `${forgingOrigin}${target.endsWith("current") ? "/sign-out" : "/create"}`,
       `${origin}${target}`
     );
 

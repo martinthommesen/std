@@ -41,11 +41,13 @@ import { randomUUID } from "node:crypto";
 
 import { assert } from "@effect/vitest";
 import type { HelpdeskUser } from "@std/testing/helpdesk-fixture";
-import { Predicate, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 import type { Locator, Page } from "playwright";
 
 import {
+  API_PREFIX,
   apiCall,
+  collectionOf,
   inOrder,
   isListResponse,
   openRecordForm,
@@ -80,6 +82,7 @@ const ChoiceSchema = Schema.Struct({
 });
 
 const FieldSchema = Schema.Struct({
+  apiName: Schema.String,
   autoNumber: Schema.NullOr(Schema.Struct({ prefix: Schema.String })),
   choices: Schema.NullOr(Schema.Array(ChoiceSchema)),
   id: Schema.String,
@@ -121,62 +124,148 @@ const LayoutSchema = Schema.NullOr(
   )
 );
 
-/** Decodes `GET /meta/tables/{table}`. */
-export const decodeMetadata = Schema.decodeUnknownSync(
+const decodeTable = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      table: Schema.Struct({
-        fields: Schema.Array(FieldSchema),
-        layouts: Schema.Struct({ form: LayoutSchema, list: LayoutSchema }),
-      }),
+      fields: Schema.Array(FieldSchema),
+      layouts: Schema.Struct({ form: LayoutSchema, list: LayoutSchema }),
     })
   )
 );
 
+/**
+ * Decodes `GET tableMetadata/{collection}`.
+ *
+ * @param text - The body.
+ * @returns The table's fields and layouts.
+ */
+export const decodeMetadata = (text: string) => ({ table: decodeTable(text) });
+
 /** A table's metadata, as far as the rules need it. */
 export type Metadata = ReturnType<typeof decodeMetadata>;
 
-const RecordSchema = Schema.Struct({
+/**
+ * A record as the rules read the API's resource (Contracts 10.2): each
+ * selected field's value by its definition name (an attribute left out
+ * and not withheld is empty, `null`), a reference as its target's ID with
+ * the EntityRef's `name` as its label, and the withheld fields by name.
+ */
+export interface ApiRecord {
+  readonly id: string;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly values: Readonly<Record<string, Schema.Json>>;
+  readonly withheld: readonly string[];
+}
+
+const ResourceSchema = Schema.StructWithRest(
+  Schema.Struct({
+    id: Schema.String,
+    revision: Schema.Int,
+    withheld: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)]
+);
+
+/** A resource as the API answers it. */
+export type Resource = typeof ResourceSchema.Type;
+
+const decodeResource = Schema.decodeUnknownSync(
+  Schema.fromJsonString(ResourceSchema)
+);
+
+const decodeResources = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(ResourceSchema))
+);
+
+const EntityRefSchema = Schema.Struct({
   id: Schema.String,
-  labels: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
-  values: Schema.Record(Schema.String, Schema.Json),
-  withheld: Schema.optionalKey(Schema.Array(Schema.String)),
+  name: Schema.optionalKey(Schema.String),
 });
 
-/** A record as the API returns it. */
-export type ApiRecord = typeof RecordSchema.Type;
+const decodeEntityRef = Schema.decodeUnknownOption(EntityRefSchema);
 
-/** Decodes a list response. */
-export const decodeList = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ records: Schema.Array(RecordSchema) }))
-);
+/**
+ * A resource read by the rules of Contracts 10.2.
+ *
+ * @param resource - The resource.
+ * @param fields - The fields the request selected.
+ * @returns The record by field name.
+ */
+export const recordOf = (
+  resource: Resource,
+  fields: readonly Field[]
+): ApiRecord => {
+  const withheldNames = new Set(resource.withheld);
+  const isWithheld = (field: Field) => withheldNames.has(field.apiName);
+  const shown = fields.filter((field) => !isWithheld(field));
 
-/** Decodes a record read. */
-export const decodeRead = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ record: RecordSchema }))
-);
+  const refOf = (field: Field) =>
+    field.type.kind === "reference"
+      ? decodeEntityRef(resource[field.apiName])
+      : Option.none();
+
+  return {
+    id: resource.id,
+    labels: Object.fromEntries(
+      shown.flatMap((field) =>
+        Option.match(
+          Option.flatMap(refOf(field), (ref) => Option.fromNullishOr(ref.name)),
+          { onNone: () => [], onSome: (name) => [[field.name, name] as const] }
+        )
+      )
+    ),
+    values: Object.fromEntries(
+      shown.map(
+        (field) =>
+          [
+            field.name,
+            Option.match(refOf(field), {
+              onNone: () => resource[field.apiName] ?? null,
+              onSome: (ref) => ref.id,
+            }),
+          ] as const
+      )
+    ),
+    withheld: fields.flatMap((field) =>
+      isWithheld(field) ? [field.name] : []
+    ),
+  };
+};
+
+/**
+ * Decodes a list response, read by the rules.
+ *
+ * @param text - The body.
+ * @param fields - The fields the request selected.
+ * @returns The records.
+ */
+export const decodeList = (text: string, fields: readonly Field[]) => ({
+  records: decodeResources(text).map((resource) => recordOf(resource, fields)),
+});
+
+/**
+ * Decodes a record read, as the resource the API answered.
+ *
+ * @param text - The body.
+ * @returns The resource.
+ */
+export const decodeRead = (text: string): Resource => decodeResource(text);
 
 const decodeVersion = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({ record: Schema.Struct({ version: Schema.Int }) })
-  )
+  Schema.fromJsonString(Schema.Struct({ revision: Schema.Int }))
 );
 
 const decodeLayoutRecord = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      record: Schema.Struct({
-        values: Schema.Struct({ elements: Schema.Array(Schema.Json) }),
-        version: Schema.Int,
-      }),
+      elements: Schema.Array(Schema.Json),
+      revision: Schema.Int,
     })
   )
 );
 
 const decodeCreated = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({ record: Schema.Struct({ id: Schema.String }) })
-  )
+  Schema.fromJsonString(Schema.Struct({ id: Schema.String }))
 );
 
 /**
@@ -194,6 +283,28 @@ export const getAsPage = async (page: Page, url: string): Promise<string> => {
 
   return text;
 };
+
+/** The incident table's metadata, under `API_PREFIX`. */
+const incidentMetadataPath = `${API_PREFIX}/tableMetadata/${collectionOf(INCIDENTS)}`;
+
+/**
+ * A definition record's path under `API_PREFIX`.
+ *
+ * @param table - The definition table, such as `core.choice`.
+ * @param id - The definition's ID.
+ * @returns The path.
+ */
+export const definitionPath = (table: string, id: string): string =>
+  `/${collectionOf(table)}/${id}`;
+
+/**
+ * An incident's path under `API_PREFIX`.
+ *
+ * @param id - The incident's ID.
+ * @returns The path.
+ */
+export const incidentPath = (id: string): string =>
+  `/${collectionOf(INCIDENTS)}/${id}`;
 
 // THE DISPLAY RULES
 
@@ -411,7 +522,7 @@ export const valueText = (
  * @returns The state and the visible text.
  */
 export const cellOfApi = (field: Field, record: ApiRecord): Shown => {
-  if (record.withheld?.includes(field.name) === true) {
+  if (record.withheld?.includes(field.name)) {
     return { state: "restricted", text: "Restricted" };
   }
 
@@ -603,18 +714,17 @@ export const listShowsTheApiValues = async (
   const request = new URL(response.url());
 
   const metadata = decodeMetadata(
-    await getAsPage(page, `${origin}/api/v1/meta/tables/${INCIDENTS}`)
+    await getAsPage(page, `${origin}${incidentMetadataPath}`)
   );
 
   const columns = fieldsOfLayout(metadata, "list");
 
   // The same request, asked again with the same session.
-  const answer = decodeList(await getAsPage(page, request.toString()));
+  const answer = decodeList(await getAsPage(page, request.toString()), columns);
 
-  assert.strictEqual(request.searchParams.get("labels"), "true");
   assert.deepStrictEqual(
     request.searchParams.get("fields")?.split(",").toSorted(),
-    columns.map((field) => field.name).toSorted(),
+    columns.map((field) => field.apiName).toSorted(),
     "the list asks for exactly its columns"
   );
 
@@ -673,7 +783,7 @@ const isReadOnly = (field: Field): boolean => {
  * @returns The state and text.
  */
 const expectedFormField = (field: Field, record: ApiRecord): Shown => {
-  if (record.withheld?.includes(field.name) === true) {
+  if (record.withheld?.includes(field.name)) {
     return { state: "restricted", text: "Restricted" };
   }
 
@@ -870,17 +980,20 @@ export const formShowsTheApiValues = async (
   await openRecordForm(page, origin, { id, table: INCIDENTS });
 
   const metadata = decodeMetadata(
-    await getAsPage(page, `${origin}/api/v1/meta/tables/${INCIDENTS}`)
-  );
-
-  const { record } = decodeRead(
-    await getAsPage(
-      page,
-      `${origin}/api/v1/tables/${INCIDENTS}/records/${id}?labels=true`
-    )
+    await getAsPage(page, `${origin}${incidentMetadataPath}`)
   );
 
   const fields = fieldsOfLayout(metadata, "form");
+
+  const record = recordOf(
+    decodeRead(
+      await getAsPage(
+        page,
+        `${origin}${API_PREFIX}/${collectionOf(INCIDENTS)}/${id}?fields=${fields.map((field) => field.apiName).join(",")}`
+      )
+    ),
+    fields
+  );
 
   const rows = await page
     .locator("[data-field]")
@@ -1004,7 +1117,7 @@ export const addLocalFields = async (
       })),
     },
     method: "POST",
-    path: "/schema/change-sets",
+    path: "/applyChangeSet",
   });
 
   return ids;
@@ -1025,35 +1138,69 @@ export const appendToLayout = async (
   layoutId: string,
   fieldIds: readonly string[]
 ): Promise<void> => {
-  const path = `/tables/core.layout/records/${layoutId}`;
+  const path = definitionPath("core.layout", layoutId);
 
   const read = decodeLayoutRecord(
     await adminCall(origin, token, { method: "GET", path })
-  ).record;
+  );
 
   await adminCall(origin, token, {
     body: {
       elements: [
-        ...read.values.elements,
+        ...read.elements,
         ...fieldIds.map((fieldId) => ({ fieldId, kind: "field" })),
       ],
     },
     method: "PATCH",
     path,
-    version: read.version,
+    version: read.revision,
   });
 };
 
 /**
- * Changes a record through the generic routes at its current version.
+ * A body written by field name, as the API takes it: API names, and a
+ * reference's ID as an EntityRef (Contracts 10.5).
  *
  * @param origin - The server.
- * @param token - A session that may change it.
- * @param path - The record's path under `/api/v1`.
- * @param body - The change.
+ * @param token - A session that may read the incident metadata.
+ * @param values - The values by field name.
+ * @returns The attributes by API name.
+ */
+const incidentBody = async (
+  origin: string,
+  token: string,
+  values: Readonly<Record<string, Schema.Json>>
+): Promise<Record<string, Schema.Json>> => {
+  const { fields } = decodeTable(
+    await adminCall(origin, token, {
+      method: "GET",
+      path: `/tableMetadata/${collectionOf(INCIDENTS)}`,
+    })
+  );
+
+  return Object.fromEntries(
+    Object.entries(values).map(([name, value]) => {
+      const field = fields.find((each) => each.name === name);
+      const isReference = field?.type.kind === "reference";
+
+      return [
+        field?.apiName ?? name,
+        isReference && Predicate.isString(value) ? { id: value } : value,
+      ] as const;
+    })
+  );
+};
+
+/**
+ * Changes a definition (a merge patch) at its current version.
+ *
+ * @param origin - The server.
+ * @param token - The administrator's session.
+ * @param path - The definition's path under `API_PREFIX`.
+ * @param body - The change, by API name.
  * @returns Nothing.
  */
-export const patchRecord = async (
+export const patchDefinition = async (
   origin: string,
   token: string,
   path: string,
@@ -1061,13 +1208,46 @@ export const patchRecord = async (
 ): Promise<void> => {
   const read = decodeVersion(
     await adminCall(origin, token, { method: "GET", path })
-  ).record;
+  );
 
   await adminCall(origin, token, {
     body,
     method: "PATCH",
     path,
-    version: read.version,
+    version: read.revision,
+  });
+};
+
+/**
+ * Changes an incident at its current version, each value replaced whole
+ * (a JSON Patch, as the form sends).
+ *
+ * @param origin - The server.
+ * @param token - A session that may change it.
+ * @param id - The incident.
+ * @param values - The change, by field name.
+ * @returns Nothing.
+ */
+export const patchIncident = async (
+  origin: string,
+  token: string,
+  id: string,
+  values: Readonly<Record<string, Schema.Json>>
+): Promise<void> => {
+  const path = incidentPath(id);
+
+  const read = decodeVersion(
+    await adminCall(origin, token, { method: "GET", path })
+  );
+
+  await adminCall(origin, token, {
+    body: Object.entries(await incidentBody(origin, token, values)).map(
+      ([apiName, value]) => ({ op: "add", path: `/${apiName}`, value })
+    ),
+    contentType: "application/json-patch+json",
+    method: "PATCH",
+    path,
+    version: read.revision,
   });
 };
 
@@ -1076,7 +1256,7 @@ export const patchRecord = async (
  *
  * @param origin - The server.
  * @param token - The administrator's session.
- * @param values - Its values.
+ * @param values - Its values, by field name.
  * @returns Its ID.
  */
 export const createIncident = async (
@@ -1086,8 +1266,8 @@ export const createIncident = async (
 ): Promise<string> =>
   decodeCreated(
     await adminCall(origin, token, {
-      body: values,
+      body: await incidentBody(origin, token, values),
       method: "POST",
-      path: `/tables/${INCIDENTS}/records`,
+      path: `/${collectionOf(INCIDENTS)}`,
     })
-  ).record.id;
+  ).id;

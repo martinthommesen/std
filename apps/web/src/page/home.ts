@@ -1,10 +1,9 @@
-import type { CurrentUser } from "@std/api/session";
-import type { MetaTableSummary } from "@std/definitions/table-metadata";
 import { Option } from "effect";
 import { AsyncData } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import type { Tables } from "../model.ts";
+import type { MetaTableSummary } from "../domain/metadata.ts";
+import type { CurrentUser, Tables } from "../model.ts";
 import { tableListRouter } from "../route.ts";
 
 const HEADING_ID = "home-heading";
@@ -70,7 +69,7 @@ const tablesView = <Message>(tables: Tables, h: HtmlBuilder<Message>): Html =>
   );
 
 /**
- * The home page: the tables the user can open (`GET meta/tables`), each
+ * The home page: the tables the user can open (`GET tableMetadata`), each
  * linking to its list.
  *
  * @param user - Who is signed in.

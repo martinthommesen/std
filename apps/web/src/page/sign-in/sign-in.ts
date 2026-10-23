@@ -1,5 +1,6 @@
 import { Button, Input } from "@foldkit/ui";
-import { CurrentUserSchema } from "@std/api/session";
+import { isTmfError } from "@std/api/v2/client";
+import { CurrentSession } from "@std/api/v2/session";
 import { Effect, Match, Option, Redacted, Schema } from "effect";
 import { Command, Dom, FieldValidation, Submodel } from "foldkit";
 import type { Update } from "foldkit";
@@ -118,7 +119,7 @@ export const Message = defineMessageUnion({
   SubmittedForm: {},
   SucceededSignIn: {
     maybeRevision: Schema.Option(SchemaRevision),
-    user: CurrentUserSchema,
+    user: CurrentSession,
   },
   UpdatedLogin: { value: Schema.String },
   UpdatedPassword: { maybePassword: Schema.Option(Password) },
@@ -134,7 +135,7 @@ export type Message = typeof Message.Type;
 export const OutMessage = defineMessageUnion({
   SucceededSignIn: {
     maybeRevision: Schema.Option(SchemaRevision),
-    user: CurrentUserSchema,
+    user: CurrentSession,
   },
 });
 
@@ -177,16 +178,19 @@ export const SignIn = Command.define("SignIn", {
     Effect.gen(function* signIn() {
       const client = yield* StdApi;
 
-      yield* client.signIn.cookieSignIn({
-        headers: { "std-client": "web" },
-        payload: { login, password: Redacted.value(password) },
+      yield* client.session.create({
+        payload: {
+          login,
+          password: Redacted.value(password),
+          tokenDelivery: "cookie",
+        },
       });
 
       const maybeSession = yield* client.session
-        .me({ responseMode: "decoded-and-response" })
+        .current({ responseMode: "decoded-and-response" })
         .pipe(
           Effect.map(Option.some),
-          Effect.catchTag("Unauthenticated", () =>
+          Effect.catchIf(isTmfError("Unauthenticated"), () =>
             Effect.succeed(Option.none())
           )
         );
@@ -200,7 +204,7 @@ export const SignIn = Command.define("SignIn", {
           }),
       });
     }).pipe(
-      Effect.catchTag("InvalidCredentials", () =>
+      Effect.catchIf(isTmfError("InvalidCredentials"), () =>
         Effect.succeed(Message.FailedSignIn({ error: "InvalidCredentials" }))
       ),
       Effect.orElseSucceed(() => Message.FailedSignIn({ error: "Unavailable" }))

@@ -1,8 +1,8 @@
-import { MetaTableSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
 
+import { MetaTableSchema } from "../../domain/metadata.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { Message as FilterBuilderMessage } from "../../filter-builder/filter-builder.ts";
 import { ListError, MetaError, RecordPage } from "./model.ts";

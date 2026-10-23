@@ -4,21 +4,67 @@
  * to assets, and the user table, in the shape of the metadata endpoint
  * (Contracts 6.3).
  */
+import { apiAttributeNameOf } from "@std/definitions/names";
+import type { MetaFieldType } from "@std/definitions/table-metadata";
+
 import type {
   MetaField,
-  MetaFieldType,
   MetaTable,
-  TableList,
-} from "@std/definitions/table-metadata";
-
+  MetaTableSummary,
+} from "./domain/metadata.ts";
 import { parseSchemaRevision } from "./domain/schema-revision.ts";
 import type { SchemaRevision } from "./domain/schema-revision.ts";
+import { collectionOf, typeOf } from "./domain/wire.ts";
 
 /** The asset table's name. */
 export const ASSET_TABLE_NAME = "acme.asset";
 
 /** The user table's name. */
 export const USER_TABLE_NAME = "core.user";
+
+/** The origin the fixtures' `href`s name. */
+export const FIXTURE_ORIGIN = "http://std.test";
+
+/**
+ * What the API adds to a table's description (Contracts 10.5): its
+ * collection as `id`, its definition ID as `classId`, its resource type,
+ * its `href` and the revision.
+ *
+ * @param classId - The table's definition ID.
+ * @param name - The qualified name.
+ * @returns The members.
+ */
+export const servedAs = (classId: string, name: string) =>
+  ({
+    "@type": "TableMetadata",
+    classId,
+    href: `${FIXTURE_ORIGIN}/api/v2/tableMetadata/${collectionOf(name)}`,
+    id: collectionOf(name),
+    resourceType: typeOf(name),
+    schemaRevision: 3,
+  }) as const;
+
+/**
+ * A table as the table list shows it.
+ *
+ * @param name - The qualified name.
+ * @param label - Its label.
+ * @param creatable - Whether the caller may create its records.
+ * @returns The entry.
+ */
+export const summaryOf = (
+  name: string,
+  label: string,
+  creatable: boolean
+): MetaTableSummary => ({
+  "@type": "TableMetadata",
+  creatable,
+  href: `${FIXTURE_ORIGIN}/api/v2/tableMetadata/${collectionOf(name)}`,
+  id: collectionOf(name),
+  label,
+  name,
+  resourceType: typeOf(name),
+});
 
 const field = (
   id: string,
@@ -27,6 +73,7 @@ const field = (
   type: MetaFieldType,
   overrides: Partial<MetaField> = {}
 ): MetaField => ({
+  apiName: apiAttributeNameOf(overrides.name ?? name),
   autoNumber: null,
   choices: null,
   default: null,
@@ -134,7 +181,7 @@ export const assetTable: MetaTable = {
   ],
   formRules: [],
   helpText: null,
-  id: "00000000-0000-4000-8000-0000000000a0",
+  ...servedAs("00000000-0000-4000-8000-0000000000a0", ASSET_TABLE_NAME),
   label: "Asset",
   layouts: { form: null, list: null },
   name: ASSET_TABLE_NAME,
@@ -156,7 +203,7 @@ export const userTable: MetaTable = {
   ],
   formRules: [],
   helpText: null,
-  id: "00000000-0000-4000-8000-0000000000b0",
+  ...servedAs("00000000-0000-4000-8000-0000000000b0", USER_TABLE_NAME),
   label: "User",
   layouts: { form: null, list: null },
   name: USER_TABLE_NAME,
@@ -192,10 +239,10 @@ export const REVISION_3 = revision("3.00000000-0000-4000-8000-000000000c03");
 export const REVISION_4 = revision("4.00000000-0000-4000-8000-000000000c04");
 
 /** The tables Ada can open. */
-export const adaTables: TableList = {
+export const adaTables = {
   schemaRevision: 3,
   tables: [
-    { creatable: true, label: "Asset", name: ASSET_TABLE_NAME },
-    { creatable: false, label: "User", name: USER_TABLE_NAME },
+    summaryOf(ASSET_TABLE_NAME, "Asset", true),
+    summaryOf(USER_TABLE_NAME, "User", false),
   ],
-};
+} as const;

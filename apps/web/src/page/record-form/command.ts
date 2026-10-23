@@ -3,30 +3,41 @@
  * `If-Match`, the reference pickers' searches, related lists and history.
  * Every request built from the form's metadata sends the revision that
  * metadata was built at (Contracts 6.2); a password or secret is unwrapped
- * only where a save's body is built.
+ * only where a save's body is built. Names and shapes are converted at the
+ * API's edge (`wire.ts`) with the fields the request was built from.
  */
-import { InvalidReference } from "@std/api/errors/invalid-reference";
-import { NotAllowed } from "@std/api/errors/not-allowed";
-import { NotFound } from "@std/api/errors/not-found";
-import { Referenced } from "@std/api/errors/referenced";
-import { SchemaChanged } from "@std/api/errors/schema-changed";
-import { Unauthenticated } from "@std/api/errors/unauthenticated";
-import { UnknownField } from "@std/api/errors/unknown-field";
-import { ValidationFailed } from "@std/api/errors/validation-failed";
-import { VersionConflict } from "@std/api/errors/version-conflict";
-import type { RecordJson } from "@std/api/records";
-import { MetaFieldSchema } from "@std/definitions/table-metadata";
-import type { MetaField } from "@std/definitions/table-metadata";
+import { SchemaChangeSchema } from "@std/api/errors/schemas";
+import { isTmfError } from "@std/api/v2/client";
+import { FieldErrorSchema } from "@std/definitions/field-errors";
 import { isJsonString } from "@std/values/json-value";
-import { Effect, Option, Result, Schema } from "effect";
+import { Effect, Option, Predicate, Result, Schema } from "effect";
 import { Command, Dom } from "foldkit";
 import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
 import { WriteOnlyValue, sentBody } from "../../domain/form-input.ts";
+import { MetaFieldSchema } from "../../domain/metadata.ts";
+import type { MetaField } from "../../domain/metadata.ts";
+import type { RecordJson } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
 import { valueText } from "../../domain/value-text.ts";
+import {
+  WireField,
+  collectionOf,
+  collectionOfType,
+  currentRevisionOf,
+  errorDetail,
+  historyEntryOf,
+  isIdentityOnly,
+  jsonPatchOf,
+  nameIn,
+  nextCursorOf,
+  recordOfResource,
+  resourceBodyOf,
+  totalCountOf,
+  wireFieldOf,
+} from "../../domain/wire.ts";
 import { StdApi, atRevision, responseRevision } from "../../std-client.ts";
 import { fetchTableMetadata } from "../table-list/command.ts";
 import type { RecordPage } from "../table-list/model.ts";
@@ -49,6 +60,9 @@ export const PICKER_LIMIT = 10;
 /** How many records a related list shows per page. [judgment] */
 export const RELATED_PAGE_SIZE = 10;
 
+/** How many history entries one request asks for (the API's maximum). */
+export const HISTORY_PAGE_SIZE = 1000;
+
 const decodeRevision = Schema.decodeUnknownOption(SchemaRevision);
 
 /** Loads the endpoint table's metadata at the app's revision. */
@@ -58,12 +72,12 @@ export const LoadFormMetadata = Command.define("LoadFormMetadata", {
     table: Schema.String,
   },
   execute: ({ maybeRevision, table }) =>
-    fetchTableMetadata(table, maybeRevision).pipe(
+    fetchTableMetadata(collectionOf(table), maybeRevision).pipe(
       Effect.map((loaded) => Message.SucceededLoadFormMetadata(loaded)),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadFormMetadata({ error: "UnknownTable" })
         )
@@ -80,30 +94,37 @@ export const LoadFormMetadata = Command.define("LoadFormMetadata", {
 });
 
 /**
- * Loads the metadata of the record's concrete class, whose rules an
- * update is validated with (decision 0017).
+ * Loads the metadata of the record's concrete class (its `@type`), whose
+ * rules an update is validated with (decision 0017).
  */
 export const LoadClassMetadata = Command.define("LoadClassMetadata", {
-  args: { revision: SchemaRevision, table: Schema.String },
-  execute: ({ revision, table }) =>
-    fetchTableMetadata(table, Option.some(revision)).pipe(
+  args: { resourceType: Schema.String, revision: SchemaRevision },
+  execute: ({ resourceType, revision }) =>
+    fetchTableMetadata(
+      collectionOfType(resourceType),
+      Option.some(revision)
+    ).pipe(
       Effect.map((loaded) =>
         Message.SucceededLoadClassMetadata({ revision, table: loaded.table })
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadClassMetadata({
             error: "UnknownTable",
+            resourceType,
             revision,
-            table,
           })
         )
       ),
       Effect.orElseSucceed(() =>
-        Message.FailedLoadClassMetadata({ error: UNAVAILABLE, revision, table })
+        Message.FailedLoadClassMetadata({
+          error: UNAVAILABLE,
+          resourceType,
+          revision,
+        })
       )
     ),
   messages: [
@@ -120,14 +141,14 @@ export const LoadClassMetadata = Command.define("LoadClassMetadata", {
 export const LoadTarget = Command.define("LoadTarget", {
   args: { request: Schema.Int, revision: SchemaRevision, table: Schema.String },
   execute: ({ request, revision, table }) =>
-    fetchTableMetadata(table, Option.some(revision)).pipe(
+    fetchTableMetadata(collectionOf(table), Option.some(revision)).pipe(
       Effect.map((loaded) =>
         Message.SucceededLoadTarget({ request, table: loaded.table })
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadTarget({ error: "UnknownTable", request, table })
         )
@@ -149,8 +170,9 @@ const failedRecord =
     Message.FailedLoadRecord({ error, generation, maybeRevision });
 
 /**
- * Reads the record with reference labels (`GET .../records/{id}`), at the
- * form's revision.
+ * Reads the record (`GET {collection}/{id}`) at the form's revision; its
+ * references carry their labels. `selected` are the fields a read without
+ * `fields` returns (the endpoint's active ones).
  */
 export const LoadRecord = Command.define("LoadRecord", {
   args: {
@@ -158,16 +180,17 @@ export const LoadRecord = Command.define("LoadRecord", {
     purpose: ReadPurpose,
     recordId: Schema.String,
     revision: SchemaRevision,
+    selected: Schema.Array(WireField),
     table: Schema.String,
   },
-  execute: ({ generation, purpose, recordId, revision, table }) =>
+  execute: ({ generation, purpose, recordId, revision, selected, table }) =>
     Effect.gen(function* loadRecord() {
       const client = yield* StdApi;
 
-      const [read, response] = yield* client.records
+      const [resource, response] = yield* client.records
         .get({
-          params: { id: recordId, table },
-          query: { labels: "true" },
+          params: { id: recordId, table: collectionOf(table) },
+          query: {},
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
@@ -176,24 +199,21 @@ export const LoadRecord = Command.define("LoadRecord", {
         generation,
         maybeRevision: responseRevision(response),
         purpose,
-        record: read.record,
+        record: recordOfResource(resource, selected),
       });
     }).pipe(
-      Effect.catchTag("NotFound", () =>
+      Effect.catchIf(isTmfError("NotFound"), () =>
         Effect.succeed(failedRecord(generation, "NotFound")(Option.none()))
       ),
-      Effect.catchTag("SchemaChanged", (changed) =>
+      Effect.catchIf(isTmfError("SchemaChanged"), (changed) =>
         Effect.succeed(
-          failedRecord(
-            generation,
-            "SchemaChanged"
-          )(decodeRevision(changed.currentRevision))
+          failedRecord(generation, "SchemaChanged")(currentRevisionOf(changed))
         )
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(failedRecord(generation, "UnknownTable")(Option.none()))
       ),
       Effect.orElseSucceed(() =>
@@ -208,91 +228,171 @@ export const LoadRecord = Command.define("LoadRecord", {
 });
 
 /**
- * Refusals the form shows with the server's message (Contracts 3.8): a
- * definition change set's refusals (writes to definition tables run as
- * change sets, 1.4), a busy schema, a malformed request. Their messages
- * name definitions or parameters, never a value.
+ * Refusals the form shows with the server's message (Contracts 3.8, 10.6):
+ * a definition change set's refusals (writes to definition tables run as
+ * change sets, 1.4), a record rule's (4.10), a busy schema, a malformed
+ * request. Their messages name definitions, rules or parameters, never a
+ * value.
  */
-const REFUSAL_TAGS: ReadonlySet<string> = new Set([
+const REFUSAL_TAGS: readonly string[] = [
   "DefinitionInvalid",
   "DefinitionProtected",
   "DependencyConflict",
   "ExistingDataViolates",
+  "HookDepthExceeded",
   "InvalidRequest",
   "InvalidSchemaRevision",
+  "InvalidTransition",
   "PermissionRequired",
   "PurgeRefused",
+  "RecordInSave",
+  "RuleRefused",
   "SchemaBusy",
   "SchemaLockTimeout",
   "SchemaNeedsAttention",
   "UnknownTable",
+  "UnsupportedMediaType",
   "UseRetireOrPurge",
   "VersionRequired",
-]);
+];
 
 /** An ended session, told apart from the write's refusals. */
 const SESSION_ENDED = "SessionEnded";
 
-const isRefusal = (
-  error: unknown
-): error is Error & { readonly _tag: string } =>
-  error instanceof Error &&
-  "_tag" in error &&
-  typeof error._tag === "string" &&
-  REFUSAL_TAGS.has(error._tag);
+const decodeFieldErrors = Schema.decodeUnknownOption(
+  Schema.Array(FieldErrorSchema)
+);
+
+const decodeChanges = Schema.decodeUnknownOption(
+  Schema.Array(SchemaChangeSchema)
+);
+
+/**
+ * A detail of a TMF `Error` that is text.
+ *
+ * @param failure - The client's failure.
+ * @param member - The detail's name.
+ * @returns The text, if the failure has it.
+ */
+const textDetail = (
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure, any of the route's errors
+  failure: unknown,
+  member: string
+): Option.Option<string> =>
+  Option.filter(errorDetail(failure, member), Predicate.isString);
+
+/**
+ * The field errors of a `ValidationFailed`, named as the form names its
+ * fields.
+ *
+ * @param failure - The refusal.
+ * @param fields - The fields the body was built from.
+ * @returns The errors.
+ */
+const fieldErrorsOf = (
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure, any of the route's errors
+  failure: unknown,
+  fields: readonly WireField[]
+) =>
+  Option.getOrElse(
+    Option.flatMap(errorDetail(failure, "fieldErrors"), decodeFieldErrors),
+    () => []
+  ).map((error) => ({ ...error, field: nameIn(fields, error.field) }));
+
+/**
+ * The changes of a `SchemaChanged`, named as the form names its fields
+ * where the form knows the field.
+ *
+ * @param failure - The refusal.
+ * @param fields - The fields the request was built from.
+ * @returns The changes.
+ */
+const changesOf = (
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure, any of the route's errors
+  failure: unknown,
+  fields: readonly WireField[]
+) =>
+  Option.getOrElse(
+    Option.flatMap(errorDetail(failure, "changes"), decodeChanges),
+    () => []
+  ).map((change) => ({
+    ...change,
+    field: change.field === null ? null : nameIn(fields, change.field),
+  }));
 
 /**
  * What a write's failure means for the form.
  *
- * @param error - The typed client's failure.
+ * @param error - The typed client's failure: a TMF `Error` body.
+ * @param fields - The fields the request was built from.
  * @returns The refusal, `SessionEnded`, or `Unavailable` for anything that
  *   is not an answer of the API.
  */
 const writeErrorOf = (
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure is a union of every error the route declares plus transport failures
-  error: unknown
+  error: unknown,
+  fields: readonly WireField[]
 ): WriteError | typeof SESSION_ENDED => {
-  if (error instanceof Unauthenticated) {
+  const fieldOf = (member: string) =>
+    nameIn(
+      fields,
+      Option.getOrElse(textDetail(error, member), () => "")
+    );
+
+  if (isTmfError("Unauthenticated")(error)) {
     return SESSION_ENDED;
   }
 
-  if (error instanceof ValidationFailed) {
-    return WriteError.ValidationFailed({ errors: error.errors });
-  }
-
-  if (error instanceof VersionConflict) {
-    return WriteError.VersionConflict({ currentVersion: error.currentVersion });
-  }
-
-  if (error instanceof SchemaChanged) {
-    return WriteError.SchemaChanged({
-      changes: error.changes,
-      currentRevision: error.currentRevision,
+  if (isTmfError("ValidationFailed")(error)) {
+    return WriteError.ValidationFailed({
+      errors: fieldErrorsOf(error, fields),
     });
   }
 
-  if (error instanceof InvalidReference) {
-    return WriteError.InvalidReference({ field: error.field });
+  if (isTmfError("VersionConflict")(error)) {
+    return WriteError.VersionConflict({
+      currentVersion: Option.getOrElse(
+        Option.filter(errorDetail(error, "currentVersion"), Predicate.isNumber),
+        () => 0
+      ),
+    });
   }
 
-  if (error instanceof UnknownField) {
-    return WriteError.UnknownField({ field: error.field });
+  if (isTmfError("SchemaChanged")(error)) {
+    return WriteError.SchemaChanged({
+      changes: changesOf(error, fields),
+      currentRevision: Option.getOrElse(
+        textDetail(error, "currentRevision"),
+        () => ""
+      ),
+    });
   }
 
-  if (error instanceof NotAllowed) {
+  if (isTmfError("InvalidReference")(error)) {
+    return WriteError.InvalidReference({ field: fieldOf("field") });
+  }
+
+  if (isTmfError("UnknownField")(error)) {
+    return WriteError.UnknownField({ field: fieldOf("field") });
+  }
+
+  if (isTmfError("NotAllowed")(error)) {
     return WriteError.NotAllowed();
   }
 
-  if (error instanceof NotFound) {
+  if (isTmfError("NotFound")(error)) {
     return WriteError.NotFound();
   }
 
-  if (error instanceof Referenced) {
+  if (isTmfError("Referenced")(error)) {
     return WriteError.Referenced();
   }
 
-  return isRefusal(error)
-    ? WriteError.Refused({ message: error.message, tag: error._tag })
+  return isTmfError(...REFUSAL_TAGS)(error)
+    ? WriteError.Refused({
+        message: error.message ?? error.reason,
+        tag: error.code,
+      })
     : WriteError.Unavailable();
 };
 
@@ -302,43 +402,112 @@ const writeErrorOf = (
  * @param error - The refusal.
  * @returns The revision, if it is one.
  */
-const currentRevisionOf = (error: WriteError): Option.Option<Revision> =>
+const currentRevisionOfWrite = (error: WriteError): Option.Option<Revision> =>
   WriteError.guards.SchemaChanged(error)
     ? decodeRevision(error.currentRevision)
     : Option.none();
 
-const failedSave =
-  (generation: number) =>
-  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure, any of the route's errors
-  (error: unknown) => {
-    const refusal = writeErrorOf(error);
-
-    return refusal === SESSION_ENDED
+const failedSaveWith =
+  (generation: number) => (refusal: WriteError | typeof SESSION_ENDED) =>
+    refusal === SESSION_ENDED
       ? Message.FailedAuthentication()
       : Message.FailedSaveRecord({
           error: refusal,
           generation,
-          maybeRevision: currentRevisionOf(refusal),
+          maybeRevision: currentRevisionOfWrite(refusal),
         });
-  };
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- the typed client's failure, any of the route's errors
-const failedDelete = (error: unknown) => {
-  const refusal = writeErrorOf(error);
-
-  return refusal === SESSION_ENDED
+const failedDeleteWith = (refusal: WriteError | typeof SESSION_ENDED) =>
+  refusal === SESSION_ENDED
     ? Message.FailedAuthentication()
     : Message.FailedDeleteRecord({ error: refusal });
-};
 
 /** A create's or update's body, secrets kept apart until the request. */
 const BodyArgs = {
+  /** The endpoint's fields, to name the body and read refusals back. */
+  fields: Schema.Array(WireField),
   secrets: Schema.Record(Schema.String, WriteOnlyValue),
+  /** The fields the saved record is read back with (the active ones). */
+  selected: Schema.Array(WireField),
   values: Schema.Record(Schema.String, Schema.Json),
 };
 
 /**
- * Creates a record (`POST .../records`) at the form's revision. A refusal
+ * The platform's definition tables (Contracts 1.4): a write to one of them
+ * runs as a one-operation change set, and an update takes a merge patch
+ * only (Contracts 10.5; a JSON Patch is `415`), whose json values replace
+ * the stored ones.
+ */
+const DEFINITION_TABLES: ReadonlySet<string> = new Set([
+  "core.access_rule",
+  "core.choice",
+  "core.class",
+  "core.field",
+  "core.field_override",
+  "core.index",
+  "core.layout",
+  "core.namespace",
+  "core.permission",
+  "core.record_rule",
+  "core.role",
+  "core.role_permission",
+  "core.saved_filter",
+  "core.subscription",
+]);
+
+/**
+ * Whether an update is a merge patch: on a definition table, yes; on any
+ * other table it is a JSON Patch with one `add` per changed attribute,
+ * because a merge patch would merge an object into a json attribute's
+ * stored value instead of replacing it (Contracts 10.5).
+ *
+ * @param table - The qualified name.
+ * @returns True for a definition table.
+ */
+export const isDefinitionTable = (table: string): boolean =>
+  DEFINITION_TABLES.has(table);
+
+/**
+ * What a write returned: the record read back, or, when the answer holds
+ * only its identity, the record read again to tell an empty record from
+ * one the caller can no longer see (Contracts 3.9): `NotFound` means the
+ * latter, which the form shows with its ID and version only.
+ */
+const savedRecordOf = Effect.fnUntraced(function* savedRecordOf(
+  resource: Parameters<typeof recordOfResource>[0],
+  table: string,
+  selected: readonly WireField[]
+) {
+  if (!isIdentityOnly(resource)) {
+    return recordOfResource(resource, selected);
+  }
+
+  const client = yield* StdApi;
+  const version = resource.revision ?? 0;
+
+  // NOTE: the write succeeded whatever this read answers: any other
+  // failure keeps the write's own answer.
+  return yield* client.records
+    .get({
+      params: { id: resource.id, table: collectionOf(table) },
+      query: {},
+    })
+    .pipe(
+      Effect.map((reread) =>
+        recordOfResource(
+          (reread.revision ?? 0) === version ? reread : resource,
+          selected
+        )
+      ),
+      Effect.catchIf(isTmfError("NotFound"), () =>
+        Effect.succeed({ id: resource.id, version })
+      ),
+      Effect.orElseSucceed(() => recordOfResource(resource, selected))
+    );
+});
+
+/**
+ * Creates a record (`POST {collection}`) at the form's revision. A refusal
  * is never retried: the user decides (Contracts 6.4).
  */
 export const CreateRecord = Command.define("CreateRecord", {
@@ -348,14 +517,22 @@ export const CreateRecord = Command.define("CreateRecord", {
     revision: SchemaRevision,
     table: Schema.String,
   },
-  execute: ({ generation, revision, secrets, table, values }) =>
+  execute: ({
+    fields,
+    generation,
+    revision,
+    secrets,
+    selected,
+    table,
+    values,
+  }) =>
     Effect.gen(function* createRecord() {
       const client = yield* StdApi;
 
-      const [saved, response] = yield* client.records
+      const [created, response] = yield* client.records
         .create({
-          params: { table },
-          payload: sentBody({ secrets, values }),
+          params: { table: collectionOf(table) },
+          payload: resourceBodyOf(sentBody({ secrets, values }), fields),
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
@@ -363,11 +540,17 @@ export const CreateRecord = Command.define("CreateRecord", {
       return Message.SucceededSaveRecord({
         generation,
         maybeRevision: responseRevision(response),
-        saved: saved.record,
+        saved: yield* savedRecordOf(created, table, selected).pipe(
+          atRevision(Option.some(revision))
+        ),
       });
     }).pipe(
       Effect.result,
-      Effect.map(Result.getOrElse(failedSave(generation)))
+      Effect.map(
+        Result.getOrElse((failure) =>
+          failedSaveWith(generation)(writeErrorOf(failure, fields))
+        )
+      )
     ),
   messages: [
     Message.SucceededSaveRecord,
@@ -377,9 +560,10 @@ export const CreateRecord = Command.define("CreateRecord", {
 });
 
 /**
- * Updates a record (`PATCH .../records/{id}`) with `If-Match` naming the
- * version the edits were made on, at the form's revision. A refusal is
- * never retried: the user decides (Contracts 6.4).
+ * Updates a record (`PATCH {collection}/{id}`, a merge patch or a JSON
+ * Patch, `isDefinitionTable`) with
+ * `If-Match` naming the version the edits were made on, at the form's
+ * revision. A refusal is never retried: the user decides (Contracts 6.4).
  */
 export const UpdateRecord = Command.define("UpdateRecord", {
   args: {
@@ -391,10 +575,12 @@ export const UpdateRecord = Command.define("UpdateRecord", {
     version: Schema.Int,
   },
   execute: ({
+    fields,
     generation,
     recordId,
     revision,
     secrets,
+    selected,
     table,
     values,
     version,
@@ -402,23 +588,40 @@ export const UpdateRecord = Command.define("UpdateRecord", {
     Effect.gen(function* updateRecord() {
       const client = yield* StdApi;
 
-      const [saved, response] = yield* client.records
-        .update({
-          headers: { "if-match": `"${version}"` },
-          params: { id: recordId, table },
-          payload: sentBody({ secrets, values }),
-          responseMode: WITH_RESPONSE,
-        })
-        .pipe(atRevision(Option.some(revision)));
+      const request = {
+        headers: { "if-match": `"${version}"` },
+        params: { id: recordId, table: collectionOf(table) },
+        responseMode: WITH_RESPONSE,
+      } as const;
+
+      const changed = sentBody({ secrets, values });
+
+      const [patched, response] = yield* (
+        isDefinitionTable(table)
+          ? client.records.patch({
+              ...request,
+              payload: resourceBodyOf(changed, fields),
+            })
+          : client.records.patch({
+              ...request,
+              payload: jsonPatchOf(changed, fields),
+            })
+      ).pipe(atRevision(Option.some(revision)));
 
       return Message.SucceededSaveRecord({
         generation,
         maybeRevision: responseRevision(response),
-        saved: saved.record,
+        saved: yield* savedRecordOf(patched, table, selected).pipe(
+          atRevision(Option.some(revision))
+        ),
       });
     }).pipe(
       Effect.result,
-      Effect.map(Result.getOrElse(failedSave(generation)))
+      Effect.map(
+        Result.getOrElse((failure) =>
+          failedSaveWith(generation)(writeErrorOf(failure, fields))
+        )
+      )
     ),
   messages: [
     Message.SucceededSaveRecord,
@@ -427,7 +630,7 @@ export const UpdateRecord = Command.define("UpdateRecord", {
   ],
 });
 
-/** Deletes a record (`DELETE .../records/{id}`) with `If-Match`. */
+/** Deletes a record (`DELETE {collection}/{id}`) with `If-Match`. */
 export const DeleteRecord = Command.define("DeleteRecord", {
   args: {
     recordId: Schema.String,
@@ -440,9 +643,9 @@ export const DeleteRecord = Command.define("DeleteRecord", {
       const client = yield* StdApi;
 
       const [, response] = yield* client.records
-        .remove({
+        .delete({
           headers: { "if-match": `"${version}"` },
-          params: { id: recordId, table },
+          params: { id: recordId, table: collectionOf(table) },
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
@@ -450,7 +653,14 @@ export const DeleteRecord = Command.define("DeleteRecord", {
       return Message.SucceededDeleteRecord({
         maybeRevision: responseRevision(response),
       });
-    }).pipe(Effect.result, Effect.map(Result.getOrElse(failedDelete))),
+    }).pipe(
+      Effect.result,
+      Effect.map(
+        Result.getOrElse((failure) =>
+          failedDeleteWith(writeErrorOf(failure, []))
+        )
+      )
+    ),
   messages: [
     Message.SucceededDeleteRecord,
     Message.FailedDeleteRecord,
@@ -491,12 +701,13 @@ const optionalParameter = (
   });
 
 /**
- * Searches a reference picker's targets (`GET /tables/{target}/records`
- * with `allowedFor=<table>/<field>`), so only targets the caller can see
+ * Searches a reference picker's targets (`GET {target collection}`) with
+ * `allowedFor=<collection>/<attribute>`, so only targets the caller can see
  * and the field's allowed-records condition admits are offered (decision
- * 0020), at the form's revision, in the order `sort` names, from `cursor`
- * when the picker asks for more. A `SchemaChanged` refusal is told apart,
- * so the page reloads the definitions and searches again.
+ * 0020), at the form's revision, filtered by `condition` and in the order
+ * `sort` names (API names), from `cursor` when the picker asks for more. A
+ * `SchemaChanged` refusal is told apart, so the page reloads the
+ * definitions and searches again.
  */
 export const SearchTargets = Command.define("SearchTargets", {
   args: {
@@ -526,49 +737,58 @@ export const SearchTargets = Command.define("SearchTargets", {
 
       const [listed, response] = yield* client.records
         .list({
-          params: { table: target },
+          params: { table: collectionOf(target) },
           query: {
             allowedFor,
             fields: Option.match(display, {
               onNone: () => "id",
-              onSome: (field) => field.name,
+              onSome: (field) => field.apiName,
             }),
             limit: String(PICKER_LIMIT),
             ...optionalParameter("sort", sort),
-            ...optionalParameter("filter", filter),
-            ...optionalParameter("cursor", cursor),
+            ...optionalParameter("condition", filter),
+            ...optionalParameter("after", cursor),
           },
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
 
+      const selected = Option.match(display, {
+        onNone: () => [],
+        onSome: (field) => [wireFieldOf(field)],
+      });
+
       return Message.SucceededSearchTargets({
         cursor,
         fieldId,
         generation,
-        items: listed.records.map((record) => ({
-          id: record.id,
-          label: Option.match(display, {
-            onNone: () => record.id,
-            onSome: (field) => displayOf(record, field),
-          }),
-        })),
-        maybeNextCursor: Option.fromNullishOr(listed.nextCursor),
+        items: listed.map((resource) => {
+          const record = recordOfResource(resource, selected);
+
+          return {
+            id: record.id,
+            label: Option.match(display, {
+              onNone: () => record.id,
+              onSome: (field) => displayOf(record, field),
+            }),
+          };
+        }),
+        maybeNextCursor: nextCursorOf(response.headers),
         maybeRevision: responseRevision(response),
       });
     }).pipe(
-      Effect.catchTag("SchemaChanged", (changed) =>
+      Effect.catchIf(isTmfError("SchemaChanged"), (changed) =>
         Effect.succeed(
           Message.FailedSearchTargets({
             error: "SchemaChanged",
             fieldId,
             generation,
-            maybeRevision: decodeRevision(changed.currentRevision),
+            maybeRevision: currentRevisionOf(changed),
             revision,
           })
         )
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() =>
@@ -600,14 +820,14 @@ export const LoadRelatedMetadata = Command.define("LoadRelatedMetadata", {
     table: Schema.String,
   },
   execute: ({ generation, listId, revision, table }) =>
-    fetchTableMetadata(table, Option.some(revision)).pipe(
+    fetchTableMetadata(collectionOf(table), Option.some(revision)).pipe(
       Effect.map((loaded) =>
         Message.SucceededLoadRelatedMetadata({ generation, listId, ...loaded })
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(
           Message.FailedLoadRelatedMetadata({
             error: "UnknownTable",
@@ -636,12 +856,13 @@ const failedRelated =
     Message.FailedLoadRelatedRecords({ error, generation, listId });
 
 /**
- * Loads a page of a related list: `GET /tables/{table}/records` with
- * `filter=<field> = "<id>"`, the list's columns, labels and the count, at
- * the revision of the related table's metadata.
+ * Loads a page of a related list: `GET {collection}` with
+ * `condition=<field> = "<id>"` (API names), the list's columns and the
+ * count, at the revision of the related table's metadata.
  */
 export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
   args: {
+    columns: Schema.Array(WireField),
     cursor: Schema.Option(Schema.String),
     fields: Schema.String,
     filter: Schema.String,
@@ -650,32 +871,39 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
     revision: SchemaRevision,
     table: Schema.String,
   },
-  execute: ({ cursor, fields, filter, generation, listId, revision, table }) =>
+  execute: ({
+    columns,
+    cursor,
+    fields,
+    filter,
+    generation,
+    listId,
+    revision,
+    table,
+  }) =>
     Effect.gen(function* loadRelatedRecords() {
       const client = yield* StdApi;
 
-      const [listed, response] = yield* client.records
+      const [resources, response] = yield* client.records
         .list({
-          params: { table },
+          params: { table: collectionOf(table) },
           query: {
+            condition: filter,
             count: "true",
             fields,
-            filter,
-            labels: "true",
             limit: String(RELATED_PAGE_SIZE),
-            ...Option.match(cursor, {
-              onNone: () => ({}),
-              onSome: (text) => ({ cursor: text }),
-            }),
+            ...optionalParameter("after", cursor),
           },
           responseMode: WITH_RESPONSE,
         })
         .pipe(atRevision(Option.some(revision)));
 
       const page: RecordPage = {
-        maybeCount: Option.fromNullishOr(listed.count),
-        maybeNextCursor: Option.fromNullishOr(listed.nextCursor),
-        records: listed.records,
+        maybeCount: totalCountOf(response.headers),
+        maybeNextCursor: nextCursorOf(response.headers),
+        records: resources.map((resource) =>
+          recordOfResource(resource, columns)
+        ),
       };
 
       return Message.SucceededLoadRelatedRecords({
@@ -685,16 +913,16 @@ export const LoadRelatedRecords = Command.define("LoadRelatedRecords", {
         page,
       });
     }).pipe(
-      Effect.catchTag("SchemaChanged", () =>
+      Effect.catchIf(isTmfError("SchemaChanged"), () =>
         Effect.succeed(failedRelated(listId, generation)("SchemaChanged"))
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
-      Effect.catchTag("UnknownField", () =>
+      Effect.catchIf(isTmfError("UnknownField"), () =>
         Effect.succeed(failedRelated(listId, generation)("UnknownField"))
       ),
-      Effect.catchTag("UnknownTable", () =>
+      Effect.catchIf(isTmfError("UnknownTable"), () =>
         Effect.succeed(failedRelated(listId, generation)("UnknownTable"))
       ),
       Effect.orElseSucceed(() => failedRelated(listId, generation)(UNAVAILABLE))
@@ -710,10 +938,10 @@ const failedHistory = (generation: number) => (error: HistoryError) =>
   Message.FailedLoadHistory({ error, generation });
 
 /**
- * Loads the record's history (`GET .../records/{id}/history`, Contracts
- * 4.5) at the form's revision: entries with their fields described at each
- * entry's revision; fields the caller cannot read are left out by the
- * server.
+ * Loads the record's history (`GET {collection}/{id}/history`, Contracts
+ * 4.5, 10.4) at the form's revision, page by page until every entry is
+ * in: entries with their fields described at each entry's revision; fields
+ * the caller cannot read are left out by the server.
  */
 export const LoadHistory = Command.define("LoadHistory", {
   args: {
@@ -726,27 +954,45 @@ export const LoadHistory = Command.define("LoadHistory", {
     Effect.gen(function* loadHistory() {
       const client = yield* StdApi;
 
-      const [history, response] = yield* client.records
-        .history({
-          params: { id: recordId, table },
-          query: {},
-          responseMode: WITH_RESPONSE,
-        })
-        .pipe(atRevision(Option.some(revision)));
+      const pageAt = (offset: number) =>
+        client.records
+          .history({
+            params: { id: recordId, table: collectionOf(table) },
+            query: { limit: String(HISTORY_PAGE_SIZE), offset: String(offset) },
+            responseMode: WITH_RESPONSE,
+          })
+          .pipe(atRevision(Option.some(revision)));
 
-      return Message.SucceededLoadHistory({
-        entries: history.entries,
-        generation,
-        maybeRevision: responseRevision(response),
-      });
+      const [first, response] = yield* pageAt(0);
+      const total = Option.getOrElse(totalCountOf(response.headers), () => 0);
+      const pageCount = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+
+      const rest = yield* Effect.all(
+        Array.from({ length: pageCount - 1 }, (_, index) =>
+          Effect.map(pageAt((index + 1) * HISTORY_PAGE_SIZE), ([page]) => page)
+        )
+      );
+
+      return Option.match(
+        Option.all([first, ...rest].flat().map(historyEntryOf)),
+        {
+          onNone: () => failedHistory(generation)(UNAVAILABLE),
+          onSome: (entries) =>
+            Message.SucceededLoadHistory({
+              entries,
+              generation,
+              maybeRevision: responseRevision(response),
+            }),
+        }
+      );
     }).pipe(
-      Effect.catchTag("NotFound", () =>
+      Effect.catchIf(isTmfError("NotFound"), () =>
         Effect.succeed(failedHistory(generation)("NotFound"))
       ),
-      Effect.catchTag("SchemaChanged", () =>
+      Effect.catchIf(isTmfError("SchemaChanged"), () =>
         Effect.succeed(failedHistory(generation)("SchemaChanged"))
       ),
-      Effect.catchTag("Unauthenticated", () =>
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
         Effect.succeed(Message.FailedAuthentication())
       ),
       Effect.orElseSucceed(() => failedHistory(generation)(UNAVAILABLE))
@@ -761,13 +1007,13 @@ export const LoadHistory = Command.define("LoadHistory", {
 /** The user table, whose display names the history shows. */
 export const USER_TABLE = "core.user";
 
-/** The user table's display field. */
+/** The user table's display field (its API name is the same). */
 const USER_NAME_FIELD = "name";
 
 /**
  * Reads the names of the users who made the history's changes, as far as
- * the caller may read them (a list of `core.user` filtered by `id in`);
- * without them the panel shows the user IDs.
+ * the caller may read them (a list of `core.user` filtered by
+ * `condition`, `id in (...)`); without them the panel shows the user IDs.
  */
 export const LoadActorNames = Command.define("LoadActorNames", {
   args: {
@@ -780,10 +1026,10 @@ export const LoadActorNames = Command.define("LoadActorNames", {
 
       const listed = yield* client.records
         .list({
-          params: { table: USER_TABLE },
+          params: { table: collectionOf(USER_TABLE) },
           query: {
+            condition: `id in (${userIds.map((id) => JSON.stringify(id)).join(", ")})`,
             fields: USER_NAME_FIELD,
-            filter: `id in (${userIds.map((id) => JSON.stringify(id)).join(", ")})`,
             limit: String(userIds.length),
           },
         })
@@ -791,11 +1037,11 @@ export const LoadActorNames = Command.define("LoadActorNames", {
 
       return Message.SucceededLoadActorNames({
         names: Object.fromEntries(
-          listed.records.flatMap((record) => {
-            const name = record.values[USER_NAME_FIELD];
+          listed.flatMap((resource) => {
+            const name = resource[USER_NAME_FIELD];
 
             return name !== undefined && isJsonString(name)
-              ? [[record.id, name] as const]
+              ? [[resource.id, name] as const]
               : [];
           })
         ),
