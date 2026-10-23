@@ -412,10 +412,11 @@ const checkCandidate = (
 };
 
 /**
- * Stored choice keys sent back unchanged, generated from the field's
- * choices rather than from accepted creates: a hidden key is refused on
- * create but kept on an update that does not change it, and the update
- * body must accept it. A key outside the list is refused even then.
+ * The field's choice keys and an unlisted key, checked both as fresh
+ * candidates (active keys accepted on create and update; hidden and
+ * unlisted keys refused) and as stored keys sent back unchanged (a hidden
+ * key is kept on an update that does not change it, and the update body
+ * must accept it; a key outside the list is refused even then).
  *
  * @param field - The field.
  * @param schemas - The field's compiled document.
@@ -434,6 +435,8 @@ const checkStoredKeys = (
   const choices = field.choices ?? [];
 
   for (const key of [...choices.map((choice) => choice.key), "delta"]) {
+    checkCandidate(field, schemas, key, observed);
+
     const kept = convertUpdate(rules, key, key);
     const listed = JSON.stringify(choices);
 
