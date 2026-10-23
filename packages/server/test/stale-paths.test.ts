@@ -17,11 +17,8 @@ import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import { OPENAPI_PATH } from "@std/api/api";
-import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
-import { parseJson } from "@std/values/json";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 import type { Layer } from "effect";
 
@@ -50,7 +47,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { CHANGE_SETS } from "./schema-paths-support.ts";
+import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
 import { ACME, change, createRole, values } from "./schema-support.ts";
 
 /** The paths, in the order of every expectation below. */
@@ -102,18 +99,6 @@ interface DefinitionPool {
 }
 
 /**
- * A change-set request body.
- *
- * @param operations - The operations.
- * @returns The body.
- */
-const changeSetBody = (operations: readonly Operation[]): JsonValue => {
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  return parsed.ok ? parsed.value : null;
-};
-
-/**
  * A local role, created by the administrator through the change-set
  * endpoint without a stated revision.
  *
@@ -122,19 +107,15 @@ const changeSetBody = (operations: readonly Operation[]): JsonValue => {
  */
 const roleByAdmin = (callers: Callers) =>
   Effect.gen(function* createRoleByAdmin() {
-    const http = yield* TestHttpClient;
     const role = createRole(`stale_${randomUUID().slice(0, 8)}`);
 
-    const response = yield* http.request("POST", CHANGE_SETS, {
-      body: changeSetBody([role]),
-      token: callers.tokens.admin,
-    });
+    const response = yield* postChangeSet(callers.tokens.admin, [role]);
 
     assert.strictEqual(response.status, 201, response.text);
 
     return {
       changeSetId: textOf(objectOf(response.json).id),
-      id: role.op === "createRole" ? role.definition.id : "",
+      id: role.definition.id,
     };
   });
 
@@ -147,17 +128,23 @@ const roleByAdmin = (callers: Callers) =>
  */
 const definitionPool = (callers: Callers, calls: number) =>
   Effect.gen(function* makeDefinitionPool() {
-    const roles: string[] = [];
-    const relabel = yield* roleByAdmin(callers);
+    const relabel = createRole(`stale_${randomUUID().slice(0, 8)}`);
 
-    for (let made = 0; made < calls; made += 1) {
-      roles.push((yield* roleByAdmin(callers)).id);
-    }
+    const roles = Array.from({ length: calls }, () =>
+      createRole(`stale_${randomUUID().slice(0, 8)}`)
+    );
+
+    const response = yield* postChangeSet(callers.tokens.admin, [
+      relabel,
+      ...roles,
+    ]);
+
+    assert.strictEqual(response.status, 201, response.text);
 
     return {
-      changeSetId: relabel.changeSetId,
-      relabel: relabel.id,
-      roles,
+      changeSetId: textOf(objectOf(response.json).id),
+      relabel: relabel.definition.id,
+      roles: roles.map((role) => role.definition.id),
     } satisfies DefinitionPool;
   });
 
@@ -230,9 +217,9 @@ const take = (
     > = {
       "change-set apply": () =>
         http.request("POST", CHANGE_SETS, {
-          body: changeSetBody([
-            createRole(`stale_${randomUUID().slice(0, 8)}`),
-          ]),
+          body: {
+            operations: [createRole(`stale_${randomUUID().slice(0, 8)}`)],
+          },
           headers,
           ...as(admin),
         }),
@@ -706,14 +693,16 @@ describe("stale-paths", () => {
           );
 
           const endpoint = yield* http.request("POST", CHANGE_SETS, {
-            body: changeSetBody([
-              {
-                changes: { label: "Too late" },
-                id,
-                op: "update",
-                version: Number(version),
-              },
-            ]),
+            body: {
+              operations: [
+                {
+                  changes: { label: "Too late" },
+                  id,
+                  op: "update",
+                  version: Number(version),
+                },
+              ],
+            },
             headers,
             token,
           });
