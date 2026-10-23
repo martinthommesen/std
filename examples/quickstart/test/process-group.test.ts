@@ -22,6 +22,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Exit, Fiber, Ref, Schedule } from "effect";
 
 import {
+  exitCode,
   groupAlive,
   spawnGroup,
   terminateGroup,
@@ -63,24 +64,6 @@ const printed = (child: ChildProcess, text: string) =>
       if (seen.includes(text)) {
         resume(Effect.succeed(true));
       }
-    });
-  });
-
-/**
- * Waits for a child's exit.
- * @param child - The child.
- * @returns Succeeds once it has exited.
- */
-const exited = (child: ChildProcess) =>
-  Effect.callback<boolean>((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resume(Effect.succeed(true));
-
-      return;
-    }
-
-    child.once("exit", () => {
-      resume(Effect.succeed(true));
     });
   });
 
@@ -266,7 +249,7 @@ describe("process-group", () => {
       assert.isBelow(elapsed, 1000);
 
       parent.kill("SIGKILL");
-      yield* exited(parent);
+      yield* exitCode(parent);
     })
   );
 
@@ -341,7 +324,7 @@ describe("process-group", () => {
           yield* sleeping(marker);
 
           ci.kill("SIGTERM");
-          yield* exited(ci);
+          yield* exitCode(ci);
 
           assert.deepStrictEqual(processesMarked(marker), []);
         })

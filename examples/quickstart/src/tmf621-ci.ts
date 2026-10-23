@@ -24,10 +24,10 @@ import { NodeRuntime } from "@effect/platform-node";
 import { testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect } from "effect";
 
-import { findStrace, program, traceScript } from "./exec-trace.ts";
+import { findStrace, program } from "./exec-trace.ts";
 import type { ExpectedProgram } from "./exec-trace.ts";
 import { startHelpdeskServer } from "./helpdesk-server.ts";
-import { QuickstartStepFailed } from "./steps.ts";
+import { runTraced } from "./steps.ts";
 
 const SCRIPT = fileURLToPath(
   new URL("../../helpdesk/tmf621.sh", import.meta.url)
@@ -44,48 +44,6 @@ const ADMIN = {
 /** What every script run must have started. */
 const EXPECTED: readonly ExpectedProgram[] = [program("curl"), program("jq")];
 
-/**
- * Runs the example script under strace and checks every execve.
- * @param step - The heading.
- * @param env - Its environment.
- * @returns Fails when the script fails or the trace has a problem.
- */
-const runTraced = Effect.fn("Tmf621Ci.runTraced")(function* runTraced(
-  step: string,
-  env: NodeJS.ProcessEnv
-) {
-  yield* Console.log(`\n### ${step}`);
-
-  const traced = yield* traceScript({
-    env,
-    expected: EXPECTED,
-    script: SCRIPT,
-    secrets: [ADMIN.password],
-  });
-
-  if (traced.code !== 0) {
-    return yield* new QuickstartStepFailed({
-      code: traced.code,
-      detail: "",
-      reason: "exited",
-      step,
-    });
-  }
-
-  if (traced.problems.length > 0) {
-    return yield* new QuickstartStepFailed({
-      code: null,
-      detail: traced.problems.join("; "),
-      reason: "trace",
-      step,
-    });
-  }
-
-  return yield* Console.log(
-    `${step}: ${traced.calls} execve calls traced; no password or token in any argument`
-  );
-});
-
 const tmf621 = Effect.gen(function* runTmf621() {
   // Before anything else: without strace the credential check cannot run.
   yield* findStrace();
@@ -101,13 +59,20 @@ const tmf621 = Effect.gen(function* runTmf621() {
     };
 
     yield* runTraced("examples/helpdesk/tmf621.sh (first run)", {
-      ...env,
-      TMF621_RUN: "ci-1",
+      env: { ...env, TMF621_RUN: "ci-1" },
+      expected: EXPECTED,
+      script: SCRIPT,
+      secrets: [ADMIN.password],
     });
 
     return yield* runTraced(
       "examples/helpdesk/tmf621.sh (second run, same database)",
-      { ...env, TMF621_RUN: "ci-2" }
+      {
+        env: { ...env, TMF621_RUN: "ci-2" },
+        expected: EXPECTED,
+        script: SCRIPT,
+        secrets: [ADMIN.password],
+      }
     );
   }).pipe(
     Effect.tapError(() => Console.error(`\n### std serve log\n${server.log()}`))

@@ -6,6 +6,7 @@
  */
 import { Console, Effect, Schedule, Schema } from "effect";
 
+import { traceScript } from "./exec-trace.ts";
 import { exitCode, spawnGroup } from "./process-group.ts";
 
 /** How long `std serve` may take to listen: 150 polls, 200 ms apart. */
@@ -40,6 +41,45 @@ export class QuickstartStepFailed extends Schema.TaggedError<
       : `${this.step}: its execve trace failed the check: ${this.detail}`;
   }
 }
+
+/**
+ * Runs a script under strace and checks every execve.
+ * @param step - The heading.
+ * @param options - The script, environment, expected programs and secrets.
+ * @returns Fails when the script fails or the trace has a problem.
+ */
+export const runTraced = Effect.fn("QuickstartCi.runTraced")(
+  function* runTraced(
+    step: string,
+    options: Parameters<typeof traceScript>[0]
+  ) {
+    yield* Console.log(`\n### ${step}`);
+
+    const traced = yield* traceScript(options);
+
+    if (traced.code !== 0) {
+      return yield* new QuickstartStepFailed({
+        code: traced.code,
+        detail: "",
+        reason: "exited",
+        step,
+      });
+    }
+
+    if (traced.problems.length > 0) {
+      return yield* new QuickstartStepFailed({
+        code: null,
+        detail: traced.problems.join("; "),
+        reason: "trace",
+        step,
+      });
+    }
+
+    return yield* Console.log(
+      `${step}: ${traced.calls} execve calls traced; no password or token in any argument`
+    );
+  }
+);
 
 /**
  * Runs a command in its own process group, with inherited output, and ends

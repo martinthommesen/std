@@ -41,14 +41,9 @@ import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
 
-import { findStrace, program, traceScript } from "./exec-trace.ts";
+import { findStrace, program } from "./exec-trace.ts";
 import type { ExpectedProgram } from "./exec-trace.ts";
-import {
-  listeningAt,
-  QuickstartStepFailed,
-  run,
-  startServer,
-} from "./steps.ts";
+import { listeningAt, run, runTraced, startServer } from "./steps.ts";
 
 const CLI = fileURLToPath(
   new URL("../../../packages/server/src/cli/main.ts", import.meta.url)
@@ -145,48 +140,6 @@ const EXPECTED: readonly ExpectedProgram[] = [
   },
 ];
 
-/**
- * Runs the quickstart script under strace and checks every execve.
- * @param step - The heading.
- * @param env - Its environment.
- * @returns Fails when the script fails or the trace has a problem.
- */
-const runTraced = Effect.fn("QuickstartCi.runTraced")(function* runTraced(
-  step: string,
-  env: NodeJS.ProcessEnv
-) {
-  yield* Console.log(`\n### ${step}`);
-
-  const traced = yield* traceScript({
-    env,
-    expected: EXPECTED,
-    script: SCRIPT,
-    secrets: Object.values(PASSWORDS),
-  });
-
-  if (traced.code !== 0) {
-    return yield* new QuickstartStepFailed({
-      code: traced.code,
-      detail: "",
-      reason: "exited",
-      step,
-    });
-  }
-
-  if (traced.problems.length > 0) {
-    return yield* new QuickstartStepFailed({
-      code: null,
-      detail: traced.problems.join("; "),
-      reason: "trace",
-      step,
-    });
-  }
-
-  return yield* Console.log(
-    `${step}: ${traced.calls} execve calls traced; no password or token in any argument`
-  );
-});
-
 const quickstart = Effect.gen(function* runQuickstart() {
   // Before anything else: without strace the credential check cannot run.
   yield* findStrace();
@@ -222,8 +175,10 @@ const quickstart = Effect.gen(function* runQuickstart() {
     const scriptEnv = { ...env, STD_URL: url };
 
     yield* runTraced("examples/quickstart.sh (first run)", {
-      ...scriptEnv,
-      QUICKSTART_RUN: "ci-1",
+      env: { ...scriptEnv, QUICKSTART_RUN: "ci-1" },
+      expected: EXPECTED,
+      script: SCRIPT,
+      secrets: Object.values(PASSWORDS),
     });
 
     const dropped = yield* dropAliceRoles(url);
@@ -236,7 +191,12 @@ const quickstart = Effect.gen(function* runQuickstart() {
 
     return yield* runTraced(
       "examples/quickstart.sh (second run, same database, after a partial setup)",
-      { ...scriptEnv, QUICKSTART_RUN: "ci-2" }
+      {
+        env: { ...scriptEnv, QUICKSTART_RUN: "ci-2" },
+        expected: EXPECTED,
+        script: SCRIPT,
+        secrets: Object.values(PASSWORDS),
+      }
     );
   }).pipe(
     Effect.tapError(() => Console.error(`\n### std serve log\n${server.log()}`))

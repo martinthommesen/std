@@ -26,7 +26,7 @@ import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect } from "effect";
 
 import { PREVIOUS_RELEASE } from "./previous-release.ts";
-import { cleanEnv, CURRENT, previousRelease, std } from "./release.ts";
+import { cleanEnv, CURRENT, extractRelease, std } from "./release.ts";
 import type { Release } from "./release.ts";
 import { listeningAt, run, startServer } from "./steps.ts";
 
@@ -62,42 +62,36 @@ const databaseEnv = (url: string): NodeJS.ProcessEnv => ({
 });
 
 /**
- * Starts a release's `std serve` and runs quickstart scripts against it,
- * each ending with that release's `std doctor`.
- * @param server - Whose server.
- * @param scripts - The scripts and their run tags, in order.
+ * Starts a release's `std serve` and runs its quickstart script against it,
+ * ending with that release's `std doctor`.
+ * @param release - Whose server and script.
+ * @param tag - The script's run tag.
  * @param env - The environment.
  * @returns Fails when a script fails.
  */
-const serveAndRun = (
-  server: Release,
-  scripts: readonly (readonly [Release, string])[],
-  env: NodeJS.ProcessEnv
-) =>
+const serveAndRun = (release: Release, tag: string, env: NodeJS.ProcessEnv) =>
   Effect.scoped(
     Effect.gen(function* serveAndRunScripts() {
-      const running = yield* startServer(server.cli, env);
+      const running = yield* startServer(release.cli, env);
 
       yield* Effect.gen(function* runScripts() {
         const url = yield* listeningAt(running);
 
-        for (const [script, tag] of scripts) {
-          yield* run(
-            `${script.name}'s examples/quickstart.sh against ${server.name}'s std serve (${tag})`,
-            "bash",
-            [script.script],
-            {
-              ...env,
-              QUICKSTART_RUN: tag,
-              STD_DOCTOR_COMMAND: `"${process.execPath}" "${server.cli}" doctor`,
-              STD_URL: url,
-            }
-          );
-        }
+        yield* run(
+          `${release.name}'s examples/quickstart.sh against ${release.name}'s std serve (${tag})`,
+          "bash",
+          [release.script],
+          {
+            ...env,
+            QUICKSTART_RUN: tag,
+            STD_DOCTOR_COMMAND: `"${process.execPath}" "${release.cli}" doctor`,
+            STD_URL: url,
+          }
+        );
       }).pipe(
         Effect.tapError(() =>
           Console.error(
-            `\n### ${server.name}'s std serve log\n${running.log()}`
+            `\n### ${release.name}'s std serve log\n${running.log()}`
           )
         )
       );
@@ -120,14 +114,14 @@ const upgradePath = (release: Release) =>
     );
     yield* std(release, "upgrade", env);
     yield* std(release, "bootstrap-admin", env);
-    yield* serveAndRun(release, [[release, "compat-1"]], env);
+    yield* serveAndRun(release, "compat-1", env);
     yield* std(CURRENT, "upgrade", env);
     yield* std(CURRENT, "doctor", env);
-    yield* serveAndRun(CURRENT, [[CURRENT, "compat-2"]], env);
+    yield* serveAndRun(CURRENT, "compat-2", env);
   }).pipe(Effect.provide(testDatabaseService({ empty: true })));
 
 const releaseCompat = Effect.gen(function* releaseCompat() {
-  const release = yield* previousRelease;
+  const release = yield* extractRelease(PREVIOUS_RELEASE);
 
   yield* upgradePath(release);
 
