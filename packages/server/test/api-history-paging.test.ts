@@ -292,7 +292,7 @@ describe("api-history-paging", () => {
             Schema.Struct({ "QUERY PLAN": Schema.String })
           )(
             yield* sql.unsafe(
-              `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) ${text}`,
+              `EXPLAIN (ANALYZE, VERBOSE, COSTS OFF) ${text}`,
               values
             )
           );
@@ -300,28 +300,61 @@ describe("api-history-paging", () => {
           const lines = rows.map((row) => row["QUERY PLAN"]);
           const plan = lines.join("\n");
           yield* Effect.logInfo("history deep offset plan", {
+            indexOnlyScan: plan.includes(
+              "Index Only Scan using change_record_version"
+            ),
             limit,
             offset,
             plan,
           });
 
-          const heapScans = lines.filter((line) =>
-            /(?:Index|Seq|Bitmap Heap) Scan .*on change /u.test(line)
-          );
-
-          assert.isNotEmpty(heapScans, plan);
-          assert.include(plan, "Index Only Scan using change_record_version");
-
-          for (const line of heapScans) {
+          // VERBOSE pairs each executed node with its output, independently of scan type.
+          const nodes = lines.flatMap((line, index) => {
             const actual =
               /rows=(?<rows>\d+(?:\.\d+)?) loops=(?<loops>\d+)/u.exec(line);
 
-            assert.isNotNull(actual, line);
+            const output = lines[index + 1]?.trim();
 
-            const fetched =
-              Number(actual?.groups?.rows) * Number(actual?.groups?.loops);
+            // Bitmap index nodes have no tuple output to materialize.
+            if (
+              actual === null ||
+              output === undefined ||
+              !output.startsWith("Output: ")
+            ) {
+              return [];
+            }
 
-            assert.isAtMost(fetched, limit + 1, plan);
+            return [
+              {
+                fetched:
+                  Number(actual.groups?.rows) * Number(actual.groups?.loops),
+                output: output.slice("Output: ".length),
+              },
+            ];
+          });
+
+          const fullRows = nodes.filter(({ output }) =>
+            /\b(?:fields|id|operation_id|version_text|kind|actor_id|occurred_at|schema_revision|cause)\b/u.test(
+              output
+            )
+          );
+
+          assert.isNotEmpty(fullRows, plan);
+
+          for (const node of fullRows) {
+            assert.isAtMost(node.fetched, limit + 1, plan);
+          }
+
+          // Skipped entries may require heap visibility checks, but carry only keys.
+          const keyWalk = nodes.filter(({ fetched }) => fetched > limit + 1);
+          assert.isNotEmpty(keyWalk, plan);
+
+          for (const node of keyWalk) {
+            assert.deepStrictEqual(
+              node.output.split(", ").map((column) => column.split(".").at(-1)),
+              ["record_id", "record_version"],
+              plan
+            );
           }
 
           const response = yield* (yield* TestHttpClient).get(
