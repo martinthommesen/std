@@ -285,20 +285,22 @@ describe("the UI shows the API's values (helpdesk)", () => {
     );
   });
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "2B: every list cell and form value shows the API's value for the same caller, as the admin and as an agent",
-      () =>
-        Effect.gen(function* shownValuesTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "2B: every list cell and form value shows the API's value for the same caller, as the admin and as an agent",
+        () =>
+          Effect.gen(function* shownValuesTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await sameValuesForBothUsers(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await sameValuesForBothUsers(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 });

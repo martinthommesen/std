@@ -13,7 +13,7 @@ import {
   seedHelpdeskDemo,
 } from "@std/testing/helpdesk-fixture";
 import { TestHttpClient } from "@std/testing/http-client";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Redacted, Schema } from "effect";
 
 /**
  * An account with the demo login but another name and password.
@@ -47,6 +47,54 @@ describe("helpdesk-seed", () => {
   });
 
   layer(SeedLayer, { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "v3 demo priorities agree with their impact and urgency matrix cells",
+      () =>
+        Effect.gen(function* demoMatrix() {
+          const fixture = yield* HelpdeskFixture;
+          const http = yield* TestHttpClient;
+
+          const token = yield* http.signIn(
+            fixture.admin.login,
+            fixture.admin.password
+          );
+
+          // The nine cells specified in Contracts 14.2, independent of the seed implementation.
+          const priorities = [
+            ["1", "2", "3"],
+            ["2", "3", "4"],
+            ["3", "4", "5"],
+          ];
+
+          const decode = Schema.decodeUnknownSync(
+            Schema.Struct({
+              impact: Schema.String,
+              priority: Schema.String,
+              urgency: Schema.String,
+            })
+          );
+
+          for (const [name, id] of Object.entries(fixture.records)) {
+            const table =
+              name === "monitor" ? "helpdeskTicket" : "helpdeskIncident";
+
+            const response = yield* http.get(`/api/v1/${table}/${id}`, {
+              token,
+            });
+
+            assert.strictEqual(response.status, 200, response.text);
+            const record = decode(response.json);
+            assert.strictEqual(
+              record.priority,
+              priorities[Number(record.impact) - 1]?.[
+                Number(record.urgency) - 1
+              ],
+              name
+            );
+          }
+        })
+    );
+
     dbTest.effect("a rerun adds and changes nothing", () =>
       Effect.gen(function* rerun() {
         const fixture = yield* HelpdeskFixture;

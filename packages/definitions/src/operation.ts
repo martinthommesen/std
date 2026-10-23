@@ -53,6 +53,7 @@ import {
   IndexDraftSchema,
   LayoutDraftSchema,
   RecordRuleDraftSchema,
+  FormRuleDraftSchema,
   SavedFilterDraftSchema,
   NamespaceDraftSchema,
   OverrideDraftSchema,
@@ -96,6 +97,7 @@ export const OperationSchema = Union([
     definition: RecordRuleDraftSchema,
     op: Literal("createRecordRule"),
   }),
+  Struct({ definition: FormRuleDraftSchema, op: Literal("createFormRule") }),
   /**
    * Adds an override (`version` null) or replaces the stored one
    * (`version` its current version). Loosening is refused.
@@ -212,6 +214,7 @@ export const OPERATION_FORMS = {
   createAccessRule: { create: "always", creates: "accessRule", target: false },
   createChoice: { create: "always", creates: "choice", target: false },
   createClass: { create: "always", creates: "class", target: false },
+  createFormRule: { create: "always", creates: "formRule", target: false },
   createGrant: { create: "always", creates: "grant", target: false },
   createLayout: { create: "always", creates: "layout", target: false },
   createNamespace: { create: "always", creates: "namespace", target: false },
@@ -297,6 +300,7 @@ export const RENAMABLE: ReadonlySet<DefinitionKind> = new Set<DefinitionKind>([
   "subscription",
   "savedFilter",
   "recordRule",
+  "formRule",
 ]);
 
 /** The kinds `retire` and `reactivate` apply to. */
@@ -345,6 +349,17 @@ export const UPDATABLE: Readonly<Record<DefinitionKind, readonly string[]>> = {
     "readOnly",
     "required",
     "type",
+  ],
+  formRule: [
+    "active",
+    "clearHidden",
+    "message",
+    "classId",
+    "condition",
+    "fieldId",
+    "order",
+    "property",
+    "value",
   ],
   grant: [],
   index: [],

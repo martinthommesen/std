@@ -36,6 +36,7 @@ const PHASES: Readonly<Record<Draft["kind"], number>> = {
   choice: 5,
   class: 1,
   field: 1,
+  formRule: 5,
   grant: 4,
   index: 3,
   layout: 5,
@@ -114,6 +115,10 @@ export const draftDependencies = (draft: Draft): readonly DefinitionId[] => {
 
   if (draft.kind === "savedFilter") {
     return [draft.classId];
+  }
+
+  if (draft.kind === "formRule") {
+    return [draft.classId, draft.fieldId];
   }
 
   if (draft.kind === "recordRule") {
@@ -247,6 +252,10 @@ export const createOperation = (draft: Draft): Operation => {
 
   if (draft.kind === "savedFilter") {
     return { definition: draft, op: "createSavedFilter" };
+  }
+
+  if (draft.kind === "formRule") {
+    return { definition: draft, op: "createFormRule" };
   }
 
   if (draft.kind === "recordRule") {

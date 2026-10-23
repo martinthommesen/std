@@ -61,6 +61,7 @@ import type {
 import type { FieldType } from "@std/values/field-type";
 
 import type { Decision } from "./decision.ts";
+import { formRulesFor } from "./form-rules.ts";
 import { fieldDecision, knowsTable, recordDecision } from "./rules.ts";
 import type { Caller, FieldAction } from "./rules.ts";
 import { savedFiltersFor } from "./saved-filters.ts";
@@ -525,7 +526,7 @@ export const tableMetadata = (
         ? null
         : (byId.get(displayFieldId)?.name ?? null),
     fields,
-    formRules: [],
+    formRules: formRulesFor(snapshot, caller, classId),
     helpText: definition.helpText,
     id: definition.id,
     label: summary.label,

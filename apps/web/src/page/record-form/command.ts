@@ -23,6 +23,7 @@ import { SchemaRevision } from "../../domain/schema-revision.ts";
 import type { SchemaRevision as Revision } from "../../domain/schema-revision.ts";
 import { valueText } from "../../domain/value-text.ts";
 import {
+  formStateOfResponse,
   WireField,
   collectionOf,
   collectionOfType,
@@ -1064,4 +1065,67 @@ export const NavigateAway = Command.define("NavigateAway", {
   execute: ({ url }) =>
     replaceUrl(url).pipe(Effect.as(Message.CompletedNavigateAway())),
   messages: [Message.CompletedNavigateAway],
+});
+
+/** Asks for a binding form verdict; typed secrets use the non-secret presence marker from judgedBody. */
+export const LoadFormState = Command.define("LoadFormState", {
+  args: {
+    fields: Schema.Array(WireField),
+    generation: Schema.Int,
+    recordId: Schema.NullOr(Schema.String),
+    recordVersion: Schema.NullOr(Schema.Int),
+    schemaRevision: SchemaRevision,
+    table: Schema.String,
+    values: Schema.Record(Schema.String, Schema.Json),
+  },
+  execute: ({
+    fields,
+    generation,
+    table,
+    schemaRevision,
+    recordId,
+    recordVersion,
+    values,
+  }) =>
+    Effect.gen(function* loadFormState() {
+      const api = yield* StdApi;
+
+      const [verdict, response] = yield* api.records.formState({
+        payload: {
+          id: recordId,
+          revision: recordVersion,
+          table: collectionOf(table),
+          values: resourceBodyOf(values, fields),
+        },
+        responseMode: WITH_RESPONSE,
+      });
+
+      return Message.SucceededLoadFormState({
+        generation,
+        maybeRevision: responseRevision(response),
+        verdict: formStateOfResponse(verdict, fields),
+      });
+    }).pipe(
+      atRevision(Option.some(schemaRevision)),
+      Effect.catchIf(isTmfError("Unauthenticated"), () =>
+        Effect.succeed(Message.FailedAuthentication())
+      ),
+      Effect.orElseSucceed((failure) => {
+        const refusal = writeErrorOf(failure, fields);
+
+        return refusal === SESSION_ENDED
+          ? Message.FailedAuthentication()
+          : Message.FailedLoadFormState({
+              error: refusal,
+              generation,
+              maybeRevision: currentRevisionOf(failure),
+            });
+      })
+    ),
+  interrupt: true,
+  messages: [
+    Message.SucceededLoadFormState,
+    Message.FailedLoadFormState,
+    Message.FailedAuthentication,
+  ],
 });

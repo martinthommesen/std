@@ -40,15 +40,15 @@ import type { BoundValue } from "./stored-values.ts";
 export const NOW = "date_trunc('milliseconds', transaction_timestamp())";
 
 /** How the root row is locked. */
-export type RootLock = "FOR NO KEY UPDATE" | "FOR UPDATE";
+export type RootLock = "FOR NO KEY UPDATE" | "FOR UPDATE" | "none";
 
-/** What the root lock reveals: the concrete class and the version. */
-export interface LockedRoot {
+/** What the root read reveals: the concrete class and the version. */
+export interface RootRow {
   readonly classId: DefinitionId;
   readonly version: number;
 }
 
-const decodeLocked = decodeRows(
+const decodeRootRow = decodeRows(
   Schema.Struct({ class_id: Schema.String, version: Schema.String })
 );
 
@@ -73,7 +73,7 @@ export const rootTable = (
 };
 
 /**
- * Locks the root row of a record, and nothing else.
+ * Reads only the root row, optionally locking it.
  *
  * @param snapshot - The configuration.
  * @param endpointClassId - Any class of the record's hierarchy.
@@ -81,7 +81,7 @@ export const rootTable = (
  * @param lock - The row lock.
  * @returns The concrete class and version, or none when no row has the ID.
  */
-export const lockRoot = Effect.fn("Records.lockRoot")(function* lockRoot(
+export const loadRoot = Effect.fn("Records.loadRoot")(function* loadRoot(
   snapshot: ConfigSnapshot,
   endpointClassId: DefinitionId,
   id: string,
@@ -94,16 +94,16 @@ export const lockRoot = Effect.fn("Records.lockRoot")(function* lockRoot(
       `SELECT class_id::text AS class_id, version::text AS version
        FROM ${rootTable(snapshot, endpointClassId)}
        WHERE id = $1::uuid
-       ${lock}`,
+       ${lock === "none" ? "" : lock}`,
       [id]
     )
   );
 
-  const [row] = yield* decodeLocked(rows);
+  const [row] = yield* decodeRootRow(rows);
 
   return row === undefined
-    ? Option.none<LockedRoot>()
-    : Option.some<LockedRoot>({
+    ? Option.none<RootRow>()
+    : Option.some<RootRow>({
         classId: row.class_id,
         version: Number(row.version),
       });

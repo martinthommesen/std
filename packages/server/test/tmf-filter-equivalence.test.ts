@@ -575,9 +575,14 @@ describe("tmf-filter-equivalence", () => {
     );
   });
 
-  layer(TestHttpClient.layer.pipe(Layer.provideMerge(helpdeskTestLayer())), {
-    excludeTestServices: true,
-  })((dbTest) => {
+  layer(
+    TestHttpClient.layer.pipe(
+      Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+    ),
+    {
+      excludeTestServices: true,
+    }
+  )((dbTest) => {
     dbTest.effect(
       "choice filters agree on the helpdesk, with the same rules",
       () =>

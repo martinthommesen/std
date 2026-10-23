@@ -22,6 +22,7 @@ export const API_PREFIX = "/api/v1";
 /** The API's fixed resources: any other first segment is a collection. */
 const FIXED_RESOURCES: ReadonlySet<string> = new Set([
   "applyChangeSet",
+  "checkFormState",
   "openapi.json",
   "session",
   "tableMetadata",

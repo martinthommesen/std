@@ -183,6 +183,18 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     column("label", "label", "text"),
     column("condition", "condition", "json"),
   ]),
+  table("formRule", "form_rule", [
+    column("classId", "table_id", "uuid"),
+    column("name", "name", "text"),
+    column("fieldId", "field_id", "uuid"),
+    column("condition", "condition", "nullableJson"),
+    column("order", "sort_order", "int4"),
+    column("property", "property", "text"),
+    column("value", "value", "json"),
+    column("active", "active", "boolean"),
+    column("clearHidden", "clear_hidden", "nullableJson"),
+    column("message", "message", "nullableText"),
+  ]),
   table("recordRule", "record_rule", [
     column("classId", "table_id", "uuid"),
     column("name", "name", "text"),

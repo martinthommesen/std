@@ -12,7 +12,10 @@ import {
 } from "fast-check";
 
 import type { Expr, Path } from "../src/ast.ts";
-import { evaluateInBrowser } from "../src/browser.ts";
+import {
+  evaluateFormConditionInBrowser,
+  evaluateInBrowser,
+} from "../src/browser.ts";
 import { checkCondition } from "../src/check.ts";
 import { ConditionDefectError } from "../src/defect.ts";
 import type { ImageSource, RecordImage } from "../src/evaluate-core.ts";
@@ -376,6 +379,44 @@ describe("browser evaluator", () => {
     );
   });
 
+  it("returns Unknown before resolving unsupported constructs or an unavailable clock", () => {
+    const options = {
+      classId: ASSET,
+      source: { record: {} },
+      view: fixtureView,
+    };
+
+    assert.strictEqual(
+      evaluateFormConditionInBrowser(
+        { class: ASSET, op: "partsChanged" },
+        options
+      ),
+      "unknown"
+    );
+    assert.strictEqual(
+      evaluateFormConditionInBrowser(
+        { left: { path: ["missing-field"] }, op: "eq", right: { value: "x" } },
+        options
+      ),
+      "unknown"
+    );
+    assert.strictEqual(
+      evaluateFormConditionInBrowser(
+        {
+          left: path(A.due),
+          op: "eq",
+          right: { offset: 0, rel: "today", unit: "day" },
+        },
+        options
+      ),
+      "unknown"
+    );
+    assert.strictEqual(
+      evaluateFormConditionInBrowser({ op: "true" }, options),
+      true
+    );
+  });
+
   it("is sound: with data removed it agrees with the full result or is Unknown", () => {
     const allIds = [
       ...Object.values(A).map((field) => field.id),
@@ -432,7 +473,13 @@ describe("browser evaluator", () => {
           };
 
           const expected = evaluateCondition(resolved.value, full);
-          const verdict = evaluateInBrowser(resolved.value, partial);
+
+          const verdict = evaluateFormConditionInBrowser(expr, {
+            classId: ASSET,
+            context: CONTEXT,
+            source: partial,
+            view: fixtureView,
+          });
 
           if (verdict !== "unknown") {
             assert.strictEqual(verdict, expected);

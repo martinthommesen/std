@@ -9,6 +9,7 @@ import {
   OpenApi,
 } from "effect/http-api";
 
+import { FormState, FormStateRequest } from "./form-state.ts";
 import {
   ChangeEntry,
   JsonPatchOperation,
@@ -97,6 +98,11 @@ export class RecordsGroup extends HttpApiGroup.make("records").add(
     headers: ifMatch,
     params: tableAndId,
     success: HttpApiSchema.NoContent,
+  }),
+  HttpApiEndpoint.post("formState", "/checkFormState", {
+    error: WRITE_ERRORS,
+    payload: FormStateRequest,
+    success: FormState,
   }),
   HttpApiEndpoint.get("history", `${ITEM_PATH}/history`, {
     error: READ_ERRORS,

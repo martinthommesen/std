@@ -436,6 +436,18 @@ export const judgedBody = (body: FormBody) => ({
 });
 
 /**
+ * The preview body carries only write-only presence, independently of plaintext validation.
+ * @param body - Values and redacted inputs.
+ * @returns Values with explicit presence markers for typed secrets.
+ */
+export const formStateBody = (body: FormBody) => ({
+  ...body.values,
+  ...Object.fromEntries(
+    Object.keys(body.secrets).map((name) => [name, { set: true }])
+  ),
+});
+
+/**
  * The body as the request sends it: secrets unwrapped. Only the save
  * Command calls this, where the request is built.
  *

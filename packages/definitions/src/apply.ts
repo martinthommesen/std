@@ -549,7 +549,8 @@ const conditionText = (definition: Definition | undefined): string => {
   if (
     definition?.kind === "accessRule" ||
     definition?.kind === "subscription" ||
-    definition?.kind === "savedFilter"
+    definition?.kind === "savedFilter" ||
+    definition?.kind === "formRule"
   ) {
     return JSON.stringify(definition.condition);
   }

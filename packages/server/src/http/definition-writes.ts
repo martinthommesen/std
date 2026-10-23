@@ -38,6 +38,7 @@ import {
   PermissionDraftSchema,
   RoleDraftSchema,
   RecordRuleDraftSchema,
+  FormRuleDraftSchema,
   SavedFilterDraftSchema,
   SubscriptionDraftSchema,
 } from "@std/definitions/definition";
@@ -105,6 +106,7 @@ const CREATE_OP: Readonly<Record<DefinitionKind, string>> = {
   choice: "createChoice",
   class: "createClass",
   field: "addField",
+  formRule: "createFormRule",
   grant: "createGrant",
   index: "addIndex",
   layout: "createLayout",
@@ -163,6 +165,10 @@ const OVERRIDE_DEFAULTS = {
 const defaultsOf = (kind: DefinitionKind) => {
   if (kind === "override") {
     return { ...DEFAULTS, ...OVERRIDE_DEFAULTS };
+  }
+
+  if (kind === "formRule") {
+    return { ...DEFAULTS, active: true, order: 0, value: true };
   }
 
   return kind === "recordRule"
@@ -254,6 +260,7 @@ const DRAFT_SCHEMAS = {
   choice: ChoiceDraftSchema,
   class: ClassDraftSchema,
   field: FieldDraftSchema,
+  formRule: FormRuleDraftSchema,
   grant: GrantDraftSchema,
   index: IndexDraftSchema,
   layout: LayoutDraftSchema,
