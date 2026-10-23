@@ -25,7 +25,12 @@ import { InvalidFilter } from "@std/api/errors/invalid-filter";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotImplemented } from "@std/api/errors/not-implemented";
 import { UnknownField } from "@std/api/errors/unknown-field";
-import { isPath } from "@std/conditions/ast";
+import {
+  isCompare,
+  isJunction,
+  isPath,
+  isQuantifier,
+} from "@std/conditions/ast";
 import type {
   Changed,
   Compare,
@@ -34,11 +39,9 @@ import type {
   Expr,
   In,
   InPeriod,
-  Junction,
   Path,
   PartsChanged,
   Pattern,
-  Quantifier,
 } from "@std/conditions/ast";
 import type { Attribute, ValueAttribute } from "@std/tmf/mapping";
 import { parseTmfFields, parseTmfSort } from "@std/tmf/query";
@@ -285,18 +288,6 @@ const pathWithFieldIds = (path: Path, view: ReadView): Path => ({
 /** The conditions that test a field. */
 type PathCondition = Compare | In | Empty | Pattern | InPeriod | Changed;
 
-const COMPARE_OPERATORS: ReadonlySet<string> = new Set([
-  "eq",
-  "ne",
-  "lt",
-  "le",
-  "gt",
-  "ge",
-]);
-
-const isCompare = (expr: PathCondition): expr is Compare =>
-  COMPARE_OPERATORS.has(expr.op);
-
 const testWithFieldIds = (
   expr: PathCondition,
   view: ReadView
@@ -317,12 +308,6 @@ const testWithFieldIds = (
 
   return { ...expr, left: pathWithFieldIds(expr.left, view) };
 };
-
-const isJunction = (expr: Expr): expr is Junction =>
-  expr.op === "and" || expr.op === "or";
-
-const isQuantifier = (expr: Expr): expr is Quantifier =>
-  expr.op === "anyPart" || expr.op === "allParts";
 
 const isFixed = (expr: Expr): expr is Constant | PartsChanged =>
   expr.op === "true" || expr.op === "false" || expr.op === "partsChanged";

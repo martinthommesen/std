@@ -148,7 +148,14 @@ const AUDIT_REFERENCE_IDS: ReadonlySet<string> = new Set([
   SYSTEM_FIELD_IDS.updated_by,
 ]);
 
-const objectOf = (text: string | null | undefined): JsonObject | undefined => {
+/**
+ * Decode an optional jsonb-text object from definition history.
+ * @param text - The stored jsonb text, or an absent value.
+ * @returns The object, or undefined when absent or not an object.
+ */
+export const objectOf = (
+  text: string | null | undefined
+): JsonObject | undefined => {
   if (text === null || text === undefined) {
     return undefined;
   }
@@ -249,7 +256,7 @@ const fieldByNameAt = (
   definitions: DefinitionsAtR,
   classId: DefinitionId,
   name: string,
-  naming: Naming = "definition"
+  naming: Naming
 ): FieldAtR | undefined => {
   const lineage = new Set(lineageAt(definitions, classId));
 

@@ -7,6 +7,8 @@
  * and `Z` in either case (§5.6 note).
  */
 
+import { isValidCivilDate } from "@std/values/calendar";
+
 const DATE_TIME =
   /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})[Tt](?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.\d+)?(?:(?<zulu>[Zz])|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2}))$/u;
 
@@ -15,19 +17,9 @@ const HOURS_PER_DAY = 24;
 const MINUTES_PER_DAY = MINUTES_PER_HOUR * HOURS_PER_DAY;
 const LAST_MINUTE_OF_DAY = MINUTES_PER_DAY - 1;
 const LEAP_SECOND = 60;
-const MONTHS = 12;
-const FEBRUARY = 2;
-
-const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
-
-const isLeapYear = (year: number): boolean =>
-  (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
 
 const between = (value: number, low: number, high: number): boolean =>
   value >= low && value <= high;
-
-const daysIn = (year: number, month: number): number =>
-  month === FEBRUARY && isLeapYear(year) ? 29 : (DAYS_IN_MONTH[month - 1] ?? 0);
 
 /**
  * Whether a text is an RFC 3339 `date-time` with valid calendar and time
@@ -53,8 +45,7 @@ export const isRfc3339DateTime = (text: string): boolean => {
   const offsetMinute = Number(groups.offsetMinute ?? "0");
 
   const inRange = [
-    between(month, 1, MONTHS),
-    between(day, 1, daysIn(year, month)),
+    isValidCivilDate({ day, month, year }),
     between(hour, 0, HOURS_PER_DAY - 1),
     between(minute, 0, MINUTES_PER_HOUR - 1),
     between(second, 0, LEAP_SECOND),

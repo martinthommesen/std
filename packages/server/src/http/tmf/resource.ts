@@ -64,7 +64,7 @@ import {
   readPage,
 } from "../../records/read-records.ts";
 import type { DecodedRecord } from "../../records/read-records.ts";
-import type { ReadScope } from "../../records/read-view.ts";
+import type { ReadScope, ReadView } from "../../records/read-view.ts";
 import {
   aggregateOperation,
   createRecord,
@@ -74,13 +74,20 @@ import {
 } from "../../records/save-pipeline.ts";
 import { loadRecord } from "../../records/save-sql.ts";
 import type { ConfigState } from "../../sql/request-revision.ts";
+import { TYPE_MEMBERS } from "../api/body.ts";
 import {
   applyJsonPatch,
   mergePatch,
   namesOfPatch,
   parseJsonPatch,
 } from "../api/patch.ts";
-import { jsonAnswer, linkHeader, writeFailures } from "../api/records.ts";
+import type { PatchOperation } from "../api/patch.ts";
+import {
+  jsonAnswer,
+  linkHeader,
+  withoutTypeMembers,
+  writeFailures,
+} from "../api/records.ts";
 import { jsonBodyOf, mediaTypeOf, queryOf } from "../api/request.ts";
 import { classOfType } from "../api/table-names.ts";
 import { textBodyOf } from "../body-limits.ts";
@@ -100,7 +107,7 @@ import {
   renderFor,
   typeAttributesFor,
 } from "./context.ts";
-import type { MappedResource, TmfRegistry } from "./context.ts";
+import type { MappedResource, RenderInput, TmfRegistry } from "./context.ts";
 import { writeIssuesError } from "./errors.ts";
 import { pinnedDocumentOf, schemaProblemOf } from "./pinned-schemas.ts";
 import { parseTmfListQuery, parseTmfReadQuery } from "./query.ts";
@@ -115,13 +122,6 @@ import {
 const MERGE_PATCH = "application/merge-patch+json";
 const JSON_PATCH = "application/json-patch+json";
 const PLAIN_JSON = "application/json";
-
-/** Body members that name the record's class. */
-const TYPE_MEMBERS: readonly string[] = [
-  "@type",
-  "@baseType",
-  "@schemaLocation",
-];
 
 const READ_OPTIONS = { withLabels: true, withTargets: true } as const;
 
@@ -256,6 +256,45 @@ const notAnObject = () =>
     parameter: "body",
   });
 
+const sourceRecordsOf = Effect.fn("Tmf.sourceRecordsOf")(
+  function* sourceRecordsOf(
+    scope: ReadScope,
+    view: ReadView,
+    mapped: MappedResource,
+    decoded: readonly DecodedRecord[],
+    fields: ReadonlySet<string> | null
+  ) {
+    const records = yield* readSourceRecords(
+      {
+        attributes: mapped.resource.attributes,
+        extraKeys: extraKeysOf(scope.snapshot, mapped.resource),
+        scope,
+      },
+      view,
+      decoded
+    );
+
+    return yield* withHistory(
+      mapped.resource.attributes,
+      records,
+      (name) => fields === null || fields.has(name),
+      scope
+    );
+  }
+);
+
+const renderInputOf = (
+  input: TmfInput,
+  scope: ReadScope,
+  fields: ReadonlySet<string> | null
+): RenderInput => ({
+  fields,
+  mapped: input.mapped,
+  origin: input.origin,
+  registry: input.registry,
+  scope,
+});
+
 /**
  * Reads one record of the resource as the caller (with its parts), or
  * `NotFound`, identical for a missing and a hidden record (3.4).
@@ -281,25 +320,27 @@ const readCurrent = Effect.fn("Tmf.readCurrent")(function* readCurrent(
     selection: selectionOf(scope, view, sourceKeysOf(resource.attributes)),
   });
 
-  const records = yield* readSourceRecords(
-    {
-      attributes: resource.attributes,
-      extraKeys: extraKeysOf(scope.snapshot, resource),
-      scope,
-    },
+  const [record] = yield* sourceRecordsOf(
+    scope,
     view,
-    [decoded]
-  );
-
-  // History-backed attributes (Contracts 11.2), for every selected one.
-  const [record] = yield* withHistory(
-    resource.attributes,
-    records,
-    (name) => fields === null || fields.has(name),
-    scope
+    mapped,
+    [decoded],
+    fields
   );
 
   return record ?? (yield* new NotFound());
+});
+
+const readVisible = Effect.fn("Tmf.readVisible")(function* readVisible(
+  scope: ReadScope,
+  mapped: MappedResource,
+  id: string,
+  fields: ReadonlySet<string> | null = null
+) {
+  return yield* readCurrent(scope, mapped, id, fields).pipe(
+    Effect.asSome,
+    Effect.catchTag("NotFound", () => Effect.succeedNone)
+  );
 });
 
 /**
@@ -321,12 +362,7 @@ const resourceAnswer = Effect.fn("Tmf.resourceAnswer")(function* resourceAnswer(
 ) {
   const scope = yield* currentReadScope();
 
-  const current = yield* readCurrent(scope, input.mapped, id, fields).pipe(
-    Effect.asSome,
-    Effect.catchTag("NotFound", () =>
-      Effect.succeed(Option.none<SourceRecord>())
-    )
-  );
+  const current = yield* readVisible(scope, input.mapped, id, fields);
 
   const href = hrefOf(input.origin, input.mapped, id);
   const location = status === 201 ? { location: href } : {};
@@ -341,16 +377,7 @@ const resourceAnswer = Effect.fn("Tmf.resourceAnswer")(function* resourceAnswer(
     );
   }
 
-  const body = renderFor(
-    {
-      fields,
-      mapped: input.mapped,
-      origin: input.origin,
-      registry: input.registry,
-      scope,
-    },
-    current.value
-  );
+  const body = renderFor(renderInputOf(input, scope, fields), current.value);
 
   return jsonAnswer(body, status, {
     etag: etagOf(current.value.version),
@@ -400,21 +427,12 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     withCount: true,
   });
 
-  const read = yield* readSourceRecords(
-    {
-      attributes: mapped.resource.attributes,
-      extraKeys: extraKeysOf(scope.snapshot, mapped.resource),
-      scope,
-    },
+  const records = yield* sourceRecordsOf(
+    scope,
     view,
-    page.records
-  );
-
-  const records = yield* withHistory(
-    mapped.resource.attributes,
-    read,
-    (name) => parsed.fields === null || parsed.fields.has(name),
-    scope
+    mapped,
+    page.records,
+    parsed.fields
   );
 
   const classes = classesOf(records);
@@ -438,13 +456,7 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
   // (Contracts 10.4), and the links stay those of the page as read.
   const dropped = page.records.length - records.length;
 
-  const render = {
-    fields: parsed.fields,
-    mapped,
-    origin: input.origin,
-    registry: input.registry,
-    scope,
-  };
+  const render = renderInputOf(input, scope, parsed.fields);
 
   return jsonAnswer(
     records.map((record) => renderFor(render, record)),
@@ -496,16 +508,7 @@ export const retrieveTmf = Effect.fn("Tmf.retrieve")(function* retrieveTmf(
   );
 
   return jsonAnswer(
-    renderFor(
-      {
-        fields,
-        mapped: input.mapped,
-        origin: input.origin,
-        registry: input.registry,
-        scope,
-      },
-      current
-    ),
+    renderFor(renderInputOf(input, scope, fields), current),
     200,
     { etag: etagOf(current.version) }
   );
@@ -680,29 +683,27 @@ const createdClass = Effect.fn("Tmf.createdClass")(function* createdClass(
       ? Result.succeed(byType)
       : resource.createClass(body, byType);
 
-  if (Result.isFailure(decided) || decided.success === undefined) {
-    return yield* Result.isFailure(decided)
-      ? new ValidationFailed({
-          errors: [
-            {
-              _tag: "InvalidValue",
-              field: "@type",
-              message:
-                decided.failure.kind === "invalidValue"
-                  ? decided.failure.message
-                  : "",
-              reason: "invalidFormat",
-            },
-          ],
-        })
-      : invalidType("@type");
+  if (Result.isFailure(decided)) {
+    return yield* new ValidationFailed({
+      errors: [
+        {
+          _tag: "InvalidValue",
+          field: "@type",
+          message:
+            decided.failure.kind === "invalidValue"
+              ? decided.failure.message
+              : "",
+          reason: "invalidFormat",
+        },
+      ],
+    });
   }
 
-  const classId: DefinitionId = decided.success;
-
-  if (!subtree.has(classId)) {
+  if (decided.success === undefined || !subtree.has(decided.success)) {
     return yield* invalidType("@type");
   }
+
+  const classId = decided.success;
 
   const expected = typeAttributesFor(snapshot, resource, classId);
   const baseType = body["@baseType"];
@@ -718,24 +719,6 @@ const createdClass = Effect.fn("Tmf.createdClass")(function* createdClass(
   return classId;
 });
 
-const withoutTypeMembers = (body: JsonObject): JsonObject =>
-  Object.fromEntries(
-    Object.entries(body).filter(([key]) => !TYPE_MEMBERS.includes(key))
-  );
-
-/**
- * Plans a write against the caller's access to the record's class and
- * the part classes.
- *
- * @param scope - The caller's scope.
- * @param mapped - The resource.
- * @param classId - The concrete class.
- * @param body - The body without type members.
- * @param jsonMerge - Whether json objects merge into stored values (a
- *   merge-patch) rather than replace them (a create, a JSON Patch).
- * @param current - For an update, the record under the lock.
- * @returns The plan.
- */
 /**
  * What the caller may know of its own user record (3.6): its ID, and its
  * display field's value when the caller can read it there. A new note's
@@ -779,6 +762,19 @@ const actorReference = Effect.fn("Tmf.actorReference")(function* actorReference(
   } satisfies ReferenceValue;
 });
 
+/**
+ * Plans a write against the caller's access to the record's class and
+ * the part classes.
+ *
+ * @param scope - The caller's scope.
+ * @param mapped - The resource.
+ * @param classId - The concrete class.
+ * @param body - The body without type members.
+ * @param jsonMerge - Whether json objects merge into stored values (a
+ *   merge-patch) rather than replace them (a create, a JSON Patch).
+ * @param current - For an update, the record under the lock.
+ * @returns The plan.
+ */
 const planFor = Effect.fn("Tmf.planFor")(function* planFor(
   scope: ReadScope,
   mapped: MappedResource,
@@ -916,10 +912,7 @@ const checkReadOrder = Effect.fn("Tmf.checkReadOrder")(function* checkReadOrder(
     return yield* Effect.void;
   }
 
-  const after = yield* readCurrent(scope, mapped, ownerId).pipe(
-    Effect.asSome,
-    Effect.catchTag("NotFound", () => Effect.succeedNone)
-  );
+  const after = yield* readVisible(scope, mapped, ownerId);
 
   if (Option.isNone(after)) {
     return yield* Effect.void;
@@ -991,10 +984,7 @@ const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
 
     // What the caller reads adds labels, reference paths, parts and
     // history; the stored values underneath are the system's, unmasked.
-    const read = yield* readCurrent(scope, input.mapped, id).pipe(
-      Effect.asSome,
-      Effect.catchTag("NotFound", () => Effect.succeedNone)
-    );
+    const read = yield* readVisible(scope, input.mapped, id);
 
     const record = stored.value;
     const caller = Option.getOrUndefined(read);
@@ -1012,16 +1002,7 @@ const checkWrittenMembers = Effect.fn("Tmf.checkWrittenMembers")(
       version: record.version,
     };
 
-    const rendered = renderFor(
-      {
-        fields: null,
-        mapped: input.mapped,
-        origin: input.origin,
-        registry: input.registry,
-        scope,
-      },
-      unmasked
-    );
+    const rendered = renderFor(renderInputOf(input, scope, null), unmasked);
 
     for (const member of members) {
       const value = rendered[member];
@@ -1182,16 +1163,7 @@ const renderedOf = (
   scope: ReadScope,
   record: SourceRecord
 ) => {
-  const rendered = renderFor(
-    {
-      fields: null,
-      mapped: input.mapped,
-      origin: input.origin,
-      registry: input.registry,
-      scope,
-    },
-    record
-  );
+  const rendered = renderFor(renderInputOf(input, scope, null), record);
 
   const context = renderContextOf(scope.snapshot, input.registry, input.origin);
   const renderedParts = new Map<string, JsonObject>();
@@ -1207,14 +1179,18 @@ const renderedOf = (
   return { record, rendered, renderedParts };
 };
 
-// The attributes a PATCH names: a merge-patch's members, or every JSON
-// Patch operation's path and source (Contracts 10.5: its scope is every
-// attribute it touches or reads).
-const patchNames = Effect.fn("Tmf.patchNames")(function* patchNames(
+// Parse a JSON Patch once and retain every attribute it touches or reads
+// for the stale scope (Contracts 10.5); a merge-patch names its members.
+const preparePatch = Effect.fn("Tmf.preparePatch")(function* preparePatch(
   patch: TmfPatch
 ) {
   if (!patch.jsonPatch) {
-    return isJsonObject(patch.body) ? Object.keys(patch.body) : [];
+    return {
+      body: patch.body,
+      names: isJsonObject(patch.body) ? Object.keys(patch.body) : [],
+      operations: null,
+      written: new Set<string>(),
+    };
   }
 
   const operations = parseJsonPatch(patch.body);
@@ -1225,7 +1201,12 @@ const patchNames = Effect.fn("Tmf.patchNames")(function* patchNames(
 
   const names = namesOfPatch(operations.success);
 
-  return [...names.written, ...names.read];
+  return {
+    body: patch.body,
+    names: [...names.written, ...names.read],
+    operations: operations.success,
+    written: names.written,
+  };
 });
 
 /**
@@ -1245,28 +1226,26 @@ const patchNames = Effect.fn("Tmf.patchNames")(function* patchNames(
  * @returns The merge-patch body.
  */
 const patchBody = Effect.fn("Tmf.patchBody")(function* patchBody(
-  patch: TmfPatch,
+  patch: {
+    readonly body: JsonValue;
+    readonly operations: readonly PatchOperation[] | null;
+    readonly written: ReadonlySet<string>;
+  },
   rendered: JsonObject,
   attributes: readonly Attribute[]
 ) {
-  if (!patch.jsonPatch) {
+  if (patch.operations === null) {
     return isJsonObject(patch.body) ? patch.body : yield* notAnObject();
   }
 
-  const operations = parseJsonPatch(patch.body);
-
-  if (Result.isFailure(operations)) {
-    return yield* operations.failure;
-  }
-
-  const patched = applyJsonPatch(rendered, operations.success);
+  const patched = applyJsonPatch(rendered, patch.operations);
 
   if (Result.isFailure(patched)) {
     return yield* patched.failure;
   }
 
   const body = mergeBodyOf(rendered, patched.success);
-  const { written } = namesOfPatch(operations.success);
+  const { written } = patch;
 
   const supplied = attributes.flatMap((attribute): [string, JsonValue][] => {
     const value = patched.success[attribute.name];
@@ -1285,7 +1264,7 @@ const patchBody = Effect.fn("Tmf.patchBody")(function* patchBody(
 // The type members of a merge-patch may only repeat the current ones.
 const checkTypeMembers = Effect.fn("Tmf.checkTypeMembers")(
   function* checkTypeMembers(body: JsonObject, rendered: JsonObject) {
-    const changed = TYPE_MEMBERS.filter(
+    const changed = [...TYPE_MEMBERS].filter(
       (key) => body[key] !== undefined && body[key] !== rendered[key]
     );
 
@@ -1367,6 +1346,7 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
       const { snapshot } = scope;
 
       const image = renderedOf(input, scope, current);
+      const prepared = yield* preparePatch(patch);
 
       // Every name the request takes from definitions is checked against
       // its stated revision before anything is evaluated: a merge-patch's
@@ -1376,12 +1356,12 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
         input,
         scope,
         current.classId,
-        localNamesOf(input.mapped, yield* patchNames(patch)),
+        localNamesOf(input.mapped, prepared.names),
         { action: "update" }
       );
 
       const body = yield* patchBody(
-        patch,
+        prepared,
         image.rendered,
         attributesOf(snapshot, input.mapped.resource, current.classId)
       );

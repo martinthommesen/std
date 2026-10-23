@@ -124,22 +124,6 @@ const CHOICE_KEY = "^[0-9a-z][0-9_a-z]{0,62}$";
 const decimalOut = (scale: number): string =>
   scale === 0 ? "^-?(0|[1-9][0-9]*)$" : `^-?(0|[1-9][0-9]*)\\.[0-9]{${scale}}$`;
 
-const boundsOf = (
-  type: Extract<MetaFieldType, { readonly kind: "integer" }>
-): JsonObject => {
-  const bounds: Record<string, JsonValue> = {};
-
-  if (type.min !== undefined) {
-    bounds.minimum = type.min;
-  }
-
-  if (type.max !== undefined) {
-    bounds.maximum = type.max;
-  }
-
-  return bounds;
-};
-
 /** Which values a schema describes: a read, or a create or patch body. */
 type ValueMode = "read" | "create" | "update";
 
@@ -272,6 +256,25 @@ const writeOnlySchema = (read: boolean): JsonObject =>
       }
     : { type: "string", writeOnly: true };
 
+/**
+ * An object with optional members: those whose value is undefined are left
+ * out.
+ *
+ * @param base - The members always present.
+ * @param optional - Members present only with a value.
+ * @returns The object.
+ */
+const withOptional = (
+  base: JsonObject,
+  optional: readonly (readonly [string, JsonValue | undefined])[]
+): JsonObject =>
+  Object.fromEntries([
+    ...Object.entries(base),
+    ...optional.flatMap(([key, value]) =>
+      value === undefined ? [] : [[key, value] as const]
+    ),
+  ]);
+
 // The schema of a value that is present.
 const presentSchema = (
   field: MetaField,
@@ -288,7 +291,10 @@ const presentSchema = (
     }
 
     case "integer": {
-      return { type: "integer", ...boundsOf(type) };
+      return withOptional({ type: "integer" }, [
+        ["minimum", type.min],
+        ["maximum", type.max],
+      ]);
     }
 
     case "bigInteger": {
@@ -358,25 +364,6 @@ const valueSchema = (
     ? present
     : nullable(present);
 };
-
-/**
- * An object with optional members: those whose value is undefined are left
- * out.
- *
- * @param base - The members always present.
- * @param optional - Members present only with a value.
- * @returns The object.
- */
-const withOptional = (
-  base: JsonObject,
-  optional: readonly (readonly [string, JsonValue | undefined])[]
-): JsonObject =>
-  Object.fromEntries([
-    ...Object.entries(base),
-    ...optional.flatMap(([key, value]) =>
-      value === undefined ? [] : [[key, value] as const]
-    ),
-  ]);
 
 const described = (
   field: MetaField,
@@ -562,7 +549,7 @@ type OperationId = (typeof OPERATION_IDS)[number];
 
 // The API-wide operations the per-table paths take their error responses
 // from, by operation ID.
-const operationsById = (): ReadonlyMap<string, JsonObject> => {
+const API_OPERATIONS = (() => {
   const found = new Map<string, JsonObject>();
   const paths = apiOpenApi.paths ?? null;
 
@@ -577,12 +564,12 @@ const operationsById = (): ReadonlyMap<string, JsonObject> => {
   }
 
   return found;
-};
+})();
 
 // The responses of an operation with a 4xx or 5xx status.
 const errorResponsesOf = (operationId: OperationId): JsonObject => {
   const responses =
-    operationsById().get(`records.${operationId}`)?.responses ?? null;
+    API_OPERATIONS.get(`records.${operationId}`)?.responses ?? null;
 
   return isJsonObject(responses)
     ? Object.fromEntries(
@@ -590,6 +577,13 @@ const errorResponsesOf = (operationId: OperationId): JsonObject => {
       )
     : {};
 };
+
+const ERROR_RESPONSES = Object.fromEntries(
+  OPERATION_IDS.map((operationId) => [
+    operationId,
+    errorResponsesOf(operationId),
+  ])
+);
 
 const COMPONENT_PREFIX = "#/components/schemas/";
 
@@ -639,6 +633,17 @@ const referencedSchemas = (
   }
 };
 
+// The API-wide error schemas and history entry do not depend on the table.
+const API_SCHEMAS = (() => {
+  const found = new Map<string, JsonValue>();
+  referencedSchemas(
+    [componentRef("ChangeEntry"), ...Object.values(ERROR_RESPONSES)],
+    found
+  );
+
+  return Object.fromEntries(found);
+})();
+
 const operationOf = (
   operationId: OperationId,
   base: JsonObject,
@@ -646,7 +651,7 @@ const operationOf = (
 ): JsonObject => ({
   ...base,
   operationId,
-  responses: { ...success, ...errorResponsesOf(operationId) },
+  responses: { ...success, ...ERROR_RESPONSES[operationId] },
 });
 
 /**
@@ -768,27 +773,17 @@ export const tableOpenApi = (
     [["description", table.helpText ?? undefined]]
   );
 
-  const apiSchemas = new Map<string, JsonValue>();
+  const apiSchemas = { ...API_SCHEMAS };
 
-  // The error schemas (and the history entry) of the API-wide document.
-  referencedSchemas(
-    [
-      componentRef("ChangeEntry"),
-      ...OPERATION_IDS.map((operationId) => errorResponsesOf(operationId)),
-    ],
-    apiSchemas
-  );
-
-  // A JSON Patch body only where the table takes one (not a definition
-  // table's change sets).
+  // Definition tables take change sets rather than JSON Patch.
   if (!DEFINITION_KIND_OF_TABLE.has(table.name)) {
-    apiSchemas.set("JsonPatch", JSON_PATCH);
+    apiSchemas.JsonPatch = JSON_PATCH;
   }
 
   return {
     components: {
       schemas: {
-        ...Object.fromEntries(apiSchemas),
+        ...apiSchemas,
         ...referenceSchemas(table, naming.refs),
         Resource: resourceSchema(table, naming),
         ResourceCreate: bodySchema(table, "create", naming.refs),

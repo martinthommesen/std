@@ -39,7 +39,6 @@ import { effectiveFields } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
-import { parseJsonbText } from "@std/values/postgres-text";
 import { Effect, Option, Schema } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
@@ -51,7 +50,7 @@ import { readRows } from "../records/sql-run.ts";
 import { RequestRevision } from "../sql/request-revision.ts";
 import type { ConfigState } from "../sql/request-revision.ts";
 import { revisionHeaderValue } from "./schema-revision-header.ts";
-import { definitionsAt, spelled, staleScope } from "./stale-scope.ts";
+import { definitionsAt, objectOf, spelled, staleScope } from "./stale-scope.ts";
 import type { ScopeEntry, ScopeParameters, StaleScope } from "./stale-scope.ts";
 
 const HEADER =
@@ -92,16 +91,6 @@ interface DefinitionHistory {
   readonly before: JsonObject | undefined;
   readonly after: JsonObject;
 }
-
-const objectOf = (text: string | null | undefined): JsonObject | undefined => {
-  if (text === null || text === undefined) {
-    return undefined;
-  }
-
-  const parsed = parseJsonbText(text);
-
-  return parsed.ok && isJsonObject(parsed.value) ? parsed.value : undefined;
-};
 
 const textOf = (
   json: JsonObject | undefined,
@@ -419,14 +408,14 @@ const writeNameable =
 
 const visibleEntries = (
   readScope: ReadScope,
-  scope: StaleScope,
+  entries: readonly ScopeEntry[],
   nameable: Nameable
 ): {
   readonly entry: ScopeEntry;
   readonly name: string;
   readonly table: string;
 }[] =>
-  scope.entries.flatMap((entry) => {
+  entries.flatMap((entry) => {
     const field = readScope.snapshot.field(entry.fieldId);
     const table = readScope.snapshot.qualifiedNameOf(entry.classId);
 
@@ -443,7 +432,7 @@ const unknownChanges = (
   scope: StaleScope,
   nameable: Nameable
 ): SchemaChange[] => {
-  const named = visibleEntries(readScope, scope, nameable);
+  const named = visibleEntries(readScope, scope.entries, nameable);
 
   return named.length === 0
     ? [{ field: null, fieldId: null, kind: "unknown", revision: null, table }]
@@ -641,10 +630,7 @@ const journalChanges = (
 
     return visibleEntries(
       readScope,
-      {
-        ...scope,
-        entries: readOns.map((classId) => ({ classId, fieldId: field.id })),
-      },
+      readOns.map((classId) => ({ classId, fieldId: field.id })),
       nameable
     ).map(({ entry, name, table }) => ({
       field: name,
@@ -663,28 +649,14 @@ const relevantChanges = (
   operations: readonly JournalOperation[],
   nameable: Nameable
 ): SchemaChange[] => {
-  const changes = new Map<string, SchemaChange>();
-
-  for (const change of journalChanges(
-    readScope,
-    reach,
-    scope,
-    operations,
-    nameable
-  )) {
-    changes.set(
-      `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
-      change
-    );
-  }
-
-  for (const entry of history) {
-    const found =
+  const changes = [
+    ...journalChanges(readScope, reach, scope, operations, nameable),
+    ...history.flatMap((entry) =>
       entry.kind === "class"
         ? classChanges(readScope, scope, entry)
         : visibleEntries(
             readScope,
-            { ...scope, entries: touched(readScope, reach, scope, entry) },
+            touched(readScope, reach, scope, entry),
             nameable
           ).flatMap(({ entry: scoped, name, table }) =>
             kindsOf(entry).flatMap((kind): SchemaChange[] =>
@@ -700,18 +672,23 @@ const relevantChanges = (
                   ]
                 : []
             )
-          );
+          )
+    ),
+  ];
 
-    for (const change of found) {
-      changes.set(
+  return [
+    ...new Map(
+      changes.map((change) => [
         `${change.table}/${change.fieldId ?? ""}/${change.kind}`,
-        change
-      );
-    }
-  }
-
-  return [...changes.values()];
+        change,
+      ])
+    ).values(),
+  ];
 };
+
+const sameRevision = (stated: ConfigState, current: ConfigState): boolean =>
+  stated.revision === current.revision &&
+  stated.changeSetId === current.changeSetId;
 
 /**
  * Whether this database has the stated revision (Contracts 6.4): the same
@@ -733,12 +710,8 @@ export const isRevisionKnown = Effect.fn("StaleRequest.isKnown")(
     const stated = statedRevision.value;
     const current = yield* RequestRevision;
 
-    const unchanged =
-      stated.revision === current.revision &&
-      stated.changeSetId === current.changeSetId;
-
     return (
-      unchanged ||
+      sameRevision(stated, current) ||
       (stated.revision < current.revision && (yield* journalReaches(stated)))
     );
   }
@@ -795,10 +768,7 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     const stated = statedRevision.value;
     const current = yield* RequestRevision;
 
-    if (
-      stated.revision === current.revision &&
-      stated.changeSetId === current.changeSetId
-    ) {
+    if (sameRevision(stated, current)) {
       return yield* Effect.void;
     }
 
@@ -831,20 +801,13 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
       ]),
     });
 
-    const failure = (changes: SchemaChange[]) =>
-      new SchemaChanged({
-        changes,
-        currentRevision: revisionHeaderValue(current),
-        requestRevision: revisionHeaderValue(stated),
-      });
-
-    const unreachable =
-      stated.revision >= current.revision || !(yield* journalReaches(stated));
+    const unreachable = !(yield* isRevisionKnown(statedRevision));
 
     if (unreachable) {
       const atC = yield* definitionsAt(current.revision);
 
-      return yield* failure(
+      return yield* unknownRevision(
+        stated,
         unknownChanges(
           table,
           readScope,
@@ -873,7 +836,7 @@ export const checkRequestRevision = Effect.fn("StaleRequest.check")(
     );
 
     if (changes.length > 0) {
-      return yield* failure(changes);
+      return yield* unknownRevision(stated, changes);
     }
 
     return yield* Effect.void;
@@ -896,25 +859,8 @@ export const checkUnscopedRevision = Effect.fn("StaleRequest.checkUnscoped")(
       return yield* Effect.void;
     }
 
-    const stated = statedRevision.value;
-    const current = yield* RequestRevision;
-
-    if (
-      stated.revision === current.revision &&
-      stated.changeSetId === current.changeSetId
-    ) {
-      return yield* Effect.void;
-    }
-
-    const unreachable =
-      stated.revision >= current.revision || !(yield* journalReaches(stated));
-
-    if (unreachable) {
-      return yield* new SchemaChanged({
-        changes: [],
-        currentRevision: revisionHeaderValue(current),
-        requestRevision: revisionHeaderValue(stated),
-      });
+    if (!(yield* isRevisionKnown(statedRevision))) {
+      return yield* unknownRevision(statedRevision.value, []);
     }
 
     return yield* Effect.void;

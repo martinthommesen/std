@@ -285,10 +285,13 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
         record.classId !== view.classId ||
         read.extraKeys(record.classId).size > 0
       ) {
-        byClass.set(record.classId, [
-          ...(byClass.get(record.classId) ?? []),
-          record.id,
-        ]);
+        const ids = byClass.get(record.classId);
+
+        if (ids === undefined) {
+          byClass.set(record.classId, [record.id]);
+        } else {
+          ids.push(record.id);
+        }
       }
     }
 
@@ -413,7 +416,13 @@ const partsByOwner = Effect.fn("Tmf.partsByOwner")(function* partsByOwner(
     const ownerId = part.values.get(owner.id)?.value;
 
     if (ownerId !== undefined && isJsonString(ownerId)) {
-      byOwner.set(ownerId, [...(byOwner.get(ownerId) ?? []), part]);
+      const parts = byOwner.get(ownerId);
+
+      if (parts === undefined) {
+        byOwner.set(ownerId, [part]);
+      } else {
+        parts.push(part);
+      }
     }
   }
 

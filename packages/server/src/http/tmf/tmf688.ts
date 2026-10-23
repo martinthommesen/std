@@ -3,6 +3,7 @@ import { NotFound } from "@std/api/errors/not-found";
 import { SessionToken } from "@std/api/session-token";
 import { TmfHubCreate, TMF688_PREFIX } from "@std/api/tmf688";
 import { Tmf688Api } from "@std/api/tmf688-api";
+import type { Condition } from "@std/definitions/condition";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
@@ -69,13 +70,16 @@ import {
   parseRequestRevision,
 } from "../stale-request.ts";
 import {
-  filteredResources,
+  CONTROL,
+  matchesResourceFilters,
   pageAnswer,
   pageBounds,
   selectedResource,
+  selectFields,
   validateResourceFields,
   validateResourceFilters,
 } from "./page.ts";
+import type { ResourceFilter } from "./page.ts";
 
 type EventSaveServices = SaveHooks | WriteOnlyValues | HubSettings;
 
@@ -107,6 +111,8 @@ const EVENT_FIELDS = [
   "relatedParty",
   "analyticCharacteristic",
 ];
+
+const EVENT_ATTRIBUTES = new Set(EVENT_FIELDS);
 
 const HUB_MUTATIONS = new Set([
   "register",
@@ -241,25 +247,18 @@ const prepareHubMutation = Effect.fn("Tmf688.prepareHubMutation")(
         right: { value: target.topicId },
       } as const;
 
-      const condition =
-        registration.condition === null
+      const withTopic = (condition: Condition | null): Condition =>
+        condition === null
           ? topicCondition
-          : {
-              args: [registration.condition, topicCondition],
-              op: "and" as const,
-            };
-
-      const standardCondition =
-        registration.standardCondition === null
-          ? topicCondition
-          : {
-              args: [registration.standardCondition, topicCondition],
-              op: "and" as const,
-            };
+          : { args: [condition, topicCondition], op: "and" };
 
       return {
         actor,
-        registration: { ...registration, condition, standardCondition },
+        registration: {
+          ...registration,
+          condition: withTopic(registration.condition),
+          standardCondition: withTopic(registration.standardCondition),
+        },
         target,
       };
     }
@@ -267,6 +266,14 @@ const prepareHubMutation = Effect.fn("Tmf688.prepareHubMutation")(
     return { actor, registration, target };
   }
 );
+
+const hubBaseOf = (origin: string, target: HubTarget): string => {
+  const base = `${origin}${TMF688_PREFIX}`;
+
+  return target.topicId === null
+    ? base
+    : `${base}/topic/${encodeURIComponent(target.topicId)}`;
+};
 
 const hubMutation = Effect.fn("Tmf688.hubMutation")(function* hubMutation(
   input: RequestInput
@@ -300,14 +307,7 @@ const hubMutation = Effect.fn("Tmf688.hubMutation")(function* hubMutation(
 
   recordServedRevision(input.request, yield* (yield* Catalog).refresh);
 
-  const base = `${input.origin}${TMF688_PREFIX}`;
-
-  const hubBase =
-    target.topicId === null
-      ? base
-      : `${base}/topic/${encodeURIComponent(target.topicId)}`;
-
-  const resource = hubResource(subscription, hubBase);
+  const resource = hubResource(subscription, hubBaseOf(input.origin, target));
 
   return jsonAnswer(resource, 201, { location: resource.href });
 });
@@ -318,12 +318,7 @@ const readHubs = Effect.fn("Tmf688.readHubs")(function* readHubs(
   const actor = yield* Actor;
   const snapshot = yield* (yield* Catalog).current;
   const target = yield* targetOf(input);
-  const base = `${input.origin}${TMF688_PREFIX}`;
-
-  const hubBase =
-    target.topicId === null
-      ? base
-      : `${base}/topic/${encodeURIComponent(target.topicId)}`;
+  const hubBase = hubBaseOf(input.origin, target);
 
   if (input.operation === "listHubs") {
     const hubs: JsonObject[] = [];
@@ -456,7 +451,8 @@ const scanEvents = Effect.fn("Tmf688.scanEvents")(function* scanEvents(
   input: RequestInput,
   topic: EventTopic,
   bounds: EventBounds,
-  start: EventPosition | null
+  start: EventPosition | null,
+  filters: readonly ResourceFilter[]
 ) {
   const selected: JsonObject[] = [];
   let position = start;
@@ -465,7 +461,6 @@ const scanEvents = Effect.fn("Tmf688.scanEvents")(function* scanEvents(
   let payloads = 0;
   const window = bounds.offset + bounds.limit;
   let batchSize = Math.min(EVENT_BATCH_SIZE, window);
-  const allowed = new Set(EVENT_FIELDS);
 
   while (!complete && selected.length < window && scanned < EVENT_SCAN_BUDGET) {
     const options = { limit: Math.min(batchSize, EVENT_SCAN_BUDGET - scanned) };
@@ -484,7 +479,9 @@ const scanEvents = Effect.fn("Tmf688.scanEvents")(function* scanEvents(
 
     for (const candidate of batch.candidates) {
       selected.push(
-        ...(yield* filteredResources(candidate.events, input.query, allowed))
+        ...candidate.events.filter((event) =>
+          matchesResourceFilters(event, filters)
+        )
       );
       ({ position } = candidate);
       scanned += 1;
@@ -551,18 +548,10 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
               id: event.id ?? "",
             };
 
-      page.push(
-        yield* selectedResource(
-          resource,
-          input.query.get("fields"),
-          EVENT_FIELDS
-        )
-      );
+      page.push(selectFields(resource, input.query.get("fields")));
     }
 
     const headers = {
-      "cache-control": "no-store",
-      "content-type": "application/json;charset=utf-8",
       link: yield* eventPageLinks(input, topic, bounds, scan),
       "x-result-count": String(page.length),
     };
@@ -576,8 +565,7 @@ const eventPageAnswer = Effect.fn("Tmf688.eventPageAnswer")(
     }
 
     const hasFilters = [...input.query.keys()].some(
-      (name) =>
-        !["fields", "offset", "limit", "after", "sort", "count"].includes(name)
+      (name) => !CONTROL.has(name)
     );
 
     const count =
@@ -618,13 +606,10 @@ const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
     });
   }
 
-  yield* validateResourceFilters(input.query, new Set(EVENT_FIELDS));
-  yield* validateResourceFields(
-    input.query.get("fields"),
-    new Set(EVENT_FIELDS)
-  );
+  const filters = yield* validateResourceFilters(input.query, EVENT_ATTRIBUTES);
+  yield* validateResourceFields(input.query.get("fields"), EVENT_ATTRIBUTES);
   const position = yield* eventStartPosition(input, topic, lookupPending);
-  const scan = yield* scanEvents(input, topic, bounds, position);
+  const scan = yield* scanEvents(input, topic, bounds, position, filters);
 
   return yield* eventPageAnswer(input, topic, bounds, scan);
 });
