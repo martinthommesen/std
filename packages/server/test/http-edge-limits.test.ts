@@ -18,6 +18,7 @@ import {
   SessionRetentionLayer,
 } from "../src/auth/session-retention.ts";
 import {
+  signInKey,
   SIGN_IN_FAILURE_CEILING,
   SIGN_IN_FAILURE_GRACE,
   SIGN_IN_KDF_MAX_CONCURRENCY,
@@ -500,8 +501,8 @@ describe("http-edge-limits", () => {
           yield* clearAttempts;
           const http = yield* TestHttpClient;
           yield* values(
-            "INSERT INTO core.sign_in_attempt VALUES ('login', encode(sha256('bob'::bytea), 'hex'), $1::int, now() + interval '1 hour', now() + interval '2 hours')",
-            [SIGN_IN_FAILURE_CEILING]
+            "INSERT INTO core.sign_in_attempt VALUES ('login', $1, $2::int, now() + interval '1 hour', now() + interval '2 hours')",
+            [signInKey("bob"), SIGN_IN_FAILURE_CEILING]
           );
 
           const refused = yield* http.request("POST", SESSION, {
@@ -510,7 +511,8 @@ describe("http-edge-limits", () => {
 
           assert.strictEqual(refused.status, 429);
           yield* values(
-            "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 second' WHERE kind = 'login'"
+            "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 second' WHERE kind = 'login' AND key = $1",
+            [signInKey("bob")]
           );
 
           const failedProbe = yield* http.request("POST", SESSION, {
@@ -520,13 +522,15 @@ describe("http-edge-limits", () => {
           assert.strictEqual(failedProbe.status, 401, failedProbe.text);
           assert.deepStrictEqual(
             yield* values(
-              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256('bob'::bytea), 'hex')"
+              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+              [signInKey("bob")]
             ),
             ["100"]
           );
           assert.deepStrictEqual(
             yield* values(
-              "SELECT (expires_at > now() + interval '23 hours' AND expires_at <= now() + interval '24 hours')::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256('bob'::bytea), 'hex')"
+              "SELECT (expires_at > now() + interval '23 hours' AND expires_at <= now() + interval '24 hours')::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+              [signInKey("bob")]
             ),
             ["true"]
           );
@@ -537,7 +541,8 @@ describe("http-edge-limits", () => {
 
           assert.strictEqual(stillPaused.status, 429, stillPaused.text);
           yield* values(
-            "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 day' WHERE kind = 'login'"
+            "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 day' WHERE kind = 'login' AND key = $1",
+            [signInKey("bob")]
           );
 
           const response = yield* http.request("POST", SESSION, {
@@ -547,7 +552,8 @@ describe("http-edge-limits", () => {
           assert.strictEqual(response.status, 201, response.text);
           assert.deepStrictEqual(
             yield* values(
-              "SELECT count(*)::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256('bob'::bytea), 'hex')"
+              "SELECT count(*)::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+              [signInKey("bob")]
             ),
             ["0"]
           );
@@ -558,7 +564,8 @@ describe("http-edge-limits", () => {
           );
           assert.deepStrictEqual(
             yield* values(
-              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256('bob'::bytea), 'hex')"
+              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+              [signInKey("bob")]
             ),
             ["1"]
           );
@@ -574,8 +581,8 @@ describe("http-edge-limits", () => {
 
           for (const login of ["bob", "quiet-unknown"]) {
             yield* values(
-              "INSERT INTO core.sign_in_attempt VALUES ('login', encode(sha256($1::bytea), 'hex'), 100, now() + interval '5 minutes', now() + interval '6 hours')",
-              [login]
+              "INSERT INTO core.sign_in_attempt VALUES ('login', $1, 100, now() + interval '5 minutes', now() + interval '6 hours')",
+              [signInKey(login)]
             );
 
             const refused = yield* http.request("POST", SESSION, {
@@ -586,14 +593,14 @@ describe("http-edge-limits", () => {
             assert.strictEqual(refused.headers.get("retry-after"), "60");
             assert.deepStrictEqual(
               yield* values(
-                "SELECT (next_allowed_at > now() + interval '59 minutes' AND expires_at > now() + ($2::int - 60) * interval '1 second')::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256($1::bytea), 'hex')",
-                [login, SIGN_IN_OBSERVATION_SECONDS]
+                "SELECT (next_allowed_at > now() + interval '59 minutes' AND expires_at > now() + ($2::int - 60) * interval '1 second')::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+                [signInKey(login), SIGN_IN_OBSERVATION_SECONDS]
               ),
               ["true"]
             );
             yield* values(
-              "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 hour', expires_at = now() - interval '1 second' WHERE kind = 'login' AND key = encode(sha256($1::bytea), 'hex')",
-              [login]
+              "UPDATE core.sign_in_attempt SET next_allowed_at = now() - interval '1 hour', expires_at = now() - interval '1 second' WHERE kind = 'login' AND key = $1",
+              [signInKey(login)]
             );
 
             const next = yield* http.request("POST", SESSION, {
@@ -603,8 +610,8 @@ describe("http-edge-limits", () => {
             assert.strictEqual(next.status, 401, next.text);
             assert.deepStrictEqual(
               yield* values(
-                "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256($1::bytea), 'hex')",
-                [login]
+                "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+                [signInKey(login)]
               ),
               ["1"]
             );
@@ -618,7 +625,8 @@ describe("http-edge-limits", () => {
         Effect.gen(function* counterDeletionRace() {
           yield* clearAttempts;
           yield* values(
-            "INSERT INTO core.sign_in_attempt VALUES ('login', encode(sha256('bob'::bytea), 'hex'), 1, 'epoch', now() + interval '24 hours')"
+            "INSERT INTO core.sign_in_attempt VALUES ('login', $1, 1, 'epoch', now() + interval '24 hours')",
+            [signInKey("bob")]
           );
           const origin = yield* edgeServer;
           const gate = yield* counterResetGate;
@@ -651,7 +659,8 @@ describe("http-edge-limits", () => {
           assert.strictEqual(failure.status, 401, failure.text);
           assert.deepStrictEqual(
             yield* values(
-              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = encode(sha256('bob'::bytea), 'hex')"
+              "SELECT failures::text AS value FROM core.sign_in_attempt WHERE kind = 'login' AND key = $1",
+              [signInKey("bob")]
             ),
             ["1"]
           );

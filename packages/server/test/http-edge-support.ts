@@ -1,12 +1,6 @@
 import { createServer, request as nodeRequest } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
-import {
-  isJsonArray,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
 import { Deferred, Effect, Fiber, Layer } from "effect";
 import { forEach } from "effect/Effect";
 import { HttpRouter, HttpServer } from "effect/http";
@@ -16,6 +10,7 @@ import type { TestHttpClientApi } from "../../testing/src/http-client.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { answerApiFailures } from "../src/http/api-cache.ts";
 import { HttpAppLayer } from "../src/http/app.ts";
+import { userWithRoles } from "./schema-paths-support.ts";
 import { waitUntil } from "./support.ts";
 
 /** A real Node HTTP listener over the current test database. */
@@ -327,19 +322,9 @@ export const edgeWebUpload = Effect.fn("Test.edgeWebUpload")(
   }
 );
 
-const idOf = (value: JsonValue | undefined): string | undefined => {
-  const [first] = value !== undefined && isJsonArray(value) ? value : [value];
-
-  const id = first !== undefined && isJsonObject(first) ? first.id : undefined;
-
-  return id !== undefined && isJsonString(id) ? id : undefined;
-};
-
 /**
  * Creates distinct active users and signs each in, so tests can fill the
  * process body budget within every user's one-record share.
- * @param http - Real application test client.
- * @param admin - Session token of an administrator.
  * @param count - Number of users.
  * @param options - `roleless` users get no role: they can authenticate and
  * upload, but may write nothing (the body is read before authorization).
@@ -347,59 +332,16 @@ const idOf = (value: JsonValue | undefined): string | undefined => {
  */
 export const edgeUserTokens = Effect.fn("Test.edgeUserTokens")(
   function* edgeUserTokens(
-    http: TestHttpClientApi,
-    admin: string,
     count: number,
     options: { readonly prefix?: string; readonly roleless?: boolean } = {}
   ) {
-    const roles = yield* http.get("/api/v1/coreRole?name=admin", {
-      token: admin,
-    });
-
-    const role = idOf(roles.json);
-
-    if (role === undefined) {
-      return yield* Effect.die(new Error(`admin role: ${roles.text}`));
-    }
-
     return yield* forEach(
       Array.from(
         { length: count },
         (_, index) => `${options.prefix ?? "edge-user"}-${index}`
       ),
       (login) =>
-        Effect.gen(function* edgeUser() {
-          // Disposable test credentials.
-          const password = `${login}-password`;
-
-          const created = yield* http.request("POST", "/api/v1/coreUser", {
-            body: { active: true, login, name: login, password },
-            token: admin,
-          });
-
-          const user = idOf(created.json);
-
-          const assigned =
-            user === undefined || options.roleless === true
-              ? undefined
-              : yield* http.request("POST", "/api/v1/coreUserRole", {
-                  body: { role, user },
-                  token: admin,
-                });
-
-          if (
-            user === undefined ||
-            (options.roleless !== true && assigned?.status !== 201)
-          ) {
-            return yield* Effect.die(
-              new Error(
-                `creating ${login}: ${created.text} ${assigned?.text ?? ""}`
-              )
-            );
-          }
-
-          return yield* http.signIn(login, password);
-        })
+        userWithRoles(login, options.roleless === true ? [] : ["admin"])
     );
   }
 );

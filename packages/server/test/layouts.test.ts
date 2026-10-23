@@ -40,7 +40,7 @@ import {
   listPath,
   readsTestLayer,
 } from "./reads-support.ts";
-import { postChangeSet } from "./schema-paths-support.ts";
+import { definitionVersion, postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -153,11 +153,6 @@ const shown = (elements: readonly MetaLayoutElement[] | null) =>
     entry.kind === "section" ? `#${entry.label}` : entry.field
   ) ?? null;
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
-
 const fieldElements = (...fieldIds: readonly string[]): JsonObject[] =>
   fieldIds.map((fieldId) => ({ fieldId, kind: "field" }));
 
@@ -183,7 +178,13 @@ const patch = Effect.fn("Layouts.patch")(function* patch(
   id: string,
   body: JsonObject
 ) {
-  return yield* patchRecord(token, table, id, yield* versionOf(id), body);
+  return yield* patchRecord(
+    token,
+    table,
+    id,
+    yield* definitionVersion(id),
+    body
+  );
 });
 
 describe("layouts", () => {
@@ -334,10 +335,13 @@ describe("layouts", () => {
           yield* applyChangeSet({
             operations: [
               {
-                confirm: { id: due.id, version: yield* versionOf(due.id) },
+                confirm: {
+                  id: due.id,
+                  version: yield* definitionVersion(due.id),
+                },
                 id: due.id,
                 op: "purge",
-                version: yield* versionOf(due.id),
+                version: yield* definitionVersion(due.id),
               },
             ],
             requester: PURGER,
@@ -385,7 +389,7 @@ describe("layouts", () => {
           {
             id: scratch.id,
             op: "retire",
-            version: yield* versionOf(scratch.id),
+            version: yield* definitionVersion(scratch.id),
           },
         ]);
         yield* applyChangeSet({
@@ -393,11 +397,11 @@ describe("layouts", () => {
             {
               confirm: {
                 id: scratch.id,
-                version: yield* versionOf(scratch.id),
+                version: yield* definitionVersion(scratch.id),
               },
               id: scratch.id,
               op: "purge",
-              version: yield* versionOf(scratch.id),
+              version: yield* definitionVersion(scratch.id),
             },
           ],
           requester: PURGER,

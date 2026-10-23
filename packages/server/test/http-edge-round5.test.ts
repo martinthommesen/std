@@ -77,7 +77,7 @@ const chargedRoute = Effect.fn("Test.chargedRoute")(function* chargedRoute(
   const ada = yield* http.signIn("ada", "ada-password");
   const origin = yield* edgeServer;
 
-  const [attacker = ""] = yield* edgeUserTokens(http, ada, 1, {
+  const [attacker = ""] = yield* edgeUserTokens(1, {
     prefix: `edge-bypass-${path.length}`,
     roleless: true,
   });

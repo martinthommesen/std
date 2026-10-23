@@ -175,7 +175,7 @@ const metadataOf = Effect.fn("MetadataFiltering.metadataOf")(
     const decoded = yield* decodeMetadata(response.json).pipe(Effect.orDie);
 
     return {
-      body: { schemaRevision: decoded.schemaRevision, table: decoded },
+      body: decoded,
       response,
     };
   }
@@ -240,13 +240,13 @@ describe("metadata filtering", () => {
           const admin = (yield* metadataOf(tokens.admin, "acme.asset")).body;
 
           assert.deepStrictEqual(
-            names(bob.table),
+            names(bob),
             ASSET_FIELDS.filter((name) => name !== "cost")
           );
-          assert.deepStrictEqual(names(alice.table), ASSET_FIELDS);
-          assert.deepStrictEqual(names(admin.table), ASSET_FIELDS);
+          assert.deepStrictEqual(names(alice), ASSET_FIELDS);
+          assert.deepStrictEqual(names(admin), ASSET_FIELDS);
 
-          assert.deepStrictEqual(stateOf(bob.table), {
+          assert.deepStrictEqual(stateOf(bob), {
             docked_to: "perRecord/perRecord/perRecord",
             grade: "yes/no/no",
             name: "yes/perRecord/perRecord",
@@ -256,7 +256,7 @@ describe("metadata filtering", () => {
             vault: "perRecord/no/no",
           });
 
-          for (const table of [alice.table, admin.table]) {
+          for (const table of [alice, admin]) {
             assert.isTrue(
               table.fields.every(
                 (field) =>
@@ -267,18 +267,18 @@ describe("metadata filtering", () => {
             );
           }
 
-          assert.deepStrictEqual(fieldOf(bob.table, "grade").choices, [
+          assert.deepStrictEqual(fieldOf(bob, "grade").choices, [
             { key: "good", label: "GOOD", order: 1, retired: false },
             { key: "fair", label: "FAIR", order: 2, retired: false },
             { key: "scrap", label: "SCRAP", order: 3, retired: true },
           ]);
 
           // A reference to a table Bob cannot name shows no target.
-          assert.deepStrictEqual(fieldOf(bob.table, "vault").type, {
+          assert.deepStrictEqual(fieldOf(bob, "vault").type, {
             kind: "reference",
             target: null,
           });
-          assert.deepStrictEqual(fieldOf(admin.table, "vault").type, {
+          assert.deepStrictEqual(fieldOf(admin, "vault").type, {
             kind: "reference",
             target: "site.vault",
           });
@@ -287,19 +287,19 @@ describe("metadata filtering", () => {
           // the caller can open and where it can read them.
           const docked = {
             field: "docked_to",
-            fieldLabel: fieldOf(bob.table, "docked_to").label,
+            fieldLabel: fieldOf(bob, "docked_to").label,
             label: "Asset",
             table: "acme.asset",
           };
 
-          assert.deepStrictEqual(bob.table.relatedLists, [docked]);
-          assert.deepStrictEqual(alice.table.relatedLists, [docked]);
-          assert.deepStrictEqual(admin.table.relatedLists, [docked]);
+          assert.deepStrictEqual(bob.relatedLists, [docked]);
+          assert.deepStrictEqual(alice.relatedLists, [docked]);
+          assert.deepStrictEqual(admin.relatedLists, [docked]);
 
           const adminVault = (yield* metadataOf(tokens.admin, "site.vault"))
             .body;
 
-          assert.deepStrictEqual(adminVault.table.relatedLists, [
+          assert.deepStrictEqual(adminVault.relatedLists, [
             {
               field: "vault",
               fieldLabel: "vault",
@@ -309,17 +309,17 @@ describe("metadata filtering", () => {
           ]);
 
           // Layouts keep only fields the caller can read.
-          assert.deepStrictEqual(bob.table.layouts.form, [
+          assert.deepStrictEqual(bob.layouts.form, [
             { kind: "section", label: "Main" },
             { field: "name", fieldId: ACME.name, kind: "field" },
             { field: "grade", fieldId: added.grade, kind: "field" },
             { field: "vault", fieldId: added.vault, kind: "field" },
           ]);
-          assert.deepStrictEqual(bob.table.layouts.list, [
+          assert.deepStrictEqual(bob.layouts.list, [
             { field: "name", fieldId: ACME.name, kind: "field" },
             { field: "status", fieldId: ACME.status, kind: "field" },
           ]);
-          assert.deepStrictEqual(alice.table.layouts.form?.slice(0, 2), [
+          assert.deepStrictEqual(alice.layouts.form?.slice(0, 2), [
             { kind: "section", label: "Money" },
             { field: "cost", fieldId: ACME.cost, kind: "field" },
           ]);
@@ -332,7 +332,7 @@ describe("metadata filtering", () => {
             .body;
 
           assert.deepStrictEqual(
-            names(bobLaptop.table),
+            names(bobLaptop),
             [
               ...ASSET_FIELDS.filter((name) => name !== "cost"),
               "serial",
@@ -340,20 +340,17 @@ describe("metadata filtering", () => {
           );
           // A laptop is an asset, so `docked_to` can point at one; the
           // field is listed once, on the most general table.
-          assert.deepStrictEqual(bobLaptop.table.relatedLists, [docked]);
-          assert.include(names(aliceLaptop.table), "color");
-          assert.include(names(aliceLaptop.table), "disk_key");
-          assert.deepStrictEqual(fieldOf(aliceLaptop.table, "color").choices, [
+          assert.deepStrictEqual(bobLaptop.relatedLists, [docked]);
+          assert.include(names(aliceLaptop), "color");
+          assert.include(names(aliceLaptop), "disk_key");
+          assert.deepStrictEqual(fieldOf(aliceLaptop, "color").choices, [
             { key: "silver", label: "SILVER", order: 1, retired: false },
           ]);
           assert.strictEqual(
-            fieldOf(bobLaptop.table, "name").inheritedFrom,
+            fieldOf(bobLaptop, "name").inheritedFrom,
             "acme.asset"
           );
-          assert.strictEqual(
-            fieldOf(bobLaptop.table, "status").write.update,
-            "no"
-          );
+          assert.strictEqual(fieldOf(bobLaptop, "status").write.update, "no");
 
           // Nothing of a hidden field, choice or rule input reaches Bob.
           const bobText = JSON.stringify([bob, bobLaptop]);
@@ -424,7 +421,7 @@ describe("metadata filtering", () => {
 
           const admin = yield* metadataOf(tokens.admin, "site.vault");
 
-          assert.deepStrictEqual(names(admin.body.table), ["note"]);
+          assert.deepStrictEqual(names(admin.body), ["note"]);
           assert.deepStrictEqual(yield* committedState, before);
         })
     );
@@ -561,7 +558,7 @@ describe("metadata filtering", () => {
             .body;
 
           assert.deepStrictEqual(
-            aliceAsset.table.relatedLists.map(
+            aliceAsset.relatedLists.map(
               (entry) => `${entry.table}.${entry.field}:${entry.label}`
             ),
             [
@@ -629,9 +626,9 @@ describe("metadata filtering", () => {
           )) {
             const { body } = yield* metadataOf(tokens.admin, table);
 
-            assert.isFalse(body.table.creatable, table);
+            assert.isFalse(body.creatable, table);
             assert.isTrue(
-              body.table.fields.every(
+              body.fields.every(
                 (field) =>
                   field.write.create === "no" && field.write.update === "no"
               ),
@@ -656,13 +653,13 @@ describe("metadata filtering", () => {
           // only by a retire or reactivation the engine decides.
           const role = (yield* metadataOf(tokens.admin, "core.role")).body;
 
-          assert.isTrue(role.table.creatable);
+          assert.isTrue(role.creatable);
           assert.deepStrictEqual(
             Object.fromEntries(
               ["owner_layer", "protected", "state", "name", "label"].map(
                 (name) => [
                   name,
-                  `${fieldOf(role.table, name).write.create}/${fieldOf(role.table, name).write.update}`,
+                  `${fieldOf(role, name).write.create}/${fieldOf(role, name).write.update}`,
                 ]
               )
             ),
@@ -693,22 +690,16 @@ describe("metadata filtering", () => {
           const choiceMeta = (yield* metadataOf(tokens.admin, "core.choice"))
             .body;
 
+          assert.strictEqual(fieldOf(choiceMeta, "key").write.update, "no");
           assert.strictEqual(
-            fieldOf(choiceMeta.table, "key").write.update,
-            "no"
-          );
-          assert.strictEqual(
-            fieldOf(choiceMeta.table, "label").write.update,
+            fieldOf(choiceMeta, "label").write.update,
             "perRecord"
           );
 
           const namespace = (yield* metadataOf(tokens.admin, "core.namespace"))
             .body;
 
-          assert.strictEqual(
-            fieldOf(namespace.table, "state").write.update,
-            "no"
-          );
+          assert.strictEqual(fieldOf(namespace, "state").write.update, "no");
 
           const grade = snapshot
             .fields(ACME.asset)

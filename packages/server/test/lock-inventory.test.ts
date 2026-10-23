@@ -40,6 +40,7 @@ import { dropColumn, dropConstraint } from "../src/schema/ddl.ts";
 import { planChangeSet } from "../src/schema/plan.ts";
 import type { Preflight } from "../src/schema/plan.ts";
 import { decodeRows } from "../src/sql/rows.ts";
+import { TABLES, ACME_FIELDS } from "./records-support.ts";
 import {
   ACME,
   addField,
@@ -325,8 +326,6 @@ const planOf = (
     return [...plan.tables, ...plan.keys];
   });
 
-const ASSET = '"acme"."asset"';
-
 /**
  * A purge of a definition retired at version 2.
  * @param id - The definition.
@@ -342,7 +341,6 @@ const purgeOf = (id: string): Operation => ({
 const USER = '"core"."user"';
 
 /** `acme.asset.owner`, a reference to `core.user`. */
-const ACME_OWNER = "6a373fb5-bd18-4d7f-b0b4-182470f5421e";
 
 const populated: Preflight = { hasRows: () => true };
 
@@ -431,15 +429,23 @@ describe("lock-inventory", () => {
           );
 
           const snapshot = yield* (yield* Catalog).refresh;
-          const owner = snapshot.field(ACME_OWNER);
+          const owner = snapshot.field(ACME_FIELDS.owner);
 
           const dropping =
             owner === undefined
               ? []
               : [
-                  dropConstraint(ASSET, generatedName("fk", ACME_OWNER), USER),
-                  dropColumn(ASSET, owner, USER),
-                  dropConstraint(ASSET, generatedName("ck", ACME.name), null),
+                  dropConstraint(
+                    TABLES.asset,
+                    generatedName("fk", ACME_FIELDS.owner),
+                    USER
+                  ),
+                  dropColumn(TABLES.asset, owner, USER),
+                  dropConstraint(
+                    TABLES.asset,
+                    generatedName("ck", ACME.name),
+                    null
+                  ),
                 ];
 
           const session = yield* (yield* TestDatabase).session("lock-probe");
@@ -454,8 +460,8 @@ describe("lock-inventory", () => {
 
           const understated = yield* probeStatement(session, {
             form: "setDefault",
-            locks: [{ mode: "SHARE", table: ASSET }],
-            sql: `ALTER TABLE ${ASSET} ALTER COLUMN "status" SET DEFAULT 'spare'::text`,
+            locks: [{ mode: "SHARE", table: TABLES.asset }],
+            sql: `ALTER TABLE ${TABLES.asset} ALTER COLUMN "status" SET DEFAULT 'spare'::text`,
           });
 
           assert.deepStrictEqual(
@@ -467,8 +473,8 @@ describe("lock-inventory", () => {
 
           const identity = yield* probeStatement(session, {
             form: "addColumn",
-            locks: [{ mode: "ACCESS EXCLUSIVE", table: ASSET }],
-            sql: `ALTER TABLE ${ASSET} ADD COLUMN "counter" integer GENERATED ALWAYS AS IDENTITY`,
+            locks: [{ mode: "ACCESS EXCLUSIVE", table: TABLES.asset }],
+            sql: `ALTER TABLE ${TABLES.asset} ADD COLUMN "counter" integer GENERATED ALWAYS AS IDENTITY`,
           });
 
           assert.isTrue(
@@ -491,7 +497,7 @@ describe("lock-inventory", () => {
             unbudgeted.join("; ")
           );
           assert.deepStrictEqual(dropping[1]?.locks, [
-            { mode: "ACCESS EXCLUSIVE", table: ASSET },
+            { mode: "ACCESS EXCLUSIVE", table: TABLES.asset },
             { mode: "ACCESS EXCLUSIVE", table: USER },
           ]);
           assert.includeMembers(

@@ -8,7 +8,6 @@
  * one-operation change set on `core.record_rule` (`coreRecordRule`).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
 
 import {
@@ -17,8 +16,7 @@ import {
   helpdeskTestLayer,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
-import { asObject } from "./api-support.ts";
+import { codeOf } from "./reads-support.ts";
 
 const MESSAGE = "Resolution notes are required to resolve an incident.";
 
@@ -45,51 +43,46 @@ const RULE_BODY = {
   name: "resolution_notes_required",
   operations: ["update"],
   phase: "before",
-  rule_kind: "guard",
-  table_id: HELPDESK.incident,
+  ruleKind: "guard",
+  tableId: HELPDESK.incident,
 } as const;
 
-const V2_TICKET = "/api/v1/helpdeskTicket";
-const V2_INCIDENT = "/api/v1/helpdeskIncident";
+const TICKETS = "/api/v1/helpdeskTicket";
+const INCIDENTS = "/api/v1/helpdeskIncident";
 
 /** A merge patch through `/api/v1`, based on the record's current ETag. */
-const resolveV2 = Effect.fn("IncidentThroughTicket.resolveV2")(
-  function* resolveV2(
-    token: string,
-    collection: string,
-    id: string,
-    body: Readonly<Record<string, string>>
-  ) {
-    const http = yield* TestHttpClient;
-    const path = `${collection}/${id}`;
-    const read = yield* http.get(path, { token });
+const resolve = Effect.fn("IncidentThroughTicket.resolve")(function* resolve(
+  token: string,
+  collection: string,
+  id: string,
+  body: Readonly<Record<string, string>>
+) {
+  const http = yield* TestHttpClient;
+  const path = `${collection}/${id}`;
+  const read = yield* http.get(path, { token });
 
-    assert.strictEqual(read.status, 200, read.text);
+  assert.strictEqual(read.status, 200, read.text);
 
-    return yield* http.request("PATCH", path, {
-      headers: {
-        "content-type": "application/merge-patch+json",
-        "if-match": read.headers.get("etag") ?? "",
-      },
-      rawBody: JSON.stringify(body),
-      token,
-    });
-  }
-);
-
-const codeOf = (response: TestResponse): JsonValue | undefined =>
-  asObject(response.json).code;
+  return yield* http.request("PATCH", path, {
+    headers: {
+      "content-type": "application/merge-patch+json",
+      "if-match": read.headers.get("etag") ?? "",
+    },
+    rawBody: JSON.stringify(body),
+    token,
+  });
+});
 
 describe("incident-through-ticket", () => {
   it("names a rule on the incident class", () => {
-    assert.strictEqual(RULE_BODY.table_id, HELPDESK.incident);
+    assert.strictEqual(RULE_BODY.tableId, HELPDESK.incident);
   });
 
   layer(testLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "a rule on helpdesk.incident refuses resolving an incident through /api/v1/helpdeskTicket without resolution notes",
       () =>
-        Effect.gen(function* incidentThroughTicketV2() {
+        Effect.gen(function* incidentThroughTicket() {
           const http = yield* TestHttpClient;
           const fixture = yield* HelpdeskFixture;
           const { laptop, monitor, vpn } = fixture.records;
@@ -104,20 +97,12 @@ describe("incident-through-ticket", () => {
             fixture.agent.password
           );
 
-          // The rule itself through /api/v1, in v2 names: a change set.
+          // The rule itself through /api/v1: a change set.
           const created = yield* http.request(
             "POST",
             "/api/v1/coreRecordRule",
             {
-              body: {
-                actions: RULE_BODY.actions,
-                condition: RULE_BODY.condition,
-                name: RULE_BODY.name,
-                operations: RULE_BODY.operations,
-                phase: RULE_BODY.phase,
-                ruleKind: RULE_BODY.rule_kind,
-                tableId: RULE_BODY.table_id,
-              },
+              body: RULE_BODY,
               token: admin,
             }
           );
@@ -126,8 +111,8 @@ describe("incident-through-ticket", () => {
 
           // Through the parent collection and the incident's own: a TMF
           // Error with the rule's fixed message.
-          for (const collection of [V2_TICKET, V2_INCIDENT]) {
-            const refused = yield* resolveV2(agent, collection, vpn, {
+          for (const collection of [TICKETS, INCIDENTS]) {
+            const refused = yield* resolve(agent, collection, vpn, {
               status: "resolved",
             });
 
@@ -136,12 +121,12 @@ describe("incident-through-ticket", () => {
               422,
               `${collection}: ${refused.text}`
             );
-            assert.strictEqual(codeOf(refused), "RuleRefused");
+            assert.strictEqual(yield* codeOf(refused), "RuleRefused");
             assert.include(refused.text, MESSAGE);
           }
 
           // With notes, through the parent collection: resolved.
-          const withNotes = yield* resolveV2(agent, V2_TICKET, vpn, {
+          const withNotes = yield* resolve(agent, TICKETS, vpn, {
             resolutionNotes: "Restarted the VPN gateway.",
             status: "resolved",
           });
@@ -149,14 +134,14 @@ describe("incident-through-ticket", () => {
           assert.strictEqual(withNotes.status, 200, withNotes.text);
 
           // The admin is held to the rule too.
-          const byAdmin = yield* resolveV2(admin, V2_TICKET, laptop, {
+          const byAdmin = yield* resolve(admin, TICKETS, laptop, {
             status: "resolved",
           });
 
-          assert.strictEqual(codeOf(byAdmin), "RuleRefused");
+          assert.strictEqual(yield* codeOf(byAdmin), "RuleRefused");
 
           // A plain ticket is not an incident: no rule applies.
-          const plain = yield* resolveV2(agent, V2_TICKET, monitor, {
+          const plain = yield* resolve(agent, TICKETS, monitor, {
             status: "resolved",
           });
 

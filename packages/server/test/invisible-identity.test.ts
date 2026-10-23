@@ -8,7 +8,9 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { StdApi } from "@std/api/api";
 import { Effect } from "effect";
+import { HttpApi } from "effect/http-api";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -24,123 +26,135 @@ interface Probe {
   readonly options: TestRequestOptions;
 }
 
-/** How the API spells its by-ID paths and a merge patch's media type. */
-interface Api {
-  readonly asset: (id: string) => string;
-  readonly laptop: (id: string) => string;
-  /** The content type of a PATCH body. */
-  readonly patchType: string;
-}
-
-const PATHS: Api = {
-  asset: (id) => `${API.asset}/${id}`,
-  laptop: (id) => `${API.laptop}/${id}`,
-  patchType: "application/merge-patch+json",
-};
-
-const historyPath =
-  (path: (id: string) => string, query: string) => (id: string) =>
-    `${path(id)}/history?${query}`;
-
-const probes = (token: string, api: Api): readonly Probe[] => [
+const probes = (token: string): readonly Probe[] => [
   {
     method: "GET",
     name: "GET with an unknown field",
     options: { token },
-    path: (id) => `${api.laptop(id)}?fields=nosuchfield`,
+    path: (id) => `${API.laptop}/${id}?fields=nosuchfield`,
   },
   {
     method: "GET",
     name: "GET with a bad labels flag",
     options: { token },
-    path: (id) => `${api.asset(id)}?labels=perhaps`,
+    path: (id) => `${API.asset}/${id}?labels=perhaps`,
   },
   {
     method: "GET",
     name: "history with an unknown field filter",
     options: { token },
-    path: historyPath(api.laptop, "field=nosuchfield"),
+    path: (id) => `${API.laptop}/${id}/history?field=nosuchfield`,
   },
   {
     method: "GET",
     name: "history with a bad date",
     options: { token },
-    path: historyPath(api.asset, "since=yesterday"),
+    path: (id) => `${API.asset}/${id}/history?since=yesterday`,
   },
   {
     method: "GET",
     name: "history with a bad kind and actor",
     options: { token },
-    path: historyPath(api.asset, "kind=rename&actor=nobody"),
+    path: (id) => `${API.asset}/${id}/history?kind=rename&actor=nobody`,
   },
   {
     method: "PATCH",
     name: "PATCH with an unknown field",
     options: {
       body: { nosuchfield: 1 },
-      headers: { "content-type": api.patchType, "if-match": '"1"' },
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "if-match": '"1"',
+      },
       token,
     },
-    path: (id) => api.laptop(id),
+    path: (id) => `${API.laptop}/${id}`,
   },
   {
     method: "PATCH",
     name: "PATCH naming class",
     options: {
       body: { class: "x" },
-      headers: { "content-type": api.patchType, "if-match": '"1"' },
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "if-match": '"1"',
+      },
       token,
     },
-    path: (id) => api.asset(id),
+    path: (id) => `${API.asset}/${id}`,
   },
   {
     method: "PATCH",
     name: "PATCH with an invalid value and a stale version",
     options: {
       body: { cost: 12.5, name: null },
-      headers: { "content-type": api.patchType, "if-match": '"99"' },
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "if-match": '"99"',
+      },
       token,
     },
-    path: (id) => api.asset(id),
+    path: (id) => `${API.asset}/${id}`,
   },
   {
     method: "PATCH",
     name: "PATCH with a body that is not JSON",
     options: {
-      headers: { "content-type": api.patchType, "if-match": '"1"' },
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "if-match": '"1"',
+      },
       token,
     },
-    path: (id) => api.laptop(id),
+    path: (id) => `${API.laptop}/${id}`,
   },
   {
     method: "PATCH",
     name: "PATCH with a malformed If-Match",
     options: {
       body: { name: "x" },
-      headers: { "content-type": api.patchType, "if-match": "1" },
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "if-match": "1",
+      },
       token,
     },
-    path: (id) => api.laptop(id),
+    path: (id) => `${API.laptop}/${id}`,
   },
   {
     method: "DELETE",
     name: "DELETE with a stale version",
     options: { headers: { "if-match": '"99"' }, token },
-    path: (id) => api.asset(id),
+    path: (id) => `${API.asset}/${id}`,
   },
   {
     method: "DELETE",
     name: "DELETE without If-Match",
     options: { token },
-    path: (id) => api.laptop(id),
+    path: (id) => `${API.laptop}/${id}`,
   },
 ];
 
 describe("invisible-identity", () => {
   it("covers every by-ID route", () => {
-    const methods = new Set(probes("t", PATHS).map((probe) => probe.method));
+    const methods = new Set(probes("t").map((probe) => probe.method));
 
     assert.deepStrictEqual([...methods].toSorted(), ["DELETE", "GET", "PATCH"]);
+
+    const byIdMethods = new Set<string>();
+    HttpApi.reflect(StdApi, {
+      onEndpoint: ({ endpoint }) => {
+        if (endpoint.path.includes(":id")) {
+          byIdMethods.add(endpoint.method);
+        }
+      },
+      onGroup: () => {},
+    });
+
+    assert.deepStrictEqual(
+      [...methods].toSorted(),
+      [...byIdMethods].toSorted()
+    );
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
@@ -153,7 +167,7 @@ describe("invisible-identity", () => {
           const bob = yield* http.signIn("bob", "bob-password");
           const unknown = randomUUID();
 
-          for (const probe of probes(bob, PATHS)) {
+          for (const probe of probes(bob)) {
             const hidden = yield* http.request(
               probe.method,
               probe.path(fixture.records.K),
@@ -182,7 +196,7 @@ describe("invisible-identity", () => {
           const { L } = fixture.records;
 
           const unknownField = yield* http.get(
-            historyPath(PATHS.laptop, "field=nosuchfield")(L),
+            `${API.laptop}/${L}/history?field=nosuchfield`,
             { token: bob }
           );
 
@@ -190,7 +204,7 @@ describe("invisible-identity", () => {
           assert.strictEqual(asObject(unknownField.json).code, "UnknownField");
 
           const badDate = yield* http.get(
-            historyPath(PATHS.asset, "since=yesterday")(L),
+            `${API.asset}/${L}/history?since=yesterday`,
             { token: bob }
           );
 

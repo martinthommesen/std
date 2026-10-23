@@ -10,6 +10,7 @@ import { TestDatabase } from "../../testing/src/test-database.ts";
 import { CLASS_CHANGE_REFUSED_SQLSTATE } from "../src/platform/migrations/0001-core.ts";
 import { WIDENED_CHECK_NOTE } from "../src/schema/plan.ts";
 import { hygienic } from "../src/sql/errors.ts";
+import { TABLES } from "./records-support.ts";
 import {
   ACME,
   addField,
@@ -25,10 +26,6 @@ import {
   SITE_NAMESPACE_ID,
   values,
 } from "./schema-support.ts";
-
-const ASSET = '"acme"."asset"';
-const LAPTOP = '"acme"."laptop"';
-const MONITOR = '"acme"."monitor"';
 
 const FLEET = '"site"."fleet"';
 
@@ -69,7 +66,7 @@ describe("inheritance-invariants", () => {
           yield* loadCoreAndAcme;
 
           const [laptop] = yield* insertRecords(
-            [ASSET, LAPTOP],
+            [TABLES.asset, TABLES.laptop],
             ACME.laptop,
             1,
             {
@@ -78,59 +75,61 @@ describe("inheritance-invariants", () => {
             }
           );
 
-          const [asset] = yield* insertRecords([ASSET], ACME.asset, 1, {
+          const [asset] = yield* insertRecords([TABLES.asset], ACME.asset, 1, {
             name: "'S'",
           });
 
           const monitorWithLaptopId = yield* sqlStateOf(
-            `INSERT INTO ${MONITOR} (id, class_id) VALUES ('${laptop}', '${ACME.monitor}')`
+            `INSERT INTO ${TABLES.monitor} (id, class_id) VALUES ('${laptop}', '${ACME.monitor}')`
           );
 
           const monitorAsLaptop = yield* sqlStateOf(
-            `INSERT INTO ${MONITOR} (id, class_id) VALUES ('${laptop}', '${ACME.laptop}')`
+            `INSERT INTO ${TABLES.monitor} (id, class_id) VALUES ('${laptop}', '${ACME.laptop}')`
           );
 
           assert.include(["23503", "23514"], monitorWithLaptopId);
           assert.include(["23503", "23514"], monitorAsLaptop);
           assert.strictEqual(
             yield* sqlStateOf(
-              `INSERT INTO ${LAPTOP} (id, class_id) VALUES ('${freshId()}', '${ACME.monitor}')`
+              `INSERT INTO ${TABLES.laptop} (id, class_id) VALUES ('${freshId()}', '${ACME.monitor}')`
             ),
             "23514",
             "child class_id outside its subtree"
           );
           assert.strictEqual(
             yield* sqlStateOf(
-              `INSERT INTO ${LAPTOP} (id, class_id) VALUES ('${asset}', '${ACME.laptop}')`
+              `INSERT INTO ${TABLES.laptop} (id, class_id) VALUES ('${asset}', '${ACME.laptop}')`
             ),
             "23503",
             "laptop row whose class_id differs from the root"
           );
           assert.strictEqual(
             yield* sqlStateOf(
-              `INSERT INTO ${LAPTOP} (id, class_id) VALUES ('${freshId()}', '${ACME.laptop}')`
+              `INSERT INTO ${TABLES.laptop} (id, class_id) VALUES ('${freshId()}', '${ACME.laptop}')`
             ),
             "23503",
             "level row without the rows above it"
           );
           assert.strictEqual(
             yield* sqlStateOf(
-              `UPDATE ${ASSET} SET class_id = '${ACME.monitor}' WHERE id = '${laptop}'`
+              `UPDATE ${TABLES.asset} SET class_id = '${ACME.monitor}' WHERE id = '${laptop}'`
             ),
             CLASS_CHANGE_REFUSED_SQLSTATE
           );
           assert.strictEqual(
             yield* sqlStateOf(
-              `UPDATE ${LAPTOP} SET class_id = '${ACME.monitor}' WHERE id = '${laptop}'`
+              `UPDATE ${TABLES.laptop} SET class_id = '${ACME.monitor}' WHERE id = '${laptop}'`
             ),
             CLASS_CHANGE_REFUSED_SQLSTATE
           );
           assert.strictEqual(
-            yield* sqlStateOf(`DELETE FROM ${ASSET} WHERE id = '${laptop}'`),
+            yield* sqlStateOf(
+              `DELETE FROM ${TABLES.asset} WHERE id = '${laptop}'`
+            ),
             "ok"
           );
           assert.deepStrictEqual(
-            yield* values(`SELECT id::text AS value FROM ${LAPTOP}`),
+            yield* values(`SELECT id::text AS value FROM ${TABLES.laptop}`),
             [],
             "the level FK removes the level rows with the record"
           );

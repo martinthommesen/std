@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it } from "@effect/vitest";
 import { API_PREFIX } from "@std/api/api";
 import { TMF688_PREFIX } from "@std/api/tmf688";
-import { PERMISSION_IDS } from "@std/definitions/well-known";
 import { Effect, ConfigProvider, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
@@ -21,8 +20,9 @@ import {
 import { HubSettings } from "../src/events/hubs.ts";
 import { workerPass } from "../src/outbox/worker.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
-import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
+import { asArray, asObject, textOf, apiCallers, API } from "./api-support.ts";
 import {
+  subscribeGrant,
   hubTestLayer,
   hubTestLayerWith,
   listener,
@@ -30,8 +30,10 @@ import {
 } from "./hub-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { change } from "./schema-support.ts";
-
-const ASSET = `${API_PREFIX}/acmeAsset`;
+import {
+  create as createAsset,
+  patch as patchAsset,
+} from "./writes-support.ts";
 
 // The alias remains Effect-aware and lets Sonar recognize the test file.
 const test = it.effect;
@@ -41,7 +43,6 @@ describe("hub-delivery", () => {
     "event-type filters avoid new deliveries and finish queued exclusions as filtered",
     () =>
       Effect.gen(function* eventTypeFilters() {
-        const http = yield* TestHttpClient;
         const { admin } = yield* apiCallers;
         const callback = yield* listener();
 
@@ -51,9 +52,9 @@ describe("hub-delivery", () => {
           "resource=acmeAsset&eventType=RecordCreateEvent"
         );
 
-        const created = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { name: "queued filter", status: "in_use" },
+        const created = yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "queued filter",
+          status: "in_use",
         });
 
         assert.strictEqual(created.status, 201, created.text);
@@ -87,9 +88,9 @@ describe("hub-delivery", () => {
         assert.strictEqual(rows[0]?.status, "done");
         assert.strictEqual(rows[0]?.last_error, "filtered");
 
-        const ignored = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { name: "excluded at production", status: "in_use" },
+        const ignored = yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "excluded at production",
+          status: "in_use",
         });
 
         assert.strictEqual(ignored.status, 201, ignored.text);
@@ -108,9 +109,9 @@ describe("hub-delivery", () => {
       const log = yield* StatementLog;
       const { admin } = yield* apiCallers;
 
-      const created = yield* http.request("POST", ASSET, {
-        ...admin,
-        body: { name: "bounded", status: "in_use" },
+      const created = yield* createAsset(admin.token ?? "", "acme.asset", {
+        name: "bounded",
+        status: "in_use",
       });
 
       const id = textOf(asObject(created.json).id);
@@ -189,7 +190,6 @@ describe("hub-delivery", () => {
     "TMF attribute queries are case sensitive while condition keeps the field's configured comparison",
     () =>
       Effect.gen(function* queryComparisons() {
-        const http = yield* TestHttpClient;
         const { admin } = yield* apiCallers;
         const callback = yield* listener();
         yield* register(
@@ -210,9 +210,9 @@ describe("hub-delivery", () => {
         );
 
         for (const name of ["CaseMatch", "casematch"]) {
-          yield* http.request("POST", ASSET, {
-            ...admin,
-            body: { name, status: "in_use" },
+          yield* createAsset(admin.token ?? "", "acme.asset", {
+            name,
+            status: "in_use",
           });
         }
 
@@ -241,26 +241,26 @@ describe("hub-delivery", () => {
           "resource=acmeAsset&eventType=RecordCreateEvent,RecordAttributeValueChangeEvent,RecordDeleteEvent"
         );
 
-        const create = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { cost: "8", name: "events", status: "in_use" },
+        const create = yield* createAsset(admin.token ?? "", "acme.asset", {
+          cost: "8",
+          name: "events",
+          status: "in_use",
         });
 
         assert.strictEqual(create.status, 201, create.text);
         const id = textOf(asObject(create.json).id);
 
-        const update = yield* http.request("PATCH", `${ASSET}/${id}`, {
-          ...admin,
-          body: { name: "events updated" },
-          headers: {
-            "content-type": "application/merge-patch+json",
-            "if-match": '"1"',
-          },
-        });
+        const update = yield* patchAsset(
+          admin.token ?? "",
+          "acme.asset",
+          id,
+          1,
+          { name: "events updated" }
+        );
 
         assert.strictEqual(update.status, 200, update.text);
 
-        const deleted = yield* http.request("DELETE", `${ASSET}/${id}`, {
+        const deleted = yield* http.request("DELETE", `${API.asset}/${id}`, {
           ...admin,
           headers: { "if-match": '"2"' },
         });
@@ -512,14 +512,13 @@ describe("hub-callback-path", () => {
 
   it.effect("hostname callbacks pin the validated DNS address", () =>
     Effect.gen(function* hostnameCallback() {
-      const http = yield* TestHttpClient;
       const { admin } = yield* apiCallers;
       const callback = yield* listener(undefined, "localhost");
       yield* register(admin.token ?? "", `${callback.origin}/resolved`);
 
-      const created = yield* http.request("POST", ASSET, {
-        ...admin,
-        body: { name: "hostname", status: "in_use" },
+      const created = yield* createAsset(admin.token ?? "", "acme.asset", {
+        name: "hostname",
+        status: "in_use",
       });
 
       assert.strictEqual(created.status, 201, created.text);
@@ -532,7 +531,6 @@ describe("hub-callback-path", () => {
     "private destinations are denied by default; redirects and oversized responses dead-letter without another request",
     () =>
       Effect.gen(function* callbackPolicy() {
-        const http = yield* TestHttpClient;
         const { admin } = yield* apiCallers;
 
         const callback = yield* listener((call, response) => {
@@ -592,9 +590,9 @@ describe("hub-callback-path", () => {
         ]);
 
         for (const name of ["redirect-case", "size-case"]) {
-          const response = yield* http.request("POST", ASSET, {
-            ...admin,
-            body: { name, status: "in_use" },
+          const response = yield* createAsset(admin.token ?? "", "acme.asset", {
+            name,
+            status: "in_use",
           });
 
           assert.strictEqual(response.status, 201, response.text);
@@ -636,9 +634,9 @@ describe("hub-callback-path", () => {
           yield* register(admin.token ?? "", `${callback.origin}${path}`);
         }
 
-        yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { name: "callback paths", status: "in_use" },
+        yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "callback paths",
+          status: "in_use",
         });
         yield* workerPass();
         assert.sameMembers(
@@ -815,25 +813,8 @@ describe("hub-unregister", () => {
           (yield* create("resource=acmeAsset&invalid=bad")).status,
           403
         );
-        const snapshot = yield* (yield* Catalog).refresh;
-
-        const employee = snapshot
-          .all("role")
-          .find((role) => role.name === "employee");
-
-        yield* change([
-          {
-            definition: {
-              id: randomUUID(),
-              kind: "grant",
-              owner: { layer: "local" },
-              permissionId: PERMISSION_IDS["events.subscribe"],
-              protected: false,
-              roleId: employee?.id ?? "",
-            },
-            op: "createGrant",
-          },
-        ]);
+        const { op: grantOp } = yield* subscribeGrant();
+        yield* change([grantOp]);
         const hidden = yield* create("resource=coreSubscription");
         const missing = yield* create("resource=notACollection");
         assert.strictEqual(hidden.status, 400);
@@ -914,9 +895,9 @@ describe("hub-unregister", () => {
             .status,
           204
         );
-        yield* http.request("POST", ASSET, {
-          ...admin,
-          body: { name: "after unregister", status: "in_use" },
+        yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "after unregister",
+          status: "in_use",
         });
         assert.deepStrictEqual(
           yield* deliveriesWhere("subscription_id = $1::uuid", [hub]),
@@ -938,26 +919,8 @@ describe("hub-payload-filter", () => {
         const fixture = yield* AcmeFixture;
         const http = yield* TestHttpClient;
         const { admin, bob } = yield* apiCallers;
-        const snapshot = yield* (yield* Catalog).refresh;
-
-        const employee = snapshot
-          .all("role")
-          .find((role) => role.name === "employee");
-
-        assert.isDefined(employee);
-        yield* change([
-          {
-            definition: {
-              id: randomUUID(),
-              kind: "grant",
-              owner: { layer: "local" },
-              permissionId: PERMISSION_IDS["events.subscribe"],
-              protected: false,
-              roleId: employee?.id ?? "",
-            },
-            op: "createGrant",
-          },
-        ]);
+        const { op: grantOp } = yield* subscribeGrant();
+        yield* change([grantOp]);
         const callback = yield* listener();
         yield* register(bob.token ?? "", callback.origin);
 
@@ -972,33 +935,22 @@ describe("hub-payload-filter", () => {
 
         assert.strictEqual(refused.status, 400);
 
-        const saved = yield* http.request("POST", ASSET, {
-          ...admin,
-          body: {
-            cost: "8",
-            name: "Bob's event asset",
-            owner: { id: fixture.bob.id },
-            status: "in_use",
-          },
+        const saved = yield* createAsset(admin.token ?? "", "acme.asset", {
+          cost: "8",
+          name: "Bob's event asset",
+          owner: { id: fixture.bob.id },
+          status: "in_use",
         });
 
         assert.strictEqual(saved.status, 201, saved.text);
         const id = textOf(asObject(saved.json).id);
-        yield* http.request("PATCH", `${ASSET}/${id}`, {
-          ...admin,
-          body: { cost: "9" },
-          headers: {
-            "content-type": "application/merge-patch+json",
-            "if-match": '"1"',
-          },
+        yield* patchAsset(admin.token ?? "", "acme.asset", id, 1, {
+          cost: "9",
         });
-        yield* http.request("POST", ASSET, {
-          ...admin,
-          body: {
-            name: "Alice's event asset",
-            owner: { id: fixture.alice.id },
-            status: "in_use",
-          },
+        yield* createAsset(admin.token ?? "", "acme.asset", {
+          name: "Alice's event asset",
+          owner: { id: fixture.alice.id },
+          status: "in_use",
         });
         yield* workerPass();
         yield* workerPass();
