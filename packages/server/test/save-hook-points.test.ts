@@ -12,7 +12,6 @@ import { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { DecodedInput } from "@std/values/field-value";
 import { Effect, Ref } from "effect";
 
-import { SaveHooks } from "../src/records/save-hooks.ts";
 import type { BeforeWriteInput } from "../src/records/save-hooks.ts";
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
@@ -20,28 +19,18 @@ import type { ExistingActionCheck } from "../src/records/write-access.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
   changeLog,
+  newLaptop,
+  operationIds,
+  withHook,
   recordsTestLayer,
   rootVersion,
   setUpAcme,
 } from "./records-support.ts";
-import { ACME, freshId, values } from "./schema-support.ts";
+import { ACME, freshId } from "./schema-support.ts";
 
 type Rewrite = (
   input: BeforeWriteInput
 ) => ReadonlyMap<DefinitionId, DecodedInput>;
-
-// Runs an effect with a before-write hook that rewrites the values.
-const withHook =
-  (rewrite: Rewrite) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(function* hooked() {
-      const hooks = yield* SaveHooks;
-
-      return yield* Effect.provideService(effect, SaveHooks, {
-        ...hooks,
-        beforeWrite: (input) => Effect.succeed(rewrite(input)),
-      });
-    });
 
 const setting =
   (fieldId: DefinitionId, value: DecodedInput): Rewrite =>
@@ -59,19 +48,6 @@ const refuseStatus =
           : Effect.void
       )
     );
-
-const newLaptop = (name: string) =>
-  createRecord({
-    body: { name, purchased_on: "2026-01-15", serial: `SN-${name}` },
-    endpointClassId: ACME.laptop,
-  });
-
-const operationIds = (ids: readonly string[]) =>
-  values(
-    `SELECT DISTINCT operation_id::text AS value FROM core."change"
-     WHERE record_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
-    [JSON.stringify(ids)]
-  );
 
 describe("save-hook-points", () => {
   it("rewrites only the named field", () => {

@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Requester } from "@std/definitions/requester";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import type { JsonObject } from "@std/values/json-value";
+import type { JsonValue, JsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -22,7 +22,7 @@ import { applyChangeSet } from "../src/schema/change-set.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import { codeOf, collectionOf, readsTestLayer } from "./reads-support.ts";
-import { CHANGE_SETS } from "./schema-paths-support.ts";
+import { CHANGE_SETS, definitionVersion } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -55,11 +55,6 @@ const filtersOf = Effect.fn("SavedFilters.filtersOf")(function* filtersOf(
   );
 });
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
-
 /**
  * Purges a retired field or table as the purger.
  *
@@ -68,7 +63,7 @@ const versionOf = (id: string) =>
  */
 const purge = (id: string) =>
   Effect.gen(function* purgeDefinition() {
-    const version = yield* versionOf(id);
+    const version = yield* definitionVersion(id);
 
     return yield* Effect.exit(
       applyChangeSet({
@@ -88,6 +83,29 @@ const filterBody = (
   name,
   tableId: classId,
 });
+
+const savedFilterOp = <C extends JsonObject>(
+  classId: string,
+  name: string,
+  condition: C,
+  {
+    id = randomUUID(),
+    label = name,
+  }: { readonly id?: string; readonly label?: string } = {}
+) =>
+  ({
+    definition: {
+      classId,
+      condition,
+      id,
+      kind: "savedFilter",
+      label,
+      name,
+      owner: { layer: "local" },
+      protected: false,
+    },
+    op: "createSavedFilter",
+  }) as const satisfies JsonValue;
 
 const notEmpty = (fieldId: string) => ({
   arg: { path: [fieldId] },
@@ -163,19 +181,9 @@ describe("saved-filters", () => {
           const { tokens } = yield* signInAll;
 
           yield* change([
-            {
-              definition: {
-                classId: ACME.asset,
-                condition: notEmpty(ACME.name),
-                id: randomUUID(),
-                kind: "savedFilter",
-                label: "Named",
-                name: "named",
-                owner: { layer: "local" },
-                protected: false,
-              },
-              op: "createSavedFilter",
-            },
+            savedFilterOp(ACME.asset, "named", notEmpty(ACME.name), {
+              label: "Named",
+            }),
           ]);
 
           const cases: readonly {
@@ -217,19 +225,7 @@ describe("saved-filters", () => {
             const endpoint = yield* http.request("POST", CHANGE_SETS, {
               body: {
                 operations: [
-                  {
-                    definition: {
-                      classId: ACME.asset,
-                      condition: entry.condition,
-                      id: randomUUID(),
-                      kind: "savedFilter",
-                      label: entry.filterName,
-                      name: entry.filterName,
-                      owner: { layer: "local" },
-                      protected: false,
-                    },
-                    op: "createSavedFilter",
-                  },
+                  savedFilterOp(ACME.asset, entry.filterName, entry.condition),
                 ],
               },
               token: tokens.admin,
@@ -269,32 +265,14 @@ describe("saved-filters", () => {
 
           yield* change([scratch.op, label.op, extra.op]);
           yield* change([
-            {
-              definition: {
-                classId: scratch.id,
-                condition: notEmpty(extra.id),
-                id: filterId,
-                kind: "savedFilter",
-                label: "Extra",
-                name: "with_extra",
-                owner: { layer: "local" },
-                protected: false,
-              },
-              op: "createSavedFilter",
-            },
-            {
-              definition: {
-                classId: scratch.id,
-                condition: notEmpty(label.id),
-                id: tableFilterId,
-                kind: "savedFilter",
-                label: "Labelled",
-                name: "labelled",
-                owner: { layer: "local" },
-                protected: false,
-              },
-              op: "createSavedFilter",
-            },
+            savedFilterOp(scratch.id, "with_extra", notEmpty(extra.id), {
+              id: filterId,
+              label: "Extra",
+            }),
+            savedFilterOp(scratch.id, "labelled", notEmpty(label.id), {
+              id: tableFilterId,
+              label: "Labelled",
+            }),
           ]);
 
           assert.deepStrictEqual(
@@ -307,7 +285,7 @@ describe("saved-filters", () => {
             tokens.admin,
             "core.field",
             extra.id,
-            yield* versionOf(extra.id),
+            yield* definitionVersion(extra.id),
             { state: "retired" }
           );
 
@@ -335,7 +313,7 @@ describe("saved-filters", () => {
             tokens.admin,
             "core.saved_filter",
             filterId,
-            yield* versionOf(filterId)
+            yield* definitionVersion(filterId)
           );
 
           assert.strictEqual(deleted.status, 204, deleted.text);
@@ -346,7 +324,7 @@ describe("saved-filters", () => {
             {
               id: scratch.id,
               op: "retire",
-              version: yield* versionOf(scratch.id),
+              version: yield* definitionVersion(scratch.id),
             },
           ]);
 

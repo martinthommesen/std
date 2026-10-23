@@ -5,7 +5,9 @@
  * as the default acting user.
  */
 import { rawSql } from "@std/conditions/sql-fragment";
+import type { DefinitionId } from "@std/definitions/ids";
 import { SYSTEM_USER_ID, USER_CLASS_ID } from "@std/definitions/well-known";
+import type { DecodedInput } from "@std/values/field-value";
 import { Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -14,13 +16,23 @@ import {
   historyStatement,
   historyPageOfRows,
 } from "../src/records/history-query.ts";
-import type { HistoryInput } from "../src/records/history-query.ts";
+import type {
+  HistorySelection,
+  HistoryInput,
+} from "../src/records/history-query.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
+import type { BeforeWriteInput } from "../src/records/save-hooks.ts";
+import { createRecord } from "../src/records/save-pipeline.ts";
 import { readRows } from "../src/records/sql-run.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { loadCoreAndAcme, schemaTestLayer, values } from "./schema-support.ts";
+import {
+  ACME,
+  loadCoreAndAcme,
+  schemaTestLayer,
+  values,
+} from "./schema-support.ts";
 
 /** Fixed user IDs of the record tests. */
 export const USERS = {
@@ -42,9 +54,6 @@ export const ACME_FIELDS = {
   owner: "6a373fb5-bd18-4d7f-b0b4-182470f5421e",
   sizeInches: "9ecc19c5-8401-4887-ac05-d5dbdd937297",
 } as const;
-
-/** `core.user`'s unique index on `login`. */
-export const LOGIN_INDEX_ID = "4941e670-8c9b-4a1a-a758-93854cef07bb";
 
 /**
  * An acting user without roles (the phase 1 seams allow everything).
@@ -81,7 +90,7 @@ export const asUser =
  * @param name - Name and login.
  * @returns The insert.
  */
-export const insertUser = (id: string, name: string) =>
+const insertUser = (id: string, name: string) =>
   SqlClient.SqlClient.pipe(
     Effect.flatMap(
       (sql) =>
@@ -156,4 +165,71 @@ export const readHistory = Effect.fn("Test.readHistory")(function* readHistory(
       return yield* historyPageOfRows(rows, input.readable, input.selection);
     })
   );
+});
+
+/**
+ * Creates a laptop with the required acme values.
+ * @param name - The name and serial suffix.
+ * @returns The save.
+ */
+export const newLaptop = (name: string) =>
+  createRecord({
+    body: { name, purchased_on: "2026-01-15", serial: `SN-${name}` },
+    endpointClassId: ACME.laptop,
+  });
+
+/**
+ * Creates a monitor with a name.
+ * @param name - The name.
+ * @returns The save.
+ */
+export const newMonitor = (name: string) =>
+  createRecord({ body: { name }, endpointClassId: ACME.monitor });
+
+/**
+ * The distinct operation IDs of the records' change entries.
+ * @param ids - The record IDs.
+ * @returns The operation IDs.
+ */
+export const operationIds = (ids: readonly string[]) =>
+  values(
+    `SELECT DISTINCT operation_id::text AS value FROM core."change"
+     WHERE record_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
+    [JSON.stringify(ids)]
+  );
+
+/**
+ * Runs an effect with a before-write hook that rewrites the values.
+ * @param rewrite - The hook's value rewrite.
+ * @returns A function providing the hook.
+ */
+export const withHook =
+  (
+    rewrite: (
+      input: BeforeWriteInput
+    ) => ReadonlyMap<DefinitionId, DecodedInput>
+  ) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* hooked() {
+      const hooks = yield* SaveHooks;
+
+      return yield* Effect.provideService(effect, SaveHooks, {
+        ...hooks,
+        beforeWrite: (input) => Effect.succeed(rewrite(input)),
+      });
+    });
+
+/**
+ * A forward history page with a count and no cursor or range.
+ * @param limit - The fixture's required page size.
+ * @returns The selection.
+ */
+export const historyPage = (limit: number): HistorySelection => ({
+  after: null,
+  before: null,
+  count: true,
+  kind: "page",
+  limit,
+  range: null,
+  reversed: false,
 });

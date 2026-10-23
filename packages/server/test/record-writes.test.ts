@@ -18,6 +18,8 @@ import { resolveWriteBody } from "../src/records/write-body.ts";
 import {
   changeLog,
   asUser,
+  newLaptop,
+  newMonitor,
   recordsTestLayer,
   rootVersion,
   rowCount,
@@ -29,15 +31,6 @@ import { ACME, values } from "./schema-support.ts";
 
 const createAs = (endpointClassId: string, body: JsonValue) =>
   createRecord({ body, endpointClassId });
-
-const newLaptop = (name: string) =>
-  createAs(ACME.laptop, {
-    name,
-    purchased_on: "2026-01-15",
-    serial: `SN-${name}`,
-  });
-
-const newMonitor = (name: string) => createAs(ACME.monitor, { name });
 
 describe("record-writes", () => {
   it("resolves body names against the given fields only", () => {

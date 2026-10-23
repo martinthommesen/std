@@ -43,7 +43,7 @@ import { Effect, Logger, Result } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { Actor, loadActor } from "../src/auth/actor.ts";
+import { loadActor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { ruleActor } from "../src/hooks/rule-identity.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
@@ -59,7 +59,7 @@ import {
   update as updateAggregate,
 } from "./aggregates-support.ts";
 import { codeOf, readsTestLayer } from "./reads-support.ts";
-import { ACME_FIELDS, actorOf, USERS } from "./records-support.ts";
+import { ACME_FIELDS, asUser, USERS } from "./records-support.ts";
 import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
@@ -107,6 +107,18 @@ const PART_OPS: readonly Operation[] = [
   PART_STATUS.op,
 ];
 
+/**
+ * An `updateEach` of laptops that match a condition.
+ * @param where - The condition.
+ * @returns The action.
+ */
+const updateLaptopsWhere = (where: Condition | null): RuleAction => ({
+  forEach: { classId: ACME.laptop, where },
+  target: "self",
+  type: "updateEach",
+  values: [{ fieldId: ACME.status, value: { value: "each" } }],
+});
+
 const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
   createEach: {
     classId: ACME.monitor,
@@ -131,28 +143,11 @@ const ACTIONS: Readonly<Record<RuleActionType, RuleAction>> = {
     values: [{ fieldId: PART_STATUS.id, value: { value: "part" } }],
     where: null,
   },
-  updateEach: {
-    forEach: { classId: ACME.laptop, where: null },
-    target: "self",
-    type: "updateEach",
-    values: [{ fieldId: ACME.status, value: { value: "each" } }],
-  },
+  updateEach: updateLaptopsWhere(null),
 };
 
 /** A phase, or a `before` kind, as a rule declares it. */
 type Slot = "derive" | "guard" | "invariant" | Exclude<RulePhase, "before">;
-
-/**
- * An `updateEach` of laptops that match a condition.
- * @param where - The condition.
- * @returns The action.
- */
-const updateLaptopsWhere = (where: Condition): RuleAction => ({
-  forEach: { classId: ACME.laptop, where },
-  target: "self",
-  type: "updateEach",
-  values: [{ fieldId: ACME.status, value: { value: "each" } }],
-});
 
 const SLOTS: readonly Slot[] = [
   "derive",
@@ -202,21 +197,26 @@ const carrier = (id: string, extra: Record<string, JsonValue> = {}) =>
  * A rule of a slot with its actions, and the carrier it needs.
  * @param slot - A phase or `before` kind.
  * @param actions - The actions.
+ * @param condition - The rule condition, or null for every record.
  * @returns The operations.
  */
-const ruleIn = (slot: Slot, actions: readonly RuleAction[]) => {
+const ruleIn = (
+  slot: Slot,
+  actions: readonly RuleAction[],
+  condition: Condition | null = null
+) => {
+  const beforeKind =
+    slot === "derive" || slot === "guard" || slot === "invariant";
+
   const subscription = freshId();
 
-  const ruleKind =
-    slot === "derive" || slot === "guard" || slot === "invariant" ? slot : null;
+  const ruleKind = beforeKind ? slot : null;
 
-  const phase: RulePhase =
-    slot === "derive" || slot === "guard" || slot === "invariant"
-      ? "before"
-      : slot;
+  const phase: RulePhase = beforeKind ? "before" : slot;
 
   const rule = addRecordRule(ACME.asset, {
     actions: [...actions],
+    condition,
     operations: phase === "aggregate" ? [] : ["update"],
     phase,
     ruleKind,
@@ -790,22 +790,8 @@ describe("record-rule-actions", () => {
 
           for (const [what, condition, aggregate] of quantified) {
             for (const [slot, action] of slots) {
-              const rule = ruleIn(slot, [action]);
-              const last = rule.at(-1);
-
-              const withCondition =
-                last?.op === "createRecordRule"
-                  ? [
-                      ...rule.slice(0, -1),
-                      {
-                        ...last,
-                        definition: { ...last.definition, condition },
-                      },
-                    ]
-                  : rule;
-
               assert.deepStrictEqual(
-                outcomeOf(snapshot, withCondition),
+                outcomeOf(snapshot, ruleIn(slot, [action], condition)),
                 ["invalidCondition"],
                 `${what} in a ${slot} rule`
               );
@@ -968,11 +954,7 @@ describe("record-rule-actions", () => {
 
           assert.isTrue(Result.isSuccess(created));
 
-          if (Result.isFailure(created)) {
-            return;
-          }
-
-          const { after: snapshot } = created.success;
+          const { after: snapshot } = Result.getOrThrow(created);
           const ordinaryRule = snapshot.get(rule.id);
           const ordinarySubscription = snapshot.get(subscriptionId);
           assert.isDefined(ordinaryRule);
@@ -1063,11 +1045,7 @@ describe("record-rule-actions", () => {
 
           assert.isTrue(Result.isSuccess(created));
 
-          if (Result.isFailure(created)) {
-            return;
-          }
-
-          const rule = created.success.after.get(draft.id);
+          const rule = Result.getOrThrow(created).after.get(draft.id);
           assert.isDefined(rule);
 
           if (rule?.kind !== "recordRule") {
@@ -1300,7 +1278,7 @@ describe("record-rule-actions", () => {
               SaveHooks,
               recordingSettles(hooks, changeId, seen)
             ),
-            Effect.provideService(Actor, actorOf(USERS.bob))
+            asUser(USERS.bob)
           );
 
           // When settling had run, before persistence: no approval yet, and

@@ -25,12 +25,12 @@ import type { Condition } from "@std/definitions/condition";
 import type { RuleAction, RuleValue } from "@std/definitions/rule-definition";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect, Exit, Layer, Option } from "effect";
+import { Effect, Exit, Layer, Option, Schema } from "effect";
 import type { HttpClient } from "effect/http";
+import { SqlClient } from "effect/sql";
 
 import { Actor } from "../src/auth/actor.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
 import { applyDeriveRules } from "../src/hooks/before-rules.ts";
 import { RecordRuleSaveHooks } from "../src/hooks/record-rule-hooks.ts";
@@ -48,8 +48,10 @@ import { suppliedFieldsOf } from "../src/records/supplied-fields.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
+import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { subscribe } from "./outbox-support.ts";
 import { actorOf, setUpAcme, USERS } from "./records-support.ts";
 import {
   addField,
@@ -148,16 +150,6 @@ const parentNamedLikeRecord = {
   where: sameAsRecord(P.name.id, P.name.id),
 };
 
-const rulesTestLayer = () =>
-  Layer.mergeAll(
-    WriteAccess.allowAll,
-    RecordRuleSaveHooks,
-    WriteOnlyValues.unavailable,
-    Layer.succeed(Actor, actorOf(USERS.alice))
-  ).pipe(
-    Layer.provideMerge(Layer.merge(InstanceSettings.layer, schemaTestLayer()))
-  );
-
 const createParent = (body: Readonly<Record<string, JsonValue>>) =>
   createRecord({ body, endpointClassId: PARENT.id });
 
@@ -169,9 +161,6 @@ const valuesOf = (saved: SaveResult): JsonObject => {
 
   return found !== undefined && isJsonObject(found) ? found : {};
 };
-
-const count = (sqlText: string, params: readonly unknown[] = []) =>
-  values(sqlText, params).pipe(Effect.map(([value]) => Number(value)));
 
 /**
  * Hooks whose after-write step catches one refusal of its nested saves,
@@ -199,6 +188,26 @@ const catchingAround = (
  */
 const toggle = (id: string, version: number, active: boolean) =>
   change([{ changes: { active }, id, op: "update", version }]);
+
+const deriveStored = Effect.fn("RecordRules.deriveStored")(
+  function* deriveStored(id: string, supplied: ReadonlySet<string>) {
+    const snapshot = yield* (yield* Catalog).current;
+    const loaded = yield* loadRecord(snapshot, PARENT.id, id);
+    const image = Option.isSome(loaded) ? imageOf(loaded.value) : {};
+
+    const derived = yield* applyDeriveRules({
+      classId: PARENT.id,
+      context: { me: USERS.alice, now: 0, timeZone: "UTC" },
+      image,
+      operation: "update",
+      previous: image,
+      snapshot,
+      supplied,
+    });
+
+    return derived.image[P.score.id];
+  }
+);
 
 /**
  * One operation that writes an owner's own fields with an explicit score,
@@ -230,32 +239,201 @@ const settleOwner = Effect.fn("RecordRules.settleOwner")(function* settleOwner(
         endpointClassId: LOG.id,
       });
 
-      const snapshot = yield* (yield* Catalog).current;
-      const loaded = yield* loadRecord(snapshot, PARENT.id, saved.id);
-      const image = Option.isSome(loaded) ? imageOf(loaded.value) : {};
-
-      const derived = yield* applyDeriveRules({
-        classId: PARENT.id,
-        context: { me: USERS.alice, now: 0, timeZone: "UTC" },
-        image,
-        operation: "update",
-        previous: image,
-        snapshot,
-        supplied: yield* supplied(saved.id),
-      });
+      const score = yield* deriveStored(saved.id, yield* supplied(saved.id));
 
       // Roll the operation back: the aggregates workstream persists.
-      return yield* Effect.fail(derived.image[P.score.id]);
+      return yield* Effect.fail(score);
     })
   ).pipe(Effect.flip);
 });
 
-const committedCounts = Effect.all({
-  changes: count('SELECT count(*)::text AS value FROM core."change"'),
-  deliveries: count('SELECT count(*)::text AS value FROM core."delivery"'),
-  logs: count(`SELECT count(*)::text AS value FROM ${TABLES.log}`),
-  parents: count(`SELECT count(*)::text AS value FROM ${TABLES.parent}`),
+const decodeCounts = decodeRows(
+  Schema.Struct({
+    changes: Schema.FiniteFromString,
+    deliveries: Schema.FiniteFromString,
+    logs: Schema.FiniteFromString,
+    parents: Schema.FiniteFromString,
+  })
+);
+
+const committedCounts = Effect.gen(function* committedCounts() {
+  const sql = yield* SqlClient.SqlClient;
+
+  const [counts] = yield* decodeCounts(
+    yield* sql.unsafe(`
+    SELECT (SELECT count(*)::text FROM core."change") AS changes,
+           (SELECT count(*)::text FROM core."delivery") AS deliveries,
+           (SELECT count(*)::text FROM ${TABLES.log}) AS logs,
+           (SELECT count(*)::text FROM ${TABLES.parent}) AS parents
+  `)
+  );
+
+  if (counts === undefined) {
+    throw new Error("Committed counts query returned no row");
+  }
+
+  return counts;
 });
+
+const createLog = addRecordRule(PARENT.id, {
+  actions: [
+    {
+      classId: LOG.id,
+      forEach: parentNamedLikeRecord,
+      type: "createEach",
+      values: [
+        { fieldId: L.name.id, value: copy(P.name.id) },
+        { fieldId: L.target.id, value: copy(null) },
+      ],
+    },
+  ],
+  condition: prefixed(P.name.id, "log"),
+  operations: ["create"],
+  phase: "after",
+  ruleKind: null,
+});
+
+const setUpRules = Effect.gen(function* setUpRules() {
+  yield* setUpAcme;
+  yield* ensureSite;
+  yield* change([
+    PARENT.op,
+    CHILD.op,
+    LOG.op,
+    ...Object.values(P).map((field) => field.op),
+    ...Object.values(L).map((field) => field.op),
+  ]);
+  yield* subscribe({
+    classId: LOG.id,
+    name: "rr_log_watch",
+    operations: ["create"],
+  });
+
+  {
+    const scope = prefixed(P.name.id, "order-");
+    const operations = ["create", "update"] as const;
+
+    yield* change([
+      addRecordRule(PARENT.id, {
+        actions: [set([P.status.id, literal("a1")])],
+        condition: scope,
+        id: "00000000-0000-4000-8000-0000000000a1",
+        operations: [...operations],
+        order: 20,
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [set([P.notes.id, copy(P.status.id)])],
+        condition: scope,
+        id: "00000000-0000-4000-8000-0000000000a2",
+        operations: [...operations],
+        order: 20,
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [set([P.status.id, literal("z")])],
+        condition: scope,
+        operations: [...operations],
+        order: 5,
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(CHILD.id, {
+        actions: [set([P.trace.id, literal("child")])],
+        condition: scope,
+        operations: [...operations],
+        order: 10,
+        ruleKind: "derive",
+      }).op,
+    ]);
+  }
+
+  {
+    const increment: RuleValue = { increment: P.score.id };
+
+    yield* change([
+      addRecordRule(PARENT.id, {
+        actions: [set([P.score.id, literal(5)])],
+        condition: prefixed(P.name.id, "ro-"),
+        operations: ["create"],
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [set([P.notes.id, copy(P.name.id)])],
+        condition: prefixed(P.name.id, "long-"),
+        operations: ["create"],
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [
+          {
+            keepSupplied: true,
+            type: "set",
+            values: [{ fieldId: P.score.id, value: increment }],
+          },
+        ],
+        condition: prefixed(P.name.id, "inc-"),
+        operations: ["create", "update"],
+        ruleKind: "derive",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [set([P.score.id, literal(5)])],
+        condition: prefixed(P.name.id, "force-"),
+        operations: ["create", "update"],
+        ruleKind: "derive",
+      }).op,
+    ]);
+  }
+
+  {
+    const scope = prefixed(P.name.id, "g-");
+
+    yield* change([
+      addRecordRule(PARENT.id, {
+        actions: [refuse("InvalidTransition", "Closed records stay closed.")],
+        condition: all(
+          scope,
+          { arg: path(P.status.id), op: "changed" },
+          {
+            left: { image: "previous", path: [P.status.id] },
+            op: "eq",
+            right: { value: "closed" },
+          }
+        ),
+        operations: ["update"],
+        ruleKind: "guard",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [refuse("RuleRefused", "Resolution notes are required.")],
+        condition: all(scope, equals(P.status.id, "resolved"), {
+          arg: path(P.notes.id),
+          op: "empty",
+        }),
+        operations: ["create", "update"],
+        ruleKind: "invariant",
+      }).op,
+      addRecordRule(PARENT.id, {
+        actions: [set([P.trace.id, literal("derived")])],
+        condition: scope,
+        operations: ["update"],
+        ruleKind: "derive",
+      }).op,
+    ]);
+  }
+
+  yield* change([createLog.op]);
+});
+
+const rulesTestLayer = () =>
+  Layer.effectDiscard(setUpRules).pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        WriteAccess.allowAll,
+        RecordRuleSaveHooks,
+        WriteOnlyValues.unavailable,
+        Layer.succeed(Actor, actorOf(USERS.alice))
+      ).pipe(Layer.provideMerge(schemaTestLayer()))
+    )
+  );
 
 describe("record-rules", () => {
   it("in-transaction hooks get no HTTP client", () => {
@@ -294,34 +472,10 @@ describe("record-rules", () => {
   layer(rulesTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect("sets up acme and the rule test tables", () =>
       Effect.gen(function* setUp() {
-        yield* setUpAcme;
-        yield* ensureSite;
-        yield* change([
-          PARENT.op,
-          CHILD.op,
-          LOG.op,
-          ...Object.values(P).map((field) => field.op),
-          ...Object.values(L).map((field) => field.op),
-        ]);
-        yield* change([
-          {
-            definition: {
-              classId: LOG.id,
-              condition: null,
-              deadLetter: "block",
-              enabled: true,
-              id: freshId(),
-              identityId: USERS.alice,
-              kind: "subscription",
-              maxAttempts: 10,
-              name: "rr_log_watch",
-              operations: ["create"],
-              owner: { layer: "local" },
-              protected: false,
-            },
-            op: "createSubscription",
-          },
-        ]);
+        const snapshot = yield* (yield* Catalog).refresh;
+        assert.isDefined(snapshot.get(PARENT.id));
+        assert.isDefined(snapshot.get(CHILD.id));
+        assert.isDefined(snapshot.get(LOG.id));
       })
     );
 
@@ -329,42 +483,6 @@ describe("record-rules", () => {
       "rule-order: by order number then stable ID, selected by the concrete class",
       () =>
         Effect.gen(function* ruleOrder() {
-          const scope = prefixed(P.name.id, "order-");
-          const operations = ["create", "update"] as const;
-
-          yield* change([
-            addRecordRule(PARENT.id, {
-              actions: [set([P.status.id, literal("a1")])],
-              condition: scope,
-              id: "00000000-0000-4000-8000-0000000000a1",
-              operations: [...operations],
-              order: 20,
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [set([P.notes.id, copy(P.status.id)])],
-              condition: scope,
-              id: "00000000-0000-4000-8000-0000000000a2",
-              operations: [...operations],
-              order: 20,
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [set([P.status.id, literal("z")])],
-              condition: scope,
-              operations: [...operations],
-              order: 5,
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(CHILD.id, {
-              actions: [set([P.trace.id, literal("child")])],
-              condition: scope,
-              operations: [...operations],
-              order: 10,
-              ruleKind: "derive",
-            }).op,
-          ]);
-
           // On a child: z (5), child (10), then a1 and a2 (20, by ID): a2
           // copies the status a1 set, so later rules see earlier values.
           const child = valuesOf(yield* createChild({ name: "order-1" }));
@@ -418,41 +536,6 @@ describe("record-rules", () => {
       "derive values count as supplied and are validated; keepSupplied leaves the caller's values alone",
       () =>
         Effect.gen(function* deriveValidation() {
-          const increment: RuleValue = { increment: P.score.id };
-
-          yield* change([
-            addRecordRule(PARENT.id, {
-              actions: [set([P.score.id, literal(5)])],
-              condition: prefixed(P.name.id, "ro-"),
-              operations: ["create"],
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [set([P.notes.id, copy(P.name.id)])],
-              condition: prefixed(P.name.id, "long-"),
-              operations: ["create"],
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [
-                {
-                  keepSupplied: true,
-                  type: "set",
-                  values: [{ fieldId: P.score.id, value: increment }],
-                },
-              ],
-              condition: prefixed(P.name.id, "inc-"),
-              operations: ["create", "update"],
-              ruleKind: "derive",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [set([P.score.id, literal(5)])],
-              condition: prefixed(P.name.id, "force-"),
-              operations: ["create", "update"],
-              ruleKind: "derive",
-            }).op,
-          ]);
-
           assert.strictEqual(
             valuesOf(yield* createParent({ name: "ro-1" })).score,
             5
@@ -634,21 +717,9 @@ describe("record-rules", () => {
               assert.strictEqual(refused._tag, "NotAllowed");
 
               const supplied = yield* suppliedFieldsOf(record.id);
-              const snapshot = yield* (yield* Catalog).current;
-              const loaded = yield* loadRecord(snapshot, PARENT.id, record.id);
-              const image = Option.isSome(loaded) ? imageOf(loaded.value) : {};
+              const score = yield* deriveStored(record.id, supplied);
 
-              const derived = yield* applyDeriveRules({
-                classId: PARENT.id,
-                context: { me: USERS.alice, now: 0, timeZone: "UTC" },
-                image,
-                operation: "update",
-                previous: image,
-                snapshot,
-                supplied,
-              });
-
-              return [supplied.has(P.score.id), derived.image[P.score.id]];
+              return [supplied.has(P.score.id), score];
             })
           );
 
@@ -729,44 +800,6 @@ describe("record-rules", () => {
       "guard and invariant refuse with the rule's fixed message; a settled save runs only invariants",
       () =>
         Effect.gen(function* refusals() {
-          const scope = prefixed(P.name.id, "g-");
-
-          yield* change([
-            addRecordRule(PARENT.id, {
-              actions: [
-                refuse("InvalidTransition", "Closed records stay closed."),
-              ],
-              condition: all(
-                scope,
-                { arg: path(P.status.id), op: "changed" },
-                {
-                  left: { image: "previous", path: [P.status.id] },
-                  op: "eq",
-                  right: { value: "closed" },
-                }
-              ),
-              operations: ["update"],
-              ruleKind: "guard",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [
-                refuse("RuleRefused", "Resolution notes are required."),
-              ],
-              condition: all(scope, equals(P.status.id, "resolved"), {
-                arg: path(P.notes.id),
-                op: "empty",
-              }),
-              operations: ["create", "update"],
-              ruleKind: "invariant",
-            }).op,
-            addRecordRule(PARENT.id, {
-              actions: [set([P.trace.id, literal("derived")])],
-              condition: scope,
-              operations: ["update"],
-              ruleKind: "derive",
-            }).op,
-          ]);
-
           const noNotes = yield* createParent({
             name: "g-1",
             status: "resolved",
@@ -871,26 +904,6 @@ describe("record-rules", () => {
       "after rules save other records as nested saves in the same transaction, without SAVEPOINT",
       () =>
         Effect.gen(function* afterRules() {
-          const createLog = addRecordRule(PARENT.id, {
-            actions: [
-              {
-                classId: LOG.id,
-                forEach: parentNamedLikeRecord,
-                type: "createEach",
-                values: [
-                  { fieldId: L.name.id, value: copy(P.name.id) },
-                  { fieldId: L.target.id, value: copy(null) },
-                ],
-              },
-            ],
-            condition: prefixed(P.name.id, "log"),
-            operations: ["create"],
-            phase: "after",
-            ruleKind: null,
-          });
-
-          yield* change([createLog.op]);
-
           const log = yield* StatementLog;
           yield* log.clear;
 
@@ -1003,8 +1016,7 @@ describe("record-rules", () => {
       "any failure of a nested save poisons the transaction, even one that wrote nothing",
       () =>
         Effect.gen(function* nestedFailures() {
-          // The `g-` guard and invariant of an earlier test, and a closed
-          // record the guard keeps closed.
+          // The fixture's `g-` guard and invariant keep a closed record closed.
           const closed = yield* createParent({
             name: "g-nested",
             status: "closed",
@@ -1261,7 +1273,7 @@ describe("record-rules", () => {
       "a before rule's field change appears in the entry's after, and a no-op save calls no hook",
       () =>
         Effect.gen(function* entryAndNoOp() {
-          // The `ro-` derive rule of an earlier test set `score` to 5.
+          // The fixture's `ro-` derive rule sets `score` to 5.
           const created = yield* createParent({ name: "ro-entry" });
 
           const fields = yield* values(
