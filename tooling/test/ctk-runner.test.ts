@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import {
   existsSync,
   mkdtempSync,
@@ -160,23 +161,36 @@ const zipOf = (files: Readonly<Record<string, string>>): Buffer => {
 interface SessionStub {
   readonly deps: SessionDeps;
   readonly calls: (readonly string[])[];
+  /** The abort signal of each Docker call. */
+  readonly aborts: AbortSignal[];
   readonly exits: number[];
   readonly handlers: Map<() => void, KitSignal>;
   readonly signal: (signal: KitSignal) => void;
   readonly done: () => void;
 }
 
-const sessionStub = (): SessionStub => {
+const sessionStub = (
+  options: { readonly hang?: boolean; readonly timeoutMs?: number } = {}
+): SessionStub => {
   const root = mkdtempSync(path.join(tmpdir(), "std-ctk-session-"));
   const handlers = new Map<() => void, KitSignal>();
   const calls: (readonly string[])[] = [];
+  const aborts: AbortSignal[] = [];
   const exits: number[] = [];
 
   return {
+    aborts,
     calls,
     deps: {
-      docker: async (args) => {
+      cleanupTimeoutMs: options.timeoutMs ?? 20,
+      docker: async (args, signal) => {
         calls.push(args);
+        aborts.push(signal);
+
+        // A hanging Docker never answers, even when aborted.
+        if (options.hang === true) {
+          await once(new EventTarget(), "never");
+        }
 
         return await Promise.resolve({ code: 0, output: "" });
       },
@@ -440,6 +454,41 @@ describe("ctk-runner", () => {
     expect(stub.exits).toStrictEqual([143]);
     expect(stub.calls[0]).toStrictEqual(["rm", "-f", seen.container]);
     expect(existsSync(seen.work)).toBeFalsy();
+    stub.done();
+  });
+
+  it("removes the bearer configuration before Docker, kills a hanging Docker call, and keeps the signal handlers until cleanup ends", async () => {
+    const stub = sessionStub({ hang: true, timeoutMs: 300 });
+    let seen: KitSession | undefined;
+
+    const run = withKitSession(stub.deps, "tmf621", IMAGE, async (session) => {
+      seen = session;
+      writeFileSync(session.config, '{"headers":{"Authorization":"Bearer x"}}');
+
+      return await Promise.reject<KitSession>(new Error("the kit failed"));
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(stub.calls).toHaveLength(1);
+      },
+      { interval: 5, timeout: 250 }
+    );
+
+    // Docker hangs on its first cleanup call: the credential is gone, the
+    // handlers are still there.
+    expect({
+      config: existsSync(seen?.config ?? ""),
+      handlers: stub.handlers.size,
+    }).toStrictEqual({ config: false, handlers: 2 });
+
+    await expect(run).rejects.toThrow("the kit failed");
+
+    expect({
+      aborted: stub.aborts.map((signal) => signal.aborted),
+      handlers: stub.handlers.size,
+      work: existsSync(seen?.work ?? ""),
+    }).toStrictEqual({ aborted: [true, true], handlers: 0, work: false });
     stub.done();
   });
 });

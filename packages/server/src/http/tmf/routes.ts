@@ -24,6 +24,7 @@
  */
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import { mappingProblems } from "@std/tmf/mapping";
 import type { TmfOperation } from "@std/tmf/mapping";
 import { Effect, Layer } from "effect";
 import type { Context } from "effect";
@@ -320,6 +321,15 @@ const catchAll =
 export const tmfRoutesLayer = (registry: TmfRegistry) =>
   Layer.unwrap(
     Effect.gen(function* buildTmfRoutes() {
+      // An ambiguous mapping is a programming error: no route is served.
+      const problems = registry.flatMap(mappingProblems);
+
+      if (problems.length > 0) {
+        return yield* Effect.die(
+          new Error(`invalid TMF mappings: ${problems.join("; ")}`)
+        );
+      }
+
       const environment: RouteEnvironment = {
         registry,
         services: yield* Effect.context<RouteServices>(),

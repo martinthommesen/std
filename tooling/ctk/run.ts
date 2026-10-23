@@ -45,6 +45,9 @@ import { runCommand } from "../lib/run.ts";
 import { repoRoot } from "../lib/workspace.ts";
 import { readZipEntry } from "../lib/zip.ts";
 
+/** How long one Docker cleanup call may take before it is killed. */
+const CLEANUP_TIMEOUT_MS = 60_000;
+
 const sha256 = (bytes: Buffer): string =>
   createHash("sha256").update(bytes).digest("hex");
 
@@ -222,7 +225,9 @@ const main = async (): Promise<void> => {
 
   const verdict = await withKitSession(
     {
-      docker: async (args) => await docker(args),
+      cleanupTimeoutMs: CLEANUP_TIMEOUT_MS,
+      docker: async (args, signal) =>
+        await runCommand("docker", args, { cwd: repoRoot, signal }),
       exit: (code) => process.exit(code),
       signals: process,
       tempRoot: tmpdir(),

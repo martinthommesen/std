@@ -15,6 +15,8 @@ export interface RunOptions {
   /** Also stream the output to this process's stdout and stderr. */
   readonly echo?: boolean;
   readonly env?: NodeJS.ProcessEnv;
+  /** Kills the command when aborted; the result then has a null code. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -35,6 +37,7 @@ export const runCommand = async (
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
+    signal: options.signal,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -53,7 +56,14 @@ export const runCommand = async (
   child.stdout.setEncoding("utf-8").on("data", collect(process.stdout));
   child.stderr.setEncoding("utf-8").on("data", collect(process.stderr));
 
-  await once(child, "close");
+  try {
+    await once(child, "close");
+  } catch (error) {
+    // Aborted: the child was killed; report it as ended by a signal.
+    if (options.signal?.aborted !== true) {
+      throw error;
+    }
+  }
 
   return { code: child.exitCode, output: chunks.join("") };
 };

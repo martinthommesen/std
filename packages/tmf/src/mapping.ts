@@ -621,3 +621,52 @@ export const ALL_OPERATIONS: readonly TmfOperation[] = [
   "patch",
   "delete",
 ];
+
+const duplicatesOf = (names: readonly string[]): string[] =>
+  names.filter((name, index) => names.indexOf(name) !== index);
+
+/**
+ * What makes a mapping ambiguous, checked when the routes are built
+ * (decision 0033): two attributes of one resource or item with the same
+ * name, and an item attribute that writes the item mapping's `orderField`
+ * (the array's position would then have two writers; the order field is
+ * the framework's alone, never an attribute).
+ *
+ * @param api - The API mapping.
+ * @returns One message per problem; empty when the mapping is usable.
+ */
+export const mappingProblems = (api: TmfApiMapping): readonly string[] =>
+  api.resources.flatMap((resource) => {
+    const where = `${api.spec} ${resource.name}`;
+
+    const own = duplicatesOf(
+      resource.attributes.map((attribute) => attribute.name)
+    ).map((name) => `${where}: attribute ${name} is mapped twice`);
+
+    const items = resource.attributes.flatMap((attribute) => {
+      if (attribute.kind !== "parts") {
+        return [];
+      }
+
+      const { item } = attribute;
+
+      const twice = duplicatesOf(item.attributes.map((each) => each.name)).map(
+        (name) =>
+          `${where}.${attribute.name}: attribute ${name} is mapped twice`
+      );
+
+      const writesOrder = item.attributes.flatMap((each) =>
+        each.kind === "value" &&
+        item.orderField !== undefined &&
+        each.writes.includes(item.orderField)
+          ? [
+              `${where}.${attribute.name}: attribute ${each.name} writes the order field`,
+            ]
+          : []
+      );
+
+      return [...twice, ...writesOrder];
+    });
+
+    return [...own, ...items];
+  });

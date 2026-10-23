@@ -142,6 +142,53 @@ describe("tmf-lifecycle", () => {
     );
 
     dbTest.effect(
+      "a revision this database never had is SchemaChanged, as on the generic API, also for a request that names no local attribute",
+      () =>
+        Effect.gen(function* unknownRevision() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+
+          const [revision = "0", changeSet = ""] =
+            (yield* statedRevision).split(".");
+
+          const future = {
+            [REVISION_HEADER]: `${Number(revision) + 100}.${changeSet}`,
+          };
+
+          const generic = yield* http.get("/api/v2/tmffxTicket", {
+            ...alice,
+            headers: future,
+          });
+
+          assert.strictEqual(asObject(generic.json).code, "SchemaChanged");
+
+          for (const path of [
+            FIXTURE_TICKETS,
+            `${FIXTURE_TICKETS}?severity=nothing-matches`,
+            `${FIXTURE_TICKETS}?fields=description`,
+          ]) {
+            const answer = yield* http.get(path, { ...alice, headers: future });
+
+            assert.strictEqual(answer.status, 400, `${path}: ${answer.text}`);
+            assert.strictEqual(
+              asObject(answer.json).code,
+              "SchemaChanged",
+              path
+            );
+          }
+
+          const created = yield* http.request("POST", FIXTURE_TICKETS, {
+            ...alice,
+            body: { "@type": "TroubleTicket", description: "x" },
+            headers: future,
+          });
+
+          assert.strictEqual(created.status, 409, created.text);
+          assert.strictEqual(asObject(created.json).code, "SchemaChanged");
+        })
+    );
+
+    dbTest.effect(
       "a local attribute renamed and its name reused: SchemaChanged for a request stating the older revision, the current field without one",
       () =>
         Effect.gen(function* renamedAndReused() {
@@ -178,6 +225,42 @@ describe("tmf-lifecycle", () => {
 
           assert.strictEqual(read.status, 400, read.text);
           assert.strictEqual(asObject(read.json).code, "SchemaChanged");
+
+          // Every JSON Patch operation's path and source is checked before
+          // evaluation: a `test`, a `copy` source, a replacement that
+          // changes nothing.
+          for (const operations of [
+            [{ op: "test", path: "/vipLevel", value: 1 }],
+            [{ from: "/vipLevel", op: "copy", path: "/urgency" }],
+            [{ op: "replace", path: "/vipLevel", value: 1 }],
+          ]) {
+            const patched = yield* http.request("PATCH", path, {
+              ...alice,
+              headers: {
+                "content-type": "application/json-patch+json",
+                ...old,
+              },
+              rawBody: JSON.stringify(operations),
+            });
+
+            assert.strictEqual(patched.status, 409, patched.text);
+            assert.strictEqual(asObject(patched.json).code, "SchemaChanged");
+          }
+
+          // An explicit selection is checked for what it selects only.
+          const unrelated = yield* http.get(`${path}?fields=description`, {
+            ...alice,
+            headers: old,
+          });
+
+          assert.strictEqual(unrelated.status, 200, unrelated.text);
+
+          const listed = yield* http.get(
+            `${FIXTURE_TICKETS}?@type=TmffxVip&fields=description`,
+            { ...alice, headers: old }
+          );
+
+          assert.strictEqual(listed.status, 200, listed.text);
 
           const current = yield* http.request(
             "PATCH",

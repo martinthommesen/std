@@ -9,12 +9,15 @@
  * - on `SIGINT` or `SIGTERM`: from the signal handler, which then ends the
  *   process with 130 or 143.
  *
- * Cleanup force-removes the container (`--rm` removes it only when it
- * exits), deletes what the kit's user wrote into the reports directory
- * through the kit's own image (that user owns it), and deletes the working
- * directory, the configuration included.
+ * Cleanup first deletes the bearer configuration, independently of Docker;
+ * then force-removes the container (`--rm` removes it only when it exits)
+ * and deletes what the kit's user wrote into the reports directory through
+ * the kit's own image (that user owns it), each Docker call bounded by a
+ * timeout that kills it; then deletes the working directory. The signal
+ * handlers stay registered until cleanup has ended.
  */
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 
@@ -34,8 +37,16 @@ export type KitSignal = "SIGINT" | "SIGTERM";
 
 /** What a session uses from its surroundings (stubbed in tests). */
 export interface SessionDeps {
-  /** Runs `docker` with the arguments; resolves for any exit code. */
-  readonly docker: (args: readonly string[]) => Promise<CommandResult>;
+  /**
+   * Runs `docker` with the arguments and resolves for any exit code; the
+   * signal aborts it (the subprocess is killed).
+   */
+  readonly docker: (
+    args: readonly string[],
+    signal: AbortSignal
+  ) => Promise<CommandResult>;
+  /** How long one Docker cleanup call may take before it is killed. */
+  readonly cleanupTimeoutMs: number;
   /** Where signals arrive (`process`). */
   readonly signals: {
     readonly on: (signal: KitSignal, handler: () => void) => void;
@@ -55,15 +66,42 @@ export interface KitSession {
   readonly container: string;
 }
 
-// A cleanup step never stops the others: a failure is reported and the
-// next step runs.
-const attempt = async (step: () => Promise<CommandResult>): Promise<void> => {
+const report = (message: string): void => {
+  process.stderr.write(`ctk cleanup: ${message}\n`);
+};
+
+/**
+ * One Docker cleanup call, bounded: after the timeout it is aborted (its
+ * subprocess killed) and cleanup goes on, whether or not the call ever
+ * settles. A failure is reported, never thrown, so it stops no other step.
+ *
+ * @param deps - Docker and the timeout.
+ * @param args - The `docker` arguments.
+ * @returns Nothing.
+ */
+const boundedDocker = async (
+  deps: SessionDeps,
+  args: readonly string[]
+): Promise<void> => {
+  const controller = new AbortController();
+
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, deps.cleanupTimeoutMs);
+
   try {
-    await step();
+    await Promise.race([
+      deps.docker(args, controller.signal),
+      once(controller.signal, "abort"),
+    ]);
+
+    if (controller.signal.aborted) {
+      report(`docker ${args.join(" ")} timed out and was killed`);
+    }
   } catch (error) {
-    process.stderr.write(
-      `ctk cleanup: ${error instanceof Error ? error.message : String(error)}\n`
-    );
+    report(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -71,7 +109,7 @@ const removeContainer = async (
   deps: SessionDeps,
   container: string
 ): Promise<void> => {
-  await attempt(async () => await deps.docker(["rm", "-f", container]));
+  await boundedDocker(deps, ["rm", "-f", container]);
 };
 
 const clearReports = async (
@@ -79,24 +117,30 @@ const clearReports = async (
   session: KitSession,
   image: string
 ): Promise<void> => {
-  await attempt(
-    async () =>
-      await deps.docker([
-        "run",
-        "--rm",
-        "--name",
-        `${session.container}-cleanup`,
-        "--entrypoint",
-        "find",
-        "-v",
-        `${session.reports}:/reports`,
-        image,
-        "/reports",
-        "-mindepth",
-        "1",
-        "-delete",
-      ])
-  );
+  await boundedDocker(deps, [
+    "run",
+    "--rm",
+    "--name",
+    `${session.container}-cleanup`,
+    "--entrypoint",
+    "find",
+    "-v",
+    `${session.reports}:/reports`,
+    image,
+    "/reports",
+    "-mindepth",
+    "1",
+    "-delete",
+  ]);
+};
+
+// Removes a path, reporting (never throwing) what cannot be removed.
+const removePath = (target: string, recursive: boolean): void => {
+  try {
+    rmSync(target, { force: true, recursive });
+  } catch (error) {
+    report(error instanceof Error ? error.message : String(error));
+  }
 };
 
 /**
@@ -128,9 +172,11 @@ export const withKitSession = async <A>(
 
   const cleanup = async (): Promise<void> => {
     cleaned ??= (async () => {
+      // The credential first, independently of Docker.
+      removePath(session.config, false);
       await removeContainer(deps, session.container);
       await clearReports(deps, session, image);
-      rmSync(work, { force: true, recursive: true });
+      removePath(work, true);
     })();
 
     await cleaned;
@@ -157,10 +203,12 @@ export const withKitSession = async <A>(
 
     return await body(session);
   } finally {
+    // The handlers stay until cleanup has ended, so a signal during it
+    // still ends the process after it.
+    await cleanup();
+
     for (const [signal, handler] of handlers) {
       deps.signals.off(signal, handler);
     }
-
-    await cleanup();
   }
 };

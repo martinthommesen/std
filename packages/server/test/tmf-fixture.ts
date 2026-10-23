@@ -511,6 +511,13 @@ export const setUpTmfFixture = Effect.gen(function* setUpTmfFixture() {
       effect: "deny",
       fields: [FF.noteAuthor.id],
     }),
+    // Employees may write a note's position but not read it: they cannot
+    // see the order it stores, so they may not reorder (decision 0033).
+    accessRule(FX.note.id, [employee], {
+      actions: ["read"],
+      effect: "deny",
+      fields: [FF.notePosition.id],
+    }),
   ];
 
   yield* change(

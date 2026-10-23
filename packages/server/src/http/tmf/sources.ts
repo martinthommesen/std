@@ -228,7 +228,13 @@ const partsByOwner = Effect.fn("Tmf.partsByOwner")(function* partsByOwner(
 
   const selection = selectionOf(
     view,
-    new Set([...sourceKeysOf(attribute.item.attributes), owner.id])
+    // The order field too: a write keeps positions it can see unchanged.
+    new Set([
+      ...sourceKeysOf(attribute.item.attributes),
+      ...[owner.id, orderField].flatMap((key) =>
+        key === undefined ? [] : [key]
+      ),
+    ])
   );
 
   const decoded: DecodedRecord[] = [];

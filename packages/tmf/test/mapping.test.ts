@@ -7,6 +7,7 @@ import {
   enumAttribute,
   fieldAttribute,
   jsonAttribute,
+  mappingProblems,
   partsAttribute,
   referenceAttribute,
   SYSTEM_SOURCES,
@@ -340,7 +341,7 @@ describe("tmf-mapping", () => {
       attribute: "note",
       kind: "invalidValue",
       message:
-        "note keeps its items in creation order: list the kept items in their order, new items after them.",
+        "note cannot be reordered here: list the kept items in their current order, new items after them.",
     };
 
     expect(
@@ -443,6 +444,127 @@ describe("tmf-mapping", () => {
     ).toStrictEqual([
       { existingId: "n1", values: new Map([[F.noteText, "one"]]) },
     ]);
+  });
+
+  it("keeps positions when the order stays, appends after the highest, and rewrites all on a reorder, with duplicate and negative positions", () => {
+    const positioned = (id: string, position: number): SourceRecord => ({
+      ...note(id, id),
+      values: new Map([
+        [F.noteText, value(id)],
+        [F.status, value(position)],
+      ]),
+    });
+
+    // As reads list them: position, then creation (b and c tie at -3).
+    const parts = [
+      positioned("a", -5),
+      positioned("b", -3),
+      positioned("c", -3),
+    ];
+
+    const record: SourceRecord = {
+      ...RECORD,
+      parts: new Map([["note", parts]]),
+    };
+
+    const notes = partsAttribute("note", {
+      attributes: [fieldAttribute("text", F.noteText)],
+      classId: NOTE,
+      orderField: F.status,
+      ownerField: F.noteOwner,
+      type: "Note",
+    });
+
+    const itemsOf = (body: readonly object[]) => {
+      const planned = planWrite({
+        access: ALL_ACCESS,
+        attributes: [notes],
+        body: { note: body.map((item) => ({ ...item })) },
+        current: { record, rendered: {}, renderedParts: new Map() },
+        partAccess: () => ALL_ACCESS,
+      });
+
+      return Result.isSuccess(planned) ? planned.success.parts[0]?.items : [];
+    };
+
+    const same = itemsOf([
+      { id: "a", text: "a" },
+      { id: "b", text: "b" },
+      { id: "c", text: "c" },
+      { text: "d" },
+    ]);
+
+    expect(same?.map((item) => item.values.get(F.status))).toStrictEqual([
+      undefined,
+      undefined,
+      undefined,
+      -2,
+    ]);
+
+    const swapped = itemsOf([
+      { id: "c", text: "c" },
+      { id: "b", text: "b" },
+    ]);
+
+    expect(swapped?.map((item) => item.values.get(F.status))).toStrictEqual([
+      0, 1,
+    ]);
+
+    // Readable but not writable, or writable but not readable: no reorder.
+    for (const access of [
+      { ...ALL_ACCESS, canName: (key: string) => key !== F.status },
+      { ...ALL_ACCESS, canRead: (key: string) => key !== F.status },
+    ]) {
+      const refused = planWrite({
+        access: ALL_ACCESS,
+        attributes: [notes],
+        body: {
+          note: [
+            { id: "c", text: "c" },
+            { id: "a", text: "a" },
+          ],
+        },
+        current: { record, rendered: {}, renderedParts: new Map() },
+        partAccess: () => access,
+      });
+
+      expect(Result.isFailure(refused)).toBeTruthy();
+    }
+  });
+
+  it("refuses a mapping whose item attribute writes the order field, or maps a name twice", () => {
+    const notes = partsAttribute("note", {
+      attributes: [
+        fieldAttribute("text", F.noteText),
+        fieldAttribute("position", F.status),
+        fieldAttribute("text", F.json),
+      ],
+      classId: NOTE,
+      orderField: F.status,
+      ownerField: F.noteOwner,
+      type: "Note",
+    });
+
+    expect(
+      mappingProblems({
+        basePath: "/tmf-api/test/v5",
+        resources: [{ ...RESOURCE, attributes: [notes, notes] }],
+        spec: "TMF621",
+      })
+    ).toStrictEqual([
+      "TMF621 troubleTicket: attribute note is mapped twice",
+      "TMF621 troubleTicket.note: attribute text is mapped twice",
+      "TMF621 troubleTicket.note: attribute position writes the order field",
+      "TMF621 troubleTicket.note: attribute text is mapped twice",
+      "TMF621 troubleTicket.note: attribute position writes the order field",
+    ]);
+    expect(
+      mappingProblems({
+        basePath: "/tmf-api/test/v5",
+        resources: [RESOURCE],
+        spec: "TMF621",
+      })
+    ).toStrictEqual([]);
   });
 
   it("turns a patched resource into the equivalent merge-patch body", () => {

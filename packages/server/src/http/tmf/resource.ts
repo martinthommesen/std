@@ -60,8 +60,16 @@ import {
 } from "../../records/save-pipeline.ts";
 import type { ConfigState } from "../../sql/request-revision.ts";
 import { expectedVersionOf } from "../record-writes.ts";
-import { checkRequestRevision } from "../stale-request.ts";
-import { applyJsonPatch, mergePatch, parseJsonPatch } from "../v2/patch.ts";
+import {
+  checkRequestRevision,
+  checkUnscopedRevision,
+} from "../stale-request.ts";
+import {
+  applyJsonPatch,
+  mergePatch,
+  namesOfPatch,
+  parseJsonPatch,
+} from "../v2/patch.ts";
 import { jsonAnswer, linkHeader, writeFailures } from "../v2/records.ts";
 import { jsonBodyOf, mediaTypeOf, queryOf } from "../v2/request.ts";
 import { classOfType } from "../v2/table-names.ts";
@@ -108,16 +116,21 @@ export interface TmfInput {
  * takes from STD's definitions. A mapping names fields by stable ID, so
  * its attributes need none; a local class's attributes are its fields'
  * API names (11.1), and a name renamed or reused since the revision the
- * client states is `SchemaChanged`, as on `/api/v2`. Like `/api/v2`, a
- * request that states no revision is resolved at the current one
- * (decision 0033).
+ * client states is `SchemaChanged`, as on `/api/v2`. A stated revision is
+ * checked even when the request names no local attribute, as a request
+ * that names no field is (`checkUnscopedRevision`): a revision this
+ * database never had is `SchemaChanged`. Like `/api/v2`, a request that
+ * states no revision is resolved at the current one (Contracts 6.2;
+ * decision 0033).
  *
  * @param input - The request.
  * @param scope - The caller's scope.
- * @param classId - The concrete class whose names the request uses.
+ * @param classId - The concrete class whose names the request uses, or
+ *   undefined when it uses none (a list without records, a delete).
  * @param names - The non-mapped names the request uses (body members,
- *   `fields`), or undefined for a read's default selection: every local
- *   attribute of the class.
+ *   JSON Patch paths and sources, the local attributes `fields` selects),
+ *   or undefined for a read's default selection: every local attribute of
+ *   the class.
  * @param write - The write action, for a body.
  * @returns Nothing, or `SchemaChanged`.
  */
@@ -125,27 +138,32 @@ const checkLocalNames = Effect.fn("Tmf.checkLocalNames")(
   function* checkLocalNames(
     input: TmfInput,
     scope: ReadScope,
-    classId: DefinitionId,
+    classId?: DefinitionId,
     names?: readonly string[],
     write?: { readonly action: "create" | "update" }
   ) {
-    const local =
-      names ??
-      extensionsOf(scope.snapshot, input.mapped.resource, classId).map(
-        (attribute) => attribute.name
-      );
-
-    const table = scope.snapshot.qualifiedNameOf(classId);
-
-    if (
-      local.length === 0 ||
-      table === undefined ||
-      Option.isNone(input.stated)
-    ) {
-      return;
+    if (Option.isNone(input.stated)) {
+      return yield* Effect.void;
     }
 
-    yield* checkRequestRevision(
+    const local =
+      classId === undefined
+        ? []
+        : (names ??
+          extensionsOf(scope.snapshot, input.mapped.resource, classId).map(
+            (attribute) => attribute.name
+          ));
+
+    const table =
+      classId === undefined
+        ? undefined
+        : scope.snapshot.qualifiedNameOf(classId);
+
+    if (local.length === 0 || table === undefined) {
+      return yield* checkUnscopedRevision(input.stated);
+    }
+
+    return yield* checkRequestRevision(
       input.stated,
       table,
       write === undefined
@@ -162,10 +180,13 @@ const checkLocalNames = Effect.fn("Tmf.checkLocalNames")(
  * refuse.
  *
  * @param mapped - The resource.
- * @param body - The body.
+ * @param names - The names the request uses.
  * @returns The names.
  */
-const localNamesOf = (mapped: MappedResource, body: JsonObject): string[] => {
+const localNamesOf = (
+  mapped: MappedResource,
+  names: Iterable<string>
+): string[] => {
   const mappedNames = new Set([
     "id",
     "href",
@@ -173,8 +194,30 @@ const localNamesOf = (mapped: MappedResource, body: JsonObject): string[] => {
     ...mapped.resource.attributes.map((attribute) => attribute.name),
   ]);
 
-  return Object.keys(body).filter((name) => !mappedNames.has(name));
+  return [...new Set(names)].filter((name) => !mappedNames.has(name));
 };
+
+/**
+ * The local attributes an explicit `fields` selects on a class, or
+ * undefined for the default selection (all of them).
+ *
+ * @param scope - The caller's scope.
+ * @param mapped - The resource.
+ * @param classId - The class.
+ * @param fields - The selection, null for the default.
+ * @returns The names, or undefined.
+ */
+const selectedLocalNames = (
+  scope: ReadScope,
+  mapped: MappedResource,
+  classId: DefinitionId,
+  fields: ReadonlySet<string> | null
+): readonly string[] | undefined =>
+  fields === null
+    ? undefined
+    : extensionsOf(scope.snapshot, mapped.resource, classId).flatMap(
+        (attribute) => (fields.has(attribute.name) ? [attribute.name] : [])
+      );
 
 // The classes of the records a read returns, each once.
 const classesOf = (records: readonly SourceRecord[]): DefinitionId[] => [
@@ -328,8 +371,20 @@ export const listTmf = Effect.fn("Tmf.list")(function* listTmf(
     page.records
   );
 
-  for (const classId of classesOf(records)) {
-    yield* checkLocalNames(input, scope, classId);
+  const classes = classesOf(records);
+
+  // A stated revision is checked even when no record comes back.
+  if (classes.length === 0) {
+    yield* checkLocalNames(input, scope);
+  }
+
+  for (const classId of classes) {
+    yield* checkLocalNames(
+      input,
+      scope,
+      classId,
+      selectedLocalNames(scope, mapped, classId, parsed.fields)
+    );
   }
 
   const render = {
@@ -382,7 +437,12 @@ export const retrieveTmf = Effect.fn("Tmf.retrieve")(function* retrieveTmf(
 
   const current = yield* readCurrent(scope, input.mapped, id);
 
-  yield* checkLocalNames(input, scope, current.classId);
+  yield* checkLocalNames(
+    input,
+    scope,
+    current.classId,
+    selectedLocalNames(scope, input.mapped, current.classId, fields)
+  );
 
   return jsonAnswer(
     renderFor(
@@ -654,7 +714,7 @@ export const createTmf = Effect.fn("Tmf.create")(function* createTmf(
     input,
     scope,
     classId,
-    localNamesOf(input.mapped, body),
+    localNamesOf(input.mapped, Object.keys(body)),
     {
       action: "create",
     }
@@ -762,6 +822,27 @@ const renderedOf = (
 
   return { record, rendered, renderedParts };
 };
+
+// The attributes a PATCH names: a merge-patch's members, or every JSON
+// Patch operation's path and source (Contracts 10.5: its scope is every
+// attribute it touches or reads).
+const patchNames = Effect.fn("Tmf.patchNames")(function* patchNames(
+  patch: TmfPatch
+) {
+  if (!patch.jsonPatch) {
+    return isJsonObject(patch.body) ? Object.keys(patch.body) : [];
+  }
+
+  const operations = parseJsonPatch(patch.body);
+
+  if (Result.isFailure(operations)) {
+    return yield* operations.failure;
+  }
+
+  const names = namesOfPatch(operations.success);
+
+  return [...names.written, ...names.read];
+});
 
 // The merge-patch body of a PATCH: the body itself, or a JSON Patch
 // applied to the resource as the caller reads it under the lock.
@@ -872,16 +953,21 @@ export const patchTmf = Effect.fn("Tmf.patch")(function* patchTmf(
 
       const image = renderedOf(input, scope, current);
 
-      const body = yield* patchBody(patch, image.rendered);
-
-      yield* checkTypeMembers(body, image.rendered);
+      // Every name the request takes from definitions is checked against
+      // its stated revision before anything is evaluated: a merge-patch's
+      // members, and every JSON Patch operation's path and source,
+      // `test`s and replacements that change nothing included.
       yield* checkLocalNames(
         input,
         scope,
         current.classId,
-        localNamesOf(input.mapped, body),
+        localNamesOf(input.mapped, yield* patchNames(patch)),
         { action: "update" }
       );
+
+      const body = yield* patchBody(patch, image.rendered);
+
+      yield* checkTypeMembers(body, image.rendered);
 
       // A JSON Patch's result is the exact new value of every attribute it
       // changed; only a merge-patch merges json objects (RFC 7396).
@@ -974,7 +1060,14 @@ export const deleteTmf = Effect.fn("Tmf.delete")(function* deleteTmf(
 ) {
   yield* aggregateOperation(
     Effect.gen(function* deletePartsAndOwner() {
-      const { current } = yield* lockedCurrent(input, id, expectedVersion);
+      const { current, scope } = yield* lockedCurrent(
+        input,
+        id,
+        expectedVersion
+      );
+
+      // A delete names no attribute; a stated revision is still checked.
+      yield* checkLocalNames(input, scope);
 
       for (const attribute of input.mapped.resource.attributes) {
         if (attribute.kind === "parts") {

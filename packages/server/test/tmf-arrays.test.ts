@@ -413,5 +413,146 @@ describe("tmf-arrays", () => {
           assert.strictEqual(author, "Alice");
         })
     );
+
+    dbTest.effect(
+      "a caller who cannot read the order field cannot reorder, and the refusal names no hidden part",
+      () =>
+        Effect.gen(function* unreadableOrder() {
+          const http = yield* TestHttpClient;
+          const { alice, bob } = yield* v2Callers;
+
+          const ticket = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "a" },
+              { "@type": "Note", text: "b" },
+            ],
+          });
+
+          const id = textOf(ticket.id);
+          const path = `${FIXTURE_TICKETS}/${id}`;
+          const asBob = asObject((yield* http.get(path, bob)).json);
+          const [a = {}, b = {}] = asArray(asBob.note).map(asObject);
+          const version = yield* versionOf(TICKETS, id);
+
+          for (const options of [
+            patchOptions(bob, "application/merge-patch+json", { note: [b, a] }),
+            patchOptions(bob, "application/json-patch+json", [
+              { from: "/note/0", op: "move", path: "/note/1" },
+            ]),
+          ]) {
+            const refused = yield* http.request("PATCH", path, options);
+
+            assert.strictEqual(refused.status, 400, refused.text);
+            assert.strictEqual(asObject(refused.json).code, "ValidationFailed");
+            assert.notInclude(refused.text, textOf(a.id));
+          }
+
+          assert.strictEqual(yield* versionOf(TICKETS, id), version);
+          assert.deepStrictEqual(
+            noteTexts(asObject((yield* http.get(path, alice)).json)),
+            ["a", "b"]
+          );
+
+          const kept = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(bob, "application/merge-patch+json", { note: [a, b] })
+          );
+
+          assert.strictEqual(kept.status, 200, kept.text);
+          assert.strictEqual(yield* versionOf(TICKETS, id), version);
+        })
+    );
+
+    dbTest.effect(
+      "sending back the array as read keeps duplicate and negative positions and changes nothing",
+      () =>
+        Effect.gen(function* keptPositions() {
+          const http = yield* TestHttpClient;
+          const { alice } = yield* v2Callers;
+
+          const ticket = yield* newTicket(alice, {
+            note: [
+              { "@type": "Note", text: "a" },
+              { "@type": "Note", text: "b" },
+              { "@type": "Note", text: "c" },
+            ],
+          });
+
+          const id = textOf(ticket.id);
+          const path = `${FIXTURE_TICKETS}/${id}`;
+
+          // Generic writes give b and c the same negative position.
+          for (const [note, position] of [
+            [asObject(asArray(ticket.note)[1]), -3],
+            [asObject(asArray(ticket.note)[2]), -3],
+            [asObject(asArray(ticket.note)[0]), -5],
+          ] as const) {
+            const stored = yield* http.get(
+              `/api/v2/tmffxNote/${textOf(note.id)}`,
+              alice
+            );
+
+            const written = yield* http.request(
+              "PATCH",
+              `/api/v2/tmffxNote/${textOf(note.id)}`,
+              {
+                ...alice,
+                headers: {
+                  "content-type": "application/merge-patch+json",
+                  "if-match": stored.headers.get("etag") ?? "",
+                },
+                rawBody: JSON.stringify({ position }),
+              }
+            );
+
+            assert.strictEqual(written.status, 200, written.text);
+          }
+
+          const read = yield* http.get(path, alice);
+
+          assert.deepStrictEqual(noteTexts(asObject(read.json)), [
+            "a",
+            "b",
+            "c",
+          ]);
+
+          const etag = read.headers.get("etag");
+
+          const again = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: asArray(asObject(read.json).note),
+            })
+          );
+
+          assert.strictEqual(again.status, 200, again.text);
+          assert.strictEqual(again.headers.get("etag"), etag);
+
+          const positions = yield* values(
+            `SELECT position::text AS value FROM ${NOTES} WHERE ticket = $1::uuid ORDER BY position, created_at`,
+            [id]
+          );
+
+          assert.deepStrictEqual(positions, ["-5", "-3", "-3"]);
+
+          // A new item at the end gets the position after the highest.
+          const appended = yield* http.request(
+            "PATCH",
+            path,
+            patchOptions(alice, "application/merge-patch+json", {
+              note: [...asArray(asObject(read.json).note), { text: "d" }],
+            })
+          );
+
+          assert.deepStrictEqual(noteTexts(asObject(appended.json)), [
+            "a",
+            "b",
+            "c",
+            "d",
+          ]);
+        })
+    );
   });
 });
