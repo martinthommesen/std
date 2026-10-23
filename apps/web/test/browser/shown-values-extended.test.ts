@@ -45,7 +45,7 @@ import { inject } from "vitest";
 
 import {
   API_PREFIX,
-  assertHiddenValuesAbsent,
+  hiddenValuesChecker,
   collectionOf,
   bearerToken,
   captureResponses,
@@ -706,13 +706,10 @@ const uiShowsTheApiValues = async (
   const responses = await captureResponses(page);
   const seen: Seen = new Set();
 
+  const checkPlaintext = hiddenValuesChecker(page, responses, PLAINTEXTS);
+
   const noPlaintextAfter = async (step: string) => {
-    await assertHiddenValuesAbsent(
-      page,
-      responses,
-      PLAINTEXTS,
-      `${user.login}: ${step}`
-    );
+    await checkPlaintext(`${user.login}: ${step}`);
   };
 
   await signIn(page, origin, visitorOf(user));

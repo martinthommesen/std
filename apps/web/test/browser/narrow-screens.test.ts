@@ -34,6 +34,7 @@ import {
   fillField,
   formControl,
   formOutcome,
+  inOrder,
   openRecordForm,
   rendered,
   saveRecordForm,
@@ -206,8 +207,7 @@ const conflictBarCoversNoField = async (
   browser: Browser,
   origin: string,
   fixture: HelpdeskData,
-  viewport: { readonly height: number; readonly width: number },
-  version: number
+  viewport: { readonly height: number; readonly width: number }
 ) => {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
@@ -218,6 +218,7 @@ const conflictBarCoversNoField = async (
   await fillField(page, "Description", `Mine at ${viewport.width} px.`);
 
   // Another session saves first, so this save is refused as a conflict.
+  const { version } = await apiRecord(page, origin, printer);
   const token = await bearerToken(origin, fixture.agent);
 
   const theirs = await apiCall(origin, token, {
@@ -476,27 +477,18 @@ describe("narrow screens", () => {
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
-            // Each run's other session saves once more: versions 1, 2, 3.
-            await conflictBarCoversNoField(
-              browser,
-              server.origin,
-              fixture,
-              { height: 844, width: 320 },
-              1
-            );
-            await conflictBarCoversNoField(
-              browser,
-              server.origin,
-              fixture,
-              { height: 360, width: 640 },
-              2
-            );
-            await conflictBarCoversNoField(
-              browser,
-              server.origin,
-              fixture,
-              { height: 600, width: 800 },
-              3
+            await inOrder(
+              [
+                { height: 844, width: 320 },
+                { height: 360, width: 640 },
+                { height: 600, width: 800 },
+              ],
+              conflictBarCoversNoField.bind(
+                undefined,
+                browser,
+                server.origin,
+                fixture
+              )
             );
           });
         }).pipe(Effect.scoped)

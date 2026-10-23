@@ -18,7 +18,7 @@ import { ACME, AcmeFixture, acmeTestLayer } from "@std/testing/acme-fixture";
 import type { AcmeData } from "@std/testing/acme-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import type { JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { Browser, Page } from "playwright";
 import { inject } from "vitest";
 
@@ -26,6 +26,7 @@ import {
   API_PREFIX,
   addCondition,
   apiPages,
+  apiCall,
   applyFilter,
   assertHiddenValuesAbsent,
   bearerToken,
@@ -81,50 +82,24 @@ const local = { owner: { layer: "local" }, protected: false } as const;
  * Sends a JSON request to the API with a bearer token.
  *
  * @param origin - The server.
- * @param token - The session token, if any.
+ * @param token - The session token.
  * @param path - The path under `API_PREFIX`.
  * @param body - The JSON body.
  * @returns The response's text.
  */
 const post = async (
   origin: string,
-  token: string | undefined,
+  token: string,
   path: string,
   body: JsonValue
 ): Promise<string> => {
-  const headers = new Headers({ "content-type": "application/json" });
+  const response = await apiCall(origin, token, { body, method: "POST", path });
 
-  if (token !== undefined) {
-    headers.set("authorization", `Bearer ${token}`);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`POST ${path}: ${response.status} ${response.text}`);
   }
 
-  const response = await fetch(`${origin}${API_PREFIX}${path}`, {
-    body: JSON.stringify(body),
-    headers,
-    method: "POST",
-  });
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`POST ${path}: ${response.status} ${text}`);
-  }
-
-  return text;
-};
-
-const decodeSession = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ token: Schema.String }))
-);
-
-const tokenOf = async (origin: string, visitor: Visitor): Promise<string> => {
-  const text = await post(origin, undefined, "/session", {
-    login: visitor.login,
-    password: visitor.password,
-    tokenDelivery: "body",
-  });
-
-  return decodeSession(text).token;
+  return response.text;
 };
 
 /**
@@ -160,19 +135,7 @@ const dockOf = (number: number, fixture: AcmeData): string | null => {
  * @returns Nothing.
  */
 const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
-  const token = await tokenOf(origin, ADA);
-
-  const metadata = await fetch(
-    `${origin}${API_PREFIX}/tableMetadata/${collectionOf(ASSETS)}`,
-    { headers: { authorization: `Bearer ${token}` } }
-  );
-
-  // NOTE: the tests of this file share one database; the first one seeds.
-  const described = await metadata.text();
-
-  if (described.includes('"name":"tier"')) {
-    return;
-  }
+  const token = await bearerToken(origin, ADA);
 
   const tierId = randomUUID();
 
@@ -247,6 +210,27 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
     });
   });
 };
+
+/** The running server after the suite's list fixtures have been seeded. */
+class SeededAcme extends Context.Service<
+  SeededAcme,
+  { readonly origin: string }
+>()("@std/web/test/browser/list-pages/SeededAcme") {
+  static readonly layer = Layer.effect(
+    SeededAcme,
+    Effect.gen(function* seedAcmeSuite() {
+      const database = yield* TestDatabase;
+      const fixture = yield* AcmeFixture;
+      const server = yield* stdServe(database.url, inject("webRoot"));
+
+      yield* Effect.promise(async () => {
+        await seed(server.origin, fixture);
+      });
+
+      return SeededAcme.of({ origin: server.origin });
+    })
+  );
+}
 
 /** One list the UI builds and the API is asked for directly. */
 interface Scenario {
@@ -598,7 +582,7 @@ const decodeCreated = Schema.decodeUnknownSync(
  * @returns The records' IDs.
  */
 const idOnlyTable = async (origin: string): Promise<readonly string[]> => {
-  const token = await tokenOf(origin, ADA);
+  const token = await bearerToken(origin, ADA);
   const namespaceId = randomUUID();
   const classId = randomUUID();
 
@@ -731,18 +715,17 @@ describe("list pages", () => {
     );
   });
 
-  layer(acmeTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(SeededAcme.layer.pipe(Layer.provideMerge(acmeTestLayer())), {
+    excludeTestServices: true,
+  })((dbTest) => {
     dbTest.effect(
       "the UI list and the API return the same records in the same order",
       () =>
         Effect.gen(function* listsMatchTheApi() {
-          const database = yield* TestDatabase;
-          const fixture = yield* AcmeFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededAcme;
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
-            await seed(server.origin, fixture);
             await sameListsAsApi(browser, server.origin, ADA, ADMIN_SCENARIOS);
             await sameListsAsApi(browser, server.origin, BOB, BOB_SCENARIOS);
           });
@@ -753,13 +736,11 @@ describe("list pages", () => {
       "a restricted field shows as restricted and never reaches the browser",
       () =>
         Effect.gen(function* restrictedTest() {
-          const database = yield* TestDatabase;
           const fixture = yield* AcmeFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededAcme;
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
-            await seed(server.origin, fixture);
             await restrictedStaysHidden(browser, server.origin, fixture);
           });
         }).pipe(Effect.scoped)
@@ -769,8 +750,7 @@ describe("list pages", () => {
       "a table without a column to show lists its records by ID, each linking to its form",
       () =>
         Effect.gen(function* idOnlyTest() {
-          const database = yield* TestDatabase;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededAcme;
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
@@ -783,8 +763,7 @@ describe("list pages", () => {
       "the navigation lists exactly the tables the caller can open",
       () =>
         Effect.gen(function* navigationTest() {
-          const database = yield* TestDatabase;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededAcme;
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {

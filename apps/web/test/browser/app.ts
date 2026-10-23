@@ -1098,6 +1098,36 @@ export const assertHiddenValuesAbsent = async (
   }
 };
 
+/**
+ * Checks new response bodies and the current page state at each checkpoint.
+ * Call checkpoints sequentially with the same append-only capture and hidden
+ * values; only a successful check advances the checked response prefix.
+ *
+ * @param page - The page.
+ * @param responses - The complete capture, including any unread-body failures.
+ * @param hidden - The fixed values the signed-in user must never receive.
+ * @returns A checkpoint check, taking a step for its failure message.
+ */
+export const hiddenValuesChecker = (
+  page: Page,
+  responses: () => Promise<readonly ReceivedResponse[]>,
+  hidden: readonly string[]
+): ((step: string) => Promise<void>) => {
+  let checked = 0;
+
+  return async (step) => {
+    const received = await responses();
+
+    await assertHiddenValuesAbsent(
+      page,
+      async () => await Promise.resolve(received.slice(checked)),
+      hidden,
+      step
+    );
+    checked = received.length;
+  };
+};
+
 /** One step of building a condition in the filter builder. */
 export type ConditionStep =
   | { readonly kind: "field"; readonly label: string }
@@ -1315,45 +1345,6 @@ export const addCondition = async (page: Page): Promise<void> => {
 };
 
 /**
- * Adds a group inside a group.
- *
- * @param page - A list page.
- * @param groupNumber - The group to add to (1 is the outermost).
- * @returns Nothing.
- */
-export const addGroup = async (
-  page: Page,
-  groupNumber: number
-): Promise<void> => {
-  const name =
-    groupNumber === 1 ? "Add group" : `Add group to Group ${groupNumber}`;
-
-  await showFilter(page);
-  await page.getByRole("button", { exact: true, name }).click();
-  await rendered(page);
-};
-
-/**
- * Adds a condition to a nested group.
- *
- * @param page - A list page.
- * @param groupNumber - The group (not the outermost).
- * @returns Nothing.
- */
-export const addConditionTo = async (
-  page: Page,
-  groupNumber: number
-): Promise<void> => {
-  await showFilter(page);
-  await page
-    .getByRole("button", {
-      exact: true,
-      name: `Add condition to Group ${groupNumber}`,
-    })
-    .click();
-};
-
-/**
  * Sets whether a group needs all or any of its conditions.
  *
  * @param page - A list page.
@@ -1384,19 +1375,6 @@ export const applyFilter = async (page: Page): Promise<void> => {
   await rendered(page);
   await reloadingList(page, async () => {
     await page.getByRole("button", { name: "Apply filter" }).click();
-  });
-};
-
-/**
- * Clears the builder's filter and waits for the list.
- *
- * @param page - A list page.
- * @returns Nothing, once the list is settled.
- */
-export const clearFilter = async (page: Page): Promise<void> => {
-  await showFilter(page);
-  await reloadingList(page, async () => {
-    await page.getByRole("button", { name: "Clear filter" }).click();
   });
 };
 
@@ -1722,11 +1700,15 @@ export const valuesHiddenFrom = async (
   sessions: HiddenFrom
 ): Promise<string[]> => {
   const listed = await Promise.all(
-    tables.map(async (table) => ({
-      read: await everyRecord(origin, sessions.reader, table, null),
-      references: await referenceNamesOf(origin, sessions.reader, table),
-      seen: await everyRecord(origin, sessions.viewer, table, null),
-    }))
+    tables.map(async (table) => {
+      const [read, references, seen] = await Promise.all([
+        everyRecord(origin, sessions.reader, table, null),
+        referenceNamesOf(origin, sessions.reader, table),
+        everyRecord(origin, sessions.viewer, table, null),
+      ]);
+
+      return { read, references, seen };
+    })
   );
 
   const readable = new Set(

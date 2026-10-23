@@ -23,8 +23,6 @@
  * customer email on the incident list, and add sixteen incidents through
  * the API as the administrator, so lists span several pages.
  */
-import { randomUUID } from "node:crypto";
-
 import { assert, describe, it, layer } from "@effect/vitest";
 import {
   HELPDESK,
@@ -34,21 +32,19 @@ import {
 import type { HelpdeskData, HelpdeskUser } from "@std/testing/helpdesk-fixture";
 import { TestDatabase } from "@std/testing/test-database";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { Browser, Page } from "playwright";
 import { inject } from "vitest";
 
 import {
   addCondition,
   API_PREFIX,
-  apiCall,
   collectionOf,
   sentAttributes,
   apiPages,
   apiRecord,
   applyFilter,
   applySavedFilter,
-  assertHiddenValuesAbsent,
   bearerToken,
   buildCondition,
   captureApiBodies,
@@ -60,6 +56,7 @@ import {
   formControl,
   hiddenValuesIn,
   historyEntryTexts,
+  hiddenValuesChecker,
   inOrder,
   listColumnCells,
   listedPages,
@@ -80,6 +77,13 @@ import {
   waitForForm,
 } from "./app.ts";
 import type { ConditionStep, SaveOutcome, Visitor } from "./app.ts";
+import {
+  addLocalFields,
+  adminCall,
+  appendToLayout,
+  definitionPath,
+  patchDefinition,
+} from "./shown.ts";
 import {
   devToolsMcp,
   devToolsRecord,
@@ -110,43 +114,6 @@ const visitorOf = (user: HelpdeskUser): Visitor => ({
  */
 const decodeBody = sentAttributes;
 
-const decodeRecordVersion = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ revision: Schema.Int }))
-);
-
-const decodeLayout = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      elements: Schema.Array(Schema.Json),
-      revision: Schema.Int,
-    })
-  )
-);
-
-/**
- * Sends a request as the administrator and requires it to succeed.
- *
- * @param origin - The server.
- * @param token - The administrator's session.
- * @param call - The request.
- * @returns The response's text.
- */
-const adminCall = async (
-  origin: string,
-  token: string,
-  call: Parameters<typeof apiCall>[2]
-): Promise<string> => {
-  const answered = await apiCall(origin, token, call);
-
-  assert.include(
-    [200, 201],
-    answered.status,
-    `${call.method} ${call.path}: ${answered.text}`
-  );
-
-  return answered.text;
-};
-
 /**
  * Adds a local field to a helpdesk table as one change set.
  *
@@ -165,105 +132,15 @@ const addLocalField = async (
     readonly type: JsonObject;
   }
 ): Promise<string> => {
-  const id = randomUUID();
+  const [id] = await addLocalFields(origin, token, field.classId, [
+    [field.name, field.label, field.type, null],
+  ]);
 
-  await adminCall(origin, token, {
-    body: {
-      operations: [
-        {
-          definition: {
-            ...field,
-            default: null,
-            helpText: null,
-            id,
-            kind: "field",
-            numberPrefix: null,
-            owner: { layer: "local" },
-            protected: false,
-            readOnly: false,
-            required: false,
-          },
-          op: "addField",
-        },
-      ],
-    },
-    method: "POST",
-    path: "/applyChangeSet",
-  });
+  if (id === undefined) {
+    throw new Error(`No ID returned for local field ${field.name}`);
+  }
 
   return id;
-};
-
-/**
- * A definition record's path under `API_PREFIX`.
- *
- * @param table - The definition table, such as `core.field`.
- * @param id - The definition's ID.
- * @returns The path.
- */
-const definitionPath = (table: string, id: string): string =>
-  `/${collectionOf(table)}/${id}`;
-
-/**
- * Appends fields to a layout (a layout is replaced whole, Contracts 6.3a).
- *
- * @param origin - The server.
- * @param token - The administrator's session.
- * @param layoutId - The layout.
- * @param fieldIds - The fields to add at its end.
- * @returns Nothing.
- */
-const appendToLayout = async (
-  origin: string,
-  token: string,
-  layoutId: string,
-  fieldIds: readonly string[]
-): Promise<void> => {
-  const path = definitionPath("core.layout", layoutId);
-
-  const read = decodeLayout(
-    await adminCall(origin, token, { method: "GET", path })
-  );
-
-  await adminCall(origin, token, {
-    body: {
-      elements: [
-        ...read.elements,
-        ...fieldIds.map((fieldId) => ({ fieldId, kind: "field" })),
-      ],
-    },
-    method: "PATCH",
-    path,
-    version: read.revision,
-  });
-};
-
-/**
- * Changes a definition record through the generic routes, at its current
- * version.
- *
- * @param origin - The server.
- * @param token - The administrator's session.
- * @param path - The record's path under `API_PREFIX`.
- * @param body - The change.
- * @returns Nothing.
- */
-const patchDefinition = async (
-  origin: string,
-  token: string,
-  path: string,
-  body: JsonObject
-): Promise<void> => {
-  const read = decodeRecordVersion(
-    await adminCall(origin, token, { method: "GET", path })
-  );
-
-  await adminCall(origin, token, {
-    body,
-    method: "PATCH",
-    path,
-    version: read.revision,
-  });
 };
 
 // LISTS
@@ -374,7 +251,7 @@ const costOf = (index: number): string => `${900 + index}.37`;
 /**
  * Adds the local `due` field, puts it and the customer email on the
  * incident list, and adds the seeded incidents, as the administrator.
- * The tests of a layer share a database: the first one seeds.
+ * The suite layer seeds once when its database and server are acquired.
  *
  * @param origin - The server.
  * @param fixture - The helpdesk fixture.
@@ -387,10 +264,6 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
     method: "GET",
     path: `/tableMetadata/${collectionOf(INCIDENTS)}`,
   });
-
-  if (described.includes('"name":"due"')) {
-    return;
-  }
 
   const v3 = described.includes('"name":"assigned_to"');
 
@@ -438,6 +311,27 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
     });
   });
 };
+
+/** The running server after the suite's list fixtures have been seeded. */
+class SeededHelpdesk extends Context.Service<
+  SeededHelpdesk,
+  { readonly origin: string }
+>()("@std/web/test/browser/gate/SeededHelpdesk") {
+  static readonly layer = Layer.effect(
+    SeededHelpdesk,
+    Effect.gen(function* seedHelpdeskSuite() {
+      const database = yield* TestDatabase;
+      const fixture = yield* HelpdeskFixture;
+      const server = yield* stdServe(database.url, inject("webRoot"));
+
+      yield* Effect.promise(async () => {
+        await seed(server.origin, fixture);
+      });
+
+      return SeededHelpdesk.of({ origin: server.origin });
+    })
+  );
+}
 
 /** One list the UI builds and the API is asked for directly. */
 interface Scenario {
@@ -682,8 +576,6 @@ const sameListsForBothUsers = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  await seed(origin, fixture);
-
   const adminOffered = await listsMatchTheApi(browser, origin, fixture.admin);
   const agentOffered = await listsMatchTheApi(browser, origin, fixture.agent);
 
@@ -765,17 +657,13 @@ const restrictedFieldsStayHidden = async (
   origin: string,
   fixture: HelpdeskData
 ) => {
-  await seed(origin, fixture);
-
   const hidden = await hiddenFromTheAgent(origin, fixture);
   const context = await browser.newContext();
   const page = await context.newPage();
   const everything = await captureResponses(page);
   const bodies = await captureApiBodies(page);
 
-  const nothingHiddenAfter = async (step: string) => {
-    await assertHiddenValuesAbsent(page, everything, hidden, step);
-  };
+  const nothingHiddenAfter = hiddenValuesChecker(page, everything, hidden);
 
   await signIn(page, origin, visitorOf(fixture.agent));
   await nothingHiddenAfter("sign-in");
@@ -1391,42 +1279,43 @@ describe("step 2 gate (helpdesk)", () => {
     );
   });
 
-  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
-    (dbTest) => {
-      dbTest.effect(
-        "gate 2B: for the same filter, the UI list and the API return the same records in the same order, for the admin and an agent",
-        () =>
-          Effect.gen(function* listsTest() {
-            const database = yield* TestDatabase;
-            const fixture = yield* HelpdeskFixture;
-            const server = yield* stdServe(database.url, inject("webRoot"));
-            const browser = yield* launchBrowser;
+  layer(
+    SeededHelpdesk.layer.pipe(
+      Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+    ),
+    { excludeTestServices: true }
+  )((dbTest) => {
+    dbTest.effect(
+      "gate 2B: for the same filter, the UI list and the API return the same records in the same order, for the admin and an agent",
+      () =>
+        Effect.gen(function* listsTest() {
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* SeededHelpdesk;
+          const browser = yield* launchBrowser;
 
-            yield* Effect.promise(async () => {
-              await sameListsForBothUsers(browser, server.origin, fixture);
-            });
-          }).pipe(Effect.scoped)
-      );
-    }
-  );
+          yield* Effect.promise(async () => {
+            await sameListsForBothUsers(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+  });
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(SeededHelpdesk.layer.pipe(Layer.provideMerge(helpdeskTestLayer())), {
+    excludeTestServices: true,
+  })((dbTest) => {
     dbTest.effect(
       "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
       () =>
         Effect.gen(function* devToolsTest() {
-          const database = yield* TestDatabase;
           const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededHelpdesk;
           const devOrigin = yield* viteDevServer(server.origin);
           const browser = yield* launchBrowser;
           const mcp = yield* devToolsMcp;
 
-          const hidden = yield* Effect.promise(async () => {
-            await seed(server.origin, fixture);
-
-            return await hiddenFromTheAgent(server.origin, fixture);
-          });
+          const hidden = yield* Effect.promise(
+            async () => await hiddenFromTheAgent(server.origin, fixture)
+          );
 
           // NOTE: the context stays open until the scope ends, so DevTools
           // keeps the page's runtime.
@@ -1450,9 +1339,8 @@ describe("step 2 gate (helpdesk)", () => {
       "gate 2B: a restricted field shows as restricted, never as empty, and never reaches the browser",
       () =>
         Effect.gen(function* restrictedTest() {
-          const database = yield* TestDatabase;
           const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededHelpdesk;
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
@@ -1464,9 +1352,8 @@ describe("step 2 gate (helpdesk)", () => {
       "gate 2C: a shipped v3 form refreshes a stale check, keeps input and never saves by itself",
       () =>
         Effect.gen(function* staleFormState() {
-          const database = yield* TestDatabase;
           const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
+          const server = yield* SeededHelpdesk;
           const devOrigin = yield* viteDevServer(server.origin);
           const browser = yield* launchBrowser;
           const mcp = yield* devToolsMcp;

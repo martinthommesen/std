@@ -16,6 +16,7 @@ import type { Page } from "playwright";
 import {
   assertHiddenValuesAbsent,
   hiddenValuesIn,
+  hiddenValuesChecker,
   recordLeavesOf,
   sentAttributes,
 } from "./app.ts";
@@ -236,6 +237,117 @@ describe("the hidden-value check", () => {
             ["7 in the response of https://app.test/h"],
           ]
         );
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "incremental checkpoints check new bodies, current page state and capture failures without forgetting a failed body",
+    () =>
+      Effect.gen(function* incrementalCheckpoints() {
+        const browser = yield* launchBrowser;
+
+        const page = yield* Effect.promise(async () => {
+          const context = await browser.newContext();
+
+          return await context.newPage();
+        });
+
+        yield* Effect.promise(async () => {
+          assert.isNull(await checked(page, CHROME, []));
+
+          let reads = 0;
+          let unread = false;
+
+          const bodies: ReceivedResponse[] = [
+            {
+              get body() {
+                reads += 1;
+
+                return "safe";
+              },
+              url: PAGE_URL,
+            },
+          ];
+
+          const check = hiddenValuesChecker(
+            page,
+            async () => {
+              if (unread) {
+                throw new Error("body could not be read");
+              }
+
+              return await Promise.resolve(bodies);
+            },
+            SHORT
+          );
+
+          const failureAt = async (step: string) => {
+            try {
+              await check(step);
+
+              return null;
+            } catch (error) {
+              return error instanceof Error ? error.message : String(error);
+            }
+          };
+
+          assert.isNull(await failureAt("initial"));
+          assert.isNull(await failureAt("unchanged"));
+          assert.strictEqual(
+            reads,
+            1,
+            "a successful body is scanned only once"
+          );
+
+          await page.evaluate(() => {
+            localStorage.setItem("hidden", "ab");
+          });
+          assert.include((await failureAt("storage")) ?? "", "ab in the page");
+          await page.evaluate(() => {
+            localStorage.clear();
+            const control = document.querySelector("input");
+
+            if (control !== null) {
+              control.value = "ab";
+            }
+          });
+          assert.include((await failureAt("control")) ?? "", "ab in the page");
+          await page.evaluate(() => {
+            const control = document.querySelector("input");
+
+            if (control !== null) {
+              control.value = "safe";
+            }
+
+            const cell = document.querySelector("[data-cell=value]");
+
+            if (cell !== null) {
+              cell.textContent = "ab";
+            }
+          });
+          assert.include((await failureAt("DOM")) ?? "", "ab in the page");
+          await page.evaluate(() => {
+            document.body.textContent = "safe";
+          });
+          assert.isNull(await failureAt("cleared"));
+
+          unread = true;
+          assert.strictEqual(
+            await failureAt("capture"),
+            "body could not be read"
+          );
+          unread = false;
+          bodies.push({ body: '{"values":{"secret":"ab"}}', url: PAGE_URL });
+          assert.include(
+            (await failureAt("new body")) ?? "",
+            "ab in the response"
+          );
+          assert.include(
+            (await failureAt("same failed body")) ?? "",
+            "ab in the response"
+          );
+          assert.strictEqual(reads, 1);
+        });
       }).pipe(Effect.scoped)
   );
 
