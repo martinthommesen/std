@@ -9,7 +9,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { ConditionDefectError } from "@std/conditions/defect";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import {
   field,
@@ -156,6 +156,42 @@ const imageOf = (
 
 const CONTEXT = { now: Date.UTC(2026, 9, 21), timeZone: "UTC" };
 
+/** Subscriptions created before any save, keyed by their IDs. */
+class SubscriptionNames extends Context.Service<
+  SubscriptionNames,
+  Readonly<Record<string, string>>
+>()("@std/server/test/outbox-producer/SubscriptionNames") {
+  static readonly layer = Layer.effect(
+    SubscriptionNames,
+    Effect.gen(function* setUpSubscriptions() {
+      yield* setUpAcme;
+
+      const ids = {
+        all: yield* subscribe({ classId: ACME.asset, name: "all_assets" }),
+        laptops: yield* subscribe({
+          classId: ACME.laptop,
+          name: "laptops",
+          operations: ["create", "delete"],
+        }),
+        lost: yield* subscribe({
+          classId: ACME.asset,
+          condition: LOST,
+          name: "lost_assets",
+        }),
+        off: yield* subscribe({
+          classId: ACME.asset,
+          enabled: false,
+          name: "disabled",
+        }),
+      };
+
+      return Object.fromEntries(
+        Object.entries(ids).map(([name, id]) => [id, name])
+      );
+    })
+  ).pipe(Layer.provideMerge(outboxTestLayer()));
+}
+
 describe("outbox-producer", () => {
   it("matches active, enabled subscriptions of the class and its ancestors, by operation and condition", () => {
     const h = pureHierarchy();
@@ -215,37 +251,17 @@ describe("outbox-producer", () => {
     }, ConditionDefectError);
   });
 
-  layer(outboxTestLayer(), { excludeTestServices: true })((dbTest) => {
-    // Subscriptions created once, before any save: a new subscription only
-    // sees changes committed after it (4.6).
-    const names: Record<string, string> = {};
-
+  layer(SubscriptionNames.layer, { excludeTestServices: true })((dbTest) => {
     dbTest.effect("sets up core, acme, two users and the subscriptions", () =>
-      Effect.gen(function* setUp() {
-        yield* setUpAcme;
+      Effect.gen(function* fixtureReady() {
+        const names = yield* SubscriptionNames;
 
-        const ids = {
-          all: yield* subscribe({ classId: ACME.asset, name: "all_assets" }),
-          laptops: yield* subscribe({
-            classId: ACME.laptop,
-            name: "laptops",
-            operations: ["create", "delete"],
-          }),
-          lost: yield* subscribe({
-            classId: ACME.asset,
-            condition: LOST,
-            name: "lost_assets",
-          }),
-          off: yield* subscribe({
-            classId: ACME.asset,
-            enabled: false,
-            name: "disabled",
-          }),
-        };
-
-        for (const [name, id] of Object.entries(ids)) {
-          names[id] = name;
-        }
+        assert.sameMembers(Object.values(names), [
+          "all",
+          "laptops",
+          "lost",
+          "off",
+        ]);
       })
     );
 
@@ -253,6 +269,8 @@ describe("outbox-producer", () => {
       "one row per matching subscription with the entry's version, descendants included, disabled ones never",
       () =>
         Effect.gen(function* matching() {
+          const names = yield* SubscriptionNames;
+
           const asset = yield* createRecord({
             body: { name: "plain asset", status: "in_use" },
             endpointClassId: ACME.asset,
@@ -293,6 +311,8 @@ describe("outbox-producer", () => {
       "a condition sees the after image, and the before image for a delete at version n+1",
       () =>
         Effect.gen(function* conditions() {
+          const names = yield* SubscriptionNames;
+
           const created = yield* createRecord({
             body: laptopBody("watch me", "in_use"),
             endpointClassId: ACME.laptop,

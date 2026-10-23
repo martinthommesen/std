@@ -90,8 +90,8 @@ describe("record-json", () => {
   });
 });
 
-describe("rows-count", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("rows-count", () => {
     dbTest.effect(
       "Bob lists exactly his assets, counts them, and never sees cost",
       () =>
@@ -131,10 +131,8 @@ describe("rows-count", () => {
       })
     );
   });
-});
 
-describe("hidden-names", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("hidden-names", () => {
     dbTest.effect(
       "a never-readable name and a misspelled one get the same response",
       () =>
@@ -170,10 +168,8 @@ describe("hidden-names", () => {
         })
     );
   });
-});
 
-describe("invisible-404", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("invisible-404", () => {
     dbTest.effect(
       "Bob's GET of Alice's laptop K is byte-identical to a random UUID",
       () =>
@@ -230,10 +226,8 @@ describe("invisible-404", () => {
         })
     );
   });
-});
 
-describe("masked-filter", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("masked-filter", () => {
     dbTest.effect(
       "a hidden purchased_on behaves exactly like empty in filters",
       () =>
@@ -266,10 +260,8 @@ describe("masked-filter", () => {
         })
     );
   });
-});
 
-describe("hidden-rule-input", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("hidden-rule-input", () => {
     dbTest.effect(
       "rule 10 reads cost: only whether dockedTo is withheld changes",
       () =>
@@ -315,10 +307,8 @@ describe("hidden-rule-input", () => {
         })
     );
   });
-});
 
-describe("references", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("references", () => {
     dbTest.effect("a hidden target gives the bare ID without a name", () =>
       Effect.gen(function* labels() {
         const http = yield* TestHttpClient;
@@ -390,10 +380,8 @@ describe("references", () => {
         })
     );
   });
-});
 
-describe("child-fields", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("child-fields", () => {
     dbTest.effect(
       "child-only fields are unknown through the parent endpoint",
       () =>
@@ -476,10 +464,8 @@ describe("child-fields", () => {
         })
     );
   });
-});
 
-describe("unknown-table", () => {
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+  describe("unknown-table", () => {
     dbTest.effect(
       "a table without any allow is identical to one that does not exist",
       () =>

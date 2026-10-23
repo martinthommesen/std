@@ -58,61 +58,80 @@ const employeeRule = (
   target: rule.target,
 });
 
+const historyFixture = Effect.fn("OutboxPayloadHistory.fixture")(
+  function* historyFixture(name: string) {
+    const fixture = yield* AcmeFixture;
+    const admin = fixture.admin.id;
+    const bob = fixture.bob.id;
+    const delivered = yield* Ref.make<readonly Delivery[]>([]);
+
+    yield* ensureSite;
+
+    const recordClass = createClass(name);
+
+    const title = addField(recordClass.id, "title", {
+      kind: "text",
+      maxLength: 80,
+    });
+
+    const owner = addField(recordClass.id, "owner", {
+      kind: "reference",
+      targetClassId: USER_CLASS_ID,
+    });
+
+    yield* change([recordClass.op, title.op, owner.op]);
+
+    const employee = (yield* (yield* Catalog).refresh).roleByName("employee");
+    const employeeId = employee?.id ?? "";
+
+    yield* change([
+      {
+        definition: employeeRule(employeeId, recordClass.id, {
+          condition: {
+            left: { path: [owner.id] },
+            op: "eq",
+            right: { ctx: "me" },
+          },
+          effect: "allow",
+          target: { kind: "records" },
+        }),
+        op: "createAccessRule",
+      },
+      {
+        definition: employeeRule(employeeId, recordClass.id, {
+          condition: null,
+          effect: "allow",
+          target: { fields: "*", kind: "fields" },
+        }),
+        op: "createAccessRule",
+      },
+    ]);
+
+    const subscription = yield* subscribe({
+      classId: recordClass.id,
+      identityId: bob,
+      operations: ["update"],
+    });
+
+    yield* serveOnly(subscription, {
+      kind: "external",
+      run: (delivery: Delivery) =>
+        Ref.update(delivered, (all) => [...all, delivery]),
+    });
+
+    return { admin, bob, delivered, employeeId, recordClass, title };
+  }
+);
+
 const backfilled = Effect.gen(function* backfilledTest() {
-  const fixture = yield* AcmeFixture;
-  const admin = fixture.admin.id;
-  const bob = fixture.bob.id;
-  const delivered = yield* Ref.make<readonly Delivery[]>([]);
-
-  yield* ensureSite;
-
-  const vault = createClass("vault");
-  const title = addField(vault.id, "title", { kind: "text", maxLength: 80 });
-
-  const owner = addField(vault.id, "owner", {
-    kind: "reference",
-    targetClassId: USER_CLASS_ID,
-  });
-
-  yield* change([vault.op, title.op, owner.op]);
-
-  const employee = (yield* (yield* Catalog).refresh).roleByName("employee");
-  const employeeId = employee?.id ?? "";
-
-  yield* change([
-    {
-      definition: employeeRule(employeeId, vault.id, {
-        condition: {
-          left: { path: [owner.id] },
-          op: "eq",
-          right: { ctx: "me" },
-        },
-        effect: "allow",
-        target: { kind: "records" },
-      }),
-      op: "createAccessRule",
-    },
-    {
-      definition: employeeRule(employeeId, vault.id, {
-        condition: null,
-        effect: "allow",
-        target: { fields: "*", kind: "fields" },
-      }),
-      op: "createAccessRule",
-    },
-  ]);
-
-  const subscription = yield* subscribe({
-    classId: vault.id,
-    identityId: bob,
-    operations: ["update"],
-  });
-
-  yield* serveOnly(subscription, {
-    kind: "external",
-    run: (delivery: Delivery) =>
-      Ref.update(delivered, (all) => [...all, delivery]),
-  });
+  const {
+    admin,
+    bob,
+    delivered,
+    employeeId,
+    recordClass: vault,
+    title,
+  } = yield* historyFixture("vault");
 
   const create = (body: Readonly<Record<string, string | boolean>>) =>
     createRecord({ body, endpointClassId: vault.id }).pipe(
@@ -234,56 +253,13 @@ const lastBeforeMoreDigits = (revision: number): number => {
 // The field is created at a revision like 99 and its default changed at
 // 100, which sorts first as text.
 const defaultChangedAcrossDigits = Effect.gen(function* acrossDigitsTest() {
-  const fixture = yield* AcmeFixture;
-  const admin = fixture.admin.id;
-  const bob = fixture.bob.id;
-  const delivered = yield* Ref.make<readonly Delivery[]>([]);
-
-  yield* ensureSite;
-
-  const safe = createClass("safe");
-  const title = addField(safe.id, "title", { kind: "text", maxLength: 80 });
-
-  const owner = addField(safe.id, "owner", {
-    kind: "reference",
-    targetClassId: USER_CLASS_ID,
-  });
-
-  yield* change([safe.op, title.op, owner.op]);
-
-  const employeeId =
-    (yield* (yield* Catalog).refresh).roleByName("employee")?.id ?? "";
-
-  yield* change(
-    [
-      employeeRule(employeeId, safe.id, {
-        condition: {
-          left: { path: [owner.id] },
-          op: "eq",
-          right: { ctx: "me" },
-        },
-        effect: "allow",
-        target: { kind: "records" },
-      }),
-      employeeRule(employeeId, safe.id, {
-        condition: null,
-        effect: "allow",
-        target: { fields: "*", kind: "fields" },
-      }),
-    ].map((definition) => ({ definition, op: "createAccessRule" as const }))
-  );
-
-  const subscription = yield* subscribe({
-    classId: safe.id,
-    identityId: bob,
-    operations: ["update"],
-  });
-
-  yield* serveOnly(subscription, {
-    kind: "external",
-    run: (delivery: Delivery) =>
-      Ref.update(delivered, (all) => [...all, delivery]),
-  });
+  const {
+    admin,
+    bob,
+    delivered,
+    employeeId,
+    recordClass: safe,
+  } = yield* historyFixture("safe");
 
   const x = yield* createRecord({
     body: { owner: bob, title: "X" },
@@ -295,11 +271,12 @@ const defaultChangedAcrossDigits = Effect.gen(function* acrossDigitsTest() {
 
   // Filler change sets until the next one is the last revision before the
   // number of digits grows.
-  const target = lastBeforeMoreDigits(yield* currentRevision);
+  const current = yield* currentRevision;
+  const target = lastBeforeMoreDigits(current);
 
-  assert.isAtMost(target - (yield* currentRevision), MAX_FILLERS);
+  assert.isAtMost(target - current, MAX_FILLERS);
 
-  while ((yield* currentRevision) < target - 1) {
+  for (let revision = current; revision < target - 1; revision += 1) {
     yield* change([createRole(`filler_${freshId().slice(0, 8)}`)]);
   }
 

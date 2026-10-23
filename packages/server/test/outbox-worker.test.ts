@@ -44,6 +44,7 @@ import {
   leaseOf,
   runWorker,
   WorkerProbes,
+  WorkerSettings,
   workerPass,
   workerWakeups,
 } from "../src/outbox/worker.ts";
@@ -890,27 +891,28 @@ describe("outbox-worker", () => {
       "done rows are deleted 7 days after they finished; dead rows stay",
       () => retention
     );
-  });
 
-  layer(
-    workerTestLayer({
-      effectTimeout: Duration.millis(300),
-      leaseMargin: Duration.minutes(5),
-    }),
-    { excludeTestServices: true }
-  )((dbTest) => {
     dbTest.effect(
       "the worker interrupts an effect at its timeout, before its lease ends, and records the failure",
-      () => effectTimeout
+      () =>
+        effectTimeout.pipe(
+          Effect.provide(
+            WorkerSettings.layerOf({
+              effectTimeout: Duration.millis(300),
+              leaseMargin: Duration.minutes(5),
+            })
+          )
+        )
     );
-  });
 
-  layer(workerTestLayer({ pollInterval: Duration.hours(1) }), {
-    excludeTestServices: true,
-  })((dbTest) => {
     dbTest.effect(
       "a save's after-commit NOTIFY wakes the worker, which delivers without polling",
-      () => wakeUp
+      () =>
+        wakeUp.pipe(
+          Effect.provide(
+            WorkerSettings.layerOf({ pollInterval: Duration.hours(1) })
+          )
+        )
     );
   });
 });
