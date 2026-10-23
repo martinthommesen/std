@@ -46,7 +46,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3h-events-hubs` | 3H | hubs, event delivery, TMF688 | in progress |
 | 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
 | 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents and Martin's decisions on it (decision 0026; 0021 decisions 34–55); Contracts 8.8 rolling-upgrade draft | merged |
-| 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1) | in progress |
+| 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1); decision 0033 | merged |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |
 | 6 | `ws/3i-helpdesk-v3` | 3I part A | helpdesk v3: ITIL incident and problem, cascade service identity, v2→v3 upgrade (decision 0034) | merged |
 | 6 | `ws/3i-itil-helpdesk` | 3I part B | TMF621 on the framework, CTK CI job, `v0.0.3` | planned |
