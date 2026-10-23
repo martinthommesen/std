@@ -46,10 +46,10 @@ import type {
 import { isActive, isLive } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import { identifierProblem } from "./names.ts";
-import { PermissionRequired } from "./permission-required.ts";
+import type { PermissionRequired } from "./permission-required.ts";
 import { problem } from "./problems.ts";
 import type { DefinitionProblem } from "./problems.ts";
-import { hasPermission } from "./requester.ts";
+import { permissionRefusal } from "./requester.ts";
 import type { Requester } from "./requester.ts";
 import { KIND_ACTIONS, PHASE_ACTIONS } from "./rule-definition.ts";
 import type {
@@ -929,20 +929,13 @@ export const runAsRefusal = (input: {
     return touched && running && otherIdentity;
   });
 
-  // Checked by the permission's stable ID; its name only labels the error.
-  const permissionId = RULES_RUN_AS_PERMISSION_ID;
-
-  if (!needs || hasPermission(input.before, input.requester, permissionId)) {
-    return undefined;
-  }
-
-  const permission = input.before.get(permissionId);
-
-  return new PermissionRequired({
-    permission:
-      permission?.kind === "permission" ? permission.name : permissionId,
-    permissionId,
-  });
+  return needs
+    ? permissionRefusal(
+        input.before,
+        input.requester,
+        RULES_RUN_AS_PERMISSION_ID
+      )
+    : undefined;
 };
 
 /**

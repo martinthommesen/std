@@ -23,6 +23,7 @@ import { conditionPaths } from "./condition.ts";
 import type { Condition } from "./condition.ts";
 import type { FieldDefinition } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
+import { choiceListOf } from "./record-rules.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 
 /**
@@ -43,16 +44,7 @@ export const conditionChoicesOf = (
     return undefined;
   }
 
-  const choices = snapshot.choicesOf(field.id);
-
-  return {
-    active: new Set(
-      choices.flatMap((choice) => (choice.hidden ? [] : [choice.key]))
-    ),
-    retired: new Set(
-      choices.flatMap((choice) => (choice.hidden ? [choice.key] : []))
-    ),
-  };
+  return choiceListOf(snapshot.choicesOf(field.id));
 };
 
 /**
@@ -92,11 +84,13 @@ const fieldInfo = (
  */
 export const classViewOf = (snapshot: ConfigSnapshot): ClassView => ({
   field: (classId, fieldId) => {
-    const found = snapshot
-      .fields(classId)
-      .find((field) => field.id === fieldId);
+    const found = snapshot.field(fieldId);
 
-    return found === undefined ? undefined : fieldInfo(snapshot, found);
+    return found === undefined ||
+      found.state === "purged" ||
+      !snapshot.lineage(classId).some((level) => level.id === found.classId)
+      ? undefined
+      : fieldInfo(snapshot, found);
   },
   fieldByName: (classId, name) => {
     const found = snapshot.fieldByName(classId, name);

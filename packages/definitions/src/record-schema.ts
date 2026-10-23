@@ -62,6 +62,7 @@ import { decodeUnknownResult } from "effect/SchemaParser";
 
 import { invalidValue } from "./field-errors.ts";
 import type { FieldError } from "./field-errors.ts";
+import { SYSTEM_API_NAMES } from "./names.ts";
 import {
   absentCreateValue,
   choiceListOf,
@@ -117,13 +118,8 @@ export interface RecordVerdict {
 
 /** The system members of a record (Contracts 3.2, 6.6), never writable. */
 export const SYSTEM_MEMBER_NAMES: ReadonlySet<string> = new Set([
-  "id",
+  ...Object.keys(SYSTEM_API_NAMES),
   "class",
-  "version",
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
 ]);
 
 // A syntactically valid ID for the codec: `decodeIn` reads no setting of a
@@ -223,11 +219,6 @@ const storedValueOf = (
   return decoded.ok ? decoded.value : undefined;
 };
 
-/** One field with its rules. */
-interface RuledField {
-  readonly rules: FieldRules;
-}
-
 /** The fields' proposal: converted values and refusals, by name. */
 interface Proposal {
   readonly values: Map<string, DecodedInput>;
@@ -242,7 +233,7 @@ interface ResolvedBody {
 }
 
 const resolveBody = (
-  byName: ReadonlyMap<string, RuledField>,
+  byName: ReadonlyMap<string, FieldRules>,
   nameable: ReadonlySet<string>,
   body: JsonObject
 ): ResolvedBody => {
@@ -266,14 +257,14 @@ const resolveBody = (
 // The pipeline's recheck after before-write hooks (`finalize*`): every
 // value is converted again from its canonical form.
 const recheck = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
   proposal: Proposal,
   stored: (rules: FieldRules) => StoredOrPlaintext | undefined
 ): Proposal => {
   const values = new Map<string, DecodedInput>();
   const invalid = new Map(proposal.invalid);
 
-  for (const { rules } of fields) {
+  for (const rules of fields) {
     const value = proposal.values.get(rules.name);
 
     if (proposal.values.has(rules.name) && value !== undefined) {
@@ -293,7 +284,7 @@ const recheck = (
 };
 
 const errorsOf = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
   proposal: Proposal,
   written: ReadonlySet<string>,
   candidateOf: (rules: FieldRules) => {
@@ -301,7 +292,7 @@ const errorsOf = (
     readonly value: StoredOrPlaintext | undefined;
   }
 ): FieldError[] =>
-  fields.flatMap(({ rules }) => {
+  fields.flatMap((rules) => {
     const refused = proposal.invalid.get(rules.name);
 
     if (refused !== undefined) {
@@ -318,13 +309,14 @@ const errorsOf = (
   });
 
 const createErrors = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
+  byName: ReadonlyMap<string, FieldRules>,
   entries: ReadonlyMap<string, JsonValue>
 ): FieldError[] => {
   const values = new Map<string, DecodedInput>();
   const invalid = new Map<string, InvalidValue>();
 
-  for (const { rules } of fields) {
+  for (const rules of fields) {
     const json = entries.get(rules.name);
 
     if (entries.has(rules.name) && json !== undefined) {
@@ -344,13 +336,13 @@ const createErrors = (
 
   const written = new Set(
     [...entries.keys()].filter((name) => {
-      const ruled = fields.find((field) => field.rules.name === name);
+      const rules = byName.get(name);
       const value = final.values.get(name);
 
       return (
-        ruled === undefined ||
+        rules === undefined ||
         value === undefined ||
-        writtenOnCreate(ruled.rules, value)
+        writtenOnCreate(rules, value)
       );
     })
   );
@@ -362,13 +354,13 @@ const createErrors = (
 };
 
 const updateWritten = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
   proposal: Proposal,
   storedOf: (rules: FieldRules) => StoredOrPlaintext | undefined,
   readable: (name: string) => boolean
 ): Set<string> =>
   new Set(
-    fields.flatMap(({ rules }) => {
+    fields.flatMap((rules) => {
       const { name } = rules;
       const value = proposal.values.get(name);
       const supplied = proposal.values.has(name) || proposal.invalid.has(name);
@@ -388,23 +380,34 @@ const updateWritten = (
   );
 
 const updateErrors = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
   entries: ReadonlyMap<string, JsonValue>,
   stored: StoredValues
 ): FieldError[] => {
+  const storedValues = new Map<string, StoredOrPlaintext | undefined>();
+
   const storedOf = (rules: FieldRules): StoredOrPlaintext | undefined => {
+    if (storedValues.has(rules.name)) {
+      return storedValues.get(rules.name);
+    }
+
     const json = Object.hasOwn(stored, rules.name)
       ? stored[rules.name]
       : undefined;
 
-    return json === undefined ? undefined : storedValueOf(rules.type, json);
+    const value =
+      json === undefined ? undefined : storedValueOf(rules.type, json);
+
+    storedValues.set(rules.name, value);
+
+    return value;
   };
 
   const readable = (name: string): boolean => Object.hasOwn(stored, name);
   const values = new Map<string, DecodedInput>();
   const invalid = new Map<string, InvalidValue>();
 
-  for (const { rules } of fields) {
+  for (const rules of fields) {
     const json = entries.get(rules.name);
 
     if (entries.has(rules.name) && json !== undefined) {
@@ -439,10 +442,10 @@ const updateErrors = (
 };
 
 const readErrors = (
-  fields: readonly RuledField[],
+  fields: readonly FieldRules[],
   entries: ReadonlyMap<string, JsonValue>
 ): FieldError[] =>
-  fields.flatMap(({ rules }) => {
+  fields.flatMap((rules) => {
     const json = entries.get(rules.name);
 
     if (json === undefined) {
@@ -486,9 +489,7 @@ const verdictOf = (
   stored: StoredValues,
   nameable: ReadonlySet<string>
 ): Omit<RecordVerdict, "invalidBody"> => {
-  const fields = table.fields.map((field) => ({
-    rules: rulesOfMetaField(field),
-  }));
+  const fields = table.fields.map(rulesOfMetaField);
 
   // The server parses a body before anything else and refuses all of it
   // (`InvalidRequest`) when a value breaks the json rules on the wire:
@@ -504,7 +505,7 @@ const verdictOf = (
     return { errors: unsendable, unknownFields: [] };
   }
 
-  const byName = new Map(fields.map((field) => [field.rules.name, field]));
+  const byName = new Map(fields.map((rules) => [rules.name, rules]));
   const resolved = resolveBody(byName, nameable, body);
 
   if (resolved.unknown.length > 0) {
@@ -523,15 +524,13 @@ const verdictOf = (
 
   if (mode === "create") {
     return {
-      errors: createErrors(fields, resolved.entries),
+      errors: createErrors(fields, byName, resolved.entries),
       unknownFields: [],
     };
   }
 
   if (mode === "update") {
-    const onUpdate = fields.map((field) => ({
-      rules: rulesOnUpdate(field.rules),
-    }));
+    const onUpdate = fields.map(rulesOnUpdate);
 
     return {
       errors: updateErrors(onUpdate, resolved.entries, stored),

@@ -111,6 +111,10 @@ interface DefinitionCandidate {
   [property: string]: JsonValue;
 }
 
+type NewOperation =
+  | CreateOperation
+  | Extract<Operation, { readonly op: "setOverride" }>;
+
 /**
  * The definitions a new definition points at that must be active: its
  * parent class, its own class, a reference target or a condition's class,
@@ -120,7 +124,7 @@ interface DefinitionCandidate {
  * @returns The IDs.
  */
 const mustBeActive = (
-  operation: CreateOperation
+  operation: NewOperation
 ): readonly (DefinitionId | null)[] => {
   const { definition } = operation;
 
@@ -145,10 +149,7 @@ const mustBeActive = (
  * @param work - The application.
  * @param operation - The create operation.
  */
-const checkActiveReferences = (
-  work: Work,
-  operation: CreateOperation
-): void => {
+const checkActiveReferences = (work: Work, operation: NewOperation): void => {
   for (const id of mustBeActive(operation)) {
     const found = id === null ? undefined : currentOf(work, id);
 
@@ -164,7 +165,38 @@ const checkActiveReferences = (
   }
 };
 
-const create = (work: Work, operation: CreateOperation): void => {
+/**
+ * Refuses an override that makes a retired field required: a retired
+ * field is optional on every class (Contracts 1.6).
+ *
+ * @param work - The application.
+ * @param id - The override's ID.
+ * @param fieldId - The overridden field.
+ * @param required - The override's `required`.
+ * @returns True when the override may proceed.
+ */
+const overrideKeepsRetiredOptional = (
+  work: Work,
+  id: DefinitionId,
+  fieldId: DefinitionId,
+  required: boolean | null
+): boolean => {
+  if (required !== true || currentOf(work, fieldId)?.state !== "retired") {
+    return true;
+  }
+
+  work.problems.push(
+    problem(
+      "unsupportedChange",
+      id,
+      "A retired field cannot be made required; reactivate it first."
+    )
+  );
+
+  return false;
+};
+
+const create = (work: Work, operation: NewOperation): void => {
   const { definition } = operation;
   const kind = OPERATION_FORMS[operation.op].creates;
 
@@ -185,6 +217,18 @@ const create = (work: Work, operation: CreateOperation): void => {
   }
 
   if (!guardNewDefinition(work, operation.op, definition)) {
+    return;
+  }
+
+  if (
+    definition.kind === "override" &&
+    !overrideKeepsRetiredOptional(
+      work,
+      definition.id,
+      definition.fieldId,
+      definition.required
+    )
+  ) {
     return;
   }
 
@@ -231,37 +275,6 @@ const changeProblem = (
   return current.state === "retired" && value === true
     ? "A retired field cannot be made required; reactivate it first."
     : undefined;
-};
-
-/**
- * Refuses an override that makes a retired field required: a retired
- * field is optional on every class (Contracts 1.6).
- *
- * @param work - The application.
- * @param id - The override's ID.
- * @param fieldId - The overridden field.
- * @param required - The override's `required`.
- * @returns True when the override may proceed.
- */
-const overrideKeepsRetiredOptional = (
-  work: Work,
-  id: DefinitionId,
-  fieldId: DefinitionId,
-  required: boolean | null
-): boolean => {
-  if (required !== true || currentOf(work, fieldId)?.state !== "retired") {
-    return true;
-  }
-
-  work.problems.push(
-    problem(
-      "unsupportedChange",
-      id,
-      "A retired field cannot be made required; reactivate it first."
-    )
-  );
-
-  return false;
 };
 
 const firstChangeProblem = (
@@ -430,51 +443,6 @@ const setOverride = (
   }
 };
 
-const createOverride = (
-  work: Work,
-  operation: Extract<Operation, { readonly op: "setOverride" }>
-): void => {
-  const { definition } = operation;
-
-  if (currentOf(work, definition.id) !== undefined) {
-    work.problems.push(
-      problem(
-        "alreadyExists",
-        definition.id,
-        `A definition with ID ${definition.id} already exists.`
-      )
-    );
-
-    return;
-  }
-
-  if (
-    !(
-      guardNewDefinition(work, operation.op, definition) &&
-      overrideKeepsRetiredOptional(
-        work,
-        definition.id,
-        definition.fieldId,
-        definition.required
-      )
-    )
-  ) {
-    return;
-  }
-
-  const next = decodeAs(work, definition.id, {
-    ...definition,
-    enforcement: "enforced",
-    enforcementNote: null,
-    state: "active",
-    version: 1,
-  });
-
-  if (next !== undefined) {
-    record(work, operation, next);
-  }
-};
-
 const adopt = (
   work: Work,
   operation: Extract<Operation, { readonly op: "adopt" }>
@@ -534,7 +502,7 @@ const applyOne = (work: Work, operation: Operation): void => {
     adopt(work, operation);
   } else if (operation.op === "setOverride") {
     if (operation.version === null) {
-      createOverride(work, operation);
+      create(work, operation);
     } else {
       setOverride(work, operation);
     }
@@ -719,11 +687,10 @@ export const applyOperations = (
     return fail(refusal);
   }
 
-  const changes = work.order.flatMap((id): DefinitionChange[] => {
-    const after = work.current.get(id);
-
-    return after === undefined ? [] : [{ after, before: snapshot.get(id) }];
-  });
+  const changes = [...work.current.values()].map((after) => ({
+    after,
+    before: snapshot.get(after.id),
+  }));
 
   const after = snapshot.with(
     key,

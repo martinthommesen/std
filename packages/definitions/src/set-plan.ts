@@ -14,14 +14,14 @@
  * new set version's upgrade rules (renames, type changes, retire) belong to
  * workstream 1B and are refused here.
  */
-import { stringifyJson } from "@std/values/json";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { fail, succeed } from "effect/Result";
 import type { Result } from "effect/Result";
 
 import type { Definition } from "./definition.ts";
 import { compareIds } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
+import { sameJson } from "./layers.ts";
 import { UPDATABLE } from "./operation.ts";
 import type { Operation } from "./operation.ts";
 import { DefinitionInvalid, problem } from "./problems.ts";
@@ -200,9 +200,6 @@ export const topologicalOrder = (
   return { cyclic: [...pending.keys()].toSorted(compareIds), order };
 };
 
-const jsonText = (value: JsonValue | undefined): string =>
-  stringifyJson(value ?? null);
-
 /**
  * The operation that creates a draft's definition.
  *
@@ -272,9 +269,7 @@ const differingKeys = (
   stored: JsonObject
 ): readonly string[] =>
   Object.entries(draft)
-    .flatMap(([key, value]) =>
-      jsonText(value) === jsonText(stored[key]) ? [] : [key]
-    )
+    .flatMap(([key, value]) => (sameJson(value, stored[key]) ? [] : [key]))
     .toSorted();
 
 const planDraft = (
