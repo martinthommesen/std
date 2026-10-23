@@ -19,9 +19,7 @@ import { recordDecision } from "@std/access/rules";
  *   and is deleted with the other `done` rows after 7 days; the discard is
  *   logged with the operator's user ID.
  *
- * `/api/v1` is frozen and `/api/v1` comes from workstream 3G, so no HTTP
- * route calls these yet; the admin endpoint and the Foldkit view follow
- * (decision 0023).
+ * The API and Foldkit operator view are described in decision 0037.
  */
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
@@ -63,6 +61,10 @@ export interface DeadListInput {
   readonly afterId?: string;
   /** At most this many, 1 to 1,000. */
   readonly limit: number;
+  /** Position within the matching rows, for the operator API. */
+  readonly offset?: number;
+  /** One row, for the addressable dead-delivery resource. */
+  readonly deliveryId?: string;
 }
 
 /** The largest page of dead deliveries. */
@@ -89,9 +91,9 @@ const DIGITS = /^\d{1,19}$/u;
  * Refuses unless the acting user holds an unconditional decision for the
  * action on `core.subscription`.
  */
-const requireAdmin = Effect.fn("Outbox.requireAdmin")(function* requireAdmin(
-  action: AccessAction
-) {
+export const requireDeadLetterAdmin = Effect.fn(
+  "Outbox.requireDeadLetterAdmin"
+)(function* requireDeadLetterAdmin(action: AccessAction) {
   const actor = yield* Actor;
   const snapshot = yield* (yield* Catalog).current;
 
@@ -125,7 +127,7 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
 
     const rows = yield* request(
       Effect.gen(function* readDead() {
-        yield* requireAdmin("read");
+        yield* requireDeadLetterAdmin("read");
         const sql = yield* SqlClient.SqlClient;
 
         return yield* readOnly(
@@ -137,9 +139,16 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
              FROM core.delivery AS d
              WHERE d.status = 'dead' AND d.id > $1::int8
                AND ($2::uuid IS NULL OR d.subscription_id = $2::uuid)
+               AND ($4::int8 IS NULL OR d.id = $4::int8)
              ORDER BY d.id
-             LIMIT $3::int8`,
-            [afterId, input.subscriptionId ?? null, String(limit)]
+             LIMIT $3::int8 OFFSET $5::int8`,
+            [
+              afterId,
+              input.subscriptionId ?? null,
+              String(limit),
+              input.deliveryId ?? null,
+              String(input.offset ?? 0),
+            ]
           )
         );
       })
@@ -166,6 +175,28 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
   }
 );
 
+/** Counts matching dead deliveries after the same subscription read check. */
+export const countDeadDeliveries = Effect.fn("Outbox.countDeadDeliveries")(
+  function* countDeadDeliveries(subscriptionId?: string) {
+    return yield* (yield* Transactions).request(
+      Effect.gen(function* countDead() {
+        yield* requireDeadLetterAdmin("read");
+        const sql = yield* SqlClient.SqlClient;
+
+        const rows = yield* decodeRows(
+          Schema.Struct({ total: Schema.FiniteFromString })
+        )(
+          yield* readOnly(sql`SELECT count(*)::text AS total FROM core.delivery
+          WHERE status = 'dead' AND (${subscriptionId ?? null}::uuid IS NULL
+            OR subscription_id = ${subscriptionId ?? null}::uuid)`)
+        );
+
+        return rows[0]?.total ?? 0;
+      })
+    );
+  }
+);
+
 /**
  * Runs an update of one dead row as an admin; `NotFound` when the row is
  * not dead (or does not exist).
@@ -182,7 +213,7 @@ const updateDead = Effect.fn("Outbox.updateDead")(function* updateDead(
 
   const changed = yield* request(
     Effect.gen(function* changeDead() {
-      yield* requireAdmin("update");
+      yield* requireDeadLetterAdmin("update");
       const sql = yield* SqlClient.SqlClient;
 
       const rows = yield* decodeId(

@@ -6,6 +6,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Url } from "foldkit/url";
 
 import { SchemaRevision } from "./domain/schema-revision.ts";
+import { Message as DeadLettersMessage } from "./page/dead-letters/message.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { Message as SignInMessage } from "./page/sign-in/sign-in.ts";
 import { Message as TableListMessage } from "./page/table-list/message.ts";
@@ -25,6 +26,7 @@ export const Message = defineMessageUnion({
   FailedLoadCurrentUser: {},
   FailedLoadTables: { sessionId: Schema.Int },
   FailedSignOut: { sessionId: Schema.Int },
+  GotDeadLettersMessage: { message: DeadLettersMessage, pageId: Schema.Int },
   GotRecordFormMessage: { message: RecordFormMessage, pageId: Schema.Int },
   GotSignInMessage: { message: SignInMessage },
   GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
