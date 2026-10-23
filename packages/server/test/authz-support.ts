@@ -19,6 +19,7 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
+import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { deliveryCount, subscribe } from "./outbox-support.ts";
 
 /** The callers of the two-user example, plus the administrator. */
@@ -254,3 +255,59 @@ export const refused = (status: number, tag: string): Observation => ({
   status,
   tag,
 });
+
+/** Cursor-null acceptance workload (Contracts 3.5): 1,000 visible rows. */
+export const CURSOR_ROWS = 1000;
+
+const MULTIPLIER = 1_103_515_245;
+const INCREMENT = 12_345;
+const MODULUS = 2 ** 31;
+const DAYS = 28;
+const NULL_SHARE = 0.1;
+const MAX_COST = 3000;
+const LOST_SHARE = 0.5;
+
+/**
+ * A deterministic sequence of pseudo-random numbers.
+ * @param seed - The start.
+ * @returns The next number from 0 to 1.
+ */
+export const sequence = (seed: number) => {
+  let state = seed;
+
+  return (): number => {
+    state = (state * MULTIPLIER + INCREMENT) % MODULUS;
+
+    return state / MODULUS;
+  };
+};
+
+/**
+ * Bob's bulk assets: half lost (their purchased_on is hidden from him),
+ * some without a date, many with equal dates.
+ * @param bob - Bob's user ID.
+ * @param random - The number source.
+ * @returns The records.
+ */
+export const bulkRecords = (bob: string, random: () => number): OwnerRecord[] =>
+  Array.from({ length: CURSOR_ROWS }, (_, index) => ({
+    by: bob,
+    values: {
+      cost: String(Math.floor(random() * MAX_COST)),
+      name: `bulk-${String(index).padStart(4, "0")}`,
+      owner: bob,
+      purchased_on:
+        random() < NULL_SHARE
+          ? null
+          : `2024-01-${String(1 + Math.floor(random() * DAYS)).padStart(2, "0")}`,
+      status: random() < LOST_SHARE ? "lost" : "in_use",
+    },
+  }));
+
+/** Sorts covering masked cursor keys in both directions. */
+export const CURSOR_SORTS = [
+  "purchasedOn",
+  "-purchasedOn",
+  "status,-purchasedOn",
+  "-status,purchasedOn,name",
+];
