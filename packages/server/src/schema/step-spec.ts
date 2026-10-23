@@ -5,14 +5,23 @@
  */
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
-import type { Effect } from "effect";
+import { Effect, Schema } from "effect";
 
 import type { DedicatedConnection } from "../sql/dedicated.ts";
 import type { DatabaseError } from "../sql/errors.ts";
+import type { DdlStatement } from "./ddl-forms.ts";
 import type { StepKind } from "./plan.ts";
 
+/** The stored states of a step (Contracts 1.5). */
+export const StepStateSchema = Schema.Literals([
+  "pending",
+  "running",
+  "done",
+  "failed",
+]);
+
 /** The state of a step (Contracts 1.5). */
-export type StepState = "pending" | "running" | "done" | "failed";
+export type StepState = typeof StepStateSchema.Type;
 
 /** A step as stored in `core.schema_change_step`. */
 export interface StepRow {
@@ -41,12 +50,45 @@ export interface StepSpec {
     connection: DedicatedConnection,
     step: StepRow
   ) => Effect.Effect<JsonObject, DatabaseError>;
-  /** Undoes a step that will not finish (workstream 1A runs it). */
+  /** Describes cleanup outside transactions and DDL under the complete lock budget. */
   readonly abandon: (
     connection: DedicatedConnection,
     step: StepRow
-  ) => Effect.Effect<void, DatabaseError>;
+  ) => {
+    readonly autocommit: Effect.Effect<void, DatabaseError>;
+    readonly complete: readonly DdlStatement[];
+  };
 }
+
+/**
+ * Removes session timeouts for follow-up work that may wait on other transactions.
+ * @param connection - The coordinator's connection.
+ * @returns An effect that updates both timeouts in order.
+ */
+export const unlimitedSession = (
+  connection: DedicatedConnection
+): Effect.Effect<void, DatabaseError> =>
+  connection
+    .execute("SET lock_timeout = 0")
+    .pipe(
+      Effect.andThen(connection.execute("SET statement_timeout = 0")),
+      Effect.asVoid
+    );
+
+/**
+ * Restores session timeouts before the complete config commit.
+ * @param connection - The coordinator's connection.
+ * @returns An effect that restores both defaults in order.
+ */
+export const defaultSession = (
+  connection: DedicatedConnection
+): Effect.Effect<void, DatabaseError> =>
+  connection
+    .execute("SET lock_timeout = DEFAULT")
+    .pipe(
+      Effect.andThen(connection.execute("SET statement_timeout = DEFAULT")),
+      Effect.asVoid
+    );
 
 /**
  * A text detail of a step.

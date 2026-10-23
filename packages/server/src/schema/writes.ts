@@ -144,30 +144,6 @@ export const writeEnforcementNotes = Effect.fn("Schema.writeEnforcementNotes")(
 );
 
 /**
- * Sets the enforcement state of definitions (the `complete` step).
- *
- * @param entries - Definitions and their new state.
- * @returns An effect in a config commit.
- */
-export const writeEnforcement = Effect.fn("Schema.writeEnforcement")(
-  function* writeEnforcement(
-    entries: readonly {
-      readonly definition: Definition;
-      readonly enforcement: "enforced" | "failed";
-    }[]
-  ) {
-    const sql = yield* SqlClient.SqlClient;
-
-    for (const { definition, enforcement } of entries) {
-      yield* sql.unsafe(
-        `UPDATE core."${tableOf(definition.kind).table}" SET enforcement = $1::text WHERE id = $2::uuid`,
-        [enforcement, definition.id]
-      );
-    }
-  }
-);
-
-/**
  * Writes one `core.definition_revision` row per changed definition at the
  * change set's revision (Contracts 4.4).
  *

@@ -45,6 +45,7 @@ import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { maxLengthOf } from "@std/values/field-type";
 import type { FieldType } from "@std/values/field-type";
 import type { JsonObject } from "@std/values/json-value";
+import { Schema } from "effect";
 
 import { LOCK_MODES } from "./ddl-forms.ts";
 import type { DdlStatement, LockMode, TableLock } from "./ddl-forms.ts";
@@ -65,8 +66,15 @@ import {
   subtreeExpression,
   validateConstraint,
 } from "./ddl.ts";
-import { lockNames, planLifecycle } from "./plan-lifecycle.ts";
-import type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
+import {
+  isClass,
+  isIndex,
+  isNamespace,
+  isStandard,
+  lockNames,
+  planLifecycle,
+} from "./plan-lifecycle.ts";
+import type { RowCheck } from "./plan-lifecycle.ts";
 import {
   choicePredicates,
   defaultLiteral,
@@ -74,29 +82,24 @@ import {
   tableName,
 } from "./sql-text.ts";
 
-export type { PurgeCount, RecordCheck } from "./plan-lifecycle.ts";
-
 /**
  * Follow-up step kinds (Contracts 1.5); `backfill` numbers the existing
  * rows of a new auto-numbered field (Step 2).
  */
-export type StepKind =
-  | "validate_constraint"
-  | "validate_override"
-  | "backfill"
-  | "create_index_concurrently"
-  | "drop_index_concurrently"
-  | "complete";
-
-/** The order step kinds run in. */
-export const STEP_ORDER: readonly StepKind[] = [
+export const StepKindSchema = Schema.Literals([
   "validate_constraint",
   "validate_override",
   "backfill",
   "create_index_concurrently",
   "drop_index_concurrently",
   "complete",
-];
+]);
+
+/** A follow-up step kind. */
+export type StepKind = typeof StepKindSchema.Type;
+
+/** The order step kinds run in. */
+export const STEP_ORDER = StepKindSchema.literals;
 
 /** A planned follow-up step. */
 export interface PlannedStep {
@@ -107,16 +110,6 @@ export interface PlannedStep {
   readonly sql: string | null;
   /** What the probe, action and abandon action need. */
   readonly details: JsonObject;
-}
-
-/** Existing rows that would violate a tightening, found by the preflight. */
-export interface ViolationCheck {
-  /** The field or override whose rule the rows would violate. */
-  readonly definitionId: DefinitionId;
-  /** The quoted table to scan. */
-  readonly table: string;
-  /** A boolean SQL expression true for violating rows. */
-  readonly predicate: string;
 }
 
 /** An enforcement change on a definition the change set does not otherwise change. */
@@ -152,11 +145,11 @@ export interface ChangeSetPlan {
   /** Existing tables whose rows decide the plan (the preflight checks them). */
   readonly existenceChecks: readonly DefinitionId[];
   /** Data checks the preflight must pass (counted only on tables with rows). */
-  readonly violations: readonly ViolationCheck[];
+  readonly violations: readonly RowCheck[];
   /** Values or rows each purge destroys, counted under `SCHEMA_KEY`. */
-  readonly purgeCounts: readonly PurgeCount[];
+  readonly purgeCounts: readonly RowCheck[];
   /** Records that must not exist for a purge to run. */
-  readonly recordChecks: readonly RecordCheck[];
+  readonly recordChecks: readonly RowCheck[];
 }
 
 /** What the preflight found. */
@@ -223,13 +216,8 @@ interface Planning {
   readonly keys: DdlStatement[];
   readonly steps: PlannedStep[];
   readonly existence: Set<DefinitionId>;
-  readonly violations: ViolationCheck[];
+  readonly violations: RowCheck[];
 }
-
-const isStandardClass = (
-  snapshot: ConfigSnapshot,
-  classId: DefinitionId
-): boolean => snapshot.class(classId)?.storage === "standard";
 
 /**
  * Whether an existing table holds rows, recording that the preflight must
@@ -305,12 +293,12 @@ const validateStep = (
   markPending(planning, definitionId);
 };
 
-const changedOf = (
+const changedOf = <D extends Definition>(
   applied: AppliedChangeSet,
-  kind: Definition["kind"]
-): readonly Definition[] =>
+  isKind: (definition: Definition) => definition is D
+): readonly D[] =>
   applied.changes.flatMap((change) =>
-    change.after.kind === kind ? [change.after] : []
+    isKind(change.after) ? [change.after] : []
   );
 
 const createdFields = (
@@ -327,9 +315,8 @@ const planNamespaces = (
   planning: Planning,
   applied: AppliedChangeSet
 ): void => {
-  for (const definition of changedOf(applied, "namespace")) {
+  for (const definition of changedOf(applied, isNamespace)) {
     if (
-      definition.kind === "namespace" &&
       planning.created.has(definition.id) &&
       definition.storage === "standard"
     ) {
@@ -351,11 +338,9 @@ const newClasses = (
   planning: Planning,
   applied: AppliedChangeSet
 ): readonly ClassDefinition[] =>
-  changedOf(applied, "class")
+  changedOf(applied, isClass)
     .flatMap((definition) =>
-      definition.kind === "class" &&
-      planning.created.has(definition.id) &&
-      definition.storage === "standard"
+      planning.created.has(definition.id) && definition.storage === "standard"
         ? [definition]
         : []
     )
@@ -507,7 +492,7 @@ const planAddedColumns = (
   for (const field of fields) {
     if (
       !planning.created.has(field.classId) &&
-      isStandardClass(planning.after, field.classId)
+      isStandard(planning.after, field.classId)
     ) {
       const table = tableName(planning.after, field.classId);
       const hasRows = populated(planning, field.classId);
@@ -551,7 +536,7 @@ const planFieldUpdates = (
     if (
       after.kind === "field" &&
       before?.kind === "field" &&
-      isStandardClass(planning.after, after.classId)
+      isStandard(planning.after, after.classId)
     ) {
       const table = tableName(planning.after, after.classId);
 
@@ -589,7 +574,7 @@ const planReferenceKeys = (
   for (const field of fields) {
     if (
       field.type.kind === "reference" &&
-      isStandardClass(planning.after, field.classId)
+      isStandard(planning.after, field.classId)
     ) {
       const table = tableName(planning.after, field.classId);
       const validated = !populated(planning, field.classId);
@@ -620,7 +605,7 @@ const planAuditKeys = (
   planning: Planning,
   classes: readonly ClassDefinition[]
 ): void => {
-  if (!isStandardClass(planning.after, USER_CLASS_ID)) {
+  if (!isStandard(planning.after, USER_CLASS_ID)) {
     return;
   }
 
@@ -717,8 +702,8 @@ const planIndex = (planning: Planning, index: IndexDefinition): void => {
 };
 
 const planIndexes = (planning: Planning, applied: AppliedChangeSet): void => {
-  for (const definition of changedOf(applied, "index")) {
-    if (definition.kind === "index" && planning.created.has(definition.id)) {
+  for (const definition of changedOf(applied, isIndex)) {
+    if (planning.created.has(definition.id)) {
       planIndex(planning, definition);
     }
   }
@@ -835,21 +820,21 @@ const prospectivePredicate = (
 };
 
 const planOverrides = (planning: Planning, applied: AppliedChangeSet): void => {
-  for (const definition of changedOf(applied, "override")) {
-    const field =
-      definition.kind === "override"
-        ? planning.after.field(definition.fieldId)
-        : undefined;
+  for (const definition of changedOf(
+    applied,
+    (candidate): candidate is OverrideDefinition =>
+      candidate.kind === "override"
+  )) {
+    const field = planning.after.field(definition.fieldId);
 
     const predicate =
-      definition.kind === "override" && field !== undefined
-        ? overridePredicate(planning, definition, quoteIdent(field.name))
-        : undefined;
+      field === undefined
+        ? undefined
+        : overridePredicate(planning, definition, quoteIdent(field.name));
 
     if (
       field !== undefined &&
       predicate !== undefined &&
-      definition.kind === "override" &&
       populated(planning, field.classId)
     ) {
       const table = tableName(planning.after, field.classId);
@@ -1042,8 +1027,7 @@ export const planChangeSet = (
     purgeCounts: lifecycle.purgeCounts,
     recordChecks: lifecycle.recordChecks,
     seedSystemUser:
-      created.has(USER_CLASS_ID) &&
-      isStandardClass(applied.after, USER_CLASS_ID),
+      created.has(USER_CLASS_ID) && isStandard(applied.after, USER_CLASS_ID),
     steps: orderedSteps(planning.steps),
     tables: planning.tables,
     violations: planning.violations,

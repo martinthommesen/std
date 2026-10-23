@@ -13,7 +13,6 @@
  * gone, probing each first.
  */
 import type { PgClient } from "@effect/sql-pg";
-import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson, stringifyJson } from "@std/values/json";
 import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
@@ -33,9 +32,10 @@ import { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import type { DdlStatement } from "./ddl-forms.ts";
 import { runDdl, takeTableLocks } from "./lock-budget.ts";
-import { lockInventory } from "./plan.ts";
+import { lockInventory, StepKindSchema } from "./plan.ts";
 import { stepBoundary } from "./recovery-settings.ts";
 import { SchemaBusy } from "./schema-busy.ts";
+import { defaultSession, StepStateSchema } from "./step-spec.ts";
 import type { StepRow } from "./step-spec.ts";
 import { STEP_SPECS } from "./steps.ts";
 import { watchStep } from "./watchdog.ts";
@@ -120,17 +120,10 @@ const decodeSteps = decodeRows(
     attempts: Schema.Int,
     details: Schema.String,
     id: Schema.String,
-    kind: Schema.Literals([
-      "validate_constraint",
-      "validate_override",
-      "backfill",
-      "create_index_concurrently",
-      "drop_index_concurrently",
-      "complete",
-    ]),
+    kind: StepKindSchema,
     ordinal: Schema.Int,
     sql: Schema.NullOr(Schema.String),
-    state: Schema.Literals(["pending", "running", "done", "failed"]),
+    state: StepStateSchema,
     target_id: Schema.NullOr(Schema.String),
   })
 );
@@ -407,8 +400,7 @@ export const runFollowUps = Effect.fn("Schema.runFollowUps")(
       }
     }
 
-    yield* connection.execute("SET lock_timeout = DEFAULT");
-    yield* connection.execute("SET statement_timeout = DEFAULT");
+    yield* defaultSession(connection);
     yield* stepBoundary("before:complete");
 
     const completed = yield* connection.transactions.configCommit(
@@ -423,6 +415,3 @@ export const runFollowUps = Effect.fn("Schema.runFollowUps")(
     } satisfies FollowUpOutcome;
   }
 );
-
-/** The class ID written on journal rows. */
-export const SCHEMA_CHANGE_CLASS_ID = PLATFORM_CLASS_IDS.schema_change;

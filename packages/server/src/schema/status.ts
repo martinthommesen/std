@@ -11,6 +11,7 @@ import { SqlClient } from "effect/sql";
 import { hygienic } from "../sql/errors.ts";
 import { advisoryClassId, advisoryObjectId, SCHEMA_KEY } from "../sql/locks.ts";
 import { decodeRows } from "../sql/rows.ts";
+import { readOpenChangeSets } from "./recovery.ts";
 import { backendWait } from "./watchdog.ts";
 
 /** A backend holding `SCHEMA_KEY`. */
@@ -71,17 +72,6 @@ const decodeHolders = decodeRows(
   })
 );
 
-const decodeChangeSets = decodeRows(
-  Schema.Struct({
-    committed_at: Schema.NullOr(Schema.String),
-    coordinator_pid: Schema.NullOr(Schema.Int),
-    error: Schema.NullOr(Schema.String),
-    first_revision_text: Schema.NullOr(Schema.String),
-    id: Schema.String,
-    state: Schema.String,
-  })
-);
-
 const decodeSteps = decodeRows(
   Schema.Struct({
     attempts: Schema.Int,
@@ -106,11 +96,6 @@ const HOLDERS = `SELECT l.pid, a.application_name, host(a.client_addr) AS client
     AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
     AND l.classid = $1::oid AND l.objid = $2::oid AND l.objsubid = 1
   ORDER BY l.pid`;
-
-const CHANGE_SETS = `SELECT id::text AS id, state, error, first_revision::text AS first_revision_text,
-    coordinator_pid, committed_at::text AS committed_at
-  FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
-  ORDER BY sc.first_revision`;
 
 const STEPS = `SELECT s.ordinal, s.kind, s.target_id::text AS target_id, s.state, s.attempts, s.last_error,
     s.backend_pid, s.started_at::text AS started_at, p.phase,
@@ -153,9 +138,7 @@ export const schemaStatus = Effect.fn("Schema.status")(
       ])
       .pipe(Effect.flatMap(decodeHolders));
 
-    const changeSets = yield* sql
-      .unsafe(CHANGE_SETS)
-      .pipe(Effect.flatMap(decodeChangeSets));
+    const changeSets = yield* readOpenChangeSets((text) => sql.unsafe(text));
 
     const statuses: ChangeSetStatus[] = [];
 
@@ -188,13 +171,10 @@ export const schemaStatus = Effect.fn("Schema.status")(
       }
 
       statuses.push({
-        committedAt: changeSet.committed_at,
-        coordinatorPid: changeSet.coordinator_pid,
+        committedAt: changeSet.committedAt,
+        coordinatorPid: changeSet.coordinatorPid,
         error: changeSet.error,
-        firstRevision:
-          changeSet.first_revision_text === null
-            ? null
-            : Number(changeSet.first_revision_text),
+        firstRevision: changeSet.firstRevision,
         id: changeSet.id,
         state: changeSet.state,
         steps,
@@ -251,9 +231,7 @@ export const formatStatus = (status: SchemaStatus): readonly string[] => {
             ? ""
             : `, waiting for pids ${step.waitingFor.join(", ")}`;
 
-        const error = step.lastError === null ? "" : `: ${step.lastError}`;
-
-        return `  ${step.ordinal}. ${step.kind} ${step.state} (attempts ${step.attempts}${progress}${waiting})${error}`;
+        return `  ${step.ordinal}. ${step.kind} ${step.state} (attempts ${step.attempts}${progress}${waiting})${suffix(step.lastError)}`;
       }),
     ]),
   ];

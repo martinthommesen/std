@@ -40,25 +40,18 @@ export const RecoverySettings = Context.Reference<RecoverySettingsValue>(
  * value.
  */
 export const recoverySettingsFromEnv: Layer.Layer<never, Config.ConfigError> =
-  Layer.effectContext(
-    Effect.gen(function* readRecoverySettings() {
-      const resumeInterval = yield* Config.Duration(
-        "STD_SCHEMA_RESUME_INTERVAL"
-      ).pipe(Config.withDefault(DEFAULT_RECOVERY_SETTINGS.resumeInterval));
-
-      const watchdogAfter = yield* Config.Duration(
-        "STD_SCHEMA_WATCHDOG_AFTER"
-      ).pipe(Config.withDefault(DEFAULT_RECOVERY_SETTINGS.watchdogAfter));
-
-      const watchdogPoll = yield* Config.Duration(
-        "STD_SCHEMA_WATCHDOG_POLL"
-      ).pipe(Config.withDefault(DEFAULT_RECOVERY_SETTINGS.watchdogPoll));
-
-      return Context.make(RecoverySettings, {
-        resumeInterval,
-        watchdogAfter,
-        watchdogPoll,
-      });
+  Layer.effect(
+    RecoverySettings,
+    Config.all({
+      resumeInterval: Config.Duration("STD_SCHEMA_RESUME_INTERVAL").pipe(
+        Config.withDefault(DEFAULT_RECOVERY_SETTINGS.resumeInterval)
+      ),
+      watchdogAfter: Config.Duration("STD_SCHEMA_WATCHDOG_AFTER").pipe(
+        Config.withDefault(DEFAULT_RECOVERY_SETTINGS.watchdogAfter)
+      ),
+      watchdogPoll: Config.Duration("STD_SCHEMA_WATCHDOG_POLL").pipe(
+        Config.withDefault(DEFAULT_RECOVERY_SETTINGS.watchdogPoll)
+      ),
     })
   );
 

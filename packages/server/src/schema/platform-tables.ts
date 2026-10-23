@@ -22,6 +22,7 @@ import type { RequestRevision } from "../sql/request-revision.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import type { CurrentTransaction } from "../sql/transaction-context.ts";
+import { isNotNull } from "./ddl.ts";
 import { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { quoteIdent, tableName } from "./sql-text.ts";
 
@@ -133,7 +134,7 @@ export const verifyPlatformTable = Effect.fn("Schema.verifyPlatformTable")(
 
     for (const field of snapshot.ownFields(classId)) {
       expected.set(field.name, {
-        notNull: field.required || field.type.kind === "boolean",
+        notNull: isNotNull(field),
         type: formatTypeOf(field.type),
       });
     }
@@ -150,13 +151,6 @@ export const verifyPlatformTable = Effect.fn("Schema.verifyPlatformTable")(
     return yield* Effect.void;
   }
 );
-
-/** The values of the system user's row, by field name. */
-const SYSTEM_USER_VALUES: ReadonlyMap<string, string> = new Map([
-  ["name", "'System'"],
-  ["login", "'system'"],
-  ["active", "false"],
-]);
 
 /** The system user's stored values, by field name; every other field is empty. */
 const SYSTEM_USER_STORED: ReadonlyMap<string, StoredValue> = new Map<
@@ -229,26 +223,32 @@ export const insertSystemUser = Effect.fn("Schema.insertSystemUser")(
     const sql = yield* SqlClient.SqlClient;
 
     const values = snapshot.ownFields(USER_CLASS_ID).flatMap((field) => {
-      const value = SYSTEM_USER_VALUES.get(field.name);
+      const value = SYSTEM_USER_STORED.get(field.name);
 
       return value === undefined
         ? []
-        : [[quoteIdent(field.name), value] as const];
+        : [
+            {
+              column: quoteIdent(field.name),
+              type: postgresColumn(field.type).sqlType,
+              value,
+            },
+          ];
     });
 
     const columns = [
       "id, class_id, version, created_at, created_by, updated_at, updated_by",
-      ...values.map(([column]) => column),
+      ...values.map(({ column }) => column),
     ].join(", ");
 
     const literals = [
       "$1::uuid, $2::uuid, 1, now(), $1::uuid, now(), $1::uuid",
-      ...values.map(([, value]) => value),
+      ...values.map(({ type }, index) => `$${index + 3}::${type}`),
     ].join(", ");
 
     yield* sql.unsafe(
       `INSERT INTO ${tableName(snapshot, USER_CLASS_ID)} (${columns}) VALUES (${literals})`,
-      [SYSTEM_USER_ID, USER_CLASS_ID]
+      [SYSTEM_USER_ID, USER_CLASS_ID, ...values.map(({ value }) => value)]
     );
 
     const entry = yield* writeChangeEntry(

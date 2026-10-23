@@ -11,7 +11,7 @@ import type { SqlError } from "effect/sql/SqlError";
 import { SQLSTATE_LOCK_NOT_AVAILABLE, sqlStateOf } from "./errors.ts";
 import type { ConfigState } from "./request-revision.ts";
 import { analyzeStatement } from "./statement-lexer.ts";
-import type { LexedToken } from "./statement-lexer.ts";
+import type { LexedStatement, LexedToken } from "./statement-lexer.ts";
 import { StatementMarks } from "./statement-marks.ts";
 import type { StatementMarksValue } from "./statement-marks.ts";
 import { CurrentTransaction } from "./transaction-context.ts";
@@ -186,18 +186,11 @@ const isPlannerSetting = (tokens: readonly LexedToken[]): boolean => {
   );
 };
 
-/**
- * Why a statement from a transaction's code must not run, if it must not.
- * The text is lexed, so comments, punctuation and quoting cannot hide the
- * first keyword or a second statement; then the statement must be exactly
- * one non-empty statement with no `;` at all, starting with a keyword from
- * `STATEMENT_KEYWORDS`.
- * @param sql - The statement text.
- * @returns The refusal, or `undefined` when the statement may run.
- */
-export const refusalFor = (sql: string): Refusal | undefined => {
-  const { leadingTokens, separators, statements } = analyzeStatement(sql);
-
+const refusalForLexed = ({
+  leadingTokens,
+  separators,
+  statements,
+}: LexedStatement): Refusal | undefined => {
   if (separators > 0 || statements !== 1) {
     return [CONTROL_REASON, "exactly one statement without `;` is allowed"];
   }
@@ -236,6 +229,18 @@ export const refusalFor = (sql: string): Refusal | undefined => {
     `${keyword === "" ? "this statement" : keyword.toUpperCase()} is not a statement STD runs${INSIDE}`,
   ];
 };
+
+/**
+ * Why a statement from a transaction's code must not run, if it must not.
+ * The text is lexed, so comments, punctuation and quoting cannot hide the
+ * first keyword or a second statement; then the statement must be exactly
+ * one non-empty statement with no `;` at all, starting with a keyword from
+ * `STATEMENT_KEYWORDS`.
+ * @param sql - The statement text.
+ * @returns The refusal, or `undefined` when the statement may run.
+ */
+export const refusalFor = (sql: string): Refusal | undefined =>
+  refusalForLexed(analyzeStatement(sql));
 
 const refusal = (
   reason: TransactionRefused["reason"],
@@ -465,26 +470,6 @@ export class TransactionState implements TransactionHandle {
       });
 
   /**
-   * Records that the `CONFIG_KEY` wait timed out (or failed otherwise).
-   * @param failure - The driver error of the lock statement.
-   * @returns An effect that records it.
-   */
-  readonly recordLockWaitFailure = (failure: SqlError): Effect.Effect<void> =>
-    Effect.sync(() => {
-      this.statementFailed(failure, { lockWaiting: true, readOnly: false });
-    });
-
-  /**
-   * `statementFailed` for the transaction machinery's own statements.
-   * @param failure - The driver error.
-   * @returns An effect that records the failure.
-   */
-  readonly recordFailure = (failure: SqlError): Effect.Effect<void> =>
-    Effect.sync(() => {
-      this.statementFailed(failure, { lockWaiting: false, readOnly: false });
-    });
-
-  /**
    * Checks and counts a statement of the transaction's code before it is sent.
    * @param sql - The statement text.
    * @param marks - The statement's marks.
@@ -502,13 +487,12 @@ export class TransactionState implements TransactionHandle {
       return entry;
     }
 
-    const refused = refusalFor(sql);
+    const lexed = analyzeStatement(sql);
+    const refused = refusalForLexed(lexed);
 
     if (refused !== undefined) {
       return Option.some(refusal(...refused));
     }
-
-    const lexed = analyzeStatement(sql);
 
     if (!marks.readOnly) {
       // A planner setting changes plans, never results, so it does not

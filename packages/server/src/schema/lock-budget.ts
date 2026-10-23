@@ -32,6 +32,16 @@ const remainingMs = (budget: LockBudget): Effect.Effect<number> =>
     Effect.map((now) => Math.max(1, budget.deadline - now))
   );
 
+const withinBudget = Effect.fnUntraced(function* withinBudget(
+  sql: SqlClient.SqlClient,
+  budget: LockBudget,
+  text: string
+) {
+  const remaining = yield* remainingMs(budget);
+  yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
+  yield* lockWaiting(sql.unsafe(text));
+});
+
 /**
  * Takes every table lock the DDL needs, one at a time, each with
  * `lock_timeout` set to what is left of the attempt's budget. Postgres
@@ -51,11 +61,10 @@ export const takeTableLocks = Effect.fn("Schema.takeTableLocks")(
     };
 
     for (const lock of locks) {
-      const remaining = yield* remainingMs(budget);
-
-      yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-      yield* lockWaiting(
-        sql.unsafe(`LOCK TABLE ${lock.table} IN ${lock.mode} MODE`)
+      yield* withinBudget(
+        sql,
+        budget,
+        `LOCK TABLE ${lock.table} IN ${lock.mode} MODE`
       );
     }
 
@@ -79,10 +88,7 @@ export const runDdl = Effect.fn("Schema.runDdl")(function* runDdl(
   const sql = yield* SqlClient.SqlClient;
 
   for (const statement of statements) {
-    const remaining = yield* remainingMs(budget);
-
-    yield* sql.unsafe(`SET LOCAL lock_timeout = '${remaining}ms'`);
-    yield* lockWaiting(sql.unsafe(statement.sql));
+    yield* withinBudget(sql, budget, statement.sql);
   }
 });
 

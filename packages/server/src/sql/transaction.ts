@@ -72,6 +72,7 @@ import { parseConfigState, RequestRevision } from "./request-revision.ts";
 import type { ConfigState } from "./request-revision.ts";
 import { decodeRows } from "./rows.ts";
 import { discardConnection } from "./sanitizing-client.ts";
+import { NO_STATEMENT_MARKS } from "./statement-marks.ts";
 import { CurrentTransaction } from "./transaction-context.ts";
 import type { TransactionKind } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
@@ -509,11 +510,11 @@ export const runOutermost = <S, A, E, R>(
         );
 
         const setupResult = yield* setup(connection, state).pipe(
-          Effect.tapError(state.recordFailure)
+          Effect.tapError(state.failureRecorder(NO_STATEMENT_MARKS))
         );
 
         yield* markTransaction(connection, state).pipe(
-          Effect.tapError(state.recordFailure)
+          Effect.tapError(state.failureRecorder(NO_STATEMENT_MARKS))
         );
         state.tracked = tracked;
 
@@ -720,14 +721,15 @@ const maintenanceSetup =
       }
     });
 
-const runMaintenance = <A, E, R>(
+const runWithoutRevision = <A, E, R>(
+  kind: "maintenance" | "diagnostic",
+  setup: TransactionSetup<void>,
   client: PgClient.PgClient,
-  effect: Effect.Effect<A, E, R>,
-  options: MaintenanceOptions | undefined
+  effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E | SqlError, Exclude<R, MaintenanceServices>> => {
-  const state = new TransactionState("maintenance", client);
+  const state = new TransactionState(kind, client);
 
-  return runOutermost(state, maintenanceSetup(options), (_, tracked, scope) =>
+  return runOutermost(state, setup, (_, tracked, scope) =>
     Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
   );
 };
@@ -778,17 +780,6 @@ const diagnosticSetup: TransactionSetup<void> = Effect.fn(
   yield* control(connection, "SET LOCAL search_path = pg_catalog");
 });
 
-const runDiagnostic = <A, E, R>(
-  client: PgClient.PgClient,
-  effect: Effect.Effect<A, E, R>
-): Effect.Effect<A, E | SqlError, Exclude<R, MaintenanceServices>> => {
-  const state = new TransactionState("diagnostic", client);
-
-  return runOutermost(state, diagnosticSetup, (_, tracked, scope) =>
-    Effect.provideContext(effect, maintenanceContext(state, tracked, scope))
-  );
-};
-
 /** The request and maintenance transactions of one client. */
 export interface RequestTransactions {
   /**
@@ -831,6 +822,26 @@ export interface RequestTransactions {
   >;
 }
 
+const makeWithoutRevision = (
+  client: PgClient.PgClient,
+  kind: "maintenance" | "diagnostic",
+  setup: (options?: MaintenanceOptions) => TransactionSetup<void>,
+  nestedRefusal: Effect.Effect<never>
+) =>
+  Effect.fn(`Transactions.${kind}`)(
+    function* withoutRevision<A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+      options?: MaintenanceOptions
+    ) {
+      const current = yield* currentState;
+
+      return Option.isSome(current)
+        ? yield* nestedRefusal
+        : yield* runWithoutRevision(kind, setup(options), client, effect);
+    },
+    (effect) => hygienic(effect)
+  );
+
 /**
  * Builds request and maintenance transactions over a client.
  * @param client - The pooled client, or a dedicated single-connection client.
@@ -839,28 +850,17 @@ export interface RequestTransactions {
 export const makeRequestTransactions = (
   client: PgClient.PgClient
 ): RequestTransactions => ({
-  diagnostic: Effect.fn("Transactions.diagnostic")(
-    function* diagnostic<A, E, R>(effect: Effect.Effect<A, E, R>) {
-      const current = yield* currentState;
-
-      return Option.isSome(current)
-        ? yield* nestedDiagnostic
-        : yield* runDiagnostic(client, effect);
-    },
-    (effect) => hygienic(effect)
+  diagnostic: makeWithoutRevision(
+    client,
+    "diagnostic",
+    () => diagnosticSetup,
+    nestedDiagnostic
   ),
-  maintenance: Effect.fn("Transactions.maintenance")(
-    function* maintenance<A, E, R>(
-      effect: Effect.Effect<A, E, R>,
-      options?: MaintenanceOptions
-    ) {
-      const current = yield* currentState;
-
-      return Option.isSome(current)
-        ? yield* nestedMaintenance
-        : yield* runMaintenance(client, effect, options);
-    },
-    (effect) => hygienic(effect)
+  maintenance: makeWithoutRevision(
+    client,
+    "maintenance",
+    maintenanceSetup,
+    nestedMaintenance
   ),
   request: Effect.fn("Transactions.request")(
     function* request<A, E, R>(

@@ -196,14 +196,3 @@ export const withDatabase = (url: string, database: string): string => {
 
   return parsed.toString();
 };
-
-/**
- * The database name in a connection URL.
- * @param url - A `postgres://` URL.
- * @returns The database name, or `undefined` when the URL has none.
- */
-export const databaseOf = (url: string): string | undefined => {
-  const name = decodeURIComponent(new URL(url).pathname.replace(/^\//u, ""));
-
-  return name === "" ? undefined : name;
-};

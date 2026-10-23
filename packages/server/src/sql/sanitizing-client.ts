@@ -16,7 +16,7 @@
  * their SQLSTATE.
  */
 import { PgClient, PgConnection, PgPool } from "@effect/sql-pg";
-import { Effect, Option, Schema, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import type { Scope } from "effect";
 import { SqlClient, Statement } from "effect/sql";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
@@ -24,6 +24,7 @@ import { SqlError, UnknownError } from "effect/sql/SqlError";
 import type { Custom } from "effect/sql/Statement";
 
 import { logSqlError, sanitizeSqlError } from "./errors.ts";
+import { commit } from "./transaction-state.ts";
 
 /**
  * Runs a driver effect, logging and sanitizing its failure.
@@ -109,10 +110,6 @@ const pgJson = Statement.custom<PgJson>("PgJson");
 const jsonFragment: PgClient.PgClient["json"] = (value) =>
   Statement.fragment([pgJson(value)]);
 
-const CommandResult = Schema.Struct({ command: Schema.String });
-
-const decodeCommandResult = Schema.decodeUnknownOption(CommandResult);
-
 const abortedCommit = new SqlError({
   reason: new UnknownError({
     cause: new Error("COMMIT rolled back an aborted transaction"),
@@ -127,15 +124,9 @@ const abortedCommit = new SqlError({
  * @returns An effect that commits.
  */
 const checkedCommit = (connection: Connection): Effect.Effect<void, SqlError> =>
-  connection.executeRaw("COMMIT", []).pipe(
-    Effect.flatMap((result) =>
-      Option.match(decodeCommandResult(result), {
-        onNone: () => Effect.void,
-        onSome: (decoded) =>
-          decoded.command === "ROLLBACK"
-            ? Effect.fail(abortedCommit)
-            : Effect.void,
-      })
+  commit(connection).pipe(
+    Effect.flatMap((tag) =>
+      tag === "ROLLBACK" ? Effect.fail(abortedCommit) : Effect.void
     )
   );
 
