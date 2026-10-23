@@ -66,7 +66,7 @@ export const readEventCursor = Effect.fn("Events.readCursor")(
       return yield* invalidAfter();
     }
 
-    return yield* Schema.decodeUnknownEffect(
+    return yield* Schema.decodeEffect(
       Schema.fromJsonString(EventPositionSchema)
     )(row.position).pipe(Effect.mapError(invalidAfter));
   }

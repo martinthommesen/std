@@ -140,7 +140,11 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
       });
 
       const entries = yield* readEntries(row.record_id, row.version).pipe(
-        Effect.catchTag("PayloadUnreadable", () => Effect.succeed([]))
+        Effect.catchTag("PayloadUnreadable", () =>
+          Effect.logWarning("Resource event payload is unreadable", {
+            changeId: row.id,
+          }).pipe(Effect.as([]))
+        )
       );
 
       const entry = entries.at(-1);
@@ -165,7 +169,11 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
         { me: actor.userId, now, timeZone }
       );
 
-      if (!(payload instanceof PayloadUnreadable)) {
+      if (payload instanceof PayloadUnreadable) {
+        yield* Effect.logWarning("Resource event payload is unreadable", {
+          changeId: row.id,
+        });
+      } else {
         rendered.push(
           ...renderHubEvents(
             {

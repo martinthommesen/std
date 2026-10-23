@@ -8,7 +8,7 @@ export const migration0022: TxMigration = {
   phase: "expand",
   statements: [
     `CREATE TABLE core.change_image (
-      change_id uuid PRIMARY KEY REFERENCES core.change(id),
+      change_id uuid PRIMARY KEY REFERENCES core.change(id) ON DELETE CASCADE,
       before_image jsonb,
       after_image jsonb,
       CHECK (before_image IS NULL OR jsonb_typeof(before_image) = 'object'),

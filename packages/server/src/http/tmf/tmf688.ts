@@ -68,6 +68,8 @@ import {
   pageAnswer,
   pageBounds,
   selectedResource,
+  validateResourceFields,
+  validateResourceFilters,
 } from "./page.ts";
 
 type EventSaveServices = SaveHooks | WriteOnlyValues | HubSettings;
@@ -602,8 +604,11 @@ const readEvents = Effect.fn("Tmf688.readEvents")(function* readEvents(
     });
   }
 
-  yield* filteredResources([], input.query, new Set(EVENT_FIELDS));
-  yield* selectedResource({}, input.query.get("fields"), EVENT_FIELDS);
+  yield* validateResourceFilters(input.query, new Set(EVENT_FIELDS));
+  yield* validateResourceFields(
+    input.query.get("fields"),
+    new Set(EVENT_FIELDS)
+  );
   const position = yield* eventStartPosition(input, topic, lookupPending);
   const scan = yield* scanEvents(input, topic, bounds, position);
 

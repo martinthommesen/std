@@ -41,9 +41,24 @@ export const writeChangeImage = Effect.fn("Records.writeChangeImage")(
     after: StoredRecord | null
   ) {
     const sql = yield* SqlClient.SqlClient;
-    const beforeImage = imageOf(snapshot, before);
     const afterImage = imageOf(snapshot, after);
-    yield* sql`INSERT INTO core.change_image (change_id, before_image, after_image) VALUES (${entry.changeId}::uuid, ${beforeImage === null ? null : JSON.stringify(beforeImage)}::jsonb, ${afterImage === null ? null : JSON.stringify(afterImage)}::jsonb)`;
+
+    // Only bridge a legacy/old-writer gap; normally v-1 already owns this image.
+    const [previous] =
+      before === null
+        ? []
+        : yield* sql`
+      SELECT i.change_id FROM core.change c
+      JOIN core.change_image i ON i.change_id = c.id
+      WHERE c.record_id = ${entry.recordId}::uuid
+        AND c.record_version = ${entry.recordVersion - 1} AND i.after_image IS NOT NULL`;
+
+    const beforeImage =
+      previous === undefined ? imageOf(snapshot, before) : null;
+
+    if (beforeImage !== null || afterImage !== null) {
+      yield* sql`INSERT INTO core.change_image (change_id, before_image, after_image) VALUES (${entry.changeId}::uuid, ${beforeImage === null ? null : JSON.stringify(beforeImage)}::jsonb, ${afterImage === null ? null : JSON.stringify(afterImage)}::jsonb)`;
+    }
 
     if (entry.recordClassId !== EVENT_CLASS_IDS.event) {
       return;

@@ -411,7 +411,7 @@ describe("ddl-forms", () => {
     );
 
     dbTest.effect(
-      "fk-actions: every FK is NO ACTION, level FKs cascade deletes",
+      "fk-actions: reference FKs are NO ACTION; level and derived change image FKs cascade deletes",
       () =>
         Effect.gen(function* fkActions() {
           const rows = yield* values(
@@ -428,7 +428,10 @@ describe("ddl-forms", () => {
 
             assert.strictEqual(
               actions,
-              name?.startsWith("std_lv_") === true ? "ca" : "aa",
+              name?.startsWith("std_lv_") === true ||
+                name === "change_image_change_id_fkey"
+                ? "ca"
+                : "aa",
               row
             );
           }

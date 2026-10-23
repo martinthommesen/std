@@ -3,7 +3,10 @@ import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
 import { EventCreate, TopicCreate, TMF688_PREFIX } from "@std/api/v2/tmf688";
-import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
+import {
+  EVENT_CLASS_IDS,
+  EVENT_PAYLOAD_FIELD_ID,
+} from "@std/definitions/event-ids";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import {
   isJsonObject,
@@ -379,7 +382,7 @@ const clientRecordId = Effect.fn("Tmf688.clientRecordId")(
 
     if (rows.length === 0 && lookupPending) {
       rows =
-        yield* sql`SELECT c.record_id::text AS id FROM core.change c JOIN core.event e ON e.id = c.record_id WHERE c.record_class_id = ${EVENT_CLASS_IDS.event}::uuid AND c.fields->'706416a0-c21d-4346-9dda-283896c78bc9'->'after'->>'eventId' = ${eventId} AND e.topic = ${topicId}::uuid ORDER BY c.record_id LIMIT 1`.pipe(
+        yield* sql`SELECT c.record_id::text AS id FROM core.change c JOIN core.event e ON e.id = c.record_id WHERE c.record_class_id = ${EVENT_CLASS_IDS.event}::uuid AND c.fields->${EVENT_PAYLOAD_FIELD_ID}->'after'->>'eventId' = ${eventId} AND e.topic = ${topicId}::uuid ORDER BY c.record_id LIMIT 1`.pipe(
           Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String })))
         );
     }

@@ -110,51 +110,56 @@ export const pageBounds = (params: URLSearchParams) => {
   return validLimit && validOffset ? { limit, offset } : undefined;
 };
 
-/** Apply validated first-level scalar filters to authorized representations. */
-export const filteredResources = Effect.fn("Tmf688.filterResources")(
-  function* filteredResources(
-    resources: readonly JsonObject[],
-    params: URLSearchParams,
-    allowed: ReadonlySet<string>
-  ) {
-    let selected = [...resources];
+/** Validate scalar filter attributes and comparisons before reading resources. */
+export const validateResourceFilters = Effect.fn(
+  "Tmf688.validateResourceFilters"
+)(function* validateResourceFilters(
+  params: URLSearchParams,
+  allowed: ReadonlySet<string>
+) {
+  const filters = [];
 
-    for (const name of new Set(params.keys())) {
-      if (CONTROL.has(name)) {
-        continue;
-      }
-
-      const [attribute = "", comparison = "eq"] = name.split(".");
-
-      if (!allowed.has(attribute)) {
-        return yield* new UnknownField({ field: attribute });
-      }
-
-      if (!COMPARISONS.has(comparison) || attribute === "event") {
-        return yield* new InvalidFilter({
-          issues: [
-            {
-              message: "Only scalar attributes are filterable.",
-              reason: "attributeNotFilterable",
-            },
-          ],
-        });
-      }
-
-      const expected = params
-        .getAll(name)
-        .flatMap((value) => alternativesOf(value));
-
-      selected = selected.filter((resource) =>
-        matches(resource[attribute], expected, comparison)
-      );
+  for (const name of new Set(params.keys())) {
+    if (CONTROL.has(name)) {
+      continue;
     }
 
-    return selected;
-  }
-);
+    const [attribute = "", comparison = "eq"] = name.split(".");
 
-const checkFields = (fields: string | null, allowed: ReadonlySet<string>) => {
+    if (!allowed.has(attribute)) {
+      return yield* new UnknownField({ field: attribute });
+    }
+
+    if (!COMPARISONS.has(comparison) || attribute === "event") {
+      return yield* new InvalidFilter({
+        issues: [
+          {
+            message: "Only scalar attributes are filterable.",
+            reason: "attributeNotFilterable",
+          },
+        ],
+      });
+    }
+
+    const expected = params
+      .getAll(name)
+      .flatMap((value) => alternativesOf(value));
+
+    filters.push({ attribute, comparison, expected });
+  }
+
+  return filters;
+});
+
+/** Validate requested fields against the published resource attributes.
+ * @param fields - Requested attributes.
+ * @param allowed - Published attributes.
+ * @returns A field error, or success.
+ */
+export const validateResourceFields = (
+  fields: string | null,
+  allowed: ReadonlySet<string>
+) => {
   const unknown = (fields ?? "")
     .split(",")
     .filter(Boolean)
@@ -166,6 +171,23 @@ const checkFields = (fields: string | null, allowed: ReadonlySet<string>) => {
     : Effect.fail(new UnknownField({ field: unknown }));
 };
 
+/** Apply validated first-level scalar filters to authorized representations. */
+export const filteredResources = Effect.fn("Tmf688.filterResources")(
+  function* filteredResources(
+    resources: readonly JsonObject[],
+    params: URLSearchParams,
+    allowed: ReadonlySet<string>
+  ) {
+    const filters = yield* validateResourceFilters(params, allowed);
+
+    return resources.filter((resource) =>
+      filters.every(({ attribute, comparison, expected }) =>
+        matches(resource[attribute], expected, comparison)
+      )
+    );
+  }
+);
+
 /** Validate a single-resource selection against its published attributes. */
 export const selectedResource = Effect.fn("Tmf688.selectedResource")(
   function* selectedResource(
@@ -173,7 +195,7 @@ export const selectedResource = Effect.fn("Tmf688.selectedResource")(
     fields: string | null,
     allowed: readonly string[]
   ) {
-    yield* checkFields(fields, new Set(allowed));
+    yield* validateResourceFields(fields, new Set(allowed));
 
     return selectFields(resource, fields);
   }
@@ -205,7 +227,7 @@ export const pageAnswer = Effect.fn("Tmf688.page")(function* pageAnswer(
   const allowed = new Set(attributes);
   const selected = yield* filteredResources(resources, params, allowed);
   const fields = params.get("fields");
-  yield* checkFields(fields, allowed);
+  yield* validateResourceFields(fields, allowed);
 
   const page = selected
     .slice(bounds.offset, bounds.offset + bounds.limit)

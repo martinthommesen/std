@@ -188,7 +188,7 @@ Resume:
 - A tombstone keeps ID, last name, type, label and purge revision, so history can interpret old values. The name becomes free; the ID is never reused. The tombstone is the definition row in state `purged`; its purge revision is its first definition revision in that state (4.4). [decision 0011]
 - A field purge takes its single-field indexes and its overrides along; a table purge takes its fields, indexes and overrides along. Records of a child class also have rows in its ancestors' tables, which dropping the child's table cannot remove: purging a class whose subtree has records while its root table stays is refused (`PurgeRefused`, counted under `SCHEMA_KEY`); a populated hierarchy is purged from its leaves to its root in one change set. [judgment, decision 0011]
 - A purge does not free a column slot: dropped columns count toward the 1,600-column limit [checked: [limits](https://www.postgresql.org/docs/18/limits.html)].
-- A purge leaves history values in place; erasure is deliberately later.
+- A purge leaves history values in place; erasure is deliberately later and must cover `core.change_image` values too (decision 0032).
 
 ### 1.7 Dependency checks
 
@@ -296,7 +296,7 @@ Model: class-table inheritance. Each class has its own Postgres table holding on
 - `class_id` is NOT NULL in every table. Reason: with the default MATCH SIMPLE, a NULL `class_id` would skip the level FK check. `doctor` check 12 verifies it.
 - Every table gets `PRIMARY KEY (id)` and `UNIQUE (id, class_id)` at creation. Reason: any table can gain a child later, and adding a unique index then needs a concurrent build. [judgment; costs one index per table, measured in the benchmark]
 - Every table gets `CHECK (class_id IN (<stable IDs of subtree(T)>))`.
-- Every child table gets `FOREIGN KEY (id, class_id) REFERENCES <parent> (id, class_id) ON DELETE CASCADE`. This **level FK** is the only `ON DELETE CASCADE` allowed in an STD schema.
+- Every child table gets `FOREIGN KEY (id, class_id) REFERENCES <parent> (id, class_id) ON DELETE CASCADE`. This **level FK** cascades only within one logical record. The sole other cascade is the derived `core.change_image.change_id` retention FK (4.8, decision 0032).
 - Every table gets a `BEFORE UPDATE` row trigger `WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id)` that raises. `WHEN` is used instead of `UPDATE OF class_id` because column-specific triggers do not fire for changes made by other BEFORE triggers.
 - A child's own required fields are `NOT NULL` in its table. Overrides of inherited fields are enforced by the record service (2.5).
 
@@ -554,7 +554,7 @@ These work like RLS `USING` and `WITH CHECK`: both the existing and the proposed
 
 ### 3.10 Deletes and references
 
-- Every reference FK uses `ON DELETE NO ACTION` (refusal), and platform-table FKs do too. Level FKs are the only `CASCADE`. STD never uses `RESTRICT`, `SET NULL`, `SET DEFAULT` or `CASCADE` on a reference. CI checks `pg_constraint.confdeltype` and `confupdtype` across STD schemas.
+- Every reference FK uses `ON DELETE NO ACTION` (refusal), and platform-table FKs do too, except `core.change_image.change_id`, which cascades retention deletion of its change (4.8, decision 0032). Level FKs cascade within one logical record. STD never uses `RESTRICT`, `SET NULL`, `SET DEFAULT` or `CASCADE` on a reference. CI checks `pg_constraint.confdeltype` and `confupdtype` across STD schemas.
 - Clear and cascade come after v0.1 as record-service operations: find referencing records, authorize each as an update or delete by the caller against both states, run hooks, bump versions, write change entries in the same operation. If any affected record is hidden or not allowed, the whole delete is refused with `NotAllowed` and no details.
 - Users are deactivated, never deleted. A deactivated user cannot sign in, sessions end, the effective role set is empty, and labels still resolve.
 
@@ -638,7 +638,7 @@ Each committed version of a logical record has exactly one change entry, written
 ### 4.3 Secrets
 
 - `password` and `secret` values never appear in change entries, delivery payloads, import reports, logs or errors. A change entry records them as `{"changed": true}` on create and update and omits them on delete.
-- Converting a field to a secret type belongs to the deferred type-change feature, which must scrub earlier entries.
+- Converting a field to a secret type belongs to the deferred type-change feature, which must scrub earlier entries and both `core.change_image` columns (decision 0032).
 
 ### 4.4 Interpreting old values
 
@@ -715,7 +715,7 @@ Costs accepted: one row per matching subscription per change (a 100,000-row impo
 
 ### 4.8 Retention (later)
 
-v0.1 has no retention. Fixed now so it can plug in: `core.delivery.change_id` references `core.change` with `ON DELETE NO ACTION` (refusal, 3.10); import conflict detection (7.3) treats missing history as "changed by someone else"; versions are never renumbered.
+v0.1 has no retention. Fixed now so it can plug in: `core.delivery.change_id` references `core.change` with `ON DELETE NO ACTION` (refusal, 3.10); import conflict detection (7.3) treats missing history as "changed by someone else"; versions are never renumbered. Retention also covers `core.change_image`: its `change_id` FK cascades deletion of an eligible change to its image (decision 0032).
 
 ### 4.9 Aggregates (from Step 3)
 
@@ -1433,6 +1433,8 @@ Because the fence commits before the old sessions are terminated and every new c
 **What the startup check becomes** (replacing 1.9's last two bullets in Step 5, in the one place that decides it today, `refusalOf` in `platform/ledger.ts`, decision 0024): a process of release V starts when `core.admit(V)` passes, every `expand` migration of V is applied, every applied migration's checksum matches, and every ledger row it does not know is an `expand` migration of a later release. It refuses when a `contract` migration it does not know is applied, when an `expand` migration of its own release is missing, or when a checksum differs. Pending or `running` `data` migrations and a pending finalize of its own release do not stop it; `doctor` reports them as warnings, and as errors after a configurable time (default 24 h).
 
 **Helm lifecycle** (13.1, Step 5): Deployments use `RollingUpdate` with `maxUnavailable: 0` and readiness probes. Per attempt, the expand Job (`std-upgrade-<attempt>`) runs `std upgrade --expand --attempt <ID>` while the old pods keep serving, and the new pods' init containers wait for that attempt's expand row (`std wait-upgraded --phase expand --attempt <ID>`). The finalize Job (`std-finalize-<attempt>`), created with everything else, waits for its attempt's expand row and the completed rollout (above), fences, and finalizes. Helm waits for nothing that waits on Helm, so `--wait` and `--wait-for-jobs` cannot deadlock. A failed expand leaves the old pods serving and the new ones in their init containers; a failed finalize after the fence leaves the new version serving with `doctor` reporting the pending finalize; rerunning `helm upgrade` is a new attempt that takes the finalize over from its last recorded step (durable phase ordering, above).
+
+**Contract cleanup follow-up.** After event lookup backfill 0021 is applied everywhere and older writers are fenced out, a contract migration drops the temporary 0024/0025 lookup indexes and the point-lookup fallback code and ledger probe (decision 0032).
 
 **Which step builds what.** Step 3: RU1 to RU12 bind every migration, set version and delivery written (3A, 3B, 3P, 3I), `v0.0.3` ships RU12's config/dependency-kind tolerance (known-kind feature and subscription-kind gaps are recorded in 0030), and the `migration-phases` check (workstream 3R) enforces RU1, RU2 and RU5 statically on every PR. Step 4: every migration still follows them. Step 5 (5B, with 5O for the chart): `core.upgrade_state`, `core.admit` and the fence, the three phases and `--abort` in `std upgrade`, the new startup check, RU11's release tags and refusal, `std wait-upgraded --phase`, the finalize Job and `RollingUpdate`.
 

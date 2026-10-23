@@ -1117,7 +1117,7 @@
         "columns": ["change_id"],
         "deferrable": false,
         "deferred": false,
-        "deleteAction": "a",
+        "deleteAction": "c",
         "name": "change_image_change_id_fkey",
         "referencedColumns": ["id"],
         "references": "core.change",

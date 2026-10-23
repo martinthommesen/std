@@ -173,7 +173,6 @@ const imageRows = decodeRows(
     ...EntryTextSchema.fields,
     after_image: Schema.NullOr(Schema.String),
     before_image: Schema.NullOr(Schema.String),
-    image_id: Schema.NullOr(Schema.String),
   })
 );
 
@@ -233,29 +232,31 @@ export const readEntries = Effect.fn("Outbox.readEntries")(
         c.record_class_id::text AS record_class_id, c.record_version::text AS version_text,
         c.kind, c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
         c.schema_revision::text AS schema_revision, c.fields::text AS fields,
-        i.before_image::text AS before_image, i.after_image::text AS after_image,
-        i.change_id::text AS image_id
+        i.before_image::text AS before_image, i.after_image::text AS after_image
       FROM core."change" AS "c" LEFT JOIN core.change_image i ON i.change_id = c.id
-      WHERE c.record_id = ${recordId}::uuid AND c.record_version = ${version}`.pipe(
-      Effect.flatMap(imageRows)
-    );
+      WHERE c.record_id = ${recordId}::uuid AND c.record_version IN (${version - 1}, ${version})
+      ORDER BY c.record_version`.pipe(Effect.flatMap(imageRows));
 
-    const [row] = rows;
+    const row = rows.find((candidate) => candidate.version_text === version);
 
     if (row === undefined) {
       return [];
     }
 
-    if (row.image_id !== null) {
+    const previousImage =
+      row.before_image ??
+      rows.find((candidate) => candidate.version_text === version - 1)
+        ?.after_image ??
+      null;
+
+    const currentImage =
+      row.kind === "delete" ? previousImage : row.after_image;
+
+    if (currentImage !== null && (version === 1 || previousImage !== null)) {
       const entry = yield* entryOf(row);
 
-      const current = parseJsonbText(
-        entry.kind === "delete"
-          ? (row.before_image ?? "null")
-          : (row.after_image ?? "null")
-      );
-
-      const previous = parseJsonbText(row.before_image ?? "null");
+      const current = parseJsonbText(currentImage);
+      const previous = parseJsonbText(previousImage ?? "null");
 
       if (!current.ok || !isJsonObject(current.value) || !previous.ok) {
         return yield* unreadable(
@@ -499,7 +500,7 @@ export const versionImage = (
     return { known, unknown };
   }
 
-  if (at.image !== undefined) {
+  if (at.image !== undefined && at.kind !== "delete") {
     return savedVersionImage(snapshot, at.recordClassId, at.image);
   }
 
@@ -523,15 +524,20 @@ export const versionImage = (
   const platform = snapshot.class(at.recordClassId)?.storage === "platform";
 
   for (const field of payloadFields(snapshot, at.recordClassId)) {
-    const value = mentioned.has(field.id)
-      ? mentioned.get(field.id)
-      : unmentionedValue({
-          at,
-          created: startsWithCreate ? first : undefined,
-          field,
-          origin: origins.get(field.id),
-          platform,
-        });
+    let value = at.image?.[field.id];
+
+    if (mentioned.has(field.id)) {
+      value = mentioned.get(field.id);
+    } else if (value === undefined) {
+      // A legacy delete proves its empty fields even when v-1's image is partial.
+      value = unmentionedValue({
+        at,
+        created: startsWithCreate ? first : undefined,
+        field,
+        origin: origins.get(field.id),
+        platform,
+      });
+    }
 
     if (value === undefined) {
       unknown.add(field.id);

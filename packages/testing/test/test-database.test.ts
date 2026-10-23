@@ -37,6 +37,7 @@ import { migration0023 } from "@std/server/platform/migrations/0023-record-event
 import { migration0024 } from "@std/server/platform/migrations/0024-change-event-key";
 import { migration0025 } from "@std/server/platform/migrations/0025-client-event-key";
 import { migration0026 } from "@std/server/platform/migrations/0026-client-event-record";
+import { migration0027 } from "@std/server/platform/migrations/0027-change-image-backfill";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
@@ -283,6 +284,7 @@ describe("test-database", () => {
         migration0024,
         migration0025,
         migration0026,
+        migration0027,
       ])
     );
     assert.notStrictEqual(
