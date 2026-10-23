@@ -358,6 +358,85 @@ describe("itil-incident", () => {
   );
 
   it.effect(
+    "a local after rule without runAs cannot inherit a shipped cascade identity",
+    () =>
+      Effect.gen(function* localCascadeRefusal() {
+        const parent = yield* createTicket(
+          "helpdeskIncident",
+          { majorIncident: true },
+          "manager"
+        );
+
+        const child = yield* createTicket("helpdeskIncident", {
+          parentIncident: reference(parent),
+        });
+
+        const description = yield* fieldId("description");
+
+        const parentIncident = yield* fieldId(
+          "parent_incident",
+          "helpdesk.incident"
+        );
+
+        const rule = addRecordRule(HELPDESK.incident, {
+          actions: [
+            {
+              forEach: { classId: HELPDESK.incident, where: null },
+              target: "self",
+              type: "updateEach",
+              values: [
+                {
+                  fieldId: description,
+                  value: { value: "Must not run as cascade" },
+                },
+              ],
+            },
+          ],
+          condition: {
+            args: [
+              {
+                left: { path: [HELPDESK.fields.status] },
+                op: "eq",
+                right: { value: "resolved" },
+              },
+              { arg: { path: [parentIncident] }, op: "notEmpty" },
+            ],
+            op: "and",
+          },
+          phase: "after",
+          ruleKind: null,
+        });
+
+        yield* change([rule.op]);
+
+        const response = yield* patchResponse(
+          parent,
+          { status: "resolved" },
+          "helpdeskIncident",
+          "manager"
+        );
+
+        assert.strictEqual(response.status, 403, response.text);
+        const client = yield* clientFor();
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(parent.id))).status,
+          "new"
+        );
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(child.id))).status,
+          "new"
+        );
+        assert.deepStrictEqual(
+          yield* values(
+            "SELECT actor_id::text AS value FROM core.change WHERE record_id = $1::uuid AND kind = 'update'",
+            [textOf(child.id)]
+          ),
+          []
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
     "major incident permission holds through the API while priority never clears the flag and children resolve together",
     () =>
       Effect.gen(function* majorIncidentCascade() {

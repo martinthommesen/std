@@ -61,6 +61,20 @@ Use this for every STD release and every new version of an app set.
 
    Exit 0 or 2 is fine to start (2 means warnings, such as orphan columns); fix errors first. Open conflicts are informational: the local value stays effective until an admin resolves them as `keep_local`, `take_shipped` or `replace`.
 
+Legacy local rules or subscriptions that name a reserved service identity do not block unrelated change sets or helpdesk v3 loads. Doctor reports each as `localServiceIdentity`: change its run identity to an ordinary user, or disable it and remove the reserved identity; runtime execution is refused until repaired.
+
+### Reserved-role recovery
+
+`serviceIdentityRoleInactive` means the set-owned helpdesk cascade role was changed outside STD. A local reactivation is refused by ownership checks, and reloading the set cannot reactivate it. Stop servers and workers and take a backup as above. Restore a known-good backup using "Restore", or, after confirming that only the role's state was corrupted, use this database-owner repair (the recovery test executes this same SQL), then reload v3:
+
+```bash
+psql "$STD_DATABASE_URL" -At <<'SQL'
+UPDATE core.role SET state = 'active' WHERE id = 'f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3'::uuid RETURNING id::text AS value;
+SQL
+pnpm std upgrade --set examples/helpdesk/v3
+pnpm std doctor
+```
+
 ### Refusals
 
 | Code | Cause | Fix |

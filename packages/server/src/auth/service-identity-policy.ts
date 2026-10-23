@@ -3,17 +3,16 @@ import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   HELPDESK_CASCADE_ROLE_ID,
-  HELPDESK_CASCADE_LOGIN,
   HELPDESK_CASCADE_USER_ID,
   USER_CLASS_ID,
   USER_FIELD_IDS,
   USER_ROLE_CLASS_ID,
   USER_ROLE_FIELD_IDS,
 } from "@std/definitions/well-known";
-import { textKey } from "@std/values/fold";
 import { Effect, Option, Predicate } from "effect";
 
 import type { StoredRecord } from "../records/stored-record.ts";
+import { isReservedServiceLogin } from "./service-identities.ts";
 import { ServiceIdentityProvisioning } from "./service-identity-provisioning.ts";
 
 /** Refuses protected writes; internal system provisioning is audited by the pipeline. */
@@ -50,9 +49,7 @@ export const protectServiceIdentity = Effect.fn("Auth.protectServiceIdentity")(
 
       if (
         protectsIdentity ||
-        (Predicate.isString(login) &&
-          textKey(login.normalize("NFC").trim(), false) ===
-            HELPDESK_CASCADE_LOGIN)
+        (Predicate.isString(login) && isReservedServiceLogin(login))
       ) {
         return yield* new NotAllowed();
       }

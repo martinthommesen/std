@@ -1,11 +1,13 @@
 /** Read-only verification of the installed helpdesk service identity. */
 import { sql, textParameter } from "@std/conditions/sql-fragment";
+import { runIdentityOf } from "@std/definitions/rule-validation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   HELPDESK_CASCADE_ROLE_ID,
   HELPDESK_CASCADE_USER_ID,
   HELPDESK_CASCADE_LOGIN,
   HELPDESK_CASCADE_NAME,
+  SERVICE_USER_IDS,
   USER_CLASS_ID,
   USER_ROLE_CLASS_ID,
 } from "@std/definitions/well-known";
@@ -20,6 +22,46 @@ import { readRows } from "../records/sql-run.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
 
+/** Local definitions that predate reserved-identity validation.
+ * @param snapshot - The installed definitions.
+ * @returns Findings naming each definition and the repair.
+ */
+const localServiceIdentityFindings = (snapshot: ConfigSnapshot): Finding[] => {
+  const findings: Finding[] = [];
+
+  for (const definition of snapshot.definitions()) {
+    if (
+      definition.state === "purged" ||
+      definition.owner.layer !== "local" ||
+      (definition.kind !== "recordRule" && definition.kind !== "subscription")
+    ) {
+      continue;
+    }
+
+    let identity: string | null = null;
+
+    if (definition.kind === "recordRule") {
+      identity = runIdentityOf(snapshot, definition);
+    } else if (definition.kind === "subscription") {
+      identity = definition.identityId;
+    }
+
+    if (identity !== null && SERVICE_USER_IDS.has(identity)) {
+      findings.push(
+        finding(
+          18,
+          "error",
+          "localServiceIdentity",
+          `Local ${definition.kind} ${definition.id} (${definition.name}) names reserved service identity ${identity}; change its run identity to an ordinary user, or disable it and remove the reserved identity. Runtime execution is refused.`,
+          definition.id
+        )
+      );
+    }
+  }
+
+  return findings;
+};
+
 /** Check 18: the helpdesk cascade identity is active and exclusively holds its role. */
 export const checkServiceIdentities = Effect.fn(
   "Doctor.checkServiceIdentities"
@@ -31,7 +73,8 @@ export const checkServiceIdentities = Effect.fn(
     return [];
   }
 
-  const findings: Finding[] = [];
+  const findings: Finding[] = localServiceIdentityFindings(snapshot);
+
   const conflictingUserId = yield* helpdeskIdentityCollision(snapshot);
 
   if (conflictingUserId !== undefined) {
@@ -53,7 +96,7 @@ export const checkServiceIdentities = Effect.fn(
           18,
           "error",
           "serviceIdentityRoleInactive",
-          "The helpdesk cascade role is not active; restore the role to active, then reload helpdesk v3 to repair its service identity.",
+          "The helpdesk cascade role was changed outside STD and is not active; restore from backup or follow the reserved-role SQL recovery in docs/runbooks/upgrade-and-recovery.md, then reload helpdesk v3.",
           HELPDESK_CASCADE_ROLE_ID
         )
       );

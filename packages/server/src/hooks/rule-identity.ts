@@ -2,7 +2,8 @@
  * Who a rule's nested saves run as (Contracts 4.1, 4.10, decision 0022):
  *
  * - an `after` rule without `runAs`: the acting user, so access rules
- *   apply to its writes exactly as to the user's own;
+ *   apply to its writes exactly as to the user's own. Local rules are
+ *   refused when that actor is a reserved service identity;
  * - an `after` rule with `runAs`, or an `afterCommit` rule (its
  *   subscription's identity): that user, with the roles they hold now.
  *   This needs the rule's author to hold `rules.run_as`: definition
@@ -105,6 +106,10 @@ export const ruleActor = Effect.fn("Rules.actor")(function* ruleActor(
   acting: ActingUser
 ) {
   if (identityId === null) {
+    if (rule.owner.layer === "local" && SERVICE_USER_IDS.has(acting.userId)) {
+      return yield* new NotAllowed();
+    }
+
     return acting;
   }
 

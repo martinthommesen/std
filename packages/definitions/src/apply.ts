@@ -746,7 +746,12 @@ export const applyOperations = (
     ...immutableProblems(changes),
     ...(work.problems.length === 0
       ? [
-          ...validateSnapshot(after, undefined, newConditions(changes)),
+          ...validateSnapshot(
+            after,
+            undefined,
+            newConditions(changes),
+            snapshot
+          ),
           ...apiNameProblems(after, namedFields(changes)),
           ...apiTableNameProblems(after, namedTables(after, changes)),
         ]

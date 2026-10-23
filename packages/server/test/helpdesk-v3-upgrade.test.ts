@@ -52,6 +52,7 @@ import {
   recordServices,
   createTicket,
   patchTicket,
+  patchResponse,
   itilLayer,
   clientFor,
 } from "./itil-support.ts";
@@ -59,6 +60,7 @@ import { subscribe } from "./outbox-support.ts";
 import { USERS } from "./records-support.ts";
 import {
   addField,
+  addRecordRule,
   change,
   freshId,
   currentRevision,
@@ -655,6 +657,86 @@ const serviceFindings = Effect.gen(function* serviceFindings() {
 
 describe("helpdesk-service-identity", () => {
   it.effect(
+    "legacy local system identities allow unrelated changes and v3 loads, are diagnosed, and fail closed at runtime",
+    () =>
+      Effect.gen(function* legacyIdentities() {
+        const fixture = yield* HelpdeskFixture;
+
+        const rule = addRecordRule(HELPDESK.incident, {
+          actions: [
+            {
+              forEach: { classId: HELPDESK.incident, where: null },
+              target: "self",
+              type: "updateEach",
+              values: [
+                {
+                  fieldId: HELPDESK.fields.status,
+                  value: { value: "in_progress" },
+                },
+              ],
+            },
+          ],
+          phase: "after",
+          ruleKind: null,
+        });
+
+        yield* change([rule.op]);
+
+        const subscription = yield* subscribe({
+          classId: HELPDESK.incident,
+          identityId: fixture.agent.id,
+        });
+
+        // A pre-upgrade installation could validly store these identities.
+        yield* values(
+          "UPDATE core.record_rule SET run_as_id = $2::uuid WHERE id = $1::uuid RETURNING id::text AS value",
+          [rule.id, SYSTEM_USER_ID]
+        );
+        yield* values(
+          "UPDATE core.subscription SET identity_id = $2::uuid WHERE id = $1::uuid RETURNING id::text AS value",
+          [subscription, SYSTEM_USER_ID]
+        );
+        yield* (yield* Catalog).refresh;
+        yield* change([
+          addField(HELPDESK.incident, "unrelated", {
+            kind: "text",
+            maxLength: 40,
+          }).op,
+        ]);
+        yield* loadSetDirectory(HELPDESK_V3);
+
+        const findings = (yield* runDoctor()).findings.filter(
+          (entry) => entry.code === "localServiceIdentity"
+        );
+
+        assert.sameMembers(
+          findings.map((entry) => entry.subject),
+          [rule.id, subscription]
+        );
+
+        for (const entry of findings) {
+          assert.include(entry.message, SYSTEM_USER_ID);
+          assert.include(entry.message, "ordinary user");
+        }
+
+        const ticket = yield* createTicket();
+
+        const refused = yield* patchResponse(ticket, {
+          description: "Legacy rule must not execute",
+        });
+
+        assert.strictEqual(refused.status, 403, refused.text);
+      }).pipe(
+        Effect.provide(
+          TestHttpClient.layer.pipe(
+            Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+          )
+        ),
+        TestClock.withLive
+      )
+  );
+
+  it.effect(
     "reserves the service login and ID before v3, including bootstrap and rename",
     () =>
       Effect.gen(function* reserveService() {
@@ -784,10 +866,7 @@ describe("helpdesk-service-identity", () => {
           findings.map((entry) => entry.code),
           ["serviceIdentityRoleInactive"]
         );
-        assert.include(
-          findings[0]?.message ?? "",
-          "restore the role to active"
-        );
+        assert.include(findings[0]?.message ?? "", "restore from backup");
         // Raw corruption does not advance the revision; emulate a fresh CLI catalog.
         const freshCatalog = Catalog.of(yield* makeCatalog);
         assert.strictEqual(
@@ -808,8 +887,7 @@ describe("helpdesk-service-identity", () => {
           ["false"]
         );
         yield* values(
-          "UPDATE core.role SET state = 'active' WHERE id = $1::uuid RETURNING id::text AS value",
-          [HELPDESK_CASCADE_ROLE_ID]
+          "UPDATE core.role SET state = 'active' WHERE id = 'f02cabb1-cdc9-5371-81f0-d77cc1cd2ef3'::uuid RETURNING id::text AS value"
         );
         yield* (yield* Catalog).refresh;
         yield* loadSetDirectory(HELPDESK_V3);
