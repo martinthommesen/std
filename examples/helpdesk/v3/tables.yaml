@@ -252,6 +252,13 @@ tables:
         type:
           kind: reference
           target: helpdesk.ticket_specification
+      - id: 6a37ae7b-db15-5598-a745-51207619fc35
+        name: opened_by
+        label: Opened by
+        helpText: The user who opened the ticket; set on create and never changed. The opener may delete the ticket.
+        type:
+          kind: reference
+          target: core.user
     layouts:
       - id: 8ddfed22-2a48-4fa5-a4ca-5390343d869b
         type: form

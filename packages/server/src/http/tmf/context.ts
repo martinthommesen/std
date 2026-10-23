@@ -8,7 +8,7 @@ import { fieldDecision, knowsTable } from "@std/access/rules";
 import type { DefinitionId } from "@std/definitions/ids";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { fieldAttribute } from "@std/tmf/mapping";
+import { fieldAttribute, pathOf } from "@std/tmf/mapping";
 import type {
   Attribute,
   RenderContext,
@@ -29,7 +29,7 @@ import type { JsonObject } from "@std/values/json-value";
 
 import type { ReadScope } from "../../records/read-view.ts";
 import { typeNameOf } from "../api/table-names.ts";
-import { readFieldOf, sourceKeysOf } from "./sources.ts";
+import { readsSource, sourceKeysOf } from "./sources.ts";
 
 /** One mapped resource of one API. */
 export interface MappedResource {
@@ -86,7 +86,7 @@ export const resourceOfClass = (
  * @param classId - The class.
  * @returns The ancestry.
  */
-const ancestryOf = (
+export const ancestryOf = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId
 ): readonly DefinitionId[] =>
@@ -135,6 +135,7 @@ export const renderContextOf = (
 
     return mapped === undefined ? undefined : hrefOf(origin, mapped, id);
   },
+  lineageOf: (classId) => ancestryOf(snapshot, classId),
   typeOf: (classId) => {
     const mapped = resourceOfClass(snapshot, registry, classId);
 
@@ -218,6 +219,17 @@ export const extraKeysOf =
 export type NamingAction = "create" | "update";
 
 /**
+ * The field a source writes: a path source is written through its
+ * reference, resolved by the target's field, which the caller must read
+ * (decision 0035).
+ *
+ * @param key - The source.
+ * @returns The field's stable ID.
+ */
+const writtenFieldOf = (key: SourceKey): DefinitionId =>
+  pathOf(key)?.reference ?? key;
+
+/**
  * What the caller may read and name of exactly one class (Contracts 3.4):
  * the caller's visible schema of that class, and the fields a body may
  * name for a record of that class, readable there or writable there by a
@@ -241,21 +253,25 @@ export const classAccessOf = (
 ): ClassAccess => {
   const { caller, snapshot } = scope;
   const view = scope.view(classId, true);
-  const canRead = (key: SourceKey) => readFieldOf(view, key) !== undefined;
+  const canRead = (key: SourceKey) => readsSource(scope, view, key);
 
   // A purged field is gone: unknown, as one that never existed.
   const exists = (key: SourceKey) =>
-    (snapshot.field(key)?.state ?? "purged") !== "purged";
+    (snapshot.field(writtenFieldOf(key))?.state ?? "purged") !== "purged" &&
+    (pathOf(key) === undefined || canRead(key));
 
   const decisions = (key: SourceKey) =>
     actions.map(
-      (action) => fieldDecision(snapshot, caller, action, classId, key).kind
+      (action) =>
+        fieldDecision(snapshot, caller, action, classId, writtenFieldOf(key))
+          .kind
     );
 
   return {
     canName: (key) =>
       exists(key) &&
-      (canRead(key) || decisions(key).some((kind) => kind !== "never")),
+      (canRead(writtenFieldOf(key)) ||
+        decisions(key).some((kind) => kind !== "never")),
     canRead,
     // Write permission on every record of the class, for every action:
     // a conditional field rule may refuse some records.
@@ -280,15 +296,17 @@ export const knownOn = (
   classId: DefinitionId,
   attribute: Attribute
 ): boolean => {
+  const view = scope.view(classId);
+  const reads = (source: SourceKey) => readsSource(scope, view, source);
+
   if (attribute.kind === "parts") {
-    return knowsTable(scope.snapshot, scope.caller, attribute.item.classId);
+    return (
+      knowsTable(scope.snapshot, scope.caller, attribute.item.classId) ||
+      (attribute.ownerItems ?? []).some((owner) => owner.sources.every(reads))
+    );
   }
 
-  const view = scope.view(classId);
-
-  return attribute.sources.every(
-    (source) => readFieldOf(view, source) !== undefined
-  );
+  return attribute.sources.every(reads);
 };
 
 /** What rendering a record needs. */

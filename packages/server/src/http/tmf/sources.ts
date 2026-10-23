@@ -16,15 +16,21 @@
  */
 import type { Expr } from "@std/conditions/ast";
 import type { DefinitionId } from "@std/definitions/ids";
+import { pathOf, pathSource } from "@std/tmf/mapping";
 import type {
   Attribute,
+  HistoryStep,
   SourceKey,
   SourceRecord,
   SourceValue,
 } from "@std/tmf/mapping";
-import { isJsonString } from "@std/values/json-value";
+import { formatDateTime } from "@std/values/date-time";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
+import { readHistory } from "../../records/history-query.ts";
+import type { HistoryEntry } from "../../records/history-query.ts";
 import { decodeCursor } from "../../records/read-cursor.ts";
 import type { ReadField } from "../../records/read-field.ts";
 import { compileFilterExpr, MAX_LIMIT } from "../../records/read-query.ts";
@@ -60,8 +66,61 @@ export const readFieldOf = (
     : view.byId(key);
 
 /**
+ * The selected value a path source names in a view: the reference field,
+ * when the caller can read it, and the target's field, when the caller can
+ * read it on the reference's target class (Contracts 3.6).
+ *
+ * @param scope - The caller's scope.
+ * @param view - The view of the record's class.
+ * @param key - A path source (`pathSource`).
+ * @returns The selection entry, or undefined.
+ */
+const pathSelectionOf = (
+  scope: ReadScope,
+  view: ReadView,
+  key: SourceKey
+): SelectedValue | undefined => {
+  const path = pathOf(key);
+  const field = path === undefined ? undefined : view.byId(path.reference);
+
+  if (path === undefined || field?.type.kind !== "reference") {
+    return undefined;
+  }
+
+  const target = scope.view(field.type.targetClassId);
+  const targetField = target.byId(path.target);
+
+  return targetField === undefined
+    ? undefined
+    : {
+        field,
+        key: `${field.name}.${targetField.name}`,
+        through: { field: targetField, view: target },
+      };
+};
+
+/**
+ * Whether the caller can read a source in a view: a field (or system
+ * field) in its visible schema, or both hops of a path source.
+ *
+ * @param scope - The caller's scope.
+ * @param view - The view.
+ * @param key - The source.
+ * @returns True when readable.
+ */
+export const readsSource = (
+  scope: ReadScope,
+  view: ReadView,
+  key: SourceKey
+): boolean =>
+  pathOf(key) === undefined
+    ? readFieldOf(view, key) !== undefined
+    : pathSelectionOf(scope, view, key) !== undefined;
+
+/**
  * Every field key the attributes render from or write, value attributes
- * only (parts are read separately).
+ * and the owner items of arrays (parts are read separately), with the
+ * fields only some classes have (`optionalSources`).
  *
  * @param attributes - The attributes.
  * @returns The keys.
@@ -71,22 +130,32 @@ export const sourceKeysOf = (
 ): ReadonlySet<SourceKey> =>
   new Set(
     attributes.flatMap((attribute) =>
-      attribute.kind === "parts" ? [] : [...attribute.sources]
+      attribute.kind === "parts"
+        ? (attribute.ownerItems ?? []).flatMap((owner) => owner.sources)
+        : [...attribute.sources, ...(attribute.optionalSources ?? [])]
     )
   );
 
 /**
  * The selection that reads every source the caller can read in a view.
  *
+ * @param scope - The caller's scope (for path sources' targets).
  * @param view - The view.
  * @param keys - The sources.
  * @returns The selection.
  */
 export const selectionOf = (
+  scope: ReadScope,
   view: ReadView,
   keys: ReadonlySet<SourceKey>
 ): readonly SelectedValue[] =>
   [...keys].flatMap((key) => {
+    if (pathOf(key) !== undefined) {
+      const path = pathSelectionOf(scope, view, key);
+
+      return path === undefined ? [] : [path];
+    }
+
     const field = readFieldOf(view, key);
 
     return field === undefined ? [] : [{ field, key: field.name }];
@@ -106,6 +175,14 @@ const valuesOf = (record: DecodedRecord): Map<SourceKey, SourceValue> => {
 
   for (const entry of record.entries) {
     const { field, through } = entry.item;
+
+    // A path source's value: null when the target is hidden, its field
+    // unreadable there, or empty (Contracts 3.6).
+    if (!entry.withheld && through !== undefined) {
+      values.set(pathSource(field.id, through.field.id), {
+        value: entry.value,
+      });
+    }
 
     if (!entry.withheld && through === undefined) {
       const reference =
@@ -176,6 +253,7 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
       const found = yield* readByIds(read.scope, own, ids, {
         ...READ_OPTIONS,
         selection: selectionOf(
+          read.scope,
           own,
           new Set([...keys, ...read.extraKeys(classId)])
         ),
@@ -227,6 +305,7 @@ const partsByOwner = Effect.fn("Tmf.partsByOwner")(function* partsByOwner(
   );
 
   const selection = selectionOf(
+    scope,
     view,
     // The order field too: a write keeps positions it can see unchanged.
     new Set([
@@ -336,3 +415,82 @@ export const readSourceRecords = Effect.fn("Tmf.readSourceRecords")(
     });
   }
 );
+
+// One change entry as a history-backed attribute sees it: the new values
+// of the readable history sources it wrote (a secret's `changed` marker
+// carries no value and is left out).
+const stepOf = (entry: HistoryEntry): HistoryStep => {
+  const changes = new Map<SourceKey, JsonValue>();
+
+  for (const [fieldId, change] of Object.entries(entry.fields)) {
+    if (isJsonObject(change) && "after" in change) {
+      changes.set(fieldId, change.after ?? null);
+    }
+  }
+
+  return {
+    changes,
+    kind: entry.kind,
+    occurredAt: formatDateTime(entry.occurredAt),
+    version: entry.version,
+  };
+};
+
+/**
+ * Adds to each record the change entries its selected history-backed
+ * attributes render from (`ValueAttribute.history`; TMF621's
+ * `statusChangeHistory`, Contracts 11.2), through the record service's
+ * history read: only the history sources the caller can read on the
+ * record (3.7), and only for records where it can read every source of
+ * the attribute, since the attribute renders only then.
+ *
+ * @param attributes - The resource's attributes.
+ * @param records - The records as read.
+ * @param selected - Whether `fields` selects an attribute.
+ * @returns The records, with their history where an attribute needs it.
+ */
+export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
+  attributes: readonly Attribute[],
+  records: readonly SourceRecord[],
+  selected: (name: string) => boolean
+) {
+  const needing = attributes.flatMap((attribute) =>
+    attribute.kind === "value" &&
+    attribute.history !== undefined &&
+    selected(attribute.name)
+      ? [attribute]
+      : []
+  );
+
+  if (needing.length === 0) {
+    return records;
+  }
+
+  const result: SourceRecord[] = [];
+
+  for (const record of records) {
+    const readable = [
+      ...new Set(
+        needing.flatMap((attribute) =>
+          attribute.sources.every((source) => record.values.has(source))
+            ? (attribute.history ?? [])
+            : []
+        )
+      ),
+    ];
+
+    if (readable.length === 0) {
+      result.push(record);
+    } else {
+      const entries = yield* readHistory({
+        filter: { fieldIds: readable },
+        readable: new Set(readable),
+        recordId: record.id,
+      });
+
+      result.push({ ...record, history: entries.map(stepOf) });
+    }
+  }
+
+  return result;
+});

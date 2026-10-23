@@ -1271,3 +1271,34 @@ recordRules:
       - type: refuse
         code: RuleRefused
         message: A note author is assigned at creation and cannot be changed.
+  - id: c5276894-63f2-55ab-ada4-965f96c1b45e
+    name: opened_by
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - create
+    order: 10
+    kind: derive
+    actions:
+      - type: set
+        values:
+          - fieldId: 6a37ae7b-db15-5598-a745-51207619fc35
+            value:
+              ctx: me
+  - id: 92eca48e-ec7d-5ca3-9c69-c32f8afc3fa2
+    name: opened_by_immutable
+    table: helpdesk.ticket
+    phase: before
+    operations:
+      - update
+    order: 10
+    kind: invariant
+    condition:
+      op: changed
+      arg:
+        path:
+          - 6a37ae7b-db15-5598-a745-51207619fc35
+    actions:
+      - type: refuse
+        code: RuleRefused
+        message: The user who opened a ticket is set at creation and cannot be changed.

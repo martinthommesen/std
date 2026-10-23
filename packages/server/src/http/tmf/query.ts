@@ -391,7 +391,12 @@ const attributeFilter = Effect.fn("TmfQuery.attributeFilter")(
     }
 
     if (attribute.filter?.kind === "custom") {
-      const built = attribute.filter.build(comparison, values);
+      const built = attribute.filter.build(comparison, values, {
+        subtreeNamesOf: (classId) =>
+          scope.snapshot
+            .subtreeIds(classId)
+            .flatMap((id) => scope.snapshot.qualifiedNameOf(id) ?? []),
+      });
 
       return Result.isFailure(built)
         ? yield* invalidParameter(

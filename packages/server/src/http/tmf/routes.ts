@@ -34,6 +34,7 @@ import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
 import type { Catalog } from "../../catalog/catalog.ts";
 import type { InstanceSettings } from "../../config/instance-settings.ts";
+import { currentReadScope } from "../../records/read-records.ts";
 import type { SaveHooks } from "../../records/save-hooks.ts";
 import { RuleWriteAccess } from "../../records/write-access-rules.ts";
 import type { WriteOnlyValues } from "../../records/write-only-values.ts";
@@ -160,6 +161,25 @@ const inSession = <E, R>(
     )
   );
 
+/**
+ * Whether the request's configuration has the resource's class: a mapping
+ * names a shipped set's class, and until that set is installed (TMF621
+ * needs the helpdesk set) the resource answers `404`, as a resource the
+ * API does not serve (Contracts 11.1) [judgment, decision 0035].
+ *
+ * @param mapped - The resource.
+ * @returns Nothing, or `NotFound`.
+ */
+const served = Effect.fn("Tmf.served")(function* served(
+  mapped: MappedResource
+) {
+  const scope = yield* currentReadScope();
+
+  return scope.snapshot.class(mapped.resource.classId) === undefined
+    ? yield* new NotFound()
+    : undefined;
+});
+
 const routeWork =
   <E, R>(
     environment: RouteEnvironment,
@@ -184,8 +204,11 @@ const routeWork =
         return yield* inSession(
           environment,
           request,
-          work(input, params.id ?? "").pipe(
-            withTmfFieldNames(mapped.resource.attributes)
+          Effect.andThen(
+            served(mapped),
+            work(input, params.id ?? "").pipe(
+              withTmfFieldNames(mapped.resource.attributes)
+            )
           )
         );
       }),
