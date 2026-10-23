@@ -85,14 +85,9 @@ import { DdlRefused } from "./ddl-refused.ts";
 import { writeDefinitionChanges } from "./definition-changes.ts";
 import { ExistingDataViolates } from "./existing-data-violates.ts";
 import { restoreLockTimeout, runDdl, takeTableLocks } from "./lock-budget.ts";
+import type { RowCheck } from "./plan-lifecycle.ts";
 import { ASSUME_POPULATED, planChangeSet, requiresSchemaKey } from "./plan.ts";
-import type {
-  ChangeSetPlan,
-  Preflight,
-  PurgeCount,
-  RecordCheck,
-  ViolationCheck,
-} from "./plan.ts";
+import type { ChangeSetPlan, Preflight } from "./plan.ts";
 import type { PlatformTableMismatch } from "./platform-table-mismatch.ts";
 import { insertSystemUser, verifyPlatformTable } from "./platform-tables.ts";
 import { stepBoundary } from "./recovery-settings.ts";
@@ -474,7 +469,6 @@ interface MainInput {
   readonly changeSetId: string;
   readonly preflight: Preflight;
   readonly coordinatorPid: number | null;
-  readonly timing: { started: number; finished: number };
   /** Values or rows each purge destroys, counted before `CONFIG_KEY`. */
   readonly destroyed: ReadonlyMap<DefinitionId, number>;
   /** User-role assignments of retired or deleted roles. */
@@ -483,7 +477,7 @@ interface MainInput {
 
 const mainTransaction = Effect.fn("Schema.mainTransaction")(
   function* mainTransaction(input: MainInput) {
-    input.timing.started = yield* Clock.currentTimeMillis;
+    const started = yield* Clock.currentTimeMillis;
     const state = yield* RequestRevision;
     const expected = input.request.expectedState;
 
@@ -595,9 +589,9 @@ const mainTransaction = Effect.fn("Schema.mainTransaction")(
     }
 
     const next = yield* bumpRevision(input.changeSetId);
-    input.timing.finished = yield* Clock.currentTimeMillis;
+    const finished = yield* Clock.currentTimeMillis;
 
-    return { next, operations, plan };
+    return { mainTransactionMs: finished - started, next, operations, plan };
   }
 );
 
@@ -643,18 +637,25 @@ const checkExistence = Effect.fn("Schema.checkExistence")(
   }
 );
 
+const countRows = (
+  connection: DedicatedConnection,
+  check: RowCheck
+): Effect.Effect<number, DatabaseError> =>
+  connection
+    .execute(
+      `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
+    )
+    .pipe(
+      Effect.flatMap(decodeCount),
+      Effect.map(([row]) => Number(row?.n ?? "0"))
+    );
+
 const countViolations = Effect.fn("Schema.countViolations")(
   function* countViolations(
     connection: DedicatedConnection,
-    check: ViolationCheck
+    check: RowCheck
   ): Effect.fn.Return<void, ExistingDataViolates | DatabaseError> {
-    const [counted] = yield* connection
-      .execute(
-        `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
-      )
-      .pipe(Effect.flatMap(decodeCount));
-
-    const count = Number(counted?.n ?? "0");
+    const count = yield* countRows(connection, check);
 
     if (count === 0) {
       return yield* Effect.void;
@@ -673,19 +674,6 @@ const countViolations = Effect.fn("Schema.countViolations")(
     });
   }
 );
-
-const countRows = (
-  connection: DedicatedConnection,
-  check: PurgeCount | RecordCheck
-): Effect.Effect<number, DatabaseError> =>
-  connection
-    .execute(
-      `SELECT count(*) AS n FROM ${check.table} WHERE ${check.predicate}`
-    )
-    .pipe(
-      Effect.flatMap(decodeCount),
-      Effect.map(([row]) => Number(row?.n ?? "0"))
-    );
 
 /**
  * Counts what each purge destroys (Contracts 1.6), under `SCHEMA_KEY` and
@@ -807,11 +795,11 @@ const unchanged: ChangeSetResult = {
 const resultOf = (
   changeSetId: string,
   committed: {
+    readonly mainTransactionMs: number;
     readonly next: { readonly revision: number };
     readonly plan: ChangeSetPlan;
     readonly operations: readonly JsonObject[];
   },
-  timing: { readonly started: number; readonly finished: number },
   destroyed: ReadonlyMap<DefinitionId, number>,
   assignments: ReadonlyMap<DefinitionId, number>
 ): ChangeSetResult => ({
@@ -823,7 +811,7 @@ const resultOf = (
   followUps: committed.plan.steps.flatMap((step) =>
     step.sql === null ? [] : [step.sql]
   ),
-  mainTransactionMs: timing.finished - timing.started,
+  mainTransactionMs: committed.mainTransactionMs,
   operations: committed.operations,
   revision: committed.next.revision,
   state: "completed",
@@ -870,8 +858,6 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
 
     yield* guardPlan(plan);
 
-    const timing = { finished: 0, started: 0 };
-
     const committed = yield* connection.transactions.configCommit(
       mainTransaction({
         assignments,
@@ -880,18 +866,11 @@ const withCoordinator = Effect.fn("Schema.withCoordinator")(
         destroyed,
         preflight,
         request,
-        timing,
       }),
       options
     );
 
-    const result = resultOf(
-      changeSetId,
-      committed,
-      timing,
-      destroyed,
-      assignments
-    );
+    const result = resultOf(changeSetId, committed, destroyed, assignments);
 
     if (committed.plan.steps.length === 0) {
       return result;
@@ -938,8 +917,6 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
       );
     }
 
-    const timing = { finished: 0, started: 0 };
-
     const committed = yield* configCommit(
       mainTransaction({
         assignments,
@@ -948,11 +925,10 @@ export const applyChangeSet = Effect.fn("Schema.applyChangeSet")(
         destroyed: new Map(),
         preflight: ASSUME_POPULATED,
         request,
-        timing,
       }),
       options
     );
 
-    return resultOf(changeSetId, committed, timing, new Map(), assignments);
+    return resultOf(changeSetId, committed, new Map(), assignments);
   }
 );

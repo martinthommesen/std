@@ -13,8 +13,8 @@
  * `role` and `accessRule` (`config-deliveries.ts`, Contracts 4.6).
  */
 import type { Definition } from "@std/definitions/definition";
+import { sameJson } from "@std/definitions/layers";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -89,28 +89,6 @@ export const definitionImage = (
   );
 };
 
-const fieldsOf = (
-  snapshot: ConfigSnapshot,
-  before: Definition | undefined,
-  after: Definition
-): JsonObject => {
-  const { classId } = tableOf(after.kind);
-  const was = before === undefined ? undefined : definitionColumns(before);
-  const now = definitionColumns(after);
-  const fields: Record<string, JsonValue> = {};
-
-  for (const field of snapshot.fields(classId)) {
-    const old = was?.get(field.name) ?? null;
-    const next = now.get(field.name) ?? null;
-
-    if (was === undefined || stringifyJson(old) !== stringifyJson(next)) {
-      fields[field.id] = { after: next, before: old };
-    }
-  }
-
-  return fields;
-};
-
 /**
  * Writes one change entry per definition the change set created or
  * changed, at its new version.
@@ -138,28 +116,39 @@ export const writeDefinitionChanges = Effect.fn(
   const written: WrittenDefinitionChange[] = [];
 
   for (const { before, after } of changes) {
+    const { classId } = tableOf(after.kind);
+
     // Before the core set describes the platform tables there is nothing
     // to key the entry by.
-    if (snapshot.class(tableOf(after.kind).classId) !== undefined) {
+    if (snapshot.class(classId) !== undefined) {
+      const beforeImage =
+        before === undefined ? null : definitionImage(snapshot, before);
+
+      const afterImage = definitionImage(snapshot, after);
+      const fields: Record<string, JsonValue> = {};
+
+      for (const [id, value] of Object.entries(afterImage)) {
+        const old = beforeImage?.[id] ?? null;
+
+        if (beforeImage === null || !sameJson(old, value)) {
+          fields[id] = { after: value, before: old };
+        }
+      }
+
       const entry = yield* writeChangeEntry(
         {
           actorId,
           cause,
-          fields: fieldsOf(snapshot, before, after),
+          fields,
           kind: before === undefined ? "create" : "update",
-          recordClassId: tableOf(after.kind).classId,
+          recordClassId: classId,
           recordId: after.id,
           recordVersion: after.version,
         },
         revision
       );
 
-      yield* writeChangeImageValues(
-        snapshot,
-        entry,
-        before === undefined ? null : definitionImage(snapshot, before),
-        definitionImage(snapshot, after)
-      );
+      yield* writeChangeImageValues(snapshot, entry, beforeImage, afterImage);
       written.push({ after, before, entry });
     }
   }

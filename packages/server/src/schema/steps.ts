@@ -19,25 +19,18 @@ import { decodeRows } from "../sql/rows.ts";
 import { BACKFILL_STEP } from "./backfill.ts";
 import { dropConstraint, dropIndexConcurrently } from "./ddl.ts";
 import type { StepKind } from "./plan.ts";
-import { detailText } from "./step-spec.ts";
+import { detailText, unlimitedSession } from "./step-spec.ts";
 import type { ProbeResult, StepRow, StepSpec } from "./step-spec.ts";
 
 const decodeValid = decodeRows(Schema.Struct({ valid: Schema.Boolean }));
 
 const decodeCount = decodeRows(Schema.Struct({ violations: Schema.String }));
 
-// Session settings for a step that may wait on other transactions.
-const unlimited = (connection: DedicatedConnection) =>
-  Effect.andThen(
-    connection.execute("SET lock_timeout = 0"),
-    connection.execute("SET statement_timeout = 0")
-  );
-
 const runStatement = (
   connection: DedicatedConnection,
   step: StepRow
 ): Effect.Effect<JsonObject, DatabaseError> =>
-  unlimited(connection).pipe(
+  unlimitedSession(connection).pipe(
     Effect.andThen(connection.execute(step.sql ?? "SELECT 1")),
     Effect.as({})
   );
@@ -90,7 +83,7 @@ const dropIndex = (
   connection: DedicatedConnection,
   step: StepRow
 ): Effect.Effect<void, DatabaseError> =>
-  unlimited(connection).pipe(
+  unlimitedSession(connection).pipe(
     Effect.andThen(
       connection.execute(
         dropIndexConcurrently(
@@ -108,7 +101,10 @@ export const STEP_SPECS: Readonly<
 > = {
   backfill: BACKFILL_STEP,
   create_index_concurrently: {
-    abandon: dropIndex,
+    abandon: (connection, step) => ({
+      autocommit: dropIndex(connection, step),
+      complete: [],
+    }),
     action: (connection, step) =>
       indexProbe(connection, step).pipe(
         Effect.flatMap((found) =>
@@ -125,7 +121,10 @@ export const STEP_SPECS: Readonly<
     // The index definition is already a tombstone, so abandoning the drop
     // finishes it; `IF EXISTS` and `CONCURRENTLY` also remove an index a
     // failed drop left invalid.
-    abandon: dropIndex,
+    abandon: (connection, step) => ({
+      autocommit: dropIndex(connection, step),
+      complete: [],
+    }),
     action: runStatement,
     probe: (connection, step) =>
       indexProbe(connection, step).pipe(
@@ -133,21 +132,21 @@ export const STEP_SPECS: Readonly<
       ),
   },
   validate_constraint: {
-    abandon: (connection, step) =>
-      connection
-        .execute(
-          dropConstraint(
-            detailText(step, "table"),
-            detailText(step, "constraint"),
-            detailText(step, "referencedTable") || null
-          ).sql
-        )
-        .pipe(Effect.asVoid),
+    abandon: (_, step) => ({
+      autocommit: Effect.void,
+      complete: [
+        dropConstraint(
+          detailText(step, "table"),
+          detailText(step, "constraint"),
+          detailText(step, "referencedTable") || null
+        ),
+      ],
+    }),
     action: runStatement,
     probe: constraintProbe,
   },
   validate_override: {
-    abandon: () => Effect.void,
+    abandon: () => ({ autocommit: Effect.void, complete: [] }),
     action: (connection, step) =>
       connection.execute(step.sql ?? "SELECT '0' AS violations").pipe(
         Effect.flatMap(decodeCount),

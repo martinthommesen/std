@@ -40,7 +40,7 @@ import type { DedicatedConnection } from "../sql/dedicated.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { stepBoundary } from "./recovery-settings.ts";
-import { detailText } from "./step-spec.ts";
+import { detailText, unlimitedSession } from "./step-spec.ts";
 import type { ProbeResult, StepRow, StepSpec } from "./step-spec.ts";
 
 /** Rows per batch: 500 by default; tests make it small. */
@@ -118,12 +118,6 @@ const batchStatement = (
 SELECT (SELECT count(*) FROM assigned)::text AS rows,
        (SELECT id::text FROM batch ORDER BY id DESC LIMIT 1) AS cursor`;
 
-const unlimited = (connection: DedicatedConnection) =>
-  Effect.andThen(
-    connection.execute("SET lock_timeout = 0"),
-    connection.execute("SET statement_timeout = 0")
-  );
-
 /**
  * Runs batches from a cursor until a batch finds no empty row.
  *
@@ -191,10 +185,10 @@ const probe = (
 /** The `backfill` step kind: probe, action and abandon action. */
 export const BACKFILL_STEP: StepSpec = {
   // The numbers assigned so far stay; nothing physical to undo.
-  abandon: () => Effect.void,
+  abandon: () => ({ autocommit: Effect.void, complete: [] }),
   action: (connection, step) =>
     Effect.gen(function* backfill() {
-      yield* unlimited(connection);
+      yield* unlimitedSession(connection);
 
       const resumed = yield* sweep(connection, step, cursorOf(step));
       const behind = yield* sweep(connection, step, null);

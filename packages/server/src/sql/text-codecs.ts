@@ -18,6 +18,8 @@
  * generated SQL binds such values as text with a cast (`$1::numeric`).
  */
 import { PgTypes } from "@effect/sql-pg";
+import { civilFromDays } from "@std/values/calendar";
+import type { CivilDate } from "@std/values/calendar";
 import { Result } from "effect";
 
 const MICROS_PER_SECOND = 1_000_000n;
@@ -38,8 +40,6 @@ const NUMERIC_NEGATIVE_INFINITY = 0xf0_00;
 const NUMERIC_HEADER_BYTES = 8;
 const NUMERIC_GROUP_DIGITS = 4;
 const JSONB_VERSION = 1;
-const DAYS_PER_ERA = 146_097;
-const UNIX_TO_ERA_OFFSET = 719_468;
 const MAX_DECIMAL_GROUP = 9999;
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -98,43 +98,6 @@ const floorDiv = (value: bigint, divisor: bigint): bigint => {
   return value % divisor < 0n ? quotient - 1n : quotient;
 };
 
-interface CivilDate {
-  readonly year: number;
-  readonly month: number;
-  readonly day: number;
-}
-
-/**
- * Proleptic Gregorian date (astronomical years, year 0 = 1 BC) from days
- * since 1970-01-01, after Howard Hinnant's `civil_from_days`.
- * @param unixDays - Days since 1970-01-01.
- * @returns The civil date.
- */
-const civilFromUnixDays = (unixDays: number): CivilDate => {
-  const z = unixDays + UNIX_TO_ERA_OFFSET;
-  const era = Math.floor(z / DAYS_PER_ERA);
-  const dayOfEra = z - era * DAYS_PER_ERA;
-
-  const yearOfEra = Math.floor(
-    (dayOfEra -
-      Math.floor(dayOfEra / 1460) +
-      Math.floor(dayOfEra / 36_524) -
-      Math.floor(dayOfEra / 146_096)) /
-      365
-  );
-
-  const dayOfYear =
-    dayOfEra -
-    (365 * yearOfEra + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100));
-
-  const monthPrime = Math.floor((5 * dayOfYear + 2) / 153);
-  const day = dayOfYear - Math.floor((153 * monthPrime + 2) / 5) + 1;
-  const month = monthPrime < 10 ? monthPrime + 3 : monthPrime - 9;
-  const year = yearOfEra + era * 400 + (month <= 2 ? 1 : 0);
-
-  return { day, month, year };
-};
-
 /** A formatted date and whether it needs the ` BC` suffix. */
 interface FormattedDate {
   readonly text: string;
@@ -181,7 +144,7 @@ export const readDate = (
   }
 
   const { text, bc } = formatCivilDate(
-    civilFromUnixDays(days + PG_EPOCH_UNIX_DAYS)
+    civilFromDays(days + PG_EPOCH_UNIX_DAYS)
   );
 
   return bc ? `${text} BC` : text;
@@ -208,7 +171,7 @@ const formatTimestamp = (micros: bigint, zoneSuffix: string): string => {
     fraction === 0n ? "" : `.${trimTrailingZeros(pad(fraction, 6))}`;
 
   const { text, bc } = formatCivilDate(
-    civilFromUnixDays(Number(days) + PG_EPOCH_UNIX_DAYS)
+    civilFromDays(Number(days) + PG_EPOCH_UNIX_DAYS)
   );
 
   const time = `${pad(hours, 2)}:${pad(minutes, 2)}:${pad(secs, 2)}${fractionText}`;

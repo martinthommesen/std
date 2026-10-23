@@ -1,6 +1,6 @@
 /**
  * A small lexer for the shape of a SQL text: how many statements it holds
- * and the leading words of the first one.
+ * and the leading tokens.
  *
  * It follows Postgres's lexical rules closely enough that nothing can hide a
  * statement's first keyword or a statement separator: whitespace, `--` line
@@ -25,12 +25,6 @@
 
 /** The shape of a SQL text. */
 export interface LexedStatement {
-  /**
-   * The leading names of the first statement, lower-cased: unquoted words
-   * and the contents of quoted identifiers, up to the first other token, at
-   * most `MAX_LEADING_WORDS`.
-   */
-  readonly leadingWords: readonly string[];
   /**
    * The first `MAX_LEADING_TOKENS` tokens of the text (comments and
    * whitespace skipped, separators excluded), with their kinds.
@@ -66,9 +60,6 @@ export interface LexedToken {
   readonly kind: LexedTokenKind;
   readonly text: string;
 }
-
-/** How many leading words the lexer reports. */
-export const MAX_LEADING_WORDS = 4;
 
 /** How many leading tokens the lexer reports. */
 export const MAX_LEADING_TOKENS = 6;
@@ -716,12 +707,9 @@ const hasWriteClause = (tokens: readonly LexedToken[]): boolean =>
 /**
  * Lexes a SQL text into its shape.
  * @param sql - The text sent to the driver.
- * @returns How many statements it holds and the first statement's leading words.
+ * @returns How many statements it holds and the leading tokens.
  */
 export const analyzeStatement = (sql: string): LexedStatement => {
-  const leadingWords: string[] = [];
-  const leadingTokens: LexedToken[] = [];
-  let collecting = true;
   let statements = 0;
   let separators = 0;
   let inStatement = false;
@@ -740,8 +728,6 @@ export const analyzeStatement = (sql: string): LexedStatement => {
         statements += 1;
         inStatement = false;
       }
-
-      collecting = false;
     } else if (token.kind !== "blank") {
       const lexed: LexedToken = {
         kind: token.kind,
@@ -750,25 +736,12 @@ export const analyzeStatement = (sql: string): LexedStatement => {
 
       tokens.push(lexed);
 
-      if (leadingTokens.length < MAX_LEADING_TOKENS) {
-        leadingTokens.push(lexed);
-      }
-
       inStatement = true;
-
-      const isName = token.kind === "word" || token.kind === "quoted";
-
-      if (collecting && isName && token.name !== undefined) {
-        leadingWords.push(token.name);
-      }
-
-      collecting &&= isName && leadingWords.length < MAX_LEADING_WORDS;
     }
   }
 
   return {
-    leadingTokens,
-    leadingWords,
+    leadingTokens: tokens.slice(0, MAX_LEADING_TOKENS),
     separators,
     statements: inStatement ? statements + 1 : statements,
     writeClause: hasWriteClause(tokens),

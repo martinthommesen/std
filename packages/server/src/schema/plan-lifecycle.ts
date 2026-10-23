@@ -19,7 +19,6 @@ import type {
   IndexDefinition,
   NamespaceDefinition,
 } from "@std/definitions/definition";
-import { generatedName } from "@std/definitions/ids";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
@@ -37,22 +36,12 @@ import {
 } from "./ddl.ts";
 import { quoteIdent, tableName } from "./sql-text.ts";
 
-/** A count of values or rows a purge destroys (Contracts 1.6). */
-export interface PurgeCount {
+/** Rows selected for a preflight check or purge count. */
+export interface RowCheck {
   readonly definitionId: DefinitionId;
   /** The quoted table, as it is before the change set. */
   readonly table: string;
   /** A boolean SQL expression true for the rows counted. */
-  readonly predicate: string;
-}
-
-/**
- * Records that must not exist: records of a purged child class keep rows
- * in ancestor tables that stay, which `DROP TABLE` cannot remove.
- */
-export interface RecordCheck {
-  readonly definitionId: DefinitionId;
-  readonly table: string;
   readonly predicate: string;
 }
 
@@ -70,12 +59,20 @@ export interface LifecyclePlan {
   /** Statements over tables named as after the change set. */
   readonly later: readonly DdlStatement[];
   readonly indexDrops: readonly IndexDrop[];
-  readonly purgeCounts: readonly PurgeCount[];
-  readonly recordChecks: readonly RecordCheck[];
+  readonly purgeCounts: readonly RowCheck[];
+  readonly recordChecks: readonly RowCheck[];
 }
 
-const isStandard = (snapshot: ConfigSnapshot, classId: DefinitionId): boolean =>
-  snapshot.class(classId)?.storage === "standard";
+/**
+ * Whether a class has a standard table.
+ * @param snapshot - The configuration.
+ * @param classId - The class.
+ * @returns True for standard storage.
+ */
+export const isStandard = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId
+): boolean => snapshot.class(classId)?.storage === "standard";
 
 /** A definition the change set changed, before and after. */
 interface Transition<D extends Definition> {
@@ -93,18 +90,35 @@ const transitions = <D extends Definition>(
       : []
   );
 
-const isNamespace = (
+/**
+ * Narrows a definition to a namespace.
+ * @param definition - The definition.
+ * @returns Whether it is a namespace.
+ */
+export const isNamespace = (
   definition: Definition
 ): definition is NamespaceDefinition => definition.kind === "namespace";
 
-const isClass = (definition: Definition): definition is ClassDefinition =>
-  definition.kind === "class";
+/**
+ * Narrows a definition to a class.
+ * @param definition - The definition.
+ * @returns Whether it is a class.
+ */
+export const isClass = (
+  definition: Definition
+): definition is ClassDefinition => definition.kind === "class";
 
 const isField = (definition: Definition): definition is FieldDefinition =>
   definition.kind === "field";
 
-const isIndex = (definition: Definition): definition is IndexDefinition =>
-  definition.kind === "index";
+/**
+ * Narrows a definition to an index.
+ * @param definition - The definition.
+ * @returns Whether it is an index.
+ */
+export const isIndex = (
+  definition: Definition
+): definition is IndexDefinition => definition.kind === "index";
 
 const purgedNow = (before: Definition, after: Definition): boolean =>
   before.state !== "purged" && after.state === "purged";
@@ -352,15 +366,6 @@ export const planLifecycle = (applied: AppliedChangeSet): LifecyclePlan => {
     recordChecks: tableDrops.checks,
   };
 };
-
-/**
- * The generated name of an index.
- *
- * @param indexId - The index definition.
- * @returns `std_ix_<hex>`.
- */
-export const indexNameOf = (indexId: DefinitionId): string =>
-  generatedName("ix", indexId);
 
 /**
  * Maps the quoted names of tables as the change set leaves them to their

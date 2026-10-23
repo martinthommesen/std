@@ -42,12 +42,11 @@ import {
   runFollowUps,
 } from "./coordinator.ts";
 import type { FollowUpOutcome } from "./coordinator.ts";
-import { dropConstraint } from "./ddl.ts";
+import type { DdlStatement } from "./ddl-forms.ts";
 import { RecoverySettings } from "./recovery-settings.ts";
 import { SchemaChangeNotOpen } from "./schema-change-not-open.ts";
 import { SchemaNeedsAttention } from "./schema-needs-attention.ts";
-import { detailText } from "./step-spec.ts";
-import type { StepRow } from "./step-spec.ts";
+import { defaultSession, unlimitedSession } from "./step-spec.ts";
 import { STEP_SPECS } from "./steps.ts";
 
 /** `application_name` of the connection that tries to resume. */
@@ -60,10 +59,12 @@ export interface OpenChangeSet {
   readonly coordinatorPid: number | null;
   readonly error: string | null;
   readonly firstRevision: number | null;
+  readonly committedAt: string | null;
 }
 
 const decodeOpen = decodeRows(
   Schema.Struct({
+    committed_at: Schema.NullOr(Schema.String),
     coordinator_pid: Schema.NullOr(Schema.Int),
     error: Schema.NullOr(Schema.String),
     first_revision_text: Schema.NullOr(Schema.String),
@@ -81,9 +82,39 @@ type Execute = (
 const decodePresence = decodeRows(Schema.Struct({ present: Schema.Boolean }));
 
 /**
- * The change sets in `applying` or `needs_attention`, oldest first: the one
- * reader of open change sets, for the resumer, `std schema`, coordinators
- * and `std upgrade` (which plans before migration 0002 may have run).
+ * Reads open change sets, oldest first, from an existing schema-change journal.
+ * @param execute - Runs one statement; the journal must exist.
+ * @returns The open change sets, propagating database failures.
+ */
+export const readOpenChangeSets = <E, R>(
+  execute: (sql: string) => Effect.Effect<readonly unknown[], E, R>
+): Effect.Effect<readonly OpenChangeSet[], E, R> =>
+  execute(
+    `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision_text,
+       committed_at::text AS committed_at
+     FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
+     ORDER BY sc.first_revision`
+  ).pipe(
+    Effect.flatMap(decodeOpen),
+    Effect.map((rows) =>
+      rows.map((row) => ({
+        committedAt: row.committed_at,
+        coordinatorPid: row.coordinator_pid,
+        error: row.error,
+        firstRevision:
+          row.first_revision_text === null
+            ? null
+            : Number(row.first_revision_text),
+        id: row.id,
+        state: row.state,
+      }))
+    )
+  );
+
+/**
+ * The change sets in `applying` or `needs_attention`, oldest first, for
+ * recovery, coordinators and `std upgrade`, which plans before migration
+ * 0002 may have run.
  *
  * @param execute - Runs one statement.
  * @returns The open change sets; none before the journal exists.
@@ -100,22 +131,7 @@ export const openChangeSets = Effect.fn("Schema.openChangeSets")(
       return [];
     }
 
-    const rows = yield* execute(
-      `SELECT id::text AS id, state, coordinator_pid, error, first_revision::text AS first_revision_text
-       FROM core."schema_change" AS sc WHERE state IN ('applying', 'needs_attention')
-       ORDER BY sc.first_revision`
-    ).pipe(Effect.flatMap(decodeOpen));
-
-    return rows.map((row) => ({
-      coordinatorPid: row.coordinator_pid,
-      error: row.error,
-      firstRevision:
-        row.first_revision_text === null
-          ? null
-          : Number(row.first_revision_text),
-      id: row.id,
-      state: row.state,
-    }));
+    return yield* readOpenChangeSets(execute);
   }
 );
 
@@ -286,31 +302,10 @@ export const SchemaResumer: Layer.Layer<
   })
 );
 
-const decodePid = decodeRows(Schema.Struct({ pid: Schema.Int }));
-
-const HOLDER_QUERY = `SELECT l.pid FROM pg_locks l
-  WHERE l.locktype = 'advisory' AND l.granted
-    AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-    AND l.classid = $1::oid AND l.objid = $2::oid AND l.objsubid = 1`;
-
 const schemaKeyParams = [
   String(advisoryClassId(SCHEMA_KEY)),
   String(advisoryObjectId(SCHEMA_KEY)),
 ];
-
-/**
- * The backends holding `SCHEMA_KEY`.
- *
- * @param execute - Runs one statement.
- * @returns Their PIDs.
- */
-export const schemaKeyHolders = (
-  execute: Execute
-): Effect.Effect<readonly number[], DatabaseError> =>
-  execute(HOLDER_QUERY, schemaKeyParams).pipe(
-    Effect.flatMap(decodePid),
-    Effect.map((rows) => rows.map((row) => row.pid))
-  );
 
 const ABANDON_LOCK_WAIT = Duration.seconds(60);
 
@@ -410,13 +405,6 @@ const lockForAbandon = Effect.fn("Schema.lockForAbandon")(
   }
 );
 
-const constraintDropOf = (step: StepRow) =>
-  dropConstraint(
-    detailText(step, "table"),
-    detailText(step, "constraint"),
-    detailText(step, "referencedTable") || null
-  );
-
 /** What an abandon did. */
 export interface AbandonOutcome {
   readonly changeSetId: string;
@@ -439,11 +427,7 @@ export const abandonChangeSet = Effect.fn("Schema.abandonChangeSet")(
     options?: ConfigCommitOptions
   ) {
     const connection = yield* lockForAbandon(changeSetId);
-    const open = yield* openChangeSets(connection.execute);
-
-    if (!open.some((entry) => entry.id === changeSetId)) {
-      return yield* new SchemaChangeNotOpen({ changeSetId });
-    }
+    yield* requireOpen(connection.execute, changeSetId);
 
     const steps = yield* readSteps(connection.execute, changeSetId);
 
@@ -451,19 +435,19 @@ export const abandonChangeSet = Effect.fn("Schema.abandonChangeSet")(
       (step) => step.state !== "done" && step.kind !== "complete"
     );
 
-    yield* connection.execute("SET lock_timeout = 0");
-    yield* connection.execute("SET statement_timeout = 0");
+    const drops: DdlStatement[] = [];
+
+    yield* unlimitedSession(connection);
 
     // Index steps are undone here, concurrently and outside any
     // transaction: an unfinished build's index is dropped, an unfinished
     // drop is finished. Constraint drops run inside `complete` below;
     // `validate_override` has nothing physical to undo.
     for (const step of unfinished) {
-      if (
-        step.kind === "create_index_concurrently" ||
-        step.kind === "drop_index_concurrently"
-      ) {
-        yield* STEP_SPECS[step.kind].abandon(connection, step);
+      if (step.kind !== "complete") {
+        const cleanup = STEP_SPECS[step.kind].abandon(connection, step);
+        yield* cleanup.autocommit;
+        drops.push(...cleanup.complete);
       }
 
       yield* connection.execute(
@@ -475,12 +459,7 @@ export const abandonChangeSet = Effect.fn("Schema.abandonChangeSet")(
       );
     }
 
-    yield* connection.execute("SET lock_timeout = DEFAULT");
-    yield* connection.execute("SET statement_timeout = DEFAULT");
-
-    const drops = unfinished.flatMap((step) =>
-      step.kind === "validate_constraint" ? [constraintDropOf(step)] : []
-    );
+    yield* defaultSession(connection);
 
     const committed = yield* connection.transactions.configCommit(
       completeChangeSet(changeSetId, "abandoned", drops),
@@ -511,11 +490,7 @@ export const resumeOnRequest = Effect.fn("Schema.resumeOnRequest")(
     options?: ConfigCommitOptions
   ) {
     const connection = yield* openCoordinator;
-    const open = yield* openChangeSets(connection.execute);
-
-    if (!open.some((entry) => entry.id === changeSetId)) {
-      return yield* new SchemaChangeNotOpen({ changeSetId });
-    }
+    yield* requireOpen(connection.execute, changeSetId);
 
     return yield* resumeChangeSet(connection, changeSetId, options);
   },

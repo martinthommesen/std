@@ -48,6 +48,8 @@ import type { HygienicError } from "./errors.ts";
 import { advisoryClassId, advisoryObjectId, CONFIG_KEY } from "./locks.ts";
 import { parseConfigState } from "./request-revision.ts";
 import type { ConfigState } from "./request-revision.ts";
+import { decodeRows } from "./rows.ts";
+import { NO_STATEMENT_MARKS } from "./statement-marks.ts";
 import { CurrentTransaction } from "./transaction-context.ts";
 import { TransactionRefused } from "./transaction-refused.ts";
 import { control, TransactionState } from "./transaction-state.ts";
@@ -215,7 +217,7 @@ WHERE a.pid <> pg_backend_pid()
 GROUP BY a.pid, a.application_name, a.client_addr, a.state
 ORDER BY a.pid`;
 
-const HolderRows = Schema.Array(
+const decodeHolderRows = decodeRows(
   Schema.Struct({
     application_name: Schema.String,
     client_addr: Schema.NullOr(Schema.String),
@@ -225,14 +227,18 @@ const HolderRows = Schema.Array(
   })
 );
 
-const decodeHolderRows = Schema.decodeUnknownEffect(HolderRows);
+const decodePidRows = decodeRows(Schema.Struct({ pid: Schema.Int }));
 
-const PidRows = Schema.Array(Schema.Struct({ pid: Schema.Int }));
-
-const decodePidRows = Schema.decodeUnknownEffect(PidRows);
-
-const decodeWaitedRows = Schema.decodeUnknownEffect(
-  Schema.Array(WaitedLockSchema)
+// Sampling failures, including decoding failures, remain recoverable diagnostics.
+const decodeWaitSample = Schema.decodeUnknownEffect(
+  Schema.Array(
+    Schema.Struct({
+      blockers: Schema.Array(Schema.Int),
+      database: Schema.NullOr(WaitedLockSchema.fields.database),
+      mode: Schema.NullOr(WaitedLockSchema.fields.mode),
+      relation: Schema.NullOr(WaitedLockSchema.fields.relation),
+    })
+  )
 );
 
 /**
@@ -316,11 +322,15 @@ WHERE granted AND locktype = 'relation'
   AND pid <> pg_backend_pid()
 ORDER BY pid`;
 
-const WAITED_LOCK_QUERY = `
-SELECT database::text AS database, relation::text AS relation, mode
-FROM pg_locks
-WHERE pid = $1::int4 AND NOT granted AND locktype = 'relation'
-LIMIT 1`;
+const WAIT_SAMPLE_QUERY = `
+SELECT b.blockers, waited.database, waited.relation, waited.mode
+FROM (SELECT pg_blocking_pids($1::int4) AS blockers) b
+LEFT JOIN LATERAL (
+  SELECT database::text AS database, relation::text AS relation, mode
+  FROM pg_locks
+  WHERE pid = $1::int4 AND NOT granted AND locktype = 'relation'
+  LIMIT 1
+) waited ON true`;
 
 /** What the sampler saw of one attempt's lock waits. */
 interface AttemptWait {
@@ -362,9 +372,7 @@ export const describeLockHolders: (
       waited.database,
     ]);
 
-    holderPids = (yield* decodePidRows(rows).pipe(Effect.orDie)).map(
-      (row) => row.pid
-    );
+    holderPids = (yield* decodePidRows(rows)).map((row) => row.pid);
   }
 
   const raw = yield* monitor.unsafe(HOLDERS_QUERY, [
@@ -373,7 +381,7 @@ export const describeLockHolders: (
     String(advisoryObjectId(CONFIG_KEY)),
   ]);
 
-  const rows = yield* decodeHolderRows(raw).pipe(Effect.orDie);
+  const rows = yield* decodeHolderRows(raw);
 
   return rows.map((row): LockHolder => ({
     applicationName: row.application_name,
@@ -401,20 +409,28 @@ const sampleBlockers = (
   wait: AttemptWait
 ): Effect.Effect<void> =>
   Effect.gen(function* sampleWait() {
-    const blockers = yield* monitor
-      .unsafe("SELECT unnest(pg_blocking_pids($1::int4)) AS pid", [pid])
-      .pipe(Effect.flatMap((rows) => decodePidRows(rows)));
+    const [sample] = yield* monitor
+      .unsafe(WAIT_SAMPLE_QUERY, [pid])
+      .pipe(Effect.flatMap(decodeWaitSample));
 
-    for (const row of blockers) {
-      wait.blockers.add(row.pid);
+    if (sample === undefined) {
+      return;
     }
 
-    const [waited] = yield* monitor
-      .unsafe(WAITED_LOCK_QUERY, [pid])
-      .pipe(Effect.flatMap((rows) => decodeWaitedRows(rows)));
+    for (const blocker of sample.blockers) {
+      wait.blockers.add(blocker);
+    }
 
-    if (waited !== undefined) {
-      wait.waited = waited;
+    if (
+      sample.database !== null &&
+      sample.relation !== null &&
+      sample.mode !== null
+    ) {
+      wait.waited = {
+        database: sample.database,
+        mode: sample.mode,
+        relation: sample.relation,
+      };
     }
   }).pipe(
     Effect.ignore,
@@ -434,14 +450,16 @@ const configSetup =
         `SET LOCAL lock_timeout = '${CONFIG_LOCK_TIMEOUT}'`
       );
       const pids = yield* control(connection, "SELECT pg_backend_pid() AS pid");
-      const [backend] = yield* decodePidRows(pids).pipe(Effect.orDie);
+      const [backend] = yield* decodePidRows(pids);
 
       if (backend !== undefined) {
         yield* Effect.forkScoped(sampleBlockers(monitor, backend.pid, wait));
       }
 
       yield* control(connection, LOCK_CONFIG_KEY).pipe(
-        Effect.tapError(state.recordLockWaitFailure)
+        Effect.tapError(
+          state.failureRecorder({ ...NO_STATEMENT_MARKS, lockWaiting: true })
+        )
       );
       yield* control(
         connection,

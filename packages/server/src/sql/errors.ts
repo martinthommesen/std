@@ -35,9 +35,6 @@ import type { SqlErrorReason } from "effect/sql/SqlError";
 /** SQLSTATE `55P03` (`lock_not_available`), raised when `lock_timeout` expires. */
 export const SQLSTATE_LOCK_NOT_AVAILABLE = "55P03";
 
-/** SQLSTATE `57014` (`query_canceled`), raised by `statement_timeout` and cancellation. */
-export const SQLSTATE_QUERY_CANCELED = "57014";
-
 /** SQLSTATE `23505` (`unique_violation`). */
 export const SQLSTATE_UNIQUE_VIOLATION = "23505";
 
