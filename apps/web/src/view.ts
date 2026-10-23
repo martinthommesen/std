@@ -1,10 +1,10 @@
 import { Button, Nav } from "@foldkit/ui";
-import type { MetaTableSummary } from "@std/definitions/table-metadata";
 import { Match, Option } from "effect";
 import { AsyncData } from "foldkit";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
 import { MAIN_ID } from "./command.ts";
+import type { MetaTableSummary } from "./domain/metadata.ts";
 import { Message } from "./message.ts";
 import { SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";

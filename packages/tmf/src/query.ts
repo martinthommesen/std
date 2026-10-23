@@ -2,7 +2,7 @@
  * The parts of a TMF query (Contracts 10.3, 11.1) that depend only on the
  * mapping: `fields` and `sort` in TMF attribute names. Attribute filters
  * compile on the server against the caller's visible schema, through the
- * same TMF630 machinery as `/api/v2` (`server/http/tmf/query.ts`).
+ * same TMF630 machinery as `/api/v1` (`server/http/tmf/query.ts`).
  */
 import { Result } from "effect";
 

@@ -37,9 +37,9 @@ import type {
   TestResponse,
 } from "../../testing/src/http-client.ts";
 import { count, versionOf } from "./aggregates-support.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { values } from "./schema-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const TICKETS = '"tmffx"."ticket"';
@@ -74,7 +74,7 @@ const create = (caller: TestRequestOptions, body: JsonObject) =>
 /** Alice's tickets: one Bob sees (with a hidden note), one he cannot. */
 const seed = Effect.gen(function* seedTickets() {
   const http = yield* TestHttpClient;
-  const { alice } = yield* v2Callers;
+  const { alice } = yield* apiCallers;
 
   const open = yield* create(alice, {
     description: "Open to employees",
@@ -84,7 +84,7 @@ const seed = Effect.gen(function* seedTickets() {
     severity: "Major",
   });
 
-  const hiddenNote = yield* http.request("POST", "/api/v2/tmffxNote", {
+  const hiddenNote = yield* http.request("POST", "/api/v1/tmffxNote", {
     ...alice,
     body: { internal: true, text: "internal note", ticket: { id: open } },
   });
@@ -219,7 +219,7 @@ describe("tmf-noninterference-fixture", () => {
       () =>
         Effect.gen(function* hiddenFields() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* v2Callers;
+          const { alice, bob } = yield* apiCallers;
           const { open } = yield* seed;
 
           const asAlice = asObject(
@@ -235,7 +235,7 @@ describe("tmf-noninterference-fixture", () => {
 
           // The generic API does not show it to him either.
           const generic = asObject(
-            (yield* http.get(`/api/v2/tmffxTicket/${open}`, bob)).json
+            (yield* http.get(`/api/v1/tmffxTicket/${open}`, bob)).json
           );
 
           assert.strictEqual(
@@ -300,7 +300,7 @@ describe("tmf-noninterference-fixture", () => {
       () =>
         Effect.gen(function* invisible() {
           const http = yield* TestHttpClient;
-          const { bob } = yield* v2Callers;
+          const { bob } = yield* apiCallers;
           const { restricted } = yield* seed;
 
           const listed = yield* http.get(FIXTURE_TICKETS, bob);
@@ -351,7 +351,7 @@ describe("tmf-noninterference-fixture", () => {
       () =>
         Effect.gen(function* hiddenParts() {
           const http = yield* TestHttpClient;
-          const { bob } = yield* v2Callers;
+          const { bob } = yield* apiCallers;
           const { hiddenNote, open } = yield* seed;
 
           const read = asObject(
@@ -421,7 +421,7 @@ describe("tmf-noninterference-fixture", () => {
       "property: randomizing the values Bob cannot read changes none of his TMF responses",
       () =>
         Effect.gen(function* property() {
-          const { bob } = yield* v2Callers;
+          const { bob } = yield* apiCallers;
 
           yield* hiddenValuesProperty(yield* seed, bob);
         })

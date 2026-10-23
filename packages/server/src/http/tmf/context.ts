@@ -28,7 +28,7 @@ import type { ClassAccess } from "@std/tmf/write";
 import type { JsonObject } from "@std/values/json-value";
 
 import type { ReadScope } from "../../records/read-view.ts";
-import { typeNameOf } from "../v2/table-names.ts";
+import { typeNameOf } from "../api/table-names.ts";
 import { readFieldOf, sourceKeysOf } from "./sources.ts";
 
 /** One mapped resource of one API. */
@@ -118,7 +118,7 @@ export const typeAttributesFor = (
 /**
  * Type names and URLs for references (Contracts 10.2, 11.1): a class an
  * API serves takes its TMF type and URL there; any other class its
- * `/api/v2` type name and no URL.
+ * `/api/v1` type name and no URL.
  *
  * @param snapshot - The configuration.
  * @param registry - The served APIs.

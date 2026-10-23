@@ -1,11 +1,11 @@
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
-import { HistoryEntrySchema, RecordJsonSchema } from "@std/api/records";
-import { MetaTableSchema } from "@std/definitions/table-metadata";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
 
 import { WriteOnlyValue } from "../../domain/form-input.ts";
+import { MetaTableSchema } from "../../domain/metadata.ts";
+import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { MetaError, RecordPage } from "../table-list/model.ts";
 import {
@@ -34,12 +34,26 @@ export const ReadPurpose = Schema.Literals([
 export type ReadPurpose = typeof ReadPurpose.Type;
 
 /**
- * What a save returned: the record as the caller may now read it, or only
- * its ID and version when the caller can no longer see it (Contracts 3.9).
+ * A save that succeeded but whose record could not be read back (the read
+ * after it failed, or found a newer version): what the record holds now is
+ * unknown, so the form reads it again before the user saves again.
+ */
+export const UnreadSavedRecord = Schema.TaggedStruct("UnreadSavedRecord", {
+  id: Schema.String,
+  version: Schema.Int,
+});
+
+/**
+ * What a save returned: the record as the caller may now read it; only
+ * its ID and version when the caller can no longer see it (Contracts 3.9);
+ * or that the record could not be read back (`UnreadSavedRecord`).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const SavedRecord = Schema.Union([
   RecordJsonSchema,
+  // NOTE: before the bare identity, which would otherwise take an unread
+  // save's ID and version and drop its tag.
+  UnreadSavedRecord,
   Schema.Struct({ id: Schema.String, version: Schema.Int }),
 ]);
 
@@ -69,8 +83,8 @@ export const Message = defineMessageUnion({
   FailedLoadActorNames: {},
   FailedLoadClassMetadata: {
     error: MetaError,
+    resourceType: Schema.String,
     revision: SchemaRevision,
-    table: Schema.String,
   },
   FailedLoadFormMetadata: { error: MetaError },
   FailedLoadHistory: { error: HistoryError, generation: Schema.Int },

@@ -1,5 +1,5 @@
 /**
- * API names in `/api/v2` (Contracts 10.2): a field's API name is its
+ * API names in `/api/v1` (Contracts 10.2): a field's API name is its
  * definition name in lowerCamelCase; the schema engine refuses a field
  * whose API name is reserved or equals the API name of another live field
  * of its hierarchy (`apiNameClash`).

@@ -26,7 +26,6 @@ import type {
 } from "@std/conditions/ast";
 import { isCompare, isPath } from "@std/conditions/ast";
 import { MAX_RELATIVE_OFFSET } from "@std/conditions/check";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import { parseChoiceKey } from "@std/values/choice";
 import { parseDate } from "@std/values/date";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
@@ -48,6 +47,7 @@ import { parseUuid } from "@std/values/uuid";
 import { Match, Option, Result, pipe } from "effect";
 import type { CalendarDate } from "foldkit/calendar";
 
+import type { MetaField, MetaTable } from "../domain/metadata.ts";
 import { fieldById } from "../domain/table-view.ts";
 import type { TablesByName } from "../domain/table-view.ts";
 import { Condition, Group, Negation, Operand } from "./model.ts";

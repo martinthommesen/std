@@ -40,7 +40,10 @@ import { inject } from "vitest";
 
 import {
   addCondition,
+  API_PREFIX,
   apiCall,
+  collectionOf,
+  sentAttributes,
   apiPages,
   apiRecord,
   applyFilter,
@@ -101,28 +104,21 @@ const visitorOf = (user: HelpdeskUser): Visitor => ({
   password: user.password,
 });
 
-const decodeBody = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-);
+/**
+ * The attributes a save sent, by API name (a JSON Patch's values or a
+ * create's members).
+ */
+const decodeBody = sentAttributes;
 
 const decodeRecordVersion = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      record: Schema.Struct({
-        values: Schema.Record(Schema.String, Schema.Json),
-        version: Schema.Int,
-      }),
-    })
-  )
+  Schema.fromJsonString(Schema.Struct({ revision: Schema.Int }))
 );
 
 const decodeLayout = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      record: Schema.Struct({
-        values: Schema.Struct({ elements: Schema.Array(Schema.Json) }),
-        version: Schema.Int,
-      }),
+      elements: Schema.Array(Schema.Json),
+      revision: Schema.Int,
     })
   )
 );
@@ -192,11 +188,21 @@ const addLocalField = async (
       ],
     },
     method: "POST",
-    path: "/schema/change-sets",
+    path: "/applyChangeSet",
   });
 
   return id;
 };
+
+/**
+ * A definition record's path under `API_PREFIX`.
+ *
+ * @param table - The definition table, such as `core.field`.
+ * @param id - The definition's ID.
+ * @returns The path.
+ */
+const definitionPath = (table: string, id: string): string =>
+  `/${collectionOf(table)}/${id}`;
 
 /**
  * Appends fields to a layout (a layout is replaced whole, Contracts 6.3a).
@@ -213,22 +219,22 @@ const appendToLayout = async (
   layoutId: string,
   fieldIds: readonly string[]
 ): Promise<void> => {
-  const path = `/tables/core.layout/records/${layoutId}`;
+  const path = definitionPath("core.layout", layoutId);
 
   const read = decodeLayout(
     await adminCall(origin, token, { method: "GET", path })
-  ).record;
+  );
 
   await adminCall(origin, token, {
     body: {
       elements: [
-        ...read.values.elements,
+        ...read.elements,
         ...fieldIds.map((fieldId) => ({ fieldId, kind: "field" })),
       ],
     },
     method: "PATCH",
     path,
-    version: read.version,
+    version: read.revision,
   });
 };
 
@@ -238,7 +244,7 @@ const appendToLayout = async (
  *
  * @param origin - The server.
  * @param token - The administrator's session.
- * @param path - The record's path under `/api/v1`.
+ * @param path - The record's path under `API_PREFIX`.
  * @param body - The change.
  * @returns Nothing.
  */
@@ -250,13 +256,13 @@ const patchDefinition = async (
 ): Promise<void> => {
   const read = decodeRecordVersion(
     await adminCall(origin, token, { method: "GET", path })
-  ).record;
+  );
 
   await adminCall(origin, token, {
     body,
     method: "PATCH",
     path,
-    version: read.version,
+    version: read.revision,
   });
 };
 
@@ -379,7 +385,7 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
 
   const described = await adminCall(origin, token, {
     method: "GET",
-    path: `/meta/tables/${INCIDENTS}`,
+    path: `/tableMetadata/${collectionOf(INCIDENTS)}`,
   });
 
   if (described.includes('"name":"due"')) {
@@ -399,7 +405,7 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
   ]);
 
   const assigneeOf = (who: "agent" | "agent2" | null) =>
-    who === null ? null : fixture[who].id;
+    who === null ? null : { id: fixture[who].id };
 
   await inOrder(SEEDED, async (row, index) => {
     const [title, who, status, priority, category, dueOn] = row;
@@ -408,15 +414,15 @@ const seed = async (origin: string, fixture: HelpdeskData): Promise<void> => {
       body: {
         assignee: assigneeOf(who),
         category,
-        customer_email: emailOf(index),
+        customerEmail: emailOf(index),
         due: dueOn,
-        internal_cost: costOf(index),
+        internalCost: costOf(index),
         priority,
-        short_description: title,
+        shortDescription: title,
         status,
       },
       method: "POST",
-      path: `/tables/${INCIDENTS}/records`,
+      path: `/${collectionOf(INCIDENTS)}`,
     });
   });
 };
@@ -439,7 +445,7 @@ const SCENARIOS: readonly Scenario[] = [
   {
     conditions: [],
     name: "no filter, by short description",
-    sort: "short_description",
+    sort: "shortDescription",
     sortClicks: ["Short description"],
   },
   {
@@ -501,7 +507,7 @@ const SCENARIOS: readonly Scenario[] = [
     ],
     filter: 'status = "new" or not category = "hardware"',
     name: "or and not",
-    sort: "short_description",
+    sort: "shortDescription",
     sortClicks: ["Short description"],
   },
   {
@@ -525,9 +531,9 @@ const SCENARIOS: readonly Scenario[] = [
         { kind: "value", text: "gate" },
       ],
     ],
-    filter: 'customer_email contains "gate"',
+    filter: 'customerEmail contains "gate"',
     name: "a field restricted for agents (withheld values count as empty)",
-    sort: "-short_description",
+    sort: "-shortDescription",
     sortClicks: ["Short description", "Short description"],
   },
 ];
@@ -573,11 +579,9 @@ const uiAndApi = async (page: Page, origin: string, scenario: Scenario) => {
 const decodeSavedFilters = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      table: Schema.Struct({
-        savedFilters: Schema.Array(
-          Schema.Struct({ filter: Schema.String, label: Schema.String })
-        ),
-      }),
+      savedFilters: Schema.Array(
+        Schema.Struct({ filter: Schema.String, label: Schema.String })
+      ),
     })
   )
 );
@@ -616,9 +620,11 @@ const listsMatchTheApi = async (
 
   const metadata = await page
     .context()
-    .request.get(`${origin}/api/v1/meta/tables/${INCIDENTS}`);
+    .request.get(
+      `${origin}${API_PREFIX}/tableMetadata/${collectionOf(INCIDENTS)}`
+    );
 
-  const served = decodeSavedFilters(await metadata.text()).table.savedFilters;
+  const served = decodeSavedFilters(await metadata.text()).savedFilters;
 
   await openTableList(page, origin, INCIDENTS);
   await setPageSize(page, PAGE_SIZE);
@@ -839,11 +845,11 @@ const restrictedFieldsStayHidden = async (
   assert.isAtLeast(records.length, 20);
 
   for (const record of records) {
-    assert.notProperty(record.values, "internal_cost", record.id);
+    assert.notProperty(record.values, "internalCost", record.id);
 
     const isOthers = others.some(([id]) => id === record.id);
 
-    if (isOthers && "customer_email" in record.values) {
+    if (isOthers && "customerEmail" in record.values) {
       assert.fail(`${record.id}: a withheld email reached the browser`);
     }
   }
@@ -857,6 +863,7 @@ const restrictedFieldsStayHidden = async (
   }
 
   assert.notInclude(text, "internal_cost");
+  assert.notInclude(text, "internalCost");
   await context.close();
 };
 
@@ -1015,7 +1022,6 @@ const settled = async (page: Page): Promise<void> => {
 const decodeRefusal = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      _tag: Schema.String,
       changes: Schema.optionalKey(
         Schema.Array(
           Schema.Struct({
@@ -1026,12 +1032,13 @@ const decodeRefusal = Schema.decodeUnknownSync(
           })
         )
       ),
+      code: Schema.String,
     })
   )
 );
 
 /**
- * What a refused save's response body says: its error's `_tag`, and for
+ * What a refused save's response body says: its error's `code`, and for
  * `SchemaChanged` each change as `<kind> <field ID>`, sorted.
  *
  * @param outcome - The refused save.
@@ -1046,7 +1053,7 @@ const refusalOf = async (
     changes: (refusal.changes ?? [])
       .map((change) => `${change.kind} ${change.fieldId ?? "(none)"}`)
       .toSorted(),
-    tag: refusal._tag,
+    tag: refusal.code,
   };
 };
 
@@ -1086,7 +1093,7 @@ const staleSaveKeepsInput = async (
   await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${vendorRef}`,
+    definitionPath("core.field", vendorRef),
     {
       state: "retired",
     }
@@ -1094,7 +1101,7 @@ const staleSaveKeepsInput = async (
   await patchDefinition(
     origin,
     token,
-    `/tables/core.choice/records/${NETWORK_CHOICE}`,
+    definitionPath("core.choice", NETWORK_CHOICE),
     { hidden: true }
   );
 
@@ -1103,8 +1110,8 @@ const staleSaveKeepsInput = async (
   assert.strictEqual(refused.status, 409);
   assert.deepStrictEqual(decodeBody(refused.body), {
     category: "network",
-    short_description: "Paper jam in tray 2",
-    vendor_ref: "VR-1",
+    shortDescription: "Paper jam in tray 2",
+    vendorRef: "VR-1",
   });
   // The refusal is SchemaChanged, naming the retired field and the
   // category whose choices changed, not another 409 (VersionConflict).
@@ -1125,7 +1132,7 @@ const staleSaveKeepsInput = async (
   const stored = await apiRecord(page, origin, printer);
 
   assert.strictEqual(stored.version, 1);
-  assert.notStrictEqual(stored.values.short_description, "Paper jam in tray 2");
+  assert.notStrictEqual(stored.values.shortDescription, "Paper jam in tray 2");
 
   // Valid input kept; the changed fields marked; the edit of the retired
   // field noted with what was typed; the choice no longer offered flagged.
@@ -1152,7 +1159,7 @@ const staleSaveKeepsInput = async (
   assert.strictEqual(saved.status, 200);
   assert.deepStrictEqual(decodeBody(saved.body), {
     category: "software",
-    short_description: "Paper jam in tray 2",
+    shortDescription: "Paper jam in tray 2",
   });
   assert.isAbove(
     revisionNumber(saved.requestRevision),
@@ -1180,13 +1187,13 @@ const labelOnlyChangeSaves = async (
   await patchDefinition(
     origin,
     token,
-    `/tables/core.field/records/${HELPDESK.fields.description}`,
+    definitionPath("core.field", HELPDESK.fields.description),
     { label: "Details" }
   );
   await patchDefinition(
     origin,
     token,
-    `/tables/core.choice/records/${HELPDESK.choices.inProgress}`,
+    definitionPath("core.choice", HELPDESK.choices.inProgress),
     { label: "Being worked on" }
   );
 
@@ -1246,10 +1253,10 @@ const renameThenRecreate = async (
   await fillField(page, "Foo", "mine");
 
   // Meanwhile `foo` becomes `bar`, and a new field takes the name `foo`.
-  await patchDefinition(origin, token, `/tables/core.field/records/${foo}`, {
+  await patchDefinition(origin, token, definitionPath("core.field", foo), {
     name: "bar",
   });
-  await patchDefinition(origin, token, `/tables/core.field/records/${foo}`, {
+  await patchDefinition(origin, token, definitionPath("core.field", foo), {
     label: "Bar",
   });
 
@@ -1279,8 +1286,9 @@ const renameThenRecreate = async (
   const untouched = await apiRecord(page, origin, laptop);
 
   assert.strictEqual(untouched.version, 1);
-  assert.isNull(untouched.values.foo);
-  assert.isNull(untouched.values.bar);
+  // An empty attribute is left out (Contracts 10.2).
+  assert.notProperty(untouched.values, "foo");
+  assert.notProperty(untouched.values, "bar");
 
   await waitForOutdated(page);
   await settled(page);
@@ -1303,7 +1311,7 @@ const renameThenRecreate = async (
   const stored = await apiRecord(page, origin, laptop);
 
   assert.strictEqual(stored.values.bar, "mine");
-  assert.isNull(stored.values.foo);
+  assert.notProperty(stored.values, "foo");
   await context.close();
 };
 

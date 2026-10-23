@@ -29,10 +29,11 @@ import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
 import { deliveries, listNames, signInAll } from "./authz-support.ts";
 import type { Who } from "./authz-support.ts";
 import {
+  codeOf,
+  collectionOf,
   listPath,
   readsTestLayer,
   recordPath,
-  tagOf,
 } from "./reads-support.ts";
 import { change, freshId, values } from "./schema-support.ts";
 
@@ -139,10 +140,10 @@ const unknownOnEveryRoute = Effect.fn("PlatformTables.unknownOnEveryRoute")(
 
       const where = `${label} ${method} ${path}`;
       assert.strictEqual(response.status, 404, where);
-      assert.strictEqual(yield* tagOf(response), "UnknownTable", where);
+      assert.strictEqual(yield* codeOf(response), "UnknownTable", where);
       assert.strictEqual(
-        response.text.replace(table, "?"),
-        missing.text.replace(MISSING, "?"),
+        response.text.replace(collectionOf(table), "?"),
+        missing.text.replace(collectionOf(MISSING), "?"),
         where
       );
     }
@@ -183,10 +184,10 @@ describe("platform-tables", () => {
             });
 
             assert.strictEqual(response.status, 404, table);
-            assert.strictEqual(yield* tagOf(response), "UnknownTable");
+            assert.strictEqual(yield* codeOf(response), "UnknownTable");
             assert.strictEqual(
-              response.text.replace(table, "?"),
-              missing.text.replace(MISSING, "?")
+              response.text.replace(collectionOf(table), "?"),
+              missing.text.replace(collectionOf(MISSING), "?")
             );
           }
         })
@@ -261,7 +262,7 @@ describe("platform-tables", () => {
           const token = tokens.admin;
 
           const changes = yield* http.get(
-            listPath("core.change", { fields: "record_id", limit: "1" }),
+            listPath("core.change", { fields: "recordId", limit: "1" }),
             { token }
           );
 
@@ -347,7 +348,7 @@ describe("platform-tables", () => {
             });
 
             assert.strictEqual(response.status, status, `${method} ${path}`);
-            assert.strictEqual(yield* tagOf(response), tag);
+            assert.strictEqual(yield* codeOf(response), tag);
           }
 
           // A create on every platform table the catalog describes.
@@ -370,7 +371,7 @@ describe("platform-tables", () => {
               `POST ${table}`
             );
             assert.strictEqual(
-              yield* tagOf(response),
+              yield* codeOf(response),
               definitionTable ? "ValidationFailed" : "NotAllowed"
             );
           }
@@ -383,7 +384,7 @@ describe("platform-tables", () => {
             });
 
             assert.strictEqual(response.status, 404, `POST ${table}`);
-            assert.strictEqual(yield* tagOf(response), "UnknownTable");
+            assert.strictEqual(yield* codeOf(response), "UnknownTable");
           }
 
           assert.deepStrictEqual(yield* changeCount(), before);

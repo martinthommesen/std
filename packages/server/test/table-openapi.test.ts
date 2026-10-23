@@ -21,13 +21,15 @@ import { Effect } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
+import { statedRevision, stale } from "./api-support.ts";
 import { objectOf, signInAll } from "./authz-support.ts";
-import { readsTestLayer, recordPath } from "./reads-support.ts";
+import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import { ACME, addField, change, values } from "./schema-support.ts";
 
 const local = { owner: { layer: "local" }, protected: false } as const;
 const TABLE = "acme.asset";
-const RECORDS = `/api/v1/tables/${TABLE}/records`;
+const RECORDS = "/api/v1/acmeAsset";
+const DOCUMENT = "/api/v1/tableMetadata/acmeAsset/openapi.json";
 
 const choice = (fieldId: string, key: string, order: number): ChoiceDraft => ({
   ...local,
@@ -96,7 +98,7 @@ const response = (path: string, method: string, status: string): string =>
     "schema"
   );
 
-const body = (name: "CreateBody" | "UpdateBody"): string =>
+const body = (name: "ResourceCreate" | "ResourcePatch"): string =>
   pointer("components", "schemas", name);
 
 const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
@@ -105,7 +107,7 @@ const fetchDocument = (session: string) =>
   Effect.gen(function* documentFor() {
     const http = yield* TestHttpClient;
 
-    const doc = yield* http.get(`/api/v1/meta/tables/${TABLE}/openapi.json`, {
+    const doc = yield* http.get(DOCUMENT, {
       token: session,
     });
 
@@ -179,12 +181,7 @@ describe("per-table OpenAPI document", () => {
         };
 
         for (const who of ["bob", "admin"] as const) {
-          const doc = yield* http.get(
-            `/api/v1/meta/tables/${TABLE}/openapi.json`,
-            {
-              token: tokens[who],
-            }
-          );
+          const doc = yield* http.get(DOCUMENT, { token: tokens[who] });
 
           assert.strictEqual(doc.status, 200, doc.text);
           documentOf = objectOf(doc.json);
@@ -204,7 +201,7 @@ describe("per-table OpenAPI document", () => {
             response(RECORDS, "get", "200"),
             accepted(
               yield* http.get(
-                `${RECORDS}?fields=name,grade,docked_to,docked_to.name&labels=true`,
+                `${RECORDS}?fields=name,grade,dockedTo,dockedTo.name`,
                 { token: tokens[who] }
               ),
               200
@@ -223,19 +220,28 @@ describe("per-table OpenAPI document", () => {
 
           // A form sends the record back whole: `grade` keeps its hidden
           // key, and Bob may not write it (only unchanged is accepted).
-          const AUDIT = new Set([
-            "created_at",
-            "created_by",
-            "updated_at",
-            "updated_by",
+          const SYSTEM = new Set([
+            "createdBy",
+            "creationDate",
+            "href",
+            "id",
+            "lastUpdate",
+            "revision",
+            "updatedBy",
+            "withheld",
           ]);
 
-          const record = objectOf(objectOf(read).record);
+          // Through the parent collection the record also shows its
+          // concrete class's attributes, which a write cannot name.
+          const named = objectOf(
+            objectOf(objectOf(documentOf.components).schemas).ResourcePatch
+          );
 
           const form: JsonObject = {
             ...Object.fromEntries(
-              Object.entries(objectOf(record.values)).filter(
-                ([name]) => !AUDIT.has(name)
+              Object.entries(objectOf(read)).filter(
+                ([name]) =>
+                  !SYSTEM.has(name) && name in objectOf(named.properties)
               )
             ),
             name: `${who} renamed`,
@@ -247,7 +253,7 @@ describe("per-table OpenAPI document", () => {
             token: tokens[who],
           });
 
-          check(body("UpdateBody"), form, `${who} update body`);
+          check(body("ResourcePatch"), form, `${who} update body`);
           check(
             response(one, "patch", "200"),
             accepted(updated, 200),
@@ -261,7 +267,7 @@ describe("per-table OpenAPI document", () => {
               ? { grade: "good", name: "admin's new asset" }
               : { name: "Bob's new asset", owner: fixture.bob.id };
 
-          check(body("CreateBody"), created, `${who} create body`);
+          check(body("ResourceCreate"), created, `${who} create body`);
           check(
             response(RECORDS, "post", "201"),
             accepted(
@@ -276,6 +282,62 @@ describe("per-table OpenAPI document", () => {
         }
 
         assert.deepStrictEqual(failures, []);
+      })
+    );
+
+    dbTest.effect("states its revision and answers like the metadata", () =>
+      Effect.gen(function* revisions() {
+        const http = yield* TestHttpClient;
+        const { tokens } = yield* signInAll;
+        const before = yield* statedRevision;
+
+        const { json: first, text } = yield* fetchDocument(tokens.admin);
+        const info = objectOf(first.info);
+
+        assert.strictEqual(info.version, before, text);
+        assert.strictEqual(
+          first["x-std-schema-revision"],
+          Number(before.split(".")[0])
+        );
+
+        // An older stated revision is served; a malformed one and one the
+        // database never had are refused as the metadata refuses them.
+        yield* change([addField(ACME.asset, "later", { kind: "text" }).op]);
+
+        const older = yield* http.get(
+          DOCUMENT,
+          stale(before, { token: tokens.admin })
+        );
+
+        assert.strictEqual(older.status, 200, older.text);
+
+        const malformed = yield* http.get(
+          DOCUMENT,
+          stale("nope", { token: tokens.admin })
+        );
+
+        assert.strictEqual(malformed.status, 400, malformed.text);
+        assert.strictEqual(yield* codeOf(malformed), "InvalidSchemaRevision");
+
+        const never = yield* http.get(
+          DOCUMENT,
+          stale("999.00000000-0000-4000-8000-000000000000", {
+            token: tokens.admin,
+          })
+        );
+
+        assert.strictEqual(never.status, 409, never.text);
+        assert.strictEqual(yield* codeOf(never), "SchemaChanged");
+
+        // A missing table is UnknownTable naming the request's segment.
+        const missing = yield* http.get(
+          "/api/v1/tableMetadata/noSuchTable/openapi.json",
+          { token: tokens.admin }
+        );
+
+        assert.strictEqual(missing.status, 404, missing.text);
+        assert.strictEqual(yield* codeOf(missing), "UnknownTable");
+        assert.include(missing.text, "noSuchTable");
       })
     );
 
@@ -340,17 +402,17 @@ describe("per-table OpenAPI document", () => {
 
           assert.strictEqual(costWrite.status, 200, costWrite.text);
           assert.notInclude(bob.text, '"cost"');
-          check(bob.json, body("UpdateBody"), costBody, "bob writes cost");
+          check(bob.json, body("ResourcePatch"), costBody, "bob writes cost");
 
           // Choice fields without a writable key, and a big integer with
           // leading zeros: the server accepts them, so must the document.
           const admin = yield* fetchDocument(tokens.admin);
 
           const created: JsonObject = {
-            all_hidden: null,
+            allHidden: null,
             big: "0001",
             name: "input forms",
-            no_keys: null,
+            noKeys: null,
           };
 
           const posted = yield* http.request("POST", RECORDS, {
@@ -359,7 +421,7 @@ describe("per-table OpenAPI document", () => {
           });
 
           assert.strictEqual(posted.status, 201, posted.text);
-          check(admin.json, body("CreateBody"), created, "admin create");
+          check(admin.json, body("ResourceCreate"), created, "admin create");
           check(
             admin.json,
             response(RECORDS, "post", "201"),

@@ -9,7 +9,7 @@
  *   is `UnknownField`;
  * - a local attribute renamed, and its old name reused by a new field: a
  *   request stating the revision it was built at is `SchemaChanged` for
- *   the old name, on reads and writes, as on `/api/v2`; a request stating
+ *   the old name, on reads and writes, as on `/api/v1`; a request stating
  *   none is resolved at the current revision.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
@@ -21,16 +21,16 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import { addField, change, freshId } from "./schema-support.ts";
-import { FF, FIXTURE_TICKETS, tmfTestLayer, VIP } from "./tmf-fixture.ts";
 import {
   asArray,
   asObject,
   rename,
   statedRevision,
   textOf,
-  v2Callers,
-} from "./v2-support.ts";
+  apiCallers,
+} from "./api-support.ts";
+import { addField, change, freshId } from "./schema-support.ts";
+import { FF, FIXTURE_TICKETS, tmfTestLayer, VIP } from "./tmf-fixture.ts";
 
 const REVISION_HEADER = "std-schema-revision";
 
@@ -60,7 +60,7 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* retiredAndPurged() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const created = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,
@@ -146,7 +146,7 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* unknownRevision() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const [revision = "0", changeSet = ""] =
             (yield* statedRevision).split(".");
@@ -155,7 +155,7 @@ describe("tmf-lifecycle", () => {
             [REVISION_HEADER]: `${Number(revision) + 100}.${changeSet}`,
           };
 
-          const generic = yield* http.get("/api/v2/tmffxTicket", {
+          const generic = yield* http.get("/api/v1/tmffxTicket", {
             ...alice,
             headers: future,
           });
@@ -193,7 +193,7 @@ describe("tmf-lifecycle", () => {
       () =>
         Effect.gen(function* renamedAndReused() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const created = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,

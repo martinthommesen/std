@@ -15,9 +15,8 @@
  *   sent as the list API's `filter`.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { RecordJson } from "@std/api/records";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
-import type { MetaTable } from "@std/definitions/table-metadata";
+import { TableMetadata } from "@std/api/table-metadata";
+import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
 
@@ -30,10 +29,11 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import {
   allPages,
+  collectionOf,
   listPath,
-  recordOf,
+  codeOf,
   recordPath,
-  tagOf,
+  resourceOf,
 } from "./reads-support.ts";
 
 const INCIDENT = "helpdesk.incident";
@@ -42,19 +42,25 @@ const TICKET = "helpdesk.ticket";
 const testLayer = () =>
   TestHttpClient.layer.pipe(Layer.provideMerge(helpdeskTestLayer()));
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
+
+type MetaTable = typeof TableMetadata.Type;
 
 const metadataOf = Effect.fn("HelpdeskAgent.metadataOf")(function* metadataOf(
   token: string,
   table: string
 ) {
   const http = yield* TestHttpClient;
-  const response = yield* http.get(`/api/v1/meta/tables/${table}`, { token });
+
+  const response = yield* http.get(
+    `/api/v1/tableMetadata/${collectionOf(table)}`,
+    { token }
+  );
 
   assert.strictEqual(response.status, 200, response.text);
 
   return {
-    table: (yield* decodeMetadata(response.json).pipe(Effect.orDie)).table,
+    table: yield* decodeMetadata(response.json).pipe(Effect.orDie),
     text: response.text,
   };
 });
@@ -66,15 +72,16 @@ const layoutFields = (table: MetaTable, type: "form" | "list") =>
     element.kind === "field" ? [element.field] : []
   );
 
-const idsOf = (records: readonly RecordJson[]) =>
-  records.map((record) => record.id).toSorted();
+const idOf = (resource: JsonObject): string => {
+  const { id } = resource;
 
-const fakeRecord = (id: string): RecordJson => ({
-  class: "c",
-  id,
-  values: {},
-  version: 1,
-});
+  return id !== undefined && isJsonString(id) ? id : "";
+};
+
+const idsOf = (resources: readonly JsonObject[]) =>
+  resources.map((resource) => idOf(resource)).toSorted();
+
+const fakeRecord = (id: string): JsonObject => ({ id });
 
 const signInBoth = Effect.gen(function* signInBoth() {
   const http = yield* TestHttpClient;
@@ -98,19 +105,19 @@ const patchRecord = Effect.fn("HelpdeskAgent.patch")(function* patchRecord(
 ) {
   const http = yield* TestHttpClient;
 
-  const { version } = yield* recordOf(
+  const { revision } = yield* resourceOf(
     yield* http.get(recordPath(INCIDENT, id), { token: tokens.admin })
   );
 
   return yield* http.request("PATCH", recordPath(INCIDENT, id), {
     body,
-    headers: { "if-match": `"${version}"` },
+    headers: { "if-match": `"${JSON.stringify(revision)}"` },
     token: tokens.caller,
   });
 });
 
 const refusalTag = (response: TestResponse) =>
-  response.status >= 400 ? tagOf(response) : Effect.succeed("none");
+  response.status >= 400 ? codeOf(response) : Effect.succeed("none");
 
 describe("helpdesk-agent", () => {
   it("compares record IDs as sorted lists", () => {
@@ -134,6 +141,7 @@ describe("helpdesk-agent", () => {
           assert.notInclude(fieldsOf(agentMeta.table), "internal_cost");
           assert.include(fieldsOf(adminMeta.table), "internal_cost");
           assert.notInclude(agentMeta.text, "internal_cost");
+          assert.notInclude(agentMeta.text, "internalCost");
           assert.notInclude(agentMeta.text, HELPDESK.fields.internalCost);
           assert.notInclude(agentMeta.text, "Costly");
           assert.notInclude(
@@ -161,55 +169,66 @@ describe("helpdesk-agent", () => {
           );
 
           assert.strictEqual(customerEmail?.read, "perRecord");
+          assert.strictEqual(customerEmail?.apiName, "customerEmail");
 
           // Records: no internal_cost; customer_email on own tickets only,
           // withheld (not empty) on the others.
-          const seen = yield* allPages(agent, INCIDENT, { sort: "number" });
+          const seen = yield* allPages({ token: agent }, INCIDENT, {
+            sort: "number",
+          });
+
           const own = new Set([fixture.records.vpn, fixture.records.laptop]);
 
-          assert.lengthOf(seen.records, 5);
+          assert.lengthOf(seen.resources, 5);
 
-          for (const record of seen.records) {
-            assert.notProperty(record.values, "internal_cost");
+          for (const resource of seen.resources) {
+            assert.notProperty(resource, "internalCost");
 
-            if (own.has(record.id)) {
-              assert.property(record.values, "customer_email");
+            if (own.has(idOf(resource))) {
+              assert.property(resource, "customerEmail");
             } else {
-              assert.notProperty(record.values, "customer_email");
-              assert.include(record.withheld ?? [], "customer_email");
+              assert.notProperty(resource, "customerEmail");
+              assert.include(
+                Array.isArray(resource.withheld) ? resource.withheld : [],
+                "customerEmail"
+              );
             }
           }
 
           assert.notInclude(seen.texts.join(""), "internal_cost");
+          assert.notInclude(seen.texts.join(""), "internalCost");
           assert.notInclude(seen.texts.join(""), "800.00");
 
-          const adminSeen = yield* allPages(admin, INCIDENT, {
+          const adminSeen = yield* allPages({ token: admin }, INCIDENT, {
             sort: "number",
           });
 
+          // Empty attributes are left out of a resource, so the admin sees
+          // the cost wherever one is set.
           assert.isTrue(
-            adminSeen.records.every((record) =>
-              Object.hasOwn(record.values, "internal_cost")
+            adminSeen.resources.some((resource) =>
+              Object.hasOwn(resource, "internalCost")
             )
           );
+          assert.include(adminSeen.texts.join(""), "800.00");
 
           // A filter or sort on it is an unknown field for the agent, as a
           // misspelled one would be.
           for (const query of [
-            { filter: "internal_cost > 100" },
-            { sort: "internal_cost" },
-            { filter: "no_such_field > 100" },
+            { condition: "internalCost > 100" },
+            { sort: "internalCost" },
+            { condition: "noSuchField > 100" },
           ]) {
             const response = yield* http.get(listPath(INCIDENT, query), {
               token: agent,
             });
 
             assert.strictEqual(response.status, 400, response.text);
-            assert.strictEqual(yield* tagOf(response), "UnknownField");
+            assert.strictEqual(yield* codeOf(response), "UnknownField");
           }
 
           const costly = yield* http.get(
-            listPath(TICKET, { filter: "internal_cost > 500" }),
+            listPath(TICKET, { condition: "internalCost > 500" }),
             { token: admin }
           );
 
@@ -249,13 +268,13 @@ describe("helpdesk-agent", () => {
             const meta = yield* metadataOf(token, INCIDENT);
 
             for (const filter of meta.table.savedFilters ?? []) {
-              const { records } = yield* allPages(token, INCIDENT, {
-                filter: filter.filter,
+              const { resources } = yield* allPages({ token }, INCIDENT, {
+                condition: filter.filter,
               });
 
               if (filter.name !== "costly") {
                 assert.deepStrictEqual(
-                  idsOf(records),
+                  idsOf(resources),
                   [...(expected[who][filter.name] ?? [])].toSorted(),
                   `${who} ${filter.name}: ${filter.filter}`
                 );
@@ -301,7 +320,7 @@ describe("helpdesk-agent", () => {
           assert.strictEqual(take.status, 200, take.text);
 
           const cost = yield* patchRecord(asAgent, records.vpn, {
-            internal_cost: "1.00",
+            internalCost: "1.00",
           });
 
           assert.strictEqual(yield* refusalTag(cost), "UnknownField");
@@ -309,35 +328,35 @@ describe("helpdesk-agent", () => {
           const created = yield* http.request("POST", listPath(INCIDENT), {
             body: {
               category: "software",
-              customer_email: "new@example.com",
-              short_description: "New laptop needs an image",
+              customerEmail: "new@example.com",
+              shortDescription: "New laptop needs an image",
             },
             token: agent,
           });
 
           assert.strictEqual(created.status, 201, created.text);
 
-          const record = yield* recordOf(created);
+          const record = yield* resourceOf(created);
 
-          assert.match(JSON.stringify(record.values.number), /^"INC\d{7}"$/u);
-          assert.strictEqual(record.values.status, "new");
-          assert.notProperty(record.values, "internal_cost");
+          assert.match(JSON.stringify(record.number), /^"INC\d{7}"$/u);
+          assert.strictEqual(record.status, "new");
+          assert.notProperty(record, "internalCost");
 
           const withCost = yield* http.request("POST", listPath(INCIDENT), {
-            body: { internal_cost: "5.00", short_description: "Costed" },
+            body: { internalCost: "5.00", shortDescription: "Costed" },
             token: agent,
           });
 
           assert.strictEqual(yield* refusalTag(withCost), "UnknownField");
 
           // A ticket's number has the ticket prefix.
-          const ticket = yield* recordOf(
+          const ticket = yield* resourceOf(
             yield* http.get(recordPath(TICKET, records.monitor), {
               token: agent,
             })
           );
 
-          assert.match(JSON.stringify(ticket.values.number), /^"TKT\d{7}"$/u);
+          assert.match(JSON.stringify(ticket.number), /^"TKT\d{7}"$/u);
         })
     );
 
@@ -359,19 +378,19 @@ describe("helpdesk-agent", () => {
             { assignee: fixture.agent2.id, priority: "critical" },
           ]) {
             const created = yield* http.request("POST", listPath(INCIDENT), {
-              body: { ...body, short_description: "Canceled by the caller" },
+              body: { ...body, shortDescription: "Canceled by the caller" },
               token: admin,
             });
 
             assert.strictEqual(created.status, 201, created.text);
 
-            const { id } = yield* recordOf(created);
+            const id = idOf(yield* resourceOf(created));
 
-            const open = yield* allPages(admin, INCIDENT, {
-              filter: `id = "${id}"`,
+            const open = yield* allPages({ token: admin }, INCIDENT, {
+              condition: `id = "${id}"`,
             });
 
-            assert.lengthOf(open.records, 1);
+            assert.lengthOf(open.resources, 1);
 
             const cancel = yield* patchRecord(asAdmin, id, {
               status: "canceled",
@@ -391,12 +410,12 @@ describe("helpdesk-agent", () => {
             assert.lengthOf(open, 3);
 
             for (const filter of open) {
-              const { records } = yield* allPages(token, INCIDENT, {
-                filter: filter.filter,
+              const { resources } = yield* allPages({ token }, INCIDENT, {
+                condition: filter.filter,
               });
 
               for (const id of ids) {
-                assert.notInclude(idsOf(records), id, filter.name);
+                assert.notInclude(idsOf(resources), id, filter.name);
               }
             }
           }
@@ -414,11 +433,11 @@ describe("helpdesk-agent", () => {
             INCIDENT
           )).table.savedFilters?.find((filter) => filter.name === "unassigned");
 
-          const { records } = yield* allPages(admin, INCIDENT, {
-            filter: unassigned?.filter ?? "",
+          const { resources } = yield* allPages({ token: admin }, INCIDENT, {
+            condition: unassigned?.filter ?? "",
           });
 
-          assert.include(idsOf(records), ids[1]);
+          assert.include(idsOf(resources), ids[1]);
         })
     );
   });

@@ -15,7 +15,7 @@
  * - any other server error: `500`.
  */
 
-/** The status of a stale `If-Match` on STD's own API (`/api/v2`). */
+/** The status of a stale `If-Match` on STD's own API (`/api/v1`). */
 const STALE_STATUS = 412;
 
 const CONFLICT = 409;

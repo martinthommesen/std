@@ -1,14 +1,14 @@
-/**
- * What becomes of a form's edits when its definitions change (decision
- * 0020): the cases the form stories do not reach, a create form and a
- * type change.
- */
-import type { MetaField } from "@std/definitions/table-metadata";
 import { Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { TICKET_FIELDS, ticketTable } from "../form-fixture.ts";
 import { FieldInput } from "./form-input.ts";
+/**
+ * What becomes of a form's edits when its definitions change (decision
+ * 0020): the cases the form stories do not reach, a create form and a
+ * type change.
+ */
+import type { MetaField } from "./metadata.ts";
 import {
   droppedText,
   inputText,

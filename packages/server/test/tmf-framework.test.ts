@@ -13,8 +13,8 @@ import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
@@ -59,7 +59,7 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* crud() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const created = yield* createTicket(alice, {
             description: "Mail is down",
@@ -132,7 +132,7 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* versions() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const created = yield* createTicket(alice, {
             description: "Printer jam",
@@ -174,7 +174,7 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* polymorphism() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const incident = yield* createTicket(alice, {
             description: "Incident",
@@ -187,7 +187,7 @@ describe("tmf-framework", () => {
           assert.strictEqual(incident.urgency, 2);
 
           const generic = yield* http.get(
-            `/api/v2/tmffxIncident/${textOf(incident.id)}`,
+            `/api/v1/tmffxIncident/${textOf(incident.id)}`,
             alice
           );
 
@@ -266,11 +266,11 @@ describe("tmf-framework", () => {
     );
 
     dbTest.effect(
-      "filters map onto the condition AST: a state map's filter selects what its rendering shows, and paging and sort follow /api/v2",
+      "filters map onto the condition AST: a state map's filter selects what its rendering shows, and paging and sort follow /api/v1",
       () =>
         Effect.gen(function* filters() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const states = ["pending", "held", "inProgress", "pending"];
 
@@ -363,7 +363,7 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* errors() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const missing = yield* http.request("POST", FIXTURE_TICKETS, {
             ...alice,
@@ -449,7 +449,7 @@ describe("tmf-framework", () => {
       () =>
         Effect.gen(function* exactJson() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const created = yield* createTicket(alice, {
             customData: { keep: 1, remove: 2 },

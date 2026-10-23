@@ -4,12 +4,12 @@
  * resource, `GET` and `HEAD` and `POST /{resource}`, `GET`, `HEAD`,
  * `PATCH` and `DELETE /{resource}/{id}`, as the mapping offers them.
  *
- * Every route runs as `/api/v2`'s do: the session (no token is
+ * Every route runs as `/api/v1`'s do: the session (no token is
  * `Unauthenticated`), then one request transaction as the session's
  * `Actor`, then the record service. A mapping names fields by stable ID;
  * the names a request takes from definitions (a local class's attributes)
  * are checked against the revision the request states
- * (`STD-Schema-Revision`, Contracts 6.4) as on `/api/v2` (decision 0033).
+ * (`STD-Schema-Revision`, Contracts 6.4) as on `/api/v1` (decision 0033).
  * Every failure with an API tag is a TMF `Error` with a status the pinned
  * document declares for the operation (`errors.ts`).
  *
@@ -39,11 +39,11 @@ import { RuleWriteAccess } from "../../records/write-access-rules.ts";
 import type { WriteOnlyValues } from "../../records/write-only-values.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import type { TransactionsApi } from "../../sql/transactions.ts";
+import { getAndHead, withoutBody } from "../api/methods.ts";
+import { jsonBodyOf, withSession } from "../api/request.ts";
+import { originOf } from "../api/resource.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { parseRequestRevision } from "../stale-request.ts";
-import { getAndHead, withoutBody } from "../v2/methods.ts";
-import { jsonBodyOf, withSession } from "../v2/request.ts";
-import { originOf } from "../v2/resource.ts";
 import type { MappedResource, TmfRegistry } from "./context.ts";
 import { answeredOnTmf, withTmfFieldNames } from "./errors.ts";
 import {
@@ -107,7 +107,7 @@ const ALLOW_ORDER = ["GET", "HEAD", "POST", "PATCH", "DELETE"] as const;
 
 /**
  * `Allow` on a TMF route: the methods the path offers, and `HEAD` wherever
- * `GET` is (RFC 9110 §9.3.2). Unlike `/api/v2`'s, it never lists
+ * `GET` is (RFC 9110 §9.3.2). Unlike `/api/v1`'s, it never lists
  * `OPTIONS`, which TMF routes answer with `405` (decision 0033).
  *
  * @param offered - The methods the path's routes serve.

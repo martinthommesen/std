@@ -119,18 +119,18 @@ export interface ScopeParameters {
   readonly allowedFor?: string;
   /**
    * Names and one-hop paths a request filters on outside `filter` text,
-   * comma-separated (v2's attribute filters, Contracts 10.3), resolved like
+   * comma-separated (the API's attribute filters, Contracts 10.3), resolved like
    * `fields` but never replacing the selection.
    */
   readonly paths?: string;
   /**
-   * Names left out of the default selection, comma-separated (v2's
-   * `fields=!name`); used only without `fields`.
+   * Names left out of the default selection, comma-separated
+   * (`fields=!name`); used only without `fields`.
    */
   readonly excluded?: string;
   /**
    * How the names are spelled: definition names (v1, the default) or API
-   * names (v2, Contracts 10.2), resolved at R either way.
+   * names (Contracts 10.2), resolved at R either way.
    */
   readonly naming?: Naming;
 }
@@ -267,7 +267,7 @@ const fieldByNameAt = (
 
 /**
  * The system field a request name denotes, if any: `class` has no API
- * name (v2 shows it as `@type`).
+ * name (the API shows it as `@type`).
  *
  * @param name - The request's name.
  * @param naming - How the request spells names.
@@ -584,7 +584,7 @@ export const staleScope = (
 
   const labels = parameters.labels === "true";
 
-  // Exclusions (v2 `fields=!name`) leave names out of the default
+  // Exclusions (`fields=!name`) leave names out of the default
   // selection at R; each is still a name the request used.
   const excluded = new Set(splitList(parameters.excluded ?? ""));
 

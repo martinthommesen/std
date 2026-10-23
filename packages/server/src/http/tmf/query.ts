@@ -1,6 +1,6 @@
 /**
  * The query of a TMF list or retrieve (Contracts 10.3, 11.1), in TMF
- * attribute names, compiled through the `/api/v2` machinery onto the
+ * attribute names, compiled through the `/api/v1` machinery onto the
  * condition AST and the shared read compiler:
  *
  * | Parameter | Meaning |
@@ -9,7 +9,7 @@
  * | `<attr>=<v>`, `v1,v2`, repeats; `.eq`, `.gt`, `.gte`, `.lt`, `.lte` and the URL-encoded forms | the attribute's filter, by the mapping (field values or a derived condition) |
  * | `<ref>.id=` | a reference attribute's target |
  * | `@type=<Type>[,<Type>]` | the concrete class: a mapped type, or a local class's type name |
- * | `offset`, `limit`, `after`, `before` | paging, as `/api/v2` |
+ * | `offset`, `limit`, `after`, `before` | paging, as `/api/v1` |
  * | `sort` | attribute names, `-` descending |
  * | `filter` | JSONPath: `501` (exclusion E14) |
  *
@@ -50,9 +50,9 @@ import type { CursorPosition } from "../../records/read-cursor.ts";
 import { parseLimit } from "../../records/read-query.ts";
 import type { SortKey } from "../../records/read-query.ts";
 import type { ReadScope, ReadView } from "../../records/read-view.ts";
-import { alternativesOf, atomOf, splitParameter } from "../v2/query.ts";
-import type { Comparison } from "../v2/query.ts";
-import type { QueryParameters } from "../v2/request.ts";
+import { alternativesOf, atomOf, splitParameter } from "../api/query.ts";
+import type { Comparison } from "../api/query.ts";
+import type { QueryParameters } from "../api/request.ts";
 import type { MappedResource } from "./context.ts";
 import { extensionsOf, knownOn, typeAttributesFor } from "./context.ts";
 import { readFieldOf } from "./sources.ts";

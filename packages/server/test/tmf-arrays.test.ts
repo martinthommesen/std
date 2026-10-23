@@ -25,9 +25,9 @@ import { Effect } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { count, entriesOf, versionOf } from "./aggregates-support.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { values } from "./schema-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const NOTES = '"tmffx"."note"';
@@ -79,7 +79,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* addThroughTmf() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
@@ -110,11 +110,11 @@ describe("tmf-arrays", () => {
     dbTest.effect("adding a note through the generic API does the same", () =>
       Effect.gen(function* addThroughGeneric() {
         const http = yield* TestHttpClient;
-        const { alice } = yield* v2Callers;
+        const { alice } = yield* apiCallers;
         const ticket = yield* newTicket(alice);
         const id = textOf(ticket.id);
 
-        const note = yield* http.request("POST", "/api/v2/tmffxNote", {
+        const note = yield* http.request("POST", "/api/v1/tmffxNote", {
           ...alice,
           body: { text: "generic", ticket: { id } },
         });
@@ -140,7 +140,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* replaceArray() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -207,7 +207,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* jsonPatchArray() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
@@ -273,7 +273,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* reorder() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -346,13 +346,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* lockedNote() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* v2Callers;
+          const { alice, bob } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
           const id = textOf(ticket.id);
 
           const locked = yield* http.request(
             "POST",
-            "/api/v2/tmffxLockedNote",
+            "/api/v1/tmffxLockedNote",
             {
               ...alice,
               body: { author: "Alice", text: "locked", ticket: { id } },
@@ -419,7 +419,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* unreadableOrder() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* v2Callers;
+          const { alice, bob } = yield* apiCallers;
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -469,7 +469,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* keptPositions() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -489,13 +489,13 @@ describe("tmf-arrays", () => {
             [asObject(asArray(ticket.note)[0]), -5],
           ] as const) {
             const stored = yield* http.get(
-              `/api/v2/tmffxNote/${textOf(note.id)}`,
+              `/api/v1/tmffxNote/${textOf(note.id)}`,
               alice
             );
 
             const written = yield* http.request(
               "PATCH",
-              `/api/v2/tmffxNote/${textOf(note.id)}`,
+              `/api/v1/tmffxNote/${textOf(note.id)}`,
               {
                 ...alice,
                 headers: {
@@ -560,7 +560,7 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* maskedPosition() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
 
           const ticket = yield* newTicket(alice, {
             note: [
@@ -607,13 +607,13 @@ describe("tmf-arrays", () => {
       () =>
         Effect.gen(function* emptyAndBound() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice, { note: [{ text: "a" }] });
           const id = textOf(ticket.id);
           const path = `${FIXTURE_TICKETS}/${id}`;
 
           // A note created through the generic API has no position.
-          const generic = yield* http.request("POST", "/api/v2/tmffxNote", {
+          const generic = yield* http.request("POST", "/api/v1/tmffxNote", {
             ...alice,
             body: { text: "b", ticket: { id } },
           });
@@ -664,13 +664,13 @@ describe("tmf-arrays", () => {
           const [x = {}] = asArray(bound.note).map(asObject);
 
           const stored = yield* http.get(
-            `/api/v2/tmffxNote/${textOf(x.id)}`,
+            `/api/v1/tmffxNote/${textOf(x.id)}`,
             alice
           );
 
           const top = yield* http.request(
             "PATCH",
-            `/api/v2/tmffxNote/${textOf(x.id)}`,
+            `/api/v1/tmffxNote/${textOf(x.id)}`,
             {
               ...alice,
               headers: {

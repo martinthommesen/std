@@ -602,7 +602,7 @@ const namedFields = (
     })
   );
 
-// The tables a change set gives a v2 name: created, renamed, live again,
+// The tables a change set gives a API name: created, renamed, live again,
 // or in a namespace it renamed (Contracts 10.1).
 const namedTables = (
   after: ConfigSnapshot,

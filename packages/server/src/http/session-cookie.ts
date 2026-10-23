@@ -18,14 +18,13 @@
  *
  * Migration from the `/api/v1` path: before Step 3 the cookie's path was
  * `/api/v1`. A browser that still holds such a cookie beside a new `/api`
- * one would send both to `/api/v1`, the more specific path first, so v1
- * and v2 could see different sessions. Therefore every response that sets
- * or clears the cookie also expires a `std_session` cookie with
+ * one would send both to `/api/v1`, the more specific path first, so a
+ * request could carry two different sessions. Therefore every response
+ * that sets or clears the cookie also expires a `std_session` cookie with
  * `Path=/api/v1`, and a request that carries more than one `std_session`
  * cookie authenticates by no cookie (which session it meant is ambiguous;
  * a bearer token still works). After the upgrade the first sign-in or
- * sign-out removes the legacy cookie; until then a lone legacy cookie
- * still authenticates `/api/v1` (browsers do not send it to `/api/v2`).
+ * sign-out removes the legacy cookie.
  */
 import {
   LEGACY_SESSION_COOKIE_PATH,

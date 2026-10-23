@@ -14,7 +14,7 @@ import type { StdApi } from "./std-client.ts";
  * holds a session (the HTTP-only cookie, which no script can read).
  *
  * @param url - The address the app was opened at.
- * @returns The checking state and the `auth/me` request.
+ * @returns The checking state and the `session/current` request.
  */
 export const init: Runtime.RoutingApplicationInit<
   Model,

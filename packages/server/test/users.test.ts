@@ -21,12 +21,13 @@ import {
   observe,
   recordIn,
   signInAll,
+  textOf,
 } from "./authz-support.ts";
 import {
   listPath,
   readsTestLayer,
   recordPath,
-  tagOf,
+  codeOf,
 } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 
@@ -38,22 +39,25 @@ const userVersion = (id: string) =>
   ]).pipe(Effect.map(([version]) => version ?? "0"));
 
 /**
- * The labels of an asset as a caller sees them.
+ * The names of the references of an asset as a caller sees them: each
+ * reference's EntityRef `name`, by attribute.
  *
  * @param token - The caller's session.
  * @param id - The asset.
- * @returns The `labels` object.
+ * @returns The names of `owner`, `createdBy` and `updatedBy`.
  */
 const labelsOf = (token: string, id: string) =>
   Effect.gen(function* labelsOfAsset() {
     const http = yield* TestHttpClient;
 
-    const response = yield* http.get(
-      recordPath("acme.asset", id, { labels: "true" }),
-      { token }
-    );
+    const response = yield* http.get(recordPath("acme.asset", id), { token });
+    const asset = recordIn(response.json);
 
-    return objectOf(recordIn(response.json).labels);
+    return {
+      createdBy: textOf(objectOf(asset.createdBy).name),
+      owner: textOf(objectOf(asset.owner).name),
+      updatedBy: textOf(objectOf(asset.updatedBy).name),
+    };
   });
 
 describe("users", () => {
@@ -141,7 +145,7 @@ describe("users", () => {
           });
 
           assert.strictEqual(used.status, 401);
-          assert.strictEqual(yield* tagOf(used), "Unauthenticated");
+          assert.strictEqual(yield* codeOf(used), "Unauthenticated");
           assert.deepStrictEqual(
             yield* values(
               `SELECT count(*)::text AS value FROM core."session" WHERE user_id = $1::uuid`,
@@ -151,12 +155,20 @@ describe("users", () => {
           );
 
           // Sign-in is refused like a wrong password.
-          const signIn = yield* http.request("POST", "/api/v1/auth/sign-in", {
-            body: { login: "bob", password: "bob-password" },
+          const signIn = yield* http.request("POST", "/api/v1/session", {
+            body: {
+              login: "bob",
+              password: "bob-password",
+              tokenDelivery: "body",
+            },
           });
 
-          const wrong = yield* http.request("POST", "/api/v1/auth/sign-in", {
-            body: { login: "alice", password: "wrong" },
+          const wrong = yield* http.request("POST", "/api/v1/session", {
+            body: {
+              login: "alice",
+              password: "wrong",
+              tokenDelivery: "body",
+            },
           });
 
           assert.strictEqual(signIn.status, 401);
@@ -182,12 +194,12 @@ describe("users", () => {
           const label = (id: string) => labelsOf(tokens.alice, id);
 
           assert.deepInclude(yield* label(fixture.records.L), {
-            created_by: "Bob",
+            createdBy: "Bob",
             owner: "Bob",
           });
           assert.deepInclude(yield* label(created), {
-            created_by: "Bob",
-            updated_by: "Bob",
+            createdBy: "Bob",
+            updatedBy: "Bob",
           });
 
           // Carol was created deactivated; her name still labels.
@@ -196,13 +208,13 @@ describe("users", () => {
           });
 
           assert.deepInclude(yield* label(byCarol), {
-            created_by: "Carol",
+            createdBy: "Carol",
             owner: "Carol",
           });
 
           // And user names are listed for every user, inactive ones too.
           const users = yield* http.get(
-            listPath(USERS, { filter: 'name = "Bob"' }),
+            listPath(USERS, { condition: 'name = "Bob"' }),
             { token: tokens.alice }
           );
 
@@ -222,7 +234,7 @@ describe("users", () => {
 
           assert.strictEqual(reactivated.status, 200);
 
-          const stillEnded = yield* http.get("/api/v1/auth/me", {
+          const stillEnded = yield* http.get("/api/v1/session/current", {
             token: tokens.bob,
           });
 
@@ -231,7 +243,8 @@ describe("users", () => {
           const again = yield* http.signIn("bob", "bob-password");
 
           assert.strictEqual(
-            (yield* http.get("/api/v1/auth/me", { token: again })).status,
+            (yield* http.get("/api/v1/session/current", { token: again }))
+              .status,
             200
           );
         })
@@ -254,10 +267,10 @@ describe("users", () => {
 
         assert.strictEqual(created.status, 201, created.text);
         assert.notInclude(created.text, "dave-password");
-        assert.deepStrictEqual(recordIn(created.json).class, USERS);
+        assert.deepStrictEqual(recordIn(created.json)["@type"], "CoreUser");
 
         const token = yield* http.signIn("dave", "dave-password");
-        const me = yield* http.get("/api/v1/auth/me", { token });
+        const me = yield* http.get("/api/v1/session/current", { token });
 
         assert.strictEqual(me.status, 200);
         assert.include(me.text, BUILT_IN_ROLE_IDS.authenticated);

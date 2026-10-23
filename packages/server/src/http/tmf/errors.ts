@@ -1,6 +1,6 @@
 /**
  * Errors on TMF routes (Contracts 10.6, 11.1): every error is a TMF
- * `Error` built as `/api/v2` builds it (`code` is STD's tag, `reason` and
+ * `Error` built as `/api/v1` builds it (`code` is STD's tag, `reason` and
  * `message` fixed texts, STD's details as extension attributes), answered
  * with a status the pinned OpenAPI document declares for the operation
  * (`tmfStatusFor`; decision 0021, decisions 52 and 55). Field names in
@@ -21,8 +21,8 @@ import { Effect } from "effect";
 import { HttpServerResponse } from "effect/http";
 
 import { Catalog } from "../../catalog/catalog.ts";
-import { headersOf, isTmfFailure, tmfErrorOf } from "../v2/tmf-error.ts";
-import type { TaggedFailure } from "../v2/tmf-error.ts";
+import { headersOf, isTmfFailure, tmfErrorOf } from "../api/tmf-error.ts";
+import type { TaggedFailure } from "../api/tmf-error.ts";
 
 /**
  * The TMF attribute names of fields, by definition name: a field that is

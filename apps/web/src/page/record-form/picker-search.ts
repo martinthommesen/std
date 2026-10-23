@@ -21,7 +21,6 @@
  * sends nothing.
  */
 import { ExprSchema } from "@std/conditions/ast";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
 import { dateFromEpochDay, dateToEpochDay, parseDate } from "@std/values/date";
 import { formatDateTime } from "@std/values/date-time";
 import type { JsonValue } from "@std/values/json-value";
@@ -30,6 +29,7 @@ import { Match, Option, Result, Schema, pipe } from "effect";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { filterParameter, isSortable } from "../../domain/list-query.ts";
+import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import { literalFromText } from "../../filter-builder/condition.ts";
 
 /**
@@ -236,7 +236,7 @@ export const pickerSortOf = (target: MetaTable): Option.Option<string> =>
   pipe(
     displayFieldOf(target),
     Option.filter(isSortable),
-    Option.map((field) => field.name)
+    Option.map((field) => field.apiName)
   );
 
 /**
@@ -281,7 +281,8 @@ const printedDisplayFilter = (
   );
 
 /**
- * The filter a picker sends for a text, printed with the target's names:
+ * The filter a picker sends for a text, printed with the target's API
+ * names:
  * the display field's match, the ID's, or either.
  *
  * @param target - The target table's metadata.

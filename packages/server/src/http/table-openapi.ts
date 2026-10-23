@@ -1,54 +1,89 @@
 /**
- * The per-table OpenAPI 3.1 document (Contracts 6.1, 6.3): the generic
- * record routes of one table, with record values described from the
- * caller's metadata, so it shows exactly the fields the metadata shows and
+ * The per-table OpenAPI 3.1 document (Contracts 6.1, 6.3): the record
+ * routes of one table on `/api/v1` (list, create, get, patch, delete and
+ * history), with the table's resource described from the caller's
+ * metadata, so it shows exactly the attributes the metadata shows and
  * nothing else. It states the schema revision it describes: `info.version`
  * is `<revision>.<change_set_id>` (the `STD-Schema-Revision` form) and
- * `x-std-schema-revision` the number.
+ * `x-std-schema-revision` the number. The error responses and their
+ * schemas are those of `GET /api/v1/openapi.json`.
  *
- * Field schemas follow Contracts 6.5: big integers and decimals are
- * strings, date-times RFC 3339, references and UUIDs lowercase UUIDs,
- * password and secret values `{"set": bool}` when read and plaintext when
- * written, choices the keys of the table's choices.
+ * Attributes are named by API name (`purchasedOn`). Value schemas follow
+ * Contracts 6.5: big integers and decimals are strings, date-times
+ * RFC 3339, UUIDs lowercase, password and secret values `{"set": bool}`
+ * when read and plaintext when written, choices the keys of the table's
+ * choices. A reference is the typed reference (`<Type>Ref`) or the generic
+ * `EntityRef` the server answers with; a write takes the ID or an
+ * EntityRef whose `id` is the ID.
  *
  * The document never refuses traffic the server accepts; where JSON Schema
  * cannot say what the server checks, it says less and describes the rest:
  *
- * - Read values hold the selected fields, the audit fields and, for a
- *   `fields` selection naming reference paths, dotted members
- *   (`docked_to.name`).
+ * - A resource holds the attributes the caller can read, the system
+ *   attributes and, through a parent collection, the attributes of the
+ *   record's concrete class; empty attributes are left out, never null.
+ *   A reference may also carry the members of a path selected with
+ *   `fields` (`dockedTo.name`).
  * - Read schemas describe each type's canonical output (`encodeOut`), write
  *   schemas the input its codec accepts (`decodeIn`): big integers with
  *   leading zeros, decimals at any scale, date-times with offsets, UUIDs in
  *   any case. What a pattern cannot say (ranges, calendar validity, scale)
  *   is described and left to the server.
- * - A create body may name active choice keys; an update body also the
+ * - A create body may name active choice keys; a patch body also the
  *   hidden ones, which the server keeps only when unchanged (6.5). A
- *   choice field with no writable key accepts only null. Read values accept
- *   any key, since a stored key outlives its choice's deletion.
+ *   choice attribute with no writable key accepts only null. Read values
+ *   accept any key, since a stored key outlives its choice's deletion.
  * - Write bodies accept members they do not list: the server accepts
- *   fields the caller may write but not read (3.4), and the document never
- *   names a field the caller cannot read.
- * - Write bodies name every field the caller can read: forms send whole
- *   records, and an unchanged field the caller may not write is accepted
- *   (3.9). `x-std-write` states whether the caller may write it (`yes`,
- *   `no`, `perRecord`), and a read-only field is marked `readOnly`.
+ *   attributes the caller may write but not read (3.4), and the document
+ *   never names an attribute the caller cannot read.
+ * - Write bodies name every attribute the caller can read except the
+ *   read-only ones: forms send whole records, and an unchanged attribute
+ *   the caller may not write is accepted (3.9). `x-std-write` states
+ *   whether the caller may write it (`yes`, `no`, `perRecord`).
  * - Text lengths bound read values; written text is converted first
  *   (trimmed, normalized, Contracts 5.5), so its limit is described, not
  *   enforced.
  */
+import { ListQuery } from "@std/api/records";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type {
   MetaField,
   MetaFieldType,
   MetaTable,
 } from "@std/definitions/table-metadata";
+import {
+  isJsonArray,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 
-/** How the document describes the revision it was built at. */
+import { apiOpenApi } from "./api/openapi.ts";
+import { API_PREFIX } from "./api/resource.ts";
+import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
+
+/** How the document describes the revision it was served at. */
 export interface DocumentRevision {
   readonly revision: number;
   /** `<revision>.<change_set_id>`. */
   readonly header: string;
+}
+
+/** The reference types the caller sees (as `schema.json` shows them). */
+export interface DocumentRefs {
+  /** The `@type` of a reference to a table, `EntityRef` for null. */
+  readonly typeOf: (target: string | null) => string;
+  /** The `@type` of `createdBy` and `updatedBy`. */
+  readonly user: string;
+}
+
+/** How the table is named on the API. */
+export interface DocumentNaming {
+  /** The collection (`acmeAsset`). */
+  readonly collection: string;
+  /** The resource `@type` (`AcmeAsset`). */
+  readonly type: string;
+  readonly refs: DocumentRefs;
 }
 
 const nullable = (schema: JsonObject): JsonObject => ({
@@ -105,7 +140,7 @@ const boundsOf = (
   return bounds;
 };
 
-/** Which values a schema describes: a read, or a create or update body. */
+/** Which values a schema describes: a read, or a create or patch body. */
 type ValueMode = "read" | "create" | "update";
 
 const textSchema = (
@@ -126,47 +161,48 @@ const textSchema = (
 
 const ONLY_NULL: JsonObject = { type: "null" };
 
-const choiceSchema = (field: MetaField, mode: ValueMode): JsonObject => {
+// The non-null schema of a choice value, or undefined when no key can be
+// written (the server accepts only null then; an empty `enum` is invalid).
+const choiceSchema = (
+  field: MetaField,
+  mode: ValueMode
+): JsonObject | undefined => {
   const choices = field.choices ?? [];
 
   if (mode === "read") {
     // A stored key stays readable after its choice is hidden or deleted.
-    return nullable({
+    return {
       description:
         "A choice key; `x-std-choices` lists the table's keys. A key whose choice was deleted after it was stored is still returned.",
       pattern: CHOICE_KEY,
       type: "string",
       "x-std-choices": choices.map((choice) => choice.key),
-    });
+    };
   }
 
   const keys = choices.flatMap((choice) =>
     mode === "create" && choice.retired ? [] : [choice.key]
   );
 
-  // No key can be written: only null (an empty `enum` is not valid JSON
-  // Schema, and the server accepts null).
   if (keys.length === 0) {
-    return ONLY_NULL;
+    return undefined;
   }
 
-  const hidden = choices.some((choice) => choice.retired);
-
-  const schema: JsonObject =
-    mode === "update" && hidden
-      ? {
-          description:
-            "Hidden (retired) keys are accepted only when they equal the stored value.",
-          enum: keys,
-          type: "string",
-        }
-      : { enum: keys, type: "string" };
-
-  return nullable(schema);
+  return mode === "update" && choices.some((choice) => choice.retired)
+    ? {
+        description:
+          "Hidden (retired) keys are accepted only when they equal the stored value.",
+        enum: keys,
+        type: "string",
+      }
+    : { enum: keys, type: "string" };
 };
 
-const patterned = (pattern: string, extra: JsonObject = {}): JsonObject =>
-  nullable({ ...extra, pattern, type: "string" });
+const patterned = (pattern: string, extra: JsonObject = {}): JsonObject => ({
+  ...extra,
+  pattern,
+  type: "string",
+});
 
 const bigIntegerSchema = (read: boolean): JsonObject =>
   read
@@ -201,6 +237,32 @@ const dateTimeSchema = (read: boolean): JsonObject =>
 const uuidSchema = (read: boolean): JsonObject =>
   patterned(read ? UUID_OUT : UUID_IN, { format: "uuid" });
 
+const componentRef = (name: string): JsonObject => ({
+  $ref: `#/components/schemas/${name}`,
+});
+
+// A reference: read as the typed reference the server answers with, written
+// as its ID or an EntityRef carrying it.
+const referenceSchema = (
+  type: Extract<MetaFieldType, { readonly kind: "reference" }>,
+  read: boolean,
+  refs: DocumentRefs
+): JsonObject =>
+  read
+    ? componentRef(refs.typeOf(type.target))
+    : {
+        anyOf: [
+          uuidSchema(false),
+          {
+            description:
+              "An EntityRef: only `id` is read; a `@referredType` must name the target class or a descendant.",
+            properties: { id: uuidSchema(false) },
+            required: ["id"],
+            type: "object",
+          },
+        ],
+      };
+
 const writeOnlySchema = (read: boolean): JsonObject =>
   read
     ? {
@@ -208,20 +270,25 @@ const writeOnlySchema = (read: boolean): JsonObject =>
         required: ["set"],
         type: "object",
       }
-    : nullable({ type: "string", writeOnly: true });
+    : { type: "string", writeOnly: true };
 
-const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
+// The schema of a value that is present.
+const presentSchema = (
+  field: MetaField,
+  mode: ValueMode,
+  refs: DocumentRefs
+): JsonObject | undefined => {
   const { type } = field;
   const read = mode === "read";
 
   switch (type.kind) {
     case "text":
     case "longText": {
-      return nullable(textSchema(type.maxLength, mode));
+      return textSchema(type.maxLength, mode);
     }
 
     case "integer": {
-      return nullable({ type: "integer", ...boundsOf(type) });
+      return { type: "integer", ...boundsOf(type) };
     }
 
     case "bigInteger": {
@@ -248,7 +315,10 @@ const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
       return choiceSchema(field, mode);
     }
 
-    case "reference":
+    case "reference": {
+      return referenceSchema(type, read, refs);
+    }
+
     case "uuid": {
       return uuidSchema(read);
     }
@@ -263,13 +333,30 @@ const valueSchema = (field: MetaField, mode: ValueMode): JsonObject => {
     }
 
     case "condition": {
-      return nullable({ type: "object" });
+      return { type: "object" };
     }
 
     default: {
       return type satisfies never;
     }
   }
+};
+
+// Reads leave empty attributes out; writes take null to clear one.
+const valueSchema = (
+  field: MetaField,
+  mode: ValueMode,
+  refs: DocumentRefs
+): JsonObject => {
+  const present = presentSchema(field, mode, refs);
+
+  if (present === undefined) {
+    return ONLY_NULL;
+  }
+
+  return mode === "read" || field.type.kind === "boolean"
+    ? present
+    : nullable(present);
 };
 
 /**
@@ -306,54 +393,130 @@ const described = (
     : { ...titled, "x-std-write": field.write[mode] };
 };
 
-// The audit fields are values of every record (Contracts 2.1, 6.6).
-const AUDIT_VALUES: JsonObject = {
-  created_at: { format: "date-time", readOnly: true, type: "string" },
-  created_by: { format: "uuid", readOnly: true, type: "string" },
-  updated_at: { format: "date-time", readOnly: true, type: "string" },
-  updated_by: { format: "uuid", readOnly: true, type: "string" },
-};
+// The attributes the caller can read (the metadata's fields).
+const readable = (table: MetaTable): readonly MetaField[] =>
+  table.fields.filter((field) => field.read !== "no");
 
-// A followed reference's value appears under its dotted path (6.6).
-const PATH_MEMBERS: JsonObject = {
-  "^[^.]+\\.[^.]+$": {
-    description:
-      "A one-hop reference path selected with `fields` (`docked_to.name`): the target field's value, or null.",
-  },
-};
+// What a request body may name: read-only attributes are left out.
+const writable = (table: MetaTable): readonly MetaField[] =>
+  readable(table).filter((field) => !field.readOnly);
 
-const valuesSchema = (
+const attributesOf = (
   fields: readonly MetaField[],
-  mode: ValueMode
-): JsonObject => {
-  const properties: JsonObject = Object.fromEntries(
+  mode: ValueMode,
+  refs: DocumentRefs
+): JsonObject =>
+  Object.fromEntries(
     fields.map((field) => [
-      field.name,
-      described(field, valueSchema(field, mode), mode),
+      apiAttributeNameOf(field.name),
+      described(field, valueSchema(field, mode, refs), mode),
     ])
   );
 
-  return mode === "read"
-    ? {
-        additionalProperties: false,
-        patternProperties: PATH_MEMBERS,
-        properties: { ...properties, ...AUDIT_VALUES },
-        type: "object",
-      }
-    : {
-        // Fields the caller may write but not read are accepted by the
-        // server (Contracts 3.4) and never named here (6.3).
-        additionalProperties: true,
-        description:
-          "Field values by name. Fields the caller may write but not read are accepted and not listed.",
-        properties,
-        type: "object",
-      };
+const STRING: JsonObject = { type: "string" };
+
+// The system attributes of every resource (Contracts 10.2).
+const systemAttributes = (refs: DocumentRefs): JsonObject => ({
+  "@baseType": STRING,
+  "@schemaLocation": { format: "uri", type: "string" },
+  "@type": STRING,
+  createdBy: componentRef(refs.user),
+  creationDate: { format: "date-time", readOnly: true, type: "string" },
+  href: { format: "uri", type: "string" },
+  id: STRING,
+  lastUpdate: { format: "date-time", readOnly: true, type: "string" },
+  revision: { type: "integer" },
+  updatedBy: componentRef(refs.user),
+  withheld: {
+    description:
+      "Attributes the caller may not read on this record (conditionally hidden).",
+    items: STRING,
+    type: "array",
+  },
+});
+
+const resourceSchema = (
+  table: MetaTable,
+  naming: DocumentNaming
+): JsonObject => ({
+  // Through a parent collection a record shows its concrete class's
+  // attributes, which this table's metadata does not list.
+  additionalProperties: true,
+  properties: {
+    ...systemAttributes(naming.refs),
+    ...attributesOf(readable(table), "read", naming.refs),
+  },
+  required: ["id", "href", "@type"],
+  title: naming.type,
+  type: "object",
+});
+
+const bodySchema = (
+  table: MetaTable,
+  mode: "create" | "update",
+  refs: DocumentRefs
+): JsonObject => ({
+  // Attributes the caller may write but not read are accepted by the
+  // server (Contracts 3.4) and never named here (6.3).
+  additionalProperties: true,
+  description:
+    mode === "create"
+      ? "Attributes by API name; `@type` creates a subclass through the parent collection. Attributes the caller may write but not read are accepted and not listed."
+      : "A merge patch (RFC 7396): attributes by API name, `null` clears one. Attributes the caller may write but not read are accepted and not listed.",
+  properties: {
+    "@baseType": STRING,
+    "@schemaLocation": STRING,
+    "@type": STRING,
+    ...attributesOf(writable(table), mode, refs),
+  },
+  type: "object",
+});
+
+// One reference type's definition: an EntityRef whose `@type` is fixed; a
+// path selected with `fields` adds members.
+const refDefinition = (refType: string): JsonObject => ({
+  additionalProperties: true,
+  properties: {
+    "@referredType": STRING,
+    "@type": { const: refType },
+    href: { format: "uri", type: "string" },
+    id: STRING,
+    name: STRING,
+  },
+  required: ["id"],
+  type: "object",
+});
+
+const referenceSchemas = (table: MetaTable, refs: DocumentRefs): JsonObject => {
+  const used = new Set([
+    "EntityRef",
+    refs.user,
+    ...readable(table).flatMap((field) =>
+      field.type.kind === "reference" ? [refs.typeOf(field.type.target)] : []
+    ),
+  ]);
+
+  return Object.fromEntries(
+    [...used].toSorted().map((refType) => [refType, refDefinition(refType)])
+  );
 };
 
-const ref = (name: string): JsonObject => ({
-  $ref: `#/components/schemas/${name}`,
-});
+const JSON_PATCH: JsonObject = {
+  items: {
+    properties: {
+      from: STRING,
+      op: {
+        enum: ["add", "remove", "replace", "move", "copy", "test"],
+        type: "string",
+      },
+      path: STRING,
+      value: {},
+    },
+    required: ["op", "path"],
+    type: "object",
+  },
+  type: "array",
+};
 
 const json = (schema: JsonObject): JsonObject => ({
   content: { "application/json": { schema } },
@@ -368,171 +531,218 @@ const parameter = (name: string, location: "path" | "query"): JsonObject => ({
   in: location,
   name,
   required: location === "path",
-  schema: { type: "string" },
+  schema: STRING,
 });
-
-const ERROR = ok("A tagged API error (Contracts 3.8).", {
-  properties: { _tag: { type: "string" } },
-  required: ["_tag"],
-  type: "object",
-});
-
-const errors: JsonObject = {
-  "400": ERROR,
-  "401": ERROR,
-  "403": ERROR,
-  "404": ERROR,
-  "409": ERROR,
-  "422": ERROR,
-  "428": ERROR,
-};
 
 const IF_MATCH: JsonObject = {
-  description: 'The version the change is based on, as `"<version>"`.',
+  description: 'The revision the change is based on, as `"<revision>"`.',
   in: "header",
   name: "If-Match",
   required: true,
-  schema: { type: "string" },
+  schema: STRING,
 };
 
-const LIST_QUERY = [
-  "filter",
-  "sort",
-  "fields",
-  "cursor",
-  "limit",
-  "count",
-  "labels",
-].map((name) => parameter(name, "query"));
+const LIST_NOTE =
+  'A page of resources. Besides the named parameters, any attribute name filters by equality (`status=spare`), with the operator forms of Contracts 10.3. `fields` selects attributes and one-hop paths, `sort` lists attribute names (`-` descending), `condition` takes STD\'s condition text with API names, `allowedFor=<collection>/<attribute>` narrows to what a reference attribute may point at. `X-Total-Count` carries the total; the next page is the `Link` header with `rel="next"`.';
 
-const recordSchema: JsonObject = {
-  properties: {
-    class: { type: "string" },
-    id: { format: "uuid", type: "string" },
-    labels: { additionalProperties: { type: "string" }, type: "object" },
-    values: ref("Values"),
-    version: { type: "integer" },
-    withheld: { items: { type: "string" }, type: "array" },
-  },
-  required: ["id", "class", "version", "values"],
-  type: "object",
+const LIST_QUERY = Object.keys(ListQuery).map((name) =>
+  parameter(name, "query")
+);
+
+const OPERATION_IDS = [
+  "list",
+  "create",
+  "get",
+  "patch",
+  "delete",
+  "history",
+] as const;
+
+type OperationId = (typeof OPERATION_IDS)[number];
+
+// The API-wide operations the per-table paths take their error responses
+// from, by operation ID.
+const operationsById = (): ReadonlyMap<string, JsonObject> => {
+  const found = new Map<string, JsonObject>();
+  const paths = apiOpenApi.paths ?? null;
+
+  for (const item of isJsonObject(paths) ? Object.values(paths) : []) {
+    for (const operation of isJsonObject(item) ? Object.values(item) : []) {
+      const id = isJsonObject(operation) ? operation.operationId : undefined;
+
+      if (isJsonObject(operation) && id !== undefined && isJsonString(id)) {
+        found.set(id, operation);
+      }
+    }
+  }
+
+  return found;
 };
 
-const paths = (table: MetaTable): JsonObject => {
-  const base = `/api/v1/tables/${table.name}/records`;
+// The responses of an operation with a 4xx or 5xx status.
+const errorResponsesOf = (operationId: OperationId): JsonObject => {
+  const responses =
+    operationsById().get(`records.${operationId}`)?.responses ?? null;
+
+  return isJsonObject(responses)
+    ? Object.fromEntries(
+        Object.entries(responses).filter(([status]) => Number(status) >= 400)
+      )
+    : {};
+};
+
+const COMPONENT_PREFIX = "#/components/schemas/";
+
+// A component schema of the API-wide document.
+const apiSchema = (name: string): JsonValue | undefined => {
+  const components = apiOpenApi.components ?? null;
+
+  const schemas = isJsonObject(components)
+    ? (components.schemas ?? null)
+    : null;
+
+  return isJsonObject(schemas) ? schemas[name] : undefined;
+};
+
+// Every component schema a value references, transitively through the
+// API-wide components.
+const referencedSchemas = (
+  value: JsonValue,
+  found: Map<string, JsonValue>
+): void => {
+  if (isJsonArray(value)) {
+    for (const item of value) {
+      referencedSchemas(item, found);
+    }
+
+    return;
+  }
+
+  if (!isJsonObject(value)) {
+    return;
+  }
+
+  const ref = value.$ref ?? null;
+
+  if (isJsonString(ref) && ref.startsWith(COMPONENT_PREFIX)) {
+    const name = ref.slice(COMPONENT_PREFIX.length);
+    const schema = apiSchema(name);
+
+    if (schema !== undefined && !found.has(name)) {
+      found.set(name, schema);
+      referencedSchemas(schema, found);
+    }
+  }
+
+  for (const member of Object.values(value)) {
+    referencedSchemas(member, found);
+  }
+};
+
+const operationOf = (
+  operationId: OperationId,
+  base: JsonObject,
+  success: JsonObject
+): JsonObject => ({
+  ...base,
+  operationId,
+  responses: { ...success, ...errorResponsesOf(operationId) },
+});
+
+/**
+ * The media types a `PATCH` takes: a merge patch, and a JSON Patch except
+ * on a definition table, whose writes are change sets (Contracts 10.5).
+ *
+ * @param definitionTable - Whether the table holds definitions.
+ * @returns The request body's content.
+ */
+const patchContent = (definitionTable: boolean): JsonObject => {
+  const merge = { schema: componentRef("ResourcePatch") };
+
+  return definitionTable
+    ? { "application/json": merge, "application/merge-patch+json": merge }
+    : {
+        "application/json": merge,
+        "application/json-patch+json": { schema: componentRef("JsonPatch") },
+        "application/merge-patch+json": merge,
+      };
+};
+
+const paths = (table: MetaTable, naming: DocumentNaming): JsonObject => {
+  const base = `${API_PREFIX}/${naming.collection}`;
+  const definitionTable = DEFINITION_KIND_OF_TABLE.has(table.name);
   const id = parameter("id", "path");
-  const read = { record: ref("Record"), schemaRevision: { type: "integer" } };
+  const resource = componentRef("Resource");
 
-  // After a write, a record the caller can no longer see is only its ID
-  // and version (Contracts 3.9).
-  const saved = {
-    record: {
-      anyOf: [
-        ref("Record"),
-        {
-          additionalProperties: false,
-          properties: {
-            id: { format: "uuid", type: "string" },
-            version: { type: "integer" },
-          },
-          required: ["id", "version"],
-          type: "object",
-        },
-      ],
-    },
-    schemaRevision: { type: "integer" },
-  };
+  const list = operationOf(
+    "list",
+    { description: LIST_NOTE, parameters: LIST_QUERY },
+    { "200": ok("A page of resources.", { items: resource, type: "array" }) }
+  );
 
-  const create: JsonObject = {
-    operationId: "create",
-    requestBody: json(ref("CreateBody")),
-    responses: {
-      "201": ok("The created record.", { properties: saved, type: "object" }),
-      ...errors,
-    },
-  };
-
-  const collection = withOptional(
+  const create = operationOf(
+    "create",
     {
-      get: {
-        operationId: "list",
-        parameters: LIST_QUERY,
-        responses: {
-          "200": ok("A page of records.", {
-            properties: {
-              count: { type: "integer" },
-              nextCursor: { type: ["string", "null"] },
-              records: { items: ref("Record"), type: "array" },
-              schemaRevision: { type: "integer" },
-            },
-            type: "object",
-          }),
-          ...errors,
-        },
-      },
+      requestBody: { ...json(componentRef("ResourceCreate")), required: true },
     },
-    [["post", table.creatable ? create : undefined]]
+    { "201": ok("The created resource.", resource) }
   );
 
   return {
-    [base]: collection,
+    [base]: withOptional({ get: list }, [
+      ["post", table.creatable ? create : undefined],
+    ]),
     [`${base}/{id}`]: {
-      delete: {
-        operationId: "remove",
-        parameters: [id, IF_MATCH],
-        responses: {
-          "200": ok("The delete's version.", {
-            properties: {
-              id: { type: "string" },
-              schemaRevision: { type: "integer" },
-              version: { type: "integer" },
-            },
-            type: "object",
-          }),
-          ...errors,
+      delete: operationOf(
+        "delete",
+        { parameters: [id, IF_MATCH] },
+        { "204": { description: "Deleted; no body." } }
+      ),
+      get: operationOf(
+        "get",
+        { parameters: [id, parameter("fields", "query")] },
+        { "200": ok("One resource.", resource) }
+      ),
+      patch: operationOf(
+        "patch",
+        {
+          description: definitionTable
+            ? "A merge patch (`application/merge-patch+json`, or `application/json`): a definition table's write is a change set, so it takes no JSON Patch; `If-Match` carries the revision the change is based on."
+            : "A merge patch (`application/merge-patch+json`, or `application/json`) or an RFC 6902 operation list (`application/json-patch+json`); `If-Match` carries the revision the change is based on.",
+          parameters: [id, IF_MATCH],
+          requestBody: {
+            content: patchContent(definitionTable),
+            required: true,
+          },
         },
-      },
-      get: {
-        operationId: "get",
-        parameters: [
-          id,
-          parameter("fields", "query"),
-          parameter("labels", "query"),
-        ],
-        responses: {
-          "200": ok("One record.", { properties: read, type: "object" }),
-          ...errors,
-        },
-      },
-      patch: {
-        operationId: "update",
-        parameters: [id, IF_MATCH],
-        requestBody: json(ref("UpdateBody")),
-        responses: {
-          "200": ok("The updated record.", {
-            properties: saved,
-            type: "object",
-          }),
-          ...errors,
-        },
-      },
+        { "200": ok("The updated resource.", resource) }
+      ),
     },
     [`${base}/{id}/history`]: {
-      get: {
-        operationId: "history",
-        parameters: [
-          id,
-          ...["since", "until", "actor", "kind", "field"].map((name) =>
-            parameter(name, "query")
-          ),
-        ],
-        responses: {
-          "200": ok("The record's history the caller may read.", {
-            type: "object",
-          }),
-          ...errors,
+      get: operationOf(
+        "history",
+        {
+          parameters: [
+            id,
+            ...[
+              "since",
+              "until",
+              "actor",
+              "kind",
+              "field",
+              "fields",
+              "offset",
+              "limit",
+            ].map((name) => parameter(name, "query")),
+          ],
         },
-      },
+        {
+          "200": ok("The record's history the caller may read.", {
+            items: componentRef("ChangeEntry"),
+            type: "array",
+          }),
+        }
+      ),
     },
   };
 };
@@ -542,29 +752,53 @@ const paths = (table: MetaTable): JsonObject => {
  *
  * @param table - The caller's metadata of the table.
  * @param revision - The revision it was served at.
+ * @param naming - The table's collection, type and reference types.
  * @returns The document.
  */
 export const tableOpenApi = (
   table: MetaTable,
-  revision: DocumentRevision
+  revision: DocumentRevision,
+  naming: DocumentNaming
 ): JsonObject => {
   const info = withOptional(
-    { title: `${table.label} (${table.name})`, version: revision.header },
+    {
+      title: `${table.label} (${naming.collection})`,
+      version: revision.header,
+    },
     [["description", table.helpText ?? undefined]]
   );
+
+  const apiSchemas = new Map<string, JsonValue>();
+
+  // The error schemas (and the history entry) of the API-wide document.
+  referencedSchemas(
+    [
+      componentRef("ChangeEntry"),
+      ...OPERATION_IDS.map((operationId) => errorResponsesOf(operationId)),
+    ],
+    apiSchemas
+  );
+
+  // A JSON Patch body only where the table takes one (not a definition
+  // table's change sets).
+  if (!DEFINITION_KIND_OF_TABLE.has(table.name)) {
+    apiSchemas.set("JsonPatch", JSON_PATCH);
+  }
 
   return {
     components: {
       schemas: {
-        CreateBody: valuesSchema(table.fields, "create"),
-        Record: recordSchema,
-        UpdateBody: valuesSchema(table.fields, "update"),
-        Values: valuesSchema(table.fields, "read"),
+        ...Object.fromEntries(apiSchemas),
+        ...referenceSchemas(table, naming.refs),
+        Resource: resourceSchema(table, naming),
+        ResourceCreate: bodySchema(table, "create", naming.refs),
+        ResourcePatch: bodySchema(table, "update", naming.refs),
       },
     },
     info,
     openapi: "3.1.0",
-    paths: paths(table),
+    paths: paths(table, naming),
+    "x-std-collection": naming.collection,
     "x-std-schema-revision": revision.revision,
     "x-std-table": table.name,
   };

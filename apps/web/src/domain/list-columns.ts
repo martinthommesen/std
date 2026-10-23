@@ -1,3 +1,13 @@
+import type { FieldKind } from "@std/values/field-type";
+import {
+  isJsonBoolean,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
+import { Option } from "effect";
+
+import type { MetaField, MetaTable } from "./metadata.ts";
 /**
  * The columns of a table's list page and what each cell shows (Contracts
  * 6.3a, 6.6).
@@ -14,16 +24,7 @@
  * (`withheld`: "restricted", never shown as empty), and a field the
  * response did not deliver (absent and not withheld).
  */
-import type { RecordJson } from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
-import type { FieldKind } from "@std/values/field-type";
-import {
-  isJsonBoolean,
-  isJsonObject,
-  isJsonString,
-} from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
-import { Option } from "effect";
+import type { RecordJson } from "./record.ts";
 
 /** The most columns the default selection shows. [judgment] */
 export const DEFAULT_COLUMN_LIMIT = 6;
@@ -78,7 +79,7 @@ export const listColumns = (table: MetaTable): readonly MetaField[] => {
 export const ID_FIELD = "id";
 
 /**
- * The list request's `fields` parameter: the columns' names, or `id` when
+ * The list request's `fields` parameter: the columns' API names, or `id` when
  * the table has no column to show (no display field, and only fields that
  * do not fit a cell) [judgment, decision 0020].
  *
@@ -86,7 +87,7 @@ export const ID_FIELD = "id";
  * @returns The parameter.
  */
 export const listFieldsParameter = (table: MetaTable): string => {
-  const names = listColumns(table).map((field) => field.name);
+  const names = listColumns(table).map((field) => field.apiName);
 
   return names.length > 0 ? names.join(",") : ID_FIELD;
 };

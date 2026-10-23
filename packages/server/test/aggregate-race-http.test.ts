@@ -1,7 +1,7 @@
 /**
  * `aggregate-race-http` (Contracts 4.9, decision 0029's follow-up): the
  * aggregate race over HTTP. A note added through the generic API
- * (`/api/v2/tmffxNote`, the TMF630 API's collection of the part class)
+ * (`/api/v1/tmffxNote`, the TMF630 API's collection of the part class)
  * races a TMF-style `PATCH` of its ticket through the framework (the
  * fixture mapping, shaped as TMF621), with and without `If-Match`:
  *
@@ -22,8 +22,8 @@ import { Effect } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { entriesOf, versionOf } from "./aggregates-support.ts";
+import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
-import { asArray, asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const TICKETS = '"tmffx"."ticket"';
 const RACERS = 6;
@@ -56,7 +56,7 @@ const addNote = (caller: TestRequestOptions, ticket: string, text: string) =>
   Effect.gen(function* addNoteWork() {
     const http = yield* TestHttpClient;
 
-    return yield* http.request("POST", "/api/v2/tmffxNote", {
+    return yield* http.request("POST", "/api/v1/tmffxNote", {
       ...caller,
       body: { text, ticket: { id: ticket } },
     });
@@ -73,7 +73,7 @@ describe("aggregate-race-http", () => {
       () =>
         Effect.gen(function* stalePatch() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
 
           const note = yield* addNote(alice, ticket, "before the patch");
@@ -104,11 +104,11 @@ describe("aggregate-race-http", () => {
     );
 
     dbTest.effect(
-      "concurrent notes through /api/v2 and TMF PATCHes of the ticket never deadlock, and every version has one change entry",
+      "concurrent notes through /api/v1 and TMF PATCHes of the ticket never deadlock, and every version has one change entry",
       () =>
         Effect.gen(function* race() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
 
           const notes = Array.from({ length: RACERS }, (_, index) =>
@@ -165,7 +165,7 @@ describe("aggregate-race-http", () => {
       () =>
         Effect.gen(function* raceIfMatch() {
           const http = yield* TestHttpClient;
-          const { alice } = yield* v2Callers;
+          const { alice } = yield* apiCallers;
           const ticket = yield* newTicket(alice);
 
           const answers = yield* Effect.all(

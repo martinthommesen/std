@@ -5,7 +5,7 @@
  * shows more than the generic API would.
  *
  * - A record read through the mapped class's collection is read again
- *   through its own concrete class (as `/api/v2` does, decision 0025 D1),
+ *   through its own concrete class (as `/api/v1` does, decision 0025 D1),
  *   so a child class's fields reach the mapping.
  * - The parts of each array attribute are read through the part class's
  *   view, filtered on the owner reference, so only parts the caller can

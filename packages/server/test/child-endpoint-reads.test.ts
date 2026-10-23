@@ -15,10 +15,13 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { RecordJson } from "@std/api/records";
 import { stringifyJson } from "@std/values/json";
-import { isJsonNumber, isJsonString } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { ACME, AcmeFixture } from "../../testing/src/acme-fixture.ts";
@@ -27,14 +30,15 @@ import { insertAsOwner } from "../../testing/src/owner-records.ts";
 import type { OwnerRecord } from "../../testing/src/owner-records.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { arrayOf, objectOf, textOf } from "./authz-support.ts";
 import {
   allPages,
   listOf,
   listPath,
+  codeOf,
   readsTestLayer,
-  recordOf,
   recordPath,
-  tagOf,
+  resourceOf,
 } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 import { create, patch, versionOf } from "./writes-support.ts";
@@ -61,7 +65,7 @@ const idsOf = Effect.fn("ChildEndpointReads.idsOf")(function* idsOf(
     yield* http.get(listPath(table, { sort: "name", ...query }), { token })
   );
 
-  return page.records.map((record) => record.id);
+  return page.resources.map((resource) => textOf(resource.id));
 });
 
 /**
@@ -105,22 +109,20 @@ const textsOf = Effect.fn("ChildEndpointReads.textsOf")(function* textsOf(
 });
 
 /**
- * A record read with labels.
+ * A single resource read.
  * @param token - The session token.
  * @param table - The endpoint.
  * @param id - The record.
- * @returns The record.
+ * @returns The resource.
  */
-const labelled = Effect.fn("ChildEndpointReads.labelled")(function* labelled(
+const read = Effect.fn("ChildEndpointReads.read")(function* read(
   token: string,
   table: string,
   id: string
 ) {
   const http = yield* TestHttpClient;
 
-  return yield* recordOf(
-    yield* http.get(recordPath(table, id, { labels: "true" }), { token })
-  );
+  return yield* resourceOf(yield* http.get(recordPath(table, id), { token }));
 });
 
 /**
@@ -184,42 +186,43 @@ describe("masked-filter", () => {
           const lost = yield* insertLostChildren;
           const inUse = { [LAPTOP]: records.L, [MONITOR]: records.M };
 
-          const filters = [
-            'purchased_on > "2000-01-01"',
-            'not (purchased_on > "2000-01-01")',
-            "purchased_on is empty",
-            "purchased_on is not empty",
-            'purchased_on = "2025-05-01"',
-            'purchased_on in ("2025-05-01", "2024-06-01", "2025-01-15")',
+          const conditions = [
+            'purchasedOn > "2000-01-01"',
+            'not (purchasedOn > "2000-01-01")',
+            "purchasedOn is empty",
+            "purchasedOn is not empty",
+            'purchasedOn = "2025-05-01"',
+            'purchasedOn in ("2025-05-01", "2024-06-01", "2025-01-15")',
           ];
 
           for (const table of [LAPTOP, MONITOR] as const) {
-            const bobIds = (filter: string) => idsOf(bob, table, { filter });
+            const bobIds = (condition: string) =>
+              idsOf(bob, table, { condition });
 
             // Bob: the lost record's date is empty to him.
             assert.deepStrictEqual(
-              yield* bobIds('purchased_on > "2000-01-01"'),
+              yield* bobIds('purchasedOn > "2000-01-01"'),
               [inUse[table]],
               table
             );
             assert.deepStrictEqual(
-              yield* bobIds('not (purchased_on > "2000-01-01")'),
+              yield* bobIds('not (purchasedOn > "2000-01-01")'),
               [lost[table]],
               table
             );
             assert.deepStrictEqual(
-              yield* bobIds("purchased_on is empty"),
+              yield* bobIds("purchasedOn is empty"),
               [lost[table]],
               table
             );
             assert.deepStrictEqual(
-              yield* bobIds('purchased_on = "2025-05-01"'),
+              yield* bobIds('purchasedOn = "2025-05-01"'),
               [],
               table
             );
             assert.deepStrictEqual(
               yield* bobIds(
-                'purchased_on in ("2025-05-01", "2024-06-01", "2025-01-15")'
+                'purchasedOn in ("2025-05-01", "2024-06-01", "2025-01-15")'
               ),
               [inUse[table]],
               table
@@ -228,20 +231,22 @@ describe("masked-filter", () => {
             // Alice reads every date.
             assert.include(
               yield* idsOf(alice, table, {
-                filter: 'purchased_on = "2025-05-01"',
+                condition: 'purchasedOn = "2025-05-01"',
               }),
               lost[table],
               table
             );
             assert.notInclude(
-              yield* idsOf(alice, table, { filter: "purchased_on is empty" }),
+              yield* idsOf(alice, table, {
+                condition: "purchasedOn is empty",
+              }),
               lost[table],
               table
             );
 
             // The child endpoint agrees with the parent endpoint.
             const parent = yield* idsOf(bob, ASSET, {
-              filter: "purchased_on is empty",
+              condition: "purchasedOn is empty",
             });
 
             assert.include(parent, lost[table], table);
@@ -252,9 +257,9 @@ describe("masked-filter", () => {
             const texts: string[] = [];
 
             for (const table of [LAPTOP, MONITOR]) {
-              for (const filter of filters) {
+              for (const condition of conditions) {
                 const response = yield* http.get(
-                  listPath(table, { filter, sort: "name" }),
+                  listPath(table, { condition, sort: "name" }),
                   { token: bob }
                 );
 
@@ -295,28 +300,28 @@ describe("hidden-names", () => {
           // [table, parameter, hidden value, the same with nosuchfield]
           const cases = [
             ...[LAPTOP, MONITOR].flatMap((table) => [
-              [table, "filter", "cost > 0", "nosuchfield > 0"],
+              [table, "condition", "cost > 0", "nosuchfield > 0"],
               [table, "sort", "cost", "nosuchfield"],
               [table, "sort", "-cost", "-nosuchfield"],
               [table, "fields", "name,cost", "name,nosuchfield"],
               [
                 table,
-                "filter",
-                "docked_to.cost > 0",
-                "docked_to.nosuchfield > 0",
+                "condition",
+                "dockedTo.cost > 0",
+                "dockedTo.nosuchfield > 0",
               ],
               [
                 table,
                 "fields",
-                "name,docked_to.cost",
-                "name,docked_to.nosuchfield",
+                "name,dockedTo.cost",
+                "name,dockedTo.nosuchfield",
               ],
             ]),
-            // disk_key is a laptop field Bob can never read.
-            [LAPTOP, "filter", 'disk_key = "x"', 'nosuchfield = "x"'],
-            [LAPTOP, "sort", "disk_key", "nosuchfield"],
-            [LAPTOP, "fields", "disk_key", "nosuchfield"],
-            [LAPTOP, "sort", "serial,disk_key", "serial,nosuchfield"],
+            // diskKey is a laptop field Bob can never read.
+            [LAPTOP, "condition", 'diskKey = "x"', 'nosuchfield = "x"'],
+            [LAPTOP, "sort", "diskKey", "nosuchfield"],
+            [LAPTOP, "fields", "diskKey", "nosuchfield"],
+            [LAPTOP, "sort", "serial,diskKey", "serial,nosuchfield"],
           ] as const;
 
           for (const [table, parameter, hidden, missing] of cases) {
@@ -330,24 +335,24 @@ describe("hidden-names", () => {
               { token }
             );
 
-            const name = hidden.includes("disk_key") ? "disk_key" : "cost";
+            const name = hidden.includes("diskKey") ? "diskKey" : "cost";
 
             assert.strictEqual(left.status, 400, `${table} ${hidden}`);
             assert.strictEqual(
-              yield* tagOf(left),
+              yield* codeOf(left),
               "UnknownField",
               `${table} ${hidden}`
             );
             assert.strictEqual(
-              left.text.replace(name, "NAME"),
-              right.text.replace("nosuchfield", "NAME"),
+              left.text.replaceAll(name, "NAME"),
+              right.text.replaceAll("nosuchfield", "NAME"),
               `${table} ${hidden}`
             );
           }
 
           // A readable child field is known: rule 8 lets Bob read serial.
           const serial = yield* http.get(
-            listPath(LAPTOP, { filter: 'serial = "SN-L"', sort: "serial" }),
+            listPath(LAPTOP, { condition: 'serial = "SN-L"', sort: "serial" }),
             { token }
           );
 
@@ -360,7 +365,7 @@ describe("hidden-names", () => {
 describe("hidden-rule-input", () => {
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "through /acme.laptop rule 10 reads cost: only whether docked_to is withheld changes, in filters and sorts too",
+      "through /acme.laptop rule 10 reads cost: only whether dockedTo is withheld changes, in filters and sorts too",
       () =>
         Effect.gen(function* hiddenRuleInputChild() {
           const http = yield* TestHttpClient;
@@ -368,12 +373,12 @@ describe("hidden-rule-input", () => {
           const bob = yield* http.signIn("bob", "bob-password");
 
           const requests = [
-            recordPath(LAPTOP, records.L, { labels: "true" }),
-            listPath(LAPTOP, { filter: "docked_to is empty" }),
-            listPath(LAPTOP, { filter: `docked_to = "${records.AM}"` }),
-            listPath(LAPTOP, { filter: "docked_to.name is empty" }),
-            listPath(LAPTOP, { labels: "true", sort: "docked_to" }),
-            listPath(LAPTOP, { fields: "name,docked_to.name" }),
+            recordPath(LAPTOP, records.L),
+            listPath(LAPTOP, { condition: "dockedTo is empty" }),
+            listPath(LAPTOP, { condition: `dockedTo = "${records.AM}"` }),
+            listPath(LAPTOP, { condition: "dockedTo.name is empty" }),
+            listPath(LAPTOP, { sort: "dockedTo" }),
+            listPath(LAPTOP, { fields: "name,dockedTo.name" }),
           ];
 
           const texts = textsOf(bob, requests);
@@ -382,19 +387,19 @@ describe("hidden-rule-input", () => {
             setAsset("cost = $2::numeric", records.L, [cost]);
 
           // Cost 1200: docked_to is readable.
-          const cheap = yield* recordOf(
+          const cheap = yield* resourceOf(
             yield* http.get(requests[0] ?? "", { token: bob })
           );
 
-          assert.strictEqual(cheap.values.docked_to, records.AM);
-          assert.notInclude(cheap.withheld ?? [], "docked_to");
+          assert.strictEqual(objectOf(cheap.dockedTo).id, records.AM);
+          assert.notInclude(arrayOf(cheap.withheld), "dockedTo");
           assert.deepStrictEqual(
-            yield* idsOf(bob, LAPTOP, { filter: "docked_to is empty" }),
+            yield* idsOf(bob, LAPTOP, { condition: "dockedTo is empty" }),
             []
           );
           assert.deepStrictEqual(
             yield* idsOf(bob, LAPTOP, {
-              filter: `docked_to = "${records.AM}"`,
+              condition: `dockedTo = "${records.AM}"`,
             }),
             [records.L]
           );
@@ -404,20 +409,19 @@ describe("hidden-rule-input", () => {
           // Over 2000: withheld, and it filters like empty.
           yield* setCost("2500");
 
-          const withheld = yield* recordOf(
+          const withheld = yield* resourceOf(
             yield* http.get(requests[0] ?? "", { token: bob })
           );
 
-          assert.include(withheld.withheld ?? [], "docked_to");
-          assert.notProperty(withheld.values, "docked_to");
-          assert.notProperty(withheld.labels ?? {}, "docked_to");
+          assert.include(arrayOf(withheld.withheld), "dockedTo");
+          assert.notProperty(withheld, "dockedTo");
           assert.deepStrictEqual(
-            yield* idsOf(bob, LAPTOP, { filter: "docked_to is empty" }),
+            yield* idsOf(bob, LAPTOP, { condition: "dockedTo is empty" }),
             [records.L]
           );
           assert.deepStrictEqual(
             yield* idsOf(bob, LAPTOP, {
-              filter: `docked_to = "${records.AM}"`,
+              condition: `dockedTo = "${records.AM}"`,
             }),
             []
           );
@@ -441,41 +445,49 @@ describe("hidden-rule-input", () => {
 describe("references", () => {
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "through /acme.laptop and /acme.monitor a hidden target gives the bare UUID without a label",
+      "through /acme.laptop and /acme.monitor a hidden target gives the bare ID without a name",
       () =>
         Effect.gen(function* labelsChild() {
           const http = yield* TestHttpClient;
           const { records } = yield* AcmeFixture;
           const bob = yield* http.signIn("bob", "bob-password");
           const alice = yield* http.signIn("alice", "alice-password");
-          const labels = { labels: "true" };
 
-          const asBob = yield* labelled(bob, LAPTOP, records.L);
-          const asAlice = yield* labelled(alice, LAPTOP, records.L);
+          const asBob = yield* read(bob, LAPTOP, records.L);
+          const asAlice = yield* read(alice, LAPTOP, records.L);
 
-          assert.strictEqual(asBob.values.docked_to, records.AM);
-          assert.notProperty(asBob.labels ?? {}, "docked_to");
-          assert.strictEqual(asBob.labels?.owner, "Bob");
-          assert.strictEqual(asBob.labels?.created_by, "Bob");
-          assert.strictEqual(asAlice.labels?.docked_to, "Alice monitor");
-          assert.strictEqual(asAlice.labels?.owner, "Bob");
+          assert.strictEqual(objectOf(asBob.dockedTo).id, records.AM);
+          assert.notProperty(objectOf(asBob.dockedTo), "name");
+          assert.strictEqual(objectOf(asBob.owner).name, "Bob");
+          assert.strictEqual(objectOf(asBob.createdBy).name, "Bob");
+          assert.strictEqual(objectOf(asAlice.dockedTo).name, "Alice monitor");
+          assert.strictEqual(objectOf(asAlice.owner).name, "Bob");
 
-          // Lists label the same way as single reads.
+          // Lists name references the same way as single reads.
           const bobList = yield* listOf(
-            yield* http.get(listPath(LAPTOP, labels), { token: bob })
+            yield* http.get(listPath(LAPTOP), { token: bob })
           );
 
           assert.deepStrictEqual(
-            bobList.records.map((record) => ({
-              id: record.id,
-              labels: record.labels,
+            bobList.resources.map((resource) => ({
+              createdBy: resource.createdBy,
+              dockedTo: resource.dockedTo,
+              id: resource.id,
+              owner: resource.owner,
             })),
-            [{ id: records.L, labels: asBob.labels }]
+            [
+              {
+                createdBy: asBob.createdBy,
+                dockedTo: asBob.dockedTo,
+                id: records.L,
+                owner: asBob.owner,
+              },
+            ]
           );
 
           // Through the monitor endpoint, Alice's AM is a 404 for Bob.
           const hiddenMonitor = yield* http.get(
-            recordPath(MONITOR, records.AM, labels),
+            recordPath(MONITOR, records.AM),
             { token: bob }
           );
 
@@ -484,7 +496,7 @@ describe("references", () => {
     );
 
     dbTest.effect(
-      "through /acme.monitor a docked_to whose target Bob cannot see has no label and paths through it are empty",
+      "through /acme.monitor a dockedTo whose target Bob cannot see has no name and paths through it are empty",
       () =>
         Effect.gen(function* monitorReferences() {
           const http = yield* TestHttpClient;
@@ -496,76 +508,78 @@ describe("references", () => {
           // docked to Alice's monitor AM, which he cannot see.
           yield* setAsset("docked_to = $2::uuid", records.M, [records.AM]);
 
-          const asBob = yield* labelled(bob, MONITOR, records.M);
-          const asAlice = yield* labelled(alice, MONITOR, records.M);
+          const asBob = yield* read(bob, MONITOR, records.M);
+          const asAlice = yield* read(alice, MONITOR, records.M);
 
-          assert.strictEqual(asBob.values.docked_to, records.AM);
-          assert.notInclude(asBob.withheld ?? [], "docked_to");
-          assert.notProperty(asBob.labels ?? {}, "docked_to");
-          assert.strictEqual(asBob.labels?.owner, "Bob");
-          assert.strictEqual(asAlice.values.docked_to, records.AM);
-          assert.strictEqual(asAlice.labels?.docked_to, "Alice monitor");
+          assert.strictEqual(objectOf(asBob.dockedTo).id, records.AM);
+          assert.notInclude(arrayOf(asBob.withheld), "dockedTo");
+          assert.notProperty(objectOf(asBob.dockedTo), "name");
+          assert.strictEqual(objectOf(asBob.owner).name, "Bob");
+          assert.strictEqual(objectOf(asAlice.dockedTo).id, records.AM);
+          assert.strictEqual(objectOf(asAlice.dockedTo).name, "Alice monitor");
 
-          // Lists label the same way as single reads.
+          // Lists name references the same way as single reads.
           for (const [token, expected] of [
             [bob, asBob],
             [alice, asAlice],
           ] as const) {
             const page = yield* listOf(
-              yield* http.get(
-                listPath(MONITOR, { filter: 'name = "M"', labels: "true" }),
-                { token }
-              )
+              yield* http.get(listPath(MONITOR, { condition: 'name = "M"' }), {
+                token,
+              })
             );
 
             assert.deepStrictEqual(
-              page.records.map((record) => record.labels),
-              [expected.labels]
+              page.resources.map((resource) => ({
+                dockedTo: resource.dockedTo,
+                owner: resource.owner,
+              })),
+              [{ dockedTo: expected.dockedTo, owner: expected.owner }]
             );
           }
 
           // One-hop paths in the selection.
-          const fields = "name,docked_to.name,owner.name";
+          const fields = "name,dockedTo.name,owner.name";
 
           const paths = (token: string) =>
             http
               .get(recordPath(MONITOR, records.M, { fields }), { token })
-              .pipe(Effect.flatMap(recordOf));
+              .pipe(Effect.flatMap(resourceOf));
 
           const bobPaths = yield* paths(bob);
           const alicePaths = yield* paths(alice);
 
-          assert.strictEqual(bobPaths.values["docked_to.name"], null);
-          assert.strictEqual(bobPaths.values["owner.name"], "Bob");
+          assert.notProperty(objectOf(bobPaths.dockedTo), "name");
+          assert.strictEqual(objectOf(bobPaths.owner).name, "Bob");
           assert.strictEqual(
-            alicePaths.values["docked_to.name"],
+            objectOf(alicePaths.dockedTo).name,
             "Alice monitor"
           );
-          assert.strictEqual(alicePaths.values["owner.name"], "Bob");
+          assert.strictEqual(objectOf(alicePaths.owner).name, "Bob");
 
-          // One-hop paths in filters: the hidden target is an empty one.
-          const filter = (token: string, text: string) =>
-            idsOf(token, MONITOR, { filter: text });
+          // One-hop paths in conditions: the hidden target is an empty one.
+          const condition = (token: string, text: string) =>
+            idsOf(token, MONITOR, { condition: text });
 
           assert.deepStrictEqual(
-            yield* filter(bob, 'docked_to.name = "Alice monitor"'),
+            yield* condition(bob, 'dockedTo.name = "Alice monitor"'),
             []
           );
           assert.deepStrictEqual(
-            yield* filter(alice, 'docked_to.name = "Alice monitor"'),
+            yield* condition(alice, 'dockedTo.name = "Alice monitor"'),
             [records.M]
           );
           assert.deepStrictEqual(
-            yield* filter(bob, "docked_to.name is empty"),
+            yield* condition(bob, "dockedTo.name is empty"),
             [records.M]
           );
           assert.deepStrictEqual(
-            yield* filter(alice, "docked_to.name is empty"),
+            yield* condition(alice, "dockedTo.name is empty"),
             [records.AM]
           );
           // The reference itself is readable, so its value still filters.
           assert.deepStrictEqual(
-            yield* filter(bob, `docked_to = "${records.AM}"`),
+            yield* condition(bob, `dockedTo = "${records.AM}"`),
             [records.M]
           );
 
@@ -582,73 +596,72 @@ describe("references", () => {
           const bob = yield* http.signIn("bob", "bob-password");
           const alice = yield* http.signIn("alice", "alice-password");
 
-          const filter = (token: string, text: string) =>
-            idsOf(token, LAPTOP, { filter: text });
+          const condition = (token: string, text: string) =>
+            idsOf(token, LAPTOP, { condition: text });
 
           assert.deepStrictEqual(
-            yield* filter(bob, 'docked_to.name = "Alice monitor"'),
+            yield* condition(bob, 'dockedTo.name = "Alice monitor"'),
             []
           );
           assert.deepStrictEqual(
-            yield* filter(alice, 'docked_to.name = "Alice monitor"'),
+            yield* condition(alice, 'dockedTo.name = "Alice monitor"'),
             [records.L]
           );
           // A hidden target behaves like an empty reference.
           assert.deepStrictEqual(
-            yield* filter(bob, "docked_to.name is empty"),
+            yield* condition(bob, "dockedTo.name is empty"),
             [records.L]
           );
           assert.deepStrictEqual(
-            yield* filter(alice, "docked_to.name is empty"),
+            yield* condition(alice, "dockedTo.name is empty"),
             [records.K]
           );
-          assert.deepStrictEqual(yield* filter(bob, 'owner.name = "Bob"'), [
+          assert.deepStrictEqual(yield* condition(bob, 'owner.name = "Bob"'), [
             records.L,
           ]);
-          assert.deepStrictEqual(yield* filter(alice, 'owner.name = "Bob"'), [
-            records.L,
-          ]);
+          assert.deepStrictEqual(
+            yield* condition(alice, 'owner.name = "Bob"'),
+            [records.L]
+          );
 
-          const fields = "name,docked_to.name,owner.name";
+          const fields = "name,dockedTo.name,owner.name";
 
-          const bobPaths = yield* recordOf(
+          const bobPaths = yield* resourceOf(
             yield* http.get(recordPath(LAPTOP, records.L, { fields }), {
               token: bob,
             })
           );
 
-          const alicePaths = yield* recordOf(
+          const alicePaths = yield* resourceOf(
             yield* http.get(recordPath(LAPTOP, records.L, { fields }), {
               token: alice,
             })
           );
 
-          assert.strictEqual(bobPaths.values["docked_to.name"], null);
-          assert.strictEqual(bobPaths.values["owner.name"], "Bob");
+          assert.notProperty(objectOf(bobPaths.dockedTo), "name");
+          assert.strictEqual(objectOf(bobPaths.owner).name, "Bob");
           assert.strictEqual(
-            alicePaths.values["docked_to.name"],
+            objectOf(alicePaths.dockedTo).name,
             "Alice monitor"
           );
 
           // A withheld reference (rule 10) leaves out its path's key too.
           yield* setAsset("cost = 2500", records.L);
 
-          const withheld = yield* recordOf(
-            yield* http.get(
-              recordPath(LAPTOP, records.L, { fields, labels: "true" }),
-              { token: bob }
-            )
+          const withheld = yield* resourceOf(
+            yield* http.get(recordPath(LAPTOP, records.L, { fields }), {
+              token: bob,
+            })
           );
 
-          assert.notProperty(withheld.values, "docked_to.name");
-          assert.notProperty(withheld.labels ?? {}, "docked_to");
-          assert.include(withheld.withheld ?? [], "docked_to.name");
-          assert.strictEqual(withheld.values["owner.name"], "Bob");
+          assert.notProperty(withheld, "dockedTo");
+          assert.include(arrayOf(withheld.withheld), "dockedTo");
+          assert.strictEqual(objectOf(withheld.owner).name, "Bob");
         })
     );
 
     dbTest.effect(
-      "through /acme.laptop a visible target is labelled, and writing a hidden one is InvalidReference",
+      "through /acme.laptop a visible target is named, and writing a hidden one is InvalidReference",
       () =>
         Effect.gen(function* guardChild() {
           const http = yield* TestHttpClient;
@@ -662,17 +675,17 @@ describe("references", () => {
 
           // Bob docks L to his own monitor M: a visible target.
           const docked = yield* patch(bob, LAPTOP, records.L, version, {
-            docked_to: records.M,
+            dockedTo: records.M,
           });
 
           assert.strictEqual(docked.status, 200);
 
-          const dockedToM = yield* labelled(bob, LAPTOP, records.L);
+          const dockedToM = yield* read(bob, LAPTOP, records.L);
 
-          assert.strictEqual(dockedToM.values.docked_to, records.M);
-          assert.strictEqual(dockedToM.labels?.docked_to, "M");
+          assert.strictEqual(objectOf(dockedToM.dockedTo).id, records.M);
+          assert.strictEqual(objectOf(dockedToM.dockedTo).name, "M");
           assert.deepStrictEqual(
-            yield* idsOf(bob, LAPTOP, { filter: 'docked_to.name = "M"' }),
+            yield* idsOf(bob, LAPTOP, { condition: 'dockedTo.name = "M"' }),
             [records.L]
           );
 
@@ -681,15 +694,15 @@ describe("references", () => {
           const current = (yield* versionOf(records.L)) ?? 0;
 
           const random = yield* patch(bob, LAPTOP, records.L, current, {
-            docked_to: randomUUID(),
+            dockedTo: randomUUID(),
           });
 
           assert.strictEqual(random.status, 422);
-          assert.strictEqual(yield* tagOf(random), "InvalidReference");
+          assert.strictEqual(yield* codeOf(random), "InvalidReference");
 
           for (const target of [records.AM, records.K]) {
             const hidden = yield* patch(bob, LAPTOP, records.L, current, {
-              docked_to: target,
+              dockedTo: target,
             });
 
             assert.strictEqual(hidden.text, random.text);
@@ -698,16 +711,16 @@ describe("references", () => {
           assert.strictEqual(yield* versionOf(records.L), current);
 
           const body = (target: string): JsonValue => ({
-            docked_to: target,
+            dockedTo: target,
             name: "dock",
             owner: bobUser.id,
-            purchased_on: "2026-01-01",
+            purchasedOn: "2026-01-01",
             serial: "SN-DOCK",
           });
 
           const createdRandom = yield* create(bob, LAPTOP, body(randomUUID()));
 
-          assert.strictEqual(yield* tagOf(createdRandom), "InvalidReference");
+          assert.strictEqual(yield* codeOf(createdRandom), "InvalidReference");
 
           for (const target of [records.AM, records.K]) {
             const created = yield* create(bob, LAPTOP, body(target));
@@ -716,18 +729,18 @@ describe("references", () => {
           }
 
           const createdMonitor = yield* create(bob, MONITOR, {
-            docked_to: records.AM,
+            dockedTo: records.AM,
             name: "dock",
             owner: bobUser.id,
           });
 
           const createdMonitorRandom = yield* create(bob, MONITOR, {
-            docked_to: randomUUID(),
+            dockedTo: randomUUID(),
             name: "dock",
             owner: bobUser.id,
           });
 
-          assert.strictEqual(yield* tagOf(createdMonitor), "InvalidReference");
+          assert.strictEqual(yield* codeOf(createdMonitor), "InvalidReference");
           assert.strictEqual(createdMonitor.text, createdMonitorRandom.text);
         })
     );
@@ -838,30 +851,30 @@ const bulkRecords = (
 /** Per endpoint: masked fields, a child-level field, parent-level fields. */
 const SORTS: Readonly<Record<Child, readonly string[]>> = {
   [LAPTOP]: [
-    "purchased_on",
-    "-purchased_on",
-    "docked_to",
-    "-docked_to",
+    "purchasedOn",
+    "-purchasedOn",
+    "dockedTo",
+    "-dockedTo",
     "serial",
     "-serial",
-    "serial,-purchased_on",
-    "-serial,docked_to",
+    "serial,-purchasedOn",
+    "-serial,dockedTo",
     "name",
-    "-status,purchased_on,name",
-    "status,-docked_to",
+    "-status,purchasedOn,name",
+    "status,-dockedTo",
   ],
   [MONITOR]: [
-    "purchased_on",
-    "-purchased_on",
-    "docked_to",
-    "-docked_to",
-    "size_inches",
-    "-size_inches",
-    "size_inches,-purchased_on",
-    "-size_inches,docked_to",
+    "purchasedOn",
+    "-purchasedOn",
+    "dockedTo",
+    "-dockedTo",
+    "sizeInches",
+    "-sizeInches",
+    "sizeInches,-purchasedOn",
+    "-sizeInches,dockedTo",
     "name",
-    "-status,purchased_on,name",
-    "status,-docked_to",
+    "-status,purchasedOn,name",
+    "status,-dockedTo",
   ],
 };
 
@@ -869,24 +882,29 @@ const SORTS: Readonly<Record<Child, readonly string[]>> = {
 type SortKeyValue = { readonly number: number } | { readonly text: string };
 
 /**
- * A record's sort key as the caller sees it: absent or withheld is empty.
+ * A resource's sort key as the caller sees it: absent or withheld is empty.
  * @param record - The record.
  * @param name - The field.
  * @returns The number, the key text, or null for empty.
  */
-const keyOf = (record: RecordJson, name: string): SortKeyValue | null => {
-  const value: JsonValue | undefined = record.values[name];
+const keyOf = (record: JsonObject, name: string): SortKeyValue | null => {
+  const value: JsonValue | undefined = record[name];
 
   if (
     value === undefined ||
     value === null ||
-    (record.withheld ?? []).includes(name)
+    arrayOf(record.withheld).includes(name)
   ) {
     return null;
   }
 
   if (isJsonNumber(value)) {
     return { number: value };
+  }
+
+  // A reference sorts by the ID it holds.
+  if (isJsonObject(value)) {
+    return { text: textOf(value.id).toLowerCase() };
   }
 
   // Text keys compare by casefold; these keys are ASCII.
@@ -959,7 +977,7 @@ const compareNullable = (
  * @returns The IDs in order.
  */
 const expectedOrder = (
-  records: readonly RecordJson[],
+  records: readonly JsonObject[],
   sort: string
 ): string[] => {
   const keys = sort.split(",").map((part) => ({
@@ -967,7 +985,7 @@ const expectedOrder = (
     name: part.replace(/^-/u, ""),
   }));
 
-  const compare = (left: RecordJson, right: RecordJson): number => {
+  const compare = (left: JsonObject, right: JsonObject): number => {
     for (const { descending, name } of keys) {
       const order = compareNullable(
         keyOf(left, name),
@@ -980,23 +998,23 @@ const expectedOrder = (
       }
     }
 
-    return compareText(left.id, right.id);
+    return compareText(textOf(left.id), textOf(right.id));
   };
 
-  return records.toSorted(compare).map((record) => record.id);
+  return records.toSorted(compare).map((record) => textOf(record.id));
 };
 
 /**
  * A monitor with only a size, for the order computation's own test.
  * @param id - Its ID.
- * @param size - Its `size_inches`.
- * @returns The record.
+ * @param size - Its `sizeInches`.
+ * @returns The resource.
  */
-const sized = (id: string, size: number): RecordJson => ({
-  class: MONITOR,
+const sized = (id: string, size: number): JsonObject => ({
+  "@type": "AcmeMonitor",
   id,
-  values: { size_inches: size },
-  version: 1,
+  revision: 1,
+  sizeInches: size,
 });
 
 /**
@@ -1021,10 +1039,10 @@ const visibleBulkRows = (table: Child, who: "alice" | "bob"): number =>
  */
 const sortsFor = (table: Child, who: "alice" | "bob"): readonly string[] =>
   who === "bob" && table === MONITOR
-    ? SORTS[table].filter((sort) => !sort.includes("size_inches"))
+    ? SORTS[table].filter((sort) => !sort.includes("sizeInches"))
     : SORTS[table];
 
-/** The filter selecting the bulk records. */
+/** The condition selecting the bulk records. */
 const BULK = 'name starts with "bulk-"';
 
 /**
@@ -1033,8 +1051,8 @@ const BULK = 'name starts with "bulk-"';
  * @param name - The field.
  * @returns The count.
  */
-const withheldCount = (records: readonly RecordJson[], name: string): number =>
-  records.filter((record) => (record.withheld ?? []).includes(name)).length;
+const withheldCount = (records: readonly JsonObject[], name: string): number =>
+  records.filter((record) => arrayOf(record.withheld).includes(name)).length;
 
 /**
  * One sort of the bulk records through a child endpoint: asserts that
@@ -1057,28 +1075,28 @@ const sortedPages = Effect.fn("ChildEndpointReads.sortedPages")(
 
     const unpaged = yield* listOf(
       yield* http.get(
-        listPath(table, { count: "true", filter: BULK, limit: "1000", sort }),
+        listPath(table, { condition: BULK, limit: "1000", sort }),
         { token }
       )
     );
 
-    const paged = yield* allPages(token, table, {
-      filter: BULK,
+    const paged = yield* allPages({ token }, table, {
+      condition: BULK,
       limit: PAGE,
       sort,
     });
 
-    const expected = unpaged.records.map((record) => record.id);
-    const actual = paged.records.map((record) => record.id);
+    const expected = unpaged.resources.map((resource) => textOf(resource.id));
+    const actual = paged.resources.map((resource) => textOf(resource.id));
     const label = `${table} ${sort}`;
 
     assert.strictEqual(expected.length, rows, label);
-    assert.strictEqual(unpaged.count, rows, label);
+    assert.strictEqual(unpaged.total, rows, label);
     assert.strictEqual(new Set(actual).size, actual.length, label);
     assert.deepStrictEqual(actual, expected, label);
     assert.deepStrictEqual(
       expected,
-      expectedOrder(unpaged.records, sort),
+      expectedOrder(unpaged.resources, sort),
       label
     );
 
@@ -1086,20 +1104,23 @@ const sortedPages = Effect.fn("ChildEndpointReads.sortedPages")(
   }
 );
 
+/**
+ * A laptop resource; an empty attribute is absent from a resource.
+ * @param id - Its ID.
+ * @param serial - Its serial, or null for empty.
+ * @returns The resource.
+ */
+const record = (id: string, serial: string | null): JsonObject =>
+  serial === null
+    ? { "@type": "AcmeLaptop", id, revision: 1 }
+    : { "@type": "AcmeLaptop", id, revision: 1, serial };
+
 describe("cursor-nulls", () => {
   it("orders empty keys last ascending and first descending, ties by id", () => {
-    const record = (id: string, serial: string | null): RecordJson => ({
-      class: LAPTOP,
-      id,
-      values: { serial },
-      version: 1,
-    });
-
-    const withheld: RecordJson = {
-      class: LAPTOP,
+    const withheld: JsonObject = {
+      "@type": "AcmeLaptop",
       id: "00000000-0000-7000-8000-000000000001",
-      values: {},
-      version: 1,
+      revision: 1,
       withheld: ["serial"],
     };
 
@@ -1133,7 +1154,7 @@ describe("cursor-nulls", () => {
           sized("00000000-0000-7000-8000-000000000002", 9),
           sized("00000000-0000-7000-8000-000000000003", 100),
         ],
-        "size_inches"
+        "sizeInches"
       ),
       [
         "00000000-0000-7000-8000-000000000002",
@@ -1200,28 +1221,28 @@ describe("cursor-nulls", () => {
           // A monitor's own field is never readable to Bob: its sort is
           // refused like a misspelled name.
           const bySize = yield* http.get(
-            listPath(MONITOR, { filter: BULK, sort: "size_inches" }),
+            listPath(MONITOR, { condition: BULK, sort: "sizeInches" }),
             { token: tokens.bob }
           );
 
           assert.strictEqual(bySize.status, 400);
-          assert.strictEqual(yield* tagOf(bySize), "UnknownField");
+          assert.strictEqual(yield* codeOf(bySize), "UnknownField");
 
           // Bob's masked keys: some hidden dates and docked_to values exist
           // on both endpoints.
           for (const table of [LAPTOP, MONITOR] as const) {
             const bobRecords = yield* listOf(
               yield* http.get(
-                listPath(table, { filter: BULK, limit: "1000" }),
+                listPath(table, { condition: BULK, limit: "1000" }),
                 {
                   token: tokens.bob,
                 }
               )
             );
 
-            for (const name of ["purchased_on", "docked_to"]) {
+            for (const name of ["purchasedOn", "dockedTo"]) {
               assert.isAbove(
-                withheldCount(bobRecords.records, name),
+                withheldCount(bobRecords.resources, name),
                 0,
                 `${table} ${name}`
               );
@@ -1262,23 +1283,23 @@ describe("cursor-nulls", () => {
             })
           );
 
-          const cursor = first.nextCursor ?? "";
+          const after = first.next ?? "";
 
           const other = yield* http.get(
-            listPath(LAPTOP, { cursor, limit: "1", sort: "-serial" }),
+            listPath(LAPTOP, { after, limit: "1", sort: "-serial" }),
             { token }
           );
 
           const parent = yield* http.get(
-            listPath(ASSET, { cursor, limit: "1", sort: "serial" }),
+            listPath(ASSET, { after, limit: "1", sort: "serial" }),
             { token }
           );
 
-          assert.notStrictEqual(cursor, "");
+          assert.notStrictEqual(after, "");
           assert.strictEqual(other.status, 400);
-          assert.strictEqual(yield* tagOf(other), "InvalidCursor");
+          assert.strictEqual(yield* codeOf(other), "InvalidCursor");
           // serial is unknown at the parent, before the cursor is read.
-          assert.strictEqual(yield* tagOf(parent), "UnknownField");
+          assert.strictEqual(yield* codeOf(parent), "UnknownField");
         })
     );
   });

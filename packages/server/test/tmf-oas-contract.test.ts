@@ -22,13 +22,13 @@ import {
   tmfExchangeProblem,
 } from "../../testing/src/tmf-oas-contract.ts";
 import type { TmfExchange } from "../../testing/src/tmf-oas-contract.ts";
+import { asObject, textOf, apiCallers } from "./api-support.ts";
 import {
   FIXTURE_BASE,
   FIXTURE_RESOURCE,
   FIXTURE_TICKETS,
   tmfTestLayer,
 } from "./tmf-fixture.ts";
-import { asObject, textOf, v2Callers } from "./v2-support.ts";
 
 const CONTRACT = contractAt("TMF621", FIXTURE_BASE);
 const TICKET_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
@@ -231,7 +231,7 @@ describe("tmf-oas-contract", () => {
       () =>
         Effect.gen(function* everyResponse() {
           const http = yield* TestHttpClient;
-          const { alice, bob } = yield* v2Callers;
+          const { alice, bob } = yield* apiCallers;
 
           // The client fails the test on any response the document does
           // not declare; these requests reach every operation and error.

@@ -93,11 +93,11 @@ jobs:
       # twice (the rerun must succeed too), each ending with `std doctor`.
       - name: Quickstart (examples/quickstart.sh against std serve, run twice)
         run: pnpm quickstart:ci
-      # Release compatibility: the previous release's tag
+      # Release compatibility, a database-upgrade check (decision 0021,
+      # decision 56): the previous release's tag
       # (examples/quickstart/src/previous-release.ts) installs and fills a
       # database with its own code and quickstart; this branch upgrades it,
-      # `std doctor` must exit 0, and that release's quickstart, unchanged,
-      # and this branch's run against this branch's `std serve`; then the
-      # release's quickstart sets up a fresh install of this branch.
-      - name: Release compatibility (previous release's database and quickstart against this branch)
+      # `std doctor` must exit 0, and this branch's quickstart runs against
+      # this branch's `std serve`. Clients of the old API are not supported.
+      - name: Release compatibility (previous release's database upgraded, this branch's quickstart against it)
         run: pnpm release-compat:ci

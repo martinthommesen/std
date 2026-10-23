@@ -7,7 +7,7 @@
  *   testing the same value and replacing it, end with exactly one success
  *   and one `PatchTestFailed` that wrote nothing; a copy whose source a
  *   concurrent save changes copies the value of the version it applies to.
- * - Through `/api/v2`, where `If-Match` is required: two concurrent JSON
+ * - Through `/api/v1`, where `If-Match` is required: two concurrent JSON
  *   Patches based on one revision end with exactly one success, and the
  *   other is `412 VersionConflict` with nothing written.
  *
@@ -36,9 +36,9 @@ import type { LockedImage } from "../src/records/save-pipeline.ts";
 import { WriteAccess } from "../src/records/write-access.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { asObject, textOf, API, apiCallers } from "./api-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { waitUntil } from "./support.ts";
-import { asObject, textOf, V2, v2Callers } from "./v2-support.ts";
 
 const SaveServices = Layer.mergeAll(
   WriteAccess.allowAll,
@@ -227,20 +227,20 @@ describe("json-patch-race", () => {
     );
 
     dbTest.effect(
-      "two concurrent JSON Patches on one revision through /api/v2: one applies, the other is 412",
+      "two concurrent JSON Patches on one revision through /api/v1: one applies, the other is 412",
       () =>
         Effect.gen(function* raceWithVersion() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
-          const created = yield* http.request("POST", V2.asset, {
+          const created = yield* http.request("POST", API.asset, {
             ...callers.alice,
             body: { name: "H", status: "spare" },
           });
 
           const id = textOf(asObject(created.json).id);
 
-          const patch = http.request("PATCH", `${V2.asset}/${id}`, {
+          const patch = http.request("PATCH", `${API.asset}/${id}`, {
             ...callers.alice,
             headers: {
               "content-type": "application/json-patch+json",
@@ -268,7 +268,7 @@ describe("json-patch-race", () => {
           assert.deepStrictEqual(statuses, [200, 412]);
 
           const after = asObject(
-            (yield* http.get(`${V2.asset}/${id}`, callers.alice)).json
+            (yield* http.get(`${API.asset}/${id}`, callers.alice)).json
           );
 
           assert.strictEqual(after.revision, 2);

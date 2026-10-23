@@ -59,20 +59,20 @@ import {
   updateRecord,
 } from "../../records/save-pipeline.ts";
 import type { ConfigState } from "../../sql/request-revision.ts";
-import { expectedVersionOf } from "../record-writes.ts";
-import {
-  checkRequestRevision,
-  checkUnscopedRevision,
-} from "../stale-request.ts";
 import {
   applyJsonPatch,
   mergePatch,
   namesOfPatch,
   parseJsonPatch,
-} from "../v2/patch.ts";
-import { jsonAnswer, linkHeader, writeFailures } from "../v2/records.ts";
-import { jsonBodyOf, mediaTypeOf, queryOf } from "../v2/request.ts";
-import { classOfType } from "../v2/table-names.ts";
+} from "../api/patch.ts";
+import { jsonAnswer, linkHeader, writeFailures } from "../api/records.ts";
+import { jsonBodyOf, mediaTypeOf, queryOf } from "../api/request.ts";
+import { classOfType } from "../api/table-names.ts";
+import { expectedVersionOf } from "../record-writes.ts";
+import {
+  checkRequestRevision,
+  checkUnscopedRevision,
+} from "../stale-request.ts";
 import {
   attributesOf,
   classAccessOf,
@@ -116,10 +116,10 @@ export interface TmfInput {
  * takes from STD's definitions. A mapping names fields by stable ID, so
  * its attributes need none; a local class's attributes are its fields'
  * API names (11.1), and a name renamed or reused since the revision the
- * client states is `SchemaChanged`, as on `/api/v2`. A stated revision is
+ * client states is `SchemaChanged`, as on `/api/v1`. A stated revision is
  * checked even when the request names no local attribute, as a request
  * that names no field is (`checkUnscopedRevision`): a revision this
- * database never had is `SchemaChanged`. Like `/api/v2`, a request that
+ * database never had is `SchemaChanged`. Like `/api/v1`, a request that
  * states no revision is resolved at the current one (Contracts 6.2;
  * decision 0033).
  *

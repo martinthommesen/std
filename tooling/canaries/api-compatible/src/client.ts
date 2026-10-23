@@ -12,7 +12,11 @@ export const signInAsAlice = Effect.gen(function* signInAsAlice() {
     baseUrl: "http://127.0.0.1:8080",
   });
 
-  return yield* client.signIn.signIn({
-    payload: { login: "alice", password: "alice-password" },
+  return yield* client.session.create({
+    payload: {
+      login: "alice",
+      password: "alice-password",
+      tokenDelivery: "body",
+    },
   });
 });

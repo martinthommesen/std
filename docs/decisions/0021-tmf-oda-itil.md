@@ -82,6 +82,8 @@ Licence: the OpenAPI documents and the [APIS] repositories are Apache-2.0; user 
 
 The record service stays the only place that reads and writes records, enforcing access rules, masks, history, the outbox and stale checks (Contracts 2 to 6). Above it sit three surfaces, each a thin adapter:
 
+> **Superseded paths (decision 56, 2026-10-23).** The original `/api/v1` is deleted and the TMF630 API built as `/api/v2` is now STD's only generic API at `/api/v1`. Read `/api/v2` in this record as today's `/api/v1`, and drop the frozen row below; this record keeps the paths as they were decided.
+
 | Surface | Path | Contracts | Shapes |
 | --- | --- | --- | --- |
 | Generic API v2 | `/api/v2` | 10 | every table, TMF630 shape, STD names and classes |
@@ -242,3 +244,7 @@ Decision 0026 checked this plan against the TM Forum member documents and listed
 Decision after review round 2 of the spec check:
 
 55. **On TMF routes the pinned OpenAPI document wins (amends decision 36 for TMF routes).** Decided by Martin on 2026-10-22: a version conflict on a TMF API route answers the status that API's pinned OpenAPI document declares for the operation, with the current `ETag` (`409` for TMF621 `PATCH` and `DELETE`, which declare `409` and not `412`); `/api/v2`, STD's own TMF630 API, keeps `412` with the current `ETag` and `428` for a missing `If-Match`. Together with decision 52, TMF routes answer only declared statuses. E27's reason follows.
+
+Decision after the merge of workstream 3G:
+
+56. **One API: the TMF630 API becomes `/api/v1` (supersedes decision 6 and the strict freeze of `/api/v1`).** Decided by Martin on 2026-10-23. STD is greenfield and nobody uses the old API, so keeping it frozen beside the new one buys nothing. The old `/api/v1` is retired and deleted, and the TMF630 API (Contracts 10, built as `/api/v2`) becomes STD's only API, renamed to `/api/v1`. Every client (the web app, the quickstart and examples, the CLI helpers and the tests) moves to it first. The release-compatibility CI step becomes a database-upgrade check: build a database with `v0.0.2`, upgrade it with the new release, then run the new quickstart against it; clients of the old API are not supported. Recorded in decision 0025, "API consolidation".
