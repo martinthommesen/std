@@ -34,6 +34,7 @@ import {
   aggregatePaths,
   checkAggregateCondition,
   checkPartCondition,
+  resolvePartCondition,
   evaluateAggregate,
   partMatches,
   pathsOfNode,
@@ -42,7 +43,6 @@ import {
 import type { ResolvedAggregate } from "@std/conditions/aggregate";
 import { ConditionDefectError } from "@std/conditions/defect";
 import type { RecordImage } from "@std/conditions/evaluate-core";
-import { resolveCondition } from "@std/conditions/resolve";
 import type { ResolvedNode, TypedPath } from "@std/conditions/typed";
 import { isPartClassOf, ownerReferenceOf } from "@std/definitions/aggregates";
 import type { Condition } from "@std/definitions/condition";
@@ -290,7 +290,7 @@ const partConditionOf = (
   });
 
   const resolved = checked.ok
-    ? resolveCondition(checked.value, settling.context)
+    ? resolvePartCondition(checked.value, settling.context)
     : undefined;
 
   if (resolved === undefined || !resolved.ok) {

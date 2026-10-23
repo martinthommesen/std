@@ -45,12 +45,7 @@ import type {
 import { resolveCondition } from "./resolve.ts";
 import type { ConditionContext, ResolveOptions } from "./resolve.ts";
 import { makeChecked } from "./typed.ts";
-import type {
-  CheckedCondition,
-  CheckedNode,
-  ResolvedNode,
-  TypedPath,
-} from "./typed.ts";
+import type { CheckedNode, ResolvedNode, TypedPath } from "./typed.ts";
 
 /** A node of an aggregate condition; `Leaf` is a checked or resolved tree. */
 export type AggregateNode<Leaf> =
@@ -175,6 +170,30 @@ const nestedIssues = (expr: Expr, at: Segments): readonly ConditionIssue[] => {
 };
 
 /**
+ * A checked condition on an owner's parts (a quantifier's `where`, a
+ * `setParts.where`). Its own stage, not a `CheckedCondition`: its owner
+ * paths mean nothing to the SQL compiler and the plain evaluator, so it
+ * reaches neither (and both refuse owner paths at run time too,
+ * `owner-scope.ts`).
+ */
+export interface CheckedPartCondition {
+  readonly stage: "checkedPart";
+  /** The part class its paths start from. */
+  readonly classId: string;
+  /** The owner's class, which `scope: "owner"` paths read. */
+  readonly ownerClassId: string;
+  readonly root: CheckedNode;
+}
+
+/** A part condition with its context values resolved. */
+export interface ResolvedPartCondition {
+  readonly stage: "resolvedPart";
+  readonly classId: string;
+  readonly ownerClassId: string;
+  readonly root: ResolvedNode;
+}
+
+/**
  * Checks a condition on an owner's parts of a class: a quantifier's
  * `where` or a `setParts.where` (Contracts 4.10, 5.10). Paths read the
  * part; `scope: "owner"` paths read the owner.
@@ -183,14 +202,14 @@ const nestedIssues = (expr: Expr, at: Segments): readonly ConditionIssue[] => {
  * @param partClassId - The part class.
  * @param ownerClassId - The owner's class.
  * @param options - The view and purpose.
- * @returns The checked condition, or every issue.
+ * @returns The checked part condition, or every issue.
  */
 export const checkPartCondition = (
   expr: Expr,
   partClassId: string,
   ownerClassId: string,
   options: Pick<CheckOptions, "view" | "purpose">
-): ConditionResult<CheckedCondition> => {
+): ConditionResult<CheckedPartCondition> => {
   const previousOnPart = pathsOfExpr(expr, []).flatMap(([path, at]) =>
     path.image === "previous" && path.scope !== "owner"
       ? [
@@ -209,12 +228,51 @@ export const checkPartCondition = (
     return invalid(structural);
   }
 
-  return checkCondition(expr, {
+  const checked = checkCondition(expr, {
     ...options,
     classId: partClassId,
     ownerClassId,
     profile: "recordRule",
   });
+
+  return checked.ok
+    ? valid({
+        classId: partClassId,
+        ownerClassId,
+        root: checked.value.root,
+        stage: "checkedPart",
+      })
+    : checked;
+};
+
+/**
+ * Resolves the context values, relative dates and periods of a part
+ * condition.
+ *
+ * @param condition - A checked part condition.
+ * @param context - `now`, `timeZone` and `me`.
+ * @param options - An injected Temporal implementation, if any.
+ * @returns The resolved part condition, or the resolver's issues.
+ */
+export const resolvePartCondition = (
+  condition: CheckedPartCondition,
+  context: ConditionContext,
+  options: ResolveOptions = {}
+): ConditionResult<ResolvedPartCondition> => {
+  const resolved = resolveCondition(
+    { classId: condition.classId, root: condition.root, stage: "checked" },
+    context,
+    options
+  );
+
+  return resolved.ok
+    ? valid({
+        classId: condition.classId,
+        ownerClassId: condition.ownerClassId,
+        root: resolved.value.root,
+        stage: "resolvedPart",
+      })
+    : resolved;
 };
 
 interface Checking {

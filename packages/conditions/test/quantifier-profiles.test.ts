@@ -8,12 +8,21 @@
  */
 import { assert, describe, it } from "@effect/vitest";
 
-import { checkAggregateCondition } from "../src/aggregate.ts";
+import {
+  checkAggregateCondition,
+  checkPartCondition,
+  resolvePartCondition,
+} from "../src/aggregate.ts";
 import type { Expr } from "../src/ast.ts";
 import { checkCondition } from "../src/check.ts";
 import { staticClassView } from "../src/class-view.ts";
 import type { FieldInfo } from "../src/class-view.ts";
+import { ConditionDefectError } from "../src/defect.ts";
+import { evaluateCondition } from "../src/evaluate.ts";
 import { PROFILES } from "../src/profile.ts";
+import { identSql } from "../src/sql-fragment.ts";
+import { compileCondition } from "../src/sql.ts";
+import { makeResolved } from "../src/typed.ts";
 
 const OWNER = "0e000000-0000-4000-8000-000000000001";
 const PART = "0e000000-0000-4000-8000-000000000002";
@@ -110,5 +119,57 @@ describe("quantifier-profiles", () => {
 
       assert.isTrue(checked.ok, operator);
     }
+  });
+
+  it("a part condition's owner paths never reach the SQL compiler or the plain evaluator", () => {
+    const checked = checkPartCondition(
+      {
+        left: { path: [NUM.id], scope: "owner" },
+        op: "eq",
+        right: { value: 1 },
+      },
+      PART,
+      OWNER,
+      { purpose: "evaluate", view }
+    );
+
+    assert.isTrue(checked.ok);
+
+    if (!checked.ok) {
+      return;
+    }
+
+    // Its own stage: not a CheckedCondition, so not a compiler input.
+    assert.strictEqual(checked.value.stage, "checkedPart");
+
+    const resolved = resolvePartCondition(checked.value, {
+      now: 0,
+      timeZone: "UTC",
+    });
+
+    assert.isTrue(resolved.ok);
+
+    if (!resolved.ok) {
+      return;
+    }
+
+    // Even a tree taken out of it is refused, never compiled as the
+    // part's own field.
+    const smuggled = makeResolved(PART, resolved.value.root);
+
+    assert.throws(() => {
+      compileCondition(smuggled, {
+        alias: "p",
+        hooks: {
+          column: (source, column) => identSql(source.alias, column.name),
+          join: () => {
+            throw new Error("No references here.");
+          },
+        },
+      });
+    }, ConditionDefectError);
+    assert.throws(() => {
+      evaluateCondition(smuggled, { record: { [PART_NUM.id]: 1 } });
+    }, ConditionDefectError);
   });
 });
