@@ -259,7 +259,8 @@ export const edgeWebUpload = Effect.fn("Test.edgeWebUpload")(
   function* edgeWebUpload(
     http: TestHttpClientApi,
     token: string,
-    bytes: number
+    bytes: number,
+    options: { readonly path?: string; readonly method?: string } = {}
   ) {
     const retained = yield* Deferred.make<boolean>();
     const close = yield* Deferred.make<() => void>();
@@ -297,16 +298,20 @@ export const edgeWebUpload = Effect.fn("Test.edgeWebUpload")(
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         },
-        method: "POST",
+        method: options.method ?? "POST",
         signal,
       };
 
-      return await http.fetch("http://std.test/api/v1/acmeMonitor", init);
+      return await http.fetch(
+        `http://std.test${options.path ?? "/api/v1/acmeMonitor"}`,
+        init
+      );
     }).pipe(Effect.forkScoped);
 
     yield* Deferred.await(retained);
 
     return {
+      cancel: Fiber.interrupt(response),
       finish: Effect.flatMap(Deferred.await(close), (finish) =>
         Effect.sync(finish)
       ),

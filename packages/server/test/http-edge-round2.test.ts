@@ -317,18 +317,22 @@ describe("http-edge-round2", () => {
           const origin = yield* edgeServer;
 
           const slots = Math.floor(BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES);
+          const bob = yield* http.signIn("bob", "bob-password");
 
           const uploads = yield* forEach(
-            Array.from({ length: slots }, () => 0),
-            () => edgeWebUpload(http, token, BODY_MAX_BYTES)
+            Array.from({ length: slots }, (_, index) => index),
+            (index) =>
+              edgeWebUpload(http, index % 2 === 0 ? token : bob, BODY_MAX_BYTES)
           );
+
+          const alice = yield* http.signIn("alice", "alice-password");
 
           // Wait until all actual body bytes are retained, without EOF. The
           // refused request itself is the public observation of full capacity.
           yield* waitUntil(
             edgeRequest(origin, "/api/v1/acmeMonitor", {
               body: "{}",
-              headers: { authorization: `Bearer ${token}` },
+              headers: { authorization: `Bearer ${alice}` },
             }).pipe(Effect.map((response) => response.status === 503))
           );
 
@@ -338,7 +342,7 @@ describe("http-edge-round2", () => {
           ]) {
             const refused = yield* edgeRequest(origin, path, {
               body: "{}",
-              headers: { authorization: `Bearer ${token}` },
+              headers: { authorization: `Bearer ${alice}` },
             });
 
             assert.strictEqual(refused.status, 503, refused.text);
@@ -363,7 +367,7 @@ describe("http-edge-round2", () => {
             body: "{}",
             finish: false,
             headers: {
-              authorization: `Bearer ${token}`,
+              authorization: `Bearer ${alice}`,
               "transfer-encoding": "chunked",
             },
           });
@@ -376,7 +380,7 @@ describe("http-edge-round2", () => {
           const web = yield* http.request("POST", "/api/v1/acmeMonitor", {
             headers: { "content-length": "1" },
             rawBody: "{}",
-            token,
+            token: alice,
           });
 
           assert.strictEqual(web.status, 503, web.text);

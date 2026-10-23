@@ -18,8 +18,9 @@ import { parseJson } from "@std/values/json";
 import { Effect, Redacted } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { Actor } from "../../auth/actor.ts";
 import type { TransactionsApi } from "../../sql/transactions.ts";
-import { textBodyOf } from "../body-limits.ts";
+import { ownBody, textBodyOf } from "../body-limits.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { cookieMayAuthenticate } from "../session-cookie.ts";
 
@@ -147,11 +148,13 @@ export const readAuthenticatedBody = Effect.fn("Api.readAuthenticatedBody")(
     return yield* withSession(
       request,
       Effect.gen(function* authenticatedRead() {
-        yield* inRequestTransaction(
+        const actor = yield* inRequestTransaction(
           transactions,
           request,
-          asActor(Effect.void)
+          asActor(Actor)
         );
+
+        ownBody(request, actor.userId);
 
         return yield* textBodyOf(request);
       })

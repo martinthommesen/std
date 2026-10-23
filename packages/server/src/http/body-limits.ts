@@ -10,7 +10,6 @@ import { Clock, Effect, Schedule, Stream, Predicate, Semaphore } from "effect";
 import { FindMyWay, HttpRouter } from "effect/http";
 import { HttpServerRequest } from "effect/http/HttpServerRequest";
 
-import { SIGN_IN_KDF_MAX_CONCURRENCY } from "../auth/sign-in-limits.ts";
 import { tmfErrorResponse } from "./api/tmf-error.ts";
 import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
 
@@ -49,10 +48,29 @@ export const BODY_IN_FLIGHT_MAX_BYTES =
     Math.floor(getHeapStatistics().heap_size_limit / (64 * 4 * BODY_MAX_BYTES))
   );
 
-/** Sign-in has two KDF workers, so its separate retained-body budget holds
- * two maximum 64-KiB credential envelopes; it never consumes record capacity. */
+/** User fairness budget: at most half the process byte budget (two maximum
+ * records on the measured heap), leaving half for independent users. On heaps
+ * admitting only one record, a full record must still fit. This is a capacity
+ * partition, not a throughput claim; decision 0038, round 4 (2026-10-23). */
+export const BODY_USER_IN_FLIGHT_MAX_BYTES = Math.max(
+  BODY_MAX_BYTES,
+  BODY_IN_FLIGHT_MAX_BYTES / 2
+);
+
+/** Sign-in memory receipt, 2026-10-23: 64 retained 64-KiB envelopes through
+ * parseJson + checkedSessionCreate cost 8,698,424 heap bytes for legal strings,
+ * 98,979,360 for wrong-kind object arrays (113,770,496 RSS bytes, 27.1x input).
+ * Allow 64x amplification and at most 1/16 of V8 heap, capped at 4 MiB raw
+ * (64 maximum bodies on the measured 4,192-MiB heap). Independent of KDF work;
+ * decision 0038 records the command, shapes and results. */
 export const SESSION_BODY_IN_FLIGHT_MAX_BYTES =
-  SESSION_BODY_MAX_BYTES * SIGN_IN_KDF_MAX_CONCURRENCY;
+  SESSION_BODY_MAX_BYTES *
+  Math.min(
+    64,
+    Math.floor(
+      getHeapStatistics().heap_size_limit / (64 * 16 * SESSION_BODY_MAX_BYTES)
+    )
+  );
 
 /** Upload rate budget: half the 1 Mbit/s minimum uplink in the UK broadband
  * universal-service specification (125,000 / 2 bytes/s), allowing protocol and
@@ -65,9 +83,15 @@ export const BODY_MIN_BYTES_PER_SECOND = 62_500;
  * https://www.rfc-editor.org/rfc/rfc6298.html (2026-10-23). */
 export const BODY_READ_GRACE_MS = 8000;
 
-/** Check once per initial 1-second TCP RTO (RFC 6298 §2.1); at most one
- * such interval beyond the progress allowance before an incomplete read fails. */
-const BODY_PROGRESS_INTERVAL_MS = 1000;
+/** Recent-progress/idle budget: 4 seconds covers RFC 6298's first 1+2-second
+ * retransmission waits with the next doubling (4 s) as the cutoff. After the
+ * initial grace, each rolling 4-second window must carry half a 1-Mbit/s
+ * uplink. Earlier bursts cannot pay for a later window; even during grace,
+ * four idle seconds fail. Check once per initial 1-second RTO, so observation
+ * adds at most one interval. Same RFC/uplink sources as above (2026-10-23). */
+export const BODY_PROGRESS_WINDOW_MS = 4000;
+export const BODY_IDLE_TIMEOUT_MS = BODY_PROGRESS_WINDOW_MS;
+export const BODY_PROGRESS_INTERVAL_MS = 1000;
 
 /** Temporary overload recovery advice: one second, exceeding the accepted
  * ~0.5 s maximum JSON pause; TMF630 v5 P1 §3.3.4 p.33 (decision 0038). */
@@ -127,6 +151,18 @@ interface BodyPolicy {
 }
 
 const policies = new WeakMap<object, BodyPolicy>();
+const bodyOwners = new WeakMap<object, string>();
+const userBodyBytes = new Map<string, number>();
+
+/**
+ * Bind a protected body's capacity to its authenticated user after SQL releases.
+ * The outer policy holds/releases the reservation through work and retries.
+ * @param request - Incoming request owned by BodyLimitsLayer.
+ * @param userId - Authenticated user's identity, shared across sessions.
+ */
+export const ownBody = (request: HttpServerRequest, userId: string): void => {
+  bodyOwners.set(request.source, userId);
+};
 
 const tooLarge = (limit: number, received: number | string) => {
   const message = `body_max_bytes=${limit}; received ${received} bytes. ${limit === 0 ? "This method takes no body." : "Reduce the request body."}`;
@@ -292,23 +328,48 @@ const readBody = Effect.fn("Http.readBody")(function* readBody(
   request: HttpServerRequest
 ) {
   const started = yield* Clock.currentTimeMillis;
+  let lastProgress = started;
+  let previousReceived = 0;
+  const samples = [{ at: started, received: 0 }];
 
   const progress = Effect.gen(function* bodyProgress() {
-    const elapsed = (yield* Clock.currentTimeMillis) - started;
+    const now = yield* Clock.currentTimeMillis;
+    const elapsed = now - started;
     const received = policies.get(request.source)?.received() ?? 0;
 
-    const required =
-      (Math.max(0, elapsed - BODY_READ_GRACE_MS) * BODY_MIN_BYTES_PER_SECOND) /
-      1000;
+    if (received > previousReceived) {
+      lastProgress = now;
+      previousReceived = received;
+    }
 
-    if (received < required) {
+    // Retain the sample at/before the window start and all later samples.
+    // This accounts for scheduler delays without borrowing old burst credit.
+    while (
+      samples[1] !== undefined &&
+      samples[1].at <= now - BODY_PROGRESS_WINDOW_MS
+    ) {
+      samples.shift();
+    }
+
+    const baseline = samples[0] ?? { at: started, received: 0 };
+    const windowMs = now - baseline.at;
+    const recent = received - baseline.received;
+    const required = (windowMs * BODY_MIN_BYTES_PER_SECOND) / 1000;
+    const idleMs = now - lastProgress;
+
+    if (
+      idleMs >= BODY_IDLE_TIMEOUT_MS ||
+      (elapsed >= BODY_READ_GRACE_MS && recent < required)
+    ) {
       return yield* new InvalidRequest({
         limit: BODY_MIN_BYTES_PER_SECOND,
-        message: `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_read_grace_ms=${BODY_READ_GRACE_MS}; received ${received} bytes in ${elapsed} ms; required at least ${Math.ceil(required)} bytes.`,
+        message: `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_read_grace_ms=${BODY_READ_GRACE_MS}; body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}; body_idle_timeout_ms=${BODY_IDLE_TIMEOUT_MS}; received ${received} bytes in ${elapsed} ms, ${recent} recent bytes in ${windowMs} ms (required ${Math.ceil(required)}); observed idle ${idleMs} ms. Keep sending within the idle timeout and meet the recent-progress rate, or reduce the body.`,
         parameter: "body_min_bytes_per_second",
         received,
       });
     }
+
+    samples.push({ at: now, received });
 
     return yield* Effect.void;
   }).pipe(
@@ -394,6 +455,23 @@ export const BodyLimitsLayer = HttpRouter.middleware(
             return undefined;
           }
 
+          const owner = bodyOwners.get(request.source);
+
+          const userReserved =
+            owner === undefined ? 0 : (userBodyBytes.get(owner) ?? 0);
+
+          if (
+            owner !== undefined &&
+            userReserved + asked > BODY_USER_IN_FLIGHT_MAX_BYTES
+          ) {
+            return new BodyCapacityExceeded({
+              limit: BODY_USER_IN_FLIGHT_MAX_BYTES,
+              message: `body_user_in_flight_max_bytes=${BODY_USER_IN_FLIGHT_MAX_BYTES}; user already holds ${userReserved} bytes; asked for ${asked} additional bytes. Retry after this user's capacity is released.`,
+              requested: asked,
+              retryAfterSeconds: BODY_RETRY_SECONDS,
+            });
+          }
+
           // takeIfAvailable never suspends in Effect 4.0.5 (Semaphore.ts).
           // Synchronous acquisition is required inside Node's readable callback.
           if (!Effect.runSync(capacity.takeIfAvailable(asked))) {
@@ -407,6 +485,10 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
           reserved += asked;
 
+          if (owner !== undefined) {
+            userBodyBytes.set(owner, userReserved + asked);
+          }
+
           return undefined;
         };
 
@@ -418,9 +500,21 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
         return yield* app.pipe(
           Effect.ensuring(
-            Effect.suspend(() =>
-              reserved > 0 ? capacity.release(reserved) : Effect.void
-            )
+            Effect.suspend(() => {
+              const owner = bodyOwners.get(request.source);
+
+              if (owner !== undefined && reserved > 0) {
+                const remaining = (userBodyBytes.get(owner) ?? 0) - reserved;
+
+                if (remaining === 0) {
+                  userBodyBytes.delete(owner);
+                } else {
+                  userBodyBytes.set(owner, remaining);
+                }
+              }
+
+              return reserved > 0 ? capacity.release(reserved) : Effect.void;
+            })
           )
         );
       });
