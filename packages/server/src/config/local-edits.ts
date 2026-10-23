@@ -26,7 +26,7 @@
 import type { Definition } from "@std/definitions/definition";
 import { effectiveJson } from "@std/definitions/effective-json";
 import type { DefinitionId } from "@std/definitions/ids";
-import { sameJson } from "@std/definitions/layers";
+import { overridesByRecord, sameJson } from "@std/definitions/layers";
 import type { LocalOverride } from "@std/definitions/layers";
 import type { Operation } from "@std/definitions/operation";
 import {
@@ -38,7 +38,8 @@ import type { DroppedOverride } from "@std/definitions/set-upgrade";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { ConfigEditRefused } from "./config-edit-refused.ts";
+import type { ConfigEditRefused } from "./config-edit-refused.ts";
+import { refused, notRecorded } from "./config-edit-refused.ts";
 import type { InstalledState } from "./installed-state.ts";
 import type { OverrideChanges } from "./override-store.ts";
 
@@ -68,6 +69,10 @@ interface PlannedOverride {
 /** The planner's state while it walks the operations. */
 interface Planning {
   readonly installed: InstalledState;
+  readonly storedOverrides: ReadonlyMap<
+    DefinitionId,
+    ReadonlyMap<string, LocalOverride>
+  >;
   readonly operations: Operation[];
   /** `recordId/property` to the planned override. */
   readonly overrides: Map<string, PlannedOverride>;
@@ -79,35 +84,19 @@ interface Planning {
 const overrideKey = (recordId: DefinitionId, property: string): string =>
   `${recordId}/${property}`;
 
-const refused = (
-  reason: ConfigEditRefused["reason"],
-  definitionId: string,
-  detail: string
-): ConfigEditRefused => new ConfigEditRefused({ definitionId, detail, reason });
-
-const notRecorded = (id: DefinitionId): ConfigEditRefused =>
-  refused(
-    "notRecorded",
-    id,
-    `The definition ${id} has no shipped base; run std upgrade to record its set.`
-  );
-
 /**
  * Whether an override of a property is stored.
  *
- * @param installed - The layer tables.
+ * @param planning - The plan and its indexed stored overrides.
  * @param recordId - The record.
  * @param property - The property.
  * @returns True when a row exists.
  */
 const isStored = (
-  installed: InstalledState,
+  planning: Planning,
   recordId: DefinitionId,
   property: string
-): boolean =>
-  installed.layers.overrides.some(
-    (entry) => entry.recordId === recordId && entry.property === property
-  );
+): boolean => planning.storedOverrides.get(recordId)?.has(property) === true;
 
 /**
  * Whether an override of a property exists now: planned in this change set,
@@ -126,7 +115,7 @@ const isOverridden = (
   const planned = planning.overrides.get(overrideKey(recordId, property));
 
   return planned === undefined
-    ? isStored(planning.installed, recordId, property)
+    ? isStored(planning, recordId, property)
     : planned.local !== null;
 };
 
@@ -336,6 +325,7 @@ export const planLocalEdits = Effect.fn("Config.planLocalEdits")(
       operations: [],
       overrides: new Map(),
       removeBases: [],
+      storedOverrides: overridesByRecord(installed.layers.overrides),
     };
 
     for (const operation of operations) {
@@ -348,7 +338,7 @@ export const planLocalEdits = Effect.fn("Config.planLocalEdits")(
     for (const { local, property, recordId } of planning.overrides.values()) {
       if (local !== null) {
         upserts.push(local);
-      } else if (isStored(installed, recordId, property)) {
+      } else if (isStored(planning, recordId, property)) {
         deletes.push({ property, recordId });
       }
     }

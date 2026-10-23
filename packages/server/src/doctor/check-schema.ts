@@ -9,6 +9,8 @@ import type { Enforcement } from "@std/definitions/definition";
 import { generatedName, parseGeneratedName } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 
+import { quoteIdent } from "../schema/sql-text.ts";
+import { liveColumn } from "./catalog-facts.ts";
 import type {
   CatalogFacts,
   ConstraintFact,
@@ -55,9 +57,7 @@ const columnFindings = (
   facts: TableFacts
 ): readonly Finding[] =>
   describedColumns(snapshot, described).flatMap((expected) => {
-    const column = facts.columns.find(
-      (entry) => entry.name === expected.name && !entry.dropped
-    );
+    const column = liveColumn(facts, expected.name);
 
     const where = `${described.key}.${expected.name}`;
 
@@ -193,8 +193,7 @@ const structureDifferences = (
  * @returns The printed name; a column missing from the table is quoted.
  */
 const quoteOf = (facts: TableFacts, column: string): string =>
-  facts.columns.find((entry) => entry.name === column && !entry.dropped)
-    ?.quoted ?? `"${column.replaceAll('"', '""')}"`;
+  liveColumn(facts, column)?.quoted ?? quoteIdent(column);
 
 const constraintFinding = (
   key: string,
@@ -600,9 +599,7 @@ export const checkInheritanceCatalog = (
       return [];
     }
 
-    const column = catalog
-      .get(described.key)
-      ?.columns.find((entry) => entry.name === "class_id" && !entry.dropped);
+    const column = liveColumn(catalog.get(described.key), "class_id");
 
     return column !== undefined && !column.notNull
       ? [

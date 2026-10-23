@@ -107,16 +107,5 @@ export const readInstalledState: Effect.Effect<
     };
   }
 
-  const catalog = yield* Catalog;
-  const { request } = yield* Transactions;
-
-  return yield* request(
-    Effect.gen(function* readAtOneRevision() {
-      const state = yield* RequestRevision;
-      const snapshot = yield* catalog.at(state);
-      const layers = yield* readLayerState;
-
-      return { layers, snapshot, state };
-    })
-  );
+  return yield* readCheckedInstalledState(() => Effect.void);
 });

@@ -40,7 +40,7 @@ import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { DIAGNOSTIC_LOCK_TIMEOUT } from "../sql/transaction.ts";
 import { Transactions } from "../sql/transactions.ts";
-import { readCatalogFacts, tableKey } from "./catalog-facts.ts";
+import { readCatalogFacts } from "./catalog-facts.ts";
 import {
   checkAuditUsers,
   checkChangeSets,
@@ -69,7 +69,7 @@ import {
   checkUnicodeVersion,
 } from "./check-server.ts";
 import { checkServiceIdentities } from "./check-service-identities.ts";
-import { migrationTables } from "./described.ts";
+import { migrationTables, tableKeyOf } from "./described.ts";
 import { exitCodeOf, finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
 import { checkPlatformTables } from "./platform-catalog.ts";
@@ -143,21 +143,17 @@ const allChecks = Effect.fn("Doctor.checks")(function* allChecks(
   }
 
   const { snapshot, layers } = yield* diagnosticState;
-  const catalog = yield* readCatalogFacts(stdSchemas(snapshot));
+  const schemas = stdSchemas(snapshot).filter((schema) => schema !== "core");
+
+  const catalog = new Map([
+    ...core,
+    ...(schemas.length === 0 ? [] : yield* readCatalogFacts(schemas)),
+  ]);
 
   const exists = (classId: string): boolean => {
-    const definition = snapshot.class(classId);
+    const key = tableKeyOf(snapshot, classId);
 
-    const namespace =
-      definition === undefined
-        ? undefined
-        : snapshot.namespace(definition.namespaceId);
-
-    return (
-      definition !== undefined &&
-      namespace !== undefined &&
-      catalog.has(tableKey(namespace.name, definition.name))
-    );
+    return key !== undefined && catalog.has(key);
   };
 
   return [

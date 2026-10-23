@@ -15,6 +15,7 @@
  */
 import { createHash } from "node:crypto";
 
+import { DEFINITION_KINDS } from "@std/definitions/definition";
 import type { DefinitionKind } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type {
@@ -25,7 +26,10 @@ import type {
 } from "@std/definitions/layers";
 import { EMPTY_LAYERS } from "@std/definitions/layers";
 import type { ResolvedSet } from "@std/definitions/set-resolve";
-import type { LayerWrites } from "@std/definitions/set-upgrade";
+import type {
+  DroppedOverride,
+  LayerWrites,
+} from "@std/definitions/set-upgrade";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { parseJson, stringifyJson } from "@std/values/json";
 import {
@@ -130,23 +134,9 @@ const decodeOverrides = decodeRows(
 );
 
 /** Config kinds understood by this release; newer kinds stay in storage. */
-export const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set([
-  "accessRule",
-  "class",
-  "field",
-  "grant",
-  "index",
-  "namespace",
-  "override",
-  "permission",
-  "role",
-  "subscription",
-  "choice",
-  "layout",
-  "savedFilter",
-  "recordRule",
-  "formRule",
-]);
+export const DEFINITION_KIND_NAMES: ReadonlySet<string> = new Set<string>(
+  DEFINITION_KINDS
+);
 
 /**
  * Narrows a stored kind to those understood by this release.
@@ -327,20 +317,32 @@ const writeBase = Effect.fn("Config.writeBase")(function* writeBase(
       kind = EXCLUDED.kind, shipped = EXCLUDED.shipped, hash = EXCLUDED.hash, removed = EXCLUDED.removed`;
 });
 
-const dropOverrides = Effect.fn("Config.dropOverrides")(function* dropOverrides(
-  drops: LayerWrites["dropOverrides"]
-) {
-  if (drops.length === 0) {
-    return;
+/**
+ * Deletes local overrides by record and property, for set loads and admin
+ * edits alike.
+ *
+ * @param deletes - The overrides to delete.
+ * @returns An effect in the caller's transaction.
+ */
+export const deleteOverrides = Effect.fn("Config.deleteOverrides")(
+  function* deleteOverrides(deletes: readonly DroppedOverride[]) {
+    if (deletes.length === 0) {
+      return;
+    }
+
+    const sql = yield* SqlClient.SqlClient;
+
+    const rows = deletes.map((entry): JsonObject => ({
+      property: entry.property,
+      recordId: entry.recordId,
+    }));
+
+    yield* sql`
+      DELETE FROM core."config_override" AS o
+      USING jsonb_array_elements(${stringifyJson(rows)}::jsonb) AS e
+      WHERE o.record_id = (e ->> 'recordId')::uuid AND o.property = e ->> 'property'`;
   }
-
-  const sql = yield* SqlClient.SqlClient;
-
-  yield* sql`
-    DELETE FROM core."config_override" AS o
-    USING jsonb_array_elements(${stringifyJson(drops.map((drop): JsonObject => ({ property: drop.property, recordId: drop.recordId })))}::jsonb) AS e
-    WHERE o.record_id = (e ->> 'recordId')::uuid AND o.property = e ->> 'property'`;
-});
+);
 
 /** What every conflict row of a change set shares. */
 interface ConflictContext {
@@ -454,7 +456,7 @@ export const writeSetLayers = Effect.fn("Config.writeSetLayers")(
     }
 
     yield* writeBase(writes.base, actorId);
-    yield* dropOverrides(writes.dropOverrides);
+    yield* deleteOverrides(writes.dropOverrides);
 
     const context: ConflictContext = {
       actorId,

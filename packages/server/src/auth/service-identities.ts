@@ -6,11 +6,10 @@ import {
   HELPDESK_CASCADE_ROLE_ID,
   HELPDESK_CASCADE_USER_ID,
 } from "@std/definitions/well-known";
-import { textKey } from "@std/values/fold";
 import { Effect } from "effect";
 
 import { readRows } from "../records/sql-run.ts";
-import { column, userTables } from "./user-table.ts";
+import { loginKey, userTables } from "./user-table.ts";
 
 /** Whether the installed role calls for provisioning and checking its service user.
  * @param snapshot - The installed definitions.
@@ -24,7 +23,7 @@ export const helpdeskIdentityRequired = (snapshot: ConfigSnapshot): boolean =>
  * @returns Whether its normalized case-folded value is reserved.
  */
 export const isReservedServiceLogin = (login: string): boolean =>
-  textKey(login.normalize("NFC").trim(), false) === HELPDESK_CASCADE_LOGIN;
+  loginKey(login) === HELPDESK_CASCADE_LOGIN;
 
 /** Finds a pre-existing user whose login must be renamed before provisioning.
  * @param snapshot - The installed definitions.
@@ -37,7 +36,7 @@ export const helpdeskIdentityCollision = Effect.fn(
 
   const [user] =
     yield* readRows(sql`SELECT u.id::text AS id FROM ${tables.user} u
-    WHERE casefold(${column("u", tables.login)} COLLATE pg_unicode_fast) = ${textParameter(HELPDESK_CASCADE_LOGIN, "text")}
+    WHERE casefold("u".${tables.login} COLLATE pg_unicode_fast) = ${textParameter(HELPDESK_CASCADE_LOGIN, "text")}
     AND u.id <> ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")} ORDER BY u.id LIMIT 1`);
 
   return user?.id ?? undefined;

@@ -47,7 +47,8 @@ import type {
 } from "../schema/change-set.ts";
 import { hygienic } from "../sql/errors.ts";
 import type { DatabaseError } from "../sql/errors.ts";
-import { ConfigEditRefused } from "./config-edit-refused.ts";
+import type { ConfigEditRefused } from "./config-edit-refused.ts";
+import { refused, notRecorded } from "./config-edit-refused.ts";
 import {
   readCheckedInstalledState,
   readInstalledState,
@@ -131,12 +132,6 @@ const versionConflict = (definition: Definition, expected: number) =>
       ),
     ],
   });
-
-const refused = (
-  reason: ConfigEditRefused["reason"],
-  definitionId: string | null,
-  detail: string
-): ConfigEditRefused => new ConfigEditRefused({ definitionId, detail, reason });
 
 /** A local change set: the admin's operations, before layer planning. */
 export interface LocalChangeSet {
@@ -237,11 +232,7 @@ const shippedRecord = Effect.fn("Config.shippedRecord")(function* shippedRecord(
   const base = installed.layers.base.get(id);
 
   if (base === undefined) {
-    return yield* refused(
-      "notRecorded",
-      id,
-      `The definition ${id} has no shipped base; run std upgrade to record its set.`
-    );
+    return yield* notRecorded(id);
   }
 
   return {

@@ -103,6 +103,18 @@ const reportFailure =
       Effect.andThen(setExitCode(EXIT_FAILURE))
     );
 
+const finishCommand =
+  (name: string) =>
+  <A, E extends { readonly message: string }, R>(
+    effect: Effect.Effect<A, E, R>
+  ) =>
+    effect.pipe(
+      Effect.matchEffect({
+        onFailure: reportFailure(name),
+        onSuccess: () => Effect.void,
+      })
+    );
+
 const status = (json: boolean) =>
   schemaStatus().pipe(
     Effect.flatMap((current) =>
@@ -111,10 +123,7 @@ const status = (json: boolean) =>
         : Console.log(formatStatus(current).join("\n"))
     ),
     Effect.provide(cliServices),
-    Effect.matchEffect({
-      onFailure: reportFailure("schema status"),
-      onSuccess: () => Effect.void,
-    })
+    finishCommand("schema status")
   );
 
 const resume = (changeSetId: string) =>
@@ -129,10 +138,7 @@ const resume = (changeSetId: string) =>
           ).pipe(Effect.andThen(setExitCode(EXIT_FAILURE)))
     ),
     Effect.provide(cliServices),
-    Effect.matchEffect({
-      onFailure: reportFailure("schema resume"),
-      onSuccess: () => Effect.void,
-    })
+    finishCommand("schema resume")
   );
 
 const abandon = (changeSetId: string) =>
@@ -143,10 +149,7 @@ const abandon = (changeSetId: string) =>
       )
     ),
     Effect.provide(cliServices),
-    Effect.matchEffect({
-      onFailure: reportFailure("schema abandon"),
-      onSuccess: () => Effect.void,
-    })
+    finishCommand("schema abandon")
   );
 
 /**
@@ -289,10 +292,7 @@ const upgrade = (args: UpgradeArguments) => {
       output.refused ? setExitCode(EXIT_FAILURE) : Effect.void
     ),
     Effect.provide(Layer.merge(cliServices, InstanceSettings.layer)),
-    Effect.matchEffect({
-      onFailure: reportFailure("upgrade"),
-      onSuccess: () => Effect.void,
-    })
+    finishCommand("upgrade")
   );
 };
 
@@ -305,10 +305,7 @@ const doctor = (json: boolean) =>
     ),
     Effect.flatMap((report) => setExitCode(report.exitCode)),
     Effect.provide(cliServices),
-    Effect.matchEffect({
-      onFailure: reportFailure("doctor"),
-      onSuccess: () => Effect.void,
-    })
+    finishCommand("doctor")
   );
 
 /** The administrator `std bootstrap-admin` creates, from the environment. */
@@ -335,33 +332,28 @@ const createAdmin = adminAccountConfig.pipe(
     )
   ),
   Effect.provide(Layer.merge(cliServices, InstanceSettings.layer)),
-  Effect.matchEffect({
-    onFailure: reportFailure("bootstrap-admin"),
-    onSuccess: () => Effect.void,
-  })
+  finishCommand("bootstrap-admin")
 );
+
+const launch = <A, E>(
+  name: string,
+  layer: Layer.Layer<A, E>
+): Effect.Effect<void> =>
+  Layer.launch(layer).pipe(
+    Effect.matchEffect({
+      onFailure: (error) =>
+        Console.error(`std ${name}: ${String(error)}`).pipe(
+          Effect.andThen(setExitCode(EXIT_FAILURE))
+        ),
+      onSuccess: () => Effect.void,
+    })
+  );
 
 /** `std serve`: runs the HTTP server until interrupted. */
-const serve: Effect.Effect<void> = Layer.launch(ServerLayer).pipe(
-  Effect.matchEffect({
-    onFailure: (failure) =>
-      Console.error(`std serve: ${String(failure)}`).pipe(
-        Effect.andThen(setExitCode(EXIT_FAILURE))
-      ),
-    onSuccess: () => Effect.void,
-  })
-);
+const serve = launch("serve", ServerLayer);
 
 /** `std worker`: runs the outbox worker until interrupted. */
-const worker: Effect.Effect<void> = Layer.launch(WorkerProcessLayer).pipe(
-  Effect.matchEffect({
-    onFailure: (failure) =>
-      Console.error(`std worker: ${String(failure)}`).pipe(
-        Effect.andThen(setExitCode(EXIT_FAILURE))
-      ),
-    onSuccess: () => Effect.void,
-  })
-);
+const worker = launch("worker", WorkerProcessLayer);
 
 const main = (args: readonly string[]): Effect.Effect<void> => {
   const [command, ...rest] = args;

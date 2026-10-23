@@ -122,12 +122,12 @@ const changeSetFinding = (
 };
 
 /** Step states that fit each change set state. */
-const STEP_STATES = {
-  abandoned: new Set(["done", "failed", "pending"]),
-  applying: new Set(["done", "failed", "pending", "running"]),
-  completed: new Set(["done"]),
-  needs_attention: new Set(["done", "failed", "pending"]),
-} satisfies Readonly<Record<string, ReadonlySet<string>>>;
+const STEP_STATES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["abandoned", new Set(["done", "failed", "pending"])],
+  ["applying", new Set(["done", "failed", "pending", "running"])],
+  ["completed", new Set(["done"])],
+  ["needs_attention", new Set(["done", "failed", "pending"])],
+]);
 
 /**
  * Whether a step's state fits its change set's state.
@@ -137,9 +137,7 @@ const STEP_STATES = {
  * @returns True when they fit.
  */
 const fits = (change: string, step: string): boolean =>
-  Object.entries(STEP_STATES).some(
-    ([state, steps]) => state === change && steps.has(step)
-  );
+  STEP_STATES.get(change)?.has(step) === true;
 
 const stepFinding = (
   row: {

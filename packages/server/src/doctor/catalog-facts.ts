@@ -165,17 +165,21 @@ export const tableKey = (schema: string, table: string): string =>
 
 const group = <T extends { readonly schema: string; readonly table: string }>(
   rows: readonly T[]
-): ReadonlyMap<string, readonly T[]> => {
-  const grouped = new Map<string, T[]>();
+): ReadonlyMap<string, readonly T[]> =>
+  Map.groupBy(rows, (row) => tableKey(row.schema, row.table));
 
-  for (const row of rows) {
-    const key = tableKey(row.schema, row.table);
-
-    grouped.set(key, [...(grouped.get(key) ?? []), row]);
-  }
-
-  return grouped;
-};
+/**
+ * Finds a live column in the table's catalog facts.
+ *
+ * @param facts - The table's facts, if present.
+ * @param name - The column name.
+ * @returns The column, excluding dropped attributes.
+ */
+export const liveColumn = (
+  facts: TableFacts | undefined,
+  name: string
+): ColumnFact | undefined =>
+  facts?.columns.find((entry) => entry.name === name && !entry.dropped);
 
 const keyColumns = (keys: string, relation: string): string =>
   `coalesce((SELECT json_agg(a.attname ORDER BY k.ord)

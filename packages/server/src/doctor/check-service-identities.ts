@@ -17,7 +17,7 @@ import {
   helpdeskIdentityCollision,
   helpdeskIdentityRequired,
 } from "../auth/service-identities.ts";
-import { column, userTables } from "../auth/user-table.ts";
+import { userTables } from "../auth/user-table.ts";
 import { readRows } from "../records/sql-run.ts";
 import { finding } from "./finding.ts";
 import type { Finding } from "./finding.ts";
@@ -110,17 +110,16 @@ export const checkServiceIdentities = Effect.fn(
 
   const tables = userTables(snapshot);
 
-  const users =
-    yield* readRows(sql`SELECT ${column("u", tables.active)}::text AS active,
-      ${column("u", tables.login)}::text AS login, ${column("u", tables.name)}::text AS name,
-      (${column("u", tables.password)} IS NOT NULL)::text AS has_password
+  const users = yield* readRows(sql`SELECT "u".${tables.active}::text AS active,
+      "u".${tables.login}::text AS login, "u".${tables.name}::text AS name,
+      ("u".${tables.password} IS NOT NULL)::text AS has_password
       FROM ${tables.user} u WHERE u.id = ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")}`);
 
   const assignments =
-    yield* readRows(sql`SELECT ${column("r", tables.userRoleUser)}::text AS user_id,
-      ${column("r", tables.userRoleRole)}::text AS role_id FROM ${tables.userRole} r
-      WHERE ${column("r", tables.userRoleUser)} = ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")}
-      OR ${column("r", tables.userRoleRole)} = ${textParameter(HELPDESK_CASCADE_ROLE_ID, "uuid")}`);
+    yield* readRows(sql`SELECT "r".${tables.userRoleUser}::text AS user_id,
+      "r".${tables.userRoleRole}::text AS role_id FROM ${tables.userRole} r
+      WHERE "r".${tables.userRoleUser} = ${textParameter(HELPDESK_CASCADE_USER_ID, "uuid")}
+      OR "r".${tables.userRoleRole} = ${textParameter(HELPDESK_CASCADE_ROLE_ID, "uuid")}`);
 
   const add = (code: string, message: string) =>
     findings.push(

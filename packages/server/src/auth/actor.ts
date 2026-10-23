@@ -10,7 +10,7 @@
  * user holds no role at all (Contracts 3.10).
  */
 import type { Caller } from "@std/access/rules";
-import { arrayParameter, rawSql, sql } from "@std/conditions/sql-fragment";
+import { arrayParameter, sql } from "@std/conditions/sql-fragment";
 import { compareIds } from "@std/definitions/ids";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -19,7 +19,6 @@ import { Context, Effect, Layer } from "effect";
 
 import { Catalog } from "../catalog/catalog.ts";
 import { readRows } from "../records/sql-run.ts";
-import { quoteIdent } from "../schema/sql-text.ts";
 import { userTables } from "./user-table.ts";
 
 /** Who acts: the user and the effective role IDs. */
@@ -71,10 +70,10 @@ export const readUserRoles = Effect.fn("Actor.readUserRoles")(
     const tables = userTables(snapshot);
 
     const rows = yield* readRows(
-      sql`SELECT "u"."id"::text AS "user_id", "u".${rawSql(quoteIdent(tables.active))}::text AS "active",
-  "ur".${rawSql(quoteIdent(tables.userRoleRole))}::text AS "role_id"
+      sql`SELECT "u"."id"::text AS "user_id", "u".${tables.active}::text AS "active",
+  "ur".${tables.userRoleRole}::text AS "role_id"
 FROM ${tables.user} AS "u"
-LEFT JOIN ${tables.userRole} AS "ur" ON "ur".${rawSql(quoteIdent(tables.userRoleUser))} = "u"."id"
+LEFT JOIN ${tables.userRole} AS "ur" ON "ur".${tables.userRoleUser} = "u"."id"
 WHERE "u"."id" = ANY(${arrayParameter(userIds, "uuid")})`
     );
 

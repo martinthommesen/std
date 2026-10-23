@@ -4,14 +4,13 @@
  * change entry). Used by the acme fixture and the demo. Production code
  * sets passwords through the save pipeline.
  */
-import { rawSql, sql, textParameter } from "@std/conditions/sql-fragment";
+import { sql, textParameter } from "@std/conditions/sql-fragment";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Plaintext } from "@std/values/write-only";
 import { Effect } from "effect";
 
 import { writeRows } from "../records/sql-run.ts";
-import { quoteIdent } from "../schema/sql-text.ts";
 import { hashPassword } from "./password.ts";
 import { userTables } from "./user-table.ts";
 
@@ -33,7 +32,7 @@ export const setPasswordForDevelopment = Effect.fn("DevPassword.set")(
     const hash = yield* hashPassword(new Plaintext(password));
 
     yield* writeRows(
-      sql`UPDATE ${tables.user} SET ${rawSql(quoteIdent(tables.password))} = ${textParameter(hash, "text")}
+      sql`UPDATE ${tables.user} SET ${tables.password} = ${textParameter(hash, "text")}
 WHERE "id" = ${textParameter(userId, "uuid")}`
     );
   }
