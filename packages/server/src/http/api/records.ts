@@ -250,7 +250,7 @@ const linkTo = (
 };
 
 /** What a list's `Link` header is built from. */
-interface PageLinks {
+export interface PageLinks {
   readonly origin: string;
   readonly request: HttpServerRequest;
   readonly query: QueryParameters;
@@ -270,7 +270,7 @@ interface PageLinks {
  * @param links - The page and how it was asked for.
  * @returns The header value.
  */
-const linkHeader = (links: PageLinks): string => {
+export const linkHeader = (links: PageLinks): string => {
   const { limit, offset, origin, page, query, request } = links;
 
   const to = (changes: Readonly<Record<string, string>>) =>
