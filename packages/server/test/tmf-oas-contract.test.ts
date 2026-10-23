@@ -9,6 +9,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { TmfOperation } from "@std/tmf/mapping";
 import { tmfStatusFor } from "@std/tmf/status";
+import { TMF621_API } from "@std/tmf/tmf621";
 import type { JsonValue } from "@std/values/json-value";
 import { Cause, Effect, Exit } from "effect";
 
@@ -23,12 +24,21 @@ import {
 } from "../../testing/src/tmf-oas-contract.ts";
 import type { TmfExchange } from "../../testing/src/tmf-oas-contract.ts";
 import { asObject, textOf, apiCallers } from "./api-support.ts";
+import { itilLayer } from "./itil-support.ts";
 import {
   FIXTURE_BASE,
   FIXTURE_RESOURCE,
   FIXTURE_TICKETS,
   tmfTestLayer,
 } from "./tmf-fixture.ts";
+import {
+  bodyOf,
+  JSON_PATCH,
+  SPECIFICATIONS as TMF621_SPECIFICATIONS,
+  TICKETS as TMF621_TICKETS,
+  ticketBody,
+  tmf621As,
+} from "./tmf621-support.ts";
 
 const CONTRACT = contractAt("TMF621", FIXTURE_BASE);
 const TICKET_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
@@ -360,6 +370,108 @@ describe("tmf-oas-contract", () => {
           assert.strictEqual(listed.status, 200);
           assert.isArray(
             yield* Effect.promise(async () => await listed.json())
+          );
+        })
+    );
+  });
+});
+
+describe("tmf-oas-contract-tmf621", () => {
+  it("the shipped TMF621 mapping declares exactly its pinned document's statuses for both resources and the hubs", () => {
+    const pinned = pinnedContracts().find(
+      (contract) => contract.spec === "TMF621"
+    );
+
+    assert.strictEqual(pinned?.basePath, TMF621_API.basePath);
+
+    const file = pinned?.file ?? "";
+
+    for (const resource of TMF621_API.resources) {
+      for (const [operation, method, template] of OPERATIONS) {
+        assert.deepStrictEqual(
+          resource.declaredStatuses[operation],
+          declaredStatusesOf(
+            file,
+            method,
+            template.replace("/troubleTicket", `/${resource.name}`)
+          ),
+          `${resource.name} ${operation}`
+        );
+      }
+    }
+
+    assert.deepStrictEqual(TMF621_API.hubStatuses, {
+      create: declaredStatusesOf(file, "post", "/hub"),
+      delete: declaredStatusesOf(file, "delete", "/hub/{id}"),
+      retrieve: declaredStatusesOf(file, "get", "/hub/{id}"),
+    });
+  });
+
+  layer(itilLayer, { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "every TMF621 operation's success and error responses validate against the pinned document",
+      () =>
+        Effect.gen(function* everyTmf621Response() {
+          const http = yield* TestHttpClient;
+          const admin = yield* tmf621As("admin");
+          const agent = yield* tmf621As("agent");
+
+          // The client fails the test on any response the document does
+          // not declare or whose body is off its schema.
+          const created = yield* admin.post(
+            TMF621_TICKETS,
+            ticketBody({ note: [{ text: "first" }] })
+          );
+
+          const id = textOf(bodyOf(created).id);
+          const item = `${TMF621_TICKETS}/${id}`;
+
+          const specification = yield* admin.post(TMF621_SPECIFICATIONS, {
+            "@type": "TroubleTicketSpecification",
+            name: "Contract sweep",
+          });
+
+          const specificationItem = `${TMF621_SPECIFICATIONS}/${textOf(bodyOf(specification).id)}`;
+
+          const statuses = [
+            created.status,
+            specification.status,
+            (yield* admin.get(TMF621_TICKETS)).status,
+            (yield* admin.get(`${TMF621_TICKETS}?fields=severity&limit=2`))
+              .status,
+            (yield* admin.get(item)).status,
+            (yield* admin.patch(item, { status: "inProgress" })).status,
+            (yield* admin.patch(
+              item,
+              [{ op: "replace", path: "/name", value: "swept" }],
+              { contentType: JSON_PATCH }
+            )).status,
+            (yield* admin.get(TMF621_SPECIFICATIONS)).status,
+            (yield* admin.get(specificationItem)).status,
+            (yield* admin.patch(specificationItem, {
+              lifecycleStatus: "active",
+            })).status,
+            // Errors: 400, 401, 403, 404, 409, 501.
+            (yield* admin.post(TMF621_TICKETS, { "@type": "TroubleTicket" }))
+              .status,
+            (yield* admin.get(`${TMF621_TICKETS}?status.gt=x`)).status,
+            (yield* http.get(TMF621_TICKETS)).status,
+            (yield* agent.del(item)).status,
+            (yield* admin.get(`${TMF621_TICKETS}/${TICKET_ID}`)).status,
+            (yield* admin.patch(item, { name: "x" }, { ifMatch: '"1"' }))
+              .status,
+            (yield* admin.del(item, { ifMatch: '"1"' })).status,
+            (yield* admin.get(`${TMF621_TICKETS}?filter=$.x`)).status,
+            (yield* admin.del(item)).status,
+            (yield* admin.del(specificationItem)).status,
+          ];
+
+          assert.deepStrictEqual(
+            statuses,
+            [
+              201, 201, 200, 200, 200, 200, 200, 200, 200, 200, 400, 400, 401,
+              403, 404, 409, 409, 501, 204, 204,
+            ]
           );
         })
     );
