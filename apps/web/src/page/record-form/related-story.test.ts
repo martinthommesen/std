@@ -226,6 +226,61 @@ const withEntries = (field: string | null): MetaTable => ({
 });
 
 describe("a related list that is removed and made again (review round 3)", () => {
+  it("allocates IDs only for new entries while keeping metadata order", () => {
+    const entries = [
+      {
+        field: "ticket",
+        fieldLabel: "Ticket",
+        label: "Notes",
+        table: "help.note",
+      },
+      {
+        field: "parent_ticket",
+        fieldLabel: "Parent",
+        label: "Tasks",
+        table: "help.task",
+      },
+      {
+        field: "ticket",
+        fieldLabel: "Ticket",
+        label: "Links",
+        table: "help.link",
+      },
+    ];
+
+    const synchronized = after(
+      onFirstPage,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: { ...ticketWithRelated, relatedLists: entries },
+      })
+    );
+
+    expect(synchronized.relatedLists.map((list) => list.id)).toStrictEqual([
+      2,
+      LIST,
+      3,
+    ]);
+    expect(synchronized.relatedLists.map((list) => list.entry)).toStrictEqual(
+      entries
+    );
+    expect(synchronized.nextRelatedListId).toBe(4);
+    expect(listOf(synchronized).isOpen).toBeTruthy();
+
+    const reordered = after(
+      synchronized,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: { ...ticketWithRelated, relatedLists: entries.toReversed() },
+      })
+    );
+
+    expect({
+      ids: reordered.relatedLists.map((list) => list.id),
+      nextId: reordered.nextRelatedListId,
+    }).toStrictEqual({ ids: [3, LIST, 2], nextId: 4 });
+  });
+
   it("is a new list: an answer meant for the removed one never reaches it", () => {
     const remade = after(
       onFirstPage,

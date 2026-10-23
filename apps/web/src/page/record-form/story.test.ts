@@ -1258,6 +1258,79 @@ describe("rereads", () => {
 });
 
 describe("the reference picker", () => {
+  it("a target metadata answer only resumes searches for that target", () => {
+    const secondReference = TICKET_FIELDS.due;
+
+    const withTwoTargets = modifyFields(ticketTable, {
+      fields: (fields) =>
+        fields.map((field) =>
+          field.id === secondReference
+            ? modifyFields(field, {
+                type: () => ({ kind: "reference", target: "help.location" }),
+              })
+            : field
+        ),
+    });
+
+    const waiting = after(
+      creating.model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: withTwoTargets,
+      }),
+      Message.GotPickerMessage({
+        fieldId: TICKET_FIELDS.assignee,
+        message: Combobox.Message.PressedToggleButton({
+          isClearable: false,
+          restingInputValue: "",
+        }),
+      }),
+      Message.GotPickerMessage({
+        fieldId: secondReference,
+        message: Combobox.Message.PressedToggleButton({
+          isClearable: false,
+          restingInputValue: "",
+        }),
+      })
+    );
+
+    const users = update(
+      waiting,
+      Message.SucceededLoadTarget({ request: 1, table: userTable })
+    );
+
+    const locations = update(
+      users.model,
+      Message.SucceededLoadTarget({
+        request: 2,
+        table: modifyFields(userTable, { name: () => "help.location" }),
+      })
+    );
+
+    expect(users.commands).toHaveLength(1);
+    expect(locations.commands).toHaveLength(1);
+    expect(locations.model.pickers[TICKET_FIELDS.assignee]?.generation).toBe(2);
+    expect(locations.model.pickers[secondReference]?.generation).toBe(2);
+
+    const answered = update(
+      locations.model,
+      Message.SucceededSearchTargets({
+        cursor: Option.none(),
+        fieldId: TICKET_FIELDS.assignee,
+        generation: 2,
+        items: [{ id: USERS.sam, label: "Sam Agent" }],
+        maybeNextCursor: Option.none(),
+        maybeRevision: Option.none(),
+      })
+    );
+
+    expect(
+      AsyncData.getData(
+        present(answered.model.pickers[TICKET_FIELDS.assignee]).results
+      )
+    ).toStrictEqual(Option.some([{ id: USERS.sam, label: "Sam Agent" }]));
+  });
+
   it("says it cannot search when the target's metadata does not load", () => {
     const searching = after(
       editing.model,
