@@ -1090,23 +1090,26 @@ select.control-input {
   overflow-x: auto;
 }
 
-/* Wide enough for the table to fit: no scroll container, so the header
-   row can stick under the app header. 64 rem is the width where the
-   sidebar and a seven-column helpdesk list fit side by side
-   (screenshots/after, 1024 and 1440 px wide). */
-@media (width >= 64rem) {
-  .table-scroll {
-    overflow: visible;
-  }
+/* The list's table scrolls in its own area, at most the window's height
+   below the app header, and its header row sticks to the top of that
+   area: it stays visible at every width, and a table wider than the page
+   (the incident list is 853 px wide, wider than its 734 px panel at a
+   1024 px window; measured with Playwright, 2026-10-23) scrolls sideways
+   inside the panel, never the page. */
+.list-panel .table-scroll {
+  max-height: calc(100dvh - var(--header-height) - var(--space-4));
+  overflow: auto;
 }
 
-/* Narrower, the table scrolls sideways in its own container, which a
-   sticky header row would stick to, not to the window: it stays put. */
-@media (width < 64rem) {
-  .table-scroll .records thead th {
-    position: static;
-  }
+.list-panel .records thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
 
+/* Narrow screens (the 48 rem of the navigation drawer, below): the saved
+   filters scroll on one line instead of stacking. */
+@media (width < 48rem) {
   .saved-filters {
     flex-wrap: nowrap;
     max-width: 100%;
@@ -1139,9 +1142,6 @@ select.control-input {
 }
 
 .records thead th {
-  position: sticky;
-  top: var(--header-height);
-  z-index: 5;
   height: 2.25rem;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -1274,10 +1274,6 @@ th[aria-sort="descending"] .sort-icon {
 .records-compact th,
 .records-compact td {
   padding: var(--space-1) var(--space-2);
-}
-
-.records-compact thead th {
-  position: static;
 }
 
 /* Filter builder */
@@ -1638,6 +1634,13 @@ th[aria-sort="descending"] .sort-icon {
 .action-status[data-state="failed"] {
   color: var(--color-danger);
   font-weight: var(--weight-medium);
+}
+
+/* "Show the reason" reads as the way to the alert, not as plain text. */
+.action-status .button-ghost {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
 }
 
 .form-actions {
