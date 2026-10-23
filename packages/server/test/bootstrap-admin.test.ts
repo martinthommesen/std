@@ -18,6 +18,7 @@ import {
   bootstrapAdmin,
 } from "../src/auth/bootstrap-admin.ts";
 import { signIn } from "../src/auth/sessions.ts";
+import { SignInAdmission } from "../src/auth/sign-in-limits.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { InstanceSettings } from "../src/config/instance-settings.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -72,7 +73,8 @@ const recordEntries = (recordId: string) =>
   ).pipe(Effect.map(([count]) => Number(count)));
 
 const testLayer = InstanceSettings.layer.pipe(
-  Layer.provideMerge(schemaTestLayer())
+  Layer.provideMerge(schemaTestLayer()),
+  Layer.provideMerge(SignInAdmission.layer)
 );
 
 describe("bootstrap-admin", () => {

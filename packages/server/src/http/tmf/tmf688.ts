@@ -55,6 +55,7 @@ import { jsonAnswer } from "../api/records.ts";
 import { jsonBodyOf, mediaTypeOf, withSession } from "../api/request.ts";
 import { originOf } from "../api/resource.ts";
 import { isTmfFailure, tmfErrorResponse } from "../api/tmf-error.ts";
+import { textBodyOf } from "../body-limits.ts";
 import { hubRateLimitResponse } from "../hubs.ts";
 import { expectedVersionOf } from "../record-writes.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
@@ -127,8 +128,12 @@ const errorResponse = (
     return Effect.succeed(hubRateLimitResponse());
   }
 
-  if (failure._tag === "BodyTooLarge") {
-    // E30 is proposed: preserve the byte receipt required by TMF630's 413.
+  if (
+    failure._tag === "BodyTooLarge" ||
+    failure._tag === "BodyCapacityExceeded" ||
+    (failure instanceof InvalidRequest && failure.limit === 0)
+  ) {
+    // E30/E31 remain proposed: preserve TMF630 body-size/capacity receipts.
     return Effect.succeed(tmfErrorResponse(failure));
   }
 
@@ -740,6 +745,10 @@ const handleRequest = Effect.fn("Tmf688.request")(function* handleRequest(
       message: "The request body must use application/json.",
       parameter: "Content-Type",
     });
+  }
+
+  if (request.method !== "POST") {
+    yield* textBodyOf(request);
   }
 
   const body = request.method === "POST" ? yield* jsonBodyOf(request) : null;

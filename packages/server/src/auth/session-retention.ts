@@ -1,5 +1,5 @@
 import { sql, textParameter } from "@std/conditions/sql-fragment";
-import { Effect, Layer, Schedule } from "effect";
+import { Cause, Effect, Layer, Schedule } from "effect";
 
 import { writeRows } from "../records/sql-run.ts";
 import { Transactions } from "../sql/transactions.ts";
@@ -14,8 +14,8 @@ import { Transactions } from "../sql/transactions.ts";
 export const SESSION_CLEANUP_BATCH = 256;
 
 /**
- * [judgment] One pass/minute keeps idle installs tidy; sign-in also runs a pass,
- * so reclaim capacity grows with issuance (up to 256 deletions per new session).
+ * [judgment] One pass/minute keeps idle installs tidy. Cleanup owns a separate
+ * maintenance transaction; sign-in never holds deletion locks across its KDF.
  * The measured batch cost in decision 0038 leaves ample idle time per minute.
  */
 export const SESSION_CLEANUP_PERIOD = "1 minute";
@@ -50,10 +50,13 @@ export const SessionRetentionLayer = Layer.effectDiscard(
   Effect.gen(function* SessionRetentionLayer() {
     const transactions = yield* Transactions;
     yield* transactions.maintenance(deleteExpiredSessions()).pipe(
-      Effect.catchTag("DatabaseError", (error) =>
-        Effect.logError(
-          `Session cleanup failed; retrying next pass (SQLSTATE ${error.sqlState})`
-        )
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logError(
+            "Session cleanup failed; retrying next maintenance pass",
+            cause
+          )
       ),
       Effect.repeat(Schedule.spaced(SESSION_CLEANUP_PERIOD)),
       Effect.forkScoped

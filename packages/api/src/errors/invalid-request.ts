@@ -3,13 +3,18 @@
  */
 import { Schema } from "effect";
 
-/** A malformed query parameter (`limit`, `sort`, `fields`, `count`, ...). */
+/** A malformed request parameter or body; forbidden bodies carry byte details. */
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory, not an Error constructor
 export class InvalidRequest extends Schema.TaggedError<
   InvalidRequest,
   { readonly brand: unique symbol }
 >()(
   "InvalidRequest",
-  { message: Schema.String, parameter: Schema.String },
+  {
+    limit: Schema.optionalKey(Schema.Finite),
+    message: Schema.String,
+    parameter: Schema.String,
+    received: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.String])),
+  },
   { httpApiStatus: 400 }
 ) {}

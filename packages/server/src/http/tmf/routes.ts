@@ -39,7 +39,12 @@ import type { WriteOnlyValues } from "../../records/write-only-values.ts";
 import { Transactions } from "../../sql/transactions.ts";
 import type { TransactionsApi } from "../../sql/transactions.ts";
 import { getAndHead, withoutBody } from "../api/methods.ts";
-import { jsonBodyOf, withSession } from "../api/request.ts";
+import {
+  jsonBodyOf,
+  withSession,
+  readAuthenticatedBody,
+  declaresBody,
+} from "../api/request.ts";
 import { originOf } from "../api/resource.ts";
 import { hubRoutesLayer } from "../hubs.ts";
 import { asActor, inRequestTransaction } from "../request-scope.ts";
@@ -178,12 +183,24 @@ const routeWork =
           stated: yield* parseRequestRevision(request),
         };
 
-        return yield* inSession(
-          environment,
+        return yield* withSession(
           request,
-          work(input, params.id ?? "").pipe(
-            withTmfFieldNames(mapped.resource.attributes)
-          )
+          Effect.gen(function* preparedRequest() {
+            if (
+              ["create", "patch", "delete"].includes(operation) ||
+              declaresBody(request)
+            ) {
+              yield* readAuthenticatedBody(environment.transactions, request);
+            }
+
+            return yield* inSession(
+              environment,
+              request,
+              work(input, params.id ?? "").pipe(
+                withTmfFieldNames(mapped.resource.attributes)
+              )
+            );
+          })
         );
       }),
       mapped.resource.declaredStatuses[operation]

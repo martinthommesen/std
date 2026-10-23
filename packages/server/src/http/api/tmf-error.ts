@@ -31,6 +31,8 @@ import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Predicate } from "effect";
 import { HttpServerResponse } from "effect/http";
 
+import { SIGN_IN_RETRY_SECONDS } from "../../auth/sign-in-limits.ts";
+
 /**
  * The status of a stale If-Match (VersionConflict): 412 Precondition
  * Failed (Martin, 2026-10-22, M2). /api/v1 keeps 409.
@@ -42,6 +44,10 @@ const ERRORS = {
   AggregateNotSettled: [
     422,
     "The aggregates this write changed did not settle",
+  ],
+  BodyCapacityExceeded: [
+    503,
+    "The process request-body budget is temporarily exhausted",
   ],
   BodyTooLarge: [413, "The request body exceeds the server byte limit"],
   DefinitionInvalid: [422, "The definitions are invalid; nothing was applied"],
@@ -172,6 +178,7 @@ const ownDetails = (failure: TaggedFailure): JsonObject =>
 const OWN_MESSAGE: ReadonlySet<string> = new Set([
   "InvalidRequest",
   "BodyTooLarge",
+  "BodyCapacityExceeded",
   "SignInThrottled",
   "NotAllowed",
   "SubscriptionNotServed",
@@ -239,10 +246,17 @@ export const headersOf = (
 
   // Same one-minute minimum retry as the source window (auth/sign-in-limits).
   if (tag === "SignInThrottled") {
-    headers.set(RETRY_AFTER_HEADER, "60");
+    headers.set(RETRY_AFTER_HEADER, String(SIGN_IN_RETRY_SECONDS));
   }
 
-  if (tag === "BodyTooLarge") {
+  const forbiddenBody =
+    tag === "InvalidRequest" && body.parameter === "body" && body.limit === 0;
+
+  if (
+    tag === "BodyTooLarge" ||
+    tag === "BodyCapacityExceeded" ||
+    forbiddenBody
+  ) {
     headers.set("connection", "close");
   }
 

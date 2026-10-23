@@ -38,11 +38,13 @@ import { quoteIdent } from "../schema/sql-text.ts";
 import { effectiveRoles } from "./actor.ts";
 import type { ActingUser } from "./actor.ts";
 import { verifyPassword } from "./password.ts";
+import { ACTIVE_SESSION_LIMIT } from "./session-retention.ts";
 import {
-  ACTIVE_SESSION_LIMIT,
-  deleteExpiredSessions,
-} from "./session-retention.ts";
-import { admitSignIn, failSignIn, resetSignIn } from "./sign-in-limits.ts";
+  admitSignIn,
+  failSignIn,
+  resetSignIn,
+  SignInAdmission,
+} from "./sign-in-limits.ts";
 import { userTables } from "./user-table.ts";
 
 /** How long a session lasts. [judgment] */
@@ -111,7 +113,7 @@ const tokenHashParameter = (token: string) =>
 /**
  * Signs a user in, inside a request transaction. Commit credential/throttle
  * refusals as results so their counters persist; other failures must roll back.
- * HTTP admission owns native-work completion across caller interruption.
+ * The HTTP caller protects verification and counter commits across interruption.
  *
  * @param snapshot - The configuration (where users are stored).
  * @param login - The login as typed.
@@ -125,12 +127,11 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
   password: Plaintext,
   source: string
 ) {
-  yield* deleteExpiredSessions();
   const failures = yield* admitSignIn(login, source);
   const tables = userTables(snapshot);
   const key = textKey(login.normalize("NFC").trim(), false);
 
-  // FOR UPDATE serializes issuance and conflicts with the UPDATE that deactivates the user: a
+  // FOR NO KEY UPDATE serializes issuance and conflicts with the UPDATE that deactivates the user: a
   // concurrent deactivation either commits first (the row is re-read and
   // `active` is false) or waits for this sign-in to commit (its trigger then
   // deletes the new session). No session survives a deactivation.
@@ -139,10 +140,12 @@ export const signIn = Effect.fn("Sessions.signIn")(function* signIn(
   "u".${rawSql(quoteIdent(tables.active))}::text AS "active"
 FROM ${tables.user} AS "u"
 WHERE casefold(("u".${rawSql(quoteIdent(tables.login))}) COLLATE pg_unicode_fast) = ${textParameter(key, "text")}
-FOR UPDATE OF "u"`
+FOR NO KEY UPDATE OF "u"`
   );
 
-  const verified = yield* verifyPassword(password, user?.password ?? null);
+  const verified = yield* (yield* SignInAdmission).verify(
+    verifyPassword(password, user?.password ?? null)
+  );
 
   const userId = user?.id ?? null;
   const mayActOverHttp = userId !== null && !SERVICE_USER_IDS.has(userId);

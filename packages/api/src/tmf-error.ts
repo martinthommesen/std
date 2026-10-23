@@ -46,6 +46,7 @@ const tagError = <const Tag extends string>(tag: Tag) =>
 /** The error subtype of each tag, by tag. */
 export const TmfErrorSubtypes = {
   AggregateNotSettled: tagError("AggregateNotSettled"),
+  BodyCapacityExceeded: tagError("BodyCapacityExceeded"),
   BodyTooLarge: tagError("BodyTooLarge"),
   DefinitionInvalid: tagError("DefinitionInvalid"),
   DefinitionProtected: tagError("DefinitionProtected"),
@@ -183,6 +184,7 @@ export const NotImplementedError = subtypes.NotImplemented.pipe(
 
 /** `503`: schema change in progress. */
 export const UnavailableError = Schema.Union([
+  subtypes.BodyCapacityExceeded,
   subtypes.SchemaBusy,
   subtypes.SchemaLockTimeout,
 ]).pipe(HttpApiSchema.status(503));

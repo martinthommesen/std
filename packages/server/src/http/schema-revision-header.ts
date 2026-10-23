@@ -49,7 +49,7 @@ export const recordServedRevision = (
 export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
   Effect.gen(function* schemaRevisionHeader() {
     const { request: inRequest } = yield* Transactions;
-    const config = yield* HttpRouter.RouterConfig;
+    const classify = apiKindOf(yield* HttpRouter.RouterConfig);
 
     const current = inRequest(
       Effect.gen(function* currentRevision() {
@@ -61,7 +61,7 @@ export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
         // The web app's files (`web-app.ts`) are not API responses: no
         // header, and no transaction per file.
-        apiKindOf(request.url, config) === undefined
+        classify(request.url) === undefined
           ? Effect.succeed(response)
           : Effect.map(
               Effect.suspend(() => {

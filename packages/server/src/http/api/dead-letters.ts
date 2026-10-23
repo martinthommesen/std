@@ -45,7 +45,13 @@ import {
   savedAnswer,
   writeFailures,
 } from "./records.ts";
-import { jsonBodyOf, queryOf, withSession } from "./request.ts";
+import {
+  jsonBodyOf,
+  queryOf,
+  withSession,
+  readAuthenticatedBody,
+  declaresBody,
+} from "./request.ts";
 import { API_PREFIX, originOf } from "./resource.ts";
 
 interface PageHeaders {
@@ -134,6 +140,10 @@ const inDeadRequest = Effect.fn("DeadLetters.request")(function* inDeadRequest<
 >(request: HttpServerRequest, work: Work<E, R>) {
   const stated = yield* parseRequestRevision(request);
   const origin = yield* originOf(request);
+
+  if (request.method === "POST" || declaresBody(request)) {
+    yield* readAuthenticatedBody(yield* Transactions, request);
+  }
 
   return yield* inRequestTransaction(
     yield* Transactions,

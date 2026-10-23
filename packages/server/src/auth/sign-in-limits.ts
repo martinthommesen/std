@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 
 import { SignInThrottled } from "@std/api/errors/sign-in-throttled";
 import { sql, textParameter } from "@std/conditions/sql-fragment";
@@ -55,7 +56,7 @@ export const SIGN_IN_KDF_QUEUE = 4;
 
 const refused = () =>
   new SignInThrottled({
-    message: `Sign-in limits: consecutive_failures=${SIGN_IN_FAILURE_CEILING}; quiet_window_seconds=${SIGN_IN_OBSERVATION_SECONDS} (delay after ${SIGN_IN_FAILURE_GRACE}, ${SIGN_IN_DELAY_SECONDS}..${SIGN_IN_MAX_DELAY_SECONDS} seconds); source_attempts=${SIGN_IN_SOURCE_ATTEMPTS}/${SIGN_IN_RETRY_SECONDS}s; kdf_active<=${SIGN_IN_KDF_MAX_CONCURRENCY}, kdf_queue=${SIGN_IN_KDF_QUEUE}. Asked for one additional sign-in attempt while at least one limit or cooldown is active. Retry later.`,
+    message: `Sign-in limits: consecutive_failures=${SIGN_IN_FAILURE_CEILING}; quiet_window_seconds=${SIGN_IN_OBSERVATION_SECONDS} (delay after ${SIGN_IN_FAILURE_GRACE}, ${SIGN_IN_DELAY_SECONDS}..${SIGN_IN_MAX_DELAY_SECONDS} seconds); source_in_flight=1; source_attempts=${SIGN_IN_SOURCE_ATTEMPTS}/${SIGN_IN_RETRY_SECONDS}s; kdf_active<=${SIGN_IN_KDF_MAX_CONCURRENCY}, kdf_queue=${SIGN_IN_KDF_QUEUE}. Asked for one additional sign-in attempt while at least one limit or cooldown is active. Retry later.`,
   });
 
 /**
@@ -67,6 +68,51 @@ export const signInKey = (login: string): string =>
   createHash("sha256")
     .update(textKey(login.normalize("NFC").trim(), false))
     .digest("hex");
+
+/**
+ * Socket-source key; IPv6 privacy addresses in one subnet share a budget.
+ * RFC 6177 §§2,5 treats /64 as one subnet and recommends multiple subnets
+ * per end site: https://www.rfc-editor.org/rfc/rfc6177.html (2026-10-23).
+ * IPv4-mapped sockets share their IPv4 key, never a second budget.
+ * @param address - Socket address, never a forwarding header.
+ * @returns Canonical IPv4 or IPv6 /64 source.
+ */
+export const signInSource = (address: string): string => {
+  if (isIP(address) !== 6) {
+    return address;
+  }
+
+  const canonical = new URL(`http://[${address.split("%")[0]}]`).hostname.slice(
+    1,
+    -1
+  );
+
+  const [left = "", right = ""] = canonical.split("::");
+  const start = left === "" ? [] : left.split(":");
+  const end = right === "" ? [] : right.split(":");
+
+  const groups = canonical.includes("::")
+    ? [
+        ...start,
+        ...Array.from({ length: 8 - start.length - end.length }, () => "0"),
+        ...end,
+      ]
+    : start;
+
+  const words = groups.map((group) => Number.parseInt(group, 16));
+
+  if (words.slice(0, 5).every((word) => word === 0) && words[5] === 65_535) {
+    const high = words[6] ?? 0;
+    const low = words[7] ?? 0;
+
+    return `${Math.floor(high / 256)}.${high % 256}.${Math.floor(low / 256)}.${low % 256}`;
+  }
+
+  return `${words
+    .slice(0, 4)
+    .map((word) => word.toString(16))
+    .join(":")}::/64`;
+};
 
 /**
  * Reserve source capacity and lock the login's persistent counter in the
@@ -163,6 +209,10 @@ export class SignInAdmission extends Context.Service<
   SignInAdmission,
   {
     readonly run: <A, E, R>(
+      source: string,
+      effect: Effect.Effect<A, E, R>
+    ) => Effect.Effect<A, E | SignInThrottled, R>;
+    readonly verify: <A, E, R>(
       effect: Effect.Effect<A, E, R>
     ) => Effect.Effect<A, E | SignInThrottled, R>;
   }
@@ -181,7 +231,7 @@ export class SignInAdmission extends Context.Service<
       const workers = yield* Semaphore.make(concurrency);
       const capacity = yield* Semaphore.make(concurrency + SIGN_IN_KDF_QUEUE);
 
-      const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      const verify = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.gen(function* admittedWork() {
           const result = yield* capacity.withPermitsIfAvailable(1)(
             workers.withPermits(1)(Effect.uninterruptible(effect))
@@ -190,7 +240,28 @@ export class SignInAdmission extends Context.Service<
           return Option.isSome(result) ? result.value : yield* refused();
         });
 
-      return SignInAdmission.of({ run });
+      // Admission policy: one request per source prevents it occupying the
+      // global queue during SQL lock waits. Check before body reads or SQL.
+      const sources = new Set<string>();
+
+      const run = <A, E, R>(source: string, effect: Effect.Effect<A, E, R>) =>
+        Effect.suspend((): Effect.Effect<A, E | SignInThrottled, R> => {
+          if (sources.has(source)) {
+            return refused();
+          }
+
+          sources.add(source);
+
+          return effect.pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                sources.delete(source);
+              })
+            )
+          );
+        });
+
+      return SignInAdmission.of({ run, verify });
     })
   );
 }

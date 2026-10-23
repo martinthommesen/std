@@ -18,7 +18,9 @@ import { parseJson } from "@std/values/json";
 import { Effect, Redacted } from "effect";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import type { TransactionsApi } from "../../sql/transactions.ts";
 import { textBodyOf } from "../body-limits.ts";
+import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { cookieMayAuthenticate } from "../session-cookie.ts";
 
 const BEARER = "bearer";
@@ -129,3 +131,39 @@ export const jsonBodyOf = Effect.fn("Api.jsonBody")(function* jsonBodyOf(
 
   return parsed.ok ? parsed.value : yield* invalidBody(parsed.error.message);
 });
+
+/**
+ * Authenticates a protected upload, releases SQL, then caches its bounded body.
+ * Execution must authenticate again after this arbitrary network delay.
+ * @param transactions - Request transactions.
+ * @param request - Incoming request.
+ * @returns The bounded body text for this request and its retries.
+ */
+export const readAuthenticatedBody = Effect.fn("Api.readAuthenticatedBody")(
+  function* readAuthenticatedBody(
+    transactions: TransactionsApi,
+    request: HttpServerRequest
+  ) {
+    return yield* withSession(
+      request,
+      Effect.gen(function* authenticatedRead() {
+        yield* inRequestTransaction(
+          transactions,
+          request,
+          asActor(Effect.void)
+        );
+
+        return yield* textBodyOf(request);
+      })
+    );
+  }
+);
+
+/**
+ * Whether transport headers declare a body, including an unfinished chunked one.
+ * @param request - Incoming request.
+ * @returns Whether a body-less route must check its zero-byte budget.
+ */
+export const declaresBody = (request: HttpServerRequest): boolean =>
+  request.headers["content-length"] !== undefined ||
+  request.headers["transfer-encoding"] !== undefined;

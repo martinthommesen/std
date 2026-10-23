@@ -62,7 +62,7 @@ export const answerApiFailures = <R>(
       if (
         Cause.hasInterruptsOnly(cause) ||
         answered ||
-        apiKindOf(request.url, yield* HttpRouter.RouterConfig) !== "std"
+        apiKindOf(yield* HttpRouter.RouterConfig)(request.url) !== "std"
       ) {
         return yield* Effect.failCause(cause);
       }
@@ -82,12 +82,12 @@ export const answerApiFailures = <R>(
 /** The global middleware that sets `Cache-Control: no-store` on API responses. */
 export const ApiNoStoreLayer = HttpRouter.middleware(
   Effect.gen(function* apiNoStore() {
-    const config = yield* HttpRouter.RouterConfig;
+    const classify = apiKindOf(yield* HttpRouter.RouterConfig);
 
     return (httpEffect) =>
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>
         Effect.succeed(
-          apiKindOf(request.url, config) === "std"
+          classify(request.url) === "std"
             ? HttpServerResponse.setHeader(
                 response,
                 "cache-control",

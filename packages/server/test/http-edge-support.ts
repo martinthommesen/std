@@ -1,7 +1,7 @@
 import { createServer, request as nodeRequest } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Deferred, Effect, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql";
 
@@ -174,5 +174,73 @@ export const counterResetGate = Effect.gen(function* counterResetGate() {
         Effect.map((rows) => rows.length === 1)
       )
     ),
+  };
+});
+
+/**
+ * Opens a real incomplete upload; callers control EOF and can observe replies.
+ * @param origin - Listener origin.
+ * @param path - Request path.
+ * @param token - Disposable test-session token.
+ * @param bodyBytes - Declared framed bytes; the default is a small incomplete fixture.
+ * @returns A scoped upload and its response.
+ */
+export const edgeUpload = Effect.fn("Test.edgeUpload")(function* edgeUpload(
+  origin: string,
+  path: string,
+  token: string,
+  bodyBytes = 100
+) {
+  const response = yield* Deferred.make<number>();
+
+  const outgoing = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const upload = nodeRequest(
+        `${origin}${path}`,
+        {
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-length": String(bodyBytes),
+            "content-type": "application/json",
+          },
+          method: "POST",
+        },
+        (incoming) => {
+          incoming.resume();
+          incoming.on("end", () => {
+            Deferred.doneUnsafe(
+              response,
+              Effect.succeed(incoming.statusCode ?? 0)
+            );
+          });
+          incoming.on("error", (error) => {
+            Deferred.doneUnsafe(response, Effect.die(error));
+          });
+        }
+      );
+
+      upload.on("error", (error) => {
+        Deferred.doneUnsafe(response, Effect.die(error));
+      });
+      upload.flushHeaders();
+      upload.write("{");
+
+      return upload;
+    }),
+    (upload) =>
+      Effect.sync(() => {
+        upload.destroy();
+      })
+  );
+
+  return {
+    cancel: Effect.sync(() => {
+      outgoing.destroy();
+    }),
+    finish: Effect.sync(() => {
+      outgoing.end(`${" ".repeat(bodyBytes - 2)}}`);
+    }),
+    response: Deferred.await(response),
+    settled: Deferred.isDone(response),
   };
 });

@@ -26,7 +26,11 @@ import {
 } from "../src/auth/sign-in-limits.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
-import { BODY_MAX_BYTES } from "../src/http/body-limits.ts";
+import {
+  BODY_MAX_BYTES,
+  DEFINITION_BODY_MAX_BYTES,
+  HUB_BODY_MAX_BYTES,
+} from "../src/http/body-limits.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import {
@@ -69,8 +73,9 @@ describe("http-edge-limits", () => {
           ["/api//v1/session", SESSION_BODY_MAX_BYTES],
           ["/api/v1/%73ession", SESSION_BODY_MAX_BYTES],
           ["/api/v1/session//", SESSION_BODY_MAX_BYTES],
-          ["/api/v1/applyChangeSet", BODY_MAX_BYTES],
-          ["/tmf-api/event/v4/hub", BODY_MAX_BYTES],
+          ["/api/v1/applyChangeSet", DEFINITION_BODY_MAX_BYTES],
+          ["/tmf-api/event/v4/hub", HUB_BODY_MAX_BYTES],
+          ["/tmf-api/event/v4/topic/test-topic/hub", HUB_BODY_MAX_BYTES],
         ] as const) {
           const response = yield* edgeRequest(origin, path, {
             finish: false,
@@ -136,10 +141,14 @@ describe("http-edge-limits", () => {
           Uint8Array.of(32),
         ];
 
-        for (const [method, path] of [
-          ["POST", "/api/v1/applyChangeSet"],
-          ["DELETE", "/api/v1/acmeAsset/00000000-0000-0000-0000-000000000001"],
-          ["POST", "/tmf-api/event/v4/topic"],
+        for (const [method, path, limit] of [
+          ["POST", "/api/v1/applyChangeSet", DEFINITION_BODY_MAX_BYTES],
+          [
+            "DELETE",
+            "/api/v1/acmeAsset/00000000-0000-0000-0000-000000000001",
+            0,
+          ],
+          ["POST", "/tmf-api/event/v4/topic", BODY_MAX_BYTES],
         ] as const) {
           const overflow = yield* edgeRequest(origin, path, {
             chunks,
@@ -152,8 +161,12 @@ describe("http-edge-limits", () => {
             method,
           });
 
-          assert.strictEqual(overflow.status, 413, overflow.text);
-          assert.include(overflow.text, `body_max_bytes=${BODY_MAX_BYTES}`);
+          assert.strictEqual(
+            overflow.status,
+            limit === 0 ? 400 : 413,
+            overflow.text
+          );
+          assert.include(overflow.text, `body_max_bytes=${limit}`);
         }
       }).pipe(
         Effect.scoped,
@@ -346,8 +359,8 @@ describe("http-edge-limits", () => {
         const resolved = Result.getOrThrow(resolveSet(files, snapshot));
         const planned = Result.getOrThrow(planSet(resolved, snapshot));
         const body = JSON.stringify({ operations: planned });
-        assert.strictEqual(Buffer.byteLength(body), 95_538);
-        assert.strictEqual(planned.length, 186);
+        assert.strictEqual(Buffer.byteLength(body), 103_713);
+        assert.strictEqual(planned.length, 202);
         assert.strictEqual(
           Math.max(
             ...planned.map((operation) =>
@@ -356,7 +369,7 @@ describe("http-edge-limits", () => {
           ),
           1638
         );
-        assert.isBelow(Buffer.byteLength(body), BODY_MAX_BYTES);
+        assert.isBelow(Buffer.byteLength(body), DEFINITION_BODY_MAX_BYTES);
       })
     );
 
@@ -616,6 +629,14 @@ describe("http-edge-limits", () => {
           }).pipe(Effect.forkChild);
 
           yield* gate.waitForReset;
+          const { bob } = yield* AcmeFixture;
+          assert.deepStrictEqual(
+            yield* values(
+              'SELECT id::text AS value FROM core."user" WHERE id = $1::uuid FOR KEY SHARE',
+              [bob.id]
+            ),
+            [bob.id]
+          );
 
           const failing = yield* edgeRequest(origin, SESSION, {
             body: JSON.stringify(wrong("bob")),
@@ -657,12 +678,13 @@ describe("http-edge-limits", () => {
 
           const responses = yield* forEach(
             [0, 1, 2, 3],
-            () =>
+            (index) =>
               edgeRequest(origin, SESSION, {
                 body: JSON.stringify({
                   login: "bob",
                   password: "bob-password",
                 }),
+                localAddress: `127.0.0.${241 + index}`,
               }),
             { concurrency: "unbounded" }
           );
