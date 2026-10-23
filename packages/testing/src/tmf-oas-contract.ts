@@ -378,6 +378,36 @@ const validatorOf = (
   return compiled;
 };
 
+/**
+ * What is wrong with a value against one schema of a pinned document (an
+ * event body STD delivers to a listener, which the contract check of
+ * responses never sees: TMF621's `TroubleTicketCreateEvent`, ...).
+ *
+ * @param spec - The pinned specification (`TMF621`).
+ * @param schemaName - A schema of its `#/components/schemas`.
+ * @param value - The value.
+ * @returns A description of the mismatch, or undefined.
+ */
+export const schemaValueProblem = (
+  spec: string,
+  schemaName: string,
+  value: JsonValue
+): string | undefined => {
+  const { file } = contractAt(spec, "/");
+  const loaded = loadDocument(file);
+
+  const prefix =
+    loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
+
+  const validate = validatorOf(loaded, `${file}|schema|${schemaName}`, {
+    $ref: `${prefix}${schemaName}`,
+  });
+
+  return validate(value)
+    ? undefined
+    : `${spec} ${schemaName}: ${loaded.ajv.errorsText(validate.errors)}`;
+};
+
 /** A response as the contract check sees it. */
 export interface TmfExchange {
   readonly method: string;

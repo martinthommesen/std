@@ -42,7 +42,8 @@ export const HELPDESK_V3 = new URL(
   import.meta.url
 ).pathname;
 
-const upgraded = Layer.effectDiscard(
+/** A Step 2 helpdesk database upgraded to v3, with a major incident manager. */
+export const upgradedHelpdesk = Layer.effectDiscard(
   Effect.gen(function* upgraded() {
     yield* runUpgrade({ sets: [HELPDESK_V3] });
     const snapshot = yield* (yield* Catalog).refresh;
@@ -67,7 +68,7 @@ const upgraded = Layer.effectDiscard(
 
 /** Production HTTP app over an upgraded Step 2 database. */
 export const itilLayer = TestHttpClient.layer.pipe(
-  Layer.provideMerge(upgraded)
+  Layer.provideMerge(upgradedHelpdesk)
 );
 
 /** Record-service saves as the fixture admin, with production rules. */

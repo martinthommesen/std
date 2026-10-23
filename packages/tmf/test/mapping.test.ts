@@ -186,9 +186,6 @@ const without = (record: SourceRecord, ...hidden: string[]): SourceRecord => ({
   values: new Map([...record.values].filter(([key]) => !hidden.includes(key))),
 });
 
-// A value of type `undefined`, for a field that is absent.
-const ABSENT = new Map<string, SourceRecord["values"]>().get("");
-
 const withNullId = (item: {
   readonly existingId: string | undefined;
   readonly values: ReadonlyMap<string, unknown>;
@@ -723,7 +720,7 @@ describe("tmf-mapping", () => {
     expect(types({ action: "update", after: renamed, before })).toStrictEqual([
       "TroubleTicketAttributeValueChangeEvent",
     ]);
-    expect(types({ action: "create", after, before: ABSENT })).toStrictEqual([
+    expect(types({ action: "create", after })).toStrictEqual([
       "TroubleTicketCreateEvent",
     ]);
   });

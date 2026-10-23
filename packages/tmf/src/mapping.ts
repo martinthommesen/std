@@ -377,9 +377,9 @@ export type TmfOperation = "list" | "retrieve" | "create" | "patch" | "delete";
 export interface ChangeView {
   readonly action: "create" | "update" | "delete";
   /** The values before (absent on a create). */
-  readonly before: SourceValues | undefined;
+  readonly before?: SourceValues;
   /** The values after (absent on a delete). */
-  readonly after: SourceValues | undefined;
+  readonly after?: SourceValues;
 }
 
 /** One TMF event type of a resource (Contracts 12.1). */

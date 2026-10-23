@@ -136,11 +136,15 @@ const change = (
   action: ChangeView["action"],
   before: Readonly<Record<SourceKey, JsonValue>> | undefined,
   after?: Readonly<Record<SourceKey, JsonValue>>
-): ChangeView => ({
-  action,
-  after: after === undefined ? undefined : valuesOf(after),
-  before: before === undefined ? undefined : valuesOf(before),
-});
+): ChangeView => {
+  if (before === undefined) {
+    return { action, after: valuesOf(after ?? {}) };
+  }
+
+  return after === undefined
+    ? { action, before: valuesOf(before) }
+    : { action, after: valuesOf(after), before: valuesOf(before) };
+};
 
 const state = (
   status: string,
