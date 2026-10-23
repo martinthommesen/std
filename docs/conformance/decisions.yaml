@@ -216,7 +216,7 @@ entries:
   - id: E31-http-body-capacity-503
     rows: []
     requirement: "503 on TMF routes whose pinned OpenAPI documents do not declare it (decision 0021, decision 52)"
-    reason: "TMF630 v5.0.0 Part 1 §3.3.4 p.33 selects 503 for temporary server overload. The process-wide request-body byte budget refuses additional reads with an actionable error and Retry-After, and recovers when in-flight work releases capacity (decision 0038)."
+    reason: "TMF630 v5.0.0 Part 1 §3.3.4 p.33 selects 503 for temporary server overload. The process-wide request-body byte budget and each user's one-record share of it refuse additional reads with an actionable error and Retry-After, and recovers when in-flight work releases capacity (decision 0038)."
     recommendation: accept
     state: proposed
   - id: X630-hidden-base-fields

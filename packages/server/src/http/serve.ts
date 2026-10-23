@@ -39,7 +39,7 @@ import { HttpAppLayer } from "./app.ts";
 import {
   BODY_MAX_BYTES,
   BODY_MIN_BYTES_PER_SECOND,
-  BODY_READ_GRACE_MS,
+  BODY_PROGRESS_WINDOW_MS,
 } from "./body-limits.ts";
 import { sessionCookieSecureFromEnv } from "./session-cookie.ts";
 import { WebAppLayer } from "./web-app.ts";
@@ -64,13 +64,13 @@ const NodeServerLayer = Layer.unwrap(
 
     // Node's documented 60-second header budget protects the HTTP parser before
     // the application can answer. The request budget also allows one complete
-    // maximum body at our minimum rate, including its initial progress allowance.
+    // maximum body at our minimum rate, including its first progress window.
     // https://nodejs.org/api/http.html#serverheaderstimeout (2026-10-23).
     const headersTimeout = 60_000;
 
     const requestTimeout =
       headersTimeout +
-      BODY_READ_GRACE_MS +
+      BODY_PROGRESS_WINDOW_MS +
       Math.ceil((BODY_MAX_BYTES / BODY_MIN_BYTES_PER_SECOND) * 1000);
 
     return NodeHttpServer.layer(

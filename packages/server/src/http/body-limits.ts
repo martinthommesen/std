@@ -48,21 +48,26 @@ export const BODY_IN_FLIGHT_MAX_BYTES =
     Math.floor(getHeapStatistics().heap_size_limit / (64 * 4 * BODY_MAX_BYTES))
   );
 
-/** User fairness budget: at most half the process byte budget (two maximum
- * records on the measured heap), leaving half for independent users. On heaps
- * admitting only one record, a full record must still fit. This is a capacity
- * partition, not a throughput claim; decision 0038, round 4 (2026-10-23). */
-export const BODY_USER_IN_FLIGHT_MAX_BYTES = Math.max(
-  BODY_MAX_BYTES,
-  BODY_IN_FLIGHT_MAX_BYTES / 2
-);
+/** Per-user fairness budget: one maximum record body (4 MiB) of actual
+ * received bytes per authenticated user, across all of that user's sessions
+ * and every body route. Filling the process budget then needs as many distinct
+ * users as it holds maximum records (four on the measured heap), and one user
+ * still gets any number of small concurrent bodies. A per-user body count was
+ * rejected: it refuses parallel small integration writes without bounding
+ * memory, which is what this protects. Exhaustion is 503: TMF630 v5.0.0 Part 1
+ * §3.3.3 p.33 keeps 429 for request-rate limits over a time window (with the
+ * window headers of §1.5.4 p.14), while §3.3.4 p.33 gives 503 for temporary
+ * overload, and the pinned TMF621 v5.0.1 POST/PATCH declare 503, not 429.
+ * Decision 0038, round 4 (2026-10-23). */
+export const BODY_USER_IN_FLIGHT_MAX_BYTES = BODY_MAX_BYTES;
 
-/** Sign-in memory receipt, 2026-10-23: 64 retained 64-KiB envelopes through
- * parseJson + checkedSessionCreate cost 8,698,424 heap bytes for legal strings,
- * 98,979,360 for wrong-kind object arrays (113,770,496 RSS bytes, 27.1x input).
- * Allow 64x amplification and at most 1/16 of V8 heap, capped at 4 MiB raw
- * (64 maximum bodies on the measured 4,192-MiB heap). Independent of KDF work;
- * decision 0038 records the command, shapes and results. */
+/** Sign-in body budget, sized from decode memory (bodies are read before any
+ * KDF slot, so worker count is the wrong basis). Receipt, 2026-10-23, two runs:
+ * 64 retained 64-KiB envelopes through parseJson + checkedSessionCreate cost
+ * about 8.7 MB heap for legal strings and 97.9-99.0 MB heap, 113.8-121.5 MB
+ * RSS (27.1x-29.0x input) for wrong-kind object arrays. Allow 64x amplification
+ * and at most 1/16 of V8 heap, capped at 4 MiB raw: 64 maximum bodies on the
+ * measured 4,192-MiB heap. Decision 0038 records the command and shapes. */
 export const SESSION_BODY_IN_FLIGHT_MAX_BYTES =
   SESSION_BODY_MAX_BYTES *
   Math.min(
@@ -78,19 +83,19 @@ export const SESSION_BODY_IN_FLIGHT_MAX_BYTES =
  * Read 2026-10-23; decision 0038. */
 export const BODY_MIN_BYTES_PER_SECOND = 62_500;
 
-/** Initial progress allowance: RFC 6298 §§2.1,5.5 starts RTO at one second
- * and doubles it; 8 s covers the first 1+2+4 s retransmission waits.
- * https://www.rfc-editor.org/rfc/rfc6298.html (2026-10-23). */
-export const BODY_READ_GRACE_MS = 8000;
+/** Recent-progress window: every check from one window after the read began
+ * requires the bytes received in the latest window to reach
+ * window * BODY_MIN_BYTES_PER_SECOND (500,000 bytes per 8 s). Bytes received
+ * before the window never count. 8 s covers RFC 6298 §§2.1,5.5's first
+ * 1+2+4-second retransmission waits for the first window; afterwards a client
+ * at the full 1-Mbit/s uplink may stall up to half a window (4 s, the 1+2 s
+ * waits) and still carry the half-rate minimum. A body that stops sending is
+ * refused within one window plus one check interval of its last byte,
+ * whatever its size. https://www.rfc-editor.org/rfc/rfc6298.html (2026-10-23). */
+export const BODY_PROGRESS_WINDOW_MS = 8000;
 
-/** Recent-progress/idle budget: 4 seconds covers RFC 6298's first 1+2-second
- * retransmission waits with the next doubling (4 s) as the cutoff. After the
- * initial grace, each rolling 4-second window must carry half a 1-Mbit/s
- * uplink. Earlier bursts cannot pay for a later window; even during grace,
- * four idle seconds fail. Check once per initial 1-second RTO, so observation
- * adds at most one interval. Same RFC/uplink sources as above (2026-10-23). */
-export const BODY_PROGRESS_WINDOW_MS = 4000;
-export const BODY_IDLE_TIMEOUT_MS = BODY_PROGRESS_WINDOW_MS;
+/** Check once per initial 1-second TCP RTO (RFC 6298 §2.1); detection lags a
+ * window by at most one interval. */
 export const BODY_PROGRESS_INTERVAL_MS = 1000;
 
 /** Temporary overload recovery advice: one second, exceeding the accepted
@@ -328,48 +333,38 @@ const readBody = Effect.fn("Http.readBody")(function* readBody(
   request: HttpServerRequest
 ) {
   const started = yield* Clock.currentTimeMillis;
-  let lastProgress = started;
-  let previousReceived = 0;
+  // One sample per check: (time, bytes received so far).
   const samples = [{ at: started, received: 0 }];
 
   const progress = Effect.gen(function* bodyProgress() {
     const now = yield* Clock.currentTimeMillis;
-    const elapsed = now - started;
     const received = policies.get(request.source)?.received() ?? 0;
+    const windowStart = now - BODY_PROGRESS_WINDOW_MS;
 
-    if (received > previousReceived) {
-      lastProgress = now;
-      previousReceived = received;
-    }
-
-    // Retain the sample at/before the window start and all later samples.
-    // This accounts for scheduler delays without borrowing old burst credit.
-    while (
-      samples[1] !== undefined &&
-      samples[1].at <= now - BODY_PROGRESS_WINDOW_MS
-    ) {
+    // The baseline is the latest sample at or before the window start, so a
+    // late check measures a slightly longer window, never borrows older bytes.
+    while (samples[1] !== undefined && samples[1].at <= windowStart) {
       samples.shift();
     }
 
-    const baseline = samples[0] ?? { at: started, received: 0 };
+    const [baseline = { at: started, received: 0 }] = samples;
     const windowMs = now - baseline.at;
     const recent = received - baseline.received;
     const required = (windowMs * BODY_MIN_BYTES_PER_SECOND) / 1000;
-    const idleMs = now - lastProgress;
 
-    if (
-      idleMs >= BODY_IDLE_TIMEOUT_MS ||
-      (elapsed >= BODY_READ_GRACE_MS && recent < required)
-    ) {
+    if (now - started >= BODY_PROGRESS_WINDOW_MS && recent < required) {
       return yield* new InvalidRequest({
         limit: BODY_MIN_BYTES_PER_SECOND,
-        message: `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_read_grace_ms=${BODY_READ_GRACE_MS}; body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}; body_idle_timeout_ms=${BODY_IDLE_TIMEOUT_MS}; received ${received} bytes in ${elapsed} ms, ${recent} recent bytes in ${windowMs} ms (required ${Math.ceil(required)}); observed idle ${idleMs} ms. Keep sending within the idle timeout and meet the recent-progress rate, or reduce the body.`,
+        message: `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}; received ${received} bytes in ${now - started} ms, of which ${recent} in the last ${windowMs} ms; required at least ${Math.ceil(required)} bytes in that window. Send at least the minimum rate in every window, or reduce the body.`,
         parameter: "body_min_bytes_per_second",
         received,
       });
     }
 
-    samples.push({ at: now, received });
+    // The first check runs at the start; keep the zero baseline for that instant.
+    if (now > (samples.at(-1)?.at ?? started)) {
+      samples.push({ at: now, received });
+    }
 
     return yield* Effect.void;
   }).pipe(
@@ -446,6 +441,12 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
         let reserved = 0;
 
+        // Bytes charged to the owner's share; released exactly, even if the
+        // owner was bound after an earlier unowned reservation.
+        let charged:
+          | { readonly owner: string; readonly bytes: number }
+          | undefined;
+
         const reserve = (
           received: number
         ): BodyCapacityExceeded | undefined => {
@@ -487,6 +488,7 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
           if (owner !== undefined) {
             userBodyBytes.set(owner, userReserved + asked);
+            charged = { bytes: (charged?.bytes ?? 0) + asked, owner };
           }
 
           return undefined;
@@ -501,10 +503,9 @@ export const BodyLimitsLayer = HttpRouter.middleware(
         return yield* app.pipe(
           Effect.ensuring(
             Effect.suspend(() => {
-              const owner = bodyOwners.get(request.source);
-
-              if (owner !== undefined && reserved > 0) {
-                const remaining = (userBodyBytes.get(owner) ?? 0) - reserved;
+              if (charged !== undefined) {
+                const { bytes, owner } = charged;
+                const remaining = (userBodyBytes.get(owner) ?? 0) - bytes;
 
                 if (remaining === 0) {
                   userBodyBytes.delete(owner);

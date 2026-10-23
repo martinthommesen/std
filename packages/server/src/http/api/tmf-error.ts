@@ -45,10 +45,7 @@ const ERRORS = {
     422,
     "The aggregates this write changed did not settle",
   ],
-  BodyCapacityExceeded: [
-    503,
-    "The process request-body budget is temporarily exhausted",
-  ],
+  BodyCapacityExceeded: [503, "A request-body budget is temporarily exhausted"],
   BodyTooLarge: [413, "The request body exceeds the server byte limit"],
   DefinitionInvalid: [422, "The definitions are invalid; nothing was applied"],
   DefinitionProtected: [403, "The definition is protected"],

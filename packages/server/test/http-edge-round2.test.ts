@@ -19,6 +19,7 @@ import {
   edgeRequest,
   edgeServer,
   edgeUpload,
+  edgeUserTokens,
   edgeWebUpload,
 } from "./http-edge-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -316,13 +317,15 @@ describe("http-edge-round2", () => {
           const token = yield* http.signIn("ada", "ada-password");
           const origin = yield* edgeServer;
 
-          const slots = Math.floor(BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES);
-          const bob = yield* http.signIn("bob", "bob-password");
+          // One user per record slot: each user's share is one record.
+          const owners = yield* edgeUserTokens(
+            http,
+            token,
+            Math.floor(BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES)
+          );
 
-          const uploads = yield* forEach(
-            Array.from({ length: slots }, (_, index) => index),
-            (index) =>
-              edgeWebUpload(http, index % 2 === 0 ? token : bob, BODY_MAX_BYTES)
+          const uploads = yield* forEach(owners, (owner) =>
+            edgeWebUpload(http, owner, BODY_MAX_BYTES)
           );
 
           const alice = yield* http.signIn("alice", "alice-password");

@@ -1,7 +1,14 @@
 import { createServer, request as nodeRequest } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
+import {
+  isJsonArray,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
 import { Deferred, Effect, Fiber, Layer } from "effect";
+import { forEach } from "effect/Effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql";
 
@@ -317,5 +324,73 @@ export const edgeWebUpload = Effect.fn("Test.edgeWebUpload")(
       ),
       response: Fiber.join(response),
     };
+  }
+);
+
+const idOf = (value: JsonValue | undefined): string | undefined => {
+  const [first] = value !== undefined && isJsonArray(value) ? value : [value];
+
+  const id = first !== undefined && isJsonObject(first) ? first.id : undefined;
+
+  return id !== undefined && isJsonString(id) ? id : undefined;
+};
+
+/**
+ * Creates distinct active users holding the admin role and signs each in, so
+ * tests can fill the process body budget within every user's one-record share.
+ * @param http - Real application test client.
+ * @param admin - Session token of an administrator.
+ * @param count - Number of users.
+ * @returns One session token per new user.
+ */
+export const edgeUserTokens = Effect.fn("Test.edgeUserTokens")(
+  function* edgeUserTokens(
+    http: TestHttpClientApi,
+    admin: string,
+    count: number
+  ) {
+    const roles = yield* http.get("/api/v1/coreRole?name=admin", {
+      token: admin,
+    });
+
+    const role = idOf(roles.json);
+
+    if (role === undefined) {
+      return yield* Effect.die(new Error(`admin role: ${roles.text}`));
+    }
+
+    return yield* forEach(
+      Array.from({ length: count }, (_, index) => `edge-user-${index}`),
+      (login) =>
+        Effect.gen(function* edgeUser() {
+          // Disposable test credentials.
+          const password = `${login}-password`;
+
+          const created = yield* http.request("POST", "/api/v1/coreUser", {
+            body: { active: true, login, name: login, password },
+            token: admin,
+          });
+
+          const user = idOf(created.json);
+
+          const assigned =
+            user === undefined
+              ? undefined
+              : yield* http.request("POST", "/api/v1/coreUserRole", {
+                  body: { role, user },
+                  token: admin,
+                });
+
+          if (assigned?.status !== 201) {
+            return yield* Effect.die(
+              new Error(
+                `creating ${login}: ${created.text} ${assigned?.text ?? ""}`
+              )
+            );
+          }
+
+          return yield* http.signIn(login, password);
+        })
+    );
   }
 );

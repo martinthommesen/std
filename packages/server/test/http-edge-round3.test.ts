@@ -15,7 +15,7 @@ import {
 import {
   BODY_MAX_BYTES,
   BODY_MIN_BYTES_PER_SECOND,
-  BODY_READ_GRACE_MS,
+  BODY_PROGRESS_WINDOW_MS,
 } from "../src/http/body-limits.ts";
 import {
   DatabaseConfig,
@@ -177,7 +177,7 @@ describe("http-edge-round3", () => {
           );
           assert.include(
             response.text,
-            `body_read_grace_ms=${BODY_READ_GRACE_MS}`
+            `body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}`
           );
           assert.include(response.text, "received 1 bytes");
           assert.strictEqual(response.headers.connection, "close");

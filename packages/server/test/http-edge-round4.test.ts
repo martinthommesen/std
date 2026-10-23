@@ -6,21 +6,30 @@ import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { HttpServerRequest, fromWeb } from "effect/http/HttpServerRequest";
 import { TestClock } from "effect/testing";
 
-import { helpdeskTestLayer } from "../../testing/src/helpdesk-fixture.ts";
+import {
+  HELPDESK_DEMO_ACCOUNTS,
+  helpdeskTestLayer,
+} from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { tmfErrorResponse } from "../src/http/api/tmf-error.ts";
 import {
   BodyLimitsLayer,
   textBodyOf,
   BODY_MIN_BYTES_PER_SECOND,
-  BODY_IDLE_TIMEOUT_MS,
   BODY_IN_FLIGHT_MAX_BYTES,
   BODY_MAX_BYTES,
   BODY_PROGRESS_INTERVAL_MS,
+  BODY_PROGRESS_WINDOW_MS,
   BODY_USER_IN_FLIGHT_MAX_BYTES,
 } from "../src/http/body-limits.ts";
-import { edgeRequest, edgeServer, edgeWebUpload } from "./http-edge-support.ts";
+import {
+  edgeRequest,
+  edgeServer,
+  edgeUserTokens,
+  edgeWebUpload,
+} from "./http-edge-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
+import { waitUntil } from "./support.ts";
 import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
 import { TICKETS, ticketBody } from "./tmf621-support.ts";
 
@@ -31,20 +40,11 @@ const stalled = " ".repeat(SESSION_BODY_MAX_BYTES - 1);
 // Both mapped-resource implementations must enforce the same public body policy.
 const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
   path: string,
-  accounts: readonly string[]
+  login: string,
+  password: string
 ) {
   const http = yield* TestHttpClient;
-
-  const tokens = yield* forEach(accounts, (login) =>
-    http.signIn(
-      login,
-      login === "ada" || login === "bob" || login === "alice"
-        ? `${login}-password`
-        : `helpdesk-${login}-demo-password`
-    )
-  );
-
-  const [first = "", second = "", control = ""] = tokens;
+  const admin = yield* http.signIn(login, password);
 
   for (const method of ["POST", "PATCH"]) {
     const target =
@@ -62,7 +62,7 @@ const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
           ? { ...headers, "content-length": String(BODY_MAX_BYTES + 1) }
           : headers,
         rawBody: declared ? "" : " ".repeat(BODY_MAX_BYTES + 1),
-        token: control,
+        token: admin,
       });
 
       assert.strictEqual(refused.status, 413, refused.text);
@@ -71,15 +71,16 @@ const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
     }
   }
 
-  const uploads = yield* forEach(
-    Array.from(
-      { length: BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES },
-      (_, index) => index
-    ),
-    (index) =>
-      edgeWebUpload(http, index % 2 === 0 ? first : second, BODY_MAX_BYTES, {
-        path,
-      })
+  // Each user's share holds one maximum record, so filling the process
+  // budget takes one user per record slot.
+  const owners = yield* edgeUserTokens(
+    http,
+    admin,
+    BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES
+  );
+
+  const uploads = yield* forEach(owners, (owner) =>
+    edgeWebUpload(http, owner, BODY_MAX_BYTES, { path })
   );
 
   for (const method of ["POST", "PATCH"]) {
@@ -95,7 +96,7 @@ const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
           "if-match": '"1"',
         },
         rawBody: "{}",
-        token: control,
+        token: admin,
       }
     );
 
@@ -118,7 +119,7 @@ const tmfBodyLimits = Effect.fn("Test.tmfBodyLimits")(function* tmfBodyLimits(
       description: "Recovered after body capacity",
       name: "edge-round4",
     }),
-    token: first,
+    token: admin,
   });
 
   assert.strictEqual(recovered.status, 201, recovered.text);
@@ -195,7 +196,10 @@ describe("http-edge-round4", () => {
       yield* upload.send(BODY_MAX_BYTES / 2);
 
       // Keep making progress, so only the recent-rate rule can refuse this.
-      for (const tick of [1, 2, 3, 4, 5, 6, 7]) {
+      // The check at one window still counts the burst; the next does not.
+      const ticks = BODY_PROGRESS_WINDOW_MS / BODY_PROGRESS_INTERVAL_MS;
+
+      for (let tick = 1; tick <= ticks; tick += 1) {
         yield* TestClock.adjust(BODY_PROGRESS_INTERVAL_MS);
         yield* upload.send(tick);
       }
@@ -209,9 +213,14 @@ describe("http-edge-round4", () => {
         const text = Buffer.from(response.body.body).toString("utf-8");
         assert.include(
           text,
-          `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}`
+          `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}`
         );
-        assert.include(text, "recent bytes");
+        // The window starts at the one-second sample, taken before tick 1 was
+        // sent: ticks 1..8 (36 bytes) count, the burst does not.
+        assert.include(
+          text,
+          `of which 36 in the last ${BODY_PROGRESS_WINDOW_MS} ms`
+        );
       }
     }).pipe(Effect.scoped));
 
@@ -230,26 +239,37 @@ describe("http-edge-round4", () => {
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "near-complete sign-ins time out and repeated rotating sources leave independent sign-ins available",
+      "near-complete sign-ins from many sources leave an independent sign-in available and close within one window",
       () =>
         Effect.gen(function* signInStalls() {
           const origin = yield* edgeServer;
+          const sources = Array.from({ length: 8 }, (_, index) => index + 1);
 
-          // Three strikes reuse eight source budgets; failed bodies never reach KDF.
-          for (const strike of [0, 1, 2]) {
+          // Two strikes reuse eight source budgets; failed bodies never reach KDF.
+          for (const strike of [0, 1]) {
             const started = yield* Clock.currentTimeMillis;
 
-            const attacks = yield* forEach(
-              Array.from({ length: 8 }, (_, index) => index + 1),
-              (index) =>
-                edgeRequest(origin, "/api/v1/session", {
-                  body: stalled,
-                  finish: false,
-                  headers: { "content-length": String(SESSION_BODY_MAX_BYTES) },
-                  localAddress: `127.9.0.${index}`,
-                }).pipe(Effect.forkChild)
+            const attacks = yield* forEach(sources, (index) =>
+              edgeRequest(origin, "/api/v1/session", {
+                body: stalled,
+                finish: false,
+                headers: { "content-length": String(SESSION_BODY_MAX_BYTES) },
+                localAddress: `127.9.0.${index}`,
+              }).pipe(Effect.forkChild)
             );
 
+            // The one-in-flight source gate refusing a second attempt is the
+            // public observation that each stalled body is being read.
+            for (const index of sources) {
+              yield* waitUntil(
+                edgeRequest(origin, "/api/v1/session", {
+                  body: "{}",
+                  localAddress: `127.9.0.${index}`,
+                }).pipe(Effect.map((response) => response.status === 429))
+              );
+            }
+
+            // Eight held bodies exceed the former two-envelope budget.
             for (const attempt of [0, 1, 2]) {
               const legitimate = yield* edgeRequest(origin, "/api/v1/session", {
                 body: JSON.stringify({
@@ -267,7 +287,7 @@ describe("http-edge-round4", () => {
               assert.strictEqual(refused.status, 400, refused.text);
               assert.include(
                 refused.text,
-                `body_idle_timeout_ms=${BODY_IDLE_TIMEOUT_MS}`
+                `body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}`
               );
               assert.include(
                 refused.text,
@@ -276,17 +296,18 @@ describe("http-edge-round4", () => {
               assert.strictEqual(refused.headers.connection, "close");
             }
 
-            // One polling interval observes progress; one observes expiry.
+            // The last byte arrived at the start: one window plus at most
+            // one check interval, and slack for this loaded test host.
             assert.isAtMost(
               (yield* Clock.currentTimeMillis) - started,
-              BODY_IDLE_TIMEOUT_MS + 2 * BODY_PROGRESS_INTERVAL_MS
+              BODY_PROGRESS_WINDOW_MS + 2 * BODY_PROGRESS_INTERVAL_MS
             );
           }
         }).pipe(Effect.scoped)
     );
 
     dbTest.effect(
-      "four near-complete bodies across one user's sessions leave another user's write available and release on idle",
+      "one user's stalled near-complete record bodies hold one share, leave another user's write available, and release within one window",
       () =>
         Effect.gen(function* recordStalls() {
           const http = yield* TestHttpClient;
@@ -298,31 +319,29 @@ describe("http-edge-round4", () => {
 
           const origin = yield* edgeServer;
           const started = yield* Clock.currentTimeMillis;
+          const [first = "", ...others] = sessions;
 
-          const [first = "", second = "", third = "", fourth = ""] = sessions;
+          // All but EOF of a maximum body, then nothing more.
+          const held = yield* edgeWebUpload(http, first, BODY_MAX_BYTES);
 
-          const held = yield* forEach([first, second], (token) =>
-            edgeWebUpload(http, token, BODY_MAX_BYTES - 1)
-          );
-
-          const attacks = yield* forEach([third, fourth], (token) =>
-            edgeRequest(origin, "/api/v1/acmeMonitor", {
+          // Alice's other sessions share her one-record budget.
+          for (const token of others) {
+            const refused = yield* edgeRequest(origin, "/api/v1/acmeMonitor", {
               body: " ".repeat(BODY_MAX_BYTES - 1),
               finish: false,
               headers: {
                 authorization: `Bearer ${token}`,
                 "content-length": String(BODY_MAX_BYTES),
               },
-            }).pipe(Effect.forkChild)
-          );
+            });
 
-          for (const attack of attacks) {
-            const refused = yield* Fiber.join(attack);
             assert.strictEqual(refused.status, 503, refused.text);
             assert.include(
               refused.text,
-              `body_user_in_flight_max_bytes=${BODY_USER_IN_FLIGHT_MAX_BYTES}`
+              `body_user_in_flight_max_bytes=${BODY_USER_IN_FLIGHT_MAX_BYTES}; user already holds ${BODY_MAX_BYTES} bytes`
             );
+            assert.strictEqual(refused.headers["retry-after"], "1");
+            assert.strictEqual(refused.headers.connection, "close");
           }
 
           const write = yield* edgeRequest(origin, "/api/v1/acmeMonitor", {
@@ -332,28 +351,24 @@ describe("http-edge-round4", () => {
 
           assert.strictEqual(write.status, 201, write.text);
 
-          for (const upload of held) {
-            const refused = yield* upload.response;
-
-            const text = yield* Effect.promise(
-              async () => await refused.text()
-            );
-
-            assert.strictEqual(refused.status, 400, text);
-            assert.include(
-              text,
-              `body_idle_timeout_ms=${BODY_IDLE_TIMEOUT_MS}`
-            );
-          }
+          const closed = yield* held.response;
+          const text = yield* Effect.promise(async () => await closed.text());
+          assert.strictEqual(closed.status, 400, text);
+          assert.include(
+            text,
+            `body_progress_window_ms=${BODY_PROGRESS_WINDOW_MS}`
+          );
+          assert.include(text, `received ${BODY_MAX_BYTES} bytes`);
 
           assert.isAtMost(
             (yield* Clock.currentTimeMillis) - started,
-            BODY_IDLE_TIMEOUT_MS + 2 * BODY_PROGRESS_INTERVAL_MS
+            BODY_PROGRESS_WINDOW_MS + 2 * BODY_PROGRESS_INTERVAL_MS
           );
 
+          // The closed body released Alice's share.
           const recovered = yield* edgeRequest(origin, "/api/v1/acmeMonitor", {
             body: JSON.stringify({ name: "same-user-recovered" }),
-            headers: { authorization: `Bearer ${sessions[0] ?? ""}` },
+            headers: { authorization: `Bearer ${first}` },
           });
 
           assert.strictEqual(recovered.status, 201, recovered.text);
@@ -365,7 +380,7 @@ describe("http-edge-round4", () => {
     dbTest.effect(
       "generic mapped TMF POST and PATCH return actionable 413 and 503, then recover",
       () =>
-        tmfBodyLimits(FIXTURE_TICKETS, ["ada", "bob", "alice"]).pipe(
+        tmfBodyLimits(FIXTURE_TICKETS, "ada", "ada-password").pipe(
           Effect.scoped
         )
     );
@@ -377,7 +392,11 @@ describe("http-edge-round4", () => {
     dbTest.effect(
       "TMF621 troubleTicket POST and PATCH return actionable 413 and 503, then recover",
       () =>
-        tmfBodyLimits(TICKETS, ["admin", "agent", "agent2"]).pipe(Effect.scoped)
+        tmfBodyLimits(
+          TICKETS,
+          HELPDESK_DEMO_ACCOUNTS.admin.login,
+          HELPDESK_DEMO_ACCOUNTS.admin.password
+        ).pipe(Effect.scoped)
     );
   });
 });
