@@ -36,11 +36,11 @@ import {
 import { Message } from "./message.ts";
 import { WriteError } from "./model.ts";
 
-const COLLECTION = "/api/v2/helpTicket";
+const COLLECTION = "/api/v1/helpTicket";
 
 const RECORD_PATH = `${COLLECTION}/${TICKET_ID}`;
 
-const USERS_PATH = "/api/v2/coreUser";
+const USERS_PATH = "/api/v1/coreUser";
 
 /**
  * A value the test knows is there.
@@ -71,7 +71,7 @@ const BADGE: MetaField = {
 /** The ticket as the API serves it: API names, the assignee an EntityRef. */
 const ticketResource = {
   "@schemaLocation":
-    "http://std.test/api/v2/tableMetadata/helpTicket/schema.json",
+    "http://std.test/api/v1/tableMetadata/helpTicket/schema.json",
   "@type": "HelpTicket",
   assignee: {
     "@referredType": "CoreUser",
@@ -344,7 +344,7 @@ describe("form Commands against the server", () => {
 
   it("an update of a definition table sends a merge patch, whose json values replace the stored ones", async () => {
     const api = fakeStdApi({
-      [`/api/v2/coreAccessRule/${TICKET_ID}`]: {
+      [`/api/v1/coreAccessRule/${TICKET_ID}`]: {
         body: { ...ticketResource, "@type": "CoreAccessRule", revision: 4 },
         status: 200,
       },

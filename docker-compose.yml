@@ -95,7 +95,7 @@ services:
     restart: "no"
 
   # `std serve`: the web app at http://localhost:${STD_HTTP_PORT:-8080}/ and
-  # the HTTP API under /api/v2. The image builds the app (apps/web/dist, the
+  # the HTTP API under /api/v1. The image builds the app (apps/web/dist, the
   # default STD_WEB_ROOT). Over plain HTTP on localhost the session cookie
   # leaves out Secure (STD_SESSION_COOKIE_SECURE=auto; decision 0018).
   server:
@@ -130,7 +130,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:8080/api/v2/openapi.json').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+          "fetch('http://127.0.0.1:8080/api/v1/openapi.json').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
         ]
       interval: 2s
       timeout: 3s

@@ -73,7 +73,7 @@ RULE_EMPLOYEE_RENAME=7447db88-1f6e-4c7c-affc-e3a45f9f826c
 # `core.user`, from the core definition set.
 CORE_USER=da385db7-b2b7-4a1d-a1a9-42e8e0bb7992
 
-API="$STD_URL/api/v2"
+API="$STD_URL/api/v1"
 BODY_FILE=$(mktemp)
 HEADER_FILE=$(mktemp)
 RESPONSE_HEADERS=$(mktemp)

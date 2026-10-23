@@ -10,7 +10,7 @@ import { REVISION_3, adaTables } from "./table-fixture.ts";
 /** A signed-in user, as `session/current` describes her. */
 export const ada: CurrentUser = {
   "@type": "Session",
-  href: "http://localhost:5173/api/v2/session/current",
+  href: "http://localhost:5173/api/v1/session/current",
   id: "current",
   name: "Ada Lovelace",
   roles: [

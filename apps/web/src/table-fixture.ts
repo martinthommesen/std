@@ -38,7 +38,7 @@ export const servedAs = (classId: string, name: string) =>
   ({
     "@type": "TableMetadata",
     classId,
-    href: `${FIXTURE_ORIGIN}/api/v2/tableMetadata/${collectionOf(name)}`,
+    href: `${FIXTURE_ORIGIN}/api/v1/tableMetadata/${collectionOf(name)}`,
     id: collectionOf(name),
     resourceType: typeOf(name),
     schemaRevision: 3,
@@ -59,7 +59,7 @@ export const summaryOf = (
 ): MetaTableSummary => ({
   "@type": "TableMetadata",
   creatable,
-  href: `${FIXTURE_ORIGIN}/api/v2/tableMetadata/${collectionOf(name)}`,
+  href: `${FIXTURE_ORIGIN}/api/v1/tableMetadata/${collectionOf(name)}`,
   id: collectionOf(name),
   label,
   name,

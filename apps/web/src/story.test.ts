@@ -735,9 +735,9 @@ describe("navigation", () => {
 });
 
 describe("the session requests", () => {
-  const ME = "GET /api/v2/session/current";
+  const ME = "GET /api/v1/session/current";
 
-  const SIGN_OUT = "DELETE /api/v2/session/current";
+  const SIGN_OUT = "DELETE /api/v1/session/current";
 
   it("session/current: a user, no session, or an unreachable server", async () => {
     const withUser = fakeStdApi({
@@ -925,7 +925,7 @@ describe("tables and revisions", () => {
   });
 
   it("the table list comes with the revision its response states, and a revision the database never had is dropped", async () => {
-    const PATH = "/api/v2/tableMetadata";
+    const PATH = "/api/v1/tableMetadata";
 
     const listed = fakeStdApi({
       [PATH]: {

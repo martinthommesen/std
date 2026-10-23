@@ -3,10 +3,10 @@
  * generated, valid TMF attribute filters over every condition-capable type
  * (text, decimal, integer, date, date-time, reference, one-hop path, uuid,
  * the class, boolean, big integer and, on the helpdesk, choice), the IDs
- * and their order from `/api/v2` equal those of the same query written in
- * the `condition` syntax, and of `/api/v1` with the text filter.
+ * and their order equal those of the same query written in the
+ * `condition` syntax.
  *
- * Every sample must answer 200 on all three surfaces, and the successes
+ * Every sample must answer 200 on both surfaces, and the successes
  * are counted against the runs. Text values are the exact stored values,
  * so the TMF filters' case-sensitive equality and the field's
  * case-insensitive one agree (D4); a separate test shows they differ for a
@@ -32,18 +32,17 @@ import {
   helpdeskTestLayer,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
-import { listPath, readsTestLayer } from "./reads-support.ts";
-import { ACME, addField, change } from "./schema-support.ts";
 import {
   asArray,
   asObject,
   idsOf,
   numberOf,
   textOf,
-  V2,
+  API,
   withQuery,
-} from "./v2-support.ts";
+} from "./api-support.ts";
+import { readsTestLayer } from "./reads-support.ts";
+import { ACME, addField, change } from "./schema-support.ts";
 
 const RUNS = 60;
 const SEED = 20_261_022;
@@ -132,8 +131,8 @@ interface Target {
   readonly table: string;
 }
 
-const ASSETS: Target = { collection: V2.asset, table: "acme.asset" };
-const MONITORS: Target = { collection: V2.monitor, table: "acme.monitor" };
+const ASSETS: Target = { collection: API.asset, table: "acme.asset" };
+const MONITORS: Target = { collection: API.monitor, table: "acme.monitor" };
 
 /** A query: a collection, some filters and a sort. */
 interface Query {
@@ -322,11 +321,6 @@ const queryOf = (values: Values): Arbitrary<Query> =>
     })
   );
 
-const recordIds = (response: TestResponse): string[] =>
-  asArray(asObject(response.json).records).map((item) =>
-    textOf(asObject(item).id)
-  );
-
 const and = (conditions: readonly string[]): string =>
   conditions.map((condition) => `(${condition})`).join(" and ");
 
@@ -354,18 +348,18 @@ const conditionParameters = (
 };
 
 /**
- * Runs one query as TMF parameters, as a condition and through v1.
+ * Runs one query as TMF parameters and as a condition.
  *
  * @param query - The query.
  * @param token - The caller's bearer token.
- * @returns The three responses.
+ * @returns The two responses.
  */
 const observe = Effect.fn("TmfFilterEquivalence.observe")(function* observe(
   query: Query,
   token: string
 ) {
   const http = yield* TestHttpClient;
-  const [apiSort, definitionSort] = query.sort;
+  const [apiSort] = query.sort;
 
   const tmf = yield* http.get(
     withQuery(query.target.collection, [
@@ -383,27 +377,19 @@ const observe = Effect.fn("TmfFilterEquivalence.observe")(function* observe(
     { token }
   );
 
-  const v1 = yield* http.get(
-    listPath(query.target.table, {
-      filter: and(query.filters.map((f) => f.definitionCondition)),
-      sort: definitionSort,
-    }),
-    { token }
-  );
-
-  return { condition, tmf, v1 };
+  return { condition, tmf };
 });
 
 /** What a property run saw. */
 interface Tally {
-  /** Samples that answered 200 on all three surfaces and agreed. */
+  /** Samples that answered 200 on both surfaces and agreed. */
   successes: number;
   /** Of those, samples that found at least one record. */
   nonEmpty: number;
 }
 
 /**
- * Runs the generated queries; every sample must answer 200 on all three
+ * Runs the generated queries; every sample must answer 200 on both
  * surfaces, with the same IDs in the same order.
  *
  * @param queries - The generator.
@@ -434,11 +420,6 @@ const runSamples = Effect.fn("TmfFilterEquivalence.runSamples")(
       assert.deepStrictEqual(
         idsOf(observed.tmf),
         idsOf(observed.condition),
-        label
-      );
-      assert.deepStrictEqual(
-        idsOf(observed.tmf),
-        recordIds(observed.v1),
         label
       );
 
@@ -483,7 +464,7 @@ const addMissingTypes = Effect.gen(function* addMissingTypes() {
   ];
 
   for (const [id, flag, bigCount] of stored) {
-    const path = `${V2.asset}/${id}`;
+    const path = `${API.asset}/${id}`;
     const current = asObject((yield* http.get(path, { token: admin })).json);
 
     const patched = yield* http.request("PATCH", path, {
@@ -507,7 +488,7 @@ const storedValues = Effect.gen(function* storedValues() {
   const http = yield* TestHttpClient;
   const { alice, bob, records } = yield* AcmeFixture;
   const token = yield* http.signIn("alice", "alice-password");
-  const listed = yield* http.get(V2.asset, { token });
+  const listed = yield* http.get(API.asset, { token });
 
   const created = asArray(listed.json).map((item) =>
     textOf(asObject(item).creationDate)
@@ -537,7 +518,7 @@ describe("tmf-filter-equivalence", () => {
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "TMF filters, the condition syntax and v1's filter return the same IDs in the same order",
+      "TMF filters and the condition syntax return the same IDs in the same order",
       () =>
         Effect.gen(function* equivalence() {
           const http = yield* TestHttpClient;
@@ -568,26 +549,19 @@ describe("tmf-filter-equivalence", () => {
 
           for (const name of ["K", "L", "Alice monitor"]) {
             const exact = yield* http.get(
-              withQuery(V2.asset, [["name", name]]),
+              withQuery(API.asset, [["name", name]]),
               { token }
             );
 
             const changed = yield* http.get(
-              withQuery(V2.asset, [["name", lowerCased(name)]]),
+              withQuery(API.asset, [["name", lowerCased(name)]]),
               { token }
             );
 
             const condition = yield* http.get(
-              withQuery(V2.asset, [
+              withQuery(API.asset, [
                 ["condition", `name = ${quoted(lowerCased(name))}`],
               ]),
-              { token }
-            );
-
-            const v1 = yield* http.get(
-              listPath("acme.asset", {
-                filter: `name = ${quoted(lowerCased(name))}`,
-              }),
               { token }
             );
 
@@ -596,7 +570,6 @@ describe("tmf-filter-equivalence", () => {
             assert.strictEqual(changed.status, 200);
             assert.deepStrictEqual(idsOf(changed), [], name);
             assert.deepStrictEqual(idsOf(condition), idsOf(exact), name);
-            assert.deepStrictEqual(recordIds(v1), idsOf(exact), name);
           }
         })
     );
@@ -634,7 +607,7 @@ describe("tmf-filter-equivalence", () => {
           );
 
           const ticket: Target = {
-            collection: "/api/v2/helpdeskTicket",
+            collection: "/api/v1/helpdeskTicket",
             table: "helpdesk.ticket",
           };
 

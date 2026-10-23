@@ -27,7 +27,13 @@ import { updateRecord } from "../src/records/save-pipeline.ts";
 import { RuleWriteAccess } from "../src/records/write-access-rules.ts";
 import { WriteOnlyValues } from "../src/records/write-only-values.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
+import { objectOf } from "./authz-support.ts";
+import {
+  codeOf,
+  listPath,
+  readsTestLayer,
+  recordPath,
+} from "./reads-support.ts";
 import { ACME, addOverride, change, values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
 import {
@@ -132,7 +138,7 @@ describe("write-leaks", () => {
 
           assert.strictEqual(response.status, 200);
           assert.notInclude(response.text, SECRET_DATE);
-          assert.notInclude(response.text, "purchased_on");
+          assert.notInclude(response.text, "purchasedOn");
           assert.include(response.text, '"lost"');
         })
     );
@@ -152,10 +158,10 @@ describe("write-leaks", () => {
           });
 
           assert.strictEqual(visible.status, 422);
-          assert.deepStrictEqual(visible.json, {
-            _tag: "ValidationFailed",
-            errors: [{ _tag: "Required", field: "purchased_on" }],
-          });
+          assert.strictEqual(yield* codeOf(visible), "ValidationFailed");
+          assert.deepStrictEqual(objectOf(visible.json).fieldErrors, [
+            { _tag: "Required", field: "purchasedOn" },
+          ]);
 
           const hidden = yield* create(bob, LAPTOP, {
             name: "hidden",
@@ -164,10 +170,8 @@ describe("write-leaks", () => {
           });
 
           assert.strictEqual(hidden.status, 422);
-          assert.deepStrictEqual(hidden.json, {
-            _tag: "ValidationFailed",
-            errors: [],
-          });
+          assert.strictEqual(yield* codeOf(hidden), "ValidationFailed");
+          assert.deepStrictEqual(objectOf(hidden.json).fieldErrors, []);
         })
     );
   });
@@ -185,24 +189,22 @@ describe("write-leaks", () => {
         const omitted = yield* create(bob, LAPTOP, {
           name: "no cost",
           owner: fixture.bob.id,
-          purchased_on: "2026-01-01",
+          purchasedOn: "2026-01-01",
           status: "in_use",
         });
 
         assert.strictEqual(omitted.status, 422);
-        assert.deepStrictEqual(omitted.json, {
-          _tag: "ValidationFailed",
-          errors: [],
-        });
+        assert.strictEqual(yield* codeOf(omitted), "ValidationFailed");
+        assert.deepStrictEqual(objectOf(omitted.json).fieldErrors, []);
 
         const named = yield* create(bob, LAPTOP, {
           cost: null,
           name: "no cost",
           owner: fixture.bob.id,
-          purchased_on: "2026-01-01",
+          purchasedOn: "2026-01-01",
         });
 
-        assert.strictEqual(yield* tagOf(named), "UnknownField");
+        assert.strictEqual(yield* codeOf(named), "UnknownField");
       })
     );
 
@@ -217,18 +219,14 @@ describe("write-leaks", () => {
 
           yield* updateDefinition(ACME.status, { required: true });
 
-          const response = yield* http.request(
-            "POST",
-            `/api/v1/tables/${ASSET}/records`,
-            {
-              body: { name: "no status", owner: fixture.alice.id },
-              headers: { "std-schema-revision": stated },
-              token: alice,
-            }
-          );
+          const response = yield* http.request("POST", listPath(ASSET), {
+            body: { name: "no status", owner: fixture.alice.id },
+            headers: { "std-schema-revision": stated },
+            token: alice,
+          });
 
           assert.strictEqual(response.status, 409);
-          assert.strictEqual(yield* tagOf(response), "SchemaChanged");
+          assert.strictEqual(yield* codeOf(response), "SchemaChanged");
           assert.include(response.text, '"requiredChanged"');
           assert.include(response.text, '"status"');
         })
@@ -280,7 +278,7 @@ describe("write-leaks", () => {
           });
 
           assert.strictEqual(response.status, 409);
-          assert.strictEqual(yield* tagOf(response), "SchemaChanged");
+          assert.strictEqual(yield* codeOf(response), "SchemaChanged");
           assert.include(response.text, '"readOnlyChanged"');
           assert.isDefined(yield* history(bob, LAPTOP, L));
           assert.strictEqual(

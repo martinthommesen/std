@@ -59,7 +59,7 @@ describe("effect-stability-diagnostics", () => {
     expect(drifted.code).toBe(1);
     expect(drifted.output).toContain("api-drift/src/client.ts");
     expect(drifted.output).toContain(
-      "'login' does not exist in type '{ readonly password: string; readonly username: string; }'"
+      `'login' does not exist in type '{ readonly password: string; readonly tokenDelivery?: "body" | "cookie"; readonly username: string; }'`
     );
   });
 

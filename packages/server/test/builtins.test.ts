@@ -330,7 +330,9 @@ describe("built-ins", () => {
           []
         );
 
-        const me = yield* http.get("/api/v1/auth/me", { token: tokens.admin });
+        const me = yield* http.get("/api/v1/session/current", {
+          token: tokens.admin,
+        });
 
         assert.include(me.text, BUILT_IN_ROLE_IDS.admin);
         assert.include(me.text, BUILT_IN_ROLE_IDS.authenticated);
@@ -357,8 +359,8 @@ describe("built-ins", () => {
           ["system:false"]
         );
 
-        const wrong = yield* http.request("POST", "/api/v1/auth/sign-in", {
-          body: { login: "bob", password: "not-bob" },
+        const wrong = yield* http.request("POST", "/api/v1/session", {
+          body: { login: "bob", password: "not-bob", tokenDelivery: "body" },
         });
 
         // Even activated with a password, as table owner, it cannot sign in.
@@ -370,8 +372,12 @@ describe("built-ins", () => {
           [SYSTEM_USER_ID, hash]
         );
 
-        const signIn = yield* http.request("POST", "/api/v1/auth/sign-in", {
-          body: { login: "system", password: "system-password" },
+        const signIn = yield* http.request("POST", "/api/v1/session", {
+          body: {
+            login: "system",
+            password: "system-password",
+            tokenDelivery: "body",
+          },
         });
 
         assert.strictEqual(signIn.status, 401);
@@ -380,7 +386,7 @@ describe("built-ins", () => {
         // A session planted for it does not authenticate.
         const token = yield* plantSession(SYSTEM_USER_ID);
 
-        for (const path of [listPath("core.user"), "/api/v1/auth/me"]) {
+        for (const path of [listPath("core.user"), "/api/v1/session/current"]) {
           const response = yield* http.get(path, { token });
 
           assert.deepStrictEqual(observe(response), {

@@ -114,15 +114,11 @@ const configEvents = Effect.gen(function* configEventsTest() {
   yield* change([r.op]);
 
   // 2. A generic write relabels it (a one-operation change set): 2.
-  const relabelled = yield* http.request(
-    "PATCH",
-    `/api/v1/tables/core.role/records/${r.id}`,
-    {
-      body: { label: "Auditor (relabelled)" },
-      headers: { "if-match": '"1"' },
-      token: tokens.admin,
-    }
-  );
+  const relabelled = yield* http.request("PATCH", `/api/v1/coreRole/${r.id}`, {
+    body: { label: "Auditor (relabelled)" },
+    headers: { "if-match": '"1"' },
+    token: tokens.admin,
+  });
 
   assert.strictEqual(relabelled.status, 200, relabelled.text);
 
@@ -142,28 +138,20 @@ const configEvents = Effect.gen(function* configEventsTest() {
   yield* change([{ id: rule.id, op: "delete", version: 2 }]);
 
   // 5. Retire and delete R through the generic routes.
-  const retire = yield* http.request(
-    "PATCH",
-    `/api/v1/tables/core.role/records/${r.id}`,
-    {
-      body: { state: "retired" },
-      headers: { "if-match": `"${yield* storedVersion("role", r.id)}"` },
-      token: tokens.admin,
-    }
-  );
+  const retire = yield* http.request("PATCH", `/api/v1/coreRole/${r.id}`, {
+    body: { state: "retired" },
+    headers: { "if-match": `"${yield* storedVersion("role", r.id)}"` },
+    token: tokens.admin,
+  });
 
   assert.strictEqual(retire.status, 200, retire.text);
 
-  const deleted = yield* http.request(
-    "DELETE",
-    `/api/v1/tables/core.role/records/${r.id}`,
-    {
-      headers: { "if-match": `"${yield* storedVersion("role", r.id)}"` },
-      token: tokens.admin,
-    }
-  );
+  const deleted = yield* http.request("DELETE", `/api/v1/coreRole/${r.id}`, {
+    headers: { "if-match": `"${yield* storedVersion("role", r.id)}"` },
+    token: tokens.admin,
+  });
 
-  assert.strictEqual(deleted.status, 200, deleted.text);
+  assert.strictEqual(deleted.status, 204, deleted.text);
 
   // 6. An override relabels the shipped acme role `employee`.
   const snapshot = yield* (yield* Catalog).refresh;

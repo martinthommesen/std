@@ -38,16 +38,16 @@ const CHROME = `
 
 const CHROME_BODIES: readonly ReceivedResponse[] = [
   {
-    body: '[{"@type":"X","href":"https://app.test/api/v2/x/r1","id":"r1","revision":7,"size":"Seventy"}]',
-    url: "https://app.test/api/v2/x",
+    body: '[{"@type":"X","href":"https://app.test/api/v1/x/r1","id":"r1","revision":7,"size":"Seventy"}]',
+    url: "https://app.test/api/v1/x",
   },
   {
-    body: '{"@type":"TableMetadata","href":"https://app.test/api/v2/tableMetadata/x","id":"x","fields":[{"name":"ab","apiName":"ab","choices":[{"key":"ab","order":7}]}],"schemaRevision":7}',
-    url: "https://app.test/api/v2/tableMetadata/x",
+    body: '{"@type":"TableMetadata","href":"https://app.test/api/v1/tableMetadata/x","id":"x","fields":[{"name":"ab","apiName":"ab","choices":[{"key":"ab","order":7}]}],"schemaRevision":7}',
+    url: "https://app.test/api/v1/tableMetadata/x",
   },
   {
-    body: '[{"@type":"ChangeEntry","@baseType":"History","href":"https://app.test/api/v2/x/r1/history/c1","id":"c1","revision":7,"changes":{}}]',
-    url: "https://app.test/api/v2/x/r1/history",
+    body: '[{"@type":"ChangeEntry","@baseType":"History","href":"https://app.test/api/v1/x/r1/history/c1","id":"c1","revision":7,"changes":{}}]',
+    url: "https://app.test/api/v1/x/r1/history",
   },
   {
     body: 'const ab="ab";export const n=[7,"ab"];',

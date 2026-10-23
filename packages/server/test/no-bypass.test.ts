@@ -24,7 +24,6 @@ import path from "node:path";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
-import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -52,8 +51,15 @@ import {
   sourceFiles,
   workspacePackages,
 } from "./name-scan.ts";
-import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import {
+  collectionOf,
+  listPath,
+  readsTestLayer,
+  recordPath,
+} from "./reads-support.ts";
+import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
 import { change, createRole, freshId, values } from "./schema-support.ts";
+import { create, patch, remove } from "./writes-support.ts";
 
 /** The built-in allow-all rules (records, fields) of `core/access.yaml`. */
 const ALLOW_ALL = [
@@ -63,6 +69,10 @@ const ALLOW_ALL = [
 
 /** The repository root. */
 const ROOT = path.resolve(import.meta.dirname, "../../..");
+
+// The table metadata path of a table.
+const metadataPath = (table: string): string =>
+  `/api/v1/tableMetadata/${collectionOf(table)}`;
 
 // Every path an admin takes, with the record IDs it needs.
 const adminPaths = (records: {
@@ -74,8 +84,8 @@ const adminPaths = (records: {
 
   return [
     ["GET", listPath("acme.asset"), {}],
-    ["GET", listPath("acme.asset", { count: "true" }), {}],
-    ["GET", listPath("acme.laptop", { filter: "cost > 0" }), {}],
+    ["GET", listPath("acme.asset", { limit: "1" }), {}],
+    ["GET", listPath("acme.laptop", { condition: "cost > 0" }), {}],
     ["GET", recordPath("acme.asset", records.L), {}],
     ["GET", recordPath("acme.laptop", records.L), {}],
     ["GET", `${recordPath("acme.asset", records.L)}/history`, {}],
@@ -90,14 +100,9 @@ const adminPaths = (records: {
     ["GET", listPath("core.access_rule"), {}],
     ["GET", listPath("core.role"), {}],
     ["GET", listPath("core.user_role"), {}],
-    ["GET", "/api/v1/meta/tables/acme.asset", {}],
-    ["GET", "/api/v1/meta/tables/acme.laptop/openapi.json", {}],
-    ["GET", "/api/v1/meta/tables/core.access_rule", {}],
-    [
-      "GET",
-      listPath("acme.laptop", { allowedFor: "acme.asset/docked_to" }),
-      {},
-    ],
+    ["GET", metadataPath("acme.asset"), {}],
+    ["GET", metadataPath("core.access_rule"), {}],
+    ["GET", listPath("acme.laptop", { allowedFor: "acmeAsset/dockedTo" }), {}],
     [
       "PATCH",
       recordPath("core.user", records.user),
@@ -107,37 +112,21 @@ const adminPaths = (records: {
   ];
 };
 
-const CHANGE_SETS = "/api/v1/schema/change-sets";
-
 /** `acme.asset.cost`. */
 const COST_FIELD_ID = "6dfdc15e-7b81-40ba-aaac-6d7ad5a0d717";
 
 /**
- * A change-set request body.
- *
- * @param operations - The operations.
- * @returns The body.
- */
-const changeSetBody = (operations: readonly Operation[]): JsonValue => {
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  return parsed.ok ? parsed.value : null;
-};
-
-/**
- * The table names of a `GET /meta/tables` response.
+ * The table names of a `GET /tableMetadata` response.
  *
  * @param response - The response.
  * @returns The names, in response order.
  */
 const tableNames = (response: TestResponse): string[] =>
-  arrayOf(objectOf(response.json).tables).map((entry) =>
-    textOf(objectOf(entry).name)
-  );
+  arrayOf(response.json).map((entry) => textOf(objectOf(entry).name));
 
 /** What an admin gets on every path after the allow-all rules are gone. */
 const REFUSED: readonly Observation[] = [
-  ...Array.from({ length: 17 }, () => ({
+  ...Array.from({ length: 16 }, () => ({
     status: 404,
     tag: "UnknownTable",
   })),
@@ -171,7 +160,7 @@ const allowAllFor = (roleId: string): Operation[] =>
     op: "createAccessRule",
   }));
 
-// A response body without its revision, for comparing callers.
+// A metadata body without its revision, for comparing callers.
 const withoutRevision = (json: JsonValue | undefined): JsonValue =>
   Object.fromEntries(
     Object.entries(objectOf(json)).filter(([key]) => key !== "schemaRevision")
@@ -572,17 +561,16 @@ describe("no-bypass", () => {
             http.request(method, url, { ...options, token: tokens.admin });
 
           // What admin's metadata holds with the rules in place.
-          const metadataBefore = yield* http.get(
-            "/api/v1/meta/tables/acme.asset",
-            { token: tokens.admin }
-          );
+          const metadataBefore = yield* http.get(metadataPath("acme.asset"), {
+            token: tokens.admin,
+          });
 
           assert.strictEqual(metadataBefore.status, 200, metadataBefore.text);
 
           // The tables admin can open with the rules in place.
           const tablesOf = (token: string) =>
             http
-              .get("/api/v1/meta/tables", { token })
+              .get("/api/v1/tableMetadata", { token })
               .pipe(Effect.map(tableNames));
 
           const tablesBefore = yield* tablesOf(tokens.admin);
@@ -602,17 +590,13 @@ describe("no-bypass", () => {
           assert.strictEqual(before.status, 200, before.text);
 
           // A change set the admin commits and reads while the rules hold.
-          const applied = yield* asAdmin("POST", CHANGE_SETS, {
-            body: changeSetBody([
-              createRole(`before_${freshId().slice(0, 8)}`),
-            ]),
-          });
+          const applied = yield* postChangeSet(tokens.admin, [
+            createRole(`before_${freshId().slice(0, 8)}`),
+          ]);
 
           assert.strictEqual(applied.status, 201, applied.text);
 
-          const firstChangeSet = textOf(
-            objectOf(objectOf(applied.json).changeSet).id
-          );
+          const firstChangeSet = textOf(objectOf(applied.json).id);
 
           assert.strictEqual(
             (yield* asAdmin("GET", `${CHANGE_SETS}/${firstChangeSet}`)).status,
@@ -659,7 +643,7 @@ describe("no-bypass", () => {
               table
             );
             assert.deepStrictEqual(
-              observe(yield* asAdmin("GET", `/api/v1/meta/tables/${table}`)),
+              observe(yield* asAdmin("GET", metadataPath(table))),
               { status: 404, tag: "UnknownTable" },
               `metadata of ${table}`
             );
@@ -676,69 +660,67 @@ describe("no-bypass", () => {
             [COST_FIELD_ID]
           );
 
-          const definitionPaths: readonly (readonly [
+          const definitionOutcomes: readonly (readonly [
             string,
-            string,
-            TestRequestOptions,
+            TestResponse,
             Observation,
           ])[] = [
             [
-              "POST",
-              CHANGE_SETS,
-              { body: changeSetBody([role]) },
+              "POST applyChangeSet",
+              yield* postChangeSet(tokens.admin, [role]),
               { status: 403, tag: "NotAllowed" },
             ],
             [
-              "POST",
-              CHANGE_SETS,
-              {
-                body: changeSetBody([
-                  {
-                    id: COST_FIELD_ID,
-                    name: "price",
-                    op: "rename",
-                    version: Number(costVersion ?? "1"),
-                  },
-                ]),
-              },
+              "POST applyChangeSet (rename)",
+              yield* postChangeSet(tokens.admin, [
+                {
+                  id: COST_FIELD_ID,
+                  name: "price",
+                  op: "rename",
+                  version: Number(costVersion ?? "1"),
+                },
+              ]),
               // A target the caller cannot see is a missing one (0011).
               { status: 422, tag: "DefinitionInvalid" },
             ],
             [
-              "GET",
-              `${CHANGE_SETS}/${firstChangeSet}`,
-              {},
+              "GET applyChangeSet journal",
+              yield* asAdmin("GET", `${CHANGE_SETS}/${firstChangeSet}`),
               { status: 404, tag: "NotFound" },
             ],
             [
-              "POST",
-              listPath("core.role"),
-              { body: { label: "Mine", name: "mine" } },
+              "POST coreRole",
+              yield* create(tokens.admin, "core.role", {
+                label: "Mine",
+                name: "mine",
+              }),
               { status: 404, tag: "UnknownTable" },
             ],
             [
-              "PATCH",
-              recordPath("core.field", COST_FIELD_ID),
-              {
-                body: { label: "Price" },
-                headers: { "if-match": `"${costVersion ?? "1"}"` },
-              },
+              "PATCH coreField",
+              yield* patch(
+                tokens.admin,
+                "core.field",
+                COST_FIELD_ID,
+                Number(costVersion ?? "1"),
+                { label: "Price" }
+              ),
               { status: 404, tag: "UnknownTable" },
             ],
             [
-              "DELETE",
-              recordPath("core.field", COST_FIELD_ID),
-              { headers: { "if-match": `"${costVersion ?? "1"}"` } },
+              "DELETE coreField",
+              yield* remove(
+                tokens.admin,
+                "core.field",
+                COST_FIELD_ID,
+                Number(costVersion ?? "1")
+              ),
               { status: 404, tag: "UnknownTable" },
             ],
           ];
 
-          for (const [method, url, options, expected] of definitionPaths) {
-            assert.deepStrictEqual(
-              observe(yield* asAdmin(method, url, options)),
-              expected,
-              `${method} ${url}`
-            );
+          for (const [label, response, expected] of definitionOutcomes) {
+            assert.deepStrictEqual(observe(response), expected, label);
           }
 
           assert.deepStrictEqual(yield* committedState, committedBefore);
@@ -752,7 +734,7 @@ describe("no-bypass", () => {
           );
 
           // Admin still holds the admin role; it grants nothing by name.
-          const me = yield* asAdmin("GET", "/api/v1/auth/me");
+          const me = yield* asAdmin("GET", "/api/v1/session/current");
           assert.strictEqual(me.status, 200, me.text);
           assert.include(me.text, '"admin"');
 
@@ -782,15 +764,11 @@ describe("no-bypass", () => {
           );
 
           assert.strictEqual(asDeputy.status, 200, asDeputy.text);
-          assert.deepStrictEqual(
-            withoutRevision(asDeputy.json),
-            withoutRevision(before.json)
-          );
+          assert.deepStrictEqual(asDeputy.json, before.json);
 
-          const deputyMetadata = yield* http.get(
-            "/api/v1/meta/tables/acme.asset",
-            { token: eve }
-          );
+          const deputyMetadata = yield* http.get(metadataPath("acme.asset"), {
+            token: eve,
+          });
 
           assert.deepStrictEqual(
             withoutRevision(deputyMetadata.json),

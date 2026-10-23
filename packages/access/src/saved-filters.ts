@@ -159,15 +159,15 @@ export const savedFiltersFor = (
   });
 };
 
-// A field as `/api/v2` names it.
+// A field as `/api/v1` names it.
 const apiNamed = (info: FieldInfo | undefined): FieldInfo | undefined =>
   info === undefined
     ? undefined
     : { ...info, name: apiAttributeNameOf(info.name) };
 
 /**
- * The text of a saved filter's condition for a caller in `/api/v2` names
- * (Contracts 10.3), as v2's `condition` parameter takes it, or undefined
+ * The text of a saved filter's condition for a caller in `/api/v1` names
+ * (Contracts 10.3), as the API's `condition` parameter takes it, or undefined
  * when the caller may not use it.
  *
  * @param snapshot - The configuration at the request's revision.

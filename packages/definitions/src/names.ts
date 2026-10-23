@@ -134,7 +134,7 @@ export const permissionNameProblem = (
 const UNDERSCORES = /_+/u;
 
 /**
- * The API name of a field in `/api/v2` (Contracts 10.2; TMF630 v5.0.0
+ * The API name of a field in `/api/v1` (Contracts 10.2; TMF630 v5.0.0
  * Part 1 §2.5 pp.22-23): its definition name split at runs of underscores,
  * the parts after the first capitalized and joined, so `short_description`
  * becomes `shortDescription`, `due__date` `dueDate` and `foo_` `foo`.
@@ -158,7 +158,7 @@ const upperFirst = (name: string): string =>
   `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 
 /**
- * The `/api/v2` collection name of a table (Contracts 10.1; TMF630 v5.0.0
+ * The `/api/v1` collection name of a table (Contracts 10.1; TMF630 v5.0.0
  * Part 1 §2.5 p.22, Martin 2026-10-22): its namespace and table names in
  * lowerCamelCase, joined with the table's first letter upper case, so
  * `helpdesk.ticket_note` is `helpdeskTicketNote`. The inverse is a lookup
@@ -172,7 +172,7 @@ export const apiTableNameOf = (namespace: string, table: string): string =>
   `${apiNameOf(namespace)}${upperFirst(apiNameOf(table))}`;
 
 /**
- * The `/api/v2` type name of a table (`@type`, `@baseType`,
+ * The `/api/v1` type name of a table (`@type`, `@baseType`,
  * `@referredType`): its collection name in UpperCamelCase, so
  * `helpdesk.incident` is `HelpdeskIncident`.
  *
@@ -184,7 +184,7 @@ export const apiTypeNameOf = (namespace: string, table: string): string =>
   upperFirst(apiTableNameOf(namespace, table));
 
 /**
- * The fixed resources of `/api/v2` (Contracts 10.1). No table's collection
+ * The fixed resources of `/api/v1` (Contracts 10.1). No table's collection
  * name may equal one of them: definition validation refuses it
  * (`apiNameClash`), so a path segment names a fixed resource or a table,
  * never both.
@@ -200,7 +200,7 @@ export const FIXED_RESOURCE_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The `/api/v2` names of the system fields (Contracts 10.2; TMF630 v5.0.0
+ * The `/api/v1` names of the system fields (Contracts 10.2; TMF630 v5.0.0
  * Part 7 §2.1.3 p.18 and Part 4 §3 pp.28-33): `version` is the record's
  * `revision`, because TMF's `version` names an entity version;
  * `created_at` is `creationDate` and `updated_at` `lastUpdate`. `class`
@@ -220,7 +220,7 @@ const SYSTEM_API_NAME_MAP: ReadonlyMap<string, string> = new Map(
 );
 
 /**
- * v2 names of shipped platform fields whose definition names are reserved
+ * API names of shipped platform fields whose definition names are reserved
  * API names: `core.field`'s `type` is `fieldType`, because TMF630 v5.0.0
  * Part 7 §2.1.3 p.18 reserves `type`. A local or app field can never take
  * such a name (`apiNameClash`), so the rename applies to the core field
@@ -231,7 +231,7 @@ const PLATFORM_API_NAMES: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * The `/api/v2` name of a field or system field: `SYSTEM_API_NAMES` for
+ * The `/api/v1` name of a field or system field: `SYSTEM_API_NAMES` for
  * system fields, `apiNameOf` for every other (definition names never take
  * a system field's name, Contracts 1.1).
  *
@@ -244,7 +244,7 @@ export const apiAttributeNameOf = (name: string): string =>
   apiNameOf(name);
 
 /**
- * Attribute names of a `/api/v2` resource that no field's API name may
+ * Attribute names of a `/api/v1` resource that no field's API name may
  * take (Contracts 10.2): the system attributes, `href`, `version` (TMF's
  * entity version) and STD's `withheld`. Anything starting with `@` is
  * reserved as well ({@link isReservedApiName}).

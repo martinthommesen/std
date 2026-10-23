@@ -12,6 +12,7 @@ import {
   REFERENCING_KINDS,
 } from "@std/definitions/dependencies";
 import type { DependencyKind } from "@std/definitions/dependencies";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { OPERATION_FORMS, OperationSchema } from "@std/definitions/operation";
 import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
@@ -69,13 +70,14 @@ import { advisoryObjectId, CONFIG_KEY, SCHEMA_KEY } from "../src/sql/locks.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { overridesOf } from "./config-support.ts";
 import {
+  codeOf,
   listOf,
   listPath,
   readsTestLayer,
-  recordOf,
   recordPath,
-  tagOf,
+  resourceOf,
 } from "./reads-support.ts";
+import { CHANGE_SETS, postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   ACME_SET_DIRECTORY,
@@ -94,9 +96,14 @@ import {
   values,
 } from "./schema-support.ts";
 import { errorOf, waitUntil } from "./support.ts";
-import { ASSET, LAPTOP, create, patch, remove } from "./writes-support.ts";
-
-const CHANGE_SETS = "/api/v1/schema/change-sets";
+import {
+  ASSET,
+  LAPTOP,
+  create,
+  patch,
+  remove,
+  savedOf,
+} from "./writes-support.ts";
 
 /** An ID no definition has. */
 const MISSING_ID = "0b0d6c3e-5a0e-4c33-9a43-6e7f6d1b2a99";
@@ -198,12 +205,10 @@ const UNRESOLVED_HISTORY = `SELECT count(*)::text AS value
   WHERE NOT EXISTS (${FIELD_AT})`;
 
 const AppliedSchema = Schema.Struct({
-  changeSet: Schema.Struct({
-    id: Schema.NullOr(Schema.String),
-    revision: Schema.NullOr(Schema.Int),
-    state: Schema.String,
-  }),
+  id: Schema.NullOr(Schema.String),
+  revision: Schema.NullOr(Schema.Int),
   schemaRevision: Schema.Int,
+  state: Schema.String,
 });
 
 const decodeApplied = Schema.decodeUnknownEffect(AppliedSchema);
@@ -257,28 +262,47 @@ const adminToken = Effect.gen(function* signInAdmin() {
   return yield* http.signIn("alice", "alice-password");
 });
 
-const postChangeSet = (token: string, operations: readonly Operation[]) =>
-  Effect.gen(function* post() {
-    const http = yield* TestHttpClient;
-    const parsed = parseJson(JSON.stringify({ operations }));
-    const body: JsonValue = parsed.ok ? parsed.value : null;
+/**
+ * A body keyed by column names, keyed by API names (Contracts 10.2).
+ * @param body - The body.
+ * @returns The same values under their API names.
+ */
+const inApiNames = (
+  body: Readonly<Record<string, JsonValue>>
+): Record<string, JsonValue> =>
+  Object.fromEntries(
+    Object.entries(body).map(([column, value]) => [
+      apiAttributeNameOf(column),
+      value,
+    ])
+  );
 
-    return yield* http.request("POST", CHANGE_SETS, { body, token });
-  });
+/**
+ * One value for each of the attributes.
+ * @param names - The attributes' API names.
+ * @param value - The value.
+ * @returns The body members.
+ */
+const statedValues = (
+  names: readonly string[],
+  value: number
+): Record<string, number> =>
+  Object.fromEntries(names.map((name) => [name, value]));
 
 /**
  * Appends a response to the ones kept.
  * @param endpoint - Where it came from.
  * @param response - The response.
+ * @param sent - The attributes the request stated.
  * @returns The update.
  */
 const appendResponse =
-  (endpoint: string, response: TestResponse) =>
+  (endpoint: string, response: TestResponse, sent: readonly string[]) =>
   (
-    all: readonly (readonly [string, TestResponse])[]
-  ): readonly (readonly [string, TestResponse])[] => [
+    all: readonly (readonly [string, TestResponse, readonly string[]])[]
+  ): readonly (readonly [string, TestResponse, readonly string[]])[] => [
     ...all,
-    [endpoint, response],
+    [endpoint, response, sent],
   ];
 
 /** One armed stop: reached by the server, released by the test. */
@@ -1642,7 +1666,11 @@ const matrixRequests = (
 
     return body === null
       ? http.request(method, path, { headers: sent, token })
-      : http.request(method, path, { body, headers: sent, token });
+      : http.request(method, path, {
+          body: inApiNames(body),
+          headers: sent,
+          token,
+        });
   };
 
   return { generic, post };
@@ -1682,8 +1710,8 @@ const pairRunner = (coverage: Set<string>) =>
   });
 
 describe("schema-http", () => {
-  it("change sets live under /api/v1/schema", () => {
-    assert.strictEqual(CHANGE_SETS, "/api/v1/schema/change-sets");
+  it("change sets live under /api/v1/applyChangeSet", () => {
+    assert.strictEqual(CHANGE_SETS, "/api/v1/applyChangeSet");
   });
 
   layer(readsTestLayer(), { excludeTestServices: true, timeout: 300_000 })(
@@ -1705,11 +1733,11 @@ describe("schema-http", () => {
 
             const applied = yield* appliedOf(posted);
 
-            assert.strictEqual(applied.changeSet.state, "completed");
+            assert.strictEqual(applied.state, "completed");
             assert.strictEqual(headerRevision(posted), applied.schemaRevision);
 
             const journal = yield* http.get(
-              `${CHANGE_SETS}/${applied.changeSet.id ?? ""}`,
+              `${CHANGE_SETS}/${applied.id ?? ""}`,
               { token: admin }
             );
 
@@ -1723,10 +1751,10 @@ describe("schema-http", () => {
             ]);
 
             assert.strictEqual(refused.status, 403);
-            assert.strictEqual(yield* tagOf(refused), "NotAllowed");
+            assert.strictEqual(yield* codeOf(refused), "NotAllowed");
 
             const hidden = yield* http.get(
-              `${CHANGE_SETS}/${applied.changeSet.id ?? ""}`,
+              `${CHANGE_SETS}/${applied.id ?? ""}`,
               { token: bob }
             );
 
@@ -1825,7 +1853,7 @@ describe("schema-http", () => {
               const response = yield* attempt;
 
               assert.strictEqual(response.status, status, response.text);
-              assert.strictEqual(yield* tagOf(response), tag);
+              assert.strictEqual(yield* codeOf(response), tag);
             }
 
             assert.strictEqual(yield* catalogFingerprint, fingerprint);
@@ -1839,10 +1867,7 @@ describe("schema-http", () => {
             );
 
             assert.strictEqual(relabeled.status, 200, relabeled.text);
-            assert.strictEqual(
-              (yield* recordOf(relabeled)).values.label,
-              "Person"
-            );
+            assert.strictEqual((yield* resourceOf(relabeled)).label, "Person");
             assert.strictEqual(yield* catalogFingerprint, fingerprint);
           })
       );
@@ -1860,7 +1885,7 @@ describe("schema-http", () => {
             const refused = yield* remove(admin, "core.field", ACME.cost, 1);
 
             assert.strictEqual(refused.status, 409);
-            assert.strictEqual(yield* tagOf(refused), "UseRetireOrPurge");
+            assert.strictEqual(yield* codeOf(refused), "UseRetireOrPurge");
             assert.deepStrictEqual(
               yield* values(
                 `SELECT coalesce(cost::text, '-') AS value FROM "acme"."asset" ORDER BY id`
@@ -1951,7 +1976,7 @@ describe("schema-http", () => {
             );
 
             assert.strictEqual(refused.status, 422, refused.text);
-            assert.strictEqual(yield* tagOf(refused), "DefinitionInvalid");
+            assert.strictEqual(yield* codeOf(refused), "DefinitionInvalid");
 
             const label = yield* patch(
               admin,
@@ -2003,7 +2028,10 @@ describe("schema-http", () => {
             ]);
 
             assert.strictEqual(batchRefused.status, 422, batchRefused.text);
-            assert.strictEqual(yield* tagOf(batchRefused), "DefinitionInvalid");
+            assert.strictEqual(
+              yield* codeOf(batchRefused),
+              "DefinitionInvalid"
+            );
 
             // An upgrade (the acme set loaded again) keeps the local label,
             // and doctor finds the effective record and its override agree.
@@ -2062,7 +2090,7 @@ describe("schema-http", () => {
             const refused = yield* postChangeSet(admin, [adopt]);
 
             assert.strictEqual(refused.status, 422, refused.text);
-            assert.strictEqual(yield* tagOf(refused), "DefinitionInvalid");
+            assert.strictEqual(yield* codeOf(refused), "DefinitionInvalid");
             assert.include(refused.text, "still shipped");
 
             const direct = errorOf(yield* Effect.exit(change([adopt])));
@@ -2114,7 +2142,7 @@ describe("schema-http", () => {
 
             for (const response of responses) {
               assert.strictEqual(response.status, 404, response.text);
-              assert.strictEqual(yield* tagOf(response), "NotFound");
+              assert.strictEqual(yield* codeOf(response), "NotFound");
             }
 
             // The change-set endpoint: a hidden target, and a create that
@@ -2307,7 +2335,7 @@ describe("schema-http", () => {
                 table,
                 target,
                 1,
-                body(id)
+                inApiNames(body(id))
               );
 
               const missingPatch = yield* patch(
@@ -2315,7 +2343,7 @@ describe("schema-http", () => {
                 table,
                 target,
                 1,
-                body(MISSING_ID)
+                inApiNames(body(MISSING_ID))
               );
 
               assert.strictEqual(
@@ -2346,7 +2374,7 @@ describe("schema-http", () => {
             yield* change([visible.op]);
 
             const generic = yield* http.request("POST", listPath("core.role"), {
-              body: { help_text: null, label: "x", name: "stale_gen" },
+              body: { helpText: null, label: "x", name: "stale_gen" },
               headers,
               token: admin,
             });
@@ -2416,7 +2444,7 @@ describe("schema-http", () => {
             const onMissing = yield* createWithId(MISSING_ID);
 
             assert.strictEqual(onHidden.status, 409, onHidden.text);
-            assert.include(onHidden.text, '"field":"help_text"');
+            assert.include(onHidden.text, '"field":"helpText"');
             assert.strictEqual(
               asMissing(onHidden, collided.id),
               asMissing(onMissing, MISSING_ID)
@@ -2495,14 +2523,14 @@ describe("schema-http", () => {
             const broken = yield* post("broken");
 
             assert.strictEqual(broken.status, 400, broken.text);
-            assert.strictEqual(yield* tagOf(broken), "InvalidSchemaRevision");
+            assert.strictEqual(yield* codeOf(broken), "InvalidSchemaRevision");
 
             const future = yield* post(
               `${before.revision + 5}.${before.changeSetId}`
             );
 
             assert.strictEqual(future.status, 409, future.text);
-            assert.strictEqual(yield* tagOf(future), "SchemaChanged");
+            assert.strictEqual(yield* codeOf(future), "SchemaChanged");
             assert.deepStrictEqual(
               (yield* (yield* Catalog).refresh).key,
               before,
@@ -2538,13 +2566,13 @@ describe("schema-http", () => {
             );
 
             const created = yield* create(alice, ASSET, {
-              asset_tag: "T-1",
+              assetTag: "T-1",
               name: "tagged",
             });
 
             assert.strictEqual(created.status, 201, created.text);
 
-            const record = yield* recordOf(created);
+            const record = yield* savedOf(created);
 
             const retired = yield* patch(admin, "core.field", tag.id, 1, {
               state: "retired",
@@ -2557,17 +2585,14 @@ describe("schema-http", () => {
               token: alice,
             });
 
-            assert.notProperty((yield* recordOf(plain)).values, "asset_tag");
+            assert.notProperty(yield* resourceOf(plain), "assetTag");
 
             const selected = yield* http.get(
-              recordPath(ASSET, record.id, { fields: "name,asset_tag" }),
+              recordPath(ASSET, record.id, { fields: "name,assetTag" }),
               { token: alice }
             );
 
-            assert.strictEqual(
-              (yield* recordOf(selected)).values.asset_tag,
-              "T-1"
-            );
+            assert.strictEqual((yield* resourceOf(selected)).assetTag, "T-1");
 
             // Writes are refused; inserts without it succeed.
             const written = yield* patch(
@@ -2575,7 +2600,7 @@ describe("schema-http", () => {
               ASSET,
               record.id,
               record.version,
-              { asset_tag: "T-2" }
+              { assetTag: "T-2" }
             );
 
             assert.strictEqual(written.status, 422);
@@ -2596,9 +2621,9 @@ describe("schema-http", () => {
 
             assert.strictEqual(again.status, 201, again.text);
             assert.strictEqual(
-              (yield* recordOf(
+              (yield* resourceOf(
                 yield* http.get(recordPath(ASSET, record.id), { token: alice })
-              )).values.asset_tag,
+              )).assetTag,
               "T-1"
             );
           })
@@ -2686,7 +2711,7 @@ describe("schema-http", () => {
             );
 
             assert.strictEqual(stale.status, 409, stale.text);
-            assert.strictEqual(yield* tagOf(stale), "SchemaChanged");
+            assert.strictEqual(yield* codeOf(stale), "SchemaChanged");
 
             // A stale If-Match: VersionConflict with the current version.
             const updated = yield* patch(admin, "core.role", auditor.id, 1, {
@@ -2699,8 +2724,8 @@ describe("schema-http", () => {
               label: "Auditing",
             });
 
-            assert.strictEqual(conflict.status, 409, conflict.text);
-            assert.strictEqual(yield* tagOf(conflict), "VersionConflict");
+            assert.strictEqual(conflict.status, 412, conflict.text);
+            assert.strictEqual(yield* codeOf(conflict), "VersionConflict");
             assert.include(conflict.text, '"currentVersion":2');
           })
       );
@@ -2718,7 +2743,7 @@ describe("schema-http", () => {
 
             assert.strictEqual(created.status, 201, created.text);
 
-            const { id } = yield* recordOf(created);
+            const { id } = yield* savedOf(created);
 
             for (const [version, label] of [
               [1, "Historian"],
@@ -2790,11 +2815,11 @@ describe("schema-http", () => {
             ]);
 
             const generic = yield* create(admin, "core.field", {
+              fieldType: { kind: "text" },
               label: "Busy",
               name: "busy_two",
               required: false,
-              table_id: ACME.asset,
-              type: { kind: "text" },
+              tableId: ACME.asset,
             });
 
             yield* holder.query(
@@ -2803,7 +2828,7 @@ describe("schema-http", () => {
 
             for (const response of [fixed, generic]) {
               assert.strictEqual(response.status, 503, response.text);
-              assert.strictEqual(yield* tagOf(response), "SchemaBusy");
+              assert.strictEqual(yield* codeOf(response), "SchemaBusy");
               assert.strictEqual(response.headers.get("retry-after"), "5");
             }
           })
@@ -2838,7 +2863,7 @@ describe("schema-http", () => {
 
             assert.strictEqual(made.status, 201, made.text);
 
-            const record = yield* recordOf(made);
+            const record = yield* savedOf(made);
 
             assert.strictEqual(
               (yield* patch(admin, "core.class", gadget.id, 1, {
@@ -2875,7 +2900,7 @@ describe("schema-http", () => {
             );
 
             assert.strictEqual(own.status, 403);
-            assert.strictEqual(yield* tagOf(own), "NotAllowed");
+            assert.strictEqual(yield* codeOf(own), "NotAllowed");
           })
       );
 
@@ -2892,13 +2917,17 @@ describe("schema-http", () => {
             const done = yield* Ref.make(false);
 
             const responses = yield* Ref.make<
-              readonly (readonly [string, TestResponse])[]
+              readonly (readonly [string, TestResponse, readonly string[]])[]
             >([]);
 
             const addedAt = new Map<string, number>();
 
-            const keep = (endpoint: string, response: TestResponse) =>
-              Ref.update(responses, appendResponse(endpoint, response));
+            const keep = (
+              endpoint: string,
+              response: TestResponse,
+              sent: readonly string[] = []
+            ) =>
+              Ref.update(responses, appendResponse(endpoint, response, sent));
 
             const reader = Effect.gen(function* readLaptops() {
               while (!(yield* Ref.get(done))) {
@@ -2922,12 +2951,20 @@ describe("schema-http", () => {
 
               while (!(yield* Ref.get(done))) {
                 index += 1;
+
+                // Every field whose change set has committed is stated, so
+                // the answer must show them (an empty attribute is left out
+                // of a resource, so a field's presence is its value's).
+                const stated = [...addedAt.keys()].map(apiAttributeNameOf);
+
                 yield* keep(
                   "create",
                   yield* create(alice, LAPTOP, {
+                    ...statedValues(stated, index),
                     name: `load ${index}`,
-                    purchased_on: "2026-01-01",
-                  })
+                    purchasedOn: "2026-01-01",
+                  }),
+                  stated
                 );
               }
             });
@@ -2947,10 +2984,7 @@ describe("schema-http", () => {
               ]);
 
               assert.strictEqual(posted.status, 201, posted.text);
-              addedAt.set(
-                name,
-                (yield* appliedOf(posted)).changeSet.revision ?? 0
-              );
+              addedAt.set(name, (yield* appliedOf(posted)).revision ?? 0);
             }
 
             yield* Ref.set(done, true);
@@ -2961,7 +2995,7 @@ describe("schema-http", () => {
             assert.isAbove(all.length, 50);
             assert.isFalse(all.some(([, response]) => response.status >= 500));
 
-            for (const [endpoint, response] of all) {
+            for (const [endpoint, response, sent] of all) {
               // Reads succeed with 200 and creates with 201; nothing else.
               assert.strictEqual(
                 response.status,
@@ -2971,35 +3005,42 @@ describe("schema-http", () => {
 
               const revision = headerRevision(response);
 
-              const expected = [...addedAt]
-                .flatMap(([name, at]) => (at <= revision ? [name] : []))
-                .toSorted();
+              const expected = new Set(
+                [...addedAt]
+                  .flatMap(([name, at]) =>
+                    at <= revision ? [apiAttributeNameOf(name)] : []
+                  )
+                  .toSorted()
+              );
 
               const records =
                 endpoint === "create"
-                  ? [yield* recordOf(response)]
-                  : (yield* listOf(response)).records;
+                  ? [yield* resourceOf(response)]
+                  : (yield* listOf(response)).resources;
 
-              if (endpoint !== "create") {
-                assert.strictEqual(
-                  (yield* listOf(response)).schemaRevision,
-                  revision
-                );
-              }
-
-              // Through the laptop endpoint (reads and creates) every laptop
-              // field of the header's revision shows, and no later one;
-              // through the asset endpoint no child-only field ever does.
+              // Through the laptop endpoint (reads and creates) no field
+              // later than the header's revision shows, and a created
+              // laptop shows every field it stated; through the asset
+              // endpoint no child-only field ever does.
               for (const record of records) {
-                const loadFields = Object.keys(record.values)
-                  .filter((key) => key.startsWith("load_"))
+                const loadFields = Object.keys(record)
+                  .filter((key) => key.startsWith("load"))
                   .toSorted();
 
-                assert.deepStrictEqual(
-                  loadFields,
-                  endpoint === ASSET ? [] : expected,
-                  `${endpoint} at revision ${revision}`
-                );
+                const label = `${endpoint} at revision ${revision}`;
+
+                if (endpoint === ASSET) {
+                  assert.deepStrictEqual(loadFields, [], label);
+                } else {
+                  assert.isEmpty(
+                    loadFields.filter((key) => !expected.has(key)),
+                    label
+                  );
+                  assert.isEmpty(
+                    sent.filter((key) => !loadFields.includes(key)),
+                    label
+                  );
+                }
               }
             }
           })
@@ -3077,7 +3118,7 @@ describe("schema-http", () => {
               const response = yield* Fiber.join(purge);
 
               assert.strictEqual(response.status, 403, response.text);
-              assert.strictEqual(yield* tagOf(response), "PermissionRequired");
+              assert.strictEqual(yield* codeOf(response), "PermissionRequired");
               assert.strictEqual(
                 (yield* catalog.refresh).field(doomed.id)?.state,
                 "retired"
@@ -3146,7 +3187,7 @@ describe("schema-http", () => {
               // caller (3.4), as in the request's own check. This test
               // runs last: the admin rules stay revoked.
               assert.strictEqual(response.status, 404, response.text);
-              assert.strictEqual(yield* tagOf(response), "UnknownTable");
+              assert.strictEqual(yield* codeOf(response), "UnknownTable");
               assert.strictEqual(
                 (yield* (yield* Catalog).refresh).role(target.id)?.label,
                 "revocation_target"
@@ -3202,7 +3243,7 @@ describe("schema-http", () => {
           const response = yield* Fiber.join(write);
 
           assert.strictEqual(response.status, 404, response.text);
-          assert.strictEqual(yield* tagOf(response), "NotFound");
+          assert.strictEqual(yield* codeOf(response), "NotFound");
           assert.notInclude(response.text, "currentVersion");
           assert.strictEqual(
             (yield* (yield* Catalog).refresh).role(target.id)?.label,
@@ -3225,7 +3266,7 @@ describe("schema-http", () => {
 
           const write = yield* Effect.forkChild(
             patch(admin, "core.access_rule", rule.id, 1, {
-              role_ids: [role.id],
+              roleIds: [role.id],
             })
           );
 
@@ -3246,7 +3287,7 @@ describe("schema-http", () => {
             rule.id,
             1,
             {
-              role_ids: [MISSING_ID],
+              roleIds: [MISSING_ID],
             }
           );
 
@@ -3302,7 +3343,7 @@ describe("schema-http", () => {
           const patched = yield* Fiber.join(write);
 
           assert.strictEqual(patched.status, 404, patched.text);
-          assert.strictEqual(yield* tagOf(patched), "NotFound");
+          assert.strictEqual(yield* codeOf(patched), "NotFound");
 
           // The change-set endpoint, in the same interleaving.
           const second = addField(ACME.asset, "strict_two", { kind: "text" });

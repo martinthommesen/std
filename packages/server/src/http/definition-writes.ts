@@ -58,11 +58,7 @@ import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { TABLE_OF } from "../catalog/definition-tables.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
-import {
-  currentReadScope,
-  getRecord,
-  resolveTable,
-} from "../records/read-records.ts";
+import { currentReadScope, resolveTable } from "../records/read-records.ts";
 import { stepBoundary } from "../schema/recovery-settings.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
@@ -74,9 +70,7 @@ import {
   authorizeOperations,
   sessionAuthorization,
 } from "./change-sets.ts";
-import { jsonWithStatus } from "./record-writes.ts";
 import { asActor, inRequestTransaction } from "./request-scope.ts";
-import { recordServedRevision } from "./schema-revision-header.ts";
 import { checkRequestRevision } from "./stale-request.ts";
 import type { parseRequestRevision } from "./stale-request.ts";
 
@@ -846,67 +840,5 @@ export const applyDefinitionWrite = Effect.fn("Http.applyDefinitionWrite")(
     });
 
     return { actor: prepared.actor, id: prepared.id };
-  }
-);
-
-/**
- * Runs a write to a definition table as a change set and answers like the
- * generic write routes: 201 or 200 with the record, or the delete's ID and
- * version.
- *
- * @param transactions - The process's transactions.
- * @param request - The HTTP request.
- * @param table - The qualified table name.
- * @param kind - Its definition kind.
- * @param write - The write.
- * @returns The response.
- */
-export const writeDefinition = Effect.fn("Http.writeDefinition")(
-  function* writeDefinition(
-    transactions: TransactionsApi,
-    request: HttpServerRequest,
-    stated: StatedRevision,
-    table: string,
-    kind: DefinitionKind,
-    write: DefinitionWrite
-  ) {
-    const prepared = yield* applyDefinitionWrite(
-      transactions,
-      request,
-      stated,
-      table,
-      kind,
-      write
-    );
-
-    return yield* inRequestTransaction(
-      transactions,
-      request,
-      asActor(
-        Effect.gen(function* answer() {
-          const reading = yield* Catalog;
-          const snapshot = yield* reading.current;
-
-          recordServedRevision(request, snapshot.key);
-
-          if (write.action === "delete") {
-            return jsonWithStatus(
-              {
-                id: prepared.id,
-                schemaRevision: snapshot.revision,
-                version:
-                  snapshot.get(prepared.id)?.version ?? write.expectedVersion,
-              },
-              200
-            );
-          }
-
-          return jsonWithStatus(
-            yield* getRecord({ id: prepared.id, table }),
-            write.action === "create" ? 201 : 200
-          );
-        })
-      )
-    );
   }
 );

@@ -45,11 +45,12 @@ import {
 } from "./authz-support.ts";
 import type { Callers, Observation } from "./authz-support.ts";
 import {
+  codeOf,
   listPath,
   readsTestLayer,
   recordPath,
-  tagOf,
 } from "./reads-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
 import { ACME, change, createRole, values } from "./schema-support.ts";
 
 /** The paths, in the order of every expectation below. */
@@ -60,13 +61,13 @@ const PATHS = [
   "history?field",
   "create",
   "update",
+  "update?answer",
   "delete",
   "sign-in",
   "me",
   "sign-out",
   "openapi",
   "metadata",
-  "metadata openapi",
   "metadata tables",
   "picker list",
   "change-set apply",
@@ -83,10 +84,10 @@ const HEADER = "std-schema-revision";
 /** What the web app sends on every request with its session cookie. */
 const WEB_CLIENT_HEADERS = { "std-client": "web" } as const;
 
+const SESSION = "/api/v1/session";
+
 /** The services of the test layer. */
 type Services = Layer.Success<ReturnType<typeof readsTestLayer>>;
-
-const CHANGE_SETS = "/api/v1/schema/change-sets";
 
 /**
  * Definitions the definition paths work on, made before the test states
@@ -131,7 +132,7 @@ const roleByAdmin = (callers: Callers) =>
     assert.strictEqual(response.status, 201, response.text);
 
     return {
-      changeSetId: textOf(objectOf(objectOf(response.json).changeSet).id),
+      changeSetId: textOf(objectOf(response.json).id),
       id: role.op === "createRole" ? role.definition.id : "",
     };
   });
@@ -199,7 +200,10 @@ const take = (
     const history = `${recordPath("acme.asset", fixture.records.L)}/history`;
 
     // A fresh monitor, then the update or delete of it.
-    const freshThen = (method: "PATCH" | "DELETE") =>
+    // The answer of an update is the record read again through the
+    // endpoint, with the selection of `answer` (`fields`, else the default
+    // selection of the record's concrete class).
+    const freshThen = (method: "PATCH" | "DELETE", answer = "") =>
       Effect.gen(function* onFreshMonitor() {
         const id = yield* freshAsset(alice, ACME.monitor, FRESH);
 
@@ -210,7 +214,7 @@ const take = (
 
         return yield* http.request(
           method,
-          recordPath("acme.asset", id),
+          recordPath("acme.asset", id, answer === "" ? {} : { fields: answer }),
           method === "PATCH"
             ? { ...options, body: { name: "renamed" } }
             : options
@@ -281,39 +285,37 @@ const take = (
           headers,
           ...as(token),
         }),
-      me: () => http.get("/api/v1/auth/me", { headers, ...as(token) }),
+      me: () => http.get(`${SESSION}/current`, { headers, ...as(token) }),
       // Metadata is what a stale client asks for: an older revision is
       // served, one the database never had is not.
       metadata: () =>
-        http.get("/api/v1/meta/tables/acme.asset", { headers, ...as(token) }),
-      "metadata openapi": () =>
-        http.get("/api/v1/meta/tables/acme.asset/openapi.json", {
+        http.get("/api/v1/tableMetadata/acmeAsset", {
           headers,
           ...as(token),
         }),
       "metadata tables": () =>
-        http.get("/api/v1/meta/tables", { headers, ...as(token) }),
-      openapi: () => http.request("GET", OPENAPI_PATH, { headers }),
-      // The picker's reference field is in scope; `docked_to` is not
+        http.get("/api/v1/tableMetadata", { headers, ...as(token) }),
+      openapi: () => http.get(OPENAPI_PATH, { headers }),
+      // The picker's reference field is in scope; `dockedTo` is not
       // touched by the changes below.
       "picker list": () =>
         http.get(
           listPath("acme.asset", {
-            allowedFor: "acme.asset/docked_to",
+            allowedFor: "acmeAsset/dockedTo",
             fields: "name",
           }),
           { headers, ...as(token) }
         ),
       // The web app signs in with the cookie form.
       "sign-in": () =>
-        http.request(
-          "POST",
-          cookies ? "/api/v1/auth/cookie-sign-in" : "/api/v1/auth/sign-in",
-          {
-            body: { login: "alice", password: "alice-password" },
-            headers: cookies ? { ...headers, ...WEB_CLIENT_HEADERS } : headers,
-          }
-        ),
+        http.request("POST", SESSION, {
+          body: {
+            login: "alice",
+            password: "alice-password",
+            tokenDelivery: cookies ? "cookie" : "body",
+          },
+          headers: cookies ? { ...headers, ...WEB_CLIENT_HEADERS } : headers,
+        }),
       // A session of its own, so Alice's stays.
       "sign-out": () =>
         (cookies
@@ -321,13 +323,16 @@ const take = (
           : http.signIn("alice", "alice-password")
         ).pipe(
           Effect.flatMap((own) =>
-            http.request("POST", "/api/v1/auth/sign-out", {
+            http.request("DELETE", `${SESSION}/current`, {
               headers,
               ...as(own),
             })
           )
         ),
-      update: () => freshThen("PATCH"),
+      // Naming only `name`, the answer too.
+      update: () => freshThen("PATCH", "name"),
+      // The answer shows the monitor's default selection, `status` too.
+      "update?answer": () => freshThen("PATCH"),
     };
 
     return yield* routes[name]();
@@ -359,22 +364,22 @@ const success: Readonly<Record<PathName, number>> = {
   "change-set read": 200,
   create: 201,
   "definition create": 201,
-  "definition delete": 200,
+  "definition delete": 204,
   "definition update": 200,
-  delete: 200,
+  delete: 204,
   get: 200,
   history: 200,
   "history?field": 200,
   list: 200,
   me: 200,
   metadata: 200,
-  "metadata openapi": 200,
   "metadata tables": 200,
   openapi: 200,
   "picker list": 200,
-  "sign-in": 200,
+  "sign-in": 201,
   "sign-out": 204,
   update: 200,
+  "update?answer": 200,
 };
 
 /**
@@ -587,6 +592,7 @@ describe("stale-paths", () => {
                 create: CHANGED,
                 history: CHANGED,
                 "history?field": CHANGED,
+                "update?answer": CHANGED,
               })
             )
           );
@@ -629,7 +635,7 @@ describe("stale-paths", () => {
             const stale = yield* historyOfK(table, callers.tokens.alice);
 
             assert.strictEqual(stale.status, 409, table);
-            assert.strictEqual(yield* tagOf(stale), "SchemaChanged");
+            assert.strictEqual(yield* codeOf(stale), "SchemaChanged");
             assert.include(stale.text, "readOnlyChanged");
             assert.include(stale.text, '"serial"');
           }

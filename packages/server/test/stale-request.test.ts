@@ -14,7 +14,7 @@ import { Effect, Schema } from "effect";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
-import { listPath, readsTestLayer, tagOf } from "./reads-support.ts";
+import { codeOf, listPath, readsTestLayer } from "./reads-support.ts";
 import { ACME, addField, change, values } from "./schema-support.ts";
 
 const ChangedBodySchema = Schema.Struct({
@@ -29,7 +29,10 @@ const ChangedBodySchema = Schema.Struct({
 
 const decodeChanged = Schema.decodeUnknownEffect(ChangedBodySchema);
 
-const FILTER_ON_STATUS = listPath("acme.asset", { filter: 'status = "lost"' });
+const FILTER_ON_STATUS = listPath("acme.asset", {
+  condition: 'status = "lost"',
+});
+
 const SORT_BY_NAME = listPath("acme.asset", { sort: "name" });
 const NAME_ONLY = listPath("acme.asset", { fields: "name", sort: "name" });
 
@@ -64,7 +67,7 @@ describe("stale-request", () => {
 
         const malformed = yield* at("12.not-a-uuid");
         assert.strictEqual(malformed.status, 400);
-        assert.strictEqual(yield* tagOf(malformed), "InvalidSchemaRevision");
+        assert.strictEqual(yield* codeOf(malformed), "InvalidSchemaRevision");
 
         const ahead = yield* at(
           revisionHeaderValue({
@@ -74,7 +77,7 @@ describe("stale-request", () => {
         );
 
         assert.strictEqual(ahead.status, 409);
-        assert.strictEqual(yield* tagOf(ahead), "SchemaChanged");
+        assert.strictEqual(yield* codeOf(ahead), "SchemaChanged");
 
         const restored = yield* at(
           revisionHeaderValue({
@@ -166,8 +169,8 @@ describe("stale-request", () => {
             token,
           });
 
-        const path = { fields: "name,laptop_ref.serial" };
-        const labelled = { fields: "name,docked_to", labels: "true" };
+        const path = { fields: "name,laptopRef.serial" };
+        const labelled = { fields: "name,dockedTo" };
 
         assert.strictEqual((yield* at(path)).status, 200);
 
@@ -190,7 +193,7 @@ describe("stale-request", () => {
           [["serial", "readOnlyChanged"]]
         );
 
-        // A label reads the target's display field: name.
+        // A reference reads the target's display field: name.
         assert.strictEqual((yield* at(labelled)).status, 200);
 
         const relabel = yield* catalog.refresh;
@@ -204,7 +207,7 @@ describe("stale-request", () => {
           },
         ]);
 
-        const label = yield* at({ fields: "docked_to", labels: "true" });
+        const label = yield* at({ fields: "dockedTo" });
         assert.strictEqual(label.status, 409);
       }).pipe(Effect.orDie)
     );
@@ -232,11 +235,11 @@ describe("stale-request", () => {
           addField(ACME.asset, "r2_missing", { kind: "text" }).op,
         ]);
 
-        const unrelated = yield* at("name,r2_novel,docked_to.name");
+        const unrelated = yield* at("name,r2Novel,dockedTo.name");
         assert.strictEqual(unrelated.status, 400);
-        assert.strictEqual(yield* tagOf(unrelated), "UnknownField");
+        assert.strictEqual(yield* codeOf(unrelated), "UnknownField");
 
-        const added = yield* at("name,docked_to.r2_missing");
+        const added = yield* at("name,dockedTo.r2Missing");
         assert.strictEqual(added.status, 409);
         assert.deepStrictEqual(
           (yield* decodeChanged(added.json)).changes.map((entry) => [
@@ -244,7 +247,7 @@ describe("stale-request", () => {
             entry.field,
             entry.kind,
           ]),
-          [["acme.asset", "r2_missing", "fieldAdded"]]
+          [["acme.asset", "r2Missing", "fieldAdded"]]
         );
       }).pipe(Effect.orDie)
     );

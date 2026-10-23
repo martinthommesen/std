@@ -1,4 +1,4 @@
-import { isTmfError } from "@std/api/v2/client";
+import { isTmfError } from "@std/api/client";
 import { Effect, Option, Schema } from "effect";
 import { Command, Dom } from "foldkit";
 import { load, pushUrl, replaceUrl } from "foldkit/navigation";

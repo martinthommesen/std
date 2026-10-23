@@ -13,29 +13,34 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { TableMetadata } from "@std/api/table-metadata";
 import type { LayoutDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
 import type { Requester } from "@std/definitions/requester";
 import type { NamedSetFile, SetFile } from "@std/definitions/set-file";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
 import type { MetaLayoutElement } from "@std/definitions/table-metadata";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import { parseJson } from "@std/values/json";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonObject } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
-import { objectOf, signInAll } from "./authz-support.ts";
+import { signInAll } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
 import {
   conflictsOf,
   overridesOf,
   writeSetDirectory,
 } from "./config-support.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import {
+  codeOf,
+  collectionOf,
+  listPath,
+  readsTestLayer,
+} from "./reads-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -44,6 +49,7 @@ import {
   ensureSite,
   values,
 } from "./schema-support.ts";
+import { patch as patchRecord } from "./writes-support.ts";
 
 const LX = {
   form: "6f7bd0a1-3b8a-4c5e-9e0d-1a2b3c4d5e01",
@@ -139,7 +145,7 @@ const loadVersion = (version: Version) =>
     })
   );
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
 // A layout as names: `#label` for a section.
 const shown = (elements: readonly MetaLayoutElement[] | null) =>
@@ -152,16 +158,6 @@ const versionOf = (id: string) =>
     return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
   });
 
-const operationsJson = (operations: readonly Operation[]): JsonValue => {
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  if (!parsed.ok) {
-    throw new Error("not JSON");
-  }
-
-  return parsed.value;
-};
-
 const fieldElements = (...fieldIds: readonly string[]): JsonObject[] =>
   fieldIds.map((fieldId) => ({ fieldId, kind: "field" }));
 
@@ -170,25 +166,24 @@ const metaOf = Effect.fn("Layouts.metaOf")(function* metaOf(
   table: string
 ) {
   const http = yield* TestHttpClient;
-  const response = yield* http.get(`/api/v1/meta/tables/${table}`, { token });
+
+  const response = yield* http.get(
+    `/api/v1/tableMetadata/${collectionOf(table)}`,
+    { token }
+  );
+
   const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
 
-  return body.table.layouts;
+  return body.layouts;
 });
 
 const patch = Effect.fn("Layouts.patch")(function* patch(
   token: string,
-  path: string,
+  table: string,
+  id: string,
   body: JsonObject
 ) {
-  const http = yield* TestHttpClient;
-  const id = path.split("/").at(-1) ?? "";
-
-  return yield* http.request("PATCH", path, {
-    body,
-    headers: { "if-match": `"${yield* versionOf(id)}"` },
-    token,
-  });
+  return yield* patchRecord(token, table, id, yield* versionOf(id), body);
 });
 
 describe("layouts", () => {
@@ -237,13 +232,9 @@ describe("layouts", () => {
           // whole element list.
           const local = [LX.notes, LX.title];
 
-          const edited = yield* patch(
-            token,
-            `/api/v1/tables/core.layout/records/${LX.form}`,
-            {
-              elements: fieldElements(...local),
-            }
-          );
+          const edited = yield* patch(token, "core.layout", LX.form, {
+            elements: fieldElements(...local),
+          });
 
           assert.strictEqual(edited.status, 200, edited.text);
 
@@ -290,18 +281,14 @@ describe("layouts", () => {
           );
 
           // The child's own layout replaces the parent's as a whole.
-          const own = yield* http.request(
-            "POST",
-            "/api/v1/tables/core.layout/records",
-            {
-              body: {
-                elements: fieldElements(LX.impact, LX.title),
-                layout_type: "form",
-                table_id: LX.incident,
-              },
-              token,
-            }
-          );
+          const own = yield* http.request("POST", listPath("core.layout"), {
+            body: {
+              elements: fieldElements(LX.impact, LX.title),
+              layoutType: "form",
+              tableId: LX.incident,
+            },
+            token,
+          });
 
           assert.strictEqual(own.status, 201, own.text);
 
@@ -317,13 +304,9 @@ describe("layouts", () => {
 
           yield* change([due.op]);
 
-          const withDue = yield* patch(
-            token,
-            `/api/v1/tables/core.layout/records/${LX.form}`,
-            {
-              elements: fieldElements(LX.notes, due.id, LX.title),
-            }
-          );
+          const withDue = yield* patch(token, "core.layout", LX.form, {
+            elements: fieldElements(LX.notes, due.id, LX.title),
+          });
 
           assert.strictEqual(withDue.status, 200, withDue.text);
           assert.deepStrictEqual(
@@ -331,13 +314,9 @@ describe("layouts", () => {
             ["notes", "due", "title"]
           );
 
-          const retired = yield* patch(
-            token,
-            `/api/v1/tables/core.field/records/${due.id}`,
-            {
-              state: "retired",
-            }
-          );
+          const retired = yield* patch(token, "core.field", due.id, {
+            state: "retired",
+          });
 
           assert.strictEqual(retired.status, 200, retired.text);
 
@@ -487,12 +466,12 @@ describe("layouts", () => {
 
             const generic = yield* http.request(
               "POST",
-              "/api/v1/tables/core.layout/records",
+              listPath("core.layout"),
               {
                 body: {
                   elements: entry.elements,
-                  layout_type: entry.type,
-                  table_id: entry.classId,
+                  layoutType: entry.type,
+                  tableId: entry.classId,
                 },
                 token: tokens.admin,
               }
@@ -511,11 +490,7 @@ describe("layouts", () => {
               op: "createLayout",
             };
 
-            const endpoint = yield* http.request(
-              "POST",
-              "/api/v1/schema/change-sets",
-              { body: operationsJson([operation]), token: tokens.admin }
-            );
+            const endpoint = yield* postChangeSet(tokens.admin, [operation]);
 
             for (const response of [generic, endpoint]) {
               assert.strictEqual(
@@ -524,7 +499,7 @@ describe("layouts", () => {
                 `${entry.name}: ${response.text}`
               );
               assert.strictEqual(
-                objectOf(response.json)._tag,
+                yield* codeOf(response),
                 "DefinitionInvalid",
                 entry.name
               );

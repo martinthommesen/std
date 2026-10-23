@@ -1,4 +1,4 @@
-import { makeStdClientV2 } from "@std/api/v2/client";
+import { makeStdClient } from "@std/api/client";
 import type { Schema } from "effect";
 import { Effect, Layer, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -29,8 +29,8 @@ const decoder = new TextDecoder();
 
 /**
  * The real typed client over a fake server that answers by method and
- * path (`DELETE /api/v2/session/current`) or by path alone
- * (`/api/v2/tableMetadata`), for testing what a Command does with each
+ * path (`DELETE /api/v1/session/current`) or by path alone
+ * (`/api/v1/tableMetadata`), for testing what a Command does with each
  * answer. Requests are recorded.
  *
  * @param answers - The answer for each method and path, or path.
@@ -82,7 +82,7 @@ export const fakeStdApi = (answers: Readonly<Record<string, FakeAnswer>>) => {
 
   const layer = Layer.effect(
     StdApi,
-    makeStdClientV2({ baseUrl: BASE_URL, webClient: true })
+    makeStdClient({ baseUrl: BASE_URL, webClient: true })
   ).pipe(
     Layer.provide(
       Layer.succeed(HttpClient.HttpClient, sendingRequestRevision(client))

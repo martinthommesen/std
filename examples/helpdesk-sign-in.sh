@@ -9,7 +9,7 @@
 #      served: 200, text/html, its root element and its module script, and
 #      that script itself (200, JavaScript);
 #   2. signs in as `admin` and as `agent` the way the web app does
-#      (`POST /api/v2/session` with `tokenDelivery: cookie` and
+#      (`POST /api/v1/session` with `tokenDelivery: cookie` and
 #      `STD-Client: web`; decision 0018) and checks the HTTP-only session
 #      cookie;
 #   3. lists `helpdeskIncident` as each of them with that cookie and checks
@@ -37,7 +37,7 @@ STD_URL=${STD_URL:-http://127.0.0.1:8080}
 ADMIN_PASSWORD=${HELPDESK_ADMIN_PASSWORD:-helpdesk-admin-demo-password}
 AGENT_PASSWORD=${HELPDESK_AGENT_PASSWORD:-helpdesk-agent-demo-password}
 
-API="$STD_URL/api/v2"
+API="$STD_URL/api/v1"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -96,7 +96,7 @@ sign_in() {
     curl -sS -o "$WORK/body" -D "$WORK/headers" -w '%{http_code}' -c "$jar" -X POST \
       -H 'content-type: application/json' -H 'std-client: web' --data-binary @- \
       "$API/session") || fail "sign-in as $login: no answer from the server"
-  [[ $status == 201 ]] || fail "POST /api/v2/session as $login -> $status $(cat "$WORK/body")"
+  [[ $status == 201 ]] || fail "POST /api/v1/session as $login -> $status $(cat "$WORK/body")"
   grep -qi '^set-cookie: std_session=[^;]*;.*HttpOnly' "$WORK/headers" ||
     fail "sign-in as $login set no HTTP-only std_session cookie: $(grep -i '^set-cookie' "$WORK/headers" | sed 's/=[^;]*/=<redacted>/' || true)"
   expect "$(cat "$WORK/body")" '(.user.id | type) == "string" and (has("token") | not)' "a cookie sign-in for $login: the user and no token in the body"
@@ -113,7 +113,7 @@ sign_in agent "$AGENT_PASSWORD" "$WORK/agent.jar"
 # the body. Stops unless 200 with at least one record.
 incidents() {
   get "$API/helpdeskIncident?sort=number" -b "$2"
-  [[ $STATUS == 200 ]] || fail "GET /api/v2/helpdeskIncident as $1 -> $STATUS $BODY"
+  [[ $STATUS == 200 ]] || fail "GET /api/v1/helpdeskIncident as $1 -> $STATUS $BODY"
   expect "$BODY" 'length > 0' "incidents for $1 (did pnpm helpdesk:seed run?)"
   printf '%s' "$BODY"
 }

@@ -234,15 +234,15 @@ describe("sign-in", () => {
   });
 });
 
-const ME = "/api/v2/session/current";
+const ME = "/api/v1/session/current";
 
-const COOKIE_SIGN_IN = "/api/v2/session";
+const COOKIE_SIGN_IN = "/api/v1/session";
 
 const signedIn = {
   body: {
     "@type": "Session",
     expiresAt: "2026-10-22T12:00:00.000Z",
-    href: "http://std.test/api/v2/session/current",
+    href: "http://std.test/api/v1/session/current",
     id: "current",
     tokenDelivery: "cookie",
     user: ada.user,

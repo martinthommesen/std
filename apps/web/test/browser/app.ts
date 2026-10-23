@@ -15,9 +15,9 @@ import type { Locator, Page, Response } from "playwright";
 
 /**
  * Where the API lives. Every helper here names its paths relative to it,
- * so moving the API (`/api/v2` to `/api/v1`) is a change of this line.
+ * so moving the API (`/api/v1` to `/api/v1`) is a change of this line.
  */
-export const API_PREFIX = "/api/v2";
+export const API_PREFIX = "/api/v1";
 
 /** The API's fixed resources: any other first segment is a collection. */
 const FIXED_RESOURCES: ReadonlySet<string> = new Set([

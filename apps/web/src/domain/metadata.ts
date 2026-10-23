@@ -10,7 +10,7 @@ import type {
   TableMetadata,
   TableMetadataField,
   TableMetadataSummary,
-} from "@std/api/v2/table-metadata";
+} from "@std/api/table-metadata";
 
 export {
   /** One table's metadata for the caller. */
@@ -19,7 +19,7 @@ export {
   TableMetadataField as MetaFieldSchema,
   /** One table the caller can open, as the table list shows it. */
   TableMetadataSummary as MetaTableSummarySchema,
-} from "@std/api/v2/table-metadata";
+} from "@std/api/table-metadata";
 
 /** One table's metadata for the caller. */
 export type MetaTable = typeof TableMetadata.Type;

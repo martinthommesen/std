@@ -16,19 +16,19 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
-import { mergePatch } from "../src/http/v2/patch.ts";
-import { TMF_ERROR_TAGS, tmfErrorOf } from "../src/http/v2/tmf-error.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import { mergePatch } from "../src/http/api/patch.ts";
+import { TMF_ERROR_TAGS, tmfErrorOf } from "../src/http/api/tmf-error.ts";
 import {
   asArray,
   asObject,
   idsOf,
   numberOf,
   textOf,
-  V2,
-  v2Callers,
+  API,
+  apiCallers,
   withQuery,
-} from "./v2-support.ts";
+} from "./api-support.ts";
+import { readsTestLayer } from "./reads-support.ts";
 
 const ORIGIN = "http://localhost";
 
@@ -80,7 +80,7 @@ const freshAsset = (
   Effect.gen(function* createAsset() {
     const http = yield* TestHttpClient;
 
-    const created = yield* http.request("POST", V2.asset, {
+    const created = yield* http.request("POST", API.asset, {
       ...caller,
       body,
     });
@@ -111,7 +111,7 @@ describe("tmf630-conformance", () => {
       assert.isTrue(isJsonString(body.reason ?? null));
       assert.strictEqual(
         body["@schemaLocation"],
-        `/api/v2/openapi.json#/components/schemas/${tag}`
+        `/api/v1/openapi.json#/components/schemas/${tag}`
       );
     }
 
@@ -125,16 +125,16 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* collections() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { records } = yield* AcmeFixture;
 
-          const response = yield* http.get(V2.asset, callers.alice);
+          const response = yield* http.get(API.asset, callers.alice);
 
           assert.strictEqual(response.status, 200, response.text);
           assert.sameMembers(idsOf(response), Object.values(records));
 
           const qualified = yield* http.get(
-            "/api/v2/acme.asset",
+            "/api/v1/acme.asset",
             callers.alice
           );
 
@@ -149,11 +149,11 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* representation() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { records } = yield* AcmeFixture;
 
           const response = yield* http.get(
-            `${V2.laptop}/${records.L}`,
+            `${API.laptop}/${records.L}`,
             callers.alice
           );
 
@@ -161,12 +161,15 @@ describe("tmf630-conformance", () => {
 
           assert.strictEqual(response.status, 200, response.text);
           assert.strictEqual(laptop.id, records.L);
-          assert.strictEqual(laptop.href, `${ORIGIN}${V2.laptop}/${records.L}`);
+          assert.strictEqual(
+            laptop.href,
+            `${ORIGIN}${API.laptop}/${records.L}`
+          );
           assert.strictEqual(laptop["@type"], "AcmeLaptop");
           assert.strictEqual(laptop["@baseType"], "AcmeAsset");
           assert.strictEqual(
             laptop["@schemaLocation"],
-            `${ORIGIN}/api/v2/tableMetadata/acmeLaptop/schema.json`
+            `${ORIGIN}/api/v1/tableMetadata/acmeLaptop/schema.json`
           );
           assert.strictEqual(laptop.purchasedOn, "2025-01-15");
           assert.strictEqual(laptop.cost, "1200.00");
@@ -194,7 +197,7 @@ describe("tmf630-conformance", () => {
           );
 
           const root = asObject(
-            (yield* http.get(`${V2.asset}/${records.S}`, callers.alice)).json
+            (yield* http.get(`${API.asset}/${records.S}`, callers.alice)).json
           );
 
           assert.strictEqual(root["@type"], "AcmeAsset");
@@ -207,11 +210,11 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* parentRead() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { records } = yield* AcmeFixture;
 
           const response = yield* http.get(
-            `${V2.asset}/${records.L}`,
+            `${API.asset}/${records.L}`,
             callers.alice
           );
 
@@ -220,7 +223,7 @@ describe("tmf630-conformance", () => {
           assert.strictEqual(laptop["@type"], "AcmeLaptop");
           assert.strictEqual(
             response.headers.get("content-location"),
-            `${ORIGIN}${V2.laptop}/${records.L}`
+            `${ORIGIN}${API.laptop}/${records.L}`
           );
           // The concrete representation, child fields included (Martin, D1).
           assert.strictEqual(laptop.serial, "SN-L");
@@ -232,17 +235,17 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* references() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { alice, bob, records } = yield* AcmeFixture;
 
           const asAlice = asObject(
-            (yield* http.get(`${V2.laptop}/${records.L}`, callers.alice)).json
+            (yield* http.get(`${API.laptop}/${records.L}`, callers.alice)).json
           );
 
           assert.deepStrictEqual(asAlice.dockedTo, {
             "@referredType": "AcmeMonitor",
             "@type": "AcmeAssetRef",
-            href: `${ORIGIN}${V2.monitor}/${records.AM}`,
+            href: `${ORIGIN}${API.monitor}/${records.AM}`,
             id: records.AM,
             name: "Alice monitor",
           });
@@ -255,13 +258,13 @@ describe("tmf630-conformance", () => {
           // Bob cannot see Alice's monitor: no label, and its class is the
           // declared target's.
           const asBob = asObject(
-            (yield* http.get(`${V2.laptop}/${records.L}`, callers.bob)).json
+            (yield* http.get(`${API.laptop}/${records.L}`, callers.bob)).json
           );
 
           assert.deepStrictEqual(asBob.dockedTo, {
             "@referredType": "AcmeAsset",
             "@type": "AcmeAssetRef",
-            href: `${ORIGIN}${V2.asset}/${records.AM}`,
+            href: `${ORIGIN}${API.asset}/${records.AM}`,
             id: records.AM,
           });
           assert.notProperty(asBob, "cost");
@@ -269,14 +272,14 @@ describe("tmf630-conformance", () => {
           // S is lost: purchased_on is withheld from Bob (rule 6), and M
           // has no docking (empty, so absent).
           const lost = asObject(
-            (yield* http.get(`${V2.asset}/${records.S}`, callers.bob)).json
+            (yield* http.get(`${API.asset}/${records.S}`, callers.bob)).json
           );
 
           assert.include(asArray(lost.withheld), "purchasedOn");
           assert.notProperty(lost, "purchasedOn");
 
           const monitor = asObject(
-            (yield* http.get(`${V2.monitor}/${records.M}`, callers.bob)).json
+            (yield* http.get(`${API.monitor}/${records.M}`, callers.bob)).json
           );
 
           assert.notProperty(monitor, "dockedTo");
@@ -290,9 +293,9 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* fields() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { records } = yield* AcmeFixture;
-          const path = `${V2.laptop}/${records.L}`;
+          const path = `${API.laptop}/${records.L}`;
 
           const named = asObject(
             (yield* http.get(
@@ -358,10 +361,10 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* equality() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
           const eq = yield* http.get(
-            withQuery(V2.asset, [["status", "lost"]]),
+            withQuery(API.asset, [["status", "lost"]]),
             callers.alice
           );
 
@@ -376,7 +379,7 @@ describe("tmf630-conformance", () => {
             ],
           ] as const) {
             const listed = yield* http.get(
-              withQuery(V2.asset, query),
+              withQuery(API.asset, query),
               callers.alice
             );
 
@@ -386,7 +389,7 @@ describe("tmf630-conformance", () => {
           // TMF filters compare text unmodified (Martin, D4); the
           // condition extension keeps the field's case behavior.
           const exact = yield* http.get(
-            withQuery(V2.asset, [["name", "k"]]),
+            withQuery(API.asset, [["name", "k"]]),
             callers.alice
           );
 
@@ -394,7 +397,7 @@ describe("tmf630-conformance", () => {
           assert.deepStrictEqual(namesOf(exact), []);
 
           const folded = yield* http.get(
-            withQuery(V2.asset, [["condition", 'name = "k"']]),
+            withQuery(API.asset, [["condition", 'name = "k"']]),
             callers.alice
           );
 
@@ -407,7 +410,7 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* comparisons() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { alice, records } = yield* AcmeFixture;
 
           const forms: readonly (readonly [string, string])[] = [
@@ -417,7 +420,7 @@ describe("tmf630-conformance", () => {
 
           for (const form of forms) {
             const listed = yield* http.get(
-              withQuery(V2.asset, [form]),
+              withQuery(API.asset, [form]),
               callers.alice
             );
 
@@ -425,7 +428,7 @@ describe("tmf630-conformance", () => {
           }
 
           const range = yield* http.get(
-            withQuery(V2.asset, [
+            withQuery(API.asset, [
               ["cost.gt", "300"],
               ["cost.lt", "1800"],
             ]),
@@ -435,35 +438,35 @@ describe("tmf630-conformance", () => {
           assert.sameMembers(namesOf(range), ["Alice monitor", "L"]);
 
           const lte = yield* http.get(
-            withQuery(V2.asset, [["cost<=", "300"]]),
+            withQuery(API.asset, [["cost<=", "300"]]),
             callers.alice
           );
 
           assert.deepStrictEqual(namesOf(lte), ["M"]);
 
           const owned = yield* http.get(
-            withQuery(V2.asset, [["owner.id", alice.id]]),
+            withQuery(API.asset, [["owner.id", alice.id]]),
             callers.alice
           );
 
           assert.sameMembers(idsOf(owned), [records.AM, records.K]);
 
           const hop = yield* http.get(
-            withQuery(V2.asset, [["dockedTo.name", "Alice monitor"]]),
+            withQuery(API.asset, [["dockedTo.name", "Alice monitor"]]),
             callers.alice
           );
 
           assert.deepStrictEqual(idsOf(hop), [records.L]);
 
           const typed = yield* http.get(
-            withQuery(V2.asset, [["@type", "AcmeLaptop,AcmeMonitor"]]),
+            withQuery(API.asset, [["@type", "AcmeLaptop,AcmeMonitor"]]),
             callers.alice
           );
 
           assert.sameMembers(namesOf(typed), ["K", "L", "M", "Alice monitor"]);
 
           const condition = yield* http.get(
-            withQuery(V2.asset, [
+            withQuery(API.asset, [
               ["condition", 'purchasedOn > "2025-01-01"'],
               ["status", "in_use"],
             ]),
@@ -473,7 +476,7 @@ describe("tmf630-conformance", () => {
           assert.sameMembers(namesOf(condition), ["Alice monitor", "K", "L"]);
 
           const escaped = yield* http.get(
-            withQuery(V2.asset, [[".status", "lost"]]),
+            withQuery(API.asset, [[".status", "lost"]]),
             callers.alice
           );
 
@@ -486,15 +489,15 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* refusedFilters() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
           const hidden = yield* http.get(
-            withQuery(V2.asset, [["cost", "1"]]),
+            withQuery(API.asset, [["cost", "1"]]),
             callers.bob
           );
 
           const missing = yield* http.get(
-            withQuery(V2.asset, [["nosuchfield", "1"]]),
+            withQuery(API.asset, [["nosuchfield", "1"]]),
             callers.bob
           );
 
@@ -506,21 +509,21 @@ describe("tmf630-conformance", () => {
           );
 
           const regex = yield* http.get(
-            withQuery(V2.asset, [["name.regex", "~K"]]),
+            withQuery(API.asset, [["name.regex", "~K"]]),
             callers.alice
           );
 
           assert.strictEqual(codeOf(regex), "InvalidFilter");
 
           const empty = yield* http.get(
-            withQuery(V2.asset, [["name", ""]]),
+            withQuery(API.asset, [["name", ""]]),
             callers.alice
           );
 
           assert.strictEqual(codeOf(empty), "InvalidFilter");
 
           const unknown = yield* http.get(
-            withQuery(V2.asset, [["@foo", "1"]]),
+            withQuery(API.asset, [["@foo", "1"]]),
             callers.alice
           );
 
@@ -528,7 +531,7 @@ describe("tmf630-conformance", () => {
           assert.strictEqual(codeOf(unknown), "InvalidRequest");
 
           const jsonPath = yield* http.get(
-            withQuery(V2.asset, [["filter", "$[?(@.name=='K')]"]]),
+            withQuery(API.asset, [["filter", "$[?(@.name=='K')]"]]),
             callers.alice
           );
 
@@ -542,10 +545,10 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* offsetPages() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
           const first = yield* http.get(
-            withQuery(V2.asset, [
+            withQuery(API.asset, [
               ["sort", "name"],
               ["limit", "2"],
               ["offset", "0"],
@@ -580,7 +583,7 @@ describe("tmf630-conformance", () => {
           assert.deepStrictEqual(namesOf(last), ["S"]);
 
           const past = yield* http.get(
-            withQuery(V2.asset, [["offset", "99"]]),
+            withQuery(API.asset, [["offset", "99"]]),
             callers.alice
           );
 
@@ -593,7 +596,7 @@ describe("tmf630-conformance", () => {
             ["limit", "1001"],
           ] as const) {
             const refused = yield* http.get(
-              withQuery(V2.asset, [[name, value]]),
+              withQuery(API.asset, [[name, value]]),
               callers.alice
             );
 
@@ -607,17 +610,17 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* cursorPages() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const sorted = [["sort", "-cost,+name"]] as const;
 
           const all = namesOf(
-            yield* http.get(withQuery(V2.asset, sorted), callers.alice)
+            yield* http.get(withQuery(API.asset, sorted), callers.alice)
           );
 
           assert.deepStrictEqual(all, ["S", "K", "L", "Alice monitor", "M"]);
 
           const page = yield* http.get(
-            withQuery(V2.asset, [...sorted, ["limit", "2"]]),
+            withQuery(API.asset, [...sorted, ["limit", "2"]]),
             callers.alice
           );
 
@@ -653,11 +656,11 @@ describe("tmf630-conformance", () => {
     dbTest.effect("history is a list of ChangeEntry resources", () =>
       Effect.gen(function* history() {
         const http = yield* TestHttpClient;
-        const callers = yield* v2Callers;
+        const callers = yield* apiCallers;
         const { records } = yield* AcmeFixture;
 
         const response = yield* http.get(
-          `${V2.laptop}/${records.L}/history`,
+          `${API.laptop}/${records.L}/history`,
           callers.alice
         );
 
@@ -674,11 +677,11 @@ describe("tmf630-conformance", () => {
       })
     );
 
-    dbTest.effect("sessions: create, read and end at /api/v2/session", () =>
+    dbTest.effect("sessions: create, read and end at /api/v1/session", () =>
       Effect.gen(function* sessions() {
         const http = yield* TestHttpClient;
 
-        const created = yield* http.request("POST", "/api/v2/session", {
+        const created = yield* http.request("POST", "/api/v1/session", {
           body: {
             login: "bob",
             password: "bob-password",
@@ -691,17 +694,17 @@ describe("tmf630-conformance", () => {
         assert.strictEqual(created.status, 201, created.text);
         assert.strictEqual(
           created.headers.get("location"),
-          `${ORIGIN}/api/v2/session/current`
+          `${ORIGIN}/api/v1/session/current`
         );
         assert.isString(session.token);
 
         const token = textOf(session.token);
-        const current = yield* http.get("/api/v2/session/current", { token });
+        const current = yield* http.get("/api/v1/session/current", { token });
 
         assert.strictEqual(current.status, 200);
         assert.strictEqual(asObject(current.json).name, "Bob");
 
-        const cookie = yield* http.request("POST", "/api/v2/session", {
+        const cookie = yield* http.request("POST", "/api/v1/session", {
           body: {
             login: "bob",
             password: "bob-password",
@@ -712,18 +715,18 @@ describe("tmf630-conformance", () => {
         assert.notProperty(asObject(cookie.json), "token");
         assert.match(cookie.headers.get("set-cookie") ?? "", /Path=\/api;/u);
 
-        const ended = yield* http.request("DELETE", "/api/v2/session/current", {
+        const ended = yield* http.request("DELETE", "/api/v1/session/current", {
           token,
         });
 
         assert.strictEqual(ended.status, 204);
 
-        const after = yield* http.get("/api/v2/session/current", { token });
+        const after = yield* http.get("/api/v1/session/current", { token });
 
         assert.strictEqual(after.status, 401);
         assert.strictEqual(codeOf(after), "Unauthenticated");
 
-        const wrong = yield* http.request("POST", "/api/v2/session", {
+        const wrong = yield* http.request("POST", "/api/v1/session", {
           body: { login: "bob", password: "nope" },
         });
 
@@ -736,14 +739,14 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* metadata() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
-          const list = yield* http.get("/api/v2/tableMetadata", callers.bob);
+          const list = yield* http.get("/api/v1/tableMetadata", callers.bob);
 
           assert.include(idsOf(list), "acmeAsset");
 
           const table = asObject(
-            (yield* http.get("/api/v2/tableMetadata/acmeLaptop", callers.alice))
+            (yield* http.get("/api/v1/tableMetadata/acmeLaptop", callers.alice))
               .json
           );
 
@@ -755,7 +758,7 @@ describe("tmf630-conformance", () => {
           assert.include(apiNames, "diskKey");
 
           const schema = yield* http.get(
-            "/api/v2/tableMetadata/acmeAsset/schema.json",
+            "/api/v1/tableMetadata/acmeAsset/schema.json",
             callers.bob
           );
 
@@ -766,7 +769,7 @@ describe("tmf630-conformance", () => {
           assert.notProperty(properties, "cost");
           assert.strictEqual(asObject(schema.json).title, "AcmeAsset");
 
-          const openApi = yield* http.get("/api/v2/openapi.json");
+          const openApi = yield* http.get("/api/v1/openapi.json");
 
           assert.strictEqual(openApi.status, 200);
           assert.strictEqual(asObject(openApi.json).openapi, "3.1.0");
@@ -780,10 +783,10 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* creates() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
           const { alice } = yield* AcmeFixture;
 
-          const created = yield* http.request("POST", V2.asset, {
+          const created = yield* http.request("POST", API.asset, {
             ...callers.alice,
             body: { name: "New", owner: { id: alice.id }, status: "spare" },
           });
@@ -800,7 +803,7 @@ describe("tmf630-conformance", () => {
             `"${numberOf(asset.revision)}"`
           );
 
-          const laptop = yield* http.request("POST", V2.asset, {
+          const laptop = yield* http.request("POST", API.asset, {
             ...callers.alice,
             body: {
               "@type": "AcmeLaptop",
@@ -814,14 +817,14 @@ describe("tmf630-conformance", () => {
           assert.strictEqual(asObject(laptop.json)["@type"], "AcmeLaptop");
           assert.strictEqual(asObject(laptop.json).serial, "SN-C");
 
-          const outside = yield* http.request("POST", V2.laptop, {
+          const outside = yield* http.request("POST", API.laptop, {
             ...callers.alice,
             body: { "@type": "AcmeMonitor", name: "X" },
           });
 
           assert.strictEqual(codeOf(outside), "InvalidRequest");
 
-          const readOnly = yield* http.request("POST", V2.asset, {
+          const readOnly = yield* http.request("POST", API.asset, {
             ...callers.alice,
             body: {
               creationDate: "2026-01-01T00:00:00.000Z",
@@ -838,7 +841,7 @@ describe("tmf630-conformance", () => {
             ["creationDate", "id"]
           );
 
-          const wrongType = yield* http.request("POST", V2.asset, {
+          const wrongType = yield* http.request("POST", API.asset, {
             ...callers.alice,
             body: {
               dockedTo: { "@referredType": "CoreUser", id: alice.id },
@@ -855,14 +858,14 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* mergePatches() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
           const asset = yield* freshAsset(callers.alice, {
             name: "P",
             status: "spare",
           });
 
-          const path = `${V2.asset}/${textOf(asset.id)}`;
+          const path = `${API.asset}/${textOf(asset.id)}`;
 
           const missing = yield* http.request("PATCH", path, {
             ...callers.alice,
@@ -924,14 +927,14 @@ describe("tmf630-conformance", () => {
       () =>
         Effect.gen(function* jsonPatches() {
           const http = yield* TestHttpClient;
-          const callers = yield* v2Callers;
+          const callers = yield* apiCallers;
 
           const asset = yield* freshAsset(callers.alice, {
             name: "J",
             status: "spare",
           });
 
-          const path = `${V2.asset}/${textOf(asset.id)}`;
+          const path = `${API.asset}/${textOf(asset.id)}`;
           const jsonPatch = "application/json-patch+json";
 
           const applied = yield* http.request(
@@ -1020,9 +1023,9 @@ describe("tmf630-conformance", () => {
     dbTest.effect("DELETE answers 204; a body is refused; PUT is 405", () =>
       Effect.gen(function* deletes() {
         const http = yield* TestHttpClient;
-        const callers = yield* v2Callers;
+        const callers = yield* apiCallers;
         const asset = yield* freshAsset(callers.alice, { name: "D" });
-        const path = `${V2.asset}/${textOf(asset.id)}`;
+        const path = `${API.asset}/${textOf(asset.id)}`;
 
         const withBody = yield* http.request("DELETE", path, {
           ...callers.alice,
