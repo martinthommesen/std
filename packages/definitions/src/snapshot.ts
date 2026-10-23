@@ -83,6 +83,10 @@ export class ConfigSnapshot implements SnapshotKey {
 
   readonly #definitions: ReadonlyMap<DefinitionId, Definition>;
   readonly #byKind: ReadonlyMap<DefinitionKind, readonly Definition[]>;
+  readonly #recordRules: readonly RecordRuleDefinition[];
+  readonly #grants: readonly GrantDefinition[];
+  readonly #accessRules: readonly AccessRuleDefinition[];
+  readonly #subscriptions: readonly SubscriptionDefinition[];
   readonly #namespaceByName = new Map<string, NamespaceDefinition>();
   readonly #classByName = new Map<string, ClassDefinition>();
   readonly #roleByName = new Map<string, RoleDefinition>();
@@ -111,6 +115,10 @@ export class ConfigSnapshot implements SnapshotKey {
     this.changeSetId = key.changeSetId;
     this.#definitions = definitions;
     this.#byKind = groupByKind([...definitions.values()].toSorted(byId));
+    this.#recordRules = this.all("recordRule").filter(isLive);
+    this.#grants = this.all("grant").filter(isLive);
+    this.#accessRules = this.all("accessRule").filter(isLive);
+    this.#subscriptions = this.all("subscription").filter(isLive);
 
     this.#index();
   }
@@ -224,7 +232,7 @@ export class ConfigSnapshot implements SnapshotKey {
       appendTo(this.#savedFiltersByClass, filter.classId, filter);
     }
 
-    for (const rule of this.all("recordRule").filter(isLive)) {
+    for (const rule of this.#recordRules) {
       appendTo(this.#recordRulesByClass, rule.classId, rule);
     }
 
@@ -600,27 +608,27 @@ export class ConfigSnapshot implements SnapshotKey {
    * @returns Every live record rule.
    */
   recordRules(): readonly RecordRuleDefinition[] {
-    return this.all("recordRule").filter(isLive);
+    return this.#recordRules;
   }
 
   /**
    * @returns Every live grant.
    */
   grants(): readonly GrantDefinition[] {
-    return this.all("grant").filter(isLive);
+    return this.#grants;
   }
 
   /**
    * @returns Every live access rule.
    */
   accessRules(): readonly AccessRuleDefinition[] {
-    return this.all("accessRule").filter(isLive);
+    return this.#accessRules;
   }
 
   /**
    * @returns Every live subscription.
    */
   subscriptions(): readonly SubscriptionDefinition[] {
-    return this.all("subscription").filter(isLive);
+    return this.#subscriptions;
   }
 }

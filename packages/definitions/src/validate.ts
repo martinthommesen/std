@@ -728,7 +728,7 @@ const boundValueProblem = (
 const overrideBoundsProblem = (
   inherited: FieldType,
   override: OverrideDefinition
-): string | undefined => {
+): DefinitionProblem | undefined => {
   const { kind } = inherited;
 
   if (override.min === null && override.max === null) {
@@ -736,13 +736,17 @@ const overrideBoundsProblem = (
   }
 
   if (kind !== "integer" && kind !== "bigInteger" && kind !== "decimal") {
-    return `Fields of type ${kind} have no numeric bounds.`;
+    return problem(
+      "overrideInvalid",
+      override.id,
+      `Fields of type ${kind} have no numeric bounds.`
+    );
   }
 
   const malformed = boundValueProblem(inherited, override);
 
   if (malformed !== undefined) {
-    return malformed;
+    return problem("overrideInvalid", override.id, malformed);
   }
 
   const tightened = tightenType(inherited, override);
@@ -752,7 +756,11 @@ const overrideBoundsProblem = (
     inherited.min !== undefined &&
     compareBounds(kind, override.min, inherited.min) < 0
   ) {
-    return "The minimum may only be raised.";
+    return problem(
+      "overrideLoosens",
+      override.id,
+      "The minimum may only be raised."
+    );
   }
 
   if (
@@ -760,7 +768,11 @@ const overrideBoundsProblem = (
     inherited.max !== undefined &&
     compareBounds(kind, override.max, inherited.max) > 0
   ) {
-    return "The maximum may only be lowered.";
+    return problem(
+      "overrideLoosens",
+      override.id,
+      "The maximum may only be lowered."
+    );
   }
 
   const bounded = tightened.kind === kind ? tightened : undefined;
@@ -770,7 +782,13 @@ const overrideBoundsProblem = (
     bounded.max !== undefined &&
     compareBounds(kind, bounded.min, bounded.max) > 0;
 
-  return inverted ? "The minimum must not exceed the maximum." : undefined;
+  return inverted
+    ? problem(
+        "overrideInvalid",
+        override.id,
+        "The minimum must not exceed the maximum."
+      )
+    : undefined;
 };
 
 const loosens = (
@@ -933,13 +951,7 @@ const checkOverrideTightening = (
   const bounds = overrideBoundsProblem(inherited.type, override);
 
   if (bounds !== undefined) {
-    problems.push(
-      problem(
-        bounds.includes("may only") ? "overrideLoosens" : "overrideInvalid",
-        override.id,
-        bounds
-      )
-    );
+    problems.push(bounds);
   }
 
   const effective = effectiveField(snapshot, override.classId, field);
@@ -1376,23 +1388,40 @@ export const apiTableNameProblems = (
   snapshot: ConfigSnapshot,
   classIds?: ReadonlySet<DefinitionId>
 ): readonly DefinitionProblem[] => {
-  const live = snapshot.all("class").filter(isLive);
+  const live = snapshot.all("class").flatMap((definition) => {
+    if (!isLive(definition)) {
+      return [];
+    }
 
-  const derived = (definition: ClassDefinition): string | undefined => {
     const namespace = snapshot.get(definition.namespaceId);
 
-    return namespace?.kind === "namespace"
-      ? apiTableNameOf(namespace.name, definition.name)
-      : undefined;
-  };
+    return [
+      {
+        definition,
+        name:
+          namespace?.kind === "namespace"
+            ? apiTableNameOf(namespace.name, definition.name)
+            : undefined,
+      },
+    ];
+  });
 
-  return live.flatMap((definition) => {
-    const name =
-      classIds === undefined || classIds.has(definition.id)
-        ? derived(definition)
-        : undefined;
+  const byName = new Map<string, ClassDefinition[]>();
 
-    if (name === undefined) {
+  for (const { definition, name } of live) {
+    if (name !== undefined) {
+      const group = byName.get(name) ?? [];
+
+      group.push(definition);
+      byName.set(name, group);
+    }
+  }
+
+  return live.flatMap(({ definition, name }) => {
+    if (
+      name === undefined ||
+      (classIds !== undefined && !classIds.has(definition.id))
+    ) {
       return [];
     }
 
@@ -1406,10 +1435,9 @@ export const apiTableNameProblems = (
       ];
     }
 
-    const other = live.find(
-      (candidate) =>
-        candidate.id !== definition.id && derived(candidate) === name
-    );
+    const other = byName
+      .get(name)
+      ?.find((candidate) => candidate.id !== definition.id);
 
     return other === undefined
       ? []
@@ -1443,7 +1471,26 @@ export const apiNameProblems = (
   fieldIds?: ReadonlySet<DefinitionId>
 ): readonly DefinitionProblem[] => {
   const live = snapshot.all("field").filter(isLive);
-  const rootOf = (field: FieldDefinition) => snapshot.root(field.classId)?.id;
+  const roots = new Map<DefinitionId, DefinitionId | undefined>();
+  const byRoot = new Map<DefinitionId, Map<string, FieldDefinition[]>>();
+
+  for (const field of live) {
+    if (!roots.has(field.classId)) {
+      roots.set(field.classId, snapshot.root(field.classId)?.id);
+    }
+
+    const rootId = roots.get(field.classId);
+
+    if (rootId !== undefined) {
+      const byName = byRoot.get(rootId) ?? new Map<string, FieldDefinition[]>();
+      const name = apiAttributeNameOf(field.name);
+      const group = byName.get(name) ?? [];
+
+      group.push(field);
+      byName.set(name, group);
+      byRoot.set(rootId, byName);
+    }
+  }
 
   const clashOf = (field: FieldDefinition): DefinitionProblem | undefined => {
     // A core platform field keeps its definition name and takes its
@@ -1462,17 +1509,15 @@ export const apiNameProblems = (
       );
     }
 
-    const rootId = rootOf(field);
+    const rootId = roots.get(field.classId);
 
-    const other = live.find((candidate) => {
-      const sameApiName =
-        candidate.name !== field.name &&
-        apiAttributeNameOf(candidate.name) === apiName;
-
-      return (
-        sameApiName && rootId !== undefined && rootOf(candidate) === rootId
-      );
-    });
+    const other =
+      rootId === undefined
+        ? undefined
+        : byRoot
+            .get(rootId)
+            ?.get(apiName)
+            ?.find((candidate) => candidate.name !== field.name);
 
     return other === undefined
       ? undefined
