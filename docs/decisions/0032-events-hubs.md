@@ -80,7 +80,7 @@ The main merge keeps helpdesk v3 as migration 0018 and renumbers this workstream
 
 Follow-ups from the round-5 check, owned by 3I:
 
-- `render` gives every hub API other than TMF688 the generic `Record*Event` shape. A TMF621 hub can register today and would receive events that are not TMF621 events, and an `eventType` filter with TMF621 names would drop all of them. No mapped API ships yet (`SHIPPED_TMF_APIS` is empty). 3I must not ship a mapped API without its notification shapes. Until then, its gate must prove that registration on that API is refused, or that its events are the API's own.
+- `render` gives every hub API other than TMF688 the generic `Record*Event` shape. A TMF621 hub can register today and would receive events that are not TMF621 events, and an `eventType` filter with TMF621 names would drop all of them. No mapped API ships yet (`SHIPPED_TMF_APIS` is empty). 3I must not ship a mapped API without its notification shapes. Until then, its gate must prove that registration on that API is refused, or that its events are the API's own. Resolved in workstream 3I-B by the second option: hubs on a mapped TMF API render that API's own events (`events/tmf-events.ts`, `tmf621-events`; decision 0035).
 - When retention has removed v−1, the derived previous image treats a field added between v−1 and v as known, holding its default. The reducer would treat it as unknown. The difference is small and occurs only after retention.
 
 ## Evidence
