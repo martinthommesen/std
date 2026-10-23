@@ -28,20 +28,21 @@ import path from "node:path";
 
 import {
   loadDocument,
+  schemaProblemOf,
   SCHEMA_PREFIX,
   SPECS_DIRECTORY,
   SWAGGER_SCHEMA_PREFIX,
   validatorOf,
 } from "@std/server/http/tmf/pinned-schemas";
 import type { LoadedDocument } from "@std/server/http/tmf/pinned-schemas";
+import { decodePinsFile } from "@std/tmf/pins";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import {
   isJsonArray,
   isJsonObject,
   isJsonString,
-  isJsonValue,
 } from "@std/values/json-value";
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 
 /** A TMF API whose responses are checked: its base path and document. */
 export interface TmfContract {
@@ -63,39 +64,41 @@ const asArray = (value: JsonValue | undefined): readonly JsonValue[] =>
 const textOf = (value: JsonValue | undefined): string | undefined =>
   value !== undefined && isJsonString(value) ? value : undefined;
 
+let cachedContracts: readonly TmfContract[] | undefined;
+
 /**
  * The pinned Open APIs' contracts, from `packages/tmf/specs/pins.json`.
  *
  * @returns The contracts.
  */
 export const pinnedContracts = (): readonly TmfContract[] => {
-  const parsed: unknown = JSON.parse(
-    readFileSync(path.join(SPECS, "pins.json"), "utf-8")
+  if (cachedContracts !== undefined) {
+    return cachedContracts;
+  }
+
+  const decoded = decodePinsFile(
+    JSON.parse(readFileSync(path.join(SPECS, "pins.json"), "utf-8"))
   );
 
-  const specifications = isJsonValue(parsed)
-    ? asObject(parsed).specifications
-    : undefined;
+  if (Result.isFailure(decoded)) {
+    throw new TypeError(
+      `pins.json does not decode: ${String(decoded.failure)}`
+    );
+  }
 
-  const pins =
-    specifications !== undefined && isJsonArray(specifications)
-      ? specifications
-      : [];
+  cachedContracts = decoded.success.specifications.flatMap(
+    (pin): TmfContract[] => {
+      if (pin.kind !== "openApi") {
+        return [];
+      }
 
-  return pins.flatMap((pin): TmfContract[] => {
-    const entry = asObject(pin);
-    const basePath = textOf(entry.basePath);
-    const file = textOf(asObject(entry.openApi).file);
-    const spec = textOf(entry.spec);
-
-    if (entry.kind !== "openApi") {
-      return [];
+      return pin.basePath !== undefined && pin.openApi !== undefined
+        ? [{ basePath: pin.basePath, file: pin.openApi.file, spec: pin.spec }]
+        : [];
     }
+  );
 
-    return basePath !== undefined && file !== undefined && spec !== undefined
-      ? [{ basePath, file, spec }]
-      : [];
-  });
+  return cachedContracts;
 };
 
 /**
@@ -230,18 +233,11 @@ export const schemaValueProblem = (
   value: JsonValue
 ): string | undefined => {
   const { file } = contractAt(spec, "/");
-  const loaded = loadDocument(file);
+  const problem = schemaProblemOf(file, schemaName, value);
 
-  const prefix =
-    loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
-
-  const validate = validatorOf(loaded, `${file}|schema|${schemaName}`, {
-    $ref: `${prefix}${schemaName}`,
-  });
-
-  return validate(value)
+  return problem === undefined
     ? undefined
-    : `${spec} ${schemaName}: ${loaded.ajv.errorsText(validate.errors)}`;
+    : `${spec} ${schemaName}: ${problem.message}`;
 };
 
 /**
