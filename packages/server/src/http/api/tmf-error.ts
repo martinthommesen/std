@@ -161,11 +161,13 @@ const ownDetails = (failure: TaggedFailure): JsonObject =>
 
 /**
  * Tags whose message is a fixed text of its own: per check
- * (`InvalidRequest`), or as a record rule's author wrote it (`RuleRefused`,
- * `InvalidTransition`, Contracts 4.10).
+ * (`InvalidRequest`), per kind of refusal (`NotAllowed`, whose refusal by
+ * a part's owner has its own text, decision 0039), or as a record rule's
+ * author wrote it (`RuleRefused`, `InvalidTransition`, Contracts 4.10).
  */
 const OWN_MESSAGE: ReadonlySet<string> = new Set([
   "InvalidRequest",
+  "NotAllowed",
   "SubscriptionNotServed",
   "InvalidTransition",
   "RuleRefused",
