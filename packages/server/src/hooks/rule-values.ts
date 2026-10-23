@@ -33,6 +33,12 @@ export interface ValueSources {
   readonly record: ValueRecord;
   /** The current `forEach` record, when the action has one. */
   readonly source: ValueRecord | null;
+  /**
+   * The owner, while settling (aggregate rules, 4.9): the rule's record
+   * itself, so `owner.f` and `record.f` read the same image. Absent
+   * outside settling.
+   */
+  readonly owner?: ValueRecord;
   /** The acting user. */
   readonly me: string;
   /** The evaluation instant, epoch milliseconds. */
@@ -114,7 +120,9 @@ export const ruleValue = (
     const { from, fieldId } = value.copy;
 
     if (from === "owner") {
-      return defect("owner values are read only while settling (4.9)");
+      return sources.owner === undefined
+        ? defect("owner values are read only while settling (4.9)")
+        : read(sources.owner, fieldId);
     }
 
     return read(from === "record" ? sources.record : sources.source, fieldId);

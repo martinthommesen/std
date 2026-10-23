@@ -39,6 +39,10 @@ export const STALE_VERSION_STATUS = 412;
 
 /** HTTP status and fixed reason of each error tag (Contracts 3.8, 10.6). */
 const ERRORS = {
+  AggregateNotSettled: [
+    422,
+    "The aggregates this write changed did not settle",
+  ],
   DefinitionInvalid: [422, "The definitions are invalid; nothing was applied"],
   DefinitionProtected: [403, "The definition is protected"],
   DependencyConflict: [409, "Other definitions depend on this one"],

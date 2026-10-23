@@ -23,6 +23,7 @@ import { SqlClient } from "effect/sql";
 
 import { bumpRevision } from "../sql/config-commit.ts";
 import type { ConfigCommitOptions } from "../sql/config-commit.ts";
+import { versionedApplicationName } from "../sql/database-config.ts";
 import type { DatabaseConfig } from "../sql/database-config.ts";
 import { makeDedicatedConnection } from "../sql/dedicated.ts";
 import type { DedicatedConnection } from "../sql/dedicated.ts";
@@ -40,7 +41,8 @@ import { STEP_SPECS } from "./steps.ts";
 import { watchStep } from "./watchdog.ts";
 
 /** `application_name` of the coordinator's connection. */
-export const COORDINATOR_APPLICATION_NAME = "std-coordinator";
+export const COORDINATOR_APPLICATION_NAME =
+  versionedApplicationName("std-coordinator");
 
 /** `Retry-After` of `SchemaBusy`, in seconds [judgment]. */
 export const SCHEMA_BUSY_RETRY_AFTER_SECONDS = 5;

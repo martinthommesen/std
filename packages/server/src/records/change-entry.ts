@@ -59,6 +59,20 @@ export const ChangeCauseSchema = Schema.Union([
     accessRules: Schema.Array(Schema.String),
     kind: Schema.Literal("system"),
   }),
+  // A save that finalizing an aggregate made as the system effect
+  // `aggregate` (Contracts 4.9, 4.10): an owner's aggregate save or a part
+  // write a settling proposed. `parts` lists the change IDs of the owner's
+  // part writes, `rules` the aggregate rules that proposed the change. It
+  // says `kind: "system"` for a previous release, like `accessRules`
+  // [decision 0029].
+  Schema.Struct({
+    aggregate: Schema.Struct({
+      parts: Schema.Array(Schema.String),
+      reason: Schema.Literals(["parts", "derived", "both"]),
+      rules: Schema.Array(Schema.String),
+    }),
+    kind: Schema.Literal("system"),
+  }),
   Schema.Struct({
     kind: Schema.Literal("system"),
     /** The `data` migration that made the change (Contracts 1.9, 3.1). */

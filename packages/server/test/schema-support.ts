@@ -30,6 +30,7 @@ import { CORE_SET_DIRECTORY } from "../src/config/set-files.ts";
 import { runDataMigrations } from "../src/platform/data-migrations.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import type { ChangeSetOptions } from "../src/schema/change-set.ts";
+import { COORDINATOR_APPLICATION_NAME } from "../src/schema/coordinator.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 
 /** The acme example set. */
@@ -528,7 +529,8 @@ export const insertRecordsFlushed = (
  */
 export const coordinatorGone = values(
   `SELECT count(*)::text AS value FROM pg_stat_activity
-   WHERE datname = current_database() AND application_name = 'std-coordinator'`
+   WHERE datname = current_database() AND application_name = $1`,
+  [COORDINATOR_APPLICATION_NAME]
 ).pipe(
   Effect.repeat({
     schedule: Schedule.spaced(Duration.millis(10)),
@@ -538,12 +540,14 @@ export const coordinatorGone = values(
 );
 
 /**
- * The sequential scans of a table, from a fresh statistics snapshot.
+ * The sequential scans of a table, from a fresh statistics snapshot after
+ * flushing the current backend's statistics.
  * @param table - A quoted table.
  * @returns The `seq_scan` counter.
  */
 export const seqScans = (table: string) =>
-  values("SELECT pg_stat_clear_snapshot()::text AS value").pipe(
+  values("SELECT pg_stat_force_next_flush()::text AS value").pipe(
+    Effect.andThen(values("SELECT pg_stat_clear_snapshot()::text AS value")),
     Effect.andThen(
       values(
         `SELECT coalesce(seq_scan, 0)::text AS value FROM pg_stat_user_tables WHERE relid = to_regclass($1)`,

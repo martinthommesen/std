@@ -15,6 +15,7 @@
  * fields is writable; purged fields are not part of the schema at all.
  */
 import { compareDecimals, parseDecimal } from "@std/values/decimal";
+import { isOwnerReferenceType } from "@std/values/field-type";
 import type { FieldType, FieldTypeOf } from "@std/values/field-type";
 import { compareBigIntegers, parseBigInteger } from "@std/values/integer";
 import type { JsonValue } from "@std/values/json-value";
@@ -264,7 +265,8 @@ const baseField = (
     numberPrefix: field.numberPrefix,
     overrideIds: [],
     readOnly: field.readOnly || field.numberPrefix !== null,
-    required: field.required,
+    // An owner reference is always required (Contracts 4.9).
+    required: field.required || isOwnerReferenceType(field.type),
     selectedByDefault: active,
     state: active ? "active" : "retired",
     type: field.type,

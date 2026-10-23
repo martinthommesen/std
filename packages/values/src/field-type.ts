@@ -130,8 +130,13 @@ const DecimalTypeSchema = Struct({
  * 5.2, field IDs) that a target must satisfy, under the filter profile in
  * the writer's view. Here it is any JSON; `@std/definitions` checks it as
  * a condition when the field is stored. Absent (or null): no condition.
+ *
+ * `aggregate: true` (from Step 3, Contracts 4.9, 6.5) makes the field its
+ * class's owner reference: the records of the class are parts of the
+ * record it names. Absent means false; the setting is fixed at creation.
  */
 const ReferenceTypeSchema = Struct({
+  aggregate: optionalKey(SchemaBoolean),
   allowedRecords: optionalKey(Json),
   kind: Literal("reference"),
   targetClassId: SchemaString.check(isPattern(UUID_TEXT)),
@@ -462,3 +467,13 @@ export const isOrdered = (kind: FieldKind): boolean => ORDERED_KINDS.has(kind);
  */
 export const isTextKind = (kind: FieldKind): kind is "text" | "longText" =>
   kind === "text" || kind === "longText";
+
+/**
+ * Whether a field type is an owner reference (Contracts 4.9, 6.5): a
+ * reference declared `aggregate: true`.
+ *
+ * @param type - A field type.
+ * @returns True for an owner reference.
+ */
+export const isOwnerReferenceType = (type: FieldType): boolean =>
+  type.kind === "reference" && type.aggregate === true;

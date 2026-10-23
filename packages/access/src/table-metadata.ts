@@ -207,10 +207,13 @@ export const metaTypeOf = (
   type: FieldType
 ): MetaFieldType => {
   if (type.kind === "reference") {
-    return {
-      kind: "reference",
-      target: knownName(snapshot, caller, type.targetClassId),
-    };
+    const target = knownName(snapshot, caller, type.targetClassId);
+
+    // An owner reference says so (4.9), so the browser's `recordSchema`
+    // keeps it read-only after create, as the server does.
+    return type.aggregate === true
+      ? { aggregate: true, kind: "reference", target }
+      : { kind: "reference", target };
   }
 
   if (type.kind === "condition") {

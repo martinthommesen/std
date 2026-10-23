@@ -33,6 +33,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { SERVER_APPLICATION_NAME } from "../src/sql/database-config.ts";
+import { STD_VERSION } from "../src/version.ts";
 import { startServe } from "./cli-support.ts";
 import type { ServeProcess } from "./cli-support.ts";
 import { listenGate } from "./listen-gate.ts";
@@ -244,7 +245,7 @@ const addAssetField = Effect.fn("CrossProcess.addAssetField")(
 
 describe("cross-process", () => {
   it("names the server's application", () => {
-    assert.strictEqual(SERVER_APPLICATION_NAME, "std-server");
+    assert.strictEqual(SERVER_APPLICATION_NAME, `std-server@${STD_VERSION}`);
   });
 
   layer(acmeTestLayer(), { excludeTestServices: true })((dbTest) => {

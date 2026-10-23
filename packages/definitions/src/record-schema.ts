@@ -69,6 +69,7 @@ import {
   convertUpdate,
   fieldErrorsOf,
   recheckValue,
+  rulesOnUpdate,
   writtenOnCreate,
 } from "./record-rules.ts";
 import type { FieldRules } from "./record-rules.ts";
@@ -138,7 +139,10 @@ const NO_CLASS = "00000000-0000-0000-0000-000000000000";
  */
 export const codecTypeOf = (type: MetaFieldType): FieldType => {
   if (type.kind === "reference") {
-    return { kind: "reference", targetClassId: NO_CLASS };
+    // An owner reference stays one: an update may not change it (4.9).
+    return type.aggregate === true
+      ? { aggregate: true, kind: "reference", targetClassId: NO_CLASS }
+      : { kind: "reference", targetClassId: NO_CLASS };
   }
 
   if (type.kind === "condition") {
@@ -525,8 +529,12 @@ const verdictOf = (
   }
 
   if (mode === "update") {
+    const onUpdate = fields.map((field) => ({
+      rules: rulesOnUpdate(field.rules),
+    }));
+
     return {
-      errors: updateErrors(fields, resolved.entries, stored),
+      errors: updateErrors(onUpdate, resolved.entries, stored),
       unknownFields: [],
     };
   }

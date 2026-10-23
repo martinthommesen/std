@@ -227,6 +227,42 @@ const ALLOW_ALL: WriteAccessApi = {
     existingTargets(input.snapshot, input.targetClassId, input.ids),
 };
 
+const userAccess = new WeakMap<WriteAccessApi, WriteAccessApi>();
+
+/**
+ * The access layer of the system effect `aggregate` (Contracts 4.9, 4.10):
+ * the saves that finalizing an aggregate persists need no write right of
+ * the acting user. They name and see every field of the record, every
+ * existing reference target is allowed, and neither access check refuses;
+ * the result is still validated, and responses and validation errors keep
+ * the acting user's read rights.
+ *
+ * @param base - The acting user's access layer.
+ * @returns The system effect's.
+ */
+export const systemEffectAccess = (base: WriteAccessApi): WriteAccessApi => {
+  const system: WriteAccessApi = {
+    ...ALLOW_ALL,
+    forActor: base.forActor,
+    project: base.project,
+    readableOnProposal: base.readableOnProposal,
+  };
+
+  userAccess.set(system, base);
+
+  return system;
+};
+
+/**
+ * The acting user's access layer behind a system effect's, which hooks
+ * of a system-effect save use for their own nested saves.
+ *
+ * @param access - An access layer.
+ * @returns The user's layer, or the layer itself.
+ */
+export const userAccessOf = (access: WriteAccessApi): WriteAccessApi =>
+  userAccess.get(access) ?? access;
+
 /** The access layer's answers for the acting user.
  *
  * Its methods run inside the save's transaction and use that

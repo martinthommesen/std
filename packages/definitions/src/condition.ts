@@ -28,8 +28,11 @@ import type { DefinitionId } from "./ids.ts";
 export const ConditionPathSchema = Struct({
   image: optionalKey(Literal("previous")),
   path: SchemaArray(DefinitionIdSchema),
-  /** `record`: the rule's own record (record-rule actions, Contracts 4.10). */
-  scope: optionalKey(Literal("record")),
+  /**
+   * `record`: the rule's own record (record-rule actions, Contracts 4.10);
+   * `owner`: the owner, in the part conditions of aggregate rules (5.10).
+   */
+  scope: optionalKey(Literals(["record", "owner"])),
 });
 
 /** A field path. */
@@ -115,7 +118,13 @@ export type Condition =
       readonly left: ConditionPath;
       readonly period: Period;
     }
-  | { readonly op: "changed"; readonly arg: ConditionPath };
+  | { readonly op: "changed"; readonly arg: ConditionPath }
+  | {
+      readonly op: "anyPart" | "allParts";
+      readonly class: DefinitionId;
+      readonly where: Condition;
+    }
+  | { readonly op: "partsChanged"; readonly class: DefinitionId };
 
 /** The structural schema of a stored condition. */
 export const ConditionSchema: Codec<Condition> = Union([
@@ -146,6 +155,12 @@ export const ConditionSchema: Codec<Condition> = Union([
     period: PeriodSchema,
   }),
   Struct({ arg: ConditionPathSchema, op: Literal("changed") }),
+  Struct({
+    class: DefinitionIdSchema,
+    op: Literals(["anyPart", "allParts"]),
+    where: suspend((): Codec<Condition> => ConditionSchema),
+  }),
+  Struct({ class: DefinitionIdSchema, op: Literal("partsChanged") }),
 ]);
 
 /**
@@ -182,6 +197,10 @@ export const conditionPaths = (
     return conditionPaths(condition.arg);
   }
 
+  if (condition.op === "anyPart" || condition.op === "allParts") {
+    return conditionPaths(condition.where);
+  }
+
   if (isComparison(condition)) {
     return isPath(condition.right)
       ? [condition.left, condition.right]
@@ -208,3 +227,32 @@ export const conditionFieldIds = (
   [...new Set(conditionPaths(condition).flatMap((path) => path.path))].toSorted(
     compareIds
   );
+
+const namedClasses = (condition: Condition): readonly DefinitionId[] => {
+  if (condition.op === "and" || condition.op === "or") {
+    return condition.args.flatMap(namedClasses);
+  }
+
+  if (condition.op === "not") {
+    return namedClasses(condition.arg);
+  }
+
+  if (condition.op === "anyPart" || condition.op === "allParts") {
+    return [condition.class, ...namedClasses(condition.where)];
+  }
+
+  return condition.op === "partsChanged" ? [condition.class] : [];
+};
+
+/**
+ * Every class a condition names: the part classes of its `anyPart`,
+ * `allParts` and `partsChanged` (aggregate record rules, Contracts 5.10),
+ * deduplicated and sorted, for the `rule_on` dependency kind.
+ *
+ * @param condition - A condition.
+ * @returns The class IDs.
+ */
+export const conditionClassIds = (
+  condition: Condition
+): readonly DefinitionId[] =>
+  [...new Set(namedClasses(condition))].toSorted(compareIds);

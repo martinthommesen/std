@@ -106,6 +106,7 @@ export const migration0002: TxMigration = {
   id: 2,
   kind: "tx",
   name: "definitions",
+  phase: "expand",
   statements: [
     ...platformTable(
       "namespace",

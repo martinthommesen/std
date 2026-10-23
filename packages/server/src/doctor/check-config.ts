@@ -4,7 +4,10 @@
  */
 import { withAddedDefaults } from "@std/definitions/definition";
 import type { Definition } from "@std/definitions/definition";
-import { dependenciesOf } from "@std/definitions/dependencies";
+import {
+  DEPENDENCY_KINDS,
+  dependenciesOf,
+} from "@std/definitions/dependencies";
 import { effectiveJson } from "@std/definitions/effective-json";
 import { effectiveField } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
@@ -30,6 +33,8 @@ import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
 import {
+  DEFINITION_KIND_NAMES,
+  isDefinitionKind,
   jsonColumn,
   jsonHash,
   jsonObjectColumn,
@@ -236,6 +241,7 @@ const decodeBaseHashes = decodeRows(
   Schema.Struct({
     hash: Schema.String,
     id: Schema.String,
+    kind: Schema.String,
     shipped: Schema.String,
   })
 );
@@ -244,13 +250,26 @@ const baseEdits = Effect.gen(function* baseEdits() {
   const sql = yield* SqlClient.SqlClient;
 
   const rows = yield* readOnly(sql`
-    SELECT id::text AS id, hash, shipped::text AS shipped FROM core."config_base" ORDER BY id`).pipe(
+    SELECT id::text AS id, kind, hash, shipped::text AS shipped FROM core."config_base" ORDER BY id`).pipe(
     Effect.flatMap(decodeBaseHashes)
   );
 
   const found: Finding[] = [];
 
   for (const row of rows) {
+    if (!isDefinitionKind(row.kind)) {
+      found.push(
+        finding(
+          8,
+          "info",
+          "newerConfigKind",
+          `Configuration ${row.id} uses newer kind ${row.kind}; left untouched.`,
+          row.id
+        )
+      );
+      continue;
+    }
+
     if (jsonHash(yield* jsonColumn(row.shipped)) !== row.hash) {
       found.push(
         finding(
@@ -393,10 +412,11 @@ const openConflictFindings = Effect.gen(function* openConflictFindings() {
   const sql = yield* SqlClient.SqlClient;
 
   const rows = yield* readOnly(sql`
-    SELECT id::text AS id, record_id::text AS record_id, property
-    FROM core."config_conflict" WHERE state = 'open' ORDER BY created_at, id`).pipe(
-    Effect.flatMap(decodeConflicts)
-  );
+    SELECT c.id::text AS id, record_id::text AS record_id, property
+    FROM core."config_conflict" c WHERE state = 'open'
+      AND NOT EXISTS (SELECT 1 FROM core.config_base b WHERE b.id = c.record_id
+        AND NOT (b.kind = ANY(${[...DEFINITION_KIND_NAMES]}::text[])))
+    ORDER BY created_at, c.id`).pipe(Effect.flatMap(decodeConflicts));
 
   return rows.map((row) =>
     finding(
@@ -595,8 +615,24 @@ export const checkDependencies = Effect.fn("Doctor.checkDependencies")(
     const actual = new Set<string>();
     const dangling: Finding[] = [];
     const extra: Finding[] = [];
+    const information: Finding[] = [];
+
+    const kinds: ReadonlySet<string> = new Set(DEPENDENCY_KINDS);
 
     for (const row of rows) {
+      if (!kinds.has(row.kind)) {
+        information.push(
+          finding(
+            9,
+            "info",
+            "newerDependencyKind",
+            `Dependency ${row.from_id} uses newer kind ${row.kind}; left untouched.`,
+            row.from_id
+          )
+        );
+        continue;
+      }
+
       const key = dependencyKey(row.from_id, row.kind, row.to_id);
 
       const known =
@@ -642,7 +678,7 @@ export const checkDependencies = Effect.fn("Doctor.checkDependencies")(
           ]
     );
 
-    return [...dangling, ...extra, ...missing];
+    return [...dangling, ...extra, ...missing, ...information];
   }
 );
 

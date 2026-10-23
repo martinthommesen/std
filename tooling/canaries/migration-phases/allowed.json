@@ -1,0 +1,201 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 17,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN note text"]
+    },
+    {
+      "id": 18,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN enabled boolean NOT NULL DEFAULT false"
+      ]
+    },
+    {
+      "id": 19,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN label text DEFAULT 'DROP RENAME'"
+      ]
+    },
+    {
+      "id": 20,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN amount numeric DEFAULT -1.5"
+      ]
+    },
+    {
+      "id": 21,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT sample_check CHECK (amount > 0) NOT VALID"
+      ]
+    },
+    {
+      "id": 22,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD FOREIGN KEY (id) REFERENCES core.parent (id) NOT VALID"
+      ]
+    },
+    {
+      "id": 23,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.new_table (id integer NOT NULL, UNIQUE (id), CHECK (id > 0))"
+      ]
+    },
+    {
+      "id": 24,
+      "kind": "concurrent_index",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [],
+      "statement": "CREATE INDEX CONCURRENTLY sample_index ON core.sample (id)"
+    },
+    {
+      "id": 25,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.new_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ]
+    },
+    {
+      "id": 26,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TYPE core.status ADD VALUE 'new'"]
+    },
+    {
+      "id": 27,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "-- DROP this comment\n /* RENAME /* nested */ TYPE */ ALTER TABLE core.sample ADD COLUMN note text"
+      ]
+    },
+    {
+      "id": 28,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN a$x$ text"]
+    },
+    {
+      "id": 29,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN note text DEFAULT '-- DROP /* text */'"
+      ]
+    },
+    {
+      "id": 30,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.parent (id int)",
+        "CREATE TABLE core.child () INHERITS (core.parent)"
+      ]
+    },
+    {
+      "id": 31,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.parent (id int) PARTITION BY RANGE (id)",
+        "CREATE TABLE core.child PARTITION OF core.parent FOR VALUES FROM (1) TO (2)"
+      ]
+    },
+    {
+      "id": 32,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.new_table (id int)",
+        "CREATE INDEX ix ON core.new_table(id)",
+        "CREATE TRIGGER t BEFORE INSERT ON core.new_table EXECUTE FUNCTION core.fn()"
+      ]
+    },
+    {
+      "id": 33,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.new_table (id int)",
+        "ALTER TABLE core.new_table ADD CONSTRAINT c UNIQUE (id)"
+      ]
+    },
+    {
+      "id": 34,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (id int); -- trailing comment"]
+    },
+    {
+      "id": 35,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.\"semi;colon\" (\"dollar$\" text DEFAULT ';$not_a_tag')"
+      ]
+    },
+    {
+      "id": 36,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (c text DEFAULT $tag$;$tag$)"]
+    },
+    {
+      "id": 37,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["CREATE TABLE core.fresh (s bigserial)"]
+    },
+    {
+      "id": 38,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.body_semicolons() RETURNS int LANGUAGE plpgsql AS $$ BEGIN PERFORM 1; RETURN 2; END $$"
+      ]
+    },
+    {
+      "id": 39,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": ["COMMENT ON TABLE core.sample IS 'backslash \\'"]
+    }
+  ]
+}

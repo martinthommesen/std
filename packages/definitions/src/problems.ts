@@ -47,6 +47,9 @@ export const ProblemCodeSchema = Literals([
   "idInUse",
   "versionConflict",
   "unsupportedChange",
+  "aggregateCycle",
+  "aggregateTooDeep",
+  "aggregateSecondOwner",
 ]);
 
 /** A problem code. */

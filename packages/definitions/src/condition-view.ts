@@ -3,13 +3,22 @@
  * the class view over a config snapshot, and the check of an access-rule or
  * subscription condition when it is stored.
  */
+import {
+  checkAggregateCondition,
+  checkPartCondition,
+} from "@std/conditions/aggregate";
+import { decodeExpr } from "@std/conditions/ast";
+import type { Expr } from "@std/conditions/ast";
 import { checkConditionJson } from "@std/conditions/check";
 import type { CheckOptions } from "@std/conditions/check";
 import type { ClassView, FieldInfo } from "@std/conditions/class-view";
+import type { ConditionResult } from "@std/conditions/issue";
 import type { ChoiceList } from "@std/values/choice";
 import type { ConditionProfile } from "@std/values/field-type";
 import type { JsonValue } from "@std/values/json-value";
+import { isSuccess } from "effect/Result";
 
+import { isPartClassOf } from "./aggregates.ts";
 import { conditionPaths } from "./condition.ts";
 import type { Condition } from "./condition.ts";
 import type { FieldDefinition } from "./definition.ts";
@@ -99,6 +108,14 @@ export const classViewOf = (snapshot: ConfigSnapshot): ClassView => ({
 /** Whether a condition is being stored now or was stored earlier. */
 export type ConditionPurpose = "store" | "evaluate";
 
+const messagesOf = (checked: ConditionResult<unknown>): readonly string[] =>
+  checked.ok
+    ? []
+    : checked.error.issues.map(
+        (issue) =>
+          `${issue.reason} at ${issue.path.join(".") || "root"}: ${issue.message}`
+      );
+
 /**
  * Checks a condition as it is stored on an access rule (`accessRule`
  * profile, no reference hops in Step 1) or a subscription (`subscription`
@@ -144,10 +161,76 @@ export const conditionProblems = (
     recordClassId === undefined ? options : { ...options, recordClassId }
   );
 
-  return checked.ok
-    ? []
-    : checked.error.issues.map(
-        (issue) =>
-          `${issue.reason} at ${issue.path.join(".") || "root"}: ${issue.message}`
+  return messagesOf(checked);
+};
+
+const decoded = (condition: Condition): Expr | undefined => {
+  const json: JsonValue = condition;
+  const result = decodeExpr(json);
+
+  return isSuccess(result) ? result.success : undefined;
+};
+
+const NOT_AN_AST = ["malformed at root: The value is not a condition AST."];
+
+/**
+ * Checks the condition of an aggregate record rule (Contracts 5.10): the
+ * record-rule profile on the owner (the rule's class), with
+ * `partsChanged`, `anyPart` and `allParts` over its part classes.
+ *
+ * @param snapshot - The configuration after the change.
+ * @param classId - The rule's class.
+ * @param condition - The condition.
+ * @param purpose - `store` or `evaluate`.
+ * @returns Messages, empty when the condition is acceptable.
+ */
+export const aggregateConditionProblems = (
+  snapshot: ConfigSnapshot,
+  classId: DefinitionId,
+  condition: Condition,
+  purpose: ConditionPurpose
+): readonly string[] => {
+  const expr = decoded(condition);
+
+  return expr === undefined
+    ? NOT_AN_AST
+    : messagesOf(
+        checkAggregateCondition(expr, {
+          classId,
+          isPartClass: (partClassId) =>
+            isPartClassOf(snapshot, partClassId, classId),
+          purpose,
+          view: classViewOf(snapshot),
+        })
+      );
+};
+
+/**
+ * Checks a condition on an owner's parts of a class (a `setParts.where`,
+ * Contracts 4.10): paths read the part, `scope: "owner"` paths the owner.
+ *
+ * @param snapshot - The configuration after the change.
+ * @param partClassId - The part class.
+ * @param ownerClassId - The rule's class.
+ * @param condition - The condition.
+ * @param purpose - `store` or `evaluate`.
+ * @returns Messages, empty when the condition is acceptable.
+ */
+export const partConditionProblems = (
+  snapshot: ConfigSnapshot,
+  partClassId: DefinitionId,
+  ownerClassId: DefinitionId,
+  condition: Condition,
+  purpose: ConditionPurpose
+): readonly string[] => {
+  const expr = decoded(condition);
+
+  return expr === undefined
+    ? NOT_AN_AST
+    : messagesOf(
+        checkPartCondition(expr, partClassId, ownerClassId, {
+          purpose,
+          view: classViewOf(snapshot),
+        })
       );
 };

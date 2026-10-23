@@ -87,6 +87,7 @@ export const migration0008: TxMigration = {
   id: 8,
   kind: "tx",
   name: "ui-config",
+  phase: "expand",
   statements: [
     'ALTER TABLE core."field" ADD COLUMN number_prefix text',
     'ALTER TABLE core."field_override" ADD COLUMN choices jsonb',

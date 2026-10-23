@@ -21,6 +21,7 @@ import type { JsonValue } from "@std/values/json-value";
 import { isFailure } from "effect/Result";
 import { decodeUnknownResult } from "effect/Schema";
 
+import { aggregateProblems } from "./aggregates.ts";
 import { allowedRecordsOf } from "./allowed-records.ts";
 import { conditionProblems } from "./condition-view.ts";
 import type { ConditionPurpose } from "./condition-view.ts";
@@ -1698,6 +1699,9 @@ export const validateSnapshot = (
   }
 
   checkUniqueness(problems, snapshot);
+  // The aggregate graph is a property of the whole configuration, like
+  // name uniqueness: a new class or field can break it far from itself.
+  problems.push(...aggregateProblems(snapshot));
 
   return problems;
 };

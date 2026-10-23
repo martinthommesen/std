@@ -38,6 +38,13 @@ export interface TypedPath {
   readonly classes: readonly string[];
   /** The field read (the last entry of `fields`). */
   readonly field: FieldInfo;
+  /**
+   * `owner`: the path reads the owner, inside a part condition of an
+   * aggregate record rule (Contracts 5.10). Only the aggregate evaluator
+   * (`aggregate.ts`) reads such paths; the checker refuses them
+   * everywhere else.
+   */
+  readonly scope?: "owner";
 }
 
 /** A comparison operator after `ne` became `not eq`. */

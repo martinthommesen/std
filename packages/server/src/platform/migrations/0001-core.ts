@@ -16,6 +16,7 @@ export const migration0001: TxMigration = {
   id: 1,
   kind: "tx",
   name: "core",
+  phase: "expand",
   statements: [
     "CREATE SCHEMA core",
     `CREATE TABLE core.platform_migration (

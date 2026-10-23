@@ -14,6 +14,7 @@ import { ConditionDefectError } from "./defect.ts";
  */
 import { evaluateNode, imageReader } from "./evaluate-core.ts";
 import type { ImageSource } from "./evaluate-core.ts";
+import { refuseAggregateConstructs } from "./owner-scope.ts";
 import type { ResolvedCondition, ResolvedNode } from "./typed.ts";
 
 /**
@@ -68,6 +69,9 @@ export const evaluateCondition = (
   condition: ResolvedCondition,
   source: ImageSource
 ): boolean => {
+  // Owner paths and quantifiers belong to the aggregate evaluator (5.10).
+  refuseAggregateConstructs(condition.root);
+
   if (hasUnavailableContext(condition.root)) {
     throw new ConditionDefectError(
       "A context value was not provided to the resolver."
