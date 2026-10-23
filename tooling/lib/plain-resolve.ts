@@ -45,6 +45,8 @@ export interface PlainContext {
   readonly allowedDependencies: ReadonlyMap<string, string>;
   /** The plain package that owns the file. */
   readonly pkg: WorkspacePackage;
+  /** Manifest reader shared by every file in one check invocation. */
+  readonly readManifest: (dir: string) => PackageManifest;
   /** Every workspace package, by name. */
   readonly workspace: ReadonlyMap<string, WorkspacePackage>;
 }
@@ -75,10 +77,25 @@ const PackageManifestJson = Schema.fromJsonString(
 
 type PackageManifest = typeof PackageManifestJson.Type;
 
-const readManifest = (dir: string): PackageManifest =>
-  Schema.decodeSync(PackageManifestJson)(
-    readFileSync(path.join(dir, "package.json"), "utf-8")
-  );
+/**
+ * Reads and decodes each package manifest once within one import check.
+ * @returns A reader whose cached manifests expire with the invocation.
+ */
+export const makeManifestReader = (): PlainContext["readManifest"] => {
+  const manifests = new Map<string, PackageManifest>();
+
+  return (dir) => {
+    const manifest =
+      manifests.get(dir) ??
+      Schema.decodeSync(PackageManifestJson)(
+        readFileSync(path.join(dir, "package.json"), "utf-8")
+      );
+
+    manifests.set(dir, manifest);
+
+    return manifest;
+  };
+};
 
 const isInside = (file: string, dir: string): boolean => {
   const relative = path.relative(dir, file);
@@ -258,9 +275,14 @@ const aliasTarget = (spec: string): string | undefined => {
  *
  * @param dir - The installed package's real directory.
  * @param seen - Real directories already walked.
+ * @param readManifest - The invocation's shared manifest reader.
  * @returns The chain of package names that reaches `effect` or `@effect/*`, or undefined.
  */
-const pathToEffect = (dir: string, seen: Set<string>): string[] | undefined => {
+const pathToEffect = (
+  dir: string,
+  seen: Set<string>,
+  readManifest: PlainContext["readManifest"]
+): string[] | undefined => {
   seen.add(dir);
 
   const manifest = readManifest(dir);
@@ -288,7 +310,7 @@ const pathToEffect = (dir: string, seen: Set<string>): string[] | undefined => {
     }
 
     if (installed !== undefined && !seen.has(installed)) {
-      const deeper = pathToEffect(installed, seen);
+      const deeper = pathToEffect(installed, seen, readManifest);
 
       if (deeper !== undefined) {
         return [self, ...deeper];
@@ -351,7 +373,8 @@ const checkLocal = (
 const checkWorkspace = (
   specifier: string,
   bare: BareSpecifier,
-  sibling: WorkspacePackage
+  sibling: WorkspacePackage,
+  readManifest: PlainContext["readManifest"]
 ): string[] => {
   if (sibling.profile !== "plain") {
     return [
@@ -400,7 +423,7 @@ const checkThirdParty = (
     ];
   }
 
-  const realName = readManifest(installed).name ?? bare.name;
+  const realName = context.readManifest(installed).name ?? bare.name;
 
   if (isEffectPackage(realName)) {
     return [
@@ -408,7 +431,7 @@ const checkThirdParty = (
     ];
   }
 
-  const chain = pathToEffect(installed, new Set());
+  const chain = pathToEffect(installed, new Set(), context.readManifest);
 
   return chain === undefined
     ? []
@@ -457,7 +480,10 @@ export const checkSpecifier = (
   }
 
   if (specifier.startsWith("#")) {
-    const targets = lookUp(readManifest(context.pkg.dir).imports, specifier);
+    const targets = lookUp(
+      context.readManifest(context.pkg.dir).imports,
+      specifier
+    );
 
     if (targets.length === 0) {
       return [`"${specifier}" is not in this package's "imports" map`];
@@ -485,5 +511,5 @@ export const checkSpecifier = (
 
   return sibling === undefined
     ? checkThirdParty(specifier, bare, fromFile, context)
-    : checkWorkspace(specifier, bare, sibling);
+    : checkWorkspace(specifier, bare, sibling, context.readManifest);
 };

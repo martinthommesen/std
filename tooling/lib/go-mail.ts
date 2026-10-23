@@ -312,28 +312,24 @@ const consumeWord = (input: Input, haveWords: boolean): string | undefined => {
   }
 };
 
-const consumePhrase = (input: Input): string => {
-  const words: string[] = [];
-  let done = false;
+const consumePhrase = (input: Input): void => {
+  let haveWords = false;
 
-  while (!done) {
-    if (words.length > 0 && !skipCfws(input)) {
+  for (;;) {
+    if (haveWords && !skipCfws(input)) {
       throw new ParseError(misformattedComment);
     }
 
     skipSpace(input);
 
-    const word =
-      input.rest === "" ? undefined : consumeWord(input, words.length > 0);
+    const word = input.rest === "" ? undefined : consumeWord(input, haveWords);
 
     if (word === undefined) {
-      done = true;
-    } else {
-      words.push(word);
+      return;
     }
-  }
 
-  return words.join(" ");
+    haveWords = true;
+  }
 };
 
 const consumeDisplayNameComment = (input: Input): void => {
