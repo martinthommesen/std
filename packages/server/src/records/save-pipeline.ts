@@ -319,8 +319,8 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
  * `http/handlers.ts` and `http/definition-writes.ts`). What reaches this
  * guard is every other platform table (the journal, `core.change`, the
  * config-layer tables and stored dead-delivery actions), refused for every
- * caller. Only the private writer returned by `makeDeadDeliveryActionWriter`
- * can create an action through the pipeline (Contracts 4.6, decision 0037).
+ * caller. Only `appendDeadDeliveryAction`, called by the dead-letter tasks
+ * alone, creates an action through the pipeline (Contracts 4.6, decision 0037).
  */
 const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
   function* refusePlatformTable(
@@ -1666,29 +1666,31 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
 }, poisonIfNested);
 
 /**
- * Issues the dead-letter module's internal append capability (decision 0014).
- * The returned writer creates only this class, with validation, the real
- * Actor, history, ordinary read projection and outbox events. Generic saves
- * never receive its private create authority; updates and deletes have none.
+ * Appends a stored dead-delivery action (decisions 0014 and 0037): the one
+ * create the platform guard lets through, with validation, the real Actor,
+ * history, ordinary read projection and outbox events. It makes no access
+ * decision; its only caller, the retry and discard tasks in
+ * `outbox/dead-letters.ts`, authorizes and locks the delivery first. The
+ * `no-bypass` source scan fails if any other source file names it. Updates
+ * and deletes have no such path.
  *
- * @returns The writer held privately by the dead-letter module.
+ * @param body - The action the dead-letter task built; never client input.
+ * @returns The saved action.
  */
-export const makeDeadDeliveryActionWriter = () =>
-  Effect.fn("Records.appendDeadDeliveryAction")(
-    function* appendDeadDeliveryAction(body: JsonObject) {
-      const endpointClassId = PLATFORM_CLASS_IDS.dead_delivery_action;
-      const { request } = yield* Transactions;
+export const appendDeadDeliveryAction = Effect.fn(
+  "Records.appendDeadDeliveryAction"
+)(function* appendDeadDeliveryAction(body: JsonObject) {
+  const endpointClassId = PLATFORM_CLASS_IDS.dead_delivery_action;
+  const { request } = yield* Transactions;
 
-      return yield* request(
-        createInTransaction(
-          { body, endpointClassId },
-          body,
-          DEAD_DELIVERY_ACTION_CREATE
-        ).pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
-      );
-    },
-    poisonIfNested
+  return yield* request(
+    createInTransaction(
+      { body, endpointClassId },
+      body,
+      DEAD_DELIVERY_ACTION_CREATE
+    ).pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
   );
+}, poisonIfNested);
 
 /**
  * Updates a record through any endpoint of its hierarchy whose subtree

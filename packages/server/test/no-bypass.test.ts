@@ -539,6 +539,29 @@ describe("no-bypass", () => {
     assert.sameMembers([...used], [...NAME_LOOKUP_SITES.keys()]);
   });
 
+  it("only the dead-letter tasks name the dead-delivery action writer", () => {
+    // `appendDeadDeliveryAction` skips the platform guard and makes no access
+    // decision (decisions 0014, 0037): any other caller would be a bypass.
+    const writer = "appendDeadDeliveryAction";
+
+    const allowed = [
+      "packages/server/src/outbox/dead-letters.ts",
+      "packages/server/src/records/save-pipeline.ts",
+    ];
+
+    const naming = workspacePackages(ROOT).flatMap((name) => {
+      const src = path.join(ROOT, name, "src");
+
+      return existsSync(src)
+        ? sourceFiles(src)
+            .filter((file) => readFileSync(file, "utf-8").includes(writer))
+            .map((file) => path.relative(ROOT, file))
+        : [];
+    });
+
+    assert.sameMembers(naming, allowed);
+  });
+
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
       "without the allow-all rules admin is refused on every path; another role with them is not",

@@ -33,7 +33,7 @@ import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { makeDeadDeliveryActionWriter } from "../records/save-pipeline.ts";
+import { appendDeadDeliveryAction } from "../records/save-pipeline.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
@@ -195,8 +195,6 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
     return dead;
   }
 );
-
-const appendDeadDeliveryAction = makeDeadDeliveryActionWriter();
 
 /**
  * Atomically changes one dead row and stores its operator action through the
