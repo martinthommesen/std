@@ -28,9 +28,9 @@ const diagnosticLedger = Effect.gen(function* diagnosticLedger() {
   );
 
   return columns?.present === true
-    ? yield* readOnly(sql.unsafe(ledgerRows(columns.stateful))).pipe(
-        Effect.flatMap(decodeLedgerRows)
-      )
+    ? yield* readOnly(
+        sql.unsafe(ledgerRows(columns.stateful, columns.phased))
+      ).pipe(Effect.flatMap(decodeLedgerRows))
     : [];
 });
 
@@ -68,7 +68,7 @@ export const checkLedger = Effect.fn("Doctor.checkLedger")(
           1,
           "error",
           "migrationChanged",
-          `The checksum of applied platform migration ${id} differs from the code's.`,
+          `The checksum or phase of applied platform migration ${id} differs from the code's.`,
           String(id)
         )
       ),

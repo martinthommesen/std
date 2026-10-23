@@ -78,6 +78,7 @@ export const migration0013: TxMigration = {
   id: 13,
   kind: "tx",
   name: "record-rules",
+  phase: "expand",
   statements: [
     ...platformTable(
       "record_rule",

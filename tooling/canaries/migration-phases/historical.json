@@ -1,0 +1,40 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 1,
+      "kind": "tx",
+      "name": "core",
+      "phase": "expand",
+      "statements": [
+        "INSERT INTO core.config_state (revision, change_set_id) VALUES (0, uuidv7())"
+      ]
+    },
+    {
+      "id": 3,
+      "kind": "tx",
+      "name": "sessions",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.end_user_sessions()\nRETURNS trigger\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  DELETE FROM core.session WHERE user_id = NEW.id;\n  RETURN NULL;\nEND\n$$"
+      ]
+    },
+    {
+      "id": 11,
+      "kind": "tx",
+      "name": "ledger-state",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.platform_migration\n  ADD COLUMN state text NOT NULL DEFAULT 'applied'\n    CONSTRAINT platform_migration_state CHECK (state IN ('running', 'applied')),\n  ADD COLUMN progress jsonb"
+      ]
+    },
+    {
+      "id": 14,
+      "kind": "tx",
+      "name": "outbox-worker",
+      "phase": "expand",
+      "statements": [
+        "UPDATE core.delivery SET finished_at = now() WHERE status IN ('done', 'dead')"
+      ]
+    }
+  ]
+}

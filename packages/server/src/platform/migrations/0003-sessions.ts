@@ -26,6 +26,7 @@ export const migration0003: TxMigration = {
   id: 3,
   kind: "tx",
   name: "sessions",
+  phase: "expand",
   statements: [
     `CREATE TABLE core.session (
   token_hash bytea PRIMARY KEY CHECK (octet_length(token_hash) = 32),

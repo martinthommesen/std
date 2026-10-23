@@ -33,6 +33,7 @@ export const migration0004: TxMigration = {
   id: 4,
   kind: "tx",
   name: "history",
+  phase: "expand",
   statements: [
     `CREATE TABLE core."change" (
   id uuid NOT NULL,

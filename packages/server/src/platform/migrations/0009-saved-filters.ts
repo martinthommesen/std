@@ -76,6 +76,7 @@ export const migration0009: TxMigration = {
   id: 9,
   kind: "tx",
   name: "saved-filters",
+  phase: "expand",
   statements: [
     ...platformTable(
       "saved_filter",

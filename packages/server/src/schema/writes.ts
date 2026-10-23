@@ -7,7 +7,10 @@
  */
 import type { AppliedChangeSet } from "@std/definitions/apply";
 import type { Definition } from "@std/definitions/definition";
-import { dependenciesOf } from "@std/definitions/dependencies";
+import {
+  DEPENDENCY_KINDS,
+  dependenciesOf,
+} from "@std/definitions/dependencies";
 import { effectiveJson } from "@std/definitions/effective-json";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { Operation } from "@std/definitions/operation";
@@ -217,8 +220,12 @@ export const writeDependencies = Effect.fn("Schema.writeDependencies")(
 
     yield* sql.unsafe(
       `DELETE FROM core.config_dependency
-           WHERE from_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
-      [stringifyJson(definitions.map((definition) => definition.id))]
+           WHERE from_id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)
+             AND kind = ANY($2::text[])`,
+      [
+        stringifyJson(definitions.map((definition) => definition.id)),
+        [...DEPENDENCY_KINDS],
+      ]
     );
 
     const edges = definitions.flatMap(dependenciesOf);

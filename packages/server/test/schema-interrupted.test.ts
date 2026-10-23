@@ -27,6 +27,7 @@ import type { Scope } from "effect";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
+import { COORDINATOR_APPLICATION_NAME } from "../src/schema/coordinator.ts";
 import { resumePass } from "../src/schema/recovery.ts";
 import { schemaStatus } from "../src/schema/status.ts";
 import { decodeRows } from "../src/sql/rows.ts";
@@ -331,7 +332,8 @@ describe("schema-interrupted", () => {
             const building = values(
               `SELECT p.pid::text AS value FROM pg_stat_progress_create_index p
                JOIN pg_stat_activity a ON a.pid = p.pid
-               WHERE a.datname = current_database() AND a.application_name = 'std-coordinator'`
+               WHERE a.datname = current_database() AND a.application_name = $1`,
+              [COORDINATOR_APPLICATION_NAME]
             );
 
             yield* waitUntil(

@@ -30,6 +30,7 @@ export const migration0007: TxMigration = {
   id: 7,
   kind: "tx",
   name: "outbox",
+  phase: "expand",
   statements: [
     `CREATE TABLE core.delivery (
   id bigint GENERATED ALWAYS AS IDENTITY,

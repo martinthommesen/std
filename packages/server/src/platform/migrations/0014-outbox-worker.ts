@@ -22,6 +22,7 @@ export const migration0014: TxMigration = {
   id: 14,
   kind: "tx",
   name: "outbox-worker",
+  phase: "expand",
   statements: [
     "ALTER TABLE core.delivery ADD COLUMN finished_at timestamptz(3)",
     "UPDATE core.delivery SET finished_at = now() WHERE status IN ('done', 'dead')",

@@ -1,0 +1,11 @@
+libpg-query 18.1.5 and @pgsql/types 18.0.0 are development-only dependencies.
+Their JavaScript/TypeScript wrappers are MIT licensed (LICENSE-libpg-query-MIT).
+The WASM embeds libpg_query, originally by pganalyze, under BSD-3-Clause
+(LICENSE-libpg-query-BSD), and PostgreSQL under the PostgreSQL Licence
+(LICENSE-PostgreSQL). These notices must accompany redistributed parser binaries.
+
+Sources:
+https://github.com/constructive-io/libpg-query-node
+https://github.com/constructive-io/libpg_query/tree/18-constructive
+https://github.com/pganalyze/libpg_query
+https://www.postgresql.org/about/licence/

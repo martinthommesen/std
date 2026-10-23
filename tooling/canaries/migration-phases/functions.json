@@ -1,0 +1,22 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 17,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "contract",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION core.\"fn\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ]
+    },
+    {
+      "id": 18,
+      "kind": "tx",
+      "name": "fixture",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.fn(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
+      ]
+    }
+  ]
+}

@@ -29,6 +29,7 @@ import type {
 import { createRecord, updateRecord } from "../src/records/save-pipeline.ts";
 import { decodeRows } from "../src/sql/rows.ts";
 import { Transactions } from "../src/sql/transactions.ts";
+import { STD_VERSION } from "../src/version.ts";
 import {
   deliveriesOf,
   deliveriesWhere,
@@ -122,6 +123,7 @@ const explainClaim = (policy: DeadLetterPolicy, subscription: string) =>
         subscription,
         "10",
         "300000 milliseconds",
+        STD_VERSION,
       ])
     ),
     Effect.flatMap(decodePlan),

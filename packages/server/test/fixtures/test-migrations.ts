@@ -21,6 +21,7 @@ export const slowProbeMigration: TxMigration = {
   id: 2,
   kind: "tx",
   name: "slow-probe",
+  phase: "expand",
   statements: [
     "CREATE TABLE core.migration_probe (id integer PRIMARY KEY, note text NOT NULL)",
     "INSERT INTO core.migration_probe VALUES (1, 'applied once')",
@@ -33,6 +34,7 @@ export const itemTableMigration: TxMigration = {
   id: 2,
   kind: "tx",
   name: "item-table",
+  phase: "expand",
   statements: [
     "CREATE TABLE core.migration_item (id integer NOT NULL)",
     "INSERT INTO core.migration_item SELECT generate_series(1, 10000)",
@@ -45,6 +47,7 @@ export const itemIndexMigration: ConcurrentIndexMigration = {
   index: "migration_item_id",
   kind: "concurrent_index",
   name: "item-index",
+  phase: "expand",
   schema: "core",
   statement:
     "CREATE INDEX CONCURRENTLY migration_item_id ON core.migration_item (id)",

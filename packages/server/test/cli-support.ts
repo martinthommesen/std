@@ -189,3 +189,40 @@ export const runCli = (
 
     return killAndAwait(child);
   });
+
+/**
+ * Starts the real worker CLI with scoped cleanup. Callers observe readiness
+ * through pg_stat_activity, since an idle worker need not log anything.
+ * @param url - Disposable test database for both pooled and direct connections.
+ * @returns The child and its accumulated output.
+ */
+export const startWorker = Effect.fn("CliSupport.startWorker")(
+  function* startWorker(url: string) {
+    const chunks: string[] = [];
+
+    const keep = (chunk: Uint8Array) => {
+      chunks.push(String(chunk));
+    };
+
+    const child = yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const spawned = spawn(process.execPath, [CLI_SCRIPT, "worker"], {
+          env: {
+            ...process.env,
+            STD_DATABASE_DIRECT_URL: url,
+            STD_DATABASE_URL: url,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        spawned.stdout.on("data", keep);
+        spawned.stderr.on("data", keep);
+
+        return spawned;
+      }),
+      killAndAwait
+    );
+
+    return { child, log: () => chunks.join("") };
+  }
+);

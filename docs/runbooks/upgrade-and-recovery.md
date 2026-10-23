@@ -33,10 +33,12 @@ Use this for every STD release and every new version of an app set.
 
    If the last line says `Result: refused`, fix each refusal first (see "Refusals" below) and plan again. Review the "Security changes" section with whoever owns access control.
 
-2. Stop every STD server. `std upgrade` refuses while any session with `application_name = 'std-server'` is connected:
+2. Stop every STD server and worker. `std upgrade` refuses while a server or worker session is connected, including legacy unversioned names:
 
    ```bash
-   psql "$STD_DATABASE_URL" -Atc "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'std-server'"
+   psql "$STD_DATABASE_URL" -Atc "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND (application_name IN ('std-server', 'std-worker')
+        OR starts_with(application_name, 'std-server@')
+        OR starts_with(application_name, 'std-worker@'))"
    ```
 
    The query must print nothing.
@@ -160,7 +162,7 @@ While a dump runs, concurrent index builds wait for its snapshot (the watchdog r
 
 ## Restore (Contracts 8.6)
 
-1. Stop every STD server (the query in "Upgrade an install", step 2, must print nothing).
+1. Stop every STD server and worker (the query in "Upgrade an install", step 2, must print nothing).
 2. Restore into an empty database. `STD_RESTORE_DB` names a database that does not exist yet on the same Postgres 18 server:
 
    ```bash
