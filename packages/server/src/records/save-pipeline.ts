@@ -54,6 +54,7 @@ import type { DefinitionId } from "@std/definitions/ids";
 import { writtenOnCreate } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
+  PLATFORM_CLASS_IDS,
   SYSTEM_USER_ID,
   PARTY_CLASS_IDS,
   PARTY_FIELD_IDS,
@@ -87,6 +88,7 @@ import { AggregateScope, noteAggregateWrite } from "./aggregate-state.ts";
 import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
+import { writeChangeImage } from "./change-image.ts";
 import {
   deriveIndividualName,
   individualOf,
@@ -210,7 +212,8 @@ export interface LockedImage {
 /** A delete, based on a version the caller read. */
 export interface DeleteInput extends SaveInput {
   readonly id: string;
-  readonly expectedVersion: number;
+  /** Null applies to the locked version (TMF); generic routes always supply one. */
+  readonly expectedVersion: number | null;
 }
 
 /** What a save did. */
@@ -231,6 +234,7 @@ export interface SaveResult {
 }
 
 const API_CAUSE: ChangeCause = { kind: "api" };
+const DEAD_DELIVERY_ACTION_CREATE = Symbol("DeadDeliveryActionCreate");
 
 // The stored values of a record's json fields, by name.
 const storedJsonOf = (
@@ -289,7 +293,9 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
  * routes them to one-operation change sets first (Contracts 1.4,
  * `http/handlers.ts` and `http/definition-writes.ts`). What reaches this
  * guard is every other platform table (the journal, `core.change`, the
- * config-layer tables), refused for every caller.
+ * config-layer tables and stored dead-delivery actions), refused for every
+ * caller. Only `appendDeadDeliveryAction`, called by the dead-letter tasks
+ * alone, creates an action through the pipeline (Contracts 4.6, decision 0037).
  */
 const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
   function* refusePlatformTable(
@@ -588,6 +594,8 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     recordVersion: change.version,
   });
 
+  yield* writeChangeImage(snapshot, entry, change.before, change.after);
+
   const hookInput = {
     after: change.after,
     before: change.before,
@@ -799,7 +807,8 @@ const lockOwnersOf = Effect.fn("Records.lockOwnersOf")(function* lockOwnersOf(
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInRequest(
     input: CreateInput,
-    body: JsonObject
+    body: JsonObject,
+    platformCreate?: typeof DEAD_DELIVERY_ACTION_CREATE
   ): Effect.fn.Return<SaveResult, CreateFailure, CreateServices> {
     yield* checkDepth(yield* SaveStack);
 
@@ -819,7 +828,9 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     const resolved = yield* resolveBody(snapshot, input, body, "create");
 
-    yield* refusePlatformTable(snapshot, classId);
+    if (platformCreate !== DEAD_DELIVERY_ACTION_CREATE) {
+      yield* refusePlatformTable(snapshot, classId);
+    }
 
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields, { input, update: false });
@@ -923,14 +934,16 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     const after = yield* reload(snapshot, classId, id);
 
-    yield* access.checkProposed({
-      action: "create",
-      classId,
-      endpointClassId: classId,
-      id,
-      snapshot,
-      written: supplied,
-    });
+    if (platformCreate !== DEAD_DELIVERY_ACTION_CREATE) {
+      yield* access.checkProposed({
+        action: "create",
+        classId,
+        endpointClassId: classId,
+        id,
+        snapshot,
+        written: supplied,
+      });
+    }
 
     const entry = yield* recordChange(snapshot, {
       after,
@@ -1578,6 +1591,33 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
     createInTransaction(input, body).pipe(
       Effect.flatMap((saved) => finishSave(saved, input.endpointClassId))
     )
+  );
+}, poisonIfNested);
+
+/**
+ * Appends a stored dead-delivery action (decisions 0014 and 0037): the one
+ * create the platform guard lets through, with validation, the real Actor,
+ * history, ordinary read projection and outbox events. It makes no access
+ * decision; its only caller, the retry and discard tasks in
+ * `outbox/dead-letters.ts`, authorizes and locks the delivery first. The
+ * `no-bypass` source scan fails if any other source file names it. Updates
+ * and deletes have no such path.
+ *
+ * @param body - The action the dead-letter task built; never client input.
+ * @returns The saved action.
+ */
+export const appendDeadDeliveryAction = Effect.fn(
+  "Records.appendDeadDeliveryAction"
+)(function* appendDeadDeliveryAction(body: JsonObject) {
+  const endpointClassId = PLATFORM_CLASS_IDS.dead_delivery_action;
+  const { request } = yield* Transactions;
+
+  return yield* request(
+    createInTransaction(
+      { body, endpointClassId },
+      body,
+      DEAD_DELIVERY_ACTION_CREATE
+    ).pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
   );
 }, poisonIfNested);
 

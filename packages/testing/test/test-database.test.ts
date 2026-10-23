@@ -29,7 +29,18 @@ import { migration0015 } from "@std/server/platform/migrations/0015-delivery-don
 import { migration0016 } from "@std/server/platform/migrations/0016-system-user-history";
 import { migration0017 } from "@std/server/platform/migrations/0017-rolling-groundwork";
 import { migration0018 } from "@std/server/platform/migrations/0018-helpdesk-v3";
-import { migration0019 } from "@std/server/platform/migrations/0019-form-rules";
+import { migration0019 } from "@std/server/platform/migrations/0019-hubs";
+import { migration0020 } from "@std/server/platform/migrations/0020-event-lookups";
+import { migration0021 } from "@std/server/platform/migrations/0021-change-topic-page";
+import { migration0022 } from "@std/server/platform/migrations/0022-event-lookup-backfill";
+import { migration0023 } from "@std/server/platform/migrations/0023-event-images-cursors";
+import { migration0024 } from "@std/server/platform/migrations/0024-record-event-id";
+import { migration0025 } from "@std/server/platform/migrations/0025-change-event-key";
+import { migration0026 } from "@std/server/platform/migrations/0026-client-event-key";
+import { migration0027 } from "@std/server/platform/migrations/0027-client-event-record";
+import { migration0028 } from "@std/server/platform/migrations/0028-change-image-backfill";
+import { migration0029 } from "@std/server/platform/migrations/0029-dead-delivery-actions";
+import { migration0030 } from "@std/server/platform/migrations/0030-form-rules";
 import { checkPlatformMigrations } from "@std/server/platform/runner";
 import { DatabaseConfig } from "@std/server/sql/database-config";
 import { decodeRows } from "@std/server/sql/rows";
@@ -269,6 +280,17 @@ describe("test-database", () => {
         migration0017,
         migration0018,
         migration0019,
+        migration0020,
+        migration0021,
+        migration0022,
+        migration0023,
+        migration0024,
+        migration0025,
+        migration0026,
+        migration0027,
+        migration0028,
+        migration0029,
+        migration0030,
       ])
     );
     assert.notStrictEqual(

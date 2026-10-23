@@ -485,44 +485,49 @@ interface FieldsSpec {
   readonly identityOnly: boolean;
 }
 
-const fieldsSpecOf = Effect.fn("ApiQuery.fieldsSpec")(function* fieldsSpecOf(
-  text: string
-) {
-  const items = text.split(",").map((item) => item.trim());
+/**
+ * Parses selection syntax shared by table and fixed-resource reads.
+ * @param text - The fields directive.
+ * @returns Inclusion, exclusion and identity-only selection.
+ */
+export const fieldsSpecOf = Effect.fn("ApiQuery.fieldsSpec")(
+  function* fieldsSpecOf(text: string) {
+    const items = text.split(",").map((item) => item.trim());
 
-  if (items.includes("")) {
-    return yield* invalidParameter(
-      "fields",
-      "fields lists attribute names and one-hop paths such as assignedTo.name."
+    if (items.includes("")) {
+      return yield* invalidParameter(
+        "fields",
+        "fields lists attribute names and one-hop paths such as assignedTo.name."
+      );
+    }
+
+    const excluded = new Set(
+      items.flatMap((item) => (item.startsWith("!") ? [item.slice(1)] : []))
     );
+
+    const included = items.flatMap((item) => {
+      const named = item.startsWith(".") ? item.slice(1) : item;
+
+      return item.startsWith("!") ||
+        item === "none" ||
+        IDENTITY_ATTRIBUTES.has(named)
+        ? []
+        : [named];
+    });
+
+    const conflict = included.find((item) => excluded.has(item));
+
+    if (conflict !== undefined) {
+      return yield* new FieldsConflict({ field: conflict });
+    }
+
+    return {
+      excluded,
+      identityOnly: included.length === 0 && excluded.size === 0,
+      included,
+    } satisfies FieldsSpec;
   }
-
-  const excluded = new Set(
-    items.flatMap((item) => (item.startsWith("!") ? [item.slice(1)] : []))
-  );
-
-  const included = items.flatMap((item) => {
-    const named = item.startsWith(".") ? item.slice(1) : item;
-
-    return item.startsWith("!") ||
-      item === "none" ||
-      IDENTITY_ATTRIBUTES.has(named)
-      ? []
-      : [named];
-  });
-
-  const conflict = included.find((item) => excluded.has(item));
-
-  if (conflict !== undefined) {
-    return yield* new FieldsConflict({ field: conflict });
-  }
-
-  return {
-    excluded,
-    identityOnly: included.length === 0 && excluded.size === 0,
-    included,
-  } satisfies FieldsSpec;
-});
+);
 
 // Each path's reference is selected with it, so its EntityRef comes along;
 // `<ref>.id` and `<ref>.name` are the EntityRef's own.
@@ -690,13 +695,18 @@ export interface ListQuery {
 const cursorsOf = Effect.fn("ApiQuery.cursors")(function* cursorsOf(
   sortKeys: readonly SortKey[],
   after: string | undefined,
-  before: string | undefined
+  before: string | undefined,
+  identityType: "uuid" | "int8"
 ) {
   return {
     after:
-      after === undefined ? undefined : yield* decodeCursor(sortKeys, after),
+      after === undefined
+        ? undefined
+        : yield* decodeCursor(sortKeys, after, identityType),
     before:
-      before === undefined ? undefined : yield* decodeCursor(sortKeys, before),
+      before === undefined
+        ? undefined
+        : yield* decodeCursor(sortKeys, before, identityType),
   } satisfies PageCursors;
 });
 
@@ -744,7 +754,14 @@ export const parseListQuery = Effect.fn("ApiQuery.parseList")(
     const limit = yield* parseLimit(yield* single(query, "limit"));
     const offset = yield* parseOffset(offsetText);
     const count = yield* parseCount(yield* single(query, "count"));
-    const cursors = yield* cursorsOf(sortKeys, after, before);
+
+    const cursors = yield* cursorsOf(
+      sortKeys,
+      after,
+      before,
+      view.byName("id")?.type.kind === "bigInteger" ? "int8" : "uuid"
+    );
+
     // A page asked for with `offset` is an offset page; any other page
     // (the first one, or one asked for with a cursor) is a cursor page,
     // whose `next` is a cursor: keyset paging is stable across changes

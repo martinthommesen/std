@@ -123,7 +123,8 @@ export const committedState = Effect.gen(function* readCommittedState() {
     catalog: yield* catalogFingerprint,
     revision,
     tables: Object.fromEntries(
-      digests.map((entry) => {
+      // Parallel UNION branches need not return their table digests in order.
+      digests.toSorted().map((entry) => {
         const at = entry.indexOf("=");
 
         return [entry.slice(0, at), entry.slice(at + 1)];

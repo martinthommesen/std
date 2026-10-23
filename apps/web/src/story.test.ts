@@ -313,6 +313,7 @@ describe("signing in", () => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "maybeDeadLetters",
           "maybeRecordForm",
           "maybeRevision",
           "maybeTableList",
@@ -554,6 +555,7 @@ describe("answers of an earlier session", () => {
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
   const bobEntering = Model.SignedIn({
+    maybeDeadLetters: Option.none(),
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),
     maybeTableList: Option.none(),

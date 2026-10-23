@@ -2215,19 +2215,26 @@ rows:
     source: TMF630 v5.0.0 P1 §11.1 p.185
     level: mandatory
     requirement: A successful hub subscription creation (POST /hub) must return 201 Created.
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
     note: "hubs (3H, C12): Contracts 12.2 POST /hub answers 201 with id, callback and query"
   - id: TMF630@5.0.0/P1/11.3/hub-retrieve-200
     source: TMF630 v5.0.0 P1 §11.3 p.192
     level: mandatory
     requirement: A successful retrieval of one hub subscription (GET /hub/{id}) must return 200 OK.
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#registration requires events.subscribe, owner isolation holds, and unregister stops new deliveries"
+      - "packages/server/test/tmf688.test.ts#TMF688 topic, event and hub operations return only pinned statuses and valid schemas"
     note: "hubs (3H, C12): Contracts 12.2 GET /hub/{id}"
   - id: TMF630@5.0.0/P1/11.4/hub-delete-204-or-202
     source: TMF630 v5.0.0 P1 §11.4 p.193
     level: mandatory
     requirement: A successful deletion of a hub subscription must return either 204 No Content with no body or 202 Accepted.
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#registration requires events.subscribe, owner isolation holds, and unregister stops new deliveries"
     note: "hubs (3H, C12): Contracts 12.2 DELETE /hub/{id} answers 204"
   - id: TMF630@5.0.0/P1/11.5/listener-accepts-event-201-or-204
     source: TMF630 v5.0.0 P1 §11.5 p.195
@@ -2239,8 +2246,11 @@ rows:
     source: TMF630 v5.0.0 P1 §11.6 p.198
     level: mandatory
     requirement: API-specific event types must use the same common Event schema as the default events, with their details documented by the API.
-    status: pending
-    note: "hubs (3H, C12): Contracts 12.1 renders every event type, TMF621 Resolved and InformationRequired included, in the one v5 Event envelope"
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
+      - "packages/server/test/tmf688.test.ts#TMF688 top-level hubs receive its TopicCreateEvent, TopicChangeEvent, TopicDeleteEvent and EventCreateEvent notifications"
+    note: "hubs (3H, C12): Contracts 12.1 renders generic and TMF688 notifications in the v5 Event envelope; TMF621 Resolved and InformationRequired remain pending with that API"
   - id: TMF630@5.0.0/P1/11.6.1/create-event-full-resource
     source: TMF630 v5.0.0 P1 §11.6.1 p.199
     level: mandatory
@@ -2251,7 +2261,9 @@ rows:
     source: TMF630 v5.0.0 P1 §11.6.2 p.203
     level: mandatory
     requirement: A server's AttributeValueChangeEvent payload always carries the changed resource's addressable information (its id, and href). (lowercase 'must' in the source)
-    status: pending
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
     note: "hubs (3H, C12): the payload is the record image masked as in 4.5, and C10.2 makes id and href always present"
   - id: TMF630@5.0.0/P1/11.6.2/attribute-change-event-arrays-whole
     source: TMF630 v5.0.0 P1 §11.6.2 p.203
@@ -2287,8 +2299,10 @@ rows:
     source: TMF630 v5.0.0 P1 §11.6.4 p.204
     level: mandatory
     requirement: A server's DeleteEvent payload carries only the deleted resource's addressable information (for example id and href), nothing else.
-    status: pending
-    note: "gap: Contracts 12.1 with 4.5 renders a delete event's payload as the masked before image, not id/href only (conflicts in substance with 4.5, which is outside Contracts 10, so not flagged as a contradiction)"
+    status: tested
+    tests:
+      - "packages/server/test/hubs.test.ts#committed create, attribute update and delete arrive in order with TMF envelopes"
+    note: "Contracts 12.1 authorizes against the before image and emits only id, href and @type"
   - id: TMF630@5.0.0/P1/11.6.5/version-create-event-full-metadata
     source: TMF630 v5.0.0 P1 §11.6.5 p.205
     level: mandatory

@@ -36,10 +36,11 @@
  */
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import type { JsonObject } from "@std/values/json-value";
 import { Context, Layer } from "effect";
 import type { Effect } from "effect";
 
-import type { Actor } from "../auth/actor.ts";
+import type { Actor, ActingUser } from "../auth/actor.ts";
 import type { Catalog } from "../catalog/catalog.ts";
 import type { InstanceSettings } from "../config/instance-settings.ts";
 import type { ChangeCause } from "../records/change-entry.ts";
@@ -48,10 +49,16 @@ import type { WriteAccess } from "../records/write-access.ts";
 import type { WriteOnlyValues } from "../records/write-only-values.ts";
 import type { TransactionServices } from "../sql/transaction.ts";
 import type { Transactions } from "../sql/transactions.ts";
-import type { DeliveryPayload } from "./delivery-payload.ts";
+import type {
+  DeliveryPayload,
+  StoredEntry,
+  FieldOrigin,
+} from "./delivery-payload.ts";
 
 /** One delivery, as an effect receives it. */
 export interface Delivery {
+  /** Events authorized and rendered in the preparation transaction. */
+  readonly events?: readonly JsonObject[];
   /** The `core.delivery` row ID, in decimal. */
   readonly deliveryId: string;
   /** The subscription, as the worker's snapshot has it. */
@@ -103,6 +110,21 @@ export interface RecordDeliveryEffect {
 /** An effect that calls an external system, with `changeId` as its key. */
 export interface ExternalDeliveryEffect {
   readonly kind: "external";
+  /** Additional current-record checks inside the preparation transaction. */
+  readonly authorize?: (
+    delivery: Delivery
+  ) => Effect.Effect<void, EffectFailure, RecordEffectServices>;
+  /** Optional pure rendering while the worker still holds its current snapshot. */
+  readonly render?: (
+    delivery: Delivery,
+    context: {
+      readonly actor: ActingUser;
+      readonly entries: readonly StoredEntry[];
+      readonly origins: ReadonlyMap<string, FieldOrigin>;
+      readonly now: number;
+      readonly timeZone: string;
+    }
+  ) => readonly JsonObject[];
   readonly run: (delivery: Delivery) => Effect.Effect<void, EffectFailure>;
 }
 

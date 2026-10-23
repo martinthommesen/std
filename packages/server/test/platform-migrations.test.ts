@@ -186,7 +186,10 @@ describe("platform-migrations", () => {
   it("migration lists are numbered from 1 without gaps and keep their checksums", () => {
     assert.deepStrictEqual(
       PLATFORM_MIGRATIONS.map((migration) => migration.id),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+      ]
     );
     assert.strictEqual(
       migrationChecksum(migration0001),
@@ -292,8 +295,10 @@ describe("platform-migrations", () => {
             const empty = yield* Effect.exit(checkPlatformMigrations());
             assert.deepStrictEqual(
               stateRefusal(errorOf(empty))?.pending,
-              [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19],
-              "Helpdesk migration 18 is deferred until its optional set reaches v3"
+              [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19,
+                20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+              ]
             );
 
             const applied = yield* runPlatformMigrations([migration0001]);

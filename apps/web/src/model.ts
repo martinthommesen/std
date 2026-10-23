@@ -5,6 +5,7 @@ import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";
 
 import { SchemaRevision } from "./domain/schema-revision.ts";
+import { Model as DeadLettersModel } from "./page/dead-letters/model.ts";
 import { Model as RecordFormModel } from "./page/record-form/model.ts";
 import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { Model as TableListModel } from "./page/table-list/model.ts";
@@ -72,6 +73,7 @@ export const Model = defineTaggedUnion({
   CheckingSession: { route: AppRoute },
   SessionUnavailable: { route: AppRoute },
   SignedIn: {
+    maybeDeadLetters: Schema.Option(DeadLettersModel),
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),

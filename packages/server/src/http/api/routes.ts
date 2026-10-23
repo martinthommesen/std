@@ -31,6 +31,7 @@ import { asActor, inRequestTransaction } from "../request-scope.ts";
 import { parseRequestRevision } from "../stale-request.ts";
 import { answered } from "./answered.ts";
 import { ChangeSetRoutes } from "./change-sets.ts";
+import { DeadLetterRoutes } from "./dead-letters.ts";
 import { definitionWriteIn } from "./definition-writes.ts";
 import type { DefinitionAction } from "./definition-writes.ts";
 import { FixedRoutes } from "./fixed.ts";
@@ -358,5 +359,6 @@ const RecordRoutes = Layer.unwrap(
 export const ApiRoutesLayer = Layer.mergeAll(
   RecordRoutes,
   FixedRoutes,
-  ChangeSetRoutes
+  ChangeSetRoutes,
+  DeadLetterRoutes
 );

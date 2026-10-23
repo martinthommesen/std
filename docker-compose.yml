@@ -143,10 +143,20 @@ services:
       context: .
       dockerfile: docker/quickstart.Dockerfile
     init: true
+    entrypoint: ["sh", "docker/quickstart-entrypoint.sh"]
     command: ["pnpm", "--silent", "std", "worker"]
     environment:
-      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@postgres:5432/std}
+      STD_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-postgres://std:std@quickstart-postgres:5432/std}
+      STD_COMPOSE_DATABASE_URL: ${STD_COMPOSE_DATABASE_URL:-}
+      STD_DATABASE_SSL_MODE: ${STD_DATABASE_SSL_MODE:-}
+      STD_DATABASE_SSL_CA_FILE: ${STD_DATABASE_SSL_CA_FILE:-}
+      STD_DATABASE_SSL_SYSTEM_ROOTS: ${STD_DATABASE_SSL_SYSTEM_ROOTS:-}
+      STD_DATABASE_SSL_CERT_FILE: ${STD_DATABASE_SSL_CERT_FILE:-}
+      STD_DATABASE_SSL_KEY_FILE: ${STD_DATABASE_SSL_KEY_FILE:-}
+      STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE: ${STD_DATABASE_DANGEROUSLY_ALLOW_INSECURE_REMOTE:-}
       STD_TIME_ZONE: ${STD_TIME_ZONE:-UTC}
+    volumes:
+      - std-ca:/std-ca:ro
     depends_on:
       upgrade:
         condition: service_completed_successfully

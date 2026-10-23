@@ -23,6 +23,7 @@ export const PLATFORM_CLASS_IDS = {
   config_conflict: "b7281780-9441-46f3-9d58-f14b812a59c2",
   config_override: "225c71f0-e411-4e5e-a01c-aebdd779a2c5",
   config_set: "0b70df4d-c000-4b9a-aa7f-8b5b92f1afce",
+  dead_delivery_action: "6ef83f5d-41c6-4acb-943c-4bc82503aa92",
   field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
   field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",
   form_rule: "553d1bdb-321c-4eee-a7ba-2a67b6c0ffad",
@@ -107,6 +108,7 @@ export const RULES_RUN_AS_PERMISSION_ID: DefinitionId =
 
 /** Built-in permissions (Contracts 3.1), checked by ID. */
 export const PERMISSION_IDS = {
+  "events.subscribe": "482cfac8-dc92-4637-a8cb-ce4eaf01233d",
   "rules.run_as": RULES_RUN_AS_PERMISSION_ID,
   "schema.purge": SCHEMA_PURGE_PERMISSION_ID,
   "schema.snapshot": "f84a7851-ccdb-4c84-8363-6cf2c1078520",

@@ -988,6 +988,28 @@
     "indexes": [
       {
         "included": [],
+        "keys": [
+          "record_class_id",
+          "(((fields -> '706416a0-c21d-4346-9dda-283896c78bc9'::text) -> 'after'::text) ->> 'eventId'::text)",
+          "record_id"
+        ],
+        "method": "btree",
+        "name": "change_client_event_key",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["core.record_event_id(id, kind)"],
+        "method": "btree",
+        "name": "change_event_key",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
         "keys": ["operation_id"],
         "method": "btree",
         "name": "change_operation",
@@ -1002,6 +1024,15 @@
         "name": "change_record_version",
         "predicate": null,
         "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["record_class_id", "occurred_at", "id"],
+        "method": "btree",
+        "name": "change_topic_page",
+        "predicate": null,
+        "unique": false,
         "valid": true
       },
       {
@@ -1032,6 +1063,107 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.change_image": {
+    "columns": [
+      {
+        "default": null,
+        "name": "change_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "before_image",
+        "notNull": false,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "after_image",
+        "notNull": false,
+        "type": "jsonb"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK (((after_image IS NULL) OR (jsonb_typeof(after_image) = 'object'::text)))",
+        "columns": ["after_image"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "change_image_after_image_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK (((before_image IS NULL) OR (jsonb_typeof(before_image) = 'object'::text)))",
+        "columns": ["before_image"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "change_image_before_image_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": "c",
+        "name": "change_image_change_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.change",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "change_image_change_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "change_image_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["change_id"],
+        "method": "btree",
+        "name": "change_image_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.choice": {
     "columns": [
@@ -2014,6 +2146,103 @@
         "when": "old.class_id IS DISTINCT FROM new.class_id"
       }
     ]
+  },
+  "core.client_event": {
+    "columns": [
+      {
+        "default": null,
+        "name": "topic_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "event_id",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "record_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_event_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["topic_id", "event_id", "record_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["record_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_record_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["topic_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "client_event_topic_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["topic_id", "event_id", "record_id"],
+        "method": "btree",
+        "name": "client_event_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["record_id"],
+        "method": "btree",
+        "name": "client_event_record",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      }
+    ],
+    "triggers": []
   },
   "core.config_base": {
     "columns": [
@@ -3812,6 +4041,360 @@
     ],
     "triggers": []
   },
+  "core.dead_delivery_action": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "delivery_id",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "subscription_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "action",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "occurred_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK ((action = ANY (ARRAY['retry'::text, 'discard'::text])))",
+        "columns": ["action"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_action_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["action"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_action_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_class_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_created_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_created_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((delivery_id > 0))",
+        "columns": ["delivery_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_delivery_id_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["delivery_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_delivery_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["occurred_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_occurred_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = 'completed'::text))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_state_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_subscription_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_updated_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_updated_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((version > 0))",
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_pk_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((class_id = '6ef83f5d-41c6-4acb-943c-4bc82503aa92'::uuid))",
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_sc_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id", "class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_uq_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "std_pk_6ef83f5d41c64acb943c4bc82503aa92",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id", "class_id"],
+        "method": "btree",
+        "name": "std_uq_6ef83f5d41c64acb943c4bc82503aa92",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "function": "core.refuse_class_change",
+        "name": "std_tg_6ef83f5d41c64acb943c4bc82503aa92",
+        "type": 19,
+        "when": "old.class_id IS DISTINCT FROM new.class_id"
+      }
+    ]
+  },
   "core.definition_revision": {
     "columns": [
       {
@@ -4291,6 +4874,160 @@
         "keys": ["subscription_id", "change_id"],
         "method": "btree",
         "name": "delivery_subscription_change",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
+  "core.event_cursor": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "identity_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "topic_id",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "query",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "position",
+        "notNull": true,
+        "type": "jsonb"
+      },
+      {
+        "default": null,
+        "name": "expires_at",
+        "notNull": true,
+        "type": "timestamp with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["expires_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_expires_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["identity_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_identity_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["position"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_position_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["query"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_query_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["topic_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "event_cursor_topic_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["expires_at"],
+        "method": "btree",
+        "name": "event_cursor_expiry",
+        "predicate": null,
+        "unique": false,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "event_cursor_pkey",
         "predicate": null,
         "unique": true,
         "valid": true
@@ -8342,6 +9079,110 @@
       }
     ]
   },
+  "core.resource_event": {
+    "columns": [
+      {
+        "default": null,
+        "name": "event_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "change_id",
+        "notNull": true,
+        "type": "uuid"
+      }
+    ],
+    "constraints": [
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": "a",
+        "name": "resource_event_change_id_fkey",
+        "referencedColumns": ["id"],
+        "references": "core.change",
+        "type": "f",
+        "updateAction": "a",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_change_id_key",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["change_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_change_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_event_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["event_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "resource_event_pkey",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["change_id"],
+        "method": "btree",
+        "name": "resource_event_change_id_key",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["event_id"],
+        "method": "btree",
+        "name": "resource_event_pkey",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": []
+  },
   "core.role": {
     "columns": [
       {
@@ -10609,6 +11450,12 @@
         "name": "enabled",
         "notNull": true,
         "type": "boolean"
+      },
+      {
+        "default": null,
+        "name": "hub",
+        "notNull": false,
+        "type": "jsonb"
       }
     ],
     "constraints": [

@@ -11,14 +11,18 @@
  */
 import { Layer } from "effect";
 
+import { HubSettings } from "../events/hubs.ts";
 import { RecordRuleSaveHooks } from "../hooks/record-rule-hooks.ts";
+import { ProductionDeliveryHandlers } from "../outbox/production-handlers.ts";
 import { WriteOnlyValues } from "../records/write-only-values.ts";
 import { ApiNoStoreLayer } from "./api-cache.ts";
 import { ApiRoutesLayer } from "./api/routes.ts";
+import { HubRoutes } from "./hubs.ts";
 import { SchemaRevisionHeaderLayer } from "./schema-revision-header.ts";
 import { SHIPPED_TMF_APIS } from "./tmf/apis.ts";
 import type { TmfRegistry } from "./tmf/context.ts";
 import { tmfRoutesLayer } from "./tmf/routes.ts";
+import { Tmf688Routes } from "./tmf/tmf688.ts";
 
 /**
  * The save pipeline's hook points and password hashing for the write
@@ -38,12 +42,18 @@ const SaveServices = Layer.mergeAll(
  * @returns The routes layer.
  */
 export const tmfRoutes = (registry: TmfRegistry) =>
-  tmfRoutesLayer(registry).pipe(Layer.provide(SaveServices));
+  tmfRoutesLayer(registry).pipe(
+    Layer.provide(Layer.merge(SaveServices, HubSettings.layer))
+  );
 
 /** The routes plus the global revision header and `no-store`. */
 export const HttpAppLayer = Layer.mergeAll(
-  ApiRoutesLayer.pipe(Layer.provide(SaveServices)),
+  HubRoutes,
+  Tmf688Routes.pipe(Layer.provide(SaveServices)),
+  ApiRoutesLayer.pipe(
+    Layer.provide(Layer.merge(SaveServices, ProductionDeliveryHandlers))
+  ),
   tmfRoutes(SHIPPED_TMF_APIS),
   SchemaRevisionHeaderLayer,
   ApiNoStoreLayer
-);
+).pipe(Layer.provide(HubSettings.layer));

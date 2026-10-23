@@ -22,6 +22,13 @@ import type {
   SignedOutModel,
 } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
+import { OutMessage as DeadLettersOutMessage } from "./page/dead-letters/message.ts";
+import type { Message as DeadLettersMessage } from "./page/dead-letters/message.ts";
+import type { Model as DeadLettersModel } from "./page/dead-letters/model.ts";
+import {
+  init as deadLettersInit,
+  update as deadLettersUpdate,
+} from "./page/dead-letters/update.ts";
 import { OutMessage as RecordFormOutMessage } from "./page/record-form/message.ts";
 import type { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
@@ -97,10 +104,17 @@ const landSignedOut = (
 ): UpdateReturn =>
   Match.value(route).pipe(
     withUpdateReturn,
-    Match.tag("Home", "NewRecord", "Record", "TableList", (signedInRoute) => ({
-      commands: [ReplaceUrl({ url: signInRouter() })],
-      model: toModel(AppRoute.SignIn(), Option.some(signedInRoute)),
-    })),
+    Match.tag(
+      "Home",
+      "DeadLetters",
+      "NewRecord",
+      "Record",
+      "TableList",
+      (signedInRoute) => ({
+        commands: [ReplaceUrl({ url: signInRouter() })],
+        model: toModel(AppRoute.SignIn(), Option.some(signedInRoute)),
+      })
+    ),
     Match.orElse((signedOutRoute) => ({
       model: toModel(signedOutRoute, Option.none()),
     }))
@@ -147,6 +161,7 @@ const initSignedIn =
   ) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
+      maybeDeadLetters: Option.none(),
       maybeRecordForm: Option.none(),
       maybeRevision,
       maybeTableList: Option.none(),
@@ -411,6 +426,66 @@ const syncTableList: Step = (model) => {
   );
 };
 
+// THE DEAD-LETTER PAGE
+const readDeadLetters = (model: Model): Option.Option<DeadLettersModel> =>
+  Model.guards.SignedIn(model) ? model.maybeDeadLetters : Option.none();
+
+const writeDeadLetters = (
+  model: Model,
+  nextDeadLetters: DeadLettersModel
+): Model =>
+  Model.guards.SignedIn(model)
+    ? modifyFields(model, {
+        maybeDeadLetters: () => Option.some(nextDeadLetters),
+      })
+    : model;
+
+const toGotDeadLettersMessage =
+  (pageId: number) =>
+  (message: DeadLettersMessage): Message =>
+    Message.GotDeadLettersMessage({ message, pageId });
+
+const foldDeadLettersOutMessage = DeadLettersOutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- keyed by the child's OutMessage tag
+  SessionEnded: () => endSession,
+});
+
+const foldDeadLetters = (pageId: number) =>
+  Update.foldChild({
+    foldOutMessage: foldDeadLettersOutMessage,
+    read: (model: Model) =>
+      Option.filter(readDeadLetters(model), (page) => page.id === pageId),
+    toParentMessage: toGotDeadLettersMessage(pageId),
+    update: deadLettersUpdate,
+    write: writeDeadLetters,
+  });
+
+const syncDeadLetters: Step = (model) => {
+  if (!Model.guards.SignedIn(model)) {
+    return { model };
+  }
+
+  if (model.route._tag !== "DeadLetters") {
+    return {
+      model: modifyFields(model, { maybeDeadLetters: () => Option.none() }),
+    };
+  }
+
+  if (Option.isSome(model.maybeDeadLetters)) {
+    return { model };
+  }
+
+  return Update.foldChildInit(deadLettersInit(model.nextPageId), {
+    foldOutMessage: foldDeadLettersOutMessage,
+    toParentMessage: toGotDeadLettersMessage(model.nextPageId),
+    toParentModel: (page: DeadLettersModel) =>
+      writeDeadLetters(
+        modifyFields(model, { nextPageId: (next) => next + 1 }),
+        page
+      ),
+  });
+};
+
 // THE FORM PAGE
 
 /**
@@ -530,7 +605,12 @@ const syncRecordForm: Step = (model) => {
  * @returns It, with those Commands.
  */
 const enterSignedIn: Step = (model) =>
-  Update.combine(model, [reloadTableList, syncTableList, syncRecordForm]);
+  Update.combine(model, [
+    reloadTableList,
+    syncTableList,
+    syncRecordForm,
+    syncDeadLetters,
+  ]);
 
 /**
  * Moves the signed-out state to another page. The redirect to sign-in
@@ -610,6 +690,7 @@ const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
     (stepModel) => landOnRoute(stepModel, route),
     syncTableList,
     syncRecordForm,
+    syncDeadLetters,
   ]);
 
   const showsAnotherPage =
@@ -821,6 +902,9 @@ export const update = (model: Model, message: Message) =>
           signOutRequest: () => SignOutRequest.Failed(),
         }),
       })),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    GotDeadLettersMessage: ({ message: deadLettersMessage, pageId }) =>
+      foldDeadLetters(pageId)(model, deadLettersMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotRecordFormMessage: ({ message: recordFormMessage, pageId }) =>
       foldRecordForm(pageId)(model, recordFormMessage),

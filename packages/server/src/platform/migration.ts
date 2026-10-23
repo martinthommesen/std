@@ -118,7 +118,8 @@ export type DataBatchServices =
 
 /**
  * A migration that changes records through the save pipeline as the
- * system user, in batches.
+ * system user, in batches. Derived non-record indexes may be maintained
+ * directly: they must remain bounded, resumable and counted by remaining.
  */
 export interface DataMigration {
   readonly id: number;

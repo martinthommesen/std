@@ -12,6 +12,7 @@
  *   document refuses is `400 InvalidRequest`.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { API_PREFIX } from "@std/api/api";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
@@ -20,6 +21,7 @@ import {
   API_ENDPOINTS,
   apiEndpointOf,
 } from "../../testing/src/api-contract.ts";
+import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type {
   TestRequestOptions,
@@ -341,6 +343,58 @@ describe("api-contract", () => {
             { ...callers.alice, headers: { "if-match": '"3"' } },
             204
           );
+
+          const dead = yield* seedDeadLetters(callers.admin);
+          yield* exchange("GET", "/api/v1/deadDelivery", callers.admin, 200);
+          yield* exchange("GET", "/api/v1/deadDelivery", callers.bob, 404);
+          yield* exchange(
+            "GET",
+            `/api/v1/deadDelivery/${dead.firstId}`,
+            callers.admin,
+            200
+          );
+          yield* exchange(
+            "GET",
+            "/api/v1/deadDelivery/9223372036854775807",
+            callers.admin,
+            404
+          );
+
+          for (const [taskPath, deliveryId] of [
+            ["retryDeadDelivery", dead.firstId],
+            ["discardDeadDelivery", dead.secondId],
+          ]) {
+            const options = {
+              ...callers.admin,
+              body: { deliveryId: deliveryId ?? "" },
+            };
+
+            yield* exchange("POST", `/api/v1/${taskPath}`, options, 201);
+            yield* exchange("POST", `/api/v1/${taskPath}`, options, 404);
+          }
+
+          const hubPath = `${API_PREFIX}/hub`;
+
+          const hub = yield* exchange(
+            "POST",
+            hubPath,
+            {
+              ...callers.admin,
+              body: {
+                "@type": "Hub",
+                callback: "https://example.com/events",
+                query: "resource=acmeAsset",
+              },
+            },
+            201
+          );
+
+          yield* exchange("POST", hubPath, {}, 401);
+          const registeredHubPath = `${hubPath}/${textOf(asObject(hub.json).id)}`;
+          yield* exchange("GET", registeredHubPath, callers.admin, 200);
+          yield* exchange("GET", `${hubPath}/${RANDOM_ID}`, callers.admin, 404);
+          yield* exchange("DELETE", registeredHubPath, callers.admin, 204);
+          yield* exchange("DELETE", registeredHubPath, callers.admin, 404);
 
           for (const endpoint of API_ENDPOINTS) {
             assert.sameMembers(

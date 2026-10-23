@@ -1,0 +1,34 @@
+# TMF688 client resources use the ordinary record service and outbox.
+tables:
+  - id: 72bf219e-bc75-46dd-b25d-f75be11d4e99
+    name: core.event_resource
+    label: Event resource
+  - id: 643d8f21-675c-4f64-82c2-181dcd7407da
+    name: core.event_topic
+    label: Event topic
+    extends: core.event_resource
+    displayField: name
+    fields:
+      - id: 3603bdb5-a7bc-476c-aad3-210225ee0a7a
+        name: name
+        type: text
+        required: true
+      - id: 4beb0035-4dc8-4e88-86c6-85b979453f7f
+        name: header_query
+        type: text
+      - id: 78d35777-8f55-4b63-8b87-90fbdf595f45
+        name: content_query
+        type: text
+  - id: 8bac18f3-bca8-4f15-b82b-54d4ce3312e4
+    name: core.event
+    label: Event
+    extends: core.event_resource
+    fields:
+      - id: 746da8d7-b4ac-4a60-a8ee-3fdf6338588e
+        name: topic
+        type: { kind: reference, target: core.event_topic }
+        required: true
+      - id: 706416a0-c21d-4346-9dda-283896c78bc9
+        name: payload
+        type: json
+        required: true

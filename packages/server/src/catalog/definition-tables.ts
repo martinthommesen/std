@@ -155,6 +155,7 @@ export const DEFINITION_TABLES: readonly DefinitionTable[] = [
     ]
   ),
   table("subscription", "subscription", [
+    column("hub", "hub", "nullableJson"),
     column("name", "name", "text"),
     column("classId", "table_id", "uuid"),
     column("operations", "operations", "json"),

@@ -52,8 +52,9 @@
 import { PgClient } from "@effect/sql-pg";
 import type { SubscriptionDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
+import { hasPermission } from "@std/definitions/requester";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { SERVICE_USER_IDS } from "@std/definitions/well-known";
+import { PERMISSION_IDS, SERVICE_USER_IDS } from "@std/definitions/well-known";
 import {
   Cause,
   Clock,
@@ -77,6 +78,8 @@ import { Actor, effectiveRoles, readUserRoles } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
+import { acceptsHubEvent, EventFiltered } from "../events/filter.ts";
+import { EventNotAuthorized } from "../events/not-authorized.ts";
 import type { ChangeCause } from "../records/change-entry.ts";
 import { RuleWriteAccess } from "../records/write-access-rules.ts";
 import { LISTEN_RETRY } from "../sql/config-listener.ts";
@@ -92,7 +95,7 @@ import {
   releaseClaim,
 } from "./delivery-claims.ts";
 import type { ClaimedDelivery } from "./delivery-claims.ts";
-import { DeliveryHandlers, effectFor } from "./delivery-effects.ts";
+import { DeliveryHandlers } from "./delivery-effects.ts";
 import type { Delivery, DeliveryEffect } from "./delivery-effects.ts";
 import { DeliveryFailed } from "./delivery-failed.ts";
 import {
@@ -108,6 +111,8 @@ import {
   deliveriesLeaseLost,
   refreshDeadGauge,
 } from "./metrics.ts";
+import { resolveServed } from "./served.ts";
+import type { Served } from "./served.ts";
 
 /** How the worker runs. */
 export interface WorkerSettingsValues {
@@ -245,43 +250,6 @@ export const WorkerProbes = Context.Reference<WorkerProbesApi>(
 export const leaseOf = (settings: WorkerSettingsValues): Duration.Duration =>
   Duration.sum(settings.effectTimeout, settings.leaseMargin);
 
-/** A subscription and the effect that serves it. */
-export interface Served {
-  readonly subscription: SubscriptionDefinition;
-  readonly effect: DeliveryEffect;
-}
-
-/**
- * A subscription as a configuration serves it: active, enabled and served
- * by a handler, with that handler's effect.
- *
- * @param snapshot - The configuration.
- * @param handlers - The worker's handlers.
- * @param subscriptionId - The subscription.
- * @returns It and its effect, or undefined when it is not served.
- */
-const resolveServed = (
-  snapshot: ConfigSnapshot,
-  handlers: DeliveryHandlers["Service"],
-  subscriptionId: DefinitionId
-): Served | undefined => {
-  const subscription = snapshot
-    .subscriptions()
-    .find((candidate) => candidate.id === subscriptionId);
-
-  if (
-    subscription === undefined ||
-    subscription.state !== "active" ||
-    !subscription.enabled
-  ) {
-    return undefined;
-  }
-
-  const effect = effectFor(handlers, subscription, snapshot);
-
-  return effect === undefined ? undefined : { effect, subscription };
-};
-
 /** How one attempt ended. */
 export type AttemptOutcome =
   | "done"
@@ -294,6 +262,8 @@ export type AttemptOutcome =
   | "unrecorded";
 
 const LEASE_LOST: AttemptOutcome = "lease-lost";
+const leaseLostOutcome = () => Effect.succeed(LEASE_LOST);
+const unrecordedOutcome = () => Effect.succeed<AttemptOutcome>("unrecorded");
 
 const IDENTITY_UNAVAILABLE =
   "The subscription's identity is missing or inactive.";
@@ -322,6 +292,10 @@ const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
   const user = users.get(identityId);
 
   if (user === undefined || !user.active) {
+    if (subscription.hub !== null && subscription.hub !== undefined) {
+      return yield* new EventNotAuthorized();
+    }
+
     return yield* new DeliveryFailed({ reason: IDENTITY_UNAVAILABLE });
   }
 
@@ -360,7 +334,17 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
   }
 
   const { subscription } = served;
+
   const actor = yield* identityOf(snapshot, subscription);
+
+  if (
+    subscription.hub !== null &&
+    subscription.hub !== undefined &&
+    !hasPermission(snapshot, actor, PERMISSION_IDS["events.subscribe"])
+  ) {
+    return yield* new EventNotAuthorized();
+  }
+
   const { timeZone } = yield* InstanceSettings;
   const now = yield* Clock.currentTimeMillis;
   const entries = yield* readEntries(claimed.recordId, claimed.recordVersion);
@@ -402,6 +386,50 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
     snapshot,
     subscription,
   };
+
+  if (
+    served.effect.kind === "external" &&
+    served.effect.authorize !== undefined
+  ) {
+    yield* served.effect
+      .authorize(delivery)
+      .pipe(
+        Effect.provide(RuleWriteAccess),
+        Effect.provideService(Actor, actor)
+      );
+  }
+
+  if (served.effect.kind === "external" && served.effect.render !== undefined) {
+    if (
+      !acceptsHubEvent(
+        snapshot,
+        subscription,
+        payload.classId,
+        payload.kind,
+        new Map(Object.entries(payload.image))
+      )
+    ) {
+      return yield* new EventFiltered();
+    }
+
+    const events = served.effect.render(delivery, {
+      actor,
+      entries,
+      now,
+      origins,
+      timeZone,
+    });
+
+    if (events.length === 0) {
+      return yield* new EventNotAuthorized();
+    }
+
+    return {
+      actor,
+      delivery: { ...delivery, events },
+      effect: served.effect,
+    } satisfies Prepared;
+  }
 
   return { actor, delivery, effect: served.effect } satisfies Prepared;
 });
@@ -644,6 +672,22 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
     }
 
     const failure = taggedFailure(exit.cause);
+
+    if (
+      failure instanceof EventNotAuthorized ||
+      failure instanceof EventFiltered
+    ) {
+      return yield* markDone(
+        claimed,
+        failure instanceof EventFiltered ? "filtered" : "notAuthorized"
+      ).pipe(
+        Effect.as<AttemptOutcome>("done"),
+        Effect.catchTags({
+          DatabaseError: unrecordedOutcome,
+          LeaseLost: leaseLostOutcome,
+        })
+      );
+    }
 
     if (failure instanceof AttemptRefused) {
       return yield* refusedOutcome(failure, claimed);

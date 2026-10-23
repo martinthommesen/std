@@ -73,6 +73,7 @@ export const TmfErrorSubtypes = {
   SchemaChanged: tagError("SchemaChanged"),
   SchemaLockTimeout: tagError("SchemaLockTimeout"),
   SchemaNeedsAttention: tagError("SchemaNeedsAttention"),
+  SubscriptionNotServed: tagError("SubscriptionNotServed"),
   Unauthenticated: tagError("Unauthenticated"),
   UnknownField: tagError("UnknownField"),
   UnknownTable: tagError("UnknownTable"),
@@ -120,6 +121,7 @@ export const MethodNotAllowedError = subtypes.MethodNotAllowed.pipe(
 
 /** `409`: conflicts. */
 export const ConflictError = Schema.Union([
+  subtypes.SubscriptionNotServed,
   subtypes.DependencyConflict,
   subtypes.ExistingDataViolates,
   subtypes.FieldsConflict,

@@ -1,0 +1,24 @@
+.dead-letters-main,
+.dead-letters {
+  min-width: 0;
+}
+
+.dead-letters-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.dead-letters-table .records {
+  width: max-content;
+  min-width: 100%;
+}
+
+.dead-letters-table td {
+  max-width: 24ch;
+  overflow-wrap: anywhere;
+}
+
+.dead-letters-table th,
+.dead-letters-table .button {
+  white-space: nowrap;
+}

@@ -57,9 +57,9 @@ const liveUnique = (
 ): string =>
   `CREATE UNIQUE INDEX ${name} ON core."${table}" (${columns}) WHERE state <> 'purged'`;
 
-/** Migration 0019. Never edit it: the ledger records its checksum. */
-export const migration0019: TxMigration = {
-  id: 19,
+/** Migration 0030. Never edit it: the ledger records its checksum. */
+export const migration0030: TxMigration = {
+  id: 30,
   kind: "tx",
   name: "form-rules",
   phase: "expand",

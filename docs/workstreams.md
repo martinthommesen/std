@@ -37,14 +37,15 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3a-record-rules` | 3A | record rules as Contracts 4.10 declares them (all four phases; `aggregate` declared, executed by the aggregates workstream); `keepSupplied`; any failed nested save poisons its transaction | merged |
 | 6 | `ws/3a-aggregates` | 3A, 3T | aggregates (Contracts 4.9): owner references, root-first locks, settle and persist, aggregate saves, aggregate rules and quantifiers | merged |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker (`std worker`), leases with fencing, dead letters, config subscriptions, payloads rebuilt from history (fail closed), afterCommit rules run from carrier deliveries | merged |
+| 6 | `ws/3b-dead-letter-admin` | 3B follow-up | dead-letter operator API (`/api/v1/deadDelivery`, retry and discard tasks), append-only stored actions `core.dead_delivery_action` (migration 0029, core set v4), admin page (decision 0037) | merged |
 | 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
 | 6 | `ws/3g-tmf630-api` | 3G | the TMF630 API per Contracts 10 on the v5 baseline (Martin, 2026-10-22), TMF630 matrix file | merged |
 | 6 | `ws/3r-migration-phases` | 3R | migration phases and the `migration-phases` check (libpg-query AST allow-list), RU9/RU10/RU12 groundwork, release version 0.0.3 | merged |
 | 6 | `ws/ci-flakes-load`, `ws/ci-flakes-2-main` | CI follow-up | load flakes diagnosed by Gemini 4 Argon | merged |
 | 6 | `ws/api-v1-consolidation` | 3G follow-up | Martin, 2026-10-23: the old `/api/v1` is deleted and the TMF630 API becomes `/api/v1`; release compatibility becomes a database-upgrade check | merged |
 | 6 | `ws/web-new-api` | 3G follow-up | the web app on the TMF630 API (merged with the consolidation) | merged |
-| 6 | `ws/3h-events-hubs` | 3H | hubs, event delivery, TMF688 | in progress |
-| 6 | `ws/3h-events` | 3H | hubs on every API, listener calls from the worker, TMF688 topics (Contracts 12) | planned |
+| 6 | `ws/3h-events-hubs` | 3H | hubs on the generic API and the TMF framework, event delivery from per-change images, TMF688 topics and events (decision 0032) | merged |
+| 6 | `ws/3h-events` | 3H | the listener example (`examples/listener`) | planned |
 | 6 | `ws/3t-conformance-matrix` | 3T | `@std/tmf` pins and vendored OpenAPI documents, `check-conformance-matrix`, Step 3 matrix files, spec check of Contracts 10–15 against the member documents and Martin's decisions on it (decision 0026; 0021 decisions 34–55); Contracts 8.8 rolling-upgrade draft | merged |
 | 6 | `ws/3t-tmf-framework` | 3T | mapping rules over the aggregates, CTK runner and OpenAPI contract tests in CI (Contracts 11.1); decision 0033 | merged |
 | 6 | `ws/3p-party-foundation` | 3P | `core.party`, `core.individual`, `core.organization`, `core.user.individual`, the `data` migration kind and the user backfill (Contracts 1.9, 11.3), release-compat baseline `v0.0.2` | merged |

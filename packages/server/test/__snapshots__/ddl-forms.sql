@@ -21,6 +21,21 @@ CREATE TABLE "core"."party" (
 
 CREATE TRIGGER std_tg_566904e772b9455a8ea15df797c43ae9 BEFORE UPDATE ON "core"."party" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
 
+CREATE TABLE "core"."event_resource" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  version bigint NOT NULL,
+  created_at timestamptz(3) NOT NULL,
+  created_by uuid NOT NULL,
+  updated_at timestamptz(3) NOT NULL,
+  updated_by uuid NOT NULL,
+  CONSTRAINT std_pk_72bf219ebc7546ddb25df75be11d4e99 PRIMARY KEY (id),
+  CONSTRAINT std_uq_72bf219ebc7546ddb25df75be11d4e99 UNIQUE (id, class_id),
+  CONSTRAINT std_sc_72bf219ebc7546ddb25df75be11d4e99 CHECK (class_id IN ('643d8f21-675c-4f64-82c2-181dcd7407da'::uuid, '72bf219e-bc75-46dd-b25d-f75be11d4e99'::uuid, '8bac18f3-bca8-4f15-b82b-54d4ce3312e4'::uuid))
+);
+
+CREATE TRIGGER std_tg_72bf219ebc7546ddb25df75be11d4e99 BEFORE UPDATE ON "core"."event_resource" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
 CREATE TABLE "core"."user_role" (
   id uuid NOT NULL,
   class_id uuid NOT NULL,
@@ -60,6 +75,36 @@ CREATE TABLE "core"."user" (
 
 CREATE TRIGGER std_tg_da385db7b2b74a1da1a942e8e0bb7992 BEFORE UPDATE ON "core"."user" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
 
+CREATE TABLE "core"."event_topic" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  "name" text CONSTRAINT std_nn_3603bdb5a7bc476caad3210225ee0a7a NOT NULL,
+  "header_query" text,
+  "content_query" text,
+  CONSTRAINT std_pk_643d8f21675c4f6482c2181dcd7407da PRIMARY KEY (id),
+  CONSTRAINT std_uq_643d8f21675c4f6482c2181dcd7407da UNIQUE (id, class_id),
+  CONSTRAINT std_sc_643d8f21675c4f6482c2181dcd7407da CHECK (class_id IN ('643d8f21-675c-4f64-82c2-181dcd7407da'::uuid)),
+  CONSTRAINT std_lv_643d8f21675c4f6482c2181dcd7407da FOREIGN KEY (id, class_id) REFERENCES "core"."event_resource" (id, class_id) ON DELETE CASCADE,
+  CONSTRAINT std_ck_3603bdb5a7bc476caad3210225ee0a7a CHECK (char_length("name") <= 255),
+  CONSTRAINT std_ck_4beb00354dc84e8886c685b979453f7f CHECK (char_length("header_query") <= 255),
+  CONSTRAINT std_ck_78d357778f554b638b8790fbdf595f45 CHECK (char_length("content_query") <= 255)
+);
+
+CREATE TRIGGER std_tg_643d8f21675c4f6482c2181dcd7407da BEFORE UPDATE ON "core"."event_topic" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
+CREATE TABLE "core"."event" (
+  id uuid NOT NULL,
+  class_id uuid NOT NULL,
+  "payload" jsonb CONSTRAINT std_nn_706416a0c21d43469dda283896c78bc9 NOT NULL,
+  "topic" uuid CONSTRAINT std_nn_746da8d7b4ac4a60a8ee3fdf6338588e NOT NULL,
+  CONSTRAINT std_pk_8bac18f3bca84f15b82b54d4ce3312e4 PRIMARY KEY (id),
+  CONSTRAINT std_uq_8bac18f3bca84f15b82b54d4ce3312e4 UNIQUE (id, class_id),
+  CONSTRAINT std_sc_8bac18f3bca84f15b82b54d4ce3312e4 CHECK (class_id IN ('8bac18f3-bca8-4f15-b82b-54d4ce3312e4'::uuid)),
+  CONSTRAINT std_lv_8bac18f3bca84f15b82b54d4ce3312e4 FOREIGN KEY (id, class_id) REFERENCES "core"."event_resource" (id, class_id) ON DELETE CASCADE
+);
+
+CREATE TRIGGER std_tg_8bac18f3bca84f15b82b54d4ce3312e4 BEFORE UPDATE ON "core"."event" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
+
 CREATE TABLE "core"."individual" (
   id uuid NOT NULL,
   class_id uuid NOT NULL,
@@ -96,6 +141,8 @@ CREATE TABLE "core"."organization" (
 
 CREATE TRIGGER std_tg_f94b83bf19a44793b06fd5b4b0727fac BEFORE UPDATE ON "core"."organization" FOR EACH ROW WHEN (OLD.class_id IS DISTINCT FROM NEW.class_id) EXECUTE FUNCTION core.refuse_class_change();
 
+ALTER TABLE "core"."event" ADD CONSTRAINT std_fk_746da8d7b4ac4a60a8ee3fdf6338588e FOREIGN KEY ("topic") REFERENCES "core"."event_topic" (id);
+
 ALTER TABLE "core"."user_role" ADD CONSTRAINT std_fk_9640bd3ec66e4b438b4c31489d37dfc8 FOREIGN KEY ("role") REFERENCES "core"."role" (id);
 
 ALTER TABLE "core"."user" ADD CONSTRAINT std_fk_e8d96833a2564f3887523f7b5fde3afd FOREIGN KEY ("individual") REFERENCES "core"."individual" (id);
@@ -105,6 +152,10 @@ ALTER TABLE "core"."user_role" ADD CONSTRAINT std_fk_f60c3043b96542f2b9eaa81c3f3
 ALTER TABLE "core"."party" ADD CONSTRAINT std_cb_566904e772b9455a8ea15df797c43ae9 FOREIGN KEY ("created_by") REFERENCES "core"."user" (id);
 
 ALTER TABLE "core"."party" ADD CONSTRAINT std_ub_566904e772b9455a8ea15df797c43ae9 FOREIGN KEY ("updated_by") REFERENCES "core"."user" (id);
+
+ALTER TABLE "core"."event_resource" ADD CONSTRAINT std_cb_72bf219ebc7546ddb25df75be11d4e99 FOREIGN KEY ("created_by") REFERENCES "core"."user" (id);
+
+ALTER TABLE "core"."event_resource" ADD CONSTRAINT std_ub_72bf219ebc7546ddb25df75be11d4e99 FOREIGN KEY ("updated_by") REFERENCES "core"."user" (id);
 
 ALTER TABLE "core"."user_role" ADD CONSTRAINT std_cb_cc91a08ab8854878ad82dd4a806bc787 FOREIGN KEY ("created_by") REFERENCES "core"."user" (id);
 

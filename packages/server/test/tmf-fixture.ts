@@ -54,7 +54,10 @@ import { Effect, Layer, Result } from "effect";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { contractAt } from "../../testing/src/tmf-oas-contract.ts";
+import {
+  contractAt,
+  declaredStatusesOf,
+} from "../../testing/src/tmf-oas-contract.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import {
   addField,
@@ -392,6 +395,23 @@ export const FIXTURE_RESOURCE: TmfResourceMapping = {
 /** The fixture API. */
 export const FIXTURE_API: TmfApiMapping = {
   basePath: FIXTURE_BASE,
+  hubStatuses: {
+    create: declaredStatusesOf(
+      contractAt("TMF621", FIXTURE_BASE).file,
+      "post",
+      "/hub"
+    ),
+    delete: declaredStatusesOf(
+      contractAt("TMF621", FIXTURE_BASE).file,
+      "delete",
+      "/hub/{id}"
+    ),
+    retrieve: declaredStatusesOf(
+      contractAt("TMF621", FIXTURE_BASE).file,
+      "get",
+      "/hub/{id}"
+    ),
+  },
   resources: [FIXTURE_RESOURCE],
   spec: "TMF621",
 };
