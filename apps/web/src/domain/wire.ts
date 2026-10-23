@@ -138,9 +138,27 @@ const isObject = (
   Predicate.isObject(value) && !Array.isArray(value);
 
 /**
+ * The `fields` parameter that selects exactly these fields (`id` when
+ * there are none, since `fields` is never empty).
+ *
+ * @param selected - The fields.
+ * @returns Their API names, comma-separated.
+ */
+export const fieldsParameterOf = (selected: readonly WireField[]): string =>
+  selected.length > 0 ? selected.map((field) => field.apiName).join(",") : "id";
+
+/**
  * A resource as the app holds a record: the selected fields' values by
  * name (absent, not withheld: `null`), references as their IDs with their
  * labels apart.
+ *
+ * Only for a resource that answered exactly this selection: one asked for
+ * with `fields` (`fieldsParameterOf`), or a write's answer for a record of
+ * the endpoint's own class, whose default selection is the endpoint's
+ * active fields. A record of another class read through a parent without
+ * `fields` comes in its own class's representation (Contracts 10.2), in
+ * which a field that class never lets the caller read is simply absent,
+ * not withheld; read with this selection, it would look empty.
  *
  * @param resource - The resource.
  * @param selected - The fields the request selected.

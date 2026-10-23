@@ -127,6 +127,9 @@ export type WriteError = typeof WriteError.Type;
  *   flight differ from them and survive its success (decision 0020).
  * - `Saved`: the last save succeeded; `isVisible` is false when the record
  *   is no longer visible to the caller (Contracts 3.9).
+ * - `SavedUnread`: the last save succeeded, but its record could not be
+ *   read back, so what it holds is unknown; the form offers to read it
+ *   again and holds Save back until a read succeeds (decision 0031).
  * - `Unchanged`: the user saved without changing anything; nothing was
  *   sent.
  * - `Failed`: the last save was refused; the edits are kept. After a
@@ -142,6 +145,7 @@ export const Submission = defineTaggedUnion({
   Idle: {},
   Outdated: {},
   Saved: { isVisible: Schema.Boolean },
+  SavedUnread: {},
   Saving: {
     generation: Schema.Int,
     revision: SchemaRevision,

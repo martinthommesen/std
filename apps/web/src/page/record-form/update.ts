@@ -80,7 +80,7 @@ import {
   recordOf,
 } from "./form.ts";
 import { Message, OutMessage } from "./message.ts";
-import type { ReadPurpose, SavedRecord } from "./message.ts";
+import type { ReadPurpose, SavedRecord, UnreadSavedRecord } from "./message.ts";
 import {
   ClassMetadata,
   Deletion,
@@ -2169,9 +2169,13 @@ const receiveRecord = (
   }
 
   const afterConflict = purpose === "ReloadAfterConflict";
+  const afterUnreadSave = Submission.guards.SavedUnread(model.submission);
 
+  // NOTE: after a save whose record could not be read back, the newer
+  // version is this page's own save, not someone else's change.
   const isChangedUnderEdits =
     purpose !== "Open" &&
+    !afterUnreadSave &&
     !Record.isEmptyRecord(model.edits) &&
     Option.exists(
       recordOf(model),
@@ -2190,8 +2194,13 @@ const receiveRecord = (
     maybeRecordRevision: () =>
       Option.map(metaOf(model), (meta) => meta.revision),
     record: () => StoredRecord.Success({ data: record }),
-    submission: (submission) =>
-      afterConflict ? Submission.Idle() : submission,
+    submission: (submission) => {
+      if (afterUnreadSave) {
+        return Submission.Saved({ isVisible: true });
+      }
+
+      return afterConflict ? Submission.Idle() : submission;
+    },
   });
 
   const shown = reconcileEdits(read);
@@ -2274,6 +2283,31 @@ const focusFirst = (
   });
 
 /**
+ * Whether the last save is not over for the form: in flight, or its
+ * record not read back yet.
+ *
+ * @param submission - Where saving stands.
+ * @returns True for `Saving` and `SavedUnread`.
+ */
+const isAwaitingSave = (submission: Submission): boolean =>
+  Submission.guards.Saving(submission) ||
+  Submission.guards.SavedUnread(submission);
+
+/**
+ * Whether a click on Save does nothing now: a save is in flight, a save's
+ * record could not be read back, the form is not loaded, its definitions
+ * or record are reloading, or the record is not the metadata's.
+ *
+ * @param model - The page.
+ * @returns True when Save is held back.
+ */
+const isSaveHeld = (model: Model): boolean =>
+  isAwaitingSave(model.submission) ||
+  !isReady(model) ||
+  isReloading(model) ||
+  isRecordOutdated(model);
+
+/**
  * "Save": judges the edits with `recordSchema`; with problems, shows them
  * and moves focus to the first; with nothing changed on an existing
  * record, says so; otherwise sends the create or the update (only the
@@ -2284,12 +2318,7 @@ const focusFirst = (
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (
-    Submission.guards.Saving(model.submission) ||
-    !isReady(model) ||
-    isReloading(model) ||
-    isRecordOutdated(model)
-  ) {
+  if (isSaveHeld(model)) {
     return { model };
   }
 
@@ -2363,6 +2392,10 @@ const isVisibleRecord = (
 ): saved is Parameters<typeof StoredRecord.Success>[0]["data"] =>
   "values" in saved;
 
+const isUnreadRecord = (
+  saved: SavedRecord
+): saved is typeof UnreadSavedRecord.Type => "_tag" in saved;
+
 /**
  * The labels the saved record shows: the label the user picked for each
  * reference that changed, the label read before for each unchanged one.
@@ -2419,6 +2452,34 @@ export const editsAfterSave = (
     )
   );
 
+/**
+ * A save that succeeded but whose record could not be read back
+ * (decision 0031): the edits it sent are saved, the later ones stay, and
+ * the record on screen is kept as stale (or, after a create, fails to
+ * show) until the user reads it again; Save waits for that read.
+ *
+ * @param editing - The page, editing the saved record.
+ * @param sentEdits - The edits the save was built from.
+ * @returns The page.
+ */
+const markUnreadSave = (
+  editing: Model,
+  sentEdits: Readonly<Record<string, FieldInput>>
+): Model =>
+  modifyFields(editing, {
+    droppedEdits: () => [],
+    edits: (edits) => editsAfterSave(edits, sentEdits),
+    maybeEditsFrom: () => Option.none(),
+    record: (record) =>
+      Option.match(AsyncData.getData(record), {
+        onNone: () => StoredRecord.Failure({ error: "Unavailable" }),
+        onSome: (data) => StoredRecord.Stale({ data, error: "Unavailable" }),
+      }),
+    serverErrors: () => ({}),
+    staleChanges: () => [],
+    submission: () => Submission.SavedUnread(),
+  });
+
 const receiveSave = (
   model: Model,
   generation: number,
@@ -2450,6 +2511,16 @@ const receiveSave = (
   const editing = modifyFields(model, {
     mode: () => FormMode.Edit({ recordId: saved.id }),
   });
+
+  if (isUnreadRecord(saved)) {
+    return sawRevision(
+      {
+        commands: navigation,
+        model: markUnreadSave(editing, submission.sentEdits),
+      },
+      maybeRevision
+    );
+  }
 
   if (!isVisibleRecord(saved)) {
     return sawRevision(

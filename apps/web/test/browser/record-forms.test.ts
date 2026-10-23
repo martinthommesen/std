@@ -107,6 +107,37 @@ const signedInPage = async (
 const facts = async (page: Page): Promise<string> =>
   (await page.locator(".form-facts").textContent()) ?? "";
 
+/** Attributes every save changes: when and by whom. */
+const AUDIT_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "lastUpdate",
+  "updatedBy",
+]);
+
+/**
+ * Fails unless a save changed exactly the given attributes: every other
+ * attribute (the audit ones aside) is as it was before, none added or
+ * removed.
+ *
+ * @param before - The record before the save.
+ * @param after - The record after it.
+ * @param changed - The attributes the save set.
+ * @returns Nothing.
+ */
+const assertOnlyChanged = (
+  before: Awaited<ReturnType<typeof apiRecord>>,
+  after: Awaited<ReturnType<typeof apiRecord>>,
+  changed: readonly string[]
+) => {
+  const untouched = (record: typeof before) =>
+    Object.fromEntries(
+      Object.entries(record.values).filter(
+        ([name]) => !changed.includes(name) && !AUDIT_ATTRIBUTES.has(name)
+      )
+    );
+
+  assert.deepStrictEqual(untouched(after), untouched(before));
+};
+
 // EDIT AND CREATE
 
 const adminEditsAnIncident = async (
@@ -116,6 +147,7 @@ const adminEditsAnIncident = async (
 ) => {
   const page = await signedInPage(browser, origin, fixture.admin);
   const vpn = incident(fixture.records.vpn);
+  const before = await apiRecord(page, origin, vpn);
 
   await openRecordForm(page, origin, vpn);
   await fillField(
@@ -144,6 +176,7 @@ const adminEditsAnIncident = async (
     stored.values.shortDescription,
     "VPN drops at the top of every hour"
   );
+  assertOnlyChanged(before, stored, ["priority", "shortDescription"]);
   await page.context().close();
 };
 
@@ -154,6 +187,7 @@ const agentEditsAnIncident = async (
 ) => {
   const page = await signedInPage(browser, origin, fixture.agent);
   const laptop = incident(fixture.records.laptop);
+  const before = await apiRecord(page, origin, laptop);
 
   await openRecordForm(page, origin, laptop);
   // The laptop is assigned to the agent: its customer email is readable.
@@ -186,6 +220,7 @@ const agentEditsAnIncident = async (
     stored.values.description,
     "Black screen; the fan spins. Reseated the RAM."
   );
+  assertOnlyChanged(before, stored, ["description", "status"]);
   await page.context().close();
 };
 
@@ -319,6 +354,103 @@ const restrictedFieldNeverReachesTheBrowser = async (
   assert.notInclude(sent, "customerEmail");
   assert.notInclude(sent, "internal_cost");
   assert.notInclude(sent, "internalCost");
+  await context.close();
+};
+
+// A FIELD DENIED ON THE CHILD, READ THROUGH THE PARENT
+
+/**
+ * An access rule that hides the customer email of every incident from
+ * agents, unconditionally: the email stays readable on plain tickets.
+ *
+ * @param origin - The server.
+ * @param token - The administrator's session.
+ * @returns Nothing.
+ */
+const denyEmailOnIncidents = async (origin: string, token: string) => {
+  const added = await apiCall(origin, token, {
+    body: {
+      operations: [
+        {
+          definition: {
+            actions: ["read"],
+            active: true,
+            classId: HELPDESK.incident,
+            condition: null,
+            description: "agents never read an incident's customer email",
+            effect: "deny",
+            id: randomUUID(),
+            kind: "accessRule",
+            name: null,
+            owner: { layer: "local" },
+            protected: false,
+            roleIds: [HELPDESK.agentRole],
+            target: { fields: [HELPDESK.fields.customerEmail], kind: "fields" },
+          },
+          op: "createAccessRule",
+        },
+      ],
+    },
+    method: "POST",
+    path: "/applyChangeSet",
+  });
+
+  assert.include([200, 201], added.status, added.text);
+};
+
+/**
+ * A field the parent table lets the caller read but the record's own
+ * class denies (review round 1, finding 1): opened through the parent's
+ * form, the incident's email is restricted, never an empty editable
+ * input, before and after a save, and never reaches the browser.
+ *
+ * @param browser - The browser.
+ * @param origin - The server.
+ * @param fixture - The helpdesk fixture.
+ * @returns Nothing.
+ */
+const childDenialShowsThroughTheParent = async (
+  browser: Browser,
+  origin: string,
+  fixture: HelpdeskData
+) => {
+  await denyEmailOnIncidents(
+    origin,
+    await bearerToken(origin, visitorOf(fixture.admin))
+  );
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const everything = await captureResponses(page);
+  const laptop = { id: fixture.records.laptop, table: "helpdesk.ticket" };
+  const email = ["jo@example.com"];
+
+  await signIn(page, origin, visitorOf(fixture.agent));
+  await openRecordForm(page, origin, laptop);
+
+  assert.strictEqual(
+    await formFieldState(page, "customer_email"),
+    "restricted"
+  );
+  await assertHiddenValuesAbsent(page, everything, email, "through the parent");
+
+  await fillField(page, "Description", "Read through the ticket form.");
+
+  const saved = await saveRecordForm(page);
+
+  assert.strictEqual(saved.status, 200);
+  assert.include(await formOutcome(page), "Saved.");
+  assert.strictEqual(
+    await formFieldState(page, "customer_email"),
+    "restricted"
+  );
+  await assertHiddenValuesAbsent(page, everything, email, "after a save");
+
+  // Through its own table the field is never readable, so its metadata
+  // leaves it out and the form has no row for it.
+  await openRecordForm(page, origin, { ...laptop, table: INCIDENTS });
+  assert.isNull(await formFieldState(page, "customer_email"));
+  await assertHiddenValuesAbsent(page, everything, email, "the incident form");
   await context.close();
 };
 
@@ -748,6 +880,27 @@ describe("record forms", () => {
 
           yield* Effect.promise(async () => {
             await versionConflictKeepsTheInput(browser, server.origin, fixture);
+          });
+        }).pipe(Effect.scoped)
+    );
+  });
+
+  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "a field the record's own class denies is restricted through the parent's form too",
+      () =>
+        Effect.gen(function* parentChildTest() {
+          const database = yield* TestDatabase;
+          const fixture = yield* HelpdeskFixture;
+          const server = yield* stdServe(database.url, inject("webRoot"));
+          const browser = yield* launchBrowser;
+
+          yield* Effect.promise(async () => {
+            await childDenialShowsThroughTheParent(
+              browser,
+              server.origin,
+              fixture
+            );
           });
         }).pipe(Effect.scoped)
     );
