@@ -33,6 +33,27 @@ const hintView = <Message>(
     onSome: (text) => h.p([...attributes, h.Class("control-hint")], [text]),
   });
 
+const labelledControl = <Message>(
+  config: {
+    readonly label: string;
+    readonly maybeDescription: Option.Option<string>;
+  },
+  attributes: {
+    readonly label: readonly Attribute<Message>[];
+    readonly description: readonly Attribute<Message>[];
+  },
+  control: Html,
+  h: HtmlBuilder<Message>
+): Html =>
+  h.div(
+    [h.Class(CONTROL_CLASS)],
+    [
+      h.label([...attributes.label, h.Class(LABEL_CLASS)], [config.label]),
+      control,
+      hintView(config.maybeDescription, attributes.description, h),
+    ]
+  );
+
 /** A labelled select. */
 export interface SelectFieldConfig<Message> {
   readonly id: string;
@@ -64,27 +85,22 @@ export const selectField = <Message>(
       isDisabled: config.isDisabled ?? false,
       onChange: config.onChange,
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [config.label]
-            ),
-            h.select(
-              [...attributes.select, h.Class(INPUT_CLASS)],
-              config.options.map((option) =>
-                h.option(
-                  [
-                    h.Value(option.value),
-                    h.Selected(option.value === config.value),
-                  ],
-                  [option.label]
-                )
+        labelledControl(
+          { label: config.label, maybeDescription },
+          attributes,
+          h.select(
+            [...attributes.select, h.Class(INPUT_CLASS)],
+            config.options.map((option) =>
+              h.option(
+                [
+                  h.Value(option.value),
+                  h.Selected(option.value === config.value),
+                ],
+                [option.label]
               )
-            ),
-            hintView(maybeDescription, attributes.description, h),
-          ]
+            )
+          ),
+          h
         ),
       value: config.value,
     },
@@ -123,20 +139,15 @@ export const inputField = <Message>(
       isInvalid: config.isInvalid ?? false,
       onInput: config.onInput,
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [config.label]
-            ),
-            h.input([
-              ...attributes.input,
-              h.Spellcheck(false),
-              h.Class(INPUT_CLASS),
-            ]),
-            hintView(maybeDescription, attributes.description, h),
-          ]
+        labelledControl(
+          { label: config.label, maybeDescription },
+          attributes,
+          h.input([
+            ...attributes.input,
+            h.Spellcheck(false),
+            h.Class(INPUT_CLASS),
+          ]),
+          h
         ),
       type: config.type ?? "text",
       value: config.value,
@@ -178,20 +189,15 @@ export const textareaField = <Message>(
       onInput: config.onInput,
       rows: TEXTAREA_ROWS,
       toView: (attributes) =>
-        h.div(
-          [h.Class(CONTROL_CLASS)],
-          [
-            h.label(
-              [...attributes.label, h.Class(LABEL_CLASS)],
-              [config.label]
-            ),
-            h.textarea([
-              ...attributes.textarea,
-              h.Spellcheck(false),
-              h.Class(INPUT_CLASS),
-            ]),
-            hintView(maybeDescription, attributes.description, h),
-          ]
+        labelledControl(
+          { label: config.label, maybeDescription },
+          attributes,
+          h.textarea([
+            ...attributes.textarea,
+            h.Spellcheck(false),
+            h.Class(INPUT_CLASS),
+          ]),
+          h
         ),
       value: config.value,
     },
