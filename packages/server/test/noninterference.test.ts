@@ -192,14 +192,18 @@ const applyHidden = Effect.fn("Noninterference.apply")(function* applyHidden(
   const docked = hidden.dockedS === "none" ? null : records[hidden.dockedS];
 
   yield* values(
-    `UPDATE acme.asset SET cost = CASE id
+    `WITH assets AS (UPDATE acme.asset SET cost = CASE id
        WHEN $1::uuid THEN $2::numeric WHEN $3::uuid THEN $4::numeric
        WHEN $5::uuid THEN $6::numeric WHEN $7::uuid THEN $8::numeric ELSE cost END,
      purchased_on = CASE WHEN id = $5::uuid THEN $9::date ELSE purchased_on END,
      docked_to = CASE WHEN id = $5::uuid THEN $10::uuid ELSE docked_to END,
      name = CASE WHEN id = $11::uuid THEN $12::text ELSE name END
      WHERE id IN ($1::uuid, $3::uuid, $5::uuid, $7::uuid, $11::uuid)
-     RETURNING id::text AS value`,
+     RETURNING id),
+     laptops AS (UPDATE acme.laptop SET disk_key = $13::text
+       WHERE id = $1::uuid RETURNING id)
+     UPDATE acme.monitor SET size_inches = $14::int4
+       WHERE id = $3::uuid RETURNING id::text AS value`,
     [
       records.L,
       String(hidden.costL),
@@ -213,15 +217,9 @@ const applyHidden = Effect.fn("Noninterference.apply")(function* applyHidden(
       docked,
       records.AM,
       hidden.nameAM,
+      hidden.diskKeyL,
+      String(hidden.sizeM),
     ]
-  );
-  yield* values(
-    `UPDATE acme.laptop SET disk_key = $2::text WHERE id = $1::uuid RETURNING id::text AS value`,
-    [records.L, hidden.diskKeyL]
-  );
-  yield* values(
-    `UPDATE acme.monitor SET size_inches = $2::int4 WHERE id = $1::uuid RETURNING id::text AS value`,
-    [records.M, String(hidden.sizeM)]
   );
 });
 

@@ -6,7 +6,7 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Operation } from "@std/definitions/operation";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import { duplicatePredicate } from "../src/schema/plan.ts";
 import {
@@ -71,13 +71,16 @@ describe("preflight", () => {
     );
   });
 
-  layer(schemaTestLayer(), { excludeTestServices: true })((dbTest) => {
+  layer(
+    Layer.effectDiscard(loadCoreAndAcme).pipe(
+      Layer.provideMerge(schemaTestLayer())
+    ),
+    { excludeTestServices: true }
+  )((dbTest) => {
     dbTest.effect(
       "duplicate rows refuse a unique index before the main transaction",
       () =>
         Effect.gen(function* duplicates() {
-          yield* loadCoreAndAcme;
-
           const duplicated = yield* insertRecords([ASSET], ACME.asset, 2, {
             name: "'asset ' || g",
             status: "CASE g WHEN 1 THEN 'Lost' ELSE 'lost' END",
@@ -139,8 +142,6 @@ describe("preflight", () => {
       "unique indexes over new boolean and integer columns count their typed initial values",
       () =>
         Effect.gen(function* typedInitialValues() {
-          yield* loadCoreAndAcme;
-
           // A table of its own: three rows with distinct labels.
           const tally = createClass("tally", {
             namespaceId: SITE_NAMESPACE_ID,
@@ -211,8 +212,6 @@ describe("preflight", () => {
       "an override on a field added in the same change set is checked against its default",
       () =>
         Effect.gen(function* newFieldOverride() {
-          yield* loadCoreAndAcme;
-
           const laptops = yield* insertRecords(
             [ASSET, LAPTOP],
             ACME.laptop,
@@ -267,7 +266,6 @@ describe("preflight", () => {
       "a child listed before its parent, and a required boolean on a table with rows, apply",
       () =>
         Effect.gen(function* orderAndBooleans() {
-          yield* loadCoreAndAcme;
           yield* insertRecords([ASSET], ACME.asset, 2, {
             name: "'asset ' || g",
           });

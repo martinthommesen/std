@@ -447,13 +447,7 @@ describe("party-foundation", () => {
             // upgrade from v0.0.2 is in after the sets load.
             yield* loadSetDirectory(CORE_SET_DIRECTORY);
 
-            yield* values(
-              `INSERT INTO core."user" (id, class_id, version, created_at, created_by, updated_at, updated_by, name, login, active)
-               SELECT uuidv7(), $1::uuid, 1, now(), $2::uuid, now(), $2::uuid, 'Old User ' || g, 'old-' || g, true
-               FROM generate_series(1, 250) AS g
-               RETURNING id::text AS value`,
-              [USER_CLASS_ID, SYSTEM_USER_ID]
-            );
+            yield* insertOldUsers(250);
 
             const migration = yield* runDataMigrations({ batchSize: 7 }).pipe(
               Effect.forkChild

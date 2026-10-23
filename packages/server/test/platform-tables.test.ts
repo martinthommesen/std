@@ -118,36 +118,53 @@ const routesOf = (table: string) =>
   ] as const;
 
 /**
+ * The missing-table baseline for each route of one caller's session.
+ * @param token - The caller's session.
+ * @returns Response texts in route order.
+ */
+const missingOnEveryRoute = Effect.fn("PlatformTables.missingOnEveryRoute")(
+  function* missingOnEveryRoute(token: string) {
+    const http = yield* TestHttpClient;
+    const texts: string[] = [];
+
+    for (const [method, path, options] of routesOf(MISSING)) {
+      const response = yield* http.request(method, path, { ...options, token });
+
+      texts.push(response.text);
+    }
+
+    return texts;
+  }
+);
+
+/**
  * Checks that a table is `UnknownTable` on every route for a caller,
  * byte-identical to a table that does not exist.
  *
  * @param token - The caller's session.
  * @param table - The table.
  * @param label - Who asks, for messages.
+ * @param missingTexts - The caller's missing-table baseline in route order.
  * @returns Nothing.
  */
 const unknownOnEveryRoute = Effect.fn("PlatformTables.unknownOnEveryRoute")(
-  function* unknownOnEveryRoute(token: string, table: string, label: string) {
+  function* unknownOnEveryRoute(
+    token: string,
+    table: string,
+    label: string,
+    missingTexts: readonly string[]
+  ) {
     const http = yield* TestHttpClient;
-    const missingRoutes = routesOf(MISSING);
 
     for (const [index, [method, path, options]] of routesOf(table).entries()) {
       const response = yield* http.request(method, path, { ...options, token });
-
-      const [, missingPath = "", missingOptions = {}] =
-        missingRoutes[index] ?? [];
-
-      const missing = yield* http.request(method, missingPath, {
-        ...missingOptions,
-        token,
-      });
 
       const where = `${label} ${method} ${path}`;
       assert.strictEqual(response.status, 404, where);
       assert.strictEqual(yield* codeOf(response), "UnknownTable", where);
       assert.strictEqual(
         response.text.replace(collectionOf(table), "?"),
-        missing.text.replace(collectionOf(MISSING), "?"),
+        (missingTexts[index] ?? "").replace(collectionOf(MISSING), "?"),
         where
       );
     }
@@ -216,14 +233,18 @@ describe("platform-tables", () => {
           const nonAdmins: readonly Who[] = ["alice", "bob"];
 
           for (const who of nonAdmins) {
+            const missing = yield* missingOnEveryRoute(tokens[who]);
+
             for (const table of [...platform, ...CONFIG_TABLES, ...internal]) {
-              yield* unknownOnEveryRoute(tokens[who], table, who);
+              yield* unknownOnEveryRoute(tokens[who], table, who, missing);
             }
           }
 
           // Tables no definition describes are unknown to admins too.
+          const missing = yield* missingOnEveryRoute(tokens.admin);
+
           for (const table of internal) {
-            yield* unknownOnEveryRoute(tokens.admin, table, "admin");
+            yield* unknownOnEveryRoute(tokens.admin, table, "admin", missing);
           }
         })
     );
@@ -250,8 +271,10 @@ describe("platform-tables", () => {
           assert.includeMembers(internal, ["core.session", "core.delivery"]);
 
           for (const who of ["admin", "alice", "bob"] as const) {
+            const missing = yield* missingOnEveryRoute(tokens[who]);
+
             for (const table of internal) {
-              yield* unknownOnEveryRoute(tokens[who], table, who);
+              yield* unknownOnEveryRoute(tokens[who], table, who, missing);
             }
           }
         })
@@ -575,12 +598,18 @@ describe("platform-tables", () => {
 
           // But no platform table and no internal table, on any route.
           const atC = yield* catalog.refresh;
+          const missing = yield* missingOnEveryRoute(tokens.bob);
 
           for (const table of [
             ...platformTables(atC),
             ...(yield* internalTables(atC)),
           ]) {
-            yield* unknownOnEveryRoute(tokens.bob, table, "bob with *");
+            yield* unknownOnEveryRoute(
+              tokens.bob,
+              table,
+              "bob with *",
+              missing
+            );
           }
 
           // A local rule naming a platform table is refused.

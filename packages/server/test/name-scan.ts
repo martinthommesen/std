@@ -41,7 +41,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import { parseSync, Visitor } from "oxc-parser";
 import type {
   BindingPattern,
@@ -132,7 +132,7 @@ type LiteralValue = string | number | boolean | bigint | RegExp | null;
 const isOneOf = (
   names: ReadonlySet<string>,
   value: LiteralValue | undefined
-): boolean => [...names].some((name) => name === value);
+): boolean => Predicate.isString(value) && names.has(value);
 
 /**
  * A source position as its 1-based line.

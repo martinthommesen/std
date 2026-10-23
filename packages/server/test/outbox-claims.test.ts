@@ -9,7 +9,7 @@ import {
   PLATFORM_CLASS_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
 import {
@@ -36,7 +36,7 @@ import {
   outboxTestLayer,
   subscribe,
 } from "./outbox-support.ts";
-import { setUpAcme } from "./records-support.ts";
+import { setUpAcme, USERS } from "./records-support.ts";
 import { ACME, values } from "./schema-support.ts";
 import { refusalOf } from "./support.ts";
 
@@ -179,8 +179,25 @@ describe("outbox-claims", () => {
     assert.isAtLeast(Duration.toMillis(retryDelay(1, 0.999999)), 8000);
   });
 
-  layer(outboxTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect("sets up core, acme and two users", () => setUpAcme);
+  layer(
+    Layer.effectDiscard(setUpAcme).pipe(Layer.provideMerge(outboxTestLayer())),
+    { excludeTestServices: true }
+  )((dbTest) => {
+    dbTest.effect("sets up core, acme and two users", () =>
+      Effect.gen(function* fixtureReady() {
+        assert.sameMembers(
+          yield* values(
+            `SELECT login AS value FROM core."user" WHERE id = ANY($1::uuid[])`,
+            [[USERS.alice, USERS.bob]]
+          ),
+          ["alice", "bob"]
+        );
+        assert.deepStrictEqual(
+          yield* values(`SELECT to_regclass('acme.asset')::text AS value`),
+          ["acme.asset"]
+        );
+      })
+    );
 
     dbTest.effect(
       "claim order: n+1 is not claimable until n is done, while other records stay claimable",
