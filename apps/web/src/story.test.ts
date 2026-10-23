@@ -1,5 +1,6 @@
 import { Dialog, Menu } from "@foldkit/ui";
 import { Effect, Option } from "effect";
+import { reduce } from "effect/Array";
 import { AsyncData } from "foldkit";
 import { make as makeDate } from "foldkit/calendar";
 import { Valid } from "foldkit/fieldValidation";
@@ -24,19 +25,16 @@ import {
   ada,
   adaAtHome,
   adaEnteringHome,
+  signedIn,
   signInOpenedDirectly,
   signInRedirectedFromHome,
   urlOf,
 } from "./fixture.ts";
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
-import type { CurrentUser, SignedInModel } from "./model.ts";
+import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
-import {
-  NAVIGATION_DRAWER_ID,
-  initLeaveDialog,
-  initNavigationDrawer,
-} from "./navigation-drawer.ts";
+import { NAVIGATION_DRAWER_ID } from "./navigation-drawer.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
 import {
@@ -53,10 +51,7 @@ import {
 import { Message as TableListMessage } from "./page/table-list/message.ts";
 import { AppRoute, PLAIN_LIST, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
-import {
-  DEFAULT_SHELL_PREFERENCES,
-  StoredShellPreferences,
-} from "./shell-preferences.ts";
+import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
 import {
   ASSET_FIELDS,
   REVISION_3,
@@ -67,7 +62,6 @@ import {
   summaryOf,
 } from "./table-fixture.ts";
 import { update } from "./update.ts";
-import { initUserMenu } from "./user-menu.ts";
 
 /** Choosing "Sign out" in the (closed, as in the fixtures) user menu. */
 const selectedSignOut = Message.GotUserMenuMessage({
@@ -75,7 +69,10 @@ const selectedSignOut = Message.GotUserMenuMessage({
 });
 
 /** The flags of a browser that stored no preferences yet. */
-const firstVisit = { storedPreferences: StoredShellPreferences.Absent() };
+const firstVisit = {
+  maybePreferenceProblem: Option.none(),
+  preferences: DEFAULT_SHELL_PREFERENCES,
+};
 
 const checkingAt = (pathname: string) =>
   init(firstVisit, urlOf(pathname)).model;
@@ -107,20 +104,6 @@ const typeAndSubmit = (password: string) => [
   ),
   message(Message.GotSignInMessage({ message: SignInMessage.SubmittedForm() })),
 ];
-
-/**
- * The signed-in state, or a failure naming the state found instead.
- *
- * @param app - The app's state.
- * @returns It, signed in.
- */
-const signedIn = (app: Model): SignedInModel => {
-  if (!Model.guards.SignedIn(app)) {
-    throw new Error(`expected a signed-in state, found ${app._tag}`);
-  }
-
-  return app;
-};
 
 /**
  * Commands as their names and arguments, to compare.
@@ -593,23 +576,10 @@ describe("answers of an earlier session", () => {
   const bobTables = [summaryOf("hd.ticket", "Ticket", false)];
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
-  const bobEntering = Model.SignedIn({
-    leaveDialog: initLeaveDialog(),
-    maybeDeadLetters: Option.none(),
-    maybeLeaveIntent: Option.none(),
-    maybePreferenceProblem: Option.none(),
-    maybeRecordForm: Option.none(),
-    maybeRevision: Option.some(REVISION_4),
-    maybeTableList: Option.none(),
-    navigationDrawer: initNavigationDrawer(),
-    nextPageId: 1,
-    preferences: DEFAULT_SHELL_PREFERENCES,
-    route: AppRoute.Home(),
-    sessionId: 2,
-    signOutRequest: SignOutRequest.Idle(),
-    tables: Tables.Loading(),
-    user: bob,
-    userMenu: initUserMenu(),
+  const bobEntering = modifyFields(adaEnteringHome, {
+    maybeRevision: () => Option.some(REVISION_4),
+    sessionId: () => 2,
+    user: () => bob,
   });
 
   it("each session's requests carry its number, and the next session gets the next one", () => {
@@ -871,14 +841,22 @@ describe("navigation", () => {
   });
 
   it.each([
-    ["could not be read", StoredShellPreferences.Unreadable(), "Unreadable"],
-    ["held something else", StoredShellPreferences.Invalid(), "Invalid"],
+    ["could not be read", "Unreadable"],
+    ["held something else", "Invalid"],
   ] as const)(
     "storage that %s starts with the defaults and keeps the problem into the signed-in state, until a store succeeds",
-    (_case, storedPreferences, problem) => {
+    (_case, problem) => {
       story(
         update,
-        given(init({ storedPreferences }, urlOf("/")).model),
+        given(
+          init(
+            {
+              maybePreferenceProblem: Option.some(problem),
+              preferences: DEFAULT_SHELL_PREFERENCES,
+            },
+            urlOf("/")
+          ).model
+        ),
         model((app) => {
           expect(app).toStrictEqual(
             Model.CheckingSession({
@@ -922,9 +900,8 @@ describe("navigation", () => {
       given(
         init(
           {
-            storedPreferences: StoredShellPreferences.Stored({
-              preferences: opened,
-            }),
+            maybePreferenceProblem: Option.none(),
+            preferences: opened,
           },
           urlOf("/")
         ).model
@@ -1296,13 +1273,12 @@ const toForm = (formMessage: RecordFormMessage): Message =>
  * @param messages - The Messages.
  * @returns The last Model.
  */
-const afterAll = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : afterAll(update(start, first).model, ...rest);
-};
+const afterAll = (start: Model, ...messages: readonly Message[]): Model =>
+  reduce(
+    messages,
+    start,
+    (current, nextMessage) => update(current, nextMessage).model
+  );
 
 describe("the form pages", () => {
   const RECORD_A = "019a0000-0000-7000-8000-00000000000a";

@@ -3,12 +3,12 @@
  * environment's `localStorage`: a first visit, the stored preferences,
  * text that is not theirs, and storage that refuses to be read.
  */
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   SHELL_PREFERENCES_KEY,
-  StoredShellPreferences,
+  DEFAULT_SHELL_PREFERENCES,
   readShellPreferences,
 } from "./shell-preferences.ts";
 
@@ -21,7 +21,10 @@ describe("the shell's stored preferences", () => {
   it("are absent on a first visit", async () => {
     await expect(
       Effect.runPromise(readShellPreferences)
-    ).resolves.toStrictEqual(StoredShellPreferences.Absent());
+    ).resolves.toStrictEqual({
+      maybePreferenceProblem: Option.none(),
+      preferences: DEFAULT_SHELL_PREFERENCES,
+    });
   });
 
   it("are read back as stored", async () => {
@@ -32,11 +35,10 @@ describe("the shell's stored preferences", () => {
 
     await expect(
       Effect.runPromise(readShellPreferences)
-    ).resolves.toStrictEqual(
-      StoredShellPreferences.Stored({
-        preferences: { isAdministrationOpen: true },
-      })
-    );
+    ).resolves.toStrictEqual({
+      maybePreferenceProblem: Option.none(),
+      preferences: { isAdministrationOpen: true },
+    });
   });
 
   it.each([
@@ -47,7 +49,10 @@ describe("the shell's stored preferences", () => {
 
     await expect(
       Effect.runPromise(readShellPreferences)
-    ).resolves.toStrictEqual(StoredShellPreferences.Invalid());
+    ).resolves.toStrictEqual({
+      maybePreferenceProblem: Option.some("Invalid"),
+      preferences: DEFAULT_SHELL_PREFERENCES,
+    });
   });
 
   it("are unreadable when the storage throws", async () => {
@@ -60,6 +65,9 @@ describe("the shell's stored preferences", () => {
 
     await expect(
       Effect.runPromise(readShellPreferences)
-    ).resolves.toStrictEqual(StoredShellPreferences.Unreadable());
+    ).resolves.toStrictEqual({
+      maybePreferenceProblem: Option.some("Unreadable"),
+      preferences: DEFAULT_SHELL_PREFERENCES,
+    });
   });
 });

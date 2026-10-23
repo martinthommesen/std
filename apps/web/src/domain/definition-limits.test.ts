@@ -1,5 +1,5 @@
-import { apiAttributeNameOf } from "@std/definitions/names";
 import { Option } from "effect";
+import { reduce } from "effect/Array";
 import { describe, expect, it } from "vitest";
 
 import { REVISION_5 } from "../form-fixture.ts";
@@ -8,7 +8,7 @@ import { Message } from "../page/record-form/message.ts";
 import { FormMode } from "../page/record-form/model.ts";
 import type { Model } from "../page/record-form/model.ts";
 import { init, update } from "../page/record-form/update.ts";
-import { servedAs } from "../table-fixture.ts";
+import { field as metadataField, servedAs } from "../table-fixture.ts";
 import {
   FIELD_TABLE,
   TYPE_CHANGE_TEXT,
@@ -26,28 +26,8 @@ import type { RecordJson } from "./record.ts";
 
 const PER_RECORD = { create: "yes", update: "perRecord" } as const;
 
-const column = (
-  id: string,
-  name: string,
-  type: MetaField["type"]
-): MetaField => ({
-  apiName: apiAttributeNameOf(name),
-  autoNumber: null,
-  choices: null,
-  default: null,
-  helpText: null,
-  id,
-  inheritedFrom: null,
-  label: name,
-  name,
-  nullable: type.kind !== "boolean",
-  read: "yes",
-  readOnly: false,
-  required: false,
-  state: "active",
-  type,
-  write: PER_RECORD,
-});
+const column = (id: string, name: string, type: MetaField["type"]): MetaField =>
+  metadataField(id, name, name, type, { write: PER_RECORD });
 
 const IDS = {
   label: "00000000-0000-4000-8000-00000000c001",
@@ -93,13 +73,12 @@ const definitionRecord = (values: RecordJson["values"]): RecordJson => ({
  * @param messages - The Messages.
  * @returns The last Model.
  */
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
+const after = (start: Model, ...messages: readonly Message[]): Model =>
+  reduce(
+    messages,
+    start,
+    (current, nextMessage) => update(current, nextMessage).model
+  );
 
 /**
  * A `core.field` form, ready, on a stored definition.

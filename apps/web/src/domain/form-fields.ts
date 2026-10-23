@@ -65,16 +65,19 @@ export const formFieldsOf = (
 ): readonly MetaField[] =>
   Option.match(maybeClass, {
     onNone: () => endpoint.fields,
-    onSome: (concrete) =>
-      endpoint.fields.map((field) => {
-        const described = concrete.fields.find(
-          (candidate) => candidate.id === field.id
-        );
+    onSome: (concrete) => {
+      const fieldsById = new Map(
+        concrete.fields.map((field) => [field.id, field])
+      );
+
+      return endpoint.fields.map((field) => {
+        const described = fieldsById.get(field.id);
 
         return described === undefined
           ? field
           : { ...described, name: field.name };
-      }),
+      });
+    },
   });
 
 const byId = (fields: readonly MetaField[], fieldId: string) =>

@@ -13,7 +13,7 @@ import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
 import { printCondition } from "@std/conditions/syntax-print";
 import type { FieldKind } from "@std/values/field-type";
-import { Option, Result, Schema, pipe } from "effect";
+import { Equivalence, Option, Result, Schema, pipe } from "effect";
 
 import type { MetaField, MetaTable } from "./metadata.ts";
 import { fieldById, tableClassView } from "./table-view.ts";
@@ -182,7 +182,7 @@ export const addressOf = (query: ListQuery): ListAddress => ({
         ),
 });
 
-const sameText = Option.makeEquivalence<string>((a, b) => a === b);
+const sameText = Option.makeEquivalence(Equivalence.String);
 
 /**
  * Whether two addresses show the same list.

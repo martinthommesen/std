@@ -7,6 +7,7 @@
 import { validateRecord } from "@std/definitions/record-schema";
 import type { JsonValue } from "@std/values/json-value";
 import { Match, Option, Record, Redacted, Result, pipe } from "effect";
+import { reduce } from "effect/Array";
 import {
   array as arrayOf,
   assert as assertProperty,
@@ -46,6 +47,7 @@ import {
   REQUIRED_SECTION,
   RETIRED_SECTION,
   fieldShowOf,
+  formFieldsOf,
   formSections,
 } from "./form-fields.ts";
 import {
@@ -54,21 +56,78 @@ import {
   formStateBody,
   inputJson,
   inputOfValue,
+  sameJson,
   sentBody,
   toWriteOnlyValue,
 } from "./form-input.ts";
 import type { MetaField } from "./metadata.ts";
+import { fieldById as findFieldById } from "./table-view.ts";
 import { valueText } from "./value-text.ts";
+import { formStateOfResponse, wireFieldOf } from "./wire.ts";
 
-const fieldOf = (id: string): MetaField => {
-  const found = ticketTable.fields.find((field) => field.id === id);
+const fieldOf = (id: string): MetaField =>
+  Option.getOrThrow(findFieldById(ticketTable, id));
 
-  if (found === undefined) {
-    throw new RangeError(`no field ${id}`);
-  }
+describe("form metadata and values", () => {
+  it("uses concrete metadata with endpoint names, retaining endpoint order and undescribed fields", () => {
+    const description = fieldOf(TICKET_FIELDS.shortDescription);
+    const status = fieldOf(TICKET_FIELDS.status);
 
-  return found;
-};
+    const projected = formFieldsOf(
+      { ...ticketTable, fields: [description, status] },
+      Option.some({
+        ...incidentTable,
+        fields: [
+          { ...description, label: "Incident summary", name: "summary" },
+        ],
+      })
+    );
+
+    expect(projected.map(({ name, label }) => [name, label])).toStrictEqual([
+      ["short_description", "Incident summary"],
+      ["status", "Status"],
+    ]);
+    expect(projected[1]).toBe(status);
+    expect(formFieldsOf(ticketTable, Option.none())).toBe(ticketTable.fields);
+  });
+
+  it("maps form-state field and value names, retaining unknown names and omitted-message defaults", () => {
+    const state = { hidden: false, readOnly: false, required: true };
+
+    expect(
+      formStateOfResponse(
+        {
+          fields: { shortDescription: state, unknownField: state },
+          revision: 3,
+          schemaRevision: 5,
+          values: { shortDescription: "Black screen", unknownField: null },
+        },
+        ticketTable.fields.map(wireFieldOf)
+      )
+    ).toStrictEqual({
+      fields: { short_description: state, unknownField: state },
+      messages: [],
+      revision: 3,
+      schemaRevision: 5,
+      values: { short_description: "Black screen", unknownField: null },
+    });
+  });
+
+  it("compares JSON by value, ignoring object key order while retaining array order and types", () => {
+    const original = { a: [1, { b: null }], c: false };
+
+    const reordered = Object.fromEntries<JsonValue>([
+      ["c", false],
+      ["a", [1, { b: null }]],
+    ]);
+
+    expect(sameJson(original, original)).toBeTruthy();
+    expect(sameJson(original, reordered)).toBeTruthy();
+    expect(sameJson([1, 2], [2, 1])).toBeFalsy();
+    expect(sameJson(1, "1")).toBeFalsy();
+    expect(sameJson({ a: null }, {})).toBeFalsy();
+  });
+});
 
 const roundTrip = (fieldId: string, value: JsonValue) => {
   const field = fieldOf(fieldId);
@@ -408,13 +467,12 @@ describe("values as text", () => {
 
 // THE CLIENT VERDICT
 
-const after = (start: Model, ...messages: readonly Message[]): Model => {
-  const [first, ...rest] = messages;
-
-  return first === undefined
-    ? start
-    : after(update(start, first).model, ...rest);
-};
+const after = (start: Model, ...messages: readonly Message[]): Model =>
+  reduce(
+    messages,
+    start,
+    (current, nextMessage) => update(current, nextMessage).model
+  );
 
 const openForm = (
   mode: FormMode,

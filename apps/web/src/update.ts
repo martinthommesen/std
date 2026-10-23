@@ -1,5 +1,5 @@
 import { Dialog, Menu } from "@foldkit/ui";
-import { Match, Option, pipe } from "effect";
+import { Equivalence, Match, Option, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
 import { toString as urlToString } from "foldkit/url";
@@ -117,19 +117,12 @@ const landSignedOut = (
 ): UpdateReturn =>
   Match.value(route).pipe(
     withUpdateReturn,
-    Match.tag(
-      "Home",
-      "DeadLetters",
-      "NewRecord",
-      "Record",
-      "TableList",
-      (signedInRoute) => ({
-        commands: [ReplaceUrl({ url: signInRouter() })],
-        model: toModel(AppRoute.SignIn(), Option.some(signedInRoute)),
-      })
-    ),
-    Match.orElse((signedOutRoute) => ({
+    Match.tag("SignIn", "NotFound", (signedOutRoute) => ({
       model: toModel(signedOutRoute, Option.none()),
+    })),
+    Match.orElse((signedInRoute) => ({
+      commands: [ReplaceUrl({ url: signInRouter() })],
+      model: toModel(AppRoute.SignIn(), Option.some(signedInRoute)),
     }))
   );
 
@@ -259,29 +252,26 @@ const writeNavigationDrawer = (
 const toGotNavigationDrawerMessage = (message: Dialog.Message): Message =>
   Message.GotNavigationDrawerMessage({ message });
 
-const foldNavigationDrawer = Update.foldChild({
+const navigationDrawerWiring = {
   foldOutMessage: ignoreDrawerOutMessage,
   read: readNavigationDrawer,
   toParentMessage: toGotNavigationDrawerMessage,
-  update: (drawer: Dialog.Model, message: Dialog.Message) =>
-    Dialog.update(drawer, message),
   write: writeNavigationDrawer,
+};
+
+const foldNavigationDrawer = Update.foldChild({
+  ...navigationDrawerWiring,
+  update: Dialog.update,
 });
 
 const openNavigationDrawer = Update.foldChildStep({
-  foldOutMessage: ignoreDrawerOutMessage,
-  read: readNavigationDrawer,
-  toParentMessage: toGotNavigationDrawerMessage,
+  ...navigationDrawerWiring,
   update: Dialog.open,
-  write: writeNavigationDrawer,
 });
 
 const closeNavigationDrawer = Update.foldChildStep({
-  foldOutMessage: ignoreDrawerOutMessage,
-  read: readNavigationDrawer,
-  toParentMessage: toGotNavigationDrawerMessage,
+  ...navigationDrawerWiring,
   update: Dialog.close,
-  write: writeNavigationDrawer,
 });
 
 // THE LIST PAGE
@@ -775,6 +765,8 @@ const pageKeyOf = (route: AppRoute): Option.Option<string> =>
     Match.orElse(() => Option.none())
   );
 
+const samePageKey = Option.makeEquivalence(Equivalence.String);
+
 /**
  * Whether two routes show the same page: the same kind of page, for the
  * same table and record.
@@ -784,11 +776,7 @@ const pageKeyOf = (route: AppRoute): Option.Option<string> =>
  * @returns True when no page would change.
  */
 const isSamePage = (route: AppRoute, other: AppRoute): boolean =>
-  route._tag === other._tag &&
-  Option.makeEquivalence((a: string, b: string) => a === b)(
-    pageKeyOf(route),
-    pageKeyOf(other)
-  );
+  route._tag === other._tag && samePageKey(pageKeyOf(route), pageKeyOf(other));
 
 // LEAVING A FORM WITH UNSAVED EDITS
 
@@ -814,29 +802,26 @@ const writeLeaveDialog = (model: Model, nextDialog: Dialog.Model): Model =>
 const toGotLeaveDialogMessage = (message: Dialog.Message): Message =>
   Message.GotLeaveDialogMessage({ message });
 
-const foldLeaveDialog = Update.foldChild({
+const leaveDialogWiring = {
   foldOutMessage: ignoreLeaveOutMessage,
   read: readLeaveDialog,
   toParentMessage: toGotLeaveDialogMessage,
-  update: (dialog: Dialog.Model, message: Dialog.Message) =>
-    Dialog.update(dialog, message),
   write: writeLeaveDialog,
+};
+
+const foldLeaveDialog = Update.foldChild({
+  ...leaveDialogWiring,
+  update: Dialog.update,
 });
 
 const openLeaveDialog = Update.foldChildStep({
-  foldOutMessage: ignoreLeaveOutMessage,
-  read: readLeaveDialog,
-  toParentMessage: toGotLeaveDialogMessage,
+  ...leaveDialogWiring,
   update: Dialog.open,
-  write: writeLeaveDialog,
 });
 
 const closeLeaveDialog = Update.foldChildStep({
-  foldOutMessage: ignoreLeaveOutMessage,
-  read: readLeaveDialog,
-  toParentMessage: toGotLeaveDialogMessage,
+  ...leaveDialogWiring,
   update: Dialog.close,
-  write: writeLeaveDialog,
 });
 
 /**

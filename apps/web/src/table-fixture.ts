@@ -6,14 +6,14 @@
  */
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { MetaFieldType } from "@std/definitions/table-metadata";
+import { Schema } from "effect";
 
 import type {
   MetaField,
   MetaTable,
   MetaTableSummary,
 } from "./domain/metadata.ts";
-import { parseSchemaRevision } from "./domain/schema-revision.ts";
-import type { SchemaRevision } from "./domain/schema-revision.ts";
+import { SchemaRevision } from "./domain/schema-revision.ts";
 import { collectionOf, typeOf } from "./domain/wire.ts";
 
 /** The asset table's name. */
@@ -66,7 +66,16 @@ export const summaryOf = (
   resourceType: typeOf(name),
 });
 
-const field = (
+/**
+ * Metadata for a fixture field, with explicit overrides applied last.
+ * @param id - The field's ID.
+ * @param name - Its definition name.
+ * @param label - Its label.
+ * @param type - Its type.
+ * @param overrides - Non-default metadata.
+ * @returns The field.
+ */
+export const field = (
   id: string,
   name: string,
   label: string,
@@ -222,15 +231,8 @@ export const fixtureTables: ReadonlyMap<string, MetaTable> = new Map([
  * @param text - Such as `3.019a...`.
  * @returns The revision.
  */
-export const revision = (text: string): SchemaRevision => {
-  const parsed = parseSchemaRevision(text);
-
-  if (parsed._tag === "None") {
-    throw new RangeError(`not a revision: ${text}`);
-  }
-
-  return parsed.value;
-};
+export const revision = (text: string): SchemaRevision =>
+  Schema.decodeSync(SchemaRevision)(text.trim());
 
 /** Revision 3. */
 export const REVISION_3 = revision("3.00000000-0000-4000-8000-000000000c03");

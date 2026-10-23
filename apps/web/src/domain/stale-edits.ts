@@ -139,6 +139,26 @@ const dropped = (
   reason,
 });
 
+const reconcile = (
+  edits: Edits,
+  decide: (fieldId: string, input: FieldInput) => Option.Option<DroppedEdit>
+): Reconciled => {
+  const outcomes = Record.toEntries(edits).map(([fieldId, input]) => ({
+    drop: decide(fieldId, input),
+    fieldId,
+    input,
+  }));
+
+  return {
+    dropped: outcomes.flatMap((outcome) => Option.toArray(outcome.drop)),
+    edits: Object.fromEntries(
+      outcomes.flatMap((outcome) =>
+        Option.isNone(outcome.drop) ? [[outcome.fieldId, outcome.input]] : []
+      )
+    ),
+  };
+};
+
 /**
  * Splits the edits by what new metadata allows (decision 0020): kept, or
  * dropped with a note. Run when the form's metadata arrives at another
@@ -155,60 +175,34 @@ export const reconcileWithMetadata = (
   before: readonly MetaField[],
   after: readonly MetaField[],
   isCreate: boolean
-): Reconciled => {
-  const outcomes = Record.toEntries(edits).map(([fieldId, input]) => {
+): Reconciled =>
+  reconcile(edits, (fieldId, input) => {
     const old = before.find((field) => field.id === fieldId);
     const now = after.find((field) => field.id === fieldId);
 
     if (now === undefined) {
-      return {
-        drop: Option.some<DroppedEdit>({
-          fieldId,
-          label: old?.label ?? fieldId,
-          maybeText: old === undefined ? Option.none() : inputText(old, input),
-          reason: "Removed",
-        }),
+      return Option.some({
         fieldId,
-        input,
-      };
+        label: old?.label ?? fieldId,
+        maybeText: old === undefined ? Option.none() : inputText(old, input),
+        reason: "Removed",
+      });
     }
 
     const described = old ?? now;
 
     if (now.state === "retired") {
-      return {
-        drop: Option.some(dropped(described, input, "Retired")),
-        fieldId,
-        input,
-      };
+      return Option.some(dropped(described, input, "Retired"));
     }
 
     if (!isWritable(now, isCreate)) {
-      return {
-        drop: Option.some(dropped(described, input, "ReadOnly")),
-        fieldId,
-        input,
-      };
+      return Option.some(dropped(described, input, "ReadOnly"));
     }
 
-    return {
-      drop: inputFits(now, input)
-        ? Option.none<DroppedEdit>()
-        : Option.some(dropped(described, input, "TypeChanged")),
-      fieldId,
-      input,
-    };
+    return inputFits(now, input)
+      ? Option.none()
+      : Option.some(dropped(described, input, "TypeChanged"));
   });
-
-  return {
-    dropped: outcomes.flatMap((outcome) => Option.toArray(outcome.drop)),
-    edits: Object.fromEntries(
-      outcomes.flatMap((outcome) =>
-        Option.isNone(outcome.drop) ? [[outcome.fieldId, outcome.input]] : []
-      )
-    ),
-  };
-};
 
 /**
  * Splits the edits by how the reread record shows each field: a field it
@@ -224,45 +218,29 @@ export const reconcileWithRecord = (
   edits: Edits,
   fields: readonly MetaField[],
   showOf: (field: MetaField) => FieldShow
-): Reconciled => {
-  const outcomes = Record.toEntries(edits).map(([fieldId, input]) => {
+): Reconciled =>
+  reconcile(edits, (fieldId, input) => {
     const field = fields.find((candidate) => candidate.id === fieldId);
 
     if (field === undefined) {
-      return { drop: Option.none<DroppedEdit>(), fieldId, input };
+      return Option.none();
     }
 
-    const show = showOf(field);
-
-    return {
-      drop: Match.value(show).pipe(
-        Match.withReturnType<Option.Option<DroppedEdit>>(),
-        Match.tag("Restricted", () =>
-          Option.some(dropped(field, input, "Restricted"))
-        ),
-        Match.tag("NotDelivered", () =>
-          Option.some(dropped(field, input, "NotDelivered"))
-        ),
-        Match.tag("ReadOnly", () =>
-          Option.some(dropped(field, input, "ReadOnly"))
-        ),
-        Match.tag("Editable", () => Option.none()),
-        Match.exhaustive
+    return Match.value(showOf(field)).pipe(
+      Match.withReturnType<Option.Option<DroppedEdit>>(),
+      Match.tag("Restricted", () =>
+        Option.some(dropped(field, input, "Restricted"))
       ),
-      fieldId,
-      input,
-    };
+      Match.tag("NotDelivered", () =>
+        Option.some(dropped(field, input, "NotDelivered"))
+      ),
+      Match.tag("ReadOnly", () =>
+        Option.some(dropped(field, input, "ReadOnly"))
+      ),
+      Match.tag("Editable", () => Option.none()),
+      Match.exhaustive
+    );
   });
-
-  return {
-    dropped: outcomes.flatMap((outcome) => Option.toArray(outcome.drop)),
-    edits: Object.fromEntries(
-      outcomes.flatMap((outcome) =>
-        Option.isNone(outcome.drop) ? [[outcome.fieldId, outcome.input]] : []
-      )
-    ),
-  };
-};
 
 /**
  * Notes of dropped edits, the newest replacing an older one of the same
