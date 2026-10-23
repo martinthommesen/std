@@ -7,6 +7,7 @@ import {
   EVENT_CLASS_IDS,
   EVENT_PAYLOAD_FIELD_ID,
 } from "@std/definitions/event-ids";
+import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import {
   isJsonObject,
@@ -62,18 +63,22 @@ const resourceTopics = Effect.gen(function* resourceTopics() {
   const actor = yield* Actor;
   const snapshot = yield* (yield* Catalog).current;
 
-  return snapshot.all("class").flatMap((entry) =>
-    entry.state === "active" &&
-    entry.storage === "standard" &&
-    knowsTable(snapshot, actor, entry.id)
+  return snapshot.all("class").flatMap((entry) => {
+    const savedThroughRecords =
+      entry.storage === "standard" ||
+      entry.id === PLATFORM_CLASS_IDS.dead_delivery_action;
+
+    return entry.state === "active" &&
+      savedThroughRecords &&
+      knowsTable(snapshot, actor, entry.id)
       ? [
           {
             classId: entry.id,
             id: `record:${collectionNameOf(snapshot, entry.id)}`,
           },
         ]
-      : []
-  );
+      : [];
+  });
 });
 
 const topicRepresentation = (

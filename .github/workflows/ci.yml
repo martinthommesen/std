@@ -17,7 +17,12 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Tripwire, not a budget. Healthy runs took 12.8 to 20.6 minutes on
+    # 2026-10-23 (runs 39946026969, 39935987092, 39942528522). Run
+    # 39944349143 then hit the old 30: the Chromium step's apt fetch
+    # pulled 25.9 MB at 44.5 kB/s (9 min 43 s). 45 leaves room for one
+    # slow mirror and still stops a hung job.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:18

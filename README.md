@@ -33,7 +33,7 @@ Each step prints a heading. Every refusal it shows is checked for its exact stat
 | `STD_POSTGRES_PORT` | `54329` | compose (host port of Postgres) |
 | `STD_ADMIN_LOGIN`, `STD_ADMIN_PASSWORD` | `administrator`, `quickstart-admin-password` | compose (the first administrator) and the script |
 | `STD_URL` | `http://127.0.0.1:8080` | the script |
-| `STD_DOCTOR_COMMAND` | `docker compose exec -T server pnpm --silent std doctor` | the script |
+| `STD_DOCTOR_COMMAND` | `docker compose exec -T server sh docker/quickstart-entrypoint.sh pnpm --silent std doctor` | the script |
 | `STD_HELPDESK` | `1` | compose (`0` leaves the helpdesk example out) |
 | `HELPDESK_ADMIN_PASSWORD`, `HELPDESK_AGENT_PASSWORD`, `HELPDESK_AGENT2_PASSWORD` | `helpdesk-admin-demo-password`, `helpdesk-agent-demo-password`, `helpdesk-agent2-demo-password` | compose (the helpdesk's demo users) |
 

@@ -70,6 +70,7 @@ const ERRORS = {
   SchemaChanged: [409, "The schema changed since the request was built"],
   SchemaLockTimeout: [503, "The schema change could not get its locks"],
   SchemaNeedsAttention: [409, "A schema change needs attention"],
+  SubscriptionNotServed: [409, "The subscription is not served by the worker"],
   Unauthenticated: [401, "No valid session"],
   UnknownField: [400, "No such field"],
   UnknownTable: [404, "No such table"],
@@ -165,6 +166,7 @@ const ownDetails = (failure: TaggedFailure): JsonObject =>
  */
 const OWN_MESSAGE: ReadonlySet<string> = new Set([
   "InvalidRequest",
+  "SubscriptionNotServed",
   "InvalidTransition",
   "RuleRefused",
 ]);

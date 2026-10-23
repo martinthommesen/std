@@ -33,6 +33,7 @@ import { migration0025 } from "./migrations/0025-change-event-key.ts";
 import { migration0026 } from "./migrations/0026-client-event-key.ts";
 import { migration0027 } from "./migrations/0027-client-event-record.ts";
 import { migration0028 } from "./migrations/0028-change-image-backfill.ts";
+import { migration0029 } from "./migrations/0029-dead-delivery-actions.ts";
 
 /** Every platform migration this version of STD knows. */
 export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
@@ -65,4 +66,5 @@ export const PLATFORM_MIGRATIONS: readonly PlatformMigration[] =
     migration0026,
     migration0027,
     migration0028,
+    migration0029,
   ]);

@@ -6,7 +6,9 @@
  * - A platform table (Contracts 1.9) that is not a definition table
  *   (`core.change`, the journal, the config-layer tables) refuses every
  *   generic create, update and delete with `NotAllowed` (decision 0014):
- *   it is not creatable and no field is writable.
+ *   it is not creatable and no field is writable. The stored data class
+ *   core.dead_delivery_action is appended only by its internal task writer
+ *   (decision 0037).
  * - A definition table's generic writes become one-operation change sets
  *   (Contracts 1.4, `definition-writes.ts`). Columns no write may set
  *   (system, owner, protection, enforcement) are `no`; `state` is never

@@ -5,7 +5,7 @@ import { defineProject } from "vitest/config";
 export default defineProject({
   test: {
     environment: "happy-dom",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "test/*.test.ts"],
     name: "@std/web",
     server: {
       deps: { inline: ["foldkit", "@foldkit/ui", "@foldkit/devtools"] },

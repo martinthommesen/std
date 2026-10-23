@@ -5,6 +5,7 @@
  * of its hierarchy (`apiNameClash`).
  */
 import { assert, describe, it } from "@effect/vitest";
+import { Effect } from "effect";
 import { isFailure, isSuccess } from "effect/Result";
 import type { Result } from "effect/Result";
 
@@ -195,6 +196,39 @@ describe("api-name-clash", () => {
 
     assert.include(codesOf(fixed), "apiNameClash");
   });
+
+  it.effect(
+    "reserves the dead-delivery collection and both operator task names",
+    () =>
+      Effect.gen(function* reservedTasks() {
+        const w = world();
+
+        for (const [namespaceName, tableName] of [
+          ["dead", "delivery"],
+          ["retry", "dead_delivery"],
+          ["discard", "dead_delivery"],
+        ]) {
+          const ns = namespace(namespaceName ?? "");
+
+          const renamed = applyOperations(
+            w.snapshot.with(KEY, [ns, { ...w.laptop, namespaceId: ns.id }]),
+            [
+              {
+                id: w.laptop.id,
+                name: tableName ?? "",
+                op: "rename",
+                version: 1,
+              },
+            ],
+            NEXT
+          );
+
+          assert.include(codesOf(renamed), "apiNameClash");
+        }
+
+        yield* Effect.void;
+      })
+  );
 
   it("does not block a change set over a clash that predates the rule", () => {
     const w = world();

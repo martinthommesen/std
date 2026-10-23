@@ -892,3 +892,47 @@ tables:
       - id: 2a65dc8d-5f9a-496f-823d-4b8b91b1d5a8
         name: active
         type: boolean
+
+  - id: 6ef83f5d-41c6-4acb-943c-4bc82503aa92
+    name: core.dead_delivery_action
+    label: Dead delivery action
+    storage: platform
+    fields:
+      - id: d67fa7ae-c502-45a9-b223-ae5b46c02054
+        name: delivery_id
+        # Delivery identities are positive PostgreSQL int8 values (Contracts 4.6).
+        type: { kind: bigInteger, min: "1" }
+        required: true
+      - id: 5c586a5a-5d61-49b0-a317-7711b21c7748
+        name: subscription_id
+        type: uuid
+        required: true
+      - id: 598bf47a-8ed2-49c2-a945-3277b2f73547
+        name: action
+        type: choice
+        required: true
+        choices:
+          - {
+              id: aa846ee6-5846-47ba-821e-b0704042954f,
+              key: retry,
+              label: Retry,
+            }
+          - {
+              id: dd1276a4-2348-42a1-8ff9-0f021184867a,
+              key: discard,
+              label: Discard,
+            }
+      - id: c5988589-cb1e-46d9-97fc-c9fe0e065547
+        name: state
+        type: choice
+        required: true
+        choices:
+          - {
+              id: 786488aa-5e76-4e36-92de-a16d4a160d0e,
+              key: completed,
+              label: Completed,
+            }
+      - id: 726c4ec0-7c54-4f29-b82f-18ba37064c10
+        name: occurred_at
+        type: dateTime
+        required: true
