@@ -9,10 +9,10 @@
  *   body. A path no operation of the document has is a failure unless it
  *   is a `404` TMF `Error` (an unknown path, or a resource STD does not
  *   serve, 11.1).
- * - The status must be one the operation declares explicitly; `default`
- *   declares nothing [judgment: decision 0021, decision 52 counts only
- *   declared statuses, so a `429` on hub registration is exclusion E29
- *   although the hub operations have a `default` response].
+ * - Explicit error declarations are authoritative. When an operation
+ *   declares no explicit 4xx/5xx status, its default Error response is
+ *   its error declaration (decision 52; decision 0033 item 5). Hub POST
+ *   throttling remains the separate E29 exception.
  * - A body is validated against the response's `application/json` schema
  *   with Ajv. OpenAPI 3.0's `discriminator` is honored: an object whose
  *   `@type` the mapping names validates against that schema as well as
@@ -118,6 +118,7 @@ interface LoadedDocument {
 }
 
 const SCHEMA_PREFIX = "#/components/schemas/";
+const SWAGGER_SCHEMA_PREFIX = "#/definitions/";
 const PLAIN = "__plain";
 
 // Rewrites `$ref`s to the `$defs` of the combined schema (of the schema
@@ -138,8 +139,16 @@ const rewrite = (
 
   const ref = value.$ref;
 
-  if (ref !== undefined && isJsonString(ref) && ref.startsWith(SCHEMA_PREFIX)) {
-    const name = ref.slice(SCHEMA_PREFIX.length);
+  if (
+    ref !== undefined &&
+    isJsonString(ref) &&
+    (ref.startsWith(SCHEMA_PREFIX) || ref.startsWith(SWAGGER_SCHEMA_PREFIX))
+  ) {
+    const name = ref.slice(
+      ref.startsWith(SCHEMA_PREFIX)
+        ? SCHEMA_PREFIX.length
+        : SWAGGER_SCHEMA_PREFIX.length
+    );
 
     return { $ref: `${base ?? ""}#/$defs/${name}${inAllOf ? PLAIN : ""}` };
   }
@@ -212,7 +221,12 @@ const loadDocument = (file: string): LoadedDocument => {
 
   const parsed: unknown = parse(readFileSync(path.join(SPECS, file), "utf-8"));
   const document = asObject(isJsonValue(parsed) ? parsed : undefined);
-  const schemas = asObject(asObject(document.components).schemas);
+
+  const schemas = asObject(
+    document.swagger === "2.0"
+      ? document.definitions
+      : asObject(document.components).schemas
+  );
 
   const defs = new Map<string, JsonValue>();
 
@@ -229,7 +243,10 @@ const loadDocument = (file: string): LoadedDocument => {
   ajv.addFormat("uri", (text: string) => URL.canParse(text));
   ajv.addFormat("float", true);
   ajv.addFormat("base64", true);
-  ajv.addSchema({ $defs: Object.fromEntries(defs), $id: `tmf:${file}` });
+  ajv.addSchema({
+    $defs: Object.fromEntries(defs),
+    $id: `tmf:${encodeURIComponent(file)}`,
+  });
 
   const loaded: LoadedDocument = { ajv, document, validators: new Map() };
 
@@ -315,6 +332,11 @@ const responseSchema = (
   response: JsonValue | undefined
 ): JsonValue | undefined => {
   const object = asObject(response);
+
+  if (document.swagger === "2.0") {
+    return object.schema;
+  }
+
   const ref = object.$ref;
 
   const resolved =
@@ -341,8 +363,14 @@ const validatorOf = (
   }
 
   const compiled = loaded.ajv.compile({
-    $id: `tmf-response:${key}`,
-    allOf: [rewrite(schema, false, `tmf:${key.split("|")[0] ?? ""}`)],
+    $id: `tmf-response:${encodeURIComponent(key)}`,
+    allOf: [
+      rewrite(
+        schema,
+        false,
+        `tmf:${encodeURIComponent(key.split("|")[0] ?? "")}`
+      ),
+    ],
   });
 
   loaded.validators.set(key, compiled);
@@ -357,6 +385,7 @@ export interface TmfExchange {
   readonly status: number;
   readonly text: string;
   readonly json: JsonValue | undefined;
+  readonly contentType?: string | null;
 }
 
 const isNotFoundError = (exchange: TmfExchange): boolean =>
@@ -364,6 +393,124 @@ const isNotFoundError = (exchange: TmfExchange): boolean =>
   exchange.json !== undefined &&
   isJsonObject(exchange.json) &&
   exchange.json.code !== undefined;
+
+// Contracts 12.2 adds GET /hub/{id} where a pin omits it.
+const hubRetrieveOperation = (
+  document: JsonObject,
+  method: string,
+  relative: string
+): Operation | undefined => {
+  if (method !== "GET" || !/^\/hub\/[^/]+$/u.test(relative)) {
+    return undefined;
+  }
+
+  const prefix =
+    document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
+
+  const schema = { $ref: `${prefix}Hub` };
+  const error = { $ref: `${prefix}Error` };
+
+  const body = (value: JsonObject) =>
+    document.swagger === "2.0"
+      ? { schema: value }
+      : { content: { "application/json": { schema: value } } };
+
+  return {
+    responses: {
+      "200": body(schema),
+      "400": body(error),
+      "401": body(error),
+      "403": body(error),
+      "404": body(error),
+      "500": body(error),
+    },
+    template: "/hub/{id}",
+  };
+};
+
+const validateResponse = (
+  loaded: LoadedDocument,
+  contract: TmfContract,
+  exchange: TmfExchange,
+  operation: Operation,
+  schema: JsonValue,
+  where: string
+): string | undefined => {
+  const validate = validatorOf(
+    loaded,
+    `${contract.file}|${exchange.method}|${operation.template}|${exchange.status}`,
+    schema
+  );
+
+  return validate(exchange.json)
+    ? undefined
+    : `${where}: ${loaded.ajv.errorsText(validate.errors)}: ${exchange.text}`;
+};
+
+// Decision 52: default is an error declaration only when it is the only one.
+const defaultErrorResponse = (
+  operation: Operation,
+  status: number
+): JsonValue | undefined => {
+  if (status < 400 || status >= 600 || status === 429) {
+    return undefined;
+  }
+
+  const explicitErrors = Object.keys(operation.responses).some(
+    (key) =>
+      DECLARED_STATUS.test(key) && Number(key) >= 400 && Number(key) < 600
+  );
+
+  return explicitErrors ? undefined : operation.responses.default;
+};
+
+const operationResponseProblem = (
+  loaded: LoadedDocument,
+  contract: TmfContract,
+  exchange: TmfExchange,
+  operation: Operation,
+  where: string
+): string | undefined => {
+  const explicit = operation.responses[String(exchange.status)];
+  const response = explicit ?? defaultErrorResponse(operation, exchange.status);
+
+  if (response === undefined) {
+    return `${where}: the operation does not declare status ${exchange.status}: ${exchange.text}`;
+  }
+
+  const schema = responseSchema(loaded.document, response);
+
+  if (explicit === undefined) {
+    // A default error still needs the pinned Error body, never an unchecked response.
+    const prefix =
+      loaded.document.swagger === "2.0" ? SWAGGER_SCHEMA_PREFIX : SCHEMA_PREFIX;
+
+    return validateResponse(
+      loaded,
+      contract,
+      exchange,
+      operation,
+      { allOf: [{ $ref: `${prefix}Error` }, schema ?? {}] },
+      where
+    );
+  }
+
+  if (exchange.method === "HEAD" || schema === undefined) {
+    return exchange.method === "HEAD" || exchange.text === ""
+      ? undefined
+      : `${where}: the status declares no body: ${exchange.text}`;
+  }
+
+  if (
+    contract.spec === "TMF688" &&
+    exchange.contentType !== undefined &&
+    exchange.contentType !== "application/json;charset=utf-8"
+  ) {
+    return `${where}: JSON response has the wrong Content-Type`;
+  }
+
+  return validateResponse(loaded, contract, exchange, operation, schema, where);
+};
 
 /**
  * What is wrong with one exchange, measured against the contract of its
@@ -395,37 +542,41 @@ export const tmfExchangeProblem = (
 
   const loaded = loadDocument(contract.file);
   const relative = pathOnly.slice(contract.basePath.length);
-  const operation = operationOf(loaded.document, exchange.method, relative);
+
+  const operation =
+    operationOf(loaded.document, exchange.method, relative) ??
+    hubRetrieveOperation(loaded.document, exchange.method, relative);
+
+  // E29 accepts registration throttling on hub POSTs only.
+  if (
+    exchange.status === 429 &&
+    exchange.method === "POST" &&
+    operation !== undefined &&
+    /(?:^|\/)hub$/u.test(operation.template)
+  ) {
+    return validateResponse(
+      loaded,
+      contract,
+      exchange,
+      operation,
+      {
+        $ref:
+          loaded.document.swagger === "2.0"
+            ? "#/definitions/Error"
+            : "#/components/schemas/Error",
+      },
+      where
+    );
+  }
 
   if (operation === undefined) {
-    return isNotFoundError(exchange) || exchange.status === 405
+    return contract.spec !== "TMF688" &&
+      (isNotFoundError(exchange) || exchange.status === 405)
       ? undefined
       : `${where}: the document has no such operation`;
   }
 
-  const response = operation.responses[String(exchange.status)];
-
-  if (response === undefined) {
-    return `${where}: the operation does not declare status ${exchange.status}: ${exchange.text}`;
-  }
-
-  const schema = responseSchema(loaded.document, response);
-
-  if (exchange.method === "HEAD" || schema === undefined) {
-    return exchange.method === "HEAD" || exchange.text === ""
-      ? undefined
-      : `${where}: the status declares no body: ${exchange.text}`;
-  }
-
-  const validate = validatorOf(
-    loaded,
-    `${contract.file}|${exchange.method}|${operation.template}|${exchange.status}`,
-    schema
-  );
-
-  return validate(exchange.json)
-    ? undefined
-    : `${where}: ${loaded.ajv.errorsText(validate.errors)}: ${exchange.text}`;
+  return operationResponseProblem(loaded, contract, exchange, operation, where);
 };
 
 /**

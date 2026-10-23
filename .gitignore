@@ -10,3 +10,6 @@ coverage/
 .vite/
 bench/results/raw/
 .claude/worktrees/
+
+# Local UI screenshots and recordings (never committed)
+/screenshots/

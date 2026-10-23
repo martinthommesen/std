@@ -370,7 +370,8 @@ const FENCE =
  * @returns Nothing; `LeaseLost` when the lease is no longer this worker's.
  */
 export const markDone = Effect.fn("Outbox.markDone")(function* markDone(
-  lease: DeliveryLease
+  lease: DeliveryLease,
+  reason: string | null = null
 ) {
   const { request } = yield* Transactions;
 
@@ -379,10 +380,10 @@ export const markDone = Effect.fn("Outbox.markDone")(function* markDone(
       lease,
       `UPDATE core.delivery
        SET status = 'done', lease_until = NULL, lease_token = NULL,
-         finished_at = now()
+         finished_at = now(), last_error = COALESCE(NULLIF($3::text, ''), last_error)
        WHERE ${FENCE}
        RETURNING id::text AS id`,
-      []
+      [reason ?? ""]
     )
   );
 });

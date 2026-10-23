@@ -584,7 +584,8 @@ const CASCADE = "c";
 /**
  * Check 12, catalog part: `class_id` is NOT NULL in every class table, and
  * every foreign key in STD schemas is `NO ACTION` on delete and update
- * except level FKs, which cascade deletes (Contracts 3.10).
+ * except level FKs and the derived change image FK, which cascade deletes
+ * (Contracts 3.10, 4.8; decision 0032).
  *
  * @param snapshot - The configuration.
  * @param catalog - The catalog facts.
@@ -619,7 +620,12 @@ export const checkInheritanceCatalog = (
   const actions = [...catalog].flatMap(([key, facts]) =>
     facts.constraints.flatMap((entry) => {
       const level = parseGeneratedName(entry.name)?.kind === LEVEL_FK_KIND;
-      const expected = level ? CASCADE : NO_ACTION;
+
+      const changeImage =
+        key === "core.change_image" &&
+        entry.name === "change_image_change_id_fkey";
+
+      const expected = level || changeImage ? CASCADE : NO_ACTION;
 
       const allowed =
         entry.deleteAction === expected && entry.updateAction === NO_ACTION;
@@ -631,7 +637,7 @@ export const checkInheritanceCatalog = (
               12,
               "error",
               "fkAction",
-              `Foreign key ${entry.name} on ${key} has delete action ${entry.deleteAction} and update action ${entry.updateAction}; STD allows only NO ACTION, and CASCADE on level FKs.`,
+              `Foreign key ${entry.name} on ${key} has delete action ${entry.deleteAction} and update action ${entry.updateAction}; STD requires NO ACTION, except CASCADE on level FKs and the derived change image FK.`,
               `${key}/${entry.name}`
             ),
           ];

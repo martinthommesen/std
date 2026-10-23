@@ -11,6 +11,7 @@ import { HttpApi, OpenApi } from "effect/http-api";
 
 import { ChangeSetGroup } from "./change-sets.ts";
 import { DeadLettersGroup } from "./dead-letters.ts";
+import { HubGroup } from "./hub.ts";
 import { MetaGroup } from "./meta.ts";
 import { RecordsGroup } from "./records.ts";
 import { SessionGroup } from "./session.ts";
@@ -31,6 +32,7 @@ export const API_DESCRIPTION =
 
 /** The STD API. */
 export class StdApi extends HttpApi.make("std")
+  .add(HubGroup)
   .add(SessionGroup)
   .add(TableMetadataGroup)
   .add(MetaGroup)
