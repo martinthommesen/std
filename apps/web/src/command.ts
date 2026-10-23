@@ -16,12 +16,6 @@ import { StdApi, atRevision, responseRevision } from "./std-client.ts";
 export const MAIN_ID = "main";
 
 /**
- * The ID of the navigation drawer's disclosure: its button is
- * `navigation-button`, its panel (the sidebar) `navigation-panel`.
- */
-export const NAVIGATION_TOGGLE_ID = "navigation";
-
-/**
  * Asks the server who the browser's session acts as (the current
  * session). The session cookie is HTTP-only, so this is the only way the
  * app learns
@@ -166,30 +160,6 @@ export const SaveShellPreferences = Command.define("SaveShellPreferences", {
     Message.CompletedSaveShellPreferences,
     Message.FailedSaveShellPreferences,
   ],
-});
-
-/**
- * Moves focus into the navigation drawer once it opens on a narrow
- * screen, to its first link, so keyboard users land in what they opened.
- */
-export const FocusNavigation = Command.define("FocusNavigation", {
-  execute: Dom.focus(`#${NAVIGATION_TOGGLE_ID}-panel a`).pipe(
-    Effect.ignore,
-    Effect.as(Message.CompletedFocusNavigation())
-  ),
-  messages: [Message.CompletedFocusNavigation],
-});
-
-/**
- * Moves focus back to the button that shows the navigation once the
- * drawer closes, so keyboard users continue from where they opened it.
- */
-export const FocusNavigationToggle = Command.define("FocusNavigationToggle", {
-  execute: Dom.focus(`#${NAVIGATION_TOGGLE_ID}-button`).pipe(
-    Effect.ignore,
-    Effect.as(Message.CompletedFocusNavigationToggle())
-  ),
-  messages: [Message.CompletedFocusNavigationToggle],
 });
 
 /** Follows an in-app link. */

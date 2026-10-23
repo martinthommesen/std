@@ -1,10 +1,10 @@
-import { Button, Disclosure, Nav } from "@foldkit/ui";
+import { Button, Dialog, Disclosure, Nav } from "@foldkit/ui";
 import { Match, Option } from "effect";
 import { AsyncData } from "foldkit";
 import { childAttributes } from "foldkit/html";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import { MAIN_ID, NAVIGATION_TOGGLE_ID } from "./command.ts";
+import { MAIN_ID } from "./command.ts";
 import type { MetaTableSummary } from "./domain/metadata.ts";
 import {
   ADMINISTRATION_LABEL,
@@ -27,11 +27,13 @@ import {
 } from "./page/table-list/view.ts";
 import { deadLettersRouter, homeRouter, signInRouter } from "./route.ts";
 import type { AppRoute } from "./route.ts";
+import type { PreferenceProblem } from "./shell-preferences.ts";
 import { USER_MENU_ITEMS, UserMenu } from "./user-menu.ts";
 import type { UserMenuItem } from "./user-menu.ts";
 import {
   chevronDown,
   chevronRight,
+  close as closeIcon,
   menuLines,
   signOut as signOutIcon,
 } from "./view/icons.ts";
@@ -301,101 +303,130 @@ const tablesNavView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
     onSome: (catalog) => tablesNavList(model, catalog.tables, h),
   });
 
-/**
- * The navigation drawer is a disclosure whose button sits in the header
- * and whose panel is the sidebar; both halves are rendered from the same
- * state, each by its own `Disclosure.view` call.
- *
- * @param model - The signed-in state.
- * @returns The disclosure's state and toggle.
- */
-const navigationDisclosure = (model: SignedInModel) => ({
-  id: NAVIGATION_TOGGLE_ID,
-  isOpen: model.isNavigationOpen,
-  onToggle: (isOpen: boolean) => Message.ToggledNavigation({ isOpen }),
-});
+const PREFERENCE_PROBLEM_TEXTS = {
+  Invalid:
+    "This browser had stored something unreadable instead of whether Administration is open, so it starts closed; opening or closing it stores it again.",
+  Unreadable:
+    "This browser did not let STD read whether Administration was open, so it starts closed.",
+  Unsaved:
+    "This browser did not store whether Administration is open; it starts closed next time.",
+} as const satisfies Record<PreferenceProblem, string>;
+
+const preferenceProblemView = (
+  model: SignedInModel,
+  h: HtmlBuilder<Message>
+): Html =>
+  Option.match(model.maybePreferenceProblem, {
+    onNone: () => h.empty,
+    onSome: (problem) =>
+      h.p(
+        [h.Role("status"), h.Class("control-hint sidebar-section")],
+        [PREFERENCE_PROBLEM_TEXTS[problem]]
+      ),
+  });
 
 /**
- * Escape closes the navigation drawer when it is open.
- *
- * @param isOpen - Whether the drawer is open.
- * @returns The key handler's Message, if any.
- */
-const closeOnEscape =
-  (isOpen: boolean) =>
-  (key: string): Option.Option<Message> =>
-    isOpen && key === "Escape"
-      ? Option.some(Message.ToggledNavigation({ isOpen: false }))
-      : Option.none();
-
-/**
- * Behind the open drawer on a narrow screen: a scrim over the page, which
- * closes the drawer when clicked (the stylesheet shows it only there).
+ * The navigation: the primary links, the tables by namespace with the
+ * Administration group, and any problem storing the shell's preferences.
+ * It is shown either beside the page or in the drawer, never both, so
+ * its IDs stay unique.
  *
  * @param model - The signed-in state.
  * @param h - The builder.
- * @returns The scrim, or nothing while the drawer is closed.
+ * @returns Its parts.
  */
-const navigationScrimView = (
+const navigationContentView = (
   model: SignedInModel,
   h: HtmlBuilder<Message>
-): Html =>
-  model.isNavigationOpen
-    ? h.div([
-        h.Class("nav-scrim"),
-        h.AriaHidden(true),
-        h.OnClick(Message.ToggledNavigation({ isOpen: false })),
-      ])
-    : h.empty;
-
-const sidebarView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
-  Disclosure.view(
+): readonly Html[] => [
+  routeNavView(
     {
-      ...navigationDisclosure(model),
-      toView: ({ panel }) =>
-        h.aside(
-          [
-            ...panel,
-            h.Class("sidebar"),
-            h.AriaLabel("Navigation"),
-            h.OnKeyDownPreventDefault(closeOnEscape(model.isNavigationOpen)),
-          ],
-          [
-            routeNavView(
-              {
-                ariaLabel: "Primary",
-                className: SIDEBAR_SECTION_CLASS,
-                current: model.route,
-                items: PRIMARY_ITEMS,
-              },
-              h
-            ),
-            tablesNavView(model, h),
-            model.isPreferenceSaveFailed
-              ? h.p(
-                  [h.Role("status"), h.Class("control-hint sidebar-section")],
-                  [
-                    "This browser did not store whether Administration is open; it starts closed next time.",
-                  ]
-                )
-              : h.empty,
-          ]
-        ),
+      ariaLabel: "Primary",
+      className: SIDEBAR_SECTION_CLASS,
+      current: model.route,
+      items: PRIMARY_ITEMS,
     },
     h
+  ),
+  tablesNavView(model, h),
+  preferenceProblemView(model, h),
+];
+
+/**
+ * Beside the page on a wide screen (the stylesheet hides it on a narrow
+ * one); empty while the drawer shows the navigation.
+ *
+ * @param model - The signed-in state.
+ * @param h - The builder.
+ * @returns The sidebar.
+ */
+const sidebarView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
+  h.aside(
+    [h.Class("sidebar"), h.AriaLabel("Navigation")],
+    model.navigationDrawer.isOpen ? [] : navigationContentView(model, h)
   );
 
-const navigationToggleView = (
+const navigationDrawerView = (
   model: SignedInModel,
   h: HtmlBuilder<Message>
 ): Html =>
-  Disclosure.view(
+  h.submodel({
+    model: model.navigationDrawer,
+    slotId: model.navigationDrawer.id,
+    toParentMessage: (message) =>
+      Message.GotNavigationDrawerMessage({ message }),
+    view: Dialog.view,
+    viewInputs: {
+      toView: ({ backdrop, closeButton, dialog, isVisible, panel, title }) =>
+        h.dialog(
+          [...dialog, h.Class("drawer")],
+          isVisible
+            ? [
+                h.div([...backdrop, h.Class("drawer-backdrop")]),
+                h.div(
+                  [...panel, h.Class("drawer-panel")],
+                  [
+                    h.div(
+                      [h.Class("drawer-header")],
+                      [
+                        h.h2(
+                          [...title, h.Class("drawer-title")],
+                          ["Navigation"]
+                        ),
+                        h.button(
+                          [
+                            ...closeButton,
+                            h.Class("header-button drawer-close"),
+                            h.AriaLabel("Close navigation"),
+                          ],
+                          [closeIcon()]
+                        ),
+                      ]
+                    ),
+                    h.div(
+                      [h.Class("drawer-body")],
+                      navigationContentView(model, h)
+                    ),
+                  ]
+                ),
+              ]
+            : []
+        ),
+    },
+  });
+
+const navigationToggleView = (h: HtmlBuilder<Message>): Html =>
+  Button.view(
     {
-      ...navigationDisclosure(model),
-      ariaLabel: "Navigation",
-      toView: ({ button }) =>
+      onClick: Message.ClickedOpenNavigation(),
+      toView: (attributes) =>
         h.button(
-          [...button, h.Class("header-button nav-toggle")],
+          [
+            ...attributes.button,
+            h.Class("header-button nav-toggle"),
+            h.AriaLabel("Open navigation"),
+            h.AriaHasPopup("dialog"),
+          ],
           [menuLines()]
         ),
     },
@@ -529,7 +560,7 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
   shellView(
     {
       header: [
-        navigationToggleView(model, h),
+        navigationToggleView(h),
         brandLinkView(homeRouter(), h),
         h.div(
           [h.Class("header-end")],
@@ -550,7 +581,7 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
           ? `${MAIN_CLASS} dead-letters-main`
           : MAIN_CLASS,
       page: signedInPageView(model, h),
-      side: [navigationScrimView(model, h), sidebarView(model, h)],
+      side: [sidebarView(model, h), navigationDrawerView(model, h)],
     },
     h
   );

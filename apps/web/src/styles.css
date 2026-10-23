@@ -100,6 +100,9 @@
   /* Sizes. 2 rem (32 px) controls keep lists and forms dense and stay
      above WCAG 2.2's 24 px target minimum (2.5.8). */
   --control-height: 2rem;
+  /* A navigation row: 30 px, a list of links read top to bottom, still
+     above the 24 px minimum. */
+  --nav-row-height: 1.875rem;
   /* The header holds one 32 px control row with 8 px above and below. */
   --header-height: 3rem;
   /* The longest core table label ("Installed definition set") fits on
@@ -184,25 +187,26 @@ body {
 
 /* Keep what gets focus clear of the sticky header and the form's
    floating action bar (WCAG 2.2, 2.4.11): the header's height, and the
-   bar's 3 rem plus its 0.75 rem gap from the window's edge, with room. */
+   bar's height as it is now, however its messages wrap (the record form's
+   `KeepFocusClearOfActionBar` keeps `--action-bar-block-size` at it), plus its
+   gap from the window's edge and room to see the field. */
 html {
   scroll-padding-top: calc(var(--header-height) + var(--space-2));
-  scroll-padding-bottom: 5rem;
+  scroll-padding-bottom: calc(
+    var(--action-bar-block-size, 0px) + var(--space-3) + var(--space-2)
+  );
 }
 
-.nav-scrim {
-  display: none;
-}
-
-/* Touch screens: controls grow to 44 px, the size WCAG 2.5.5 and the
-   platforms' guidelines (Apple HIG: 44 pt) give for a finger. */
+/* Touch screens: controls and navigation rows grow to 44 px, the size
+   WCAG 2.5.5 and the platforms' guidelines (Apple HIG: 44 pt) give for a
+   finger. The rows take it through their token, so no later rule of the
+   same specificity can undo it. */
 @media (pointer: coarse) {
   :root {
     --control-height: 2.75rem;
+    --nav-row-height: 2.75rem;
   }
 
-  .nav-link,
-  .nav-group-button,
   .sort-button {
     min-height: 2.75rem;
   }
@@ -531,7 +535,7 @@ a {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 1.875rem;
+  min-height: var(--nav-row-height);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius);
   color: var(--color-text);
@@ -555,7 +559,7 @@ a {
   justify-content: space-between;
   gap: var(--space-2);
   width: 100%;
-  min-height: 1.875rem;
+  min-height: var(--nav-row-height);
   padding: var(--space-1) var(--space-3);
   font: inherit;
   font-size: var(--text-xs);
@@ -1889,6 +1893,70 @@ th[aria-sort="descending"] .sort-icon {
   text-decoration: line-through;
 }
 
+/* The navigation drawer of narrow screens (Foldkit UI Dialog: while it
+   is open the dialog covers the window, the page behind it is inert and
+   Tab stays inside it). */
+
+.drawer {
+  margin: 0;
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--color-backdrop);
+}
+
+.drawer-panel {
+  position: fixed;
+  inset: 0 auto 0 0;
+  display: flex;
+  flex-direction: column;
+  width: min(18rem, 85vw);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--color-sidebar);
+  box-shadow: var(--shadow-popover);
+}
+
+/* The drawer's own header continues the app's, at its height, so the
+   close button sits where the menu button was. */
+.drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--header-height);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  color: var(--color-header-text);
+  background: var(--color-header);
+}
+
+.drawer-header :focus-visible {
+  outline-color: var(--color-header-text);
+}
+
+.drawer-title {
+  font-size: var(--text-md);
+}
+
+.drawer-close {
+  width: var(--control-height);
+  justify-content: center;
+  padding: 0;
+}
+
+.drawer-body {
+  padding: var(--space-3) var(--space-2) var(--space-6);
+}
+
 /* Narrow screens: the navigation is a drawer behind the menu button.
    48 rem (768 px) is where a 15 rem sidebar would leave the page less
    than 33 rem, too narrow for a list's toolbar on one line. */
@@ -1902,28 +1970,7 @@ th[aria-sort="descending"] .sort-icon {
   }
 
   .sidebar {
-    position: fixed;
-    top: var(--header-height);
-    left: 0;
-    z-index: 25;
-    width: min(18rem, 85vw);
-    height: calc(100dvh - var(--header-height));
-    box-shadow: var(--shadow-popover);
-    transform: translateX(-105%);
-    visibility: hidden;
-  }
-
-  .sidebar[data-open] {
-    transform: none;
-    visibility: visible;
-  }
-
-  .nav-scrim {
-    display: block;
-    position: fixed;
-    inset: var(--header-height) 0 0;
-    z-index: 24;
-    background: var(--color-backdrop);
+    display: none;
   }
 
   .main {
@@ -1935,9 +1982,18 @@ th[aria-sort="descending"] .sort-icon {
     white-space: normal;
   }
 
+  /* The action bar stops floating and closes the form instead: wrapped
+     on a phone or at 200 % zoom, the refusal state made it 173 px tall at
+     320 px (Sol's review of a4068ab1), a fifth of the window on top of
+     the fields. In place it covers nothing, and the scroll padding goes
+     back to the gap alone. */
   .action-bar {
-    bottom: var(--space-2);
-    padding: var(--space-2) var(--space-3);
+    position: static;
+    box-shadow: none;
+  }
+
+  html {
+    scroll-padding-bottom: var(--space-3);
   }
 
   .user-menu-name {
@@ -1962,18 +2018,16 @@ th[aria-sort="descending"] .sort-icon {
       color var(--duration-fast) ease;
   }
 
-  /* Hidden only once the drawer has slid out; shown at once when it
-     opens, so focus can move into it on the same frame. */
-  .sidebar {
-    transition:
-      transform var(--duration) var(--ease-out),
-      visibility 0s linear var(--duration);
+  /* The drawer slides in as it opens; it closes at once, so focus is
+     back on the menu button with nothing still moving. */
+  .drawer-panel {
+    transition: transform var(--duration) var(--ease-out);
   }
 
-  .sidebar[data-open] {
-    transition:
-      transform var(--duration) var(--ease-out),
-      visibility 0s;
+  @starting-style {
+    .drawer-panel {
+      transform: translateX(-100%);
+    }
   }
 
   .skip-link {

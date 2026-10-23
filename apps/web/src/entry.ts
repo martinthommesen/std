@@ -1,16 +1,17 @@
 import "./styles.css";
+import { Effect } from "effect";
 import { Runtime } from "foldkit";
 
-import { init } from "./main.ts";
+import { Flags, init } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model } from "./model.ts";
-import { ShellPreferences, readShellPreferences } from "./shell-preferences.ts";
+import { readShellPreferences } from "./shell-preferences.ts";
 import { StdApi } from "./std-client.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
 
 const application = Runtime.makeApplication({
-  Flags: ShellPreferences,
+  Flags,
   Model,
   container: document.querySelector("#root") ?? document.body,
   devTools: { Message },
@@ -24,4 +25,8 @@ const application = Runtime.makeApplication({
   view,
 });
 
-Runtime.run(application, { flags: readShellPreferences });
+Runtime.run(application, {
+  flags: readShellPreferences.pipe(
+    Effect.map((storedPreferences) => ({ storedPreferences }))
+  ),
+});

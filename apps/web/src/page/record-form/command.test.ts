@@ -59,6 +59,9 @@ const present = <A>(value: A | undefined): A => {
 
 const NAME = present(userTable.fields.find((field) => field.name === "name"));
 
+/** The UUIDs in a text. */
+const UUIDS = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gu;
+
 /** An integer display field, for labels that are not text. */
 const BADGE: MetaField = {
   ...NAME,
@@ -903,7 +906,7 @@ describe("form Commands against the server", () => {
     const result = await Effect.runPromise(
       LoadHistoryLabels({
         ids: [USERS.alex, USERS.sam],
-        maybeDisplayField: Option.some("name"),
+        maybeDisplayField: Option.some(NAME),
         revision: REVISION_5,
         table: "core.user",
       }).effect.pipe(Effect.provide(api.layer))
@@ -1003,7 +1006,7 @@ describe("form Commands against the server", () => {
     const result = await Effect.runPromise(
       LoadHistoryLabels({
         ids: [USERS.alex],
-        maybeDisplayField: Option.some("name"),
+        maybeDisplayField: Option.some(NAME),
         revision: REVISION_5,
         table: "core.user",
       }).effect.pipe(Effect.provide(api.layer))
@@ -1011,6 +1014,100 @@ describe("form Commands against the server", () => {
 
     expect(result).toStrictEqual(
       Message.FailedLoadHistoryLabels({ table: "core.user" })
+    );
+  });
+
+  it.each([
+    ["an integer", BADGE, 42, "42"],
+    [
+      "a choice, by its label",
+      {
+        ...NAME,
+        apiName: "tier",
+        choices: [
+          { key: "gold", label: "Gold member", order: 1, retired: false },
+        ],
+        id: "00000000-0000-4000-8000-00000000c0c0",
+        label: "Tier",
+        name: "tier",
+        type: { kind: "choice" as const },
+      },
+      "gold",
+      "Gold member",
+    ],
+  ] as const)(
+    "a display field holding %s is shown as the pickers show it",
+    async (_case, display, value, shown) => {
+      const api = fakeStdApi({
+        [USERS_PATH]: {
+          body: [
+            {
+              "@type": "CoreUser",
+              href: `http://std.test${USERS_PATH}/${USERS.alex}`,
+              id: USERS.alex,
+              [display.apiName]: value,
+            },
+          ],
+          status: 200,
+        },
+      });
+
+      const result = await Effect.runPromise(
+        LoadHistoryLabels({
+          ids: [USERS.alex],
+          maybeDisplayField: Option.some(display),
+          revision: REVISION_5,
+          table: "core.user",
+        }).effect.pipe(Effect.provide(api.layer))
+      );
+
+      expect(result).toStrictEqual(
+        Message.SucceededLoadHistoryLabels({
+          labels: { [USERS.alex]: shown },
+          table: "core.user",
+        })
+      );
+      expect(api.seen[0]?.query.fields).toBe(display.apiName);
+    }
+  );
+
+  it("many records of one table are asked for in as few lists as fit a request's address", async () => {
+    const ids = Array.from(
+      { length: 400 },
+      (_, index) =>
+        `019a0000-0000-7000-8000-${index.toString(16).padStart(12, "0")}`
+    );
+
+    const api = fakeStdApi({
+      [USERS_PATH]: { body: [], status: 200 },
+    });
+
+    const result = await Effect.runPromise(
+      LoadHistoryLabels({
+        ids,
+        maybeDisplayField: Option.some(NAME),
+        revision: REVISION_5,
+        table: "core.user",
+      }).effect.pipe(Effect.provide(api.layer))
+    );
+
+    expect(result._tag).toBe("SucceededLoadHistoryLabels");
+
+    const conditions = api.seen.map((seen) => seen.query.condition ?? "");
+
+    // 400 UUIDs take 46 encoded bytes each, 18 400 in all: three lists
+    // within the 8 192-byte budget, every ID in exactly one.
+    expect(conditions).toHaveLength(3);
+
+    for (const condition of conditions) {
+      expect(encodeURIComponent(condition).length).toBeLessThanOrEqual(8192);
+    }
+
+    expect(
+      conditions.flatMap((condition) => condition.match(UUIDS) ?? [])
+    ).toStrictEqual(ids);
+    expect(api.seen.map((seen) => Number(seen.query.limit))).toStrictEqual(
+      conditions.map((condition) => condition.match(UUIDS)?.length ?? 0)
     );
   });
 });

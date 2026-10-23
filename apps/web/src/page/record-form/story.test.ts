@@ -9,6 +9,7 @@ import {
   model,
   story,
 } from "foldkit/story";
+import { modifyFields } from "foldkit/struct";
 import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
@@ -52,6 +53,7 @@ import { checkForm, controlIdOf } from "./form.ts";
 import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
+import { displayFieldOf } from "./picker-search.ts";
 import { init, update } from "./update.ts";
 
 const opening = (mode: FormMode) =>
@@ -1526,6 +1528,41 @@ describe("delete", () => {
     );
   });
 
+  it("goes back to the list the form was opened from, with its filter, sort and page size", () => {
+    const fromList = after(
+      modifyFields(ready, {
+        listQuery: () => ({
+          filter: Option.some('{"op":"isEmpty","left":"x"}'),
+          limit: Option.some("50"),
+          sort: Option.some("-number"),
+        }),
+      }),
+      Message.ClickedDelete()
+    );
+
+    story(
+      update,
+      given(fromList),
+      message(Message.ClickedConfirmDelete()),
+      Command.resolveAll(
+        [
+          DeleteRecord,
+          Message.SucceededDeleteRecord({ maybeRevision: Option.none() }),
+        ],
+        [Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()]
+      ),
+      Command.expectExact(
+        NavigateAway({
+          url: `/tables/${TICKET}?filter=%7B%22op%22%3A%22isEmpty%22%2C%22left%22%3A%22x%22%7D&limit=50&sort=-number`,
+        })
+      ),
+      Command.resolve(NavigateAway, Message.CompletedNavigateAway()),
+      model((page) => {
+        expect(page.listQuery.sort).toStrictEqual(Option.some("-number"));
+      })
+    );
+  });
+
   it("shows a conflict when someone else saved first", () => {
     story(
       update,
@@ -1698,7 +1735,7 @@ describe("related lists and history", () => {
       Command.expectExact(
         LoadHistoryLabels({
           ids: [USERS.alex],
-          maybeDisplayField: Option.some("name"),
+          maybeDisplayField: displayFieldOf(userTable),
           revision: REVISION_5,
           table: "core.user",
         })
@@ -1798,7 +1835,7 @@ describe("related lists and history", () => {
       Command.expectExact(
         LoadHistoryLabels({
           ids: [USERS.alex, USERS.sam],
-          maybeDisplayField: Option.some("name"),
+          maybeDisplayField: displayFieldOf(userTable),
           revision: REVISION_5,
           table: "core.user",
         }),
@@ -1816,7 +1853,7 @@ describe("related lists and history", () => {
         [
           LoadHistoryLabels({
             ids: [USERS.alex, USERS.sam],
-            maybeDisplayField: Option.some("name"),
+            maybeDisplayField: displayFieldOf(userTable),
             revision: REVISION_5,
             table: "core.user",
           }),

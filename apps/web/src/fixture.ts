@@ -3,6 +3,7 @@ import type { Url } from "foldkit/url";
 
 import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
+import { initNavigationDrawer } from "./navigation-drawer.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
 import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
@@ -28,12 +29,12 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
-  isNavigationOpen: false,
-  isPreferenceSaveFailed: false,
   maybeDeadLetters: Option.none(),
+  maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  navigationDrawer: initNavigationDrawer(),
   nextPageId: 1,
   preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
@@ -48,12 +49,12 @@ export const adaAtHome = Model.SignedIn({
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
-  isNavigationOpen: false,
-  isPreferenceSaveFailed: false,
   maybeDeadLetters: Option.none(),
+  maybePreferenceProblem: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
+  navigationDrawer: initNavigationDrawer(),
   nextPageId: 1,
   preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
@@ -66,6 +67,7 @@ export const adaEnteringHome = Model.SignedIn({
 
 /** The sign-in page after a redirect from the home page. */
 export const signInRedirectedFromHome = Model.SignedOut({
+  maybePreferenceProblem: Option.none(),
   maybeReturnRoute: Option.some(AppRoute.Home()),
   nextPageId: 1,
   nextSessionId: 1,
@@ -76,6 +78,7 @@ export const signInRedirectedFromHome = Model.SignedOut({
 
 /** The sign-in page, opened directly. */
 export const signInOpenedDirectly = Model.SignedOut({
+  maybePreferenceProblem: Option.none(),
   maybeReturnRoute: Option.none(),
   nextPageId: 1,
   nextSessionId: 1,

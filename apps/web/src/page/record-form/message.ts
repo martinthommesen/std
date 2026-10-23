@@ -77,6 +77,7 @@ export const Message = defineMessageUnion({
   ClickedSave: {},
   ClickedShowRefusal: {},
   CompletedFocusField: {},
+  CompletedKeepFocusClearOfActionBar: {},
   CompletedNavigateAway: {},
   CompletedReadToday: { today: CalendarDate },
   FailedAuthentication: {},

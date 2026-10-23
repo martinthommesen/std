@@ -43,7 +43,8 @@ import {
   wireFieldOf,
 } from "../../domain/wire.ts";
 import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
-import { recordRouter, tableListRouter } from "../../route.ts";
+import { PLAIN_LIST, recordRouter, tableListRouter } from "../../route.ts";
+import type { ListQuery } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
 import { Metadata, TargetMetadata } from "../table-list/model.ts";
 import type { MetaError, RecordPage } from "../table-list/model.ts";
@@ -62,7 +63,6 @@ import {
   NavigateAway,
   ReadToday,
   SearchTargets,
-  USER_NAME_FIELD,
   USER_TABLE,
   UpdateRecord,
 } from "./command.ts";
@@ -185,6 +185,12 @@ export interface InitConfig {
   readonly mode: FormMode;
   /** The latest revision the app has seen, sent with the first request. */
   readonly maybeAppRevision: Option.Option<SchemaRevision>;
+  /**
+   * The list the form was opened from, from the route; none when it was
+   * opened from no list (a link, the home page), which is the table's
+   * plain list.
+   */
+  readonly listQuery?: ListQuery;
 }
 
 /**
@@ -219,6 +225,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     },
     id: config.id,
     isShowingProblems: false,
+    listQuery: config.listQuery ?? PLAIN_LIST,
     maybeAppRevision: config.maybeAppRevision,
     maybeEditsFrom: Option.none(),
     maybeRecordRevision: Option.none(),
@@ -1020,22 +1027,15 @@ export const historyRecordsOf = (
  * @param table - The table.
  * @returns The API name, or none (the Command then reads the metadata).
  */
-const displayFieldApiNameOf = (
+const knownDisplayFieldOf = (
   model: Model,
   table: string
-): Option.Option<string> =>
-  table === USER_TABLE
-    ? Option.some(USER_NAME_FIELD)
-    : pipe(
-        Record.get(model.targets, table),
-        Option.flatMap(AsyncData.getData),
-        Option.flatMap((target) =>
-          Option.fromNullishOr(
-            target.fields.find((field) => field.name === target.displayField)
-          )
-        ),
-        Option.map((field) => field.apiName)
-      );
+): Option.Option<MetaField> =>
+  pipe(
+    Record.get(model.targets, table),
+    Option.flatMap(AsyncData.getData),
+    Option.flatMap(displayFieldOf)
+  );
 
 const receiveHistory = (
   model: Model,
@@ -1073,7 +1073,7 @@ const receiveHistory = (
       commands: unknown.map(({ ids, table }) =>
         LoadHistoryLabels({
           ids,
-          maybeDisplayField: displayFieldApiNameOf(model, table),
+          maybeDisplayField: knownDisplayFieldOf(model, table),
           revision: meta.revision,
           table,
         })
@@ -2647,7 +2647,11 @@ const receiveSave = (
   const navigation = wasCreating
     ? [
         NavigateAway({
-          url: recordRouter({ id: saved.id, table: model.table }),
+          url: recordRouter({
+            ...model.listQuery,
+            id: saved.id,
+            table: model.table,
+          }),
         }),
       ]
     : [];
@@ -2949,13 +2953,14 @@ const failDelete = (model: Model, error: WriteError): UpdateReturn => {
     : { model: refused };
 };
 
-const listUrlOf = (table: string): string =>
-  tableListRouter({
-    filter: Option.none(),
-    limit: Option.none(),
-    sort: Option.none(),
-    table,
-  });
+/**
+ * The address of the list the form was opened from.
+ *
+ * @param model - The page.
+ * @returns The list's address.
+ */
+export const listUrlOf = (model: Model): string =>
+  tableListRouter({ ...model.listQuery, table: model.table });
 
 // RETRY
 
@@ -3046,6 +3051,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedFocusField: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    CompletedKeepFocusClearOfActionBar: () => ({ model }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedNavigateAway: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedReadToday: ({ today }) => ({
@@ -3117,7 +3124,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     SucceededDeleteRecord: ({ maybeRevision }) =>
       sawRevision(
         {
-          commands: [NavigateAway({ url: listUrlOf(model.table) })],
+          commands: [NavigateAway({ url: listUrlOf(model) })],
           model: modifyFields(model, { deletion: () => Deletion.Idle() }),
         },
         maybeRevision

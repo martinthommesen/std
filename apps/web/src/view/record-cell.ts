@@ -15,6 +15,7 @@ import type { MetaField, MetaTable } from "../domain/metadata.ts";
  */
 import type { RecordJson } from "../domain/record.ts";
 import { recordRouter } from "../route.ts";
+import type { ListQuery } from "../route.ts";
 
 const RESTRICTED_TEXT = "Restricted";
 
@@ -64,12 +65,13 @@ const linkText = (cell: Cell, record: RecordJson): string =>
 const recordLink = <Message>(
   table: MetaTable,
   record: RecordJson,
+  listQuery: ListQuery,
   text: string,
   h: HtmlBuilder<Message>
 ): Html =>
   h.a(
     [
-      h.Href(recordRouter({ id: record.id, table: table.name })),
+      h.Href(recordRouter({ ...listQuery, id: record.id, table: table.name })),
       h.Class("link row-link"),
     ],
     [text]
@@ -80,6 +82,8 @@ const recordLink = <Message>(
  *
  * @param table - The table the record is listed from.
  * @param record - The record.
+ * @param listQuery - The list it is listed in, which its form goes back
+ *   to: a list page's address, or the plain list.
  * @param field - The column's field.
  * @param isFirst - Whether it is the first column, which links to the
  *   record's form (with the record's ID when there is no value to show).
@@ -89,6 +93,7 @@ const recordLink = <Message>(
 export const recordCellView = <Message>(
   table: MetaTable,
   record: RecordJson,
+  listQuery: ListQuery,
   field: MetaField,
   isFirst: boolean,
   h: HtmlBuilder<Message>
@@ -96,7 +101,7 @@ export const recordCellView = <Message>(
   const cell = cellOf(record, field);
 
   const content = isFirst
-    ? recordLink(table, record, linkText(cell, record), h)
+    ? recordLink(table, record, listQuery, linkText(cell, record), h)
     : cellContent(cell, field.type.kind === "choice", h);
 
   return h.keyed("td")(
@@ -114,16 +119,19 @@ export const recordCellView = <Message>(
  *
  * @param table - The table the record is listed from.
  * @param record - The record.
+ * @param listQuery - The list it is listed in, which its form goes back
+ *   to.
  * @param h - The builder.
  * @returns The cell.
  */
 export const recordIdCellView = <Message>(
   table: MetaTable,
   record: RecordJson,
+  listQuery: ListQuery,
   h: HtmlBuilder<Message>
 ): Html =>
   h.keyed("td")(
     ID_FIELD,
     [h.DataAttribute("cell", CELL_STATE.Shown)],
-    [recordLink(table, record, record.id, h)]
+    [recordLink(table, record, listQuery, record.id, h)]
   );

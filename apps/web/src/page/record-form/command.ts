@@ -9,9 +9,8 @@ import { isTmfError } from "@std/api/client";
  */
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
-import { isJsonString } from "@std/values/json-value";
 import { Effect, Option, Predicate, Result, Schema } from "effect";
-import { Command, Dom } from "foldkit";
+import { Command, Dom, Mount } from "foldkit";
 import { today } from "foldkit/calendar";
 import { replaceUrl } from "foldkit/navigation";
 
@@ -47,6 +46,7 @@ import type { RecordPage } from "../table-list/model.ts";
 import { Message, ReadPurpose, UnreadSavedRecord } from "./message.ts";
 import { WriteError } from "./model.ts";
 import type { HistoryError, RecordError, RelatedError } from "./model.ts";
+import { displayFieldOf } from "./picker-search.ts";
 
 /** The zone of the Date Pickers' "today": never the device's (5.7). */
 const CALENDAR_ZONE = "UTC";
@@ -1002,58 +1002,111 @@ export const LoadHistory = Command.define("LoadHistory", {
 /** The user table, whose display names the history shows. */
 export const USER_TABLE = "core.user";
 
-/** The user table's display field, by its API name. */
-export const USER_NAME_FIELD = "name";
-
 /**
  * The most records one list request may ask for (the API's `limit` is 1
- * to 1000; `@std/api/records`, the `list` endpoint's description).
+ * to 1000; `@std/api/records`, the `list` endpoint's description), which
+ * is also the most elements an `in` list may hold
+ * (`IN_LIST_MAX_ELEMENTS`, `@std/conditions/check`).
  */
 const LIST_LIMIT_MAX = 1000;
 
-const chunksOf = (
-  ids: readonly string[],
-  size: number
-): readonly (readonly string[])[] =>
-  Array.from({ length: Math.ceil(ids.length / size) }, (_, index) =>
-    ids.slice(index * size, (index + 1) * size)
-  );
+/**
+ * The most bytes the percent-encoded `condition` of one history-label
+ * list may take in the request's address. `std serve` answers 431 when a
+ * request line and its headers pass Node's `http.maxHeaderSize`: 16 384
+ * bytes on Node 26.12 (`node -p "require('node:http').maxHeaderSize"`,
+ * 2026-10-23; `std serve` does not change it). Against it, an `id in`
+ * list of 300 UUIDs (a 13 857-byte request target) was answered and one
+ * of 400 (18 457 bytes) refused (Sol's review of a4068ab1, 46 bytes per
+ * UUID). Half the limit leaves the other half for the path, the other
+ * parameters and the browser's headers, its cookie among them; the
+ * browser test "history names come from several lists" lists past it.
+ */
+const LABEL_CONDITION_BUDGET = 8192;
 
 /**
- * The API name of a table's display field, from its metadata.
+ * The condition that lists these records.
+ *
+ * @param ids - Their IDs.
+ * @returns `id in ("…", "…")`.
+ */
+const idsConditionOf = (ids: readonly string[]): string =>
+  `id in (${ids.map((id) => JSON.stringify(id)).join(", ")})`;
+
+/**
+ * The bytes a text takes in a URL, percent-encoded: `encodeURIComponent`'s
+ * length, which a query string's encoding never exceeds (it writes a space
+ * as one `+` where this counts three).
+ *
+ * @param text - The text.
+ * @returns Its encoded length.
+ */
+const encodedLength = (text: string): number => encodeURIComponent(text).length;
+
+/**
+ * Splits the IDs of a history's records in one table into lists whose
+ * condition stays within {@link LABEL_CONDITION_BUDGET} encoded bytes and
+ * {@link LIST_LIMIT_MAX} IDs, in order. Each ID adds its quoted text and a
+ * separator, so the size is summed rather than encoded again per ID.
+ *
+ * @param ids - The IDs.
+ * @returns The lists, none for no IDs.
+ */
+const labelBatchesOf = (
+  ids: readonly string[]
+): readonly (readonly string[])[] => {
+  const emptySize = encodedLength(idsConditionOf([]));
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let size = emptySize;
+
+  for (const id of ids) {
+    const cost = encodedLength(`${JSON.stringify(id)}, `);
+
+    const isFull =
+      batch.length === LIST_LIMIT_MAX || size + cost > LABEL_CONDITION_BUDGET;
+
+    if (batch.length > 0 && isFull) {
+      batches.push(batch);
+      batch = [];
+      size = emptySize;
+    }
+
+    batch.push(id);
+    size += cost;
+  }
+
+  return batch.length === 0 ? batches : [...batches, batch];
+};
+
+/**
+ * A table's display field, from its metadata.
  *
  * @param table - The table's name.
  * @param revision - The form's revision.
- * @returns The API name, or none when the table has no display field.
+ * @returns The field, or none when the table has no display field.
  */
-const displayFieldOf = (table: string, revision: Revision) =>
+const displayFieldFromMetadata = (table: string, revision: Revision) =>
   fetchTableMetadata(collectionOf(table), Option.some(revision)).pipe(
-    Effect.map((loaded) =>
-      Option.flatMap(Option.fromNullishOr(loaded.table.displayField), (name) =>
-        Option.map(
-          Option.fromNullishOr(
-            loaded.table.fields.find((field) => field.name === name)
-          ),
-          (field) => field.apiName
-        )
-      )
-    )
+    Effect.map((loaded) => displayFieldOf(loaded.table))
   );
 
 /**
  * Reads the display values of the records a history names in one table:
- * the users who made the changes (`core.user`, by `name`) and the targets
- * of the references whose values changed, as far as the caller may read
- * them. One list request per table (`condition` `id in (...)`, at most
- * {@link LIST_LIMIT_MAX} IDs each), never one per record; the display
- * field's API name comes with the request when the form knows it, and is
- * read from the table's metadata otherwise. Records the caller cannot see
- * are left out, and the panel shows their IDs.
+ * the users who made the changes (`core.user`) and the targets of the
+ * references whose values changed, as far as the caller may read them.
+ * One list request (`condition` `id in (...)`) per batch of IDs that fits
+ * the request's address ({@link labelBatchesOf}), never one per record.
+ * The display field comes with the request when the form has the table's
+ * metadata, and is read from the table's metadata otherwise; its values
+ * are shown as the pickers show them (a choice by its label, a number as
+ * its digits). Records the caller cannot see are left out, and the panel
+ * shows their IDs.
  */
 export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
   args: {
     ids: Schema.Array(Schema.String),
-    maybeDisplayField: Schema.Option(Schema.String),
+    maybeDisplayField: Schema.Option(MetaFieldSchema),
     revision: SchemaRevision,
     table: Schema.String,
   },
@@ -1063,7 +1116,7 @@ export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
 
       const maybeField = Option.isSome(maybeDisplayField)
         ? maybeDisplayField
-        : yield* displayFieldOf(table, revision);
+        : yield* displayFieldFromMetadata(table, revision);
 
       if (Option.isNone(maybeField)) {
         return Message.SucceededLoadHistoryLabels({ labels: {}, table });
@@ -1072,28 +1125,29 @@ export const LoadHistoryLabels = Command.define("LoadHistoryLabels", {
       const field = maybeField.value;
 
       const pages = yield* Effect.all(
-        chunksOf(ids, LIST_LIMIT_MAX).map((chunk) =>
+        labelBatchesOf(ids).map((batch) =>
           client.records
             .list({
               params: { table: collectionOf(table) },
               query: {
-                condition: `id in (${chunk.map((id) => JSON.stringify(id)).join(", ")})`,
-                fields: field,
-                limit: String(chunk.length),
+                condition: idsConditionOf(batch),
+                fields: field.apiName,
+                limit: String(batch.length),
               },
             })
             .pipe(atRevision(Option.some(revision)))
         )
       );
 
+      const selected = [wireFieldOf(field)];
+
       return Message.SucceededLoadHistoryLabels({
         labels: Object.fromEntries(
           pages.flat().flatMap((resource) => {
-            const label = resource[field];
+            const record = recordOfResource(resource, selected);
+            const label = displayOf(record, field);
 
-            return label !== undefined && isJsonString(label)
-              ? [[resource.id, label] as const]
-              : [];
+            return label === record.id ? [] : [[record.id, label] as const];
           })
         ),
         table,
@@ -1118,6 +1172,99 @@ export const ReadToday = Command.define("ReadToday", {
     .pipe(Effect.map((date) => Message.CompletedReadToday({ today: date }))),
   messages: [Message.CompletedReadToday],
 });
+
+/**
+ * The custom property on the document's root element that holds the
+ * floating action bar's height, which the stylesheet adds to the page's
+ * bottom scroll padding.
+ */
+export const ACTION_BAR_BLOCK_SIZE = "--action-bar-block-size";
+
+/**
+ * Whether an element lies outside the part of the window the scroll
+ * padding leaves clear: under the sticky header or the floating action
+ * bar, wholly or in part.
+ *
+ * @param target - The focused element.
+ * @returns True when it should be scrolled into the clear part.
+ */
+const isUnderStickyChrome = (target: Element): boolean => {
+  const padding = getComputedStyle(document.documentElement);
+  const box = target.getBoundingClientRect();
+  // NOTE: a computed padding carries its unit ("110px"), which only
+  // parseFloat reads (Number() makes it NaN); "auto" is none.
+  // oxlint-disable-next-line unicorn/prefer-number-coercion -- the value ends in "px"
+  const clearTop = Number.parseFloat(padding.scrollPaddingTop) || 0;
+
+  const clearBottom =
+    window.innerHeight -
+    // oxlint-disable-next-line unicorn/prefer-number-coercion -- the value ends in "px"
+    (Number.parseFloat(padding.scrollPaddingBottom) || 0);
+
+  return box.top < clearTop || box.bottom > clearBottom;
+};
+
+/**
+ * Keeps what gets focus in the form clear of the floating action bar and
+ * the sticky header, however far the bar's messages make it wrap (WCAG
+ * 2.2, 2.4.11), while the bar is on the page:
+ *
+ * - {@link ACTION_BAR_BLOCK_SIZE} follows the bar's height (its border
+ *   box), so the page's bottom scroll padding is the bar's real height;
+ * - a focused control that is in the window but under the bar or the
+ *   header is scrolled into the clear part. Browsers scroll only to a
+ *   control outside the window (Chromium leaves one alone that is in it,
+ *   behind the bar, measured at 800 x 600 after a version conflict), so
+ *   the padding alone does not keep it clear.
+ *
+ * Both go when the bar does.
+ */
+export const KeepFocusClearOfActionBar = Mount.define(
+  "KeepFocusClearOfActionBar",
+  {
+    execute: ({ element }) =>
+      Effect.gen(function* keepFocusClearOfActionBar() {
+        const root = document.documentElement;
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const observer = new ResizeObserver(() => {
+              root.style.setProperty(
+                ACTION_BAR_BLOCK_SIZE,
+                `${element.getBoundingClientRect().height}px`
+              );
+            });
+
+            const revealFocused = (event: FocusEvent) => {
+              const { target } = event;
+
+              if (
+                target instanceof Element &&
+                !element.contains(target) &&
+                isUnderStickyChrome(target)
+              ) {
+                target.scrollIntoView({ block: "nearest" });
+              }
+            };
+
+            observer.observe(element, { box: "border-box" });
+            document.addEventListener("focusin", revealFocused);
+
+            return { observer, revealFocused };
+          }),
+          ({ observer, revealFocused }) =>
+            Effect.sync(() => {
+              document.removeEventListener("focusin", revealFocused);
+              observer.disconnect();
+              root.style.removeProperty(ACTION_BAR_BLOCK_SIZE);
+            })
+        );
+
+        return Message.CompletedKeepFocusClearOfActionBar();
+      }),
+    messages: [Message.CompletedKeepFocusClearOfActionBar],
+  }
+);
 
 /** Moves focus to a field's input, such as the first field with a problem. */
 export const FocusField = Command.define("FocusField", {

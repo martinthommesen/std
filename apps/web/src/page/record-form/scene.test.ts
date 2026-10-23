@@ -17,6 +17,7 @@ import {
   text,
   type,
 } from "foldkit/scene";
+import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
 import { defaultSelectionOf } from "../../domain/wire.ts";
@@ -39,6 +40,7 @@ import {
   FocusField,
   LoadRecord,
   LoadRelatedRecords,
+  KeepFocusClearOfActionBar,
   UpdateRecord,
 } from "./command.ts";
 import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
@@ -99,10 +101,16 @@ const creating = after(
  */
 const fieldRow = (name: string) => selector(`[data-field="${name}"]`);
 
-/** The Combobox's Mount every form with a reference field renders. */
-const acknowledgePicker = Mount.resolve(
-  Combobox.AttachComboboxPreventBlur,
-  Combobox.Message.CompletedAttachComboboxPreventBlur()
+/**
+ * The Mounts every loaded form renders: the Combobox's of its reference
+ * field, and the action bar's, which keeps focused fields clear of it.
+ */
+const acknowledgeMounts = Mount.resolveAll(
+  [
+    Combobox.AttachComboboxPreventBlur,
+    Combobox.Message.CompletedAttachComboboxPreventBlur(),
+  ],
+  [KeepFocusClearOfActionBar, Message.CompletedKeepFocusClearOfActionBar()]
 );
 
 describe("the record form", () => {
@@ -110,7 +118,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
       expect(role("heading", { level: 1 })).toHaveText("Laptop will not boot"),
       expect(role("group", { name: "Ticket" })).toExist(),
@@ -132,7 +140,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       inside(
         fieldRow("status"),
         expect(role("option", { name: "On hold (retired)" })).toExist(),
@@ -149,7 +157,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(openTicket(restrictedTicketRecord)),
-      acknowledgePicker,
+      acknowledgeMounts,
       inside(
         fieldRow("customer_email"),
         expect(text("Restricted")).toExist(),
@@ -165,7 +173,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       inside(
         fieldRow("pin"),
         expect(text("Set. Type a new value to replace it.")).toExist(),
@@ -179,11 +187,41 @@ describe("the record form", () => {
     );
   });
 
+  it("goes back to the list it was opened from, or to the plain list", () => {
+    scene(
+      { update, view },
+      given(ready),
+      acknowledgeMounts,
+      expect(role("link", { name: "Back to the list" })).toHaveAttr(
+        "href",
+        `/tables/${TICKET}`
+      )
+    );
+
+    scene(
+      { update, view },
+      given(
+        modifyFields(ready, {
+          listQuery: () => ({
+            filter: Option.none(),
+            limit: Option.some("50"),
+            sort: Option.some("-number"),
+          }),
+        })
+      ),
+      acknowledgeMounts,
+      expect(role("link", { name: "Back to the list" })).toHaveAttr(
+        "href",
+        `/tables/${TICKET}?limit=50&sort=-number`
+      )
+    );
+  });
+
   it("saves what the user typed and says so", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       type(label("Short description (required)"), "Black screen"),
       click(role("button", { name: "Save" })),
       Command.expectExact(
@@ -239,7 +277,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       type(label("Short description (required)"), "Black screen"),
       expect(selector(".action-status")).toContainText("Unsaved changes"),
       // The form holds the handler; a key pressed in any field reaches it.
@@ -323,7 +361,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(refused),
-      acknowledgePicker,
+      acknowledgeMounts,
       inside(
         role("alert"),
         expect(
@@ -353,7 +391,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       type(label("Short description (required)"), "Black screen"),
       click(role("button", { name: "Save" })),
       Command.resolve(
@@ -378,7 +416,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       type(label("Short description (required)"), ""),
       type(label("Points"), "three"),
       click(role("button", { name: "Save" })),
@@ -396,7 +434,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       type(label("Short description (required)"), "Mine"),
       click(role("button", { name: "Save" })),
       Command.resolve(
@@ -441,7 +479,7 @@ describe("the record form", () => {
     scene(
       { update, view },
       given(creating),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(role("heading", { level: 1 })).toHaveText("New Ticket"),
       inside(
         fieldRow("number"),
@@ -513,7 +551,7 @@ describe("the history panel", () => {
     scene(
       { update, view },
       given(withHistory),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(role("button", { name: "History" })).toHaveAttr(
         "aria-expanded",
         "true"
@@ -559,7 +597,7 @@ describe("the history panel", () => {
     scene(
       { update, view },
       given(reloading),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(text("Updated · version 2")).toExist(),
       expect(selector(".history .disclosure-panel")).toHaveAttr(
         "aria-busy",
@@ -579,7 +617,7 @@ describe("the history panel", () => {
           })
         )
       ),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(selector(".history .disclosure-panel")).toHaveAttr(
         "aria-busy",
         "false"
@@ -591,7 +629,7 @@ describe("the history panel", () => {
     scene(
       { update, view },
       given(ready),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(role("button", { name: "History" })).toHaveAttr(
         "aria-expanded",
         "false"
@@ -664,7 +702,7 @@ describe("a stale form", () => {
     scene(
       { update, view },
       given(reloaded),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(text(/Loading the new definition/u)).toExist(),
       expect(role("alert")).not.toExist(),
       expect(label("Short description (required)")).toHaveValue("Mine"),
@@ -698,7 +736,7 @@ describe("a stale form", () => {
     scene(
       { update, view },
       given(outdated),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(role("alert")).toHaveText(
         /Nothing was saved: the table's definition changed/u
       ),
@@ -738,7 +776,7 @@ describe("a stale form", () => {
     scene(
       { update, view },
       given(notReread),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(
         text(/The record could not be read again under the new definition/u)
       ).toExist(),
@@ -825,7 +863,7 @@ describe("a related list's cells", () => {
     scene(
       { update, view },
       given(shown),
-      acknowledgePicker,
+      acknowledgeMounts,
       inside(
         selector(".related-list"),
         expect(selector('[data-cell="value"]')).toExist(),
@@ -894,7 +932,7 @@ describe("a related list without columns", () => {
     scene(
       { update, view },
       given(shown),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(role("columnheader", { name: "ID" })).toExist(),
       expect(role("link", { name: TASK_ID })).toHaveAttr(
         "href",
@@ -936,7 +974,7 @@ describe("a related list loading another page", () => {
     scene(
       { update, view },
       given(onEmptyPage),
-      acknowledgePicker,
+      acknowledgeMounts,
       expect(selector(".related-list .disclosure-panel")).toHaveAttr(
         "aria-busy",
         "false"

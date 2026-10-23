@@ -1,4 +1,4 @@
-import { Menu } from "@foldkit/ui";
+import { Dialog, Menu } from "@foldkit/ui";
 import { Match, Option, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import { modifyFields } from "foldkit/struct";
@@ -6,8 +6,6 @@ import { toString as urlToString } from "foldkit/url";
 
 import {
   FocusMain,
-  FocusNavigation,
-  FocusNavigationToggle,
   LoadCurrentUser,
   LoadExternal,
   LoadTables,
@@ -28,6 +26,7 @@ import type {
   SignedOutModel,
 } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
+import { initNavigationDrawer } from "./navigation-drawer.ts";
 import { OutMessage as DeadLettersOutMessage } from "./page/dead-letters/message.ts";
 import type { Message as DeadLettersMessage } from "./page/dead-letters/message.ts";
 import type { Model as DeadLettersModel } from "./page/dead-letters/model.ts";
@@ -64,8 +63,11 @@ import {
   signedInRouteToUrl,
   urlToAppRoute,
 } from "./route.ts";
-import type { SignedInRoute, SignedOutRoute } from "./route.ts";
-import type { ShellPreferences } from "./shell-preferences.ts";
+import type { ListQuery, SignedInRoute, SignedOutRoute } from "./route.ts";
+import type {
+  PreferenceProblem,
+  ShellPreferences,
+} from "./shell-preferences.ts";
 import type { StdApi } from "./std-client.ts";
 import { UserMenu, initUserMenu } from "./user-menu.ts";
 import type { UserMenuItem } from "./user-menu.ts";
@@ -137,9 +139,10 @@ const FIRST_SESSION_ID = 1;
 
 /**
  * What one state hands the next: the numbers the next session goes on
- * from, and the shell's preferences.
+ * from, and the shell's preferences with any problem storing them.
  */
 interface Carried {
+  readonly maybePreferenceProblem: Option.Option<PreferenceProblem>;
   readonly nextPageId: number;
   readonly nextSessionId: number;
   readonly preferences: ShellPreferences;
@@ -148,13 +151,15 @@ interface Carried {
 /**
  * What the first state after start-up carries.
  *
- * @param preferences - The shell's preferences read at start-up.
+ * @param checking - The start-up state: the shell's preferences read at
+ *   start-up, and any problem reading them.
  * @returns The first numbers, and the preferences.
  */
-const firstCarried = (preferences: ShellPreferences): Carried => ({
+const firstCarried = (checking: CheckingSessionModel): Carried => ({
+  maybePreferenceProblem: checking.maybePreferenceProblem,
   nextPageId: FIRST_PAGE_ID,
   nextSessionId: FIRST_SESSION_ID,
-  preferences,
+  preferences: checking.preferences,
 });
 
 // NOTE: page and session numbers go on across sign-out and sign-in (both
@@ -167,6 +172,7 @@ const initSignedOut =
     maybeReturnRoute: Option.Option<SignedInRoute>
   ): Model =>
     Model.SignedOut({
+      maybePreferenceProblem: carried.maybePreferenceProblem,
       maybeReturnRoute,
       nextPageId: carried.nextPageId,
       nextSessionId: carried.nextSessionId,
@@ -183,12 +189,12 @@ const initSignedIn =
   ) =>
   (route: SignedInRoute): Model =>
     Model.SignedIn({
-      isNavigationOpen: false,
-      isPreferenceSaveFailed: false,
       maybeDeadLetters: Option.none(),
+      maybePreferenceProblem: carried.maybePreferenceProblem,
       maybeRecordForm: Option.none(),
       maybeRevision,
       maybeTableList: Option.none(),
+      navigationDrawer: initNavigationDrawer(),
       nextPageId: carried.nextPageId,
       preferences: carried.preferences,
       route,
@@ -207,6 +213,7 @@ const initSignedIn =
  * @returns What the signed-out state carries.
  */
 const carriedAfter = (signedInModel: SignedInModel): Carried => ({
+  maybePreferenceProblem: signedInModel.maybePreferenceProblem,
   nextPageId: signedInModel.nextPageId,
   nextSessionId: signedInModel.sessionId + 1,
   preferences: signedInModel.preferences,
@@ -221,6 +228,56 @@ const carriedAfter = (signedInModel: SignedInModel): Carried => ({
 const focusingMain = (result: UpdateReturn): UpdateReturn => ({
   commands: [...(result.commands ?? []), FocusMain()],
   model: result.model,
+});
+
+// THE NAVIGATION DRAWER
+
+const ignoreDrawerOutMessage = Dialog.OutMessage.match<Step>({
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  Closed: () => (model) => ({ model }),
+  // oxlint-disable-next-line sonarjs/function-name -- an OutMessage.match case is keyed by its OutMessage's tag
+  Opened: () => (model) => ({ model }),
+});
+
+const readNavigationDrawer = (model: Model): Option.Option<Dialog.Model> =>
+  Model.guards.SignedIn(model)
+    ? Option.some(model.navigationDrawer)
+    : Option.none();
+
+const writeNavigationDrawer = (
+  model: Model,
+  nextDrawer: Dialog.Model
+): Model =>
+  Model.guards.SignedIn(model)
+    ? modifyFields(model, { navigationDrawer: () => nextDrawer })
+    : model;
+
+const toGotNavigationDrawerMessage = (message: Dialog.Message): Message =>
+  Message.GotNavigationDrawerMessage({ message });
+
+const foldNavigationDrawer = Update.foldChild({
+  foldOutMessage: ignoreDrawerOutMessage,
+  read: readNavigationDrawer,
+  toParentMessage: toGotNavigationDrawerMessage,
+  update: (drawer: Dialog.Model, message: Dialog.Message) =>
+    Dialog.update(drawer, message),
+  write: writeNavigationDrawer,
+});
+
+const openNavigationDrawer = Update.foldChildStep({
+  foldOutMessage: ignoreDrawerOutMessage,
+  read: readNavigationDrawer,
+  toParentMessage: toGotNavigationDrawerMessage,
+  update: Dialog.open,
+  write: writeNavigationDrawer,
+});
+
+const closeNavigationDrawer = Update.foldChildStep({
+  foldOutMessage: ignoreDrawerOutMessage,
+  read: readNavigationDrawer,
+  toParentMessage: toGotNavigationDrawerMessage,
+  update: Dialog.close,
+  write: writeNavigationDrawer,
 });
 
 // THE LIST PAGE
@@ -563,15 +620,24 @@ const foldRecordForm = (pageId: number) =>
 interface FormSpec {
   readonly table: string;
   readonly mode: FormMode;
+  readonly listQuery: ListQuery;
 }
 
 const formSpecOf = (route: SignedInRoute): Option.Option<FormSpec> =>
   Match.value(route).pipe(
-    Match.tag("Record", ({ id, table }) =>
-      Option.some({ mode: FormMode.Edit({ recordId: id }), table })
+    Match.tag("Record", ({ filter, id, limit, sort, table }) =>
+      Option.some({
+        listQuery: { filter, limit, sort },
+        mode: FormMode.Edit({ recordId: id }),
+        table,
+      })
     ),
-    Match.tag("NewRecord", ({ table }) =>
-      Option.some({ mode: FormMode.Create(), table })
+    Match.tag("NewRecord", ({ filter, limit, sort, table }) =>
+      Option.some({
+        listQuery: { filter, limit, sort },
+        mode: FormMode.Create(),
+        table,
+      })
     ),
     Match.orElse(() => Option.none<FormSpec>())
   );
@@ -606,6 +672,7 @@ const syncRecordForm: Step = (model) => {
         : Update.foldChildInit(
             recordFormInit({
               id: model.nextPageId,
+              listQuery: spec.listQuery,
               maybeAppRevision: model.maybeRevision,
               mode: spec.mode,
               table: spec.table,
@@ -679,10 +746,7 @@ const landOnRoute = (model: Model, route: AppRoute): UpdateReturn =>
     withUpdateReturn,
     Match.tag("SignedIn", (signedInModel) =>
       landSignedIn(route, (nextRoute) =>
-        modifyFields(signedInModel, {
-          isNavigationOpen: () => false,
-          route: () => nextRoute,
-        })
+        modifyFields(signedInModel, { route: () => nextRoute })
       )
     ),
     Match.tag("SignedOut", (signedOutModel) =>
@@ -717,6 +781,8 @@ const pageKeyOf = (route: AppRoute): Option.Option<string> =>
 const changeRoute = (model: Model, route: AppRoute): UpdateReturn => {
   const landed = Update.combine(model, [
     (stepModel) => landOnRoute(stepModel, route),
+    // NOTE: following a link in the navigation drawer closes it.
+    closeNavigationDrawer,
     syncTableList,
     syncRecordForm,
     syncDeadLetters,
@@ -748,7 +814,7 @@ const settleSession = (
   maybeUser: Option.Option<CurrentUser>,
   maybeRevision: Option.Option<SchemaRevision>
 ): UpdateReturn => {
-  const carried = firstCarried(checking.preferences);
+  const carried = firstCarried(checking);
 
   return Option.match(maybeUser, {
     onNone: () => landSignedOut(checking.route, initSignedOut(carried)),
@@ -944,11 +1010,14 @@ export const update = (model: Model, message: Message) =>
         Match.exhaustive
       ),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ClickedOpenNavigation: () => openNavigationDrawer(model),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedRetrySessionCheck: () =>
       Model.guards.SessionUnavailable(model)
         ? {
             commands: [LoadCurrentUser()],
             model: Model.CheckingSession({
+              maybePreferenceProblem: model.maybePreferenceProblem,
               preferences: model.preferences,
               route: model.route,
             }),
@@ -956,10 +1025,6 @@ export const update = (model: Model, message: Message) =>
         : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedFocusMain: () => ({ model }),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    CompletedFocusNavigation: () => ({ model }),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    CompletedFocusNavigationToggle: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedLoadExternal: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -970,7 +1035,7 @@ export const update = (model: Model, message: Message) =>
     CompletedSaveShellPreferences: () =>
       inSignedIn(model, (signedInModel) => ({
         model: modifyFields(signedInModel, {
-          isPreferenceSaveFailed: () => false,
+          maybePreferenceProblem: () => Option.none(),
         }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -980,6 +1045,7 @@ export const update = (model: Model, message: Message) =>
     FailedLoadCurrentUser: () =>
       inCheckingSession(model, (checking) => ({
         model: Model.SessionUnavailable({
+          maybePreferenceProblem: checking.maybePreferenceProblem,
           preferences: checking.preferences,
           route: checking.route,
         }),
@@ -993,7 +1059,8 @@ export const update = (model: Model, message: Message) =>
     FailedSaveShellPreferences: () =>
       inSignedIn(model, (signedInModel) => ({
         model: modifyFields(signedInModel, {
-          isPreferenceSaveFailed: () => true,
+          maybePreferenceProblem: () =>
+            Option.some<PreferenceProblem>("Unsaved"),
         }),
       })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -1006,6 +1073,9 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotDeadLettersMessage: ({ message: deadLettersMessage, pageId }) =>
       foldDeadLetters(pageId)(model, deadLettersMessage),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    GotNavigationDrawerMessage: ({ message: drawerMessage }) =>
+      foldNavigationDrawer(model, drawerMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotRecordFormMessage: ({ message: recordFormMessage, pageId }) =>
       foldRecordForm(pageId)(model, recordFormMessage),
@@ -1053,20 +1123,6 @@ export const update = (model: Model, message: Message) =>
           model: modifyFields(signedInModel, {
             preferences: () => preferences,
           }),
-        };
-      }),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    ToggledNavigation: ({ isOpen }) =>
-      inSignedIn(model, (signedInModel) => {
-        const toggled = modifyFields(signedInModel, {
-          isNavigationOpen: () => isOpen,
-        });
-
-        // NOTE: focus goes into the drawer when it opens, and back to its
-        // button when it closes (by the button, Escape or the scrim).
-        return {
-          commands: [isOpen ? FocusNavigation() : FocusNavigationToggle()],
-          model: toggled,
         };
       }),
   });

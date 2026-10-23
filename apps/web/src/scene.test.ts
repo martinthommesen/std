@@ -1,11 +1,10 @@
-import { Menu } from "@foldkit/ui";
+import { Dialog, Menu } from "@foldkit/ui";
 import { Option } from "effect";
 import {
   Command,
   click,
   expect,
   given,
-  keydown,
   Mount,
   label,
   role,
@@ -20,8 +19,6 @@ import { describe, it } from "vitest";
 
 import {
   FocusMain,
-  FocusNavigation,
-  FocusNavigationToggle,
   LoadCurrentUser,
   LoadTables,
   ReplaceUrl,
@@ -84,6 +81,7 @@ describe("app", () => {
       { update, view },
       given(
         Model.CheckingSession({
+          maybePreferenceProblem: Option.none(),
           preferences: DEFAULT_SHELL_PREFERENCES,
           route: AppRoute.Home(),
         })
@@ -119,34 +117,68 @@ describe("app", () => {
     );
   });
 
-  it("the navigation drawer opens from its button and closes with Escape", () => {
-    const drawer = role("complementary", { name: "Navigation" });
+  it("the navigation drawer is a modal dialog holding the navigation, opened from the menu button and closed from its own", () => {
+    const openNavigation = role("button", { name: "Open navigation" });
+    const drawer = role("dialog", { name: "Navigation" });
+    const sidebar = role("complementary", { name: "Navigation" });
 
     scene(
       { update, view },
       given(adaAtHome),
-      expect(role("button", { name: "Navigation" })).toHaveAttr(
-        "aria-expanded",
-        "false"
+      expect(openNavigation).toHaveAttr("aria-haspopup", "dialog"),
+      expect(drawer).not.toExist(),
+      expect(within(sidebar, homeNavLink)).toExist(),
+      click(openNavigation),
+      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
+      Mount.resolve(
+        Dialog.AcquireResources,
+        Dialog.Message.SucceededAcquireResources()
       ),
-      click(role("button", { name: "Navigation" })),
-      Command.resolve(FocusNavigation, Message.CompletedFocusNavigation()),
-      expect(role("button", { name: "Navigation" })).toHaveAttr(
-        "aria-expanded",
-        "true"
-      ),
-      expect(drawer).toHaveAttr("data-open", ""),
-      keydown(drawer, "Escape"),
+      expect(drawer).toHaveAttr("aria-modal", "true"),
+      expect(within(drawer, homeNavLink)).toExist(),
+      expect(within(drawer, administrationButton)).toExist(),
+      // The navigation is in one place at a time, so its IDs stay unique.
+      expect(within(sidebar, homeNavLink)).not.toExist(),
+      click(role("button", { name: "Close navigation" })),
       Command.resolve(
-        FocusNavigationToggle,
-        Message.CompletedFocusNavigationToggle()
+        Dialog.CloseDialog,
+        Dialog.Message.CompletedCloseDialog()
       ),
-      expect(role("button", { name: "Navigation" })).toHaveAttr(
-        "aria-expanded",
-        "false"
-      )
+      Mount.expectEnded(Dialog.AcquireResources),
+      expect(drawer).not.toExist(),
+      expect(within(sidebar, homeNavLink)).toExist()
     );
   });
+
+  it.each([
+    [
+      "Invalid",
+      "This browser had stored something unreadable instead of whether Administration is open, so it starts closed; opening or closing it stores it again.",
+    ],
+    [
+      "Unreadable",
+      "This browser did not let STD read whether Administration was open, so it starts closed.",
+    ],
+    [
+      "Unsaved",
+      "This browser did not store whether Administration is open; it starts closed next time.",
+    ],
+  ] as const)(
+    "the navigation says when the browser could not keep its preferences (%s)",
+    (problem, said) => {
+      scene(
+        { update, view },
+        given(
+          modifyFields(adaAtHome, {
+            maybePreferenceProblem: () => Option.some(problem),
+          })
+        ),
+        expect(
+          within(role("complementary", { name: "Navigation" }), role("status"))
+        ).toHaveText(said)
+      );
+    }
+  );
 
   it("the Administration group holds the dead letters page for whoever may read subscriptions", () => {
     const withSubscriptions = modifyFields(adaAtHome, {
@@ -239,6 +271,7 @@ describe("app", () => {
       { update, view },
       given(
         Model.SessionUnavailable({
+          maybePreferenceProblem: Option.none(),
           preferences: DEFAULT_SHELL_PREFERENCES,
           route: AppRoute.Home(),
         })

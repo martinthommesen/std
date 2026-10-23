@@ -1,4 +1,4 @@
-import { Menu } from "@foldkit/ui";
+import { Dialog, Menu } from "@foldkit/ui";
 import { CurrentSession } from "@std/api/session";
 import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
@@ -11,7 +11,7 @@ import { Model as RecordFormModel } from "./page/record-form/model.ts";
 import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { Model as TableListModel } from "./page/table-list/model.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
-import { ShellPreferences } from "./shell-preferences.ts";
+import { PreferenceProblem, ShellPreferences } from "./shell-preferences.ts";
 
 /** Where a sign-out request stands. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -71,22 +71,31 @@ export type Tables = typeof Tables.schema.Type;
  *   the next session's pages and requests get numbers no earlier one had.
  * - Every state carries the shell's `preferences`, read from the browser at
  *   start-up, so a session that starts later still opens the navigation as
- *   the user left it. Signed in, the shell also holds whether the
- *   navigation drawer is open on a narrow screen (`isNavigationOpen`), the
- *   user menu (Foldkit UI Menu) and whether the browser refused to store
- *   the preferences (`isPreferenceSaveFailed`).
+ *   the user left it, and why they are not as the user left them when the
+ *   browser could not read or store them (`maybePreferenceProblem`), which
+ *   the navigation says. Signed in, the shell also holds the navigation
+ *   drawer of narrow screens (Foldkit UI Dialog) and the user menu
+ *   (Foldkit UI Menu).
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
-  CheckingSession: { preferences: ShellPreferences, route: AppRoute },
-  SessionUnavailable: { preferences: ShellPreferences, route: AppRoute },
+  CheckingSession: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    preferences: ShellPreferences,
+    route: AppRoute,
+  },
+  SessionUnavailable: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    preferences: ShellPreferences,
+    route: AppRoute,
+  },
   SignedIn: {
-    isNavigationOpen: Schema.Boolean,
-    isPreferenceSaveFailed: Schema.Boolean,
     maybeDeadLetters: Schema.Option(DeadLettersModel),
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),
+    navigationDrawer: Dialog.Model,
     nextPageId: Schema.Int,
     preferences: ShellPreferences,
     route: SignedInRoute,
@@ -97,6 +106,7 @@ export const Model = defineTaggedUnion({
     userMenu: Menu.Model,
   },
   SignedOut: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeReturnRoute: Schema.Option(SignedInRoute),
     nextPageId: Schema.Int,
     nextSessionId: Schema.Int,

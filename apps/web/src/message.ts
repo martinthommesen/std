@@ -1,4 +1,4 @@
-import { Menu } from "@foldkit/ui";
+import { Dialog, Menu } from "@foldkit/ui";
 import { CurrentSession } from "@std/api/session";
 import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
@@ -17,10 +17,9 @@ import { Message as TableListMessage } from "./page/table-list/message.ts";
 export const Message = defineMessageUnion({
   ChangedUrl: { url: Url },
   ClickedLink: { request: UrlRequest },
+  ClickedOpenNavigation: {},
   ClickedRetrySessionCheck: {},
   CompletedFocusMain: {},
-  CompletedFocusNavigation: {},
-  CompletedFocusNavigationToggle: {},
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},
@@ -31,6 +30,7 @@ export const Message = defineMessageUnion({
   FailedSaveShellPreferences: {},
   FailedSignOut: { sessionId: Schema.Int },
   GotDeadLettersMessage: { message: DeadLettersMessage, pageId: Schema.Int },
+  GotNavigationDrawerMessage: { message: Dialog.Message },
   GotRecordFormMessage: { message: RecordFormMessage, pageId: Schema.Int },
   GotSignInMessage: { message: SignInMessage },
   GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
@@ -46,7 +46,6 @@ export const Message = defineMessageUnion({
   },
   SucceededSignOut: { sessionId: Schema.Int },
   ToggledAdministration: { isOpen: Schema.Boolean },
-  ToggledNavigation: { isOpen: Schema.Boolean },
 });
 
 /** What happens in the app. */

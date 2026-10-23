@@ -8,7 +8,7 @@ import {
   navigationGroupsOf,
 } from "../domain/navigation.ts";
 import type { CurrentUser, Tables } from "../model.ts";
-import { newRecordRouter, tableListRouter } from "../route.ts";
+import { PLAIN_LIST, newRecordRouter, tableListRouter } from "../route.ts";
 import { plus } from "../view/icons.ts";
 
 const HEADING_ID = "home-heading";
@@ -57,7 +57,7 @@ const tableRowView = <Message>(
       table.creatable
         ? h.a(
             [
-              h.Href(newRecordRouter({ table: table.name })),
+              h.Href(newRecordRouter({ ...PLAIN_LIST, table: table.name })),
               h.Class("button button-quiet"),
             ],
             [plus(), `New ${table.label}`]

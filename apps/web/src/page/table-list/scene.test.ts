@@ -14,6 +14,7 @@ import {
   type,
   within,
 } from "foldkit/scene";
+import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
 import type { RecordJson } from "../../domain/record.ts";
@@ -133,6 +134,32 @@ describe("list page", () => {
       expect(role("button", { name: "Previous page" })).toBeDisabled(),
       expect(role("button", { name: "Next page" })).toBeEnabled(),
       expect(text("Page 1")).toExist()
+    );
+  });
+
+  it("links each record, and New, with the list's own address, so the form goes back to this list", () => {
+    scene(
+      { update, view },
+      given(
+        modifyFields(loaded, {
+          address: () => ({
+            filter: Option.none(),
+            limit: Option.some("50"),
+            sort: Option.some("-number"),
+          }),
+        })
+      ),
+      inside(
+        rowWith("AST0000001"),
+        expect(role("link", { name: "L" })).toHaveAttr(
+          "href",
+          "/tables/acme.asset/records/019a0000-0000-7000-8000-00000000000a?limit=50&sort=-number"
+        )
+      ),
+      expect(role("link", { name: /^New/u })).toHaveAttr(
+        "href",
+        "/tables/acme.asset/new?limit=50&sort=-number"
+      )
     );
   });
 

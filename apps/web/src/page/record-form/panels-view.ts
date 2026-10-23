@@ -29,6 +29,7 @@ import {
 import type { MetaTable } from "../../domain/metadata.ts";
 import type { HistoryEntrySchema, HistoryField } from "../../domain/record.ts";
 import { valueText } from "../../domain/value-text.ts";
+import { PLAIN_LIST } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
 import { chevronRight } from "../../view/icons.ts";
 import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";
@@ -88,9 +89,16 @@ const relatedTableView = (
             record.id,
             [h.DataAttribute("record-id", record.id)],
             isIdOnly
-              ? [recordIdCellView(table, record, h)]
+              ? [recordIdCellView(table, record, PLAIN_LIST, h)]
               : columns.map((field, index) =>
-                  recordCellView(table, record, field, index === 0, h)
+                  recordCellView(
+                    table,
+                    record,
+                    PLAIN_LIST,
+                    field,
+                    index === 0,
+                    h
+                  )
                 )
           )
         )

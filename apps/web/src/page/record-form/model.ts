@@ -30,6 +30,7 @@ import { MetaFieldSchema, MetaTableSchema } from "../../domain/metadata.ts";
 import { HistoryEntrySchema, RecordJsonSchema } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import { DroppedEdit } from "../../domain/stale-edits.ts";
+import { ListQuery } from "../../route.ts";
 import {
   MetaError,
   Metadata,
@@ -339,6 +340,8 @@ export type History = typeof History.Type;
  *   the page the new record's form (decision 0020).
  * - `maybeAppRevision`: the latest revision the app had seen when the page
  *   opened, sent with the first metadata request.
+ * - `listQuery`: the list the form was opened from (the route's), which
+ *   "Back to the list", a delete and a create's new address keep.
  * - `metadata`: the endpoint's metadata and the revision it was built at,
  *   which every request of the form sends (Contracts 6.2).
  * - `record`: the record as read (edit only).
@@ -386,6 +389,7 @@ export const Model = Schema.Struct({
   history: History,
   id: Schema.Int,
   isShowingProblems: Schema.Boolean,
+  listQuery: ListQuery,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeEditsFrom: Schema.Option(RecordJsonSchema),
   maybeRecordRevision: Schema.Option(SchemaRevision),

@@ -70,6 +70,15 @@ export const menuLines = (className = ""): Html =>
   icon(["M2.5 4h11", "M2.5 8h11", "M2.5 12h11"], className);
 
 /**
+ * A cross, for the button that closes the navigation drawer.
+ *
+ * @param className - An extra class.
+ * @returns The icon.
+ */
+export const close = (className = ""): Html =>
+  icon(["M4 4l8 8", "M12 4l-8 8"], className);
+
+/**
  * A funnel, for the filter.
  *
  * @param className - An extra class.

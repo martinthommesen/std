@@ -16,11 +16,12 @@ import type { FormSection } from "../../domain/form-fields.ts";
 import type { MetaField } from "../../domain/metadata.ts";
 import type { RecordJson } from "../../domain/record.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
-import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
+import { PLAIN_LIST, homeRouter, recordRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
 import { check } from "../../view/icons.ts";
 import { view as notFoundView } from "../not-found.ts";
 import type { TableMeta } from "../table-list/model.ts";
+import { KeepFocusClearOfActionBar } from "./command.ts";
 import { fieldView, shownProblemsOf } from "./fields-view.ts";
 import {
   classMetaOf,
@@ -34,7 +35,12 @@ import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { historyView, relatedListsView } from "./panels-view.ts";
-import { FORM_MESSAGES_ID, isRecordOutdated, isReloading } from "./update.ts";
+import {
+  FORM_MESSAGES_ID,
+  isRecordOutdated,
+  isReloading,
+  listUrlOf,
+} from "./update.ts";
 
 const HEADING_ID = "record-form-heading";
 
@@ -45,14 +51,6 @@ const FAILURE_CLASS = "list-failure";
 const TRY_AGAIN = "Try again";
 
 const RELOAD_DEFINITION = "Reload the definition";
-
-const listUrlOf = (table: string): string =>
-  tableListRouter({
-    filter: Option.none(),
-    limit: Option.none(),
-    sort: Option.none(),
-    table,
-  });
 
 // HEADING
 
@@ -106,7 +104,13 @@ const recordFactsView = (
               ` · a ${concrete.label} record · `,
               h.a(
                 [
-                  h.Href(recordRouter({ id: record.id, table: concrete.name })),
+                  h.Href(
+                    recordRouter({
+                      ...PLAIN_LIST,
+                      id: record.id,
+                      table: concrete.name,
+                    })
+                  ),
                   h.Class("link"),
                 ],
                 [`Open as ${concrete.label}`]
@@ -661,14 +665,14 @@ const saveText = (model: Model): string => {
  */
 const actionBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.div(
-    [h.Class("action-bar")],
+    [h.Class("action-bar"), h.OnMount(KeepFocusClearOfActionBar())],
     [
       actionStatusView(model, h),
       h.div(
         [h.Class("form-actions")],
         [
           h.a(
-            [h.Href(listUrlOf(model.table)), h.Class("button button-ghost")],
+            [h.Href(listUrlOf(model)), h.Class("button button-ghost")],
             ["Back to the list"]
           ),
           isCreating(model)
@@ -921,12 +925,7 @@ const goneView = (model: Model, h: HtmlBuilder<Message>): Html =>
       ),
       h.p(
         [],
-        [
-          h.a(
-            [h.Href(listUrlOf(model.table)), h.Class("link")],
-            ["Back to the list"]
-          ),
-        ]
+        [h.a([h.Href(listUrlOf(model)), h.Class("link")], ["Back to the list"])]
       ),
     ]
   );
@@ -969,7 +968,7 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
     onFailure: (error) =>
       error === "UnknownTable"
         ? notFoundView(
-            listUrlOf(model.table),
+            listUrlOf(model),
             { href: homeRouter(), text: "Go to the home page" },
             h
           )

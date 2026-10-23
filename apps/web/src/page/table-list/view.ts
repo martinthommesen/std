@@ -231,9 +231,16 @@ const recordsTable = (
                 record.id,
                 [h.DataAttribute("record-id", record.id)],
                 columns.length === 0
-                  ? [recordIdCellView(meta.table, record, h)]
+                  ? [recordIdCellView(meta.table, record, model.address, h)]
                   : columns.map((field, index) =>
-                      recordCellView(meta.table, record, field, index === 0, h)
+                      recordCellView(
+                        meta.table,
+                        record,
+                        model.address,
+                        field,
+                        index === 0,
+                        h
+                      )
                     )
               )
             )
@@ -571,7 +578,12 @@ const tableView = (
           meta.table.creatable
             ? h.a(
                 [
-                  h.Href(newRecordRouter({ table: meta.table.name })),
+                  h.Href(
+                    newRecordRouter({
+                      ...model.address,
+                      table: meta.table.name,
+                    })
+                  ),
                   h.Class("button button-primary"),
                 ],
                 [plus(), `New ${meta.table.label}`]
