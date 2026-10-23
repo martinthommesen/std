@@ -225,30 +225,26 @@ const printFilter = (
   });
 
 /**
- * The page without its applied filter, when that filter names a field the
- * metadata no longer has: the filter leaves the list, the builder and the
+ * Removes an applied filter that names a field the metadata no longer
+ * has: the filter leaves the list, the builder and the
  * address, with a notice, and the list starts again from its first page.
  *
  * @param model - The page.
- * @returns The page without the filter, or none when the filter prints.
+ * @param scope - The tables the page holds.
+ * @returns The page without the filter.
  */
-const withoutLostFilter = (model: Model): Option.Option<Model> =>
-  pipe(
-    scopeOf(model),
-    Option.filter((scope) => Result.isFailure(printFilter(model, scope))),
-    Option.map((scope) => {
-      const query = withCondition(model.query, Option.none());
+const dropFilter = (model: Model, scope: ConditionScope): Model => {
+  const query = withCondition(model.query, Option.none());
 
-      return modifyFields(model, {
-        address: () => addressOf(query),
-        builder: clearBuilder(scope),
-        cursors: () => [Option.none()],
-        maybeNotice: () => Option.some(DROPPED_NOTICE),
-        maybePendingCursors: () => Option.none(),
-        query: () => query,
-      });
-    })
-  );
+  return modifyFields(model, {
+    address: () => addressOf(query),
+    builder: clearBuilder(scope),
+    cursors: () => [Option.none()],
+    maybeNotice: () => Option.some(DROPPED_NOTICE),
+    maybePendingCursors: () => Option.none(),
+    query: () => query,
+  });
+};
 
 /**
  * The cursor stack a request asks for: the page "Next" or "Previous" asked
@@ -263,41 +259,41 @@ const requestedCursors = (model: Model): readonly Option.Option<string>[] =>
 /**
  * Sends the list request for the applied state at the metadata's revision.
  *
- * @param model - The page, its filter known to print.
- * @returns The page, loading, and the request.
+ * @param maybeFilter - The applied filter, already printed with the metadata.
+ * @returns The request step.
  */
-const sendRequest: Step = (model) =>
-  Option.match(Option.all([tableMetaOf(model), scopeOf(model)]), {
-    onNone: () => ({ model }),
-    onSome: ([meta, scope]) => {
-      const generation = model.generation + 1;
+const sendRequest =
+  (maybeFilter: Option.Option<string>): Step =>
+  (model) =>
+    Option.match(tableMetaOf(model), {
+      onNone: () => ({ model }),
+      onSome: (meta) => {
+        const generation = model.generation + 1;
 
-      return {
-        commands: [
-          LoadRecords({
-            columns: listColumns(meta.table).map(wireFieldOf),
-            cursor: Option.flatten(
-              Option.fromNullishOr(requestedCursors(model).at(-1))
-            ),
-            fields: listFieldsParameter(meta.table),
-            filter: Result.getOrElse(printFilter(model, scope), () =>
-              Option.none<string>()
-            ),
-            generation,
-            limit: model.query.pageSize,
-            revision: meta.revision,
-            sort: sortParameter(model.query.sort, meta.table),
-            table: meta.table.name,
+        return {
+          commands: [
+            LoadRecords({
+              columns: listColumns(meta.table).map(wireFieldOf),
+              cursor: Option.flatten(
+                Option.fromNullishOr(requestedCursors(model).at(-1))
+              ),
+              fields: listFieldsParameter(meta.table),
+              filter: maybeFilter,
+              generation,
+              limit: model.query.pageSize,
+              revision: meta.revision,
+              sort: sortParameter(model.query.sort, meta.table),
+              table: meta.table.name,
+            }),
+          ],
+          model: modifyFields(model, {
+            generation: () => generation,
+            isReloadDue: () => false,
+            records: reloading,
           }),
-        ],
-        model: modifyFields(model, {
-          generation: () => generation,
-          isReloadDue: () => false,
-          records: reloading,
-        }),
-      };
-    },
-  });
+        };
+      },
+    });
 
 /**
  * Writes the page's address into the browser's, without a history entry.
@@ -324,10 +320,37 @@ const replaceAddress: Step = (model) => ({
  * @returns The page, loading, and the request.
  */
 const requestRecords: Step = (model) =>
-  Option.match(withoutLostFilter(model), {
-    onNone: () => sendRequest(model),
-    onSome: (dropped) => Update.combine(dropped, [sendRequest, replaceAddress]),
+  Option.match(scopeOf(model), {
+    onNone: () => ({ model }),
+    onSome: (scope) =>
+      Result.match(printFilter(model, scope), {
+        onFailure: () =>
+          Update.combine(dropFilter(model, scope), [
+            sendRequest(Option.none()),
+            replaceAddress,
+          ]),
+        onSuccess: (maybeFilter) => sendRequest(maybeFilter)(model),
+      }),
   });
+
+/**
+ * Restarts the applied list state from the first page and writes its address.
+ *
+ * @param maybeFilter - The applied filter, already printed with the metadata.
+ * @returns The step.
+ */
+const restartQuery =
+  (maybeFilter: Option.Option<string>): Step =>
+  (model) =>
+    Update.combine(
+      modifyFields(model, {
+        address: () => addressOf(model.query),
+        cursors: () => [Option.none()],
+        filterLoad: () => FilterLoad.Settled(),
+        maybePendingCursors: () => Option.none(),
+      }),
+      [sendRequest(maybeFilter), replaceAddress]
+    );
 
 /**
  * Applies a new list state from the first page, writes it into the
@@ -340,18 +363,17 @@ const requestRecords: Step = (model) =>
 const showQuery =
   (query: ListQuery): Step =>
   (model) => {
-    const shown = modifyFields(model, {
-      address: () => addressOf(query),
-      cursors: () => [Option.none()],
-      filterLoad: () => FilterLoad.Settled(),
-      maybePendingCursors: () => Option.none(),
-      query: () => query,
-    });
+    const shown = modifyFields(model, { query: () => query });
 
-    return Update.combine(
-      Option.getOrElse(withoutLostFilter(shown), () => shown),
-      [sendRequest, replaceAddress]
-    );
+    return Option.match(scopeOf(shown), {
+      onNone: () => restartQuery(Option.none())(shown),
+      onSome: (scope) =>
+        Result.match(printFilter(shown, scope), {
+          onFailure: () =>
+            restartQuery(Option.none())(dropFilter(shown, scope)),
+          onSuccess: (maybeFilter) => restartQuery(maybeFilter)(shown),
+        }),
+    });
   };
 
 const LOAD_NOTICE =
@@ -644,19 +666,25 @@ const retryAfterRefresh: Step = (model) => {
     return { model };
   }
 
-  const isChanged =
-    model.isReloadDue || Option.isSome(withoutLostFilter(model));
-
-  if (isChanged) {
-    return showQuery(model.query)(model);
-  }
-
   const isRefused = Option.match(AsyncData.getError(model.records), {
     onNone: () => false,
     onSome: (error) => error === "SchemaChanged",
   });
 
-  return isRefused ? requestRecords(model) : { model };
+  return Option.match(scopeOf(model), {
+    onNone: () => ({ model }),
+    onSome: (scope) =>
+      Result.match(printFilter(model, scope), {
+        onFailure: () => restartQuery(Option.none())(dropFilter(model, scope)),
+        onSuccess: (maybeFilter) => {
+          if (model.isReloadDue) {
+            return restartQuery(maybeFilter)(model);
+          }
+
+          return isRefused ? sendRequest(maybeFilter)(model) : { model };
+        },
+      }),
+  });
 };
 
 /**
@@ -872,15 +900,15 @@ const pageTo = (model: Model, cursors: readonly Option.Option<string>[]) =>
     modifyFields(model, { maybePendingCursors: () => Option.some(cursors) })
   );
 
-const nextPage = (model: Model): UpdateReturn =>
-  Option.match(
+const nextPage = (model: Model): UpdateReturn => {
+  if (isPaging(model)) {
+    return { model };
+  }
+
+  return Option.match(
     Option.flatMap(
-      Option.liftPredicate(model, (page) => !isPaging(page)),
-      (page) =>
-        Option.flatMap(
-          AsyncData.getData(page.records),
-          (data) => data.maybeNextCursor
-        )
+      AsyncData.getData(model.records),
+      (data) => data.maybeNextCursor
     ),
     {
       onNone: () => ({ model }),
@@ -888,6 +916,7 @@ const nextPage = (model: Model): UpdateReturn =>
         pageTo(model, [...model.cursors, Option.some(cursor)]),
     }
   );
+};
 
 const previousPage = (model: Model): UpdateReturn =>
   model.cursors.length > 1 && !isPaging(model)

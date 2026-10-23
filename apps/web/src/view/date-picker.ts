@@ -7,6 +7,7 @@
 import { DatePicker } from "@foldkit/ui";
 import type { Calendar } from "@foldkit/ui";
 import type { AnchorConfig } from "@foldkit/ui/popover";
+import { formatCivilDate } from "@std/values/calendar";
 import { Match, Option } from "effect";
 import type { CalendarDate } from "foldkit/calendar";
 import type { ChildAttribute, Html, HtmlBuilder } from "foldkit/html";
@@ -26,13 +27,6 @@ const CELL_CLASS = "calendar-cell";
 const DAY_CLASS = "calendar-day";
 
 const PICKS_CLASS = "calendar-picks";
-
-const isoText = (date: CalendarDate): string =>
-  [
-    String(date.year).padStart(4, "0"),
-    String(date.month).padStart(2, "0"),
-    String(date.day).padStart(2, "0"),
-  ].join("-");
 
 const navButton = <Message>(
   attributes: readonly ChildAttribute[],
@@ -221,7 +215,7 @@ export const datePickerField = <Message>(
               [
                 Option.match(maybeDate, {
                   onNone: () => "Pick a date",
-                  onSome: isoText,
+                  onSome: formatCivilDate,
                 }),
               ]
             ),

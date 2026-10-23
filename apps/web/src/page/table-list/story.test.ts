@@ -112,6 +112,36 @@ const lastPage: RecordPage = {
   records: [record("019a0000-0000-7000-8000-00000000000c", { name: "S" })],
 };
 
+/**
+ * The page after a series of Messages.
+ *
+ * @param start - The page to start from.
+ * @param messages - The Messages, in order.
+ * @returns The page.
+ */
+const after = (start: Model, messages: readonly Message[]): Model => {
+  let page = start;
+
+  for (const next of messages) {
+    page = update(page, next).model;
+  }
+
+  return page;
+};
+
+/** The page after its first page of records arrived. */
+const showing = after(opened.model, [
+  Message.SucceededLoadTableMetadata({
+    revision: REVISION_3,
+    table: assetTable,
+  }),
+  Message.SucceededLoadRecords({
+    generation: 1,
+    maybeRevision: Option.some(REVISION_3),
+    page: firstPage,
+  }),
+]);
+
 const listUrl = "/tables/acme.asset";
 
 /** Metadata at revision 3 has arrived; the first page is asked for. */
@@ -767,31 +797,16 @@ describe("list Commands against the server", () => {
 });
 
 describe("review fixes", () => {
-  /** The page after its first page of records arrived. */
-  const showing = (() => {
-    const withMetadata = update(
-      opened.model,
-      Message.SucceededLoadTableMetadata({
-        revision: REVISION_3,
-        table: assetTable,
-      })
-    );
-
-    return update(
-      withMetadata.model,
-      Message.SucceededLoadRecords({
-        generation: 1,
-        maybeRevision: Option.some(REVISION_3),
-        page: firstPage,
-      })
-    ).model;
-  })();
-
   const ownerIsBob: Expr = {
     left: { path: [ASSET_FIELDS.owner, USER_FIELDS.name] },
     op: "eq",
     right: { value: "Bob" },
   };
+
+  const ownerFiltered = after(
+    applyStoredFilter(showing, Option.some(ownerIsBob)).model,
+    [Message.SucceededLoadTargetTable({ request: 1, table: userTable })]
+  );
 
   it("ignores metadata of another table", () => {
     story(
@@ -926,18 +941,9 @@ describe("review fixes", () => {
   });
 
   it("after SchemaChanged, asks again only once the target tables are reloaded too", () => {
-    const filtered = (() => {
-      const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
-
-      return update(
-        stored.model,
-        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
-      ).model;
-    })();
-
     story(
       update,
-      given(filtered),
+      given(ownerFiltered),
       message(
         Message.FailedLoadRecords({
           error: "SchemaChanged",
@@ -986,18 +992,9 @@ describe("review fixes", () => {
   });
 
   it("keeps the applied filter when a target table's reload does not answer", () => {
-    const filtered = (() => {
-      const stored = applyStoredFilter(showing, Option.some(ownerIsBob));
-
-      return update(
-        stored.model,
-        Message.SucceededLoadTargetTable({ request: 1, table: userTable })
-      ).model;
-    })();
-
     story(
       update,
-      given(filtered),
+      given(ownerFiltered),
       message(
         Message.FailedLoadRecords({
           error: "SchemaChanged",
@@ -1195,24 +1192,17 @@ describe("saved filters", () => {
     ],
   };
 
-  const showingSaved = (() => {
-    const withMetadata = update(
-      opened.model,
-      Message.SucceededLoadTableMetadata({
-        revision: REVISION_3,
-        table: withSavedFilters,
-      })
-    );
-
-    return update(
-      withMetadata.model,
-      Message.SucceededLoadRecords({
-        generation: 1,
-        maybeRevision: Option.some(REVISION_3),
-        page: firstPage,
-      })
-    ).model;
-  })();
+  const showingSaved = after(opened.model, [
+    Message.SucceededLoadTableMetadata({
+      revision: REVISION_3,
+      table: withSavedFilters,
+    }),
+    Message.SucceededLoadRecords({
+      generation: 1,
+      maybeRevision: Option.some(REVISION_3),
+      page: firstPage,
+    }),
+  ]);
 
   it("applies a saved filter: its AST goes into the builder and the list asks with the metadata's filter text", () => {
     story(
@@ -1292,23 +1282,6 @@ describe("saved filters", () => {
 });
 
 /**
- * The page after a series of Messages.
- *
- * @param start - The page to start from.
- * @param messages - The Messages, in order.
- * @returns The page.
- */
-const after = (start: Model, messages: readonly Message[]): Model => {
-  let page = start;
-
-  for (const next of messages) {
-    page = update(page, next).model;
-  }
-
-  return page;
-};
-
-/**
  * A list request that found the server unavailable.
  *
  * @param generation - The request's generation.
@@ -1322,18 +1295,6 @@ const unavailable = (generation: number) =>
   });
 
 describe("positions, sorts and addresses after failures and refreshes", () => {
-  const showing = after(opened.model, [
-    Message.SucceededLoadTableMetadata({
-      revision: REVISION_3,
-      table: assetTable,
-    }),
-    Message.SucceededLoadRecords({
-      generation: 1,
-      maybeRevision: Option.some(REVISION_3),
-      page: firstPage,
-    }),
-  ]);
-
   const secondPage: RecordPage = {
     maybeCount: Option.some(4),
     maybeNextCursor: Option.some("c3"),
