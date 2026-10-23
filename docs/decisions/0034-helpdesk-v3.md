@@ -1,0 +1,66 @@
+# 0034. Helpdesk v3: incident and problem management
+
+Status: implemented for 3I-A, 2026-10-23. Contracts 4.9–4.10, 8.2–8.5, 8.8, 11.2 and 14. Builds on decisions 0019, 0021 (34–55), 0022, 0024, 0029 and 0030.
+
+`examples/helpdesk/v3` is the shipped app set, installed with `pnpm std upgrade --set examples/helpdesk/v3`. Version 3 keeps the set ID, ticket/incident class IDs, existing field IDs, choices, layout IDs, access-rule IDs and saved-filter IDs. The set contains no executable business callback. Its behavior is `recordRules:` configuration, so administrators can deactivate shipped rules and add local rules. It contains no licensed TM Forum or ITIL text. ITIL® is a registered trademark of the PeopleCert group.
+
+## Shared model and rules
+
+Ticket holds the common description, status, numeric priority, impact, urgency, hold reason, resolution fields, caller and assignee references, channel and the writable TMF-facing fields. Incident adds the major flag, parent incident and problem references. Problem adds known-error, workaround and root-cause fields. `ticket_note.ticket` and `ticket_party.ticket` are aggregate owner references: required, immutable after create, and every part change advances the owner's version. `ticket_specification` is the minimal specification model for 3I-B.
+
+Nine incident derive rules implement the matrix in Contracts 14.2. Each checks its cell and `changed(impact) or changed(urgency)`, and sets priority with `keepSupplied`. Explicit priority therefore wins even when equal to the previous value. The label-clear derives run later and keep explicitly supplied labels. There are six incident and eight problem transition guards, one per source state, on updates. Each refuses exactly the disallowed transitions. Creates can name any valid state, as TMF621 permits; unchanged states are accepted. No API guard requires resolution details, a workaround, a root cause, priority 1 for a major incident, or a browser-only lock.
+
+Hold-reason derives supply `awaiting_vendor` on entry without a reason and clear it on exit. Resolution entry supplies the timestamp unless named in the write; reopening clears it and closing retains it. Ticket status changes set the status-change date. After-rules resolve a major incident's open children with its resolution and return precisely a resolved problem's incidents waiting for that problem to work. They execute as the acting user: a denied nested save rolls back the entire operation, as Contracts 4.10 requires.
+
+## Judgments and implementation choices
+
+- **J1 [judgment]: preserving impact's identity.** A field cannot move to another declaring class. The old incident impact keeps its ID and storage as read-only `legacy_impact`; the common ticket impact is new. This preserves old history and local layout references while making severity available on tickets and problems. No old field is purged. The new incident layout uses the common impact, while an overridden layout remains untouched.
+- **J2 [judgment]: numeric choice keys.** New keys `1`–`5` are added to the existing priority field; old keys remain hidden, with their IDs, labels and overrides. Choice keys cannot be renamed. New impact and urgency use string keys `1`–`3`, defaults `3`, required. The migration explicitly preserves old priority, rather than recomputing it from a newly defaulted urgency.
+- **J3 [judgment]: assignee.** The v2 `assignee` returns to the contract's `assigned_to` name by its existing field ID. History, filters and local layouts retain the same references. The generic API exposes `assignedTo`.
+- **J4 [judgment]: description during upgrade.** The existing nullable description column cannot be tightened before the post-set data migration. Keep its storage nullable and add paired derives: missing title gets description's first line; missing description gets the title. The title remains schema-required, so a successful ordinary save always has both. The migration fills old descriptions. The TMF621 adapter must still require its mandatory create input; a required description in SQL/metadata awaits a later contract-phase constraint migration. No invented historical description replaces an existing one.
+- **J5 [judgment]: bounded text copying.** Add the optional `firstLine` code-point limit to a copy value, within the existing `set` action kind. Only text/longText source and target fields allow it; IDs and other kinds are refused. Positive limits are schema-validated. The existing identifier grammar requires underscore rule names, so contract descriptions such as `clear-priority-label` are shipped as `clear_priority_label`. CR, LF, U+2028 and U+2029 delimit the first line; Unicode code points, not UTF-16 units, count toward the limit. Title uses 160. Existing copies are unchanged and dependency extraction still records the source field. The five generated optional `firstLine` OpenAPI properties are the only change to the frozen v1 document; removing them reproduces its prior SHA-256 exactly. The frozen-document hash records that additive extension.
+- **J6 [judgment]: resolution choices.** `solved_permanently`, `solved_with_workaround`, `not_solved`, `duplicate`, `not_reproducible` are STD labels, not ITIL-defined codes. Channel defaults are not assumed. Severity, priority and ticket-type labels use long text rather than an arbitrary 160-character cap, since the TMF attributes are free text. The specification resource uses `specification_version`, since `version` is a reserved platform field name; 3I-B maps it to the external attribute.
+- **J7 [judgment]: access.** The major manager role gets the existing agent ticket permissions plus write access to the major flag. Agents may read that flag but receive no write grant. Use separate grants, not a deny on the agent role, so a user holding both roles can write. The existing assignment and sensitive-field restrictions remain. Ticket parts are readable and writable by agents/managers; the access-rule language cannot follow an owner reference, so no false claim is made that part writes inherit a ticket's assignment restriction. Agents can read party/user display names for references, and specifications, without gaining party writes or sensitive user fields.
+- **J8 [judgment]: current demo.** This part ships v3 as an explicit install. The default v2 browser/demo fixture and compose choice stay at v2 until 3C adapts its forms and seed expectations. No `apps/web` code changes here.
+- **J9 [judgment]: optional-app data migration.** Platform data migration 0018 is repeatable: when the optional helpdesk is absent or still v2, its remaining count is zero. A later v3 set load rechecks remaining and rearms the same ledger row if needed. Otherwise an earlier core-only or v2 upgrade could mark the platform migration applied forever before the app's first v3 upgrade. Rearming clears progress and marks running before batches; the ordinary running-state startup fence and final remaining proof still apply. Other migrations retain once-only semantics. The description records repeatability as part of the checksummed migration behavior. When the installed or requested set is helpdesk v3 or later, the upgrade plan includes this already-applied migration as `recheck`, within the plan hash. The CLI says it will inspect remaining records after the sets load, even when no work remains.
+- **J10 [judgment]: missing historic dates.** Old resolved/closed tickets use their pre-migration `updated_at` as `resolved_at`. All old tickets use it for missing `status_changed_at`. These are deterministic approximations; original history remains the evidence for exact past transitions. A supplied existing resolution timestamp or hold reason is kept.
+- **J11 [judgment]: narrow framework corrections.** Aggregate reference types must compare canonically rather than by JSON property insertion order, or an unchanged set reload is refused. The fix still rejects changing aggregate ownership. Generic API metadata now renders saved-filter text with API attribute names, after the existing caller-visibility filtering, so the shipped filters can be submitted directly to its list endpoint.
+
+## Offline upgrade and rolling separation
+
+The machine-readable partition is `examples/helpdesk/upgrade-v3.json`. New class identities, ordinary field types and choice entries are additive definitions. Required/default/read-only properties of new fields are listed separately for finalize, as are the new aggregate owner-reference fields (RU11). Changes to existing defaults, read-only settings, names, layouts, hidden choices, record rules and access rules are behavior. The partition describes a future phase-aware loader; Step 3's loader still applies one set in its existing order.
+
+RU7: apply additive schema during expand only when the old release can read the new definition shapes; activate record rules, access changes, changed defaults and hidden choices only at finalize. RU11: `recordRule`, aggregate ownership and the new copy `firstLine` setting are new features. A mixed release must not create/use them until every admitted process understands them. Step 5 must register their introduction versions and enforce admission. This work does not claim to implement those fences.
+
+The actual v2 → v3 upgrade is offline: stop servers/workers; run the set upgrade and data migration; restart only when the ledger is complete. Migration 0018 is **contract** phase because rewriting old priority keys is not compatible with old app behavior. It performs no DDL. Schema additions belong to set loading, not a destructive platform migration.
+
+## Deterministic v2 → v3 mapping
+
+| v2 | v3 |
+| --- | --- |
+| incident/ticket IDs, numbers, class, state, resolution notes, assignment and business fields | preserved |
+| priority critical/high/moderate/low | `1`/`2`/`3`/`4` |
+| incident impact high/medium/low or empty | common impact `1`/`2`/`3`/`3`; original retained as legacy impact |
+| plain ticket without impact | common impact `3` |
+| no urgency | `3` from the new required field's default |
+| on_hold without reason | awaiting_caller, reflecting the v2 waiting-on-caller state |
+| absent description | old short description |
+| absent status-change timestamp | pre-migration updated_at |
+| resolved/closed without resolution timestamp | pre-migration updated_at |
+| choice/layout overrides | kept by stable ID under Contracts 8.4; the Step 2 converged override remains converged |
+
+Batches select only old priority keys or missing description/status-change dates, in record-ID order. Every update goes through the system user's record save pipeline with history and outbox hooks, without applying newly shipped business rules to historical records. Cursor and saves commit together. `remaining` uses the same predicate and must be zero before the ledger becomes applied. An injected failure after one committed batch proves resumability and the no-duplicate rerun. A real-process kill of the shared runner remains covered by `data-migration-interrupted`.
+
+## Handoffs
+
+**3C form TODOs:** priority read-only; resolution code and notes required to resolve; hold reason required while on hold; known error requires workaround; root cause required to fix or resolve; major flag offered at priority 1 only; use form-state's proposed priority when clearing a manager's major flag, retain with notice for an agent, and surface the mismatch filter; show the default problem path through assess. Browser-lock the TMF-writable timestamp/history/type fields as appropriate. Update the default fixture, seed and compose install to v3 together with the browser tests. Do not implement these as API guards.
+
+**3I-B TODOs:** TMF621 adapter and CTK; severity/priority free-text mapping; ticketType class-preserving writes; status groups and all patchable attributes; exact RFC 7396 arrays for notes/parties inside `aggregateOperation`, prelocking multi-aggregate writes and projecting after finalization; supplied-priority provenance for every JSON Patch operation; mandatory create validation/output; specification version mapping; characteristic/event rendering; generic/TMF races and cross-surface proofs. These are not claimed tested by this part's matrix updates.
+
+## Verification
+
+`itil-incident` covers all nine cells on create and update, explicit priority including an equal-value JSON Patch replacement, test-only JSON Patch provenance, label lifecycle, all state pairs and refused-write stability, parent endpoints, dates, Unicode titles, local cell replacement, real manager versus agent permissions, major children, saved-filter use, record-service parity and note ownership/versioning.
+
+`itil-problem` covers every state pair including on_hold and TMF-permitted transitions, known-error in every state without API-only required fields, hold defaults/clearing and exactly the waiting incidents' return to work.
+
+`helpdesk-v3-upgrade` covers the original Step 2 customizations, every seeded record and original audit entry, deterministic mapping, interrupted batches, repeatability after a prior v2 install, clean doctor and a fresh-install reload. The conformance file marks only rows proved here; browser/TMF-specific and compound cross-surface rows stay pending.

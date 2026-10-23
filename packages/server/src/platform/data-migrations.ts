@@ -310,6 +310,25 @@ export const runDataMigrations = Effect.fn("Platform.runDataMigrations")(
     const outcomes: DataMigrationOutcome[] = [];
 
     for (const migration of migrations.filter(isDataMigration)) {
+      if (
+        !pending.has(migration.id) &&
+        !running.has(migration.id) &&
+        migration.repeatable === true
+      ) {
+        const left = yield* (yield* Transactions)
+          .request(migration.remaining)
+          .pipe(Effect.provide(SystemSaveServices));
+
+        if (left > 0) {
+          yield* (yield* Transactions).maintenance(sql`
+            UPDATE core.platform_migration
+            SET state = 'running', progress = NULL
+            WHERE id = ${migration.id} AND state = 'applied'
+          `);
+          running.add(migration.id);
+        }
+      }
+
       if (pending.has(migration.id) || running.has(migration.id)) {
         outcomes.push(
           yield* runOne(migration, running.has(migration.id), size).pipe(

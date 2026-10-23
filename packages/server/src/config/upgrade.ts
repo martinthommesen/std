@@ -121,8 +121,8 @@ export interface PlannedMigration {
   readonly id: number;
   readonly name: string;
   readonly kind: PlatformMigration["kind"];
-  /** `pending`, or `running`: a `data` migration an earlier run left incomplete. */
-  readonly state: "pending" | "running";
+  /** `recheck` inspects an applied optional-app migration after its sets load. */
+  readonly state: "pending" | "running" | "recheck";
 }
 
 /** A security change and the set making it. */
@@ -524,6 +524,44 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
     ...(options.sets ?? []),
   ]);
 
+  // A repeated data migration may first become applicable when this run
+  // installs its optional app. Show the check in the plan and its hash,
+  // even when the post-set remaining proof will find no work to do.
+  const setVersions = new Map(
+    [...installed.layers.sets.values()].map((set) => [set.name, set.version])
+  );
+
+  for (const source of sources) {
+    setVersions.set(source.header.name, source.header.version);
+  }
+
+  const listed = new Set(migrations.map((migration) => migration.id));
+  const rechecks: PlannedMigration[] = [];
+
+  for (const migration of options.migrations ?? PLATFORM_MIGRATIONS) {
+    if (
+      migration.kind !== "data" ||
+      migration.repeatable !== true ||
+      listed.has(migration.id)
+    ) {
+      continue;
+    }
+
+    const requiredSet = migration.recheckForSet;
+
+    if (
+      requiredSet === undefined ||
+      (setVersions.get(requiredSet.name) ?? 0) >= requiredSet.minVersion
+    ) {
+      rechecks.push({
+        id: migration.id,
+        kind: migration.kind,
+        name: migration.name,
+        state: "recheck",
+      });
+    }
+  }
+
   const { order, refusals: orderRefusals } = orderSets(
     sources,
     installed.layers.sets
@@ -544,7 +582,9 @@ const computePlan = Effect.fn("Config.computePlan")(function* computePlan(
       changeSetId: installed.state?.changeSetId ?? null,
       revision: installed.state?.revision ?? null,
     },
-    migrations,
+    migrations: [...migrations, ...rechecks].toSorted(
+      (left, right) => left.id - right.id
+    ),
     refusals: [
       ...unfinishedRefusals(resume),
       ...orderRefusals,

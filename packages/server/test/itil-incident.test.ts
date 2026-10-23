@@ -1,0 +1,503 @@
+/** The incident part of Contracts 14, through the generic TMF630 API. */
+import { assert, describe, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { TestClock } from "effect/testing";
+
+import {
+  HELPDESK,
+  HelpdeskFixture,
+} from "../../testing/src/helpdesk-fixture.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import { editDefinition } from "../src/config/config-service.ts";
+import { updateRecord } from "../src/records/save-pipeline.ts";
+import {
+  clientFor,
+  createTicket,
+  fieldId,
+  itilLayer,
+  patchResponse,
+  patchTicket,
+  recordServices,
+  reference,
+} from "./itil-support.ts";
+import { addRecordRule, change } from "./schema-support.ts";
+import { asArray, asObject, textOf } from "./v2-support.ts";
+
+const TRANSITIONS = {
+  canceled: [],
+  closed: [],
+  in_progress: ["on_hold", "resolved", "canceled"],
+  new: ["in_progress", "on_hold", "resolved", "canceled"],
+  on_hold: ["in_progress", "resolved", "canceled"],
+  resolved: ["in_progress", "closed"],
+};
+
+const readIncident = (
+  client: Effect.Success<ReturnType<typeof clientFor>>,
+  id: string
+) =>
+  client.records.get({ params: { id, table: "helpdeskIncident" }, query: {} });
+
+describe("itil-incident", () => {
+  it("checks every incident state in the transition matrix", () => {
+    assert.deepStrictEqual(Object.keys(TRANSITIONS).toSorted(), [
+      "canceled",
+      "closed",
+      "in_progress",
+      "new",
+      "on_hold",
+      "resolved",
+    ]);
+  });
+
+  it.effect(
+    "all nine shipped matrix cells derive priority through the generic API",
+    () =>
+      Effect.gen(function* scenario1() {
+        for (const impact of [1, 2, 3]) {
+          for (const urgency of [1, 2, 3]) {
+            const record = yield* createTicket("helpdeskIncident", {
+              impact: String(impact),
+              urgency: String(urgency),
+            });
+
+            assert.strictEqual(record.priority, String(impact + urgency - 1));
+
+            const changed = yield* patchTicket(record, {
+              impact: String(impact === 3 ? 1 : 3),
+            });
+
+            assert.strictEqual(
+              changed.priority,
+              String((impact === 3 ? 1 : 3) + urgency - 1)
+            );
+
+            const restored = yield* patchTicket(changed, {
+              impact: String(impact),
+              urgency: String(urgency),
+            });
+
+            assert.strictEqual(restored.priority, String(impact + urgency - 1));
+          }
+        }
+
+        const defaults = yield* createTicket();
+        assert.deepStrictEqual(
+          [defaults.impact, defaults.urgency, defaults.priority],
+          ["3", "3", "5"]
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "explicit priority wins even equal to the previous value and JSON Patch preserves supplied-field provenance",
+    () =>
+      Effect.gen(function* scenario2() {
+        let record = yield* createTicket("helpdeskIncident", {
+          impact: "1",
+          priority: "4",
+          urgency: "1",
+        });
+
+        assert.strictEqual(record.priority, "4");
+        record = yield* patchTicket(record, { impact: "2", priority: "4" });
+        assert.strictEqual(record.priority, "4");
+
+        const replaced = yield* patchResponse(
+          record,
+          [
+            { op: "replace", path: "/priority", value: "4" },
+            { op: "replace", path: "/impact", value: "3" },
+          ],
+          "helpdeskIncident",
+          "admin",
+          "application/json-patch+json"
+        );
+
+        assert.strictEqual(replaced.status, 200);
+        record = asObject(replaced.json);
+        assert.strictEqual(record.priority, "4");
+
+        const tested = yield* patchResponse(
+          record,
+          [
+            { op: "test", path: "/priority", value: "4" },
+            { op: "replace", path: "/impact", value: "1" },
+          ],
+          "helpdeskIncident",
+          "admin",
+          "application/json-patch+json"
+        );
+
+        assert.strictEqual(tested.status, 200);
+        assert.strictEqual(asObject(tested.json).priority, "1");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "every incident transition is accepted or refused with no write exactly as Contracts 14 specifies",
+    () =>
+      Effect.gen(function* scenario3() {
+        const client = yield* clientFor();
+
+        for (const [source, allowed] of Object.entries(TRANSITIONS)) {
+          for (const target of Object.keys(TRANSITIONS)) {
+            const record = yield* createTicket("helpdeskIncident", {
+              status: source,
+            });
+
+            const response = yield* patchResponse(record, { status: target });
+
+            if (
+              source === target ||
+              allowed.some((status: string) => status === target)
+            ) {
+              assert.strictEqual(
+                response.status,
+                200,
+                `${source} -> ${target}: ${response.text}`
+              );
+              assert.strictEqual(asObject(response.json).status, target);
+            } else {
+              assert.strictEqual(
+                response.status,
+                422,
+                `${source} -> ${target}: ${response.text}`
+              );
+              assert.strictEqual(
+                asObject(response.json).code,
+                "InvalidTransition"
+              );
+
+              const unchanged = yield* client.records.get({
+                params: { id: textOf(record.id), table: "helpdeskIncident" },
+                query: {},
+              });
+
+              assert.deepStrictEqual(
+                [unchanged.status, unchanged.revision],
+                [source, record.revision]
+              );
+            }
+          }
+        }
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "labels clear after derivation, supplied labels survive, and parent endpoints use incident rules",
+    () =>
+      Effect.gen(function* scenario4() {
+        let record = yield* createTicket("helpdeskIncident", {
+          impact: "1",
+          priorityLabel: "Urgent custom",
+          severityLabel: "Sev-A",
+          urgency: "1",
+        });
+
+        assert.deepStrictEqual(
+          [record.severityLabel, record.priorityLabel],
+          ["Sev-A", "Urgent custom"]
+        );
+        record = yield* patchTicket(record, { impact: "2" }, "helpdeskTicket");
+        assert.strictEqual(record.priority, "2");
+        assert.notProperty(record, "severityLabel");
+        assert.notProperty(record, "priorityLabel");
+        record = yield* patchTicket(record, {
+          impact: "3",
+          priorityLabel: "Custom",
+          severityLabel: "Special",
+        });
+        assert.deepStrictEqual(
+          [record.severityLabel, record.priorityLabel],
+          ["Special", "Custom"]
+        );
+        record = yield* patchTicket(record, { priority: "5" });
+        assert.notProperty(record, "priorityLabel");
+        assert.strictEqual(record.severityLabel, "Special");
+        record = yield* patchTicket(
+          record,
+          { status: "resolved" },
+          "helpdeskTicket"
+        );
+        assert.isString(record.resolvedAt);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "hold defaults, writable resolution fields, and bounded Unicode titles are shipped derives",
+    () =>
+      Effect.gen(function* scenario5() {
+        const long = `${"😀".repeat(161)}\nsecond line`;
+
+        let record = yield* createTicket("helpdeskIncident", {
+          description: long,
+        });
+
+        assert.strictEqual(record.shortDescription, "😀".repeat(160));
+        record = yield* patchTicket(record, {
+          status: "on_hold",
+          statusChangedAt: "2000-01-01T00:00:00.000Z",
+        });
+        assert.strictEqual(record.holdReason, "awaiting_vendor");
+        assert.isString(record.statusChangedAt);
+        assert.notStrictEqual(
+          record.statusChangedAt,
+          "2000-01-01T00:00:00.000Z"
+        );
+        record = yield* patchTicket(record, { status: "in_progress" });
+        assert.notProperty(record, "holdReason");
+        const explicitDate = "2025-01-02T03:04:05.000Z";
+        record = yield* patchTicket(record, {
+          resolvedAt: explicitDate,
+          status: "resolved",
+          statusChangeHistory: [{ status: "new" }],
+          ticketType: "incident",
+        });
+        assert.strictEqual(record.resolvedAt, explicitDate);
+        assert.notProperty(record, "resolutionCode");
+        assert.notProperty(record, "resolutionNotes");
+        assert.deepStrictEqual(record.statusChangeHistory, [{ status: "new" }]);
+        const closed = yield* patchTicket(record, { status: "closed" });
+        assert.strictEqual(closed.resolvedAt, explicitDate);
+
+        let reopened = yield* createTicket("helpdeskIncident", {
+          status: "resolved",
+        });
+
+        reopened = yield* patchTicket(reopened, { status: "in_progress" });
+        assert.notProperty(reopened, "resolvedAt");
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a local rule replaces one priority cell without changing the others",
+    () =>
+      Effect.gen(function* scenario6() {
+        const snapshot = yield* (yield* Catalog).refresh;
+
+        const shipped = snapshot
+          .recordRulesOf(HELPDESK.incident)
+          .find((rule) => rule.name === "priority_1_1");
+
+        assert.isDefined(shipped);
+
+        if (shipped === undefined) {
+          return;
+        }
+
+        const fixture = yield* HelpdeskFixture;
+        yield* editDefinition({
+          actorId: fixture.admin.id,
+          changes: { active: false },
+          id: shipped.id,
+          version: shipped.version,
+        });
+        const priority = yield* fieldId("priority");
+
+        const local = addRecordRule(HELPDESK.incident, {
+          actions: [
+            {
+              keepSupplied: true,
+              type: "set",
+              values: [{ fieldId: priority, value: { value: "2" } }],
+            },
+          ],
+          condition: shipped.condition,
+          operations: ["create", "update"],
+          order: 111,
+          ruleKind: "derive",
+        });
+
+        yield* change([local.op]);
+        assert.strictEqual(
+          (yield* createTicket("helpdeskIncident", {
+            impact: "1",
+            urgency: "1",
+          })).priority,
+          "2"
+        );
+        assert.strictEqual(
+          (yield* createTicket("helpdeskIncident", {
+            impact: "2",
+            urgency: "3",
+          })).priority,
+          "4"
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "major incident permission holds through the API while priority never clears the flag and children resolve together",
+    () =>
+      Effect.gen(function* scenario7() {
+        const fixture = yield* HelpdeskFixture;
+        const client = yield* clientFor();
+
+        const agentRecord = yield* createTicket(
+          "helpdeskIncident",
+          {},
+          "agent"
+        );
+
+        const refused = yield* patchResponse(
+          agentRecord,
+          { majorIncident: true },
+          "helpdeskIncident",
+          "agent"
+        );
+
+        assert.strictEqual(refused.status, 403);
+
+        let parent = yield* createTicket(
+          "helpdeskIncident",
+          { majorIncident: true, priority: "4" },
+          "manager"
+        );
+
+        parent = yield* patchTicket(
+          parent,
+          { impact: "1", urgency: "1" },
+          "helpdeskIncident",
+          "manager"
+        );
+        assert.strictEqual(parent.majorIncident, true);
+        parent = yield* patchTicket(
+          parent,
+          { impact: "3" },
+          "helpdeskIncident",
+          "manager"
+        );
+        assert.strictEqual(parent.majorIncident, true);
+        assert.strictEqual(parent.priority, "3");
+
+        const metadata = yield* client.tableMetadata.get({
+          params: { table: "helpdeskIncident" },
+        });
+
+        for (const name of ["open_major", "major_not_priority_one"]) {
+          const filter = asArray(metadata.savedFilters)
+            .map(asObject)
+            .find((entry) => entry.name === name);
+
+          assert.isDefined(filter);
+
+          const matches = yield* client.records.list({
+            params: { table: "helpdeskIncident" },
+            query: { condition: textOf(filter?.filter) },
+          });
+
+          assert.include(
+            matches.map((entry) => entry.id),
+            textOf(parent.id)
+          );
+        }
+
+        const child = yield* createTicket("helpdeskIncident", {
+          assignedTo: { id: fixture.agent.id },
+          parentIncident: reference(parent),
+        });
+
+        const untouched = yield* createTicket("helpdeskIncident", {
+          parentIncident: reference(parent),
+          status: "canceled",
+        });
+
+        const other = yield* createTicket();
+        parent = yield* patchTicket(parent, {
+          resolutionCode: "solved_permanently",
+          resolutionNotes: "Service restored",
+          status: "resolved",
+        });
+        const got = readIncident(client, textOf(child.id));
+        const resolvedChild = yield* got;
+        assert.deepStrictEqual(
+          [
+            resolvedChild.status,
+            resolvedChild.resolutionCode,
+            resolvedChild.resolutionNotes,
+            resolvedChild.resolvedAt,
+          ],
+          [
+            "resolved",
+            "solved_permanently",
+            "Service restored",
+            parent.resolvedAt,
+          ]
+        );
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(untouched.id))).status,
+          "canceled"
+        );
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(other.id))).status,
+          "new"
+        );
+        const snapshot = yield* (yield* Catalog).refresh;
+        const filters = snapshot.savedFiltersOf(HELPDESK.incident);
+        assert.isTrue(filters.some((filter) => filter.name === "open_major"));
+        assert.isTrue(
+          filters.some((filter) => filter.name === "major_not_priority_one")
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "record-service writes run the same matrix and resolution derives",
+    () =>
+      Effect.gen(function* scenario8() {
+        const record = yield* createTicket("helpdeskIncident", {
+          impact: "1",
+          urgency: "2",
+        });
+
+        const saved = yield* updateRecord({
+          body: { status: "resolved", urgency: "1" },
+          endpointClassId: HELPDESK.ticket,
+          expectedVersion: null,
+          id: textOf(record.id),
+        }).pipe(Effect.provide(recordServices));
+
+        assert.strictEqual(asObject(saved.record?.values).priority, "1");
+        assert.isDefined(asObject(saved.record?.values).resolved_at);
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+  it.effect(
+    "ticket notes are owned parts whose creates and deletes advance the ticket exactly once",
+    () =>
+      Effect.gen(function* scenario9() {
+        const client = yield* clientFor();
+        const ticket = yield* createTicket();
+        const other = yield* createTicket();
+
+        const note = yield* client.records.create({
+          params: { table: "helpdeskTicketNote" },
+          payload: {
+            text: "Caller supplied a reproduction",
+            ticket: reference(ticket),
+          },
+        });
+
+        const owner = yield* readIncident(client, textOf(ticket.id));
+        assert.strictEqual(owner.revision, Number(ticket.revision) + 1);
+
+        const refused = yield* patchResponse(
+          asObject(note),
+          { ticket: reference(other) },
+          "helpdeskTicketNote"
+        );
+
+        assert.strictEqual(refused.status, 422);
+        yield* client.records.delete({
+          headers: { "if-match": `"${String(note.revision)}"` },
+          params: { id: note.id, table: "helpdeskTicketNote" },
+        });
+        const after = yield* readIncident(client, textOf(ticket.id));
+        assert.strictEqual(after.revision, Number(owner.revision) + 1);
+        assert.strictEqual(
+          (yield* readIncident(client, textOf(other.id))).revision,
+          other.revision
+        );
+      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+  );
+});

@@ -255,6 +255,10 @@ const copyProblem = (
   }
 
   if (fieldId === null) {
+    if (value.copy.firstLine !== undefined) {
+      return "takes the first line of a record ID";
+    }
+
     return idCopyProblem(checking, scope, classId, target);
   }
 
@@ -269,6 +273,18 @@ const copyProblem = (
     WRITE_ONLY_KINDS.has(target.type.kind)
   ) {
     return "copies a password or secret, which rules never read";
+  }
+
+  if (value.copy.firstLine !== undefined) {
+    const textSource =
+      source.type.kind === "text" || source.type.kind === "longText";
+
+    const textTarget =
+      target.type.kind === "text" || target.type.kind === "longText";
+
+    return textSource && textTarget
+      ? undefined
+      : "takes the first line of a non-text field";
   }
 
   return sameKind(checking.snapshot, source.type, target.type)

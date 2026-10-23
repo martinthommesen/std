@@ -1,0 +1,961 @@
+{
+  "from": 2,
+  "to": 3,
+  "application": "Classification only: additive entries create structural identities/types; deferredFieldProperties and all behavior entries activate at finalize. Step 3 applies the complete set offline.",
+  "additive": [
+    {
+      "id": "f4707f15-8c27-55b6-9078-6037c8708704",
+      "category": "choices",
+      "name": "assess"
+    },
+    {
+      "id": "e3caf194-35fb-5c99-b5a9-0b6a6708e558",
+      "category": "choices",
+      "name": "root_cause_analysis"
+    },
+    {
+      "id": "0fa10483-17f1-5fdb-95c7-edfb92a90106",
+      "category": "choices",
+      "name": "fix_in_progress"
+    },
+    {
+      "id": "6565dd18-b7a7-54da-844f-e19e7cf3662e",
+      "category": "choices",
+      "name": "1"
+    },
+    {
+      "id": "03ee8c35-fa88-570b-81fc-12615baa95bd",
+      "category": "choices",
+      "name": "2"
+    },
+    {
+      "id": "1d7821c6-551c-5cb9-8f33-61ed957daed5",
+      "category": "choices",
+      "name": "3"
+    },
+    {
+      "id": "601b5d43-c315-5929-b6d6-84ccd1f6869d",
+      "category": "choices",
+      "name": "4"
+    },
+    {
+      "id": "9e0196cb-6de9-5b13-a7c2-badff37a3d9b",
+      "category": "choices",
+      "name": "5"
+    },
+    {
+      "id": "c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a",
+      "category": "fields",
+      "name": "impact"
+    },
+    {
+      "id": "03c708c7-ddb7-518c-be78-16b019596675",
+      "category": "choices",
+      "name": "1"
+    },
+    {
+      "id": "8e688085-5b72-50aa-bf61-0040fbcad027",
+      "category": "choices",
+      "name": "2"
+    },
+    {
+      "id": "f13ce470-1e70-5cc0-8cd3-e06023c22d99",
+      "category": "choices",
+      "name": "3"
+    },
+    {
+      "id": "dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4",
+      "category": "fields",
+      "name": "urgency"
+    },
+    {
+      "id": "256eb9d0-58b3-5e8f-9e6d-2d392329688b",
+      "category": "choices",
+      "name": "1"
+    },
+    {
+      "id": "3dc24e4b-0960-59ee-9677-ec1314b8f45e",
+      "category": "choices",
+      "name": "2"
+    },
+    {
+      "id": "bbe33af8-2385-57d4-ab00-26b3cdf05aec",
+      "category": "choices",
+      "name": "3"
+    },
+    {
+      "id": "2eb33b17-491c-568d-ba0e-67e1192f5bab",
+      "category": "fields",
+      "name": "hold_reason"
+    },
+    {
+      "id": "8e48ac6e-7a65-5209-a2e7-d3dca56ebb55",
+      "category": "choices",
+      "name": "awaiting_caller"
+    },
+    {
+      "id": "eb5fce3d-614e-5220-b55a-fd43639b71d9",
+      "category": "choices",
+      "name": "awaiting_change"
+    },
+    {
+      "id": "10df8654-8c9d-5377-ad8d-84d8d15c8a43",
+      "category": "choices",
+      "name": "awaiting_problem"
+    },
+    {
+      "id": "4200f5f2-8f67-5bd6-bb6b-0f5d9bde2f58",
+      "category": "choices",
+      "name": "awaiting_vendor"
+    },
+    {
+      "id": "b93e6de9-38f4-5ac9-b2f5-207586073d98",
+      "category": "fields",
+      "name": "resolution_code"
+    },
+    {
+      "id": "f6a06cd8-7b63-5301-abcf-624e1379f612",
+      "category": "choices",
+      "name": "solved_permanently"
+    },
+    {
+      "id": "ad4fe0f2-ee14-5f02-baf1-c306fe9e633f",
+      "category": "choices",
+      "name": "solved_with_workaround"
+    },
+    {
+      "id": "4037729e-8b97-589c-9b93-7e3dff462fc4",
+      "category": "choices",
+      "name": "not_solved"
+    },
+    {
+      "id": "8f327e42-c77a-56bd-b24c-def8a388fadc",
+      "category": "choices",
+      "name": "duplicate"
+    },
+    {
+      "id": "3f70f943-6bcb-529b-86a0-efad59a0ee57",
+      "category": "choices",
+      "name": "not_reproducible"
+    },
+    {
+      "id": "e387a9f3-886a-5e91-8823-34a180d8cddf",
+      "category": "fields",
+      "name": "resolved_at"
+    },
+    {
+      "id": "2e054ec0-656d-5246-9c67-8bbef55f774e",
+      "category": "fields",
+      "name": "status_changed_at"
+    },
+    {
+      "id": "c5bc8d9f-983a-5659-a570-f8a5c0e8d485",
+      "category": "fields",
+      "name": "status_reason"
+    },
+    {
+      "id": "a00ca65a-c756-55b8-a5d9-1e49ccd3ba05",
+      "category": "fields",
+      "name": "ticket_type"
+    },
+    {
+      "id": "8669c4c8-92da-5f4c-b4bb-eb6b139e10ed",
+      "category": "fields",
+      "name": "severity_label"
+    },
+    {
+      "id": "af216ccf-12c8-5ea8-b976-6045d47ea43a",
+      "category": "fields",
+      "name": "priority_label"
+    },
+    {
+      "id": "d5526cf1-0545-5cb4-b8b3-f0bd776e4878",
+      "category": "fields",
+      "name": "caller"
+    },
+    {
+      "id": "74314ad3-860e-5091-a059-4a30023dd175",
+      "category": "fields",
+      "name": "requested_resolution_at"
+    },
+    {
+      "id": "75ad37bf-572a-5536-abad-ad0d0a1458d8",
+      "category": "fields",
+      "name": "expected_resolution_at"
+    },
+    {
+      "id": "c0d4a5c2-afe9-5c7b-8de7-c28ff2776f04",
+      "category": "fields",
+      "name": "channel"
+    },
+    {
+      "id": "d1cd99c8-117d-5c43-9bd2-784f8c40fdef",
+      "category": "choices",
+      "name": "email"
+    },
+    {
+      "id": "000ff42d-0447-55c5-a39f-ad5850d42200",
+      "category": "choices",
+      "name": "phone"
+    },
+    {
+      "id": "ca269aa2-8720-58c6-affc-ebf67116f92f",
+      "category": "choices",
+      "name": "web"
+    },
+    {
+      "id": "50a39d24-b807-5b92-a355-d9c150934213",
+      "category": "choices",
+      "name": "monitoring"
+    },
+    {
+      "id": "1e3d0b51-a23a-552d-9407-7fcc49388f55",
+      "category": "choices",
+      "name": "other"
+    },
+    {
+      "id": "edc0a81d-706d-5979-9835-429b9b050275",
+      "category": "fields",
+      "name": "status_change_history"
+    },
+    {
+      "id": "7066fee3-5454-56cc-9b1e-73e684564a90",
+      "category": "fields",
+      "name": "ticket_relationship"
+    },
+    {
+      "id": "31693db8-c44d-51f5-b54b-b89e57560b89",
+      "category": "fields",
+      "name": "related_entity"
+    },
+    {
+      "id": "2bfce88f-0386-55a7-82f3-fa2998984e6f",
+      "category": "fields",
+      "name": "characteristic"
+    },
+    {
+      "id": "65f77455-5ee5-51c8-9687-da975f32ba6b",
+      "category": "fields",
+      "name": "external_identifier"
+    },
+    {
+      "id": "0eb00997-cd53-5caf-b203-c44be2ca9064",
+      "category": "fields",
+      "name": "attachment"
+    },
+    {
+      "id": "1fd792e2-8506-5c33-83fb-0149b4fdfa41",
+      "category": "fields",
+      "name": "ticket_specification"
+    },
+    {
+      "id": "6b1bd403-01ff-57a5-8746-990c9050fc0c",
+      "category": "fields",
+      "name": "major_incident"
+    },
+    {
+      "id": "57816def-a484-5c9e-b314-2c37053327b3",
+      "category": "fields",
+      "name": "parent_incident"
+    },
+    {
+      "id": "9ab746a9-2006-53ab-91d8-ab351c2798af",
+      "category": "fields",
+      "name": "problem"
+    },
+    {
+      "id": "947a61be-ca35-5f45-b399-7d77352376c1",
+      "category": "tables",
+      "name": "helpdesk.problem"
+    },
+    {
+      "id": "b37db3c0-e16e-5d19-afeb-1bf972e75307",
+      "category": "fields",
+      "name": "known_error"
+    },
+    {
+      "id": "5f67cb65-c784-5938-a191-c3dc98320e97",
+      "category": "fields",
+      "name": "workaround"
+    },
+    {
+      "id": "1f2fb602-80ab-5fa4-841d-f755778ec39c",
+      "category": "fields",
+      "name": "root_cause"
+    },
+    {
+      "id": "80dc363c-425c-576b-883c-2f75c6b0e0c8",
+      "category": "overrides",
+      "name": ""
+    },
+    {
+      "id": "fb3d416f-3df0-5322-bed7-395897a9574b",
+      "category": "overrides",
+      "name": ""
+    },
+    {
+      "id": "cb4f1713-bdad-5626-aff5-5a82fb3aa702",
+      "category": "tables",
+      "name": "helpdesk.ticket_note"
+    },
+    {
+      "id": "9b1a0ff8-dce6-523d-b230-4aab99f3cfe4",
+      "category": "fields",
+      "name": "author"
+    },
+    {
+      "id": "2521a144-8f2a-5b21-9d1d-45692ea8a104",
+      "category": "fields",
+      "name": "text"
+    },
+    {
+      "id": "c1360711-fa57-588f-b9a8-b30aa08ad16a",
+      "category": "tables",
+      "name": "helpdesk.ticket_party"
+    },
+    {
+      "id": "653d4c03-ea1c-5f06-89a3-aff900250171",
+      "category": "fields",
+      "name": "party"
+    },
+    {
+      "id": "eba4e422-fa81-5238-ab76-e7a57223a6ac",
+      "category": "fields",
+      "name": "role"
+    },
+    {
+      "id": "933b3f3a-8821-567e-bf73-ce175bf9cc6e",
+      "category": "tables",
+      "name": "helpdesk.ticket_specification"
+    },
+    {
+      "id": "b678aa46-66b1-50c6-bd3e-2056ba568446",
+      "category": "fields",
+      "name": "name"
+    },
+    {
+      "id": "467bfa6b-2e4d-570f-8383-8076aa196f3c",
+      "category": "fields",
+      "name": "description"
+    },
+    {
+      "id": "da645d4a-f946-592f-b3e0-8047fe85d3f0",
+      "category": "fields",
+      "name": "lifecycle_status"
+    },
+    {
+      "id": "f8da24c3-3d8d-5012-ab3a-98d15669892a",
+      "category": "fields",
+      "name": "specification_version"
+    },
+    {
+      "id": "1678612b-e91b-5ea0-ab49-4c8b1cd68a3e",
+      "category": "fields",
+      "name": "related_party"
+    },
+    {
+      "id": "0d8a21f8-9403-5f14-9b50-9c1e78382ced",
+      "category": "fields",
+      "name": "attachment"
+    },
+    {
+      "id": "d599d478-885b-5891-a76a-a3b4f98231d2",
+      "category": "fields",
+      "name": "characteristic_specification"
+    }
+  ],
+  "behavior": [
+    {
+      "id": "be6a4618-76ea-4889-9f00-dd02c6099367",
+      "category": "tables",
+      "name": "helpdesk.ticket"
+    },
+    {
+      "id": "6486c5d6-ff21-4f84-a454-b01c20048919",
+      "category": "fields",
+      "name": "number"
+    },
+    {
+      "id": "45e8b4dc-7041-4556-af31-1c802d537b8a",
+      "category": "fields",
+      "name": "short_description"
+    },
+    {
+      "id": "88514acc-6b0d-4772-8604-43fe9a913446",
+      "category": "fields",
+      "name": "description"
+    },
+    {
+      "id": "4f51d80d-0886-4184-a8bb-5b5f7eefa4d2",
+      "category": "fields",
+      "name": "status"
+    },
+    {
+      "id": "b351777d-dcbe-4f2c-a2df-a9423dcf82ce",
+      "category": "choices",
+      "name": "new"
+    },
+    {
+      "id": "52dbb866-aeea-4ff4-a02d-48154ed67ccc",
+      "category": "choices",
+      "name": "in_progress"
+    },
+    {
+      "id": "6a7b4c27-c87c-490a-a975-d03e3c945f0d",
+      "category": "choices",
+      "name": "on_hold"
+    },
+    {
+      "id": "688fc5f2-f914-4d3f-9a78-5c4228ea0405",
+      "category": "choices",
+      "name": "awaiting_approval"
+    },
+    {
+      "id": "9b72e0e2-6f39-4275-ada1-7184622cb55c",
+      "category": "choices",
+      "name": "resolved"
+    },
+    {
+      "id": "f0ef1e74-8445-47bb-94fb-9e2a724268e3",
+      "category": "choices",
+      "name": "closed"
+    },
+    {
+      "id": "d8366c57-4c0f-4399-9600-6262c83b686c",
+      "category": "choices",
+      "name": "canceled"
+    },
+    {
+      "id": "222508c2-9257-41db-a243-151441078982",
+      "category": "fields",
+      "name": "priority"
+    },
+    {
+      "id": "3c8ece62-0634-4e02-a2b6-b0432c4209da",
+      "category": "choices",
+      "name": "critical"
+    },
+    {
+      "id": "2ab955c2-46a8-49c4-8b9b-b28292348287",
+      "category": "choices",
+      "name": "high"
+    },
+    {
+      "id": "a8c358ad-adcb-4cb0-afb3-b4fbee47e614",
+      "category": "choices",
+      "name": "moderate"
+    },
+    {
+      "id": "b77c3a1e-e98d-4bb6-aab5-a01f86e622fc",
+      "category": "choices",
+      "name": "low"
+    },
+    {
+      "id": "fc99eecb-5682-4a6c-8391-60d1055c4b2e",
+      "category": "fields",
+      "name": "assigned_to"
+    },
+    {
+      "id": "5e93983b-cea1-41aa-b76c-8dba8a166ed1",
+      "category": "fields",
+      "name": "customer_email"
+    },
+    {
+      "id": "d26946db-e483-4f22-a4af-1ffcb0488ba9",
+      "category": "fields",
+      "name": "internal_cost"
+    },
+    {
+      "id": "2ca8a806-2830-4dad-8075-07f32257cca4",
+      "category": "fields",
+      "name": "resolution_notes"
+    },
+    {
+      "id": "8ddfed22-2a48-4fa5-a4ca-5390343d869b",
+      "category": "layouts",
+      "name": "form"
+    },
+    {
+      "id": "39603cbb-00a4-41e5-8bbb-db5cf9766606",
+      "category": "layouts",
+      "name": "list"
+    },
+    {
+      "id": "3524c6b1-fcf0-48de-8b11-388aef14ab6a",
+      "category": "savedFilters",
+      "name": "costly"
+    },
+    {
+      "id": "91446a86-8028-4d34-a501-b7cf0f59fdd5",
+      "category": "tables",
+      "name": "helpdesk.incident"
+    },
+    {
+      "id": "e72b19cc-c9a8-44fe-9535-93f5b66e6637",
+      "category": "fields",
+      "name": "category"
+    },
+    {
+      "id": "dc00f1cf-6878-4aaa-bd19-affb09540307",
+      "category": "choices",
+      "name": "hardware"
+    },
+    {
+      "id": "ed64cabf-1d42-49eb-8cdc-50737bba3efc",
+      "category": "choices",
+      "name": "software"
+    },
+    {
+      "id": "9e11056f-eb1d-499f-a8f9-0bfb4c590133",
+      "category": "choices",
+      "name": "network"
+    },
+    {
+      "id": "d4f0619a-a0b5-450e-94d1-23726ddeeafe",
+      "category": "choices",
+      "name": "access"
+    },
+    {
+      "id": "2ed6b817-7dc8-4170-a9bd-3b45c46dd3f3",
+      "category": "fields",
+      "name": "legacy_impact"
+    },
+    {
+      "id": "ffcdb086-4273-4003-b1bb-586697a07a47",
+      "category": "choices",
+      "name": "high"
+    },
+    {
+      "id": "34b6d1af-67df-4f5d-a633-53bbd980aa90",
+      "category": "choices",
+      "name": "medium"
+    },
+    {
+      "id": "55e6a01c-514e-406b-98c8-0413aecba24c",
+      "category": "choices",
+      "name": "low"
+    },
+    {
+      "id": "131e87a1-946d-49f4-b438-1bbbdf651716",
+      "category": "overrides",
+      "name": ""
+    },
+    {
+      "id": "8765fcbb-7b9b-4a37-b925-6b3f24997024",
+      "category": "overrides",
+      "name": ""
+    },
+    {
+      "id": "6fc95feb-9d04-4485-9435-36ab2691cf82",
+      "category": "layouts",
+      "name": "form"
+    },
+    {
+      "id": "b0538214-492c-4970-a437-ca18fd68d942",
+      "category": "layouts",
+      "name": "list"
+    },
+    {
+      "id": "cc8af5be-f3a8-404a-be7c-d00b951c0d42",
+      "category": "savedFilters",
+      "name": "my_open"
+    },
+    {
+      "id": "ccf72b42-f1a6-477f-93a4-818aa78182f4",
+      "category": "savedFilters",
+      "name": "unassigned"
+    },
+    {
+      "id": "5f7a4a5a-5032-4888-9ba8-834cf4448d8c",
+      "category": "savedFilters",
+      "name": "critical_open"
+    },
+    {
+      "id": "b78ab936-4a4d-5d2f-8034-65b762757e06",
+      "category": "savedFilters",
+      "name": "open_major"
+    },
+    {
+      "id": "6ba157bc-568a-5831-a415-9997a7dfd4c1",
+      "category": "savedFilters",
+      "name": "major_not_priority_one"
+    },
+    {
+      "id": "f41607f3-2463-53f4-8ee0-fa9c7203b893",
+      "category": "layouts",
+      "name": "form"
+    },
+    {
+      "id": "0617e423-98a7-5ea6-8986-e68e46704ee6",
+      "category": "layouts",
+      "name": "list"
+    },
+    {
+      "id": "e1e5c743-5a04-482a-870c-32b348fbb0a8",
+      "category": "namespaces",
+      "name": "helpdesk"
+    },
+    {
+      "id": "a07fb4d5-0d16-4837-80a4-60582b7210ff",
+      "category": "roles",
+      "name": "agent"
+    },
+    {
+      "id": "58854e06-29de-524b-b087-aafd6d6945dd",
+      "category": "roles",
+      "name": "major_incident_manager"
+    },
+    {
+      "id": "d8ee949d-2721-5e2d-864f-b75980560934",
+      "category": "recordRules",
+      "name": "short_description"
+    },
+    {
+      "id": "2fef4eb5-98f3-5c50-a176-336fb669efb3",
+      "category": "recordRules",
+      "name": "description_default"
+    },
+    {
+      "id": "188cc6dc-286c-58c4-af12-1536eb49f63e",
+      "category": "recordRules",
+      "name": "status_changed_at"
+    },
+    {
+      "id": "43b18b4f-b20b-5a3b-8a4f-eab2a4a89859",
+      "category": "recordRules",
+      "name": "resolved_at"
+    },
+    {
+      "id": "a3b6e4e9-3cb5-5d69-b441-446c356ac183",
+      "category": "recordRules",
+      "name": "clear_resolved_at"
+    },
+    {
+      "id": "97a1b810-9382-57d6-80cd-54e4b21af48a",
+      "category": "recordRules",
+      "name": "priority_1_1"
+    },
+    {
+      "id": "84e5cb5e-b332-594e-b708-f31b4634cedd",
+      "category": "recordRules",
+      "name": "priority_1_2"
+    },
+    {
+      "id": "7e5d1e4d-8648-5ac1-a8dc-51767d4f44ee",
+      "category": "recordRules",
+      "name": "priority_1_3"
+    },
+    {
+      "id": "7a30fb6b-708a-539e-9df0-c5fef525af69",
+      "category": "recordRules",
+      "name": "priority_2_1"
+    },
+    {
+      "id": "639aa601-1ea0-5443-9c1e-f94555461ea3",
+      "category": "recordRules",
+      "name": "priority_2_2"
+    },
+    {
+      "id": "24bdb966-ee86-53d8-9427-152bb4322ebf",
+      "category": "recordRules",
+      "name": "priority_2_3"
+    },
+    {
+      "id": "d6fab3b0-9393-5b95-8065-5e6cb2fbdc0d",
+      "category": "recordRules",
+      "name": "priority_3_1"
+    },
+    {
+      "id": "0a5f59e4-5690-5202-9e5d-863101fd8477",
+      "category": "recordRules",
+      "name": "priority_3_2"
+    },
+    {
+      "id": "a0af4948-f08e-52b1-86aa-55e394a0d4d2",
+      "category": "recordRules",
+      "name": "priority_3_3"
+    },
+    {
+      "id": "cde9858f-0238-5150-bbe4-8377c2bafce7",
+      "category": "recordRules",
+      "name": "clear_severity_label"
+    },
+    {
+      "id": "887b1a16-70f2-5347-8d9d-1adc14ce6d11",
+      "category": "recordRules",
+      "name": "clear_priority_label"
+    },
+    {
+      "id": "92136105-6833-50bf-ac76-912f90541d77",
+      "category": "recordRules",
+      "name": "transition_from_new"
+    },
+    {
+      "id": "3b1dd7fa-23bc-5419-9444-0d5bc28b5ed7",
+      "category": "recordRules",
+      "name": "transition_from_in_progress"
+    },
+    {
+      "id": "46191e35-4629-50fe-80fd-02d52d1fcee0",
+      "category": "recordRules",
+      "name": "transition_from_on_hold"
+    },
+    {
+      "id": "c74e3613-60ee-58e6-af0c-a96bab37545d",
+      "category": "recordRules",
+      "name": "transition_from_resolved"
+    },
+    {
+      "id": "a3a5052c-1070-5afa-a754-59d11da9046b",
+      "category": "recordRules",
+      "name": "transition_from_closed"
+    },
+    {
+      "id": "944a7c90-e5c1-5a8d-975a-aa11f3ac5b54",
+      "category": "recordRules",
+      "name": "transition_from_canceled"
+    },
+    {
+      "id": "16208b4c-5b83-57d9-b144-02eb69a7e752",
+      "category": "recordRules",
+      "name": "default_hold_reason"
+    },
+    {
+      "id": "93b32ebb-29c9-53cd-b445-b598ed42f55d",
+      "category": "recordRules",
+      "name": "clear_hold_reason"
+    },
+    {
+      "id": "646195b6-eba6-5637-a2ee-1934f7873b21",
+      "category": "recordRules",
+      "name": "transition_from_new"
+    },
+    {
+      "id": "33019a92-0796-5964-8832-6a6b5544d965",
+      "category": "recordRules",
+      "name": "transition_from_assess"
+    },
+    {
+      "id": "0f35a3ac-a425-503a-9df2-3739cba4e38b",
+      "category": "recordRules",
+      "name": "transition_from_root_cause_analysis"
+    },
+    {
+      "id": "325b1a3f-abc3-5ee9-a2b6-fbaa0a50bfd7",
+      "category": "recordRules",
+      "name": "transition_from_fix_in_progress"
+    },
+    {
+      "id": "05a40d29-5c28-53bd-a613-28d554d960b8",
+      "category": "recordRules",
+      "name": "transition_from_on_hold"
+    },
+    {
+      "id": "38012bb7-35a5-5076-a417-1a91c51ee623",
+      "category": "recordRules",
+      "name": "transition_from_resolved"
+    },
+    {
+      "id": "7879cf65-46d7-55bb-8a5d-eb9714019fd0",
+      "category": "recordRules",
+      "name": "transition_from_closed"
+    },
+    {
+      "id": "91ad6b05-7ca5-5715-9ec7-3c4db6d25b13",
+      "category": "recordRules",
+      "name": "transition_from_canceled"
+    },
+    {
+      "id": "08e46c7e-8c75-5288-a626-ce372e0c92bc",
+      "category": "recordRules",
+      "name": "default_hold_reason"
+    },
+    {
+      "id": "1d3bbd55-c025-52c4-a429-944cdf2eefc5",
+      "category": "recordRules",
+      "name": "clear_hold_reason"
+    },
+    {
+      "id": "3ec1dc80-5f8a-5689-9c9f-cca9e6530f94",
+      "category": "recordRules",
+      "name": "resolve_major_children"
+    },
+    {
+      "id": "4eebe362-5552-5ed3-ba29-fdd2d8e1b3a4",
+      "category": "recordRules",
+      "name": "resume_waiting_incidents"
+    },
+    {
+      "id": "31dd1a44-7d43-4c96-8c72-a3040c2cbda5",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "441ffbe0-9df6-45b8-9df7-524ab071a8af",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "c39fada7-6881-4ee1-9597-5efbf1ce2d97",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "996c0eb7-c1af-4f23-82d3-9ca8cb7820e6",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "6b53130b-9fd0-4805-96a0-7ff44f821811",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "7d53f68c-d490-49ea-abbb-1ea7aa859247",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "82d2980a-5a81-48b1-9afa-e0ebf5b7445a",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "7e9c89f2-c4fb-54b3-92f3-1c6dd98426fc",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "b2124aa7-2c30-51b1-8687-028c13d90233",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "341ed9b1-1c31-5f1b-adc7-bb9c4c22ccab",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "a56b5d08-ff62-5128-b12b-9763548e5a2b",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "cbe6ca72-1855-51d8-aa5c-88029ad2aeae",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "e242d4b6-e164-54aa-b000-5c087a5dab1f",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "1ffb6541-6103-5ebf-ba2c-653c2dad744a",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "ba32c76b-60a3-5055-ad04-b16cb0148eb0",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "2f9f6ef6-cacd-54a6-b21d-55691d3a8071",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "60479900-87e0-5449-bc8c-385a98f39dc3",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "55bc9e72-494c-55d5-8c04-0f74e91895d9",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "10ce7f83-a351-55ba-99e3-398e439e3e2a",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "aaa534d4-ae7c-514f-a7f8-0f829b95a33f",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "567d4193-1184-5bd6-89ba-52419833283e",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "d86a7f26-2b5f-50c1-821c-7de553d37d38",
+      "category": "accessRules",
+      "name": ""
+    },
+    {
+      "id": "bffb1c62-75e3-52c8-a297-d03dc463e587",
+      "category": "fields",
+      "name": "ticket"
+    },
+    {
+      "id": "386f5415-7aa1-5cfe-b4d1-43a50a2638ca",
+      "category": "fields",
+      "name": "ticket"
+    }
+  ],
+  "newFeatures": [
+    "recordRule",
+    "reference.aggregate",
+    "ruleValue.copy.firstLine"
+  ],
+  "dataMigration": {
+    "id": 18,
+    "phase": "contract",
+    "name": "helpdesk-v3"
+  },
+  "deferredFieldProperties": [
+    {
+      "id": "c6b07207-c0b9-5c71-8ee1-1ef790ba9f8a",
+      "name": "impact",
+      "properties": ["required", "default"]
+    },
+    {
+      "id": "dd40cba4-7f5c-5bb9-bb52-571bc8db8cc4",
+      "name": "urgency",
+      "properties": ["required", "default"]
+    },
+    {
+      "id": "6b1bd403-01ff-57a5-8746-990c9050fc0c",
+      "name": "major_incident",
+      "properties": ["default"]
+    },
+    {
+      "id": "b37db3c0-e16e-5d19-afeb-1bf972e75307",
+      "name": "known_error",
+      "properties": ["default"]
+    },
+    {
+      "id": "2521a144-8f2a-5b21-9d1d-45692ea8a104",
+      "name": "text",
+      "properties": ["required"]
+    },
+    {
+      "id": "653d4c03-ea1c-5f06-89a3-aff900250171",
+      "name": "party",
+      "properties": ["required"]
+    },
+    {
+      "id": "eba4e422-fa81-5238-ab76-e7a57223a6ac",
+      "name": "role",
+      "properties": ["required"]
+    },
+    {
+      "id": "b678aa46-66b1-50c6-bd3e-2056ba568446",
+      "name": "name",
+      "properties": ["required"]
+    }
+  ]
+}

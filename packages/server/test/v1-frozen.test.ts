@@ -41,12 +41,15 @@ import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
  * - `AggregateNotSettled` among the same 422s;
  * - the optional `aggregate` of a reference field's metadata type;
  * - the `owner` scope of a condition path, and the `anyPart`, `allParts`
- *   and `partsChanged` members of a condition.
+ *   and `partsChanged` members of a condition;
+ * - the optional positive `firstLine` limit on a rule copy value
+ *   (helpdesk v3, decision 0034). Removing those five generated optional
+ *   properties restores the previous f68b6d14... hash exactly.
  *
  * Any other change to the document fails this test.
  */
 const V1_DOCUMENT_SHA256 =
-  "f68b6d14a935a8d0261fd6a68a41135eec5bac1cdd290b9e723fa06774b2aa9f";
+  "bbb45b1bdbee8caf9952d6dc8feeee26b105ef073a2d5fba79fce4642cb7e1dd";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 

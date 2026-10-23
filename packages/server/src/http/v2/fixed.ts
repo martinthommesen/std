@@ -16,14 +16,18 @@
  * `/api`. No fixed resource's name is a table's v2 name: definition
  * validation refuses it (`apiNameClash`).
  */
+import { callerFilterView } from "@std/access/saved-filters";
 import { tableList, tableMetadata } from "@std/access/table-metadata";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { UnknownTable } from "@std/api/errors/unknown-table";
 import { SessionToken } from "@std/api/session-token";
+import { decodeExpr } from "@std/conditions/ast";
+import { printCondition } from "@std/conditions/syntax-print";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type {
   MetaField,
+  MetaSavedFilter,
   MetaTable,
   MetaTableSummary,
 } from "@std/definitions/table-metadata";
@@ -72,6 +76,37 @@ import {
 
 const SESSION_PATH = `${V2_PREFIX}/session`;
 const CURRENT_SESSION = `${SESSION_PATH}/current`;
+
+const savedFiltersInApiNames = (
+  snapshot: ConfigSnapshot,
+  actor: ActingUser,
+  classId: string,
+  filters: readonly MetaSavedFilter[]
+): readonly MetaSavedFilter[] => {
+  const view = callerFilterView(snapshot, actor);
+
+  return filters.flatMap((filter) => {
+    const expression = decodeExpr(filter.condition);
+
+    if (expression._tag === "Failure") {
+      return [];
+    }
+
+    const printed = printCondition(expression.success, {
+      classId,
+      field: (owner, id) => {
+        const field = view.field(owner, id);
+
+        return field === undefined
+          ? undefined
+          : { ...field, name: apiAttributeNameOf(field.name) };
+      },
+    });
+
+    return printed.ok ? [{ ...filter, filter: printed.value }] : [];
+  });
+};
+
 const METADATA_PATH = `${V2_PREFIX}/tableMetadata`;
 
 /** A sign-in body: login, password, and where the token goes. */
@@ -532,7 +567,9 @@ export const FixedRoutes = Layer.unwrap(
 
     const table = metadataRoute((origin, collection) =>
       Effect.gen(function* tableRoute() {
-        const { described } = yield* metadataOf(collection);
+        const { classId, described } = yield* metadataOf(collection);
+        const snapshot = yield* (yield* Catalog).current;
+        const actor = yield* Actor;
         const { revision } = yield* RequestRevision;
 
         return jsonAnswer(
@@ -546,6 +583,12 @@ export const FixedRoutes = Layer.unwrap(
             })),
             href: `${origin}${METADATA_PATH}/${collection}`,
             id: collection,
+            savedFilters: savedFiltersInApiNames(
+              snapshot,
+              actor,
+              classId,
+              described.savedFilters ?? []
+            ),
             schemaRevision: revision,
           },
           200

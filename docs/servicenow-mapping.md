@@ -227,3 +227,7 @@ ServiceNow implements TM Forum Open APIs in its telecom products and ITIL in its
 | Customer Service Management's consumer and contact (`csm_consumer`, `customer_contact`), account (`customer_account`), company (`core_company`); `sys_user` stands alone | `core.party` with `core.individual` and `core.organization` (Contracts 11.3, decision 0024); every `core.user` has exactly one individual (`core.user.individual`, read-only, created with the user) | One person model for users, callers and contacts, so tickets name parties and users the same way. ServiceNow links a contact to a user record optionally; STD links every user to its individual always. |
 
 ITIL® is a registered trademark of the PeopleCert group. STD describes ITIL concepts in its own words.
+
+## ITIL helpdesk v3 (Step 3, workstream 3I-A)
+
+The shipped helpdesk v3 adds incident and problem lifecycles, impact/urgency priority defaults, major-incident coordination, known-error/workaround fields, and ticket notes as owned parts. These correspond to ServiceNow incident/problem capabilities but are configured as STD record rules and access rules. Browser-only requirements and TMF621 mapping are separate workstreams; TM Forum-writable values remain writable through the record API. See [decision 0034](decisions/0034-helpdesk-v3.md) for the state tables, upgrade mapping and handoffs.

@@ -229,8 +229,14 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* scenario2() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const ledger = yield* readLedger(yield* SqlClient.SqlClient);
-          assert.strictEqual(ledger.length, 17);
-          assert.isTrue(ledger.every((entry) => entry.phase === "expand"));
+          assert.strictEqual(ledger.length, PLATFORM_MIGRATIONS.length);
+
+          for (const migration of PLATFORM_MIGRATIONS) {
+            assert.strictEqual(
+              ledger.find((entry) => entry.id === migration.id)?.phase,
+              migration.phase
+            );
+          }
         })
     );
 
@@ -345,6 +351,9 @@ describe("rolling-groundwork", () => {
         Effect.gen(function* prePhaseDataMigration() {
           yield* runUpgrade({ sets: [ACME_SET_DIRECTORY] });
           const sql = yield* SqlClient.SqlClient;
+          // A pre-phase ledger predates the first contract migration. Restore
+          // that historical prefix before removing its phase column.
+          yield* sql`DELETE FROM core.platform_migration WHERE id > 17`;
           yield* sql.unsafe(
             "ALTER TABLE core.platform_migration DROP COLUMN phase"
           );
@@ -360,7 +369,10 @@ describe("rolling-groundwork", () => {
           };
 
           yield* runDataMigrations({
-            migrations: [...PLATFORM_MIGRATIONS, migration],
+            migrations: [
+              ...PLATFORM_MIGRATIONS.filter((entry) => entry.id <= 17),
+              migration,
+            ],
           });
           const ledger = yield* readLedger(sql);
           assert.deepStrictEqual(ledger.at(-1), {

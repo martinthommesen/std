@@ -1,0 +1,20 @@
+# Helpdesk v3: Contracts 14; decisions/0034-helpdesk-v3.md.
+set:
+  id: 8405d65d-4573-43cb-931c-e59fee0557a0
+  name: helpdesk
+  layer: app
+  version: 3
+  requires:
+    - core
+namespaces:
+  - id: e1e5c743-5a04-482a-870c-32b348fbb0a8
+    name: helpdesk
+    label: Helpdesk
+roles:
+  - id: a07fb4d5-0d16-4837-80a4-60582b7210ff
+    name: agent
+    label: Helpdesk agent
+    helpText: Works tickets and incidents; never sees internal costs.
+  - id: 58854e06-29de-524b-b087-aafd6d6945dd
+    name: major_incident_manager
+    label: Major incident manager

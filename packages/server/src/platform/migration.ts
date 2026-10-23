@@ -130,6 +130,13 @@ export interface DataMigration {
    * hash, so the text changes whenever what the migration does changes.
    */
   readonly description: string;
+  /** Recheck after set loads: an optional app may be installed or upgraded later. */
+  readonly repeatable?: boolean;
+  /** Restricts planned rechecks to installs that have, or request, this set version. */
+  readonly recheckForSet?: {
+    readonly name: string;
+    readonly minVersion: number;
+  };
   /**
    * One batch: changes up to `size` records whose key is after `after`
    * (null: from the start) and that still need the change, so a rerun
