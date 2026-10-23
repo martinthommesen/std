@@ -8,45 +8,19 @@
  * test client (`tmf-oas-contract`).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
-import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
+import {
+  createFixtureTicket,
+  FIXTURE_TICKETS,
+  mergeOptions,
+  tmfTestLayer,
+} from "./tmf-fixture.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
-
-/**
- * Creates a ticket through the fixture API.
- * @param caller - The caller.
- * @param body - The TMF body.
- * @returns The created resource.
- */
-const createTicket = (caller: TestRequestOptions, body: JsonObject) =>
-  Effect.gen(function* createTicketWork() {
-    const http = yield* TestHttpClient;
-
-    const created = yield* http.request("POST", FIXTURE_TICKETS, {
-      ...caller,
-      body: { "@type": "TroubleTicket", ...body },
-    });
-
-    assert.strictEqual(created.status, 201, created.text);
-
-    return asObject(created.json);
-  });
-
-const merge = (
-  caller: TestRequestOptions,
-  body: JsonValue,
-  headers: Readonly<Record<string, string>> = {}
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": "application/merge-patch+json", ...headers },
-  rawBody: JSON.stringify(body),
-});
 
 describe("tmf-framework", () => {
   it("the fixture serves its tickets under a TMF API base path", () => {
@@ -61,7 +35,7 @@ describe("tmf-framework", () => {
           const http = yield* TestHttpClient;
           const { alice } = yield* apiCallers;
 
-          const created = yield* createTicket(alice, {
+          const created = yield* createFixtureTicket(alice, {
             description: "Mail is down",
             name: "Mail",
             severity: "Major",
@@ -106,7 +80,7 @@ describe("tmf-framework", () => {
           const patched = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${id}`,
-            merge(alice, { status: "pending" })
+            mergeOptions(alice, { status: "pending" })
           );
 
           assert.strictEqual(patched.status, 200, patched.text);
@@ -134,7 +108,7 @@ describe("tmf-framework", () => {
           const http = yield* TestHttpClient;
           const { alice } = yield* apiCallers;
 
-          const created = yield* createTicket(alice, {
+          const created = yield* createFixtureTicket(alice, {
             description: "Printer jam",
           });
 
@@ -143,7 +117,7 @@ describe("tmf-framework", () => {
           const fresh = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${id}`,
-            merge(alice, { severity: "Minor" }, { "if-match": '"1"' })
+            mergeOptions(alice, { severity: "Minor" }, { "if-match": '"1"' })
           );
 
           assert.strictEqual(fresh.status, 200, fresh.text);
@@ -151,7 +125,7 @@ describe("tmf-framework", () => {
           const stale = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${id}`,
-            merge(alice, { severity: "Major" }, { "if-match": '"1"' })
+            mergeOptions(alice, { severity: "Major" }, { "if-match": '"1"' })
           );
 
           assert.strictEqual(stale.status, 409, stale.text);
@@ -161,7 +135,7 @@ describe("tmf-framework", () => {
           const latest = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${id}`,
-            merge(alice, { severity: "Critical" })
+            mergeOptions(alice, { severity: "Critical" })
           );
 
           assert.strictEqual(latest.status, 200, latest.text);
@@ -176,7 +150,7 @@ describe("tmf-framework", () => {
           const http = yield* TestHttpClient;
           const { alice } = yield* apiCallers;
 
-          const incident = yield* createTicket(alice, {
+          const incident = yield* createFixtureTicket(alice, {
             description: "Incident",
             ticketType: "incident",
             urgency: 2,
@@ -193,7 +167,7 @@ describe("tmf-framework", () => {
 
           assert.strictEqual(generic.status, 200, generic.text);
 
-          const vip = yield* createTicket(alice, {
+          const vip = yield* createFixtureTicket(alice, {
             "@type": "TmffxVip",
             description: "VIP",
             urgency: 1,
@@ -245,7 +219,7 @@ describe("tmf-framework", () => {
           const changedType = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${textOf(vip.id)}`,
-            merge(alice, { "@type": "TroubleTicket" })
+            mergeOptions(alice, { "@type": "TroubleTicket" })
           );
 
           assert.strictEqual(changedType.status, 400, changedType.text);
@@ -257,7 +231,7 @@ describe("tmf-framework", () => {
           const sameType = yield* http.request(
             "PATCH",
             `${FIXTURE_TICKETS}/${textOf(vip.id)}`,
-            merge(alice, { "@type": "TmffxVip", vipLevel: 4 })
+            mergeOptions(alice, { "@type": "TmffxVip", vipLevel: 4 })
           );
 
           assert.strictEqual(sameType.status, 200, sameType.text);
@@ -275,7 +249,7 @@ describe("tmf-framework", () => {
           const states = ["pending", "held", "inProgress", "pending"];
 
           for (const [index, status] of states.entries()) {
-            const created = yield* createTicket(alice, {
+            const created = yield* createFixtureTicket(alice, {
               description: `Filter ${index}`,
               name: `F${index}`,
               severity: "FilterSeverity",
@@ -284,7 +258,7 @@ describe("tmf-framework", () => {
             const patched = yield* http.request(
               "PATCH",
               `${FIXTURE_TICKETS}/${textOf(created.id)}`,
-              merge(alice, { status })
+              mergeOptions(alice, { status })
             );
 
             assert.strictEqual(patched.status, 200, patched.text);
@@ -451,7 +425,7 @@ describe("tmf-framework", () => {
           const http = yield* TestHttpClient;
           const { alice } = yield* apiCallers;
 
-          const created = yield* createTicket(alice, {
+          const created = yield* createFixtureTicket(alice, {
             customData: { keep: 1, remove: 2 },
             description: "Json",
           });

@@ -59,30 +59,25 @@ const token = (part: string): string =>
 const pointer = (...parts: readonly string[]): string =>
   `doc#/${parts.map(token).join("/")}`;
 
-/** A validator for the caller's document. */
-interface DocumentValidator {
-  /** Errors of a value against the schema at a pointer, or none. */
-  readonly errors: (ref: string, value: JsonValue) => string[];
-}
-
-const validatorOf = (document: JsonObject): DocumentValidator => {
+const validatorOf = (document: JsonObject, failures: string[]) => {
   // Formats and OpenAPI's own keywords are annotations here; the document
   // is added whole so its `#/components/...` references resolve.
   const ajv = new Ajv2020({ strict: false, validateFormats: false });
 
   ajv.addSchema({ ...document, $id: "doc" });
 
-  return {
-    errors: (ref, value) => {
-      const validate = ajv.compile({ $ref: ref });
+  return (ref: string, value: JsonValue, what: string): void => {
+    const validate = ajv.compile({ $ref: ref });
 
-      return validate(value)
-        ? []
-        : (validate.errors ?? []).map(
-            (error) =>
-              `${ref}: ${error.instancePath} ${error.message ?? ""} ${JSON.stringify(error.params)}`
-          );
-    },
+    if (validate(value)) {
+      return;
+    }
+
+    for (const error of validate.errors ?? []) {
+      failures.push(
+        `${what}: ${ref}: ${error.instancePath} ${error.message ?? ""} ${JSON.stringify(error.params)}`
+      );
+    }
   };
 };
 
@@ -172,19 +167,13 @@ describe("per-table OpenAPI document", () => {
         ]);
 
         const failures: string[] = [];
-        let documentOf: JsonObject = {};
-
-        const check = (ref: string, value: JsonValue, what: string) => {
-          for (const error of validatorOf(documentOf).errors(ref, value)) {
-            failures.push(`${what}: ${error}`);
-          }
-        };
 
         for (const who of ["bob", "admin"] as const) {
           const doc = yield* http.get(DOCUMENT, { token: tokens[who] });
 
           assert.strictEqual(doc.status, 200, doc.text);
-          documentOf = objectOf(doc.json);
+          const documentOf = objectOf(doc.json);
+          const check = validatorOf(documentOf, failures);
 
           const accepted = (sent: TestResponse, status: number): JsonValue => {
             assert.strictEqual(sent.status, status, `${who}: ${sent.text}`);
@@ -378,20 +367,10 @@ describe("per-table OpenAPI document", () => {
 
           const failures: string[] = [];
 
-          const check = (
-            document: JsonObject,
-            ref: string,
-            value: JsonValue,
-            what: string
-          ) => {
-            for (const error of validatorOf(document).errors(ref, value)) {
-              failures.push(`${what}: ${error}`);
-            }
-          };
-
           // A write-only field: accepted by the server and the document,
           // never named in it.
           const bob = yield* fetchDocument(tokens.bob);
+          const checkBob = validatorOf(bob.json, failures);
           const costBody: JsonObject = { cost: "301.00" };
 
           const costWrite = yield* http.request("PATCH", recordPath(TABLE, L), {
@@ -402,11 +381,12 @@ describe("per-table OpenAPI document", () => {
 
           assert.strictEqual(costWrite.status, 200, costWrite.text);
           assert.notInclude(bob.text, '"cost"');
-          check(bob.json, body("ResourcePatch"), costBody, "bob writes cost");
+          checkBob(body("ResourcePatch"), costBody, "bob writes cost");
 
           // Choice fields without a writable key, and a big integer with
           // leading zeros: the server accepts them, so must the document.
           const admin = yield* fetchDocument(tokens.admin);
+          const checkAdmin = validatorOf(admin.json, failures);
 
           const created: JsonObject = {
             allHidden: null,
@@ -421,9 +401,8 @@ describe("per-table OpenAPI document", () => {
           });
 
           assert.strictEqual(posted.status, 201, posted.text);
-          check(admin.json, body("ResourceCreate"), created, "admin create");
-          check(
-            admin.json,
+          checkAdmin(body("ResourceCreate"), created, "admin create");
+          checkAdmin(
             response(RECORDS, "post", "201"),
             posted.json ?? null,
             "admin create response"

@@ -4,16 +4,25 @@
  * upgraded to helpdesk v3 (`itilLayer`). Every response is checked against
  * the pinned TMF621 document by the test client (`tmf-oas-contract`).
  */
+import type { Condition } from "@std/definitions/condition";
+import type {
+  AccessAction,
+  AccessRuleDraft,
+} from "@std/definitions/definition";
 import { TMF621_BASE_PATH } from "@std/tmf/tmf621";
 import { stringifyJson } from "@std/values/json";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { isJsonObject } from "@std/values/json-value";
 import { Effect } from "effect";
 
-import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
+import {
+  HELPDESK,
+  HelpdeskFixture,
+} from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
+import { freshId } from "./schema-support.ts";
 
 /** `/tmf-api/troubleTicket/v5/troubleTicket`. */
 export const TICKETS = `${TMF621_BASE_PATH}/troubleTicket` as const;
@@ -114,20 +123,13 @@ export const tmf621As = Effect.fn("Tmf621.as")(function* tmf621As(
 /**
  * The individual (TMF632 party) of a helpdesk user, read as the admin.
  *
+ * @param admin - The signed-in admin client.
  * @param userId - The user.
  * @returns The individual's ID.
  */
 export const individualOf = Effect.fn("Tmf621.individualOf")(
-  function* individualOf(userId: string) {
-    const http = yield* TestHttpClient;
-    const fixture = yield* HelpdeskFixture;
-
-    const token = yield* http.signIn(
-      fixture.admin.login,
-      fixture.admin.password
-    );
-
-    const user = yield* http.get(`/api/v1/coreUser/${userId}`, { token });
+  function* individualOf(admin: Tmf621Client, userId: string) {
+    const user = yield* admin.get(`/api/v1/coreUser/${userId}`);
 
     return textOf(asObject(asObject(user.json).individual).id);
   }
@@ -213,4 +215,36 @@ export const ticketBody = (overrides: JsonObject = {}): JsonObject => ({
   severity: "Major",
   ticketType: "incident",
   ...overrides,
+});
+
+/**
+ * A local rule denying the agent role access to records or named fields.
+ * @param classId - The target class.
+ * @param rule - The condition, fields and actions (read by default).
+ * @returns A fresh access rule.
+ */
+export const denyRead = (
+  classId: string,
+  rule: {
+    readonly fields?: readonly string[];
+    readonly condition?: Condition;
+    readonly actions?: readonly AccessAction[];
+  }
+): AccessRuleDraft => ({
+  actions: rule.actions ?? ["read"],
+  active: true,
+  classId,
+  condition: rule.condition ?? null,
+  description: null,
+  effect: "deny",
+  id: freshId(),
+  kind: "accessRule",
+  name: null,
+  owner: { layer: "local" },
+  protected: false,
+  roleIds: [HELPDESK.agentRole],
+  target:
+    rule.fields === undefined
+      ? { kind: "records" }
+      : { fields: rule.fields, kind: "fields" },
 });

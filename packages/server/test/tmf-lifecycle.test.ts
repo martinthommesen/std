@@ -14,11 +14,9 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
-import type { JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import {
@@ -30,7 +28,13 @@ import {
   apiCallers,
 } from "./api-support.ts";
 import { addField, change, freshId } from "./schema-support.ts";
-import { FF, FIXTURE_TICKETS, tmfTestLayer, VIP } from "./tmf-fixture.ts";
+import {
+  FF,
+  FIXTURE_TICKETS,
+  mergeOptions,
+  tmfTestLayer,
+  VIP,
+} from "./tmf-fixture.ts";
 
 const REVISION_HEADER = "std-schema-revision";
 
@@ -38,16 +42,6 @@ const versionOf = (id: string) =>
   Effect.gen(function* readVersion() {
     return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
   });
-
-const merge = (
-  caller: TestRequestOptions,
-  body: JsonValue,
-  headers: Readonly<Record<string, string>> = {}
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": "application/merge-patch+json", ...headers },
-  rawBody: JSON.stringify(body),
-});
 
 describe("tmf-lifecycle", () => {
   it("names the purger role it needs", () => {
@@ -90,7 +84,7 @@ describe("tmf-lifecycle", () => {
           const written = yield* http.request(
             "PATCH",
             path,
-            merge(alice, { statusChangeReason: "second" })
+            mergeOptions(alice, { statusChangeReason: "second" })
           );
 
           assert.strictEqual(written.status, 400, written.text);
@@ -128,7 +122,7 @@ describe("tmf-lifecycle", () => {
             yield* http.request(
               "PATCH",
               path,
-              merge(alice, { statusChangeReason: "third" })
+              mergeOptions(alice, { statusChangeReason: "third" })
             ),
             yield* http.get(
               `${FIXTURE_TICKETS}?statusChangeReason=first`,
@@ -215,7 +209,7 @@ describe("tmf-lifecycle", () => {
           const write = yield* http.request(
             "PATCH",
             path,
-            merge(alice, { vipLevel: 42 }, old)
+            mergeOptions(alice, { vipLevel: 42 }, old)
           );
 
           assert.strictEqual(write.status, 409, write.text);
@@ -265,7 +259,7 @@ describe("tmf-lifecycle", () => {
           const current = yield* http.request(
             "PATCH",
             path,
-            merge(alice, { vipLevel: 42 })
+            mergeOptions(alice, { vipLevel: 42 })
           );
 
           assert.strictEqual(current.status, 200, current.text);

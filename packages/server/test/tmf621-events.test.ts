@@ -13,7 +13,6 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it } from "@effect/vitest";
-import type { AccessRuleDraft } from "@std/definitions/definition";
 import { PERMISSION_IDS } from "@std/definitions/well-known";
 import {
   HELPDESK_CLASS_IDS,
@@ -54,6 +53,7 @@ import { change } from "./schema-support.ts";
 import {
   arrayOf,
   bodyOf,
+  denyRead,
   individualOf,
   SPECIFICATIONS,
   TICKETS,
@@ -87,25 +87,13 @@ const HUBS = `${TMF621_BASE_PATH}/hub`;
 const INTERNAL_NOTE = "internal note";
 
 /** Notes whose text is `internal note` are hidden from agents. */
-const hideInternalNotes: AccessRuleDraft = {
-  actions: ["read"],
-  active: true,
-  classId: HELPDESK_CLASS_IDS.note,
+const hideInternalNotes = denyRead(HELPDESK_CLASS_IDS.note, {
   condition: {
     left: { path: [NOTE_FIELD_IDS.text] },
     op: "eq",
     right: { value: INTERNAL_NOTE },
   },
-  description: null,
-  effect: "deny",
-  id: randomUUID(),
-  kind: "accessRule",
-  name: null,
-  owner: { layer: "local" },
-  protected: false,
-  roleIds: [HELPDESK.agentRole],
-  target: { kind: "records" },
-};
+});
 
 /** `eventsLayer`, where agents may subscribe and cannot see internal notes. */
 const maskedLayer = Layer.effectDiscard(
@@ -166,7 +154,10 @@ const typesOf = (calls: readonly CallbackCall[]) =>
 const resourceOf = (call: CallbackCall | undefined, name: string): JsonObject =>
   asObject(asObject(call?.body.event)[name]);
 
-const deliverAll = workerPass().pipe(Effect.repeat({ times: 4 }));
+// Drain currently claimable deliveries; retries remain governed by next_attempt_at.
+const deliverAll = workerPass().pipe(
+  Effect.repeat({ until: (claimed) => claimed === 0 })
+);
 
 /**
  * What is wrong with an event against its pinned schema, an
@@ -472,7 +463,7 @@ describe("tmf621-events", () => {
         yield* addNote(INTERNAL_NOTE);
         yield* addNote("second note");
 
-        const customer = yield* individualOf(fixture.agent2.id);
+        const customer = yield* individualOf(admin, fixture.agent2.id);
         const before = bodyOf(yield* admin.get(path));
 
         const parties = yield* admin.patch(path, {
@@ -692,21 +683,9 @@ describe("tmf621-events", () => {
       Effect.gen(function* hiddenFilter() {
         yield* change([
           {
-            definition: {
-              actions: ["read"],
-              active: true,
-              classId: HELPDESK_CLASS_IDS.ticket,
-              condition: null,
-              description: null,
-              effect: "deny",
-              id: randomUUID(),
-              kind: "accessRule",
-              name: null,
-              owner: { layer: "local" },
-              protected: false,
-              roleIds: [HELPDESK.agentRole],
-              target: { fields: [TICKET_FIELD_IDS.impact], kind: "fields" },
-            },
+            definition: denyRead(HELPDESK_CLASS_IDS.ticket, {
+              fields: [TICKET_FIELD_IDS.impact],
+            }),
             op: "createAccessRule",
           },
         ]);

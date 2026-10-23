@@ -6,9 +6,7 @@
  * TMF621 document by the test client (`tmf-oas-contract`), so each test
  * also proves its statuses are declared ones.
  */
-import { randomUUID } from "node:crypto";
-
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, layer, test } from "@effect/vitest";
 import { HELPDESK_CLASS_IDS, TICKET_FIELD_IDS } from "@std/tmf/helpdesk-ids";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect, Layer } from "effect";
@@ -16,10 +14,7 @@ import { Statement } from "effect/sql";
 import { TestClock } from "effect/testing";
 
 import { acmeTestLayer } from "../../testing/src/acme-fixture.ts";
-import {
-  HELPDESK,
-  HelpdeskFixture,
-} from "../../testing/src/helpdesk-fixture.ts";
+import { HelpdeskFixture } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
@@ -46,6 +41,7 @@ import {
 import {
   arrayOf,
   bodyOf,
+  denyRead,
   characteristicsWith,
   etagOf,
   individualOf,
@@ -87,16 +83,11 @@ const patch = Effect.fn("Tmf621Test.patch")(function* patch(
 
 /** The record as `/api/v1` shows it to the admin (stored values). */
 const stored = Effect.fn("Tmf621Test.stored")(function* stored(
+  admin: Tmf621Client,
   ticket: JsonObject,
   table = "helpdeskTicket"
 ) {
-  const http = yield* TestHttpClient;
-  const fixture = yield* HelpdeskFixture;
-  const token = yield* http.signIn(fixture.admin.login, fixture.admin.password);
-
-  const read = yield* http.get(`/api/v1/${table}/${textOf(ticket.id)}`, {
-    token,
-  });
+  const read = yield* admin.get(`/api/v1/${table}/${textOf(ticket.id)}`);
 
   assert.strictEqual(read.status, 200, read.text);
 
@@ -206,8 +197,8 @@ const sorted = (
 ): readonly string[] =>
   ids.map(textOf).toSorted((left, right) => left.localeCompare(right));
 
-describe("tmf621", () => {
-  it("serves troubleTicket and troubleTicketSpecification at the pinned base path", () => {
+layer(itilLayer, { excludeTestServices: true })("tmf621", (dbTest) => {
+  test("serves troubleTicket and troubleTicketSpecification at the pinned base path", () => {
     assert.deepStrictEqual(
       [TICKETS, SPECIFICATIONS],
       [
@@ -247,7 +238,7 @@ describe("tmf621", () => {
       )
   );
 
-  it.effect(
+  dbTest.effect(
     "creates, retrieves, lists, patches and deletes a trouble ticket",
     () =>
       Effect.gen(function* crud() {
@@ -269,7 +260,7 @@ describe("tmf621", () => {
         assert.strictEqual(ticket.href, created.headers.get("location"));
         assert.strictEqual(
           etagOf(created),
-          `"${numberOf((yield* stored(ticket)).revision)}"`
+          `"${numberOf((yield* stored(admin, ticket)).revision)}"`
         );
 
         assert.deepStrictEqual(
@@ -309,10 +300,10 @@ describe("tmf621", () => {
           outcome(yield* admin.get(`${TICKETS}/${id}`)),
           "404 NotFound"
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "ticketType makes the ITIL class on create and is patchable only within it",
     () =>
       Effect.gen(function* ticketTypes() {
@@ -326,13 +317,19 @@ describe("tmf621", () => {
           ["incident", "problem", "Request"]
         );
 
-        assert.strictEqual((yield* stored(incident)).ticketType ?? null, null);
         assert.strictEqual(
-          (yield* stored(problem, "helpdeskProblem")).id,
+          (yield* stored(admin, incident)).ticketType ?? null,
+          null
+        );
+        assert.strictEqual(
+          (yield* stored(admin, problem, "helpdeskProblem")).id,
           problem.id
         );
 
-        assert.strictEqual((yield* stored(request)).ticketType, "Request");
+        assert.strictEqual(
+          (yield* stored(admin, request)).ticketType,
+          "Request"
+        );
 
         // Within its class: a plain ticket's type is free text.
         const complaint = yield* patch(admin, request, {
@@ -361,10 +358,10 @@ describe("tmf621", () => {
 
           assert.strictEqual(outcome(refused), "400 ValidationFailed");
         }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "a create without description, severity or ticketType is refused, naming each",
     () =>
       Effect.gen(function* required() {
@@ -386,10 +383,10 @@ describe("tmf621", () => {
             `${name} in ${fields.join(", ")}`
           );
         }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "severity is free text: Critical, Major and Minor set impact, any other value is kept as given",
     () =>
       Effect.gen(function* severities() {
@@ -401,7 +398,7 @@ describe("tmf621", () => {
           ["MINOR", "3", "Minor"],
         ] as const) {
           const ticket = yield* open(admin, { severity: given });
-          const record = yield* stored(ticket);
+          const record = yield* stored(admin, ticket);
 
           assert.deepStrictEqual(
             [record.impact, record.severityLabel ?? null, ticket.severity],
@@ -410,7 +407,7 @@ describe("tmf621", () => {
         }
 
         const labelled = yield* open(admin, { severity: "Sev-A" });
-        const kept = yield* stored(labelled);
+        const kept = yield* stored(admin, labelled);
 
         assert.deepStrictEqual(
           [labelled.severity, kept.impact, kept.severityLabel],
@@ -425,7 +422,7 @@ describe("tmf621", () => {
         );
 
         const major = yield* patch(admin, labelled, { severity: "Major" });
-        const cleared = yield* stored(labelled);
+        const cleared = yield* stored(admin, labelled);
 
         assert.deepStrictEqual(
           [major.severity, cleared.impact, cleared.severityLabel ?? null],
@@ -437,10 +434,10 @@ describe("tmf621", () => {
         });
 
         assert.strictEqual(outcome(blank), "400 ValidationFailed");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "priority is free text and patchable: the five labels set priority, others are kept",
     () =>
       Effect.gen(function* priorities() {
@@ -448,7 +445,7 @@ describe("tmf621", () => {
         const ticket = yield* open(admin, { priority: "High" });
 
         assert.deepStrictEqual(
-          [ticket.priority, (yield* stored(ticket)).priority],
+          [ticket.priority, (yield* stored(admin, ticket)).priority],
           ["High", "2"]
         );
 
@@ -456,7 +453,7 @@ describe("tmf621", () => {
           priority: "P1-urgent",
         });
 
-        const kept = yield* stored(ticket);
+        const kept = yield* stored(admin, ticket);
 
         assert.deepStrictEqual(
           [labelled.priority, kept.priority, kept.priorityLabel],
@@ -468,7 +465,10 @@ describe("tmf621", () => {
         });
 
         assert.deepStrictEqual(
-          [planning.priority, (yield* stored(ticket)).priorityLabel ?? null],
+          [
+            planning.priority,
+            (yield* stored(admin, ticket)).priorityLabel ?? null,
+          ],
           ["Planning", null]
         );
 
@@ -477,10 +477,10 @@ describe("tmf621", () => {
         ).map((item) => item.id);
 
         assert.include(filtered, ticket.id);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "severity and priority filters compare the rendered labels exactly, while writes take any case",
     () =>
       Effect.gen(function* exactLabels() {
@@ -508,10 +508,10 @@ describe("tmf621", () => {
         assert.deepStrictEqual(yield* ids("severity=MINOR"), []);
         assert.deepStrictEqual(yield* ids("priority=High"), sorted(ticket.id));
         assert.deepStrictEqual(yield* ids("priority=high"), []);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "value objects that do not fit the pinned schema are refused, naming the member, and nothing is stored",
     () =>
       Effect.gen(function* schemaRefusals() {
@@ -542,7 +542,7 @@ describe("tmf621", () => {
           /^troubleTicketCharacteristic\.\d+\.value/u
         );
 
-        const record = yield* stored(ticket);
+        const record = yield* stored(admin, ticket);
 
         assert.deepStrictEqual(
           [record.statusChangeHistory ?? null, record.characteristic ?? null],
@@ -567,40 +567,26 @@ describe("tmf621", () => {
           ),
           []
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
   it.effect(
     "a member the writer may write but not read is checked against the pinned schema as stored, refused without its value, and nothing is stored",
     () =>
       Effect.gen(function* hiddenMember() {
+        const admin = yield* tmf621As("admin");
         yield* change([
           {
-            definition: {
-              actions: ["read"],
-              active: true,
-              classId: HELPDESK_CLASS_IDS.ticket,
-              condition: null,
-              description: null,
-              effect: "deny",
-              id: randomUUID(),
-              kind: "accessRule",
-              name: null,
-              owner: { layer: "local" },
-              protected: false,
-              roleIds: [HELPDESK.agentRole],
-              target: {
-                fields: [TICKET_FIELD_IDS.statusChangeHistory],
-                kind: "fields",
-              },
-            },
+            definition: denyRead(HELPDESK_CLASS_IDS.ticket, {
+              fields: [TICKET_FIELD_IDS.statusChangeHistory],
+            }),
             op: "createAccessRule",
           },
         ]);
 
         const agent = yield* tmf621As("agent");
         const ticket = yield* open(agent);
-        const before = yield* stored(ticket, "helpdeskIncident");
+        const before = yield* stored(admin, ticket, "helpdeskIncident");
 
         const refused = yield* agent.patch(`${TICKETS}/${textOf(ticket.id)}`, {
           statusChangeHistory: [{ status: "bogus" }],
@@ -614,7 +600,7 @@ describe("tmf621", () => {
 
         // Rolled back: the stored record is unchanged.
         assert.deepStrictEqual(
-          yield* stored(ticket, "helpdeskIncident"),
+          yield* stored(admin, ticket, "helpdeskIncident"),
           before
         );
 
@@ -624,22 +610,23 @@ describe("tmf621", () => {
         });
         assert.deepStrictEqual(
           asArray(
-            (yield* stored(ticket, "helpdeskIncident")).statusChangeHistory
+            (yield* stored(admin, ticket, "helpdeskIncident"))
+              .statusChangeHistory
           ).map((item) => asObject(item).status),
           ["acknowledged"]
         );
       }).pipe(Effect.provide(itilLayer), TestClock.withLive)
   );
 
-  it.effect(
+  dbTest.effect(
     "notes and related parties of a colleague's ticket are refused through merge-patch and JSON Patch, changing nothing, while a new ticket's own notes are created",
     () =>
       Effect.gen(function* partOwners() {
         const fixture = yield* HelpdeskFixture;
         const admin = yield* tmf621As("admin");
         const agent = yield* tmf621As("agent");
-        const colleague = yield* individualOf(fixture.agent2.id);
-        const customer = yield* individualOf(fixture.agent.id);
+        const colleague = yield* individualOf(admin, fixture.agent2.id);
+        const customer = yield* individualOf(admin, fixture.agent.id);
 
         const assignee = {
           partyOrPartyRole: { id: colleague },
@@ -728,7 +715,7 @@ describe("tmf621", () => {
           arrayOf(own, "note").map((note) => note.text),
           ["creator content"]
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
   it.effect(
@@ -738,28 +725,14 @@ describe("tmf621", () => {
         // Agents may not read the status reason of a resolved ticket.
         yield* change([
           {
-            definition: {
-              actions: ["read"],
-              active: true,
-              classId: HELPDESK_CLASS_IDS.ticket,
+            definition: denyRead(HELPDESK_CLASS_IDS.ticket, {
               condition: {
                 left: { path: [TICKET_FIELD_IDS.status] },
                 op: "eq",
                 right: { value: "resolved" },
               },
-              description: null,
-              effect: "deny",
-              id: randomUUID(),
-              kind: "accessRule",
-              name: null,
-              owner: { layer: "local" },
-              protected: false,
-              roleIds: [HELPDESK.agentRole],
-              target: {
-                fields: [TICKET_FIELD_IDS.statusReason],
-                kind: "fields",
-              },
-            },
+              fields: [TICKET_FIELD_IDS.statusReason],
+            }),
             op: "createAccessRule",
           },
         ]);
@@ -836,25 +809,14 @@ describe("tmf621", () => {
           // Agents may not read the field on a resolved ticket.
           yield* change([
             {
-              definition: {
-                actions: ["read"],
-                active: true,
-                classId: HELPDESK_CLASS_IDS.ticket,
+              definition: denyRead(HELPDESK_CLASS_IDS.ticket, {
                 condition: {
                   left: { path: [TICKET_FIELD_IDS.status] },
                   op: "eq",
                   right: { value: "resolved" },
                 },
-                description: null,
-                effect: "deny",
-                id: randomUUID(),
-                kind: "accessRule",
-                name: null,
-                owner: { layer: "local" },
-                protected: false,
-                roleIds: [HELPDESK.agentRole],
-                target: { fields: [field], kind: "fields" },
-              },
+                fields: [field],
+              }),
               op: "createAccessRule",
             },
           ]);
@@ -901,25 +863,13 @@ describe("tmf621", () => {
         // Agents may not see resolved tickets.
         yield* change([
           {
-            definition: {
-              actions: ["read"],
-              active: true,
-              classId: HELPDESK_CLASS_IDS.ticket,
+            definition: denyRead(HELPDESK_CLASS_IDS.ticket, {
               condition: {
                 left: { path: [TICKET_FIELD_IDS.status] },
                 op: "eq",
                 right: { value: "resolved" },
               },
-              description: null,
-              effect: "deny",
-              id: randomUUID(),
-              kind: "accessRule",
-              name: null,
-              owner: { layer: "local" },
-              protected: false,
-              roleIds: [HELPDESK.agentRole],
-              target: { kind: "records" },
-            },
+            }),
             op: "createAccessRule",
           },
         ]);
@@ -970,7 +920,7 @@ describe("tmf621", () => {
       }).pipe(Effect.provide(midReadLayer), TestClock.withLive)
   );
 
-  it.effect(
+  dbTest.effect(
     "statuses follow TMF621's life cycle onto the incident state model, and stored states read back",
     () =>
       Effect.gen(function* lifeCycle() {
@@ -991,7 +941,7 @@ describe("tmf621", () => {
 
         for (const [status, state, hold] of steps) {
           const patched = yield* patch(admin, { id }, { status });
-          const record = yield* stored(ticket);
+          const record = yield* stored(admin, ticket);
 
           assert.deepStrictEqual(
             [patched.status, record.status, record.holdReason ?? null],
@@ -1035,10 +985,10 @@ describe("tmf621", () => {
         );
 
         assert.strictEqual(outcome(unknown), "400 ValidationFailed");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "held keeps a hold reason the holdReason characteristic names, and pending is awaiting the caller",
     () =>
       Effect.gen(function* holds() {
@@ -1054,7 +1004,7 @@ describe("tmf621", () => {
 
         assert.strictEqual(held.status, "held");
         assert.strictEqual(
-          (yield* stored(ticket)).holdReason,
+          (yield* stored(admin, ticket)).holdReason,
           "awaiting_change"
         );
 
@@ -1076,10 +1026,10 @@ describe("tmf621", () => {
           itemsOf(filtered).map((item) => item.id),
           ticket.id
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "problems map acknowledged and inProgress onto their state groups",
     () =>
       Effect.gen(function* problems() {
@@ -1092,7 +1042,7 @@ describe("tmf621", () => {
 
         assert.strictEqual(progress.status, "inProgress");
         assert.strictEqual(
-          (yield* stored(problem, "helpdeskProblem")).status,
+          (yield* stored(admin, problem, "helpdeskProblem")).status,
           "root_cause_analysis"
         );
 
@@ -1100,13 +1050,13 @@ describe("tmf621", () => {
         yield* patch(admin, problem, { status: "inProgress" });
 
         assert.strictEqual(
-          (yield* stored(problem, "helpdeskProblem")).status,
+          (yield* stored(admin, problem, "helpdeskProblem")).status,
           "root_cause_analysis"
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "statusChangeHistory renders the recorded status changes, after a written value",
     () =>
       Effect.gen(function* history() {
@@ -1147,42 +1097,44 @@ describe("tmf621", () => {
         const dated = yield* patch(admin, ticket, { resolutionDate });
 
         assert.strictEqual(dated.resolutionDate, "2026-02-03T04:05:06.000Z");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect("fields selects first-level attributes on list and retrieve", () =>
-    Effect.gen(function* selected() {
-      const admin = yield* tmf621As("admin");
-      const ticket = yield* open(admin, { name: "fields" });
+  dbTest.effect(
+    "fields selects first-level attributes on list and retrieve",
+    () =>
+      Effect.gen(function* selected() {
+        const admin = yield* tmf621As("admin");
+        const ticket = yield* open(admin, { name: "fields" });
 
-      for (const name of ["description", "severity", "ticketType"]) {
-        const read = bodyOf(
-          yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
+        for (const name of ["description", "severity", "ticketType"]) {
+          const read = bodyOf(
+            yield* admin.get(`${TICKETS}/${textOf(ticket.id)}?fields=${name}`)
+          );
+
+          assert.deepStrictEqual(
+            Object.keys(read).toSorted(),
+            ["@type", "href", "id", name].toSorted()
+          );
+
+          const listed = itemsOf(
+            yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
+          );
+
+          assert.deepStrictEqual(
+            listed.map((item) => Object.keys(item).toSorted()),
+            [["@type", "href", "id", name].toSorted()]
+          );
+        }
+
+        assert.strictEqual(
+          outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
+          "400 UnknownField"
         );
-
-        assert.deepStrictEqual(
-          Object.keys(read).toSorted(),
-          ["@type", "href", "id", name].toSorted()
-        );
-
-        const listed = itemsOf(
-          yield* admin.get(`${TICKETS}?fields=${name}&name=fields`)
-        );
-
-        assert.deepStrictEqual(
-          listed.map((item) => Object.keys(item).toSorted()),
-          [["@type", "href", "id", name].toSorted()]
-        );
-      }
-
-      assert.strictEqual(
-        outcome(yield* admin.get(`${TICKETS}?fields=nonsense`)),
-        "400 UnknownField"
-      );
-    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "filters combine with AND, by status group, ticketType and @type, and page with counts",
     () =>
       Effect.gen(function* filters() {
@@ -1254,10 +1206,10 @@ describe("tmf621", () => {
           outcome(yield* admin.get(`${TICKETS}?filter=$.x`)),
           "501 NotImplemented"
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "notes are parts: a merge-patch array replaces them and the author is the acting user",
     () =>
       Effect.gen(function* notes() {
@@ -1322,17 +1274,17 @@ describe("tmf621", () => {
         const emptied = yield* patch(agent, ticket, { note: [] });
 
         assert.isUndefined(emptied.note);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "relatedParty maps reporter to caller, assignee to the assigned user's individual, other roles to parts",
     () =>
       Effect.gen(function* parties() {
         const admin = yield* tmf621As("admin");
         const fixture = yield* HelpdeskFixture;
-        const agentIndividual = yield* individualOf(fixture.agent.id);
-        const agent2Individual = yield* individualOf(fixture.agent2.id);
+        const agentIndividual = yield* individualOf(admin, fixture.agent.id);
+        const agent2Individual = yield* individualOf(admin, fixture.agent2.id);
 
         const ticket = yield* open(admin, {
           relatedParty: [
@@ -1349,7 +1301,7 @@ describe("tmf621", () => {
           ],
         });
 
-        const record = yield* stored(ticket);
+        const record = yield* stored(admin, ticket);
 
         assert.deepStrictEqual(
           [
@@ -1386,7 +1338,10 @@ describe("tmf621", () => {
           arrayOf(unassigned, "relatedParty").map((party) => party.role),
           ["reporter", "customer"]
         );
-        assert.strictEqual((yield* stored(ticket)).assignedTo ?? null, null);
+        assert.strictEqual(
+          (yield* stored(admin, ticket)).assignedTo ?? null,
+          null
+        );
 
         for (const item of [
           { role: "customer" },
@@ -1410,10 +1365,10 @@ describe("tmf621", () => {
         });
 
         assert.strictEqual(outcome(unknown), "400 InvalidReference");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "characteristics replace strictly: urgency and the ITIL fields are written, left-out ones cleared, others kept as given",
     () =>
       Effect.gen(function* mappedCharacteristics() {
@@ -1432,7 +1387,7 @@ describe("tmf621", () => {
 
         assert.strictEqual(urgent.priority, "Critical");
 
-        const record = yield* stored(ticket);
+        const record = yield* stored(admin, ticket);
 
         assert.deepStrictEqual(
           [record.urgency, record.resolutionNotes],
@@ -1509,7 +1464,7 @@ describe("tmf621", () => {
         });
 
         assert.strictEqual(
-          (yield* stored(ticket)).resolutionNotes ?? null,
+          (yield* stored(admin, ticket)).resolutionNotes ?? null,
           null
         );
         assert.deepStrictEqual(
@@ -1531,10 +1486,10 @@ describe("tmf621", () => {
             },
           ]
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "troubleTicketRelationship maps causedBy and parent onto an incident's references",
     () =>
       Effect.gen(function* relationships() {
@@ -1550,7 +1505,7 @@ describe("tmf621", () => {
           ],
         });
 
-        const record = yield* stored(child, "helpdeskIncident");
+        const record = yield* stored(admin, child, "helpdeskIncident");
 
         assert.deepStrictEqual(
           [
@@ -1580,13 +1535,13 @@ describe("tmf621", () => {
 
         assert.isUndefined(cleared.troubleTicketRelationship);
         assert.strictEqual(
-          (yield* stored(child, "helpdeskIncident")).problem ?? null,
+          (yield* stored(admin, child, "helpdeskIncident")).problem ?? null,
           null
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "externalIdentifier starts with the read-only number; attachments and related entities need their attributes",
     () =>
       Effect.gen(function* valueObjects() {
@@ -1654,10 +1609,10 @@ describe("tmf621", () => {
 
           assert.strictEqual(outcome(refused), "400 ValidationFailed");
         }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "troubleTicketSpecification is served: create with name, patch, reference and delete",
     () =>
       Effect.gen(function* specifications() {
@@ -1743,10 +1698,10 @@ describe("tmf621", () => {
           ),
           "403 NotAllowed"
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "DELETE is allowed to the user who opened the ticket and to admins, parts first",
     () =>
       Effect.gen(function* deletes() {
@@ -1769,17 +1724,17 @@ describe("tmf621", () => {
           204
         );
 
-        const record = yield* stored(yield* open(agent));
+        const record = yield* stored(admin, yield* open(agent));
         const fixture = yield* HelpdeskFixture;
 
         assert.strictEqual(
           textOf(asObject(record.openedBy).id),
           fixture.agent.id
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "If-Match is optional; a stale one answers 409 with the current ETag on PATCH and DELETE",
     () =>
       Effect.gen(function* preconditions() {
@@ -1817,10 +1772,10 @@ describe("tmf621", () => {
             .status,
           204
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "a JSON Patch changes attributes and arrays as the merge-patch would",
     () =>
       Effect.gen(function* jsonPatch() {
@@ -1875,10 +1830,10 @@ describe("tmf621", () => {
         );
 
         assert.strictEqual(bodyOf(plain).name, "plain JSON");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "pages with after and before cursors as the Link header names them",
     () =>
       Effect.gen(function* cursors() {
@@ -1917,10 +1872,10 @@ describe("tmf621", () => {
           itemsOf(yield* admin.get(previous)).map((item) => item.id),
           opened.slice(0, 2)
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 
-  it.effect(
+  dbTest.effect(
     "answers only statuses the pinned document declares: 401, 404, 400 and the TMF Error",
     () =>
       Effect.gen(function* errors() {
@@ -1948,7 +1903,7 @@ describe("tmf621", () => {
           outcome(yield* admin.get(`${TICKETS}?limit=x`)),
           "400 InvalidRequest"
         );
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      })
   );
 });
 
@@ -2028,7 +1983,7 @@ describe("tmf621-mandatory-output", () => {
         const admin = yield* tmf621As("admin");
         const client = yield* clientFor();
         const fixture = yield* HelpdeskFixture;
-        const individual = yield* individualOf(fixture.agent.id);
+        const individual = yield* individualOf(admin, fixture.agent.id);
 
         const plain = yield* createTicket("helpdeskTicket", {
           channel: "email",

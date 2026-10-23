@@ -18,7 +18,6 @@
  * The same tests through TMF621 are `tmf-noninterference` (workstream 3I).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Effect } from "effect";
 import type { SqlClient } from "effect/sql";
 import {
@@ -39,7 +38,12 @@ import type {
 import { count, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { values } from "./schema-support.ts";
-import { FIXTURE_TICKETS, tmfTestLayer } from "./tmf-fixture.ts";
+import {
+  createFixtureTicket,
+  FIXTURE_TICKETS,
+  mergeOptions,
+  tmfTestLayer,
+} from "./tmf-fixture.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 const TICKETS = '"tmffx"."ticket"';
@@ -47,42 +51,21 @@ const NOTES = '"tmffx"."note"';
 const RUNS = 12;
 const SEED = 20_261_023;
 
-const mergeOptions = (
-  caller: TestRequestOptions,
-  body: JsonValue,
-  headers: Readonly<Record<string, string>> = {}
-): TestRequestOptions => ({
-  ...caller,
-  headers: { "content-type": "application/merge-patch+json", ...headers },
-  rawBody: JSON.stringify(body),
-});
-
-const create = (caller: TestRequestOptions, body: JsonObject) =>
-  Effect.gen(function* createWork() {
-    const http = yield* TestHttpClient;
-
-    const created = yield* http.request("POST", FIXTURE_TICKETS, {
-      ...caller,
-      body: { "@type": "TroubleTicket", ...body },
-    });
-
-    assert.strictEqual(created.status, 201, created.text);
-
-    return textOf(asObject(created.json).id);
-  });
-
 /** Alice's tickets: one Bob sees (with a hidden note), one he cannot. */
-const seed = Effect.gen(function* seedTickets() {
+const seed = Effect.fn("TmfNoninterferenceFixture.seed")(function* seedTickets(
+  alice: TestRequestOptions
+) {
   const http = yield* TestHttpClient;
-  const { alice } = yield* apiCallers;
 
-  const open = yield* create(alice, {
+  const openTicket = yield* createFixtureTicket(alice, {
     description: "Open to employees",
     name: "Open",
     note: [{ "@type": "Note", text: "visible note" }],
     priority: "P1",
     severity: "Major",
   });
+
+  const open = textOf(openTicket.id);
 
   const hiddenNote = yield* http.request("POST", "/api/v1/tmffxNote", {
     ...alice,
@@ -91,7 +74,7 @@ const seed = Effect.gen(function* seedTickets() {
 
   assert.strictEqual(hiddenNote.status, 201, hiddenNote.text);
 
-  const restricted = yield* create(alice, {
+  const restrictedTicket = yield* createFixtureTicket(alice, {
     description: "Managers only",
     name: "Restricted",
     priority: "P2",
@@ -99,10 +82,14 @@ const seed = Effect.gen(function* seedTickets() {
     severity: "Critical",
   });
 
-  return { hiddenNote: textOf(asObject(hiddenNote.json).id), open, restricted };
+  return {
+    hiddenNote: textOf(asObject(hiddenNote.json).id),
+    open,
+    restricted: textOf(restrictedTicket.id),
+  };
 });
 
-type Seeded = Effect.Success<typeof seed>;
+type Seeded = Effect.Success<ReturnType<typeof seed>>;
 
 /** Values Bob cannot read, written without a version change. */
 interface HiddenSample {
@@ -145,22 +132,23 @@ const writeHidden = (
   { hiddenNote, open, restricted }: Seeded,
   sample: HiddenSample
 ) =>
-  Effect.gen(function* writeHiddenWork() {
-    yield* values(
-      `UPDATE ${TICKETS} SET priority = $1 WHERE id = $2::uuid RETURNING 'ok' AS value`,
-      [sample.priority, open]
-    );
-
-    yield* values(
-      `UPDATE ${TICKETS} SET name = $1, severity = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
-      [...sample.restricted, restricted]
-    );
-
-    yield* values(
-      `UPDATE ${NOTES} SET text = $1 WHERE id = $2::uuid RETURNING 'ok' AS value`,
-      [sample.note, hiddenNote]
-    );
-  });
+  Effect.all(
+    [
+      values(
+        `UPDATE ${TICKETS} SET priority = $1 WHERE id = $2::uuid RETURNING 'ok' AS value`,
+        [sample.priority, open]
+      ),
+      values(
+        `UPDATE ${TICKETS} SET name = $1, severity = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
+        [...sample.restricted, restricted]
+      ),
+      values(
+        `UPDATE ${NOTES} SET text = $1 WHERE id = $2::uuid RETURNING 'ok' AS value`,
+        [sample.note, hiddenNote]
+      ),
+    ],
+    { concurrency: "unbounded", discard: true }
+  );
 
 const holdsForEverySample = async (
   observe: (sample: HiddenSample) => Promise<readonly string[]>,
@@ -179,7 +167,8 @@ const hiddenValuesProperty = (ids: Seeded, caller: TestRequestOptions) =>
     const http = yield* TestHttpClient;
 
     const answers = Effect.all(
-      queriesOf(ids).map((path) => answerOf(http, caller, path))
+      queriesOf(ids).map((path) => answerOf(http, caller, path)),
+      { concurrency: "unbounded" }
     );
 
     const baseline = yield* answers;
@@ -220,7 +209,7 @@ describe("tmf-noninterference-fixture", () => {
         Effect.gen(function* hiddenFields() {
           const http = yield* TestHttpClient;
           const { alice, bob } = yield* apiCallers;
-          const { open } = yield* seed;
+          const { open } = yield* seed(alice);
 
           const asAlice = asObject(
             (yield* http.get(`${FIXTURE_TICKETS}/${open}`, alice)).json
@@ -300,8 +289,8 @@ describe("tmf-noninterference-fixture", () => {
       () =>
         Effect.gen(function* invisible() {
           const http = yield* TestHttpClient;
-          const { bob } = yield* apiCallers;
-          const { restricted } = yield* seed;
+          const { alice, bob } = yield* apiCallers;
+          const { restricted } = yield* seed(alice);
 
           const listed = yield* http.get(FIXTURE_TICKETS, bob);
 
@@ -351,8 +340,8 @@ describe("tmf-noninterference-fixture", () => {
       () =>
         Effect.gen(function* hiddenParts() {
           const http = yield* TestHttpClient;
-          const { bob } = yield* apiCallers;
-          const { hiddenNote, open } = yield* seed;
+          const { alice, bob } = yield* apiCallers;
+          const { hiddenNote, open } = yield* seed(alice);
 
           const read = asObject(
             (yield* http.get(`${FIXTURE_TICKETS}/${open}`, bob)).json
@@ -421,9 +410,9 @@ describe("tmf-noninterference-fixture", () => {
       "property: randomizing the values Bob cannot read changes none of his TMF responses",
       () =>
         Effect.gen(function* property() {
-          const { bob } = yield* apiCallers;
+          const { alice, bob } = yield* apiCallers;
 
-          yield* hiddenValuesProperty(yield* seed, bob);
+          yield* hiddenValuesProperty(yield* seed(alice), bob);
         })
     );
   });

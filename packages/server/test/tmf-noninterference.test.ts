@@ -19,11 +19,6 @@
  * `tmf-noninterference-fixture`.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
-import type { Condition } from "@std/definitions/condition";
-import type {
-  AccessAction,
-  AccessRuleDraft,
-} from "@std/definitions/definition";
 import {
   HELPDESK_CLASS_IDS,
   NOTE_FIELD_IDS,
@@ -40,14 +35,21 @@ import {
   string,
 } from "fast-check";
 
-import { HELPDESK } from "../../testing/src/helpdesk-fixture.ts";
-import { TestHttpClient } from "../../testing/src/http-client.ts";
-import type { TestResponse } from "../../testing/src/http-client.ts";
+import type {
+  TestHttpClient,
+  TestResponse,
+} from "../../testing/src/http-client.ts";
 import { count, versionOf } from "./aggregates-support.ts";
 import { asArray, asObject, textOf } from "./api-support.ts";
 import { itilLayer } from "./itil-support.ts";
-import { change, freshId, values } from "./schema-support.ts";
-import { bodyOf, TICKETS, ticketBody, tmf621As } from "./tmf621-support.ts";
+import { change, values } from "./schema-support.ts";
+import {
+  bodyOf,
+  denyRead,
+  TICKETS,
+  ticketBody,
+  tmf621As,
+} from "./tmf621-support.ts";
 import type { Tmf621Client } from "./tmf621-support.ts";
 
 const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
@@ -59,32 +61,6 @@ const SECRET_TYPE = "secret";
 const INTERNAL_NOTE = "internal note";
 
 const F = TICKET_FIELD_IDS;
-
-const denyRead = (
-  classId: string,
-  rule: {
-    readonly fields?: readonly string[];
-    readonly condition?: Condition;
-    readonly actions?: readonly AccessAction[];
-  }
-): AccessRuleDraft => ({
-  actions: rule.actions ?? ["read"],
-  active: true,
-  classId,
-  condition: rule.condition ?? null,
-  description: null,
-  effect: "deny",
-  id: freshId(),
-  kind: "accessRule",
-  name: null,
-  owner: { layer: "local" },
-  protected: false,
-  roleIds: [HELPDESK.agentRole],
-  target:
-    rule.fields === undefined
-      ? { kind: "records" }
-      : { fields: rule.fields, kind: "fields" },
-});
 
 /** The local rules that hide fields, tickets and notes from agents. */
 const hideFromAgents = change(
@@ -169,7 +145,7 @@ const seed = Effect.gen(function* seedTickets() {
     ticketType: SECRET_TYPE,
   });
 
-  return { agent, hiddenNote, open, secret };
+  return { admin, agent, hiddenNote, open, secret };
 });
 
 type Seeded = Effect.Success<typeof seed>;
@@ -202,17 +178,19 @@ const queriesOf = ({ open, secret }: Seeded): readonly string[] => [
 
 // Hidden values, written without a version change, as stored data.
 const writeHidden = ({ open, secret }: Seeded, sample: HiddenSample) =>
-  Effect.gen(function* writeHiddenWork() {
-    yield* values(
-      `UPDATE ${TICKET_TABLE} SET impact = $1, priority = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
-      [sample.impact, sample.priority, open]
-    );
-
-    yield* values(
-      `UPDATE ${TICKET_TABLE} SET short_description = $1, description = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
-      [sample.secretName, sample.secretDescription, secret]
-    );
-  });
+  Effect.all(
+    [
+      values(
+        `UPDATE ${TICKET_TABLE} SET impact = $1, priority = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
+        [sample.impact, sample.priority, open]
+      ),
+      values(
+        `UPDATE ${TICKET_TABLE} SET short_description = $1, description = $2 WHERE id = $3::uuid RETURNING 'ok' AS value`,
+        [sample.secretName, sample.secretDescription, secret]
+      ),
+    ],
+    { concurrency: "unbounded", discard: true }
+  );
 
 /**
  * Checks the seeded samples: each, once written, leaves the observed
@@ -249,7 +227,8 @@ const hiddenValuesProperty = (seeded: Seeded) =>
     const answers = Effect.all(
       queriesOf(seeded).map((path) =>
         Effect.map(seeded.agent.get(path), answerText)
-      )
+      ),
+      { concurrency: "unbounded" }
     );
 
     const baseline = yield* answers;
@@ -291,9 +270,7 @@ describe("tmf-noninterference", () => {
       "a hidden field is an absent attribute, and naming it anywhere is UnknownField as for a missing attribute",
       () =>
         Effect.gen(function* hiddenFields() {
-          const http = yield* TestHttpClient;
-          const admin = yield* tmf621As("admin");
-          const { agent, open } = yield* seed;
+          const { admin, agent, open } = yield* seed;
 
           const asAdmin = bodyOf(yield* admin.get(`${TICKETS}/${open}`));
           const asAgent = yield* agent.get(`${TICKETS}/${open}`);
@@ -307,14 +284,8 @@ describe("tmf-noninterference", () => {
           assert.notProperty(bodyOf(asAgent), "priority");
 
           // The generic API does not show them to him either.
-          const token = yield* http.signIn(
-            "agent",
-            "helpdesk-agent-demo-password"
-          );
-
           const generic = asObject(
-            (yield* http.get(`/api/v1/helpdeskIncident/${open}`, { token }))
-              .json
+            (yield* agent.get(`/api/v1/helpdeskIncident/${open}`)).json
           );
 
           assert.strictEqual(generic.description, bodyOf(asAgent).description);
