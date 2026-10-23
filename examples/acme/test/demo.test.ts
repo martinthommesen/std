@@ -34,22 +34,22 @@ describe("spike-demo", () => {
         const output = (yield* Ref.get(lines)).join("\n");
 
         for (const expected of [
-          "bob via /acme.asset: 3 records",
-          "alice via /acme.asset: 5 records",
+          "bob via /acmeAsset: 3 records",
+          "alice via /acmeAsset: 5 records",
           "-> 404 NotFound (identical to an unknown ID)",
-          'bob filter "cost > 0" -> 400 UnknownField',
-          "1. bob PATCH /acme.laptop/L {name} -> 200, version 2",
-          "2. alice PATCH /acme.asset/L {cost} at version 1 -> 409 VersionConflict, current version 2",
-          "-> 200, version 3",
-          "4. bob PATCH /acme.asset/L {status} -> 403 NotAllowed",
+          'bob condition "cost > 0" -> 400 UnknownField',
+          "1. bob PATCH /acmeLaptop/L {name} -> 200, revision 2",
+          "2. alice PATCH /acmeAsset/L {cost} at revision 1 -> 412 VersionConflict, current revision 2",
+          "-> 200, revision 3",
+          "4. bob PATCH /acmeAsset/L {status} -> 403 NotAllowed",
           "-> 422 ValidationFailed",
-          "bob via /acme.asset: v1 create",
+          "bob via /acmeAsset: r1 create",
         ]) {
           assert.include(output, expected);
         }
 
         assert.notInclude(
-          output.split("bob via /acme.asset: v1")[1] ?? "",
+          output.split("bob via /acmeAsset: r1")[1] ?? "",
           "cost"
         );
       })

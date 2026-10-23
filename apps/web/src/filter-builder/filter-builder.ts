@@ -13,13 +13,13 @@
 import { DatePicker } from "@foldkit/ui";
 import { ExprSchema } from "@std/conditions/ast";
 import type { Expr } from "@std/conditions/ast";
-import type { MetaField } from "@std/definitions/table-metadata";
 import { Effect, Option, Result, Schema } from "effect";
 import { Command, Dom, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
 import { modifyFields } from "foldkit/struct";
 
+import type { MetaField } from "../domain/metadata.ts";
 import {
   isEmptyFilter,
   isFilterable,

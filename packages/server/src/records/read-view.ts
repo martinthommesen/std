@@ -47,9 +47,9 @@ export interface ReadView {
   /** A readable field by name (system fields included). */
   readonly byName: (name: string) => ReadField | undefined;
   /**
-   * A readable field by its `/api/v2` name (`apiNameOfField`); a name two
+   * A readable field by its `/api/v1` name (`apiNameOfField`); a name two
    * fields share (a clash older than the rule, Contracts 10.2) and `class`
-   * (`@type` in v2) resolve to nothing.
+   * (`@type`) resolve to nothing.
    */
   readonly byApiName: (apiName: string) => ReadField | undefined;
   /** A readable field by ID (system fields by their synthetic IDs). */

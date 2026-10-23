@@ -1,15 +1,24 @@
 /**
  * Helpers for the write-side authorization tests: write requests through
- * the HTTP test client, history requests, and table-owner reads of the
- * state a write left behind.
+ * the HTTP test client (Contracts 10.5: bodies in API names, a `PATCH` is
+ * a merge patch), history requests, and table-owner reads of the state a
+ * write left behind.
  */
-import type { JsonValue } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import {
+  isJsonArray,
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+} from "@std/values/json-value";
+import type { JsonObject, JsonValue } from "@std/values/json-value";
+import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { listPath, recordPath } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
+
+const MERGE_PATCH = "application/merge-patch+json";
 
 /** The acme endpoints. */
 export const ASSET = "acme.asset";
@@ -21,7 +30,7 @@ export const LAPTOP = "acme.laptop";
 export const MONITOR = "acme.monitor";
 
 /**
- * `POST .../records`.
+ * `POST /api/v1/{collection}`.
  *
  * @param token - The session token.
  * @param table - The endpoint.
@@ -39,7 +48,7 @@ export const create = Effect.fn("WritesSupport.create")(function* create(
 });
 
 /**
- * `PATCH .../records/{id}` with `If-Match`.
+ * `PATCH /api/v1/{collection}/{id}` with `If-Match`: a merge patch.
  *
  * @param token - The session token.
  * @param table - The endpoint.
@@ -58,14 +67,17 @@ export const patch = Effect.fn("WritesSupport.patch")(function* patch(
   const http = yield* TestHttpClient;
 
   return yield* http.request("PATCH", recordPath(table, id), {
-    body,
-    headers: version === undefined ? {} : { "if-match": `"${version}"` },
+    headers:
+      version === undefined
+        ? { "content-type": MERGE_PATCH }
+        : { "content-type": MERGE_PATCH, "if-match": `"${version}"` },
+    rawBody: JSON.stringify(body),
     token,
   });
 });
 
 /**
- * `DELETE .../records/{id}` with `If-Match`.
+ * `DELETE /api/v1/{collection}/{id}` with `If-Match`.
  *
  * @param token - The session token.
  * @param table - The endpoint.
@@ -87,25 +99,42 @@ export const remove = Effect.fn("WritesSupport.remove")(function* remove(
   });
 });
 
-const HistoryBodySchema = Schema.Struct({
-  entries: Schema.Array(
-    Schema.Struct({
-      actor: Schema.String,
-      changes: Schema.Record(Schema.String, Schema.Json),
-      kind: Schema.String,
-      version: Schema.Int,
-    })
-  ),
-  schemaRevision: Schema.Int,
-});
+const objectOf = (value: JsonValue | undefined): JsonObject =>
+  value !== undefined && isJsonObject(value) ? value : {};
 
-/** A history body as the tests read it. */
-export type HistoryBody = typeof HistoryBodySchema.Type;
+/** One change entry as the tests read it. */
+export interface HistoryEntry {
+  /** The acting user's ID. */
+  readonly actor: string;
+  /** The changes by API name, as the caller may see them. */
+  readonly changes: JsonObject;
+  readonly kind: string;
+  /** The record's revision after the change. */
+  readonly version: number;
+}
 
-const decodeHistory = Schema.decodeUnknownEffect(HistoryBodySchema);
+/** A history as the tests read it. */
+export interface HistoryBody {
+  readonly entries: readonly HistoryEntry[];
+}
+
+// A `ChangeEntry` resource (Contracts 10.4) as a history entry.
+const entryOf = (value: JsonValue): HistoryEntry => {
+  const entry = objectOf(value);
+  const { id } = objectOf(entry.actor);
+  const { kind, revision } = entry;
+
+  return {
+    actor: id !== undefined && isJsonString(id) ? id : "",
+    changes: objectOf(entry.changes),
+    kind: kind !== undefined && isJsonString(kind) ? kind : "",
+    version: revision !== undefined && isJsonNumber(revision) ? revision : 0,
+  };
+};
 
 /**
- * `GET .../records/{id}/history`; dies unless the response is a history.
+ * `GET /api/v1/{collection}/{id}/history`; dies unless the response is a
+ * history.
  *
  * @param token - The session token.
  * @param table - The endpoint.
@@ -123,30 +152,48 @@ export const history = Effect.fn("WritesSupport.history")(function* history(
     token,
   });
 
-  return yield* decodeHistory(response.json).pipe(Effect.orDie);
+  const { json } = response;
+
+  return json !== undefined && isJsonArray(json)
+    ? ({ entries: json.map(entryOf) } satisfies HistoryBody)
+    : yield* Effect.die(
+        new Error(`expected a history, got ${response.status} ${response.text}`)
+      );
 });
 
-const SavedBodySchema = Schema.Struct({
-  record: Schema.Struct({
-    id: Schema.String,
-    values: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-    version: Schema.Int,
-  }),
-});
-
-const decodeSaved = Schema.decodeUnknownEffect(SavedBodySchema);
+/** A saved resource as the tests read it. */
+export interface Saved {
+  readonly id: string;
+  /** The resource's revision. */
+  readonly version: number;
+  /** The resource as answered. */
+  readonly values: JsonObject;
+}
 
 /**
- * The record of a create or update response; dies otherwise.
+ * The resource of a create or update response; dies otherwise.
  *
  * @param response - The response.
- * @returns The projected record.
+ * @returns The saved resource.
  */
-export const savedOf = (response: TestResponse) =>
-  decodeSaved(response.json).pipe(
-    Effect.map((body) => body.record),
-    Effect.orDie
-  );
+export const savedOf = (response: TestResponse) => {
+  const resource = objectOf(response.json);
+  const { id, revision } = resource;
+  const saved = response.status === 200 || response.status === 201;
+
+  return saved && id !== undefined && isJsonString(id)
+    ? Effect.succeed<Saved>({
+        id,
+        values: resource,
+        version:
+          revision !== undefined && isJsonNumber(revision) ? revision : 0,
+      })
+    : Effect.die(
+        new Error(
+          `expected a saved resource, got ${response.status} ${response.text}`
+        )
+      );
+};
 
 /**
  * A record's root version, read as table owner.

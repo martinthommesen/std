@@ -1,11 +1,4 @@
-/**
- * The schema engine's per-record limits on a definition table's form
- * (decision 0020): a field definition's type changes only in a
- * reference's `allowedRecords`, `required` only becomes true, and
- * auto-numbering cannot be switched on; the form offers nothing else.
- */
-import type { RecordJson } from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import { Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -15,12 +8,21 @@ import { Message } from "../page/record-form/message.ts";
 import { FormMode } from "../page/record-form/model.ts";
 import type { Model } from "../page/record-form/model.ts";
 import { init, update } from "../page/record-form/update.ts";
+import { servedAs } from "../table-fixture.ts";
 import {
   FIELD_TABLE,
   TYPE_CHANGE_TEXT,
   withRecordLimits,
 } from "./definition-limits.ts";
 import { fieldShowOf } from "./form-fields.ts";
+import type { MetaField, MetaTable } from "./metadata.ts";
+/**
+ * The schema engine's per-record limits on a definition table's form
+ * (decision 0020): a field definition's type changes only in a
+ * reference's `allowedRecords`, `required` only becomes true, and
+ * auto-numbering cannot be switched on; the form offers nothing else.
+ */
+import type { RecordJson } from "./record.ts";
 
 const PER_RECORD = { create: "yes", update: "perRecord" } as const;
 
@@ -29,6 +31,7 @@ const column = (
   name: string,
   type: MetaField["type"]
 ): MetaField => ({
+  apiName: apiAttributeNameOf(name),
   autoNumber: null,
   choices: null,
   default: null,
@@ -66,7 +69,7 @@ const fieldTable: MetaTable = {
   ],
   formRules: [],
   helpText: null,
-  id: "00000000-0000-4000-8000-00000000c000",
+  ...servedAs("00000000-0000-4000-8000-00000000c000", FIELD_TABLE),
   label: "Field",
   layouts: { form: null, list: null },
   name: FIELD_TABLE,
@@ -77,7 +80,7 @@ const fieldTable: MetaTable = {
 const TARGET = "00000000-0000-4000-8000-00000000d000";
 
 const definitionRecord = (values: RecordJson["values"]): RecordJson => ({
-  class: FIELD_TABLE,
+  class: fieldTable.resourceType,
   id: "00000000-0000-4000-8000-00000000e000",
   values: { label: "Escalation contact", number_prefix: null, ...values },
   version: 2,

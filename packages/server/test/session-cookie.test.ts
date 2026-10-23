@@ -16,20 +16,20 @@ import {
 import type { TestResponse } from "../../testing/src/http-client.ts";
 import { cookieIsSecure, isLoopbackHost } from "../src/http/session-cookie.ts";
 import { objectOf } from "./authz-support.ts";
-import { listPath, readsTestLayer, tagOf } from "./reads-support.ts";
+import { codeOf, listPath, readsTestLayer } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 
-const ME = "/api/v1/auth/me";
+const ME = "/api/v1/session/current";
 
-const SIGN_OUT = "/api/v1/auth/sign-out";
+const SESSION = "/api/v1/session";
 
-const COOKIE_SIGN_IN = "/api/v1/auth/cookie-sign-in";
+const COOKIE_BODY = {
+  login: "bob",
+  password: "bob-password",
+  tokenDelivery: "cookie",
+} as const;
 
 const ASSETS = listPath("acme.asset");
-
-const V2_SESSION = "/api/v2/session";
-
-const V2_CURRENT = "/api/v2/session/current";
 
 const WEB = { "std-client": "web" };
 
@@ -106,22 +106,22 @@ describe("session-cookie", () => {
           const http = yield* TestHttpClient;
           const { bob } = yield* AcmeFixture;
 
-          const remote = yield* http.request("POST", COOKIE_SIGN_IN, {
-            body: { login: "bob", password: "bob-password" },
+          const remote = yield* http.request("POST", SESSION, {
+            body: COOKIE_BODY,
             headers: { ...WEB, host: "std.example.com" },
           });
 
-          const local = yield* http.request("POST", COOKIE_SIGN_IN, {
-            body: { login: "bob", password: "bob-password" },
+          const local = yield* http.request("POST", SESSION, {
+            body: COOKIE_BODY,
             headers: { ...WEB, host: "localhost:8080" },
           });
 
-          assert.strictEqual(remote.status, 200, remote.text);
-          assert.deepStrictEqual(Object.keys(remote.json ?? {}).toSorted(), [
-            "expiresAt",
-            "userId",
-          ]);
-          assert.strictEqual(objectOf(remote.json).userId, bob.id);
+          assert.strictEqual(remote.status, 201, remote.text);
+          assert.notProperty(objectOf(remote.json), "token");
+          assert.deepStrictEqual(
+            objectOf(objectOf(remote.json).user).id,
+            bob.id
+          );
 
           const token = setCookieValue(remote, SESSION_COOKIE) ?? "";
 
@@ -154,31 +154,41 @@ describe("session-cookie", () => {
     );
 
     dbTest.effect(
-      "cookie sign-in needs STD-Client: web and refuses bad credentials without a cookie",
+      "cookie sign-in refuses bad credentials and a request without STD-Client: web, setting no cookie",
       () =>
         Effect.gen(function* cookieSignInRefusals() {
           const http = yield* TestHttpClient;
 
-          const noHeader = yield* http.request("POST", COOKIE_SIGN_IN, {
-            body: { login: "bob", password: "bob-password" },
-          });
-
-          const wrong = yield* http.request("POST", COOKIE_SIGN_IN, {
-            body: { login: "bob", password: "wrong" },
+          const wrong = yield* http.request("POST", SESSION, {
+            body: { ...COOKIE_BODY, password: "wrong" },
             headers: WEB,
           });
 
-          assert.strictEqual(noHeader.status, 400);
-          assert.strictEqual(yield* tagOf(noHeader), "InvalidRequest");
-          assert.deepStrictEqual(noHeader.headers.getSetCookie(), []);
           assert.strictEqual(wrong.status, 401);
-          assert.strictEqual(yield* tagOf(wrong), "InvalidCredentials");
+          assert.strictEqual(yield* codeOf(wrong), "InvalidCredentials");
           assert.deepStrictEqual(wrong.headers.getSetCookie(), []);
+
+          // Without STD-Client: web a cookie sign-in is refused before any
+          // session exists, so a cross-site form cannot sign a browser in
+          // (login CSRF, decision 0018); a token in the body needs no header.
+          const unmarked = yield* http.request("POST", SESSION, {
+            body: COOKIE_BODY,
+          });
+
+          assert.strictEqual(unmarked.status, 400, unmarked.text);
+          assert.strictEqual(yield* codeOf(unmarked), "InvalidRequest");
+          assert.deepStrictEqual(unmarked.headers.getSetCookie(), []);
+
+          const bearer = yield* http.request("POST", SESSION, {
+            body: { ...COOKIE_BODY, tokenDelivery: "body" },
+          });
+
+          assert.strictEqual(bearer.status, 201, bearer.text);
         })
     );
 
     dbTest.effect(
-      "the cookie authenticates like a bearer token, with the display name on auth/me",
+      "the cookie authenticates like a bearer token, with the display name on session/current",
       () =>
         Effect.gen(function* cookieReads() {
           const http = yield* TestHttpClient;
@@ -198,7 +208,7 @@ describe("session-cookie", () => {
           const empty = yield* http.get(ME, { cookie: "" });
 
           assert.strictEqual(unknown.status, 401);
-          assert.strictEqual(yield* tagOf(unknown), "Unauthenticated");
+          assert.strictEqual(yield* codeOf(unknown), "Unauthenticated");
           assert.strictEqual(empty.status, 401);
         })
     );
@@ -231,14 +241,14 @@ describe("session-cookie", () => {
             webClient: false,
           });
 
-          const forgedSignOut = yield* http.request("POST", SIGN_OUT, {
+          const forgedSignOut = yield* http.request("DELETE", ME, {
             cookie,
             webClient: false,
           });
 
           for (const refused of [forged, noHeader, forgedSignOut]) {
             assert.strictEqual(refused.status, 401, refused.text);
-            assert.strictEqual(yield* tagOf(refused), "Unauthenticated");
+            assert.strictEqual(yield* codeOf(refused), "Unauthenticated");
           }
 
           assert.strictEqual(yield* assetCount("forged"), 0);
@@ -261,7 +271,7 @@ describe("session-cookie", () => {
         Effect.gen(function* signOut() {
           const http = yield* TestHttpClient;
           const cookie = yield* http.cookieSignIn("alice", "alice-password");
-          const out = yield* http.request("POST", SIGN_OUT, { cookie });
+          const out = yield* http.request("DELETE", ME, { cookie });
 
           assert.strictEqual(out.status, 204);
           assert.strictEqual(setCookieValue(out, SESSION_COOKIE), "");
@@ -273,7 +283,7 @@ describe("session-cookie", () => {
           assert.strictEqual(after.status, 401);
 
           const token = yield* http.signIn("alice", "alice-password");
-          const bearerOut = yield* http.request("POST", SIGN_OUT, { token });
+          const bearerOut = yield* http.request("DELETE", ME, { token });
 
           assert.strictEqual(bearerOut.status, 204);
           // Only the legacy /api/v1 expiry; the /api cookie is left alone.
@@ -293,7 +303,7 @@ describe("session-cookie", () => {
 
           const both = yield* http.get(ME, { cookie, token });
 
-          assert.strictEqual(objectOf(both.json).userId, alice.id);
+          assert.strictEqual(objectOf(objectOf(both.json).user).id, alice.id);
 
           const write = yield* http.request("POST", ASSETS, {
             body: { name: "bearer write", owner: alice.id },
@@ -304,7 +314,10 @@ describe("session-cookie", () => {
 
           const viaCookie = yield* http.get(ME, { cookie });
 
-          assert.strictEqual(objectOf(viaCookie.json).userId, bob.id);
+          assert.strictEqual(
+            objectOf(objectOf(viaCookie.json).user).id,
+            bob.id
+          );
         })
     );
 
@@ -314,20 +327,12 @@ describe("session-cookie", () => {
         Effect.gen(function* legacyCookie() {
           const http = yield* TestHttpClient;
 
-          const v1 = yield* http.request("POST", COOKIE_SIGN_IN, {
-            body: { login: "bob", password: "bob-password" },
+          const signIn = yield* http.request("POST", SESSION, {
+            body: COOKIE_BODY,
             headers: WEB,
           });
 
-          const v2 = yield* http.request("POST", V2_SESSION, {
-            body: {
-              login: "bob",
-              password: "bob-password",
-              tokenDelivery: "cookie",
-            },
-          });
-
-          for (const response of [v1, v2]) {
+          for (const response of [signIn]) {
             assert.strictEqual(
               sessionLines(response).length,
               2,
@@ -352,19 +357,19 @@ describe("session-cookie", () => {
 
           const cookie1 = yield* http.cookieSignIn("alice", "alice-password");
 
-          const out1 = yield* http.request("POST", SIGN_OUT, {
+          const out1 = yield* http.request("DELETE", ME, {
             cookie: cookie1,
           });
 
           const cookie2 = yield* http.cookieSignIn("alice", "alice-password");
 
-          const out2 = yield* http.request("DELETE", V2_CURRENT, {
+          const out2 = yield* http.request("DELETE", ME, {
             cookie: cookie2,
           });
 
           const bearer = yield* http.signIn("alice", "alice-password");
 
-          const out3 = yield* http.request("POST", SIGN_OUT, {
+          const out3 = yield* http.request("DELETE", ME, {
             token: bearer,
           });
 
@@ -400,7 +405,7 @@ describe("session-cookie", () => {
             cookie: `${SESSION_COOKIE}=${alice}; ${SESSION_COOKIE}=${bob}`,
           };
 
-          for (const path of [ME, V2_CURRENT]) {
+          for (const path of [ME]) {
             const refused = yield* http.get(path, { headers });
 
             assert.strictEqual(refused.status, 401, path);

@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 
 import { FieldInput, toWriteOnlyValue } from "../../domain/form-input.ts";
 import {
-  INCIDENT,
   INCIDENT_ID,
   REVISION_5,
   REVISION_6,
@@ -27,6 +26,9 @@ import {
   ticketRecord,
   ticketTable,
   ticketWithRelated,
+  TICKET_WIRE,
+  TICKET_SELECTION,
+  TASK_COLUMNS,
 } from "../../form-fixture.ts";
 import { REVISION_3, userTable } from "../../table-fixture.ts";
 import {
@@ -47,7 +49,7 @@ import {
   UpdateRecord,
 } from "./command.ts";
 import { checkForm, controlIdOf } from "./form.ts";
-import { Message, OutMessage } from "./message.ts";
+import { Message, OutMessage, UnreadSavedRecord } from "./message.ts";
 import { FormMode, Submission, WriteError } from "./model.ts";
 import type { Model } from "./model.ts";
 import { init, update } from "./update.ts";
@@ -126,10 +128,13 @@ const updateRequest = (
   overrides: Partial<Parameters<typeof UpdateRecord>[0]> = {}
 ) =>
   UpdateRecord({
+    fields: TICKET_WIRE,
     generation: 2,
+    isDefinitionTable: false,
     recordId: TICKET_ID,
     revision: REVISION_5,
     secrets: {},
+    selected: TICKET_SELECTION,
     table: TICKET,
     values: {},
     version: 3,
@@ -164,6 +169,7 @@ describe("opening a form", () => {
           purpose: "Open",
           recordId: TICKET_ID,
           revision: REVISION_5,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -219,7 +225,10 @@ describe("opening a form", () => {
         })
       ),
       Command.expectHas(
-        LoadClassMetadata({ revision: REVISION_5, table: INCIDENT })
+        LoadClassMetadata({
+          resourceType: incidentTable.resourceType,
+          revision: REVISION_5,
+        })
       ),
       Command.resolveAll(
         [
@@ -317,6 +326,7 @@ describe("opening a form", () => {
           purpose: "Open",
           recordId: TICKET_ID,
           revision: REVISION_6,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -353,6 +363,20 @@ describe("opening a form", () => {
     );
   });
 });
+
+/**
+ * Whether the save a click on Save sends is a definition table's.
+ *
+ * @param page - A form with an edit.
+ * @returns The flag of each Command sent.
+ */
+const isDefinitionTableOf = (page: Model) =>
+  (update(page, Message.ClickedSave()).commands ?? []).map(
+    (command) =>
+      command.args !== undefined &&
+      "isDefinitionTable" in command.args &&
+      command.args.isDefinitionTable
+  );
 
 describe("editing and saving", () => {
   it("sends only the changed fields with If-Match and the form's revision; a cleared field is null", () => {
@@ -563,6 +587,7 @@ describe("editing and saving", () => {
           purpose: "ReloadAfterConflict",
           recordId: TICKET_ID,
           revision: REVISION_5,
+          selected: TICKET_SELECTION,
           table: TICKET,
         })
       ),
@@ -655,6 +680,211 @@ describe("editing and saving", () => {
         );
       })
     );
+  });
+
+  it("a save whose record could not be read back says so, keeps the record as stale, holds Save back and reads it again on request (review round 1)", () => {
+    const sent = after(
+      ready,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.description,
+        text: "Mine",
+      }),
+      Message.ClickedSave(),
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Typed while saving",
+      })
+    );
+
+    const unread = after(
+      sent,
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      })
+    );
+
+    expect(unread.submission).toStrictEqual(
+      Submission.SavedUnread({ version: 4 })
+    );
+    expect(AsyncData.isStale(unread.record)).toBeTruthy();
+    expect(Object.keys(unread.edits)).toStrictEqual([
+      TICKET_FIELDS.shortDescription,
+    ]);
+
+    story(
+      update,
+      given(unread),
+      message(Message.ClickedSave()),
+      Command.expectNone(),
+      message(Message.ClickedRetry()),
+      Command.expectExact(
+        LoadRecord({
+          generation: 3,
+          purpose: "Refresh",
+          recordId: TICKET_ID,
+          revision: REVISION_5,
+          selected: TICKET_SELECTION,
+          table: TICKET,
+        })
+      ),
+      Command.resolve(
+        LoadRecord,
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_5),
+          purpose: "Refresh",
+          record: {
+            ...ticketRecord,
+            values: { ...ticketRecord.values, description: "Mine" },
+            version: 4,
+          },
+        })
+      ),
+      model((page) => {
+        expect(page.submission).toStrictEqual(
+          Submission.Saved({ isVisible: true })
+        );
+        expect(page.maybeEditsFrom).toStrictEqual(Option.none());
+        expect(Object.keys(page.edits)).toStrictEqual([
+          TICKET_FIELDS.shortDescription,
+        ]);
+      })
+    );
+  });
+
+  /** A save of the description sent from `ready` (generation 2). */
+  const savingDescription = after(
+    ready,
+    Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" }),
+    Message.ClickedSave()
+  );
+
+  it("a read from before an unread save never replaces it: version 3 arriving after the save committed version 4 is ignored (review round 2)", () => {
+    // The definitions move on while the save is in flight: the record is
+    // asked for again (generation 3), then the save commits version 4
+    // without its record being read back.
+    const unread = after(
+      savingDescription,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_6,
+        table: ticketTable,
+      }),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      })
+    );
+
+    story(
+      update,
+      given(unread),
+      message(
+        Message.SucceededLoadRecord({
+          generation: 3,
+          maybeRevision: Option.some(REVISION_6),
+          purpose: "Refresh",
+          record: ticketRecord,
+        })
+      ),
+      model((page) => {
+        expect(page.submission).toStrictEqual(
+          Submission.SavedUnread({ version: 4 })
+        );
+        expect(AsyncData.isStale(page.record)).toBeTruthy();
+      }),
+      message(Message.ClickedSave()),
+      Command.expectNone()
+    );
+  });
+
+  it("after an unread save, a later version is someone else's change: the edits are marked against what the page showed (review round 2)", () => {
+    const unread = after(
+      savingDescription,
+      Message.UpdatedText({
+        fieldId: TICKET_FIELDS.shortDescription,
+        text: "Typed while saving",
+      }),
+      Message.SucceededSaveRecord({
+        generation: 2,
+        maybeRevision: Option.none(),
+        saved: UnreadSavedRecord.make({ id: TICKET_ID, version: 4 }),
+      }),
+      Message.ClickedRetry()
+    );
+
+    const theirs = {
+      ...ticketRecord,
+      values: {
+        ...ticketRecord.values,
+        description: "Mine",
+        short_description: "Theirs",
+      },
+      version: 5,
+    };
+
+    const reread = after(
+      unread,
+      Message.SucceededLoadRecord({
+        generation: 3,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Refresh",
+        record: theirs,
+      })
+    );
+
+    expect(reread.submission).toStrictEqual(
+      Submission.Saved({ isVisible: true })
+    );
+    expect(reread.maybeEditsFrom).toStrictEqual(Option.some(ticketRecord));
+    expect(Object.keys(reread.edits)).toStrictEqual([
+      TICKET_FIELDS.shortDescription,
+    ]);
+
+    // Exactly the committed version is the page's own save: no mark.
+    const own = after(
+      unread,
+      Message.SucceededLoadRecord({
+        generation: 3,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Refresh",
+        record: { ...theirs, version: 4 },
+      })
+    );
+
+    expect(own.maybeEditsFrom).toStrictEqual(Option.none());
+  });
+
+  it("updates a definition table with a merge patch, as its metadata says (definitionTable)", () => {
+    const definitionForm = after(
+      editing.model,
+      Message.SucceededLoadFormMetadata({
+        revision: REVISION_5,
+        table: { ...ticketTable, definitionTable: true },
+      }),
+      Message.SucceededLoadRecord({
+        generation: 1,
+        maybeRevision: Option.some(REVISION_5),
+        purpose: "Open",
+        record: ticketRecord,
+      }),
+      Message.UpdatedText({ fieldId: TICKET_FIELDS.description, text: "Mine" })
+    );
+
+    expect(isDefinitionTableOf(definitionForm)).toStrictEqual([true]);
+    expect(
+      isDefinitionTableOf(
+        after(
+          ready,
+          Message.UpdatedText({
+            fieldId: TICKET_FIELDS.description,
+            text: "Mine",
+          })
+        )
+      )
+    ).toStrictEqual([false]);
   });
 
   it("ignores the answer to a save the page no longer waits for", () => {
@@ -825,9 +1055,11 @@ describe("creating", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         CreateRecord({
+          fields: TICKET_WIRE,
           generation: 1,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { escalated: true, short_description: "Printer jams" },
         })
@@ -876,9 +1108,11 @@ describe("creating", () => {
     expect(described(sending.commands)).toStrictEqual(
       described([
         CreateRecord({
+          fields: TICKET_WIRE,
           generation: 1,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { short_description: "A" },
         }),
@@ -936,10 +1170,13 @@ describe("creating", () => {
       message(Message.ClickedSave()),
       Command.expectExact(
         UpdateRecord({
+          fields: TICKET_WIRE,
           generation: 2,
+          isDefinitionTable: false,
           recordId: NEW_ID,
           revision: REVISION_5,
           secrets: {},
+          selected: TICKET_SELECTION,
           table: TICKET,
           values: { description: "Later", short_description: "AB" },
           version: 1,
@@ -1134,7 +1371,7 @@ describe("the reference picker", () => {
       ),
       Command.expectExact(
         SearchTargets({
-          allowedFor: `${TICKET}/assignee`,
+          allowedFor: "helpTicket/assignee",
           cursor: Option.none(),
           display: Option.fromNullishOr(userTable.fields[0]),
           fieldId: TICKET_FIELDS.assignee,
@@ -1344,9 +1581,10 @@ describe("related lists and history", () => {
       ),
       Command.expectExact(
         LoadRelatedRecords({
+          columns: TASK_COLUMNS,
           cursor: Option.none(),
           fields:
-            "short_description,number,status,assignee,internal_cost,customer_email",
+            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 1,
           listId: LIST,
@@ -1377,9 +1615,10 @@ describe("related lists and history", () => {
       }),
       Command.expectExact(
         LoadRelatedRecords({
+          columns: TASK_COLUMNS,
           cursor: Option.some("c2"),
           fields:
-            "short_description,number,status,assignee,internal_cost,customer_email",
+            "shortDescription,number,status,assignee,internalCost,customerEmail",
           filter: `parent = "${TICKET_ID}"`,
           generation: 2,
           listId: LIST,

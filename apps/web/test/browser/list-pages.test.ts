@@ -23,6 +23,7 @@ import type { Browser, Page } from "playwright";
 import { inject } from "vitest";
 
 import {
+  API_PREFIX,
   addCondition,
   apiPages,
   applyFilter,
@@ -32,6 +33,7 @@ import {
   captureApiBodies,
   captureResponses,
   clickSort,
+  collectionOf,
   isListResponse,
   inOrder,
   listColumnCells,
@@ -80,7 +82,7 @@ const local = { owner: { layer: "local" }, protected: false } as const;
  *
  * @param origin - The server.
  * @param token - The session token, if any.
- * @param path - The path under `/api/v1`.
+ * @param path - The path under `API_PREFIX`.
  * @param body - The JSON body.
  * @returns The response's text.
  */
@@ -96,7 +98,7 @@ const post = async (
     headers.set("authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${origin}/api/v1${path}`, {
+  const response = await fetch(`${origin}${API_PREFIX}${path}`, {
     body: JSON.stringify(body),
     headers,
     method: "POST",
@@ -116,13 +118,22 @@ const decodeSession = Schema.decodeUnknownSync(
 );
 
 const tokenOf = async (origin: string, visitor: Visitor): Promise<string> => {
-  const text = await post(origin, undefined, "/auth/sign-in", {
+  const text = await post(origin, undefined, "/session", {
     login: visitor.login,
     password: visitor.password,
+    tokenDelivery: "body",
   });
 
   return decodeSession(text).token;
 };
+
+/**
+ * A reference's value in a write body: an EntityRef, or null.
+ *
+ * @param id - The target's ID, or null.
+ * @returns The value.
+ */
+const refTo = (id: string | null): JsonValue => (id === null ? null : { id });
 
 /**
  * Which asset a seeded asset of Bob's is docked to: a costly one to
@@ -151,9 +162,10 @@ const dockOf = (number: number, fixture: AcmeData): string | null => {
 const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
   const token = await tokenOf(origin, ADA);
 
-  const metadata = await fetch(`${origin}/api/v1/meta/tables/${ASSETS}`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
+  const metadata = await fetch(
+    `${origin}${API_PREFIX}/tableMetadata/${collectionOf(ASSETS)}`,
+    { headers: { authorization: `Bearer ${token}` } }
+  );
 
   // NOTE: the tests of this file share one database; the first one seeds.
   const described = await metadata.text();
@@ -164,7 +176,7 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
 
   const tierId = randomUUID();
 
-  await post(origin, token, "/schema/change-sets", {
+  await post(origin, token, "/applyChangeSet", {
     operations: [
       {
         definition: {
@@ -186,7 +198,7 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
     ],
   });
 
-  await post(origin, token, "/schema/change-sets", {
+  await post(origin, token, "/applyChangeSet", {
     operations: ["gold", "silver", "bronze", "legacy"].map((key, index) => ({
       definition: {
         ...local,
@@ -208,12 +220,12 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
   await inOrder(bobAges, async (age, index) => {
     const number = index + 1;
 
-    await post(origin, token, `/tables/${ASSETS}/records`, {
+    await post(origin, token, `/${collectionOf(ASSETS)}`, {
       cost: number % 3 === 0 ? "2600" : String(100 * number),
-      docked_to: dockOf(number, fixture),
+      dockedTo: refTo(dockOf(number, fixture)),
       name: `B${String(number).padStart(2, "0")}`,
-      owner: fixture.bob.id,
-      purchased_on: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
+      owner: { id: fixture.bob.id },
+      purchasedOn: number === 4 ? HIDDEN_PURCHASE_DATE : daysAgo(age),
       status: number % 4 === 0 ? "lost" : "in_use",
       tier: tiers[number % 4] ?? null,
     });
@@ -224,12 +236,12 @@ const seed = async (origin: string, fixture: AcmeData): Promise<void> => {
   await inOrder(aliceAges, async (age, index) => {
     const number = index + 1;
 
-    await post(origin, token, `/tables/${ASSETS}/records`, {
+    await post(origin, token, `/${collectionOf(ASSETS)}`, {
       cost: String(250 * number),
-      docked_to: number % 2 === 0 ? fixture.records.AM : null,
+      dockedTo: refTo(number % 2 === 0 ? fixture.records.AM : null),
       name: `A${String(number).padStart(2, "0")}`,
-      owner: fixture.alice.id,
-      purchased_on: daysAgo(age),
+      owner: { id: fixture.alice.id },
+      purchasedOn: daysAgo(age),
       status: number % 3 === 0 ? "lost" : "in_use",
       tier: tiers[(number + 1) % 4] ?? null,
     });
@@ -296,14 +308,14 @@ const ADMIN_SCENARIOS: readonly Scenario[] = [
   },
   {
     conditions: [relativeDate("-90")],
-    filter: "purchased_on >= today - 90 days",
+    filter: "purchasedOn >= today - 90 days",
     name: "a relative date, newest first",
-    sort: "-purchased_on",
+    sort: "-purchasedOn",
     sortClicks: ["Purchased on", "Purchased on"],
   },
   {
     conditions: [lastYear],
-    filter: "purchased_on in last year",
+    filter: "purchasedOn in last year",
     name: "inPeriod, by name",
     sort: "name",
     sortClicks: ["Name"],
@@ -333,7 +345,7 @@ const ADMIN_SCENARIOS: readonly Scenario[] = [
   },
   {
     conditions: [dockedToName("starts with", "L")],
-    filter: 'docked_to.name starts with "L"',
+    filter: 'dockedTo.name starts with "L"',
     name: "a path through a reference",
     sortClicks: [],
   },
@@ -348,14 +360,14 @@ const BOB_SCENARIOS: readonly Scenario[] = [
   },
   {
     conditions: [relativeDate("-400")],
-    filter: "purchased_on >= today - 400 days",
+    filter: "purchasedOn >= today - 400 days",
     name: "a relative date (lost assets' dates are hidden)",
-    sort: "purchased_on",
+    sort: "purchasedOn",
     sortClicks: ["Purchased on"],
   },
   {
     conditions: [lastYear],
-    filter: "purchased_on in last year",
+    filter: "purchasedOn in last year",
     name: "inPeriod",
     sortClicks: [],
   },
@@ -383,7 +395,7 @@ const BOB_SCENARIOS: readonly Scenario[] = [
   },
   {
     conditions: [dockedToName("contains", "l")],
-    filter: 'docked_to.name contains "l"',
+    filter: 'dockedTo.name contains "l"',
     name: "a path through a reference (hidden ones count as empty)",
     sort: "-name",
     sortClicks: ["Name", "Name"],
@@ -464,11 +476,7 @@ const sameListsAsApi = async (
 };
 
 const decodeTableList = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      tables: Schema.Array(Schema.Struct({ label: Schema.String })),
-    })
-  )
+  Schema.fromJsonString(Schema.Array(Schema.Struct({ label: Schema.String })))
 );
 
 /**
@@ -535,7 +543,7 @@ const restrictedStaysHidden = async (
 };
 
 /**
- * Each visitor's navigation lists exactly the tables `GET meta/tables`
+ * Each visitor's navigation lists exactly the tables `GET tableMetadata`
  * returns for that visitor.
  *
  * @param browser - The browser.
@@ -551,13 +559,13 @@ const navigationMatchesTheApi = async (browser: Browser, origin: string) => {
 
     const response = await page
       .context()
-      .request.get(`${origin}/api/v1/meta/tables`);
+      .request.get(`${origin}${API_PREFIX}/tableMetadata`);
 
     const listed = decodeTableList(await response.text());
 
     assert.deepStrictEqual(
       await navigationTables(page),
-      listed.tables.map((table) => table.label),
+      listed.map((table) => table.label),
       visitor.login
     );
     await context.close();
@@ -568,9 +576,7 @@ const navigationMatchesTheApi = async (browser: Browser, origin: string) => {
 const BLOBS = "site.blobs";
 
 const decodeCreated = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({ record: Schema.Struct({ id: Schema.String }) })
-  )
+  Schema.fromJsonString(Schema.Struct({ id: Schema.String }))
 );
 
 /**
@@ -586,7 +592,7 @@ const idOnlyTable = async (origin: string): Promise<readonly string[]> => {
   const namespaceId = randomUUID();
   const classId = randomUUID();
 
-  await post(origin, token, "/schema/change-sets", {
+  await post(origin, token, "/applyChangeSet", {
     operations: [
       {
         definition: {
@@ -641,10 +647,10 @@ const idOnlyTable = async (origin: string): Promise<readonly string[]> => {
     [1, 2, 3].map(
       async (n) =>
         decodeCreated(
-          await post(origin, token, `/tables/${BLOBS}/records`, {
+          await post(origin, token, `/${collectionOf(BLOBS)}`, {
             payload: { n },
           })
-        ).record.id
+        ).id
     )
   );
 

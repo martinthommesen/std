@@ -1,3 +1,9 @@
+import { sameTypeApartFromAllowedRecords } from "@std/definitions/allowed-records";
+import { isJsonObject } from "@std/values/json-value";
+import type { JsonValue } from "@std/values/json-value";
+import { Option } from "effect";
+
+import type { MetaField } from "./metadata.ts";
 /**
  * What the schema engine refuses on a definition record that metadata
  * cannot say per record (Contracts 1.4, 6.3; decision 0017 and 0020)
@@ -21,12 +27,7 @@
  * The server still decides (`DefinitionInvalid` with the engine's
  * message); these limits only keep the form from offering what it refuses.
  */
-import type { RecordJson } from "@std/api/records";
-import { sameTypeApartFromAllowedRecords } from "@std/definitions/allowed-records";
-import type { MetaField } from "@std/definitions/table-metadata";
-import { isJsonObject } from "@std/values/json-value";
-import type { JsonValue } from "@std/values/json-value";
-import { Option } from "effect";
+import type { RecordJson } from "./record.ts";
 
 /** The table of field definitions. */
 export const FIELD_TABLE = "core.field";

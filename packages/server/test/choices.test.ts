@@ -10,9 +10,9 @@
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
+import { TableMetadata } from "@std/api/table-metadata";
 import type { ChoiceDraft } from "@std/definitions/definition";
 import type { Operation } from "@std/definitions/operation";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
@@ -24,7 +24,15 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { runDoctor } from "../src/doctor/doctor.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { readsTestLayer, recordOf, recordPath } from "./reads-support.ts";
+import {
+  codeOf,
+  collectionOf,
+  listPath,
+  readsTestLayer,
+  recordPath,
+  resourceOf,
+} from "./reads-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -55,17 +63,17 @@ const choice = (
   return { definition, op: "createChoice" };
 };
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 
-// The error tag and the invalid-value reason a refusal gives `tier`.
+// The error code and the invalid-value reason a refusal gives `tier`.
 const reasonOf = (response: TestResponse): string => {
   const body = objectOf(response.json);
 
-  const error = arrayOf(body.errors).find(
+  const error = arrayOf(body.fieldErrors).find(
     (entry) => objectOf(entry).field === "tier"
   );
 
-  return `${textOf(body._tag)}/${textOf(objectOf(error).reason)}`;
+  return `${textOf(body.code)}/${textOf(objectOf(error).reason)}`;
 };
 
 const versionOf = (id: string) =>
@@ -105,13 +113,17 @@ const metaOf = Effect.fn("Choices.metaOf")(function* metaOf(
   table: string
 ) {
   const http = yield* TestHttpClient;
-  const response = yield* http.get(`/api/v1/meta/tables/${table}`, { token });
+
+  const response = yield* http.get(
+    `/api/v1/tableMetadata/${collectionOf(table)}`,
+    { token }
+  );
 
   return yield* decodeMetadata(response.json).pipe(Effect.orDie);
 });
 
-const choicesOf = (table: typeof TableMetadataSchema.Type) =>
-  table.table.fields.find((field) => field.name === "tier")?.choices;
+const choicesOf = (table: typeof TableMetadata.Type) =>
+  table.fields.find((field) => field.name === "tier")?.choices;
 
 const setup = Effect.gen(function* setupChoices() {
   const tier = addField(ACME.asset, "tier", { kind: "choice" });
@@ -136,7 +148,7 @@ const setup = Effect.gen(function* setupChoices() {
 describe("choice fields", () => {
   it("reads the reason a refusal gives the field", () => {
     const text =
-      '{"_tag":"ValidationFailed","errors":[{"_tag":"InvalidValue","field":"tier","reason":"unknownChoice"}]}';
+      '{"code":"ValidationFailed","fieldErrors":[{"_tag":"InvalidValue","field":"tier","reason":"unknownChoice"}]}';
 
     const parsed = parseJson(text);
 
@@ -168,42 +180,34 @@ describe("choice fields", () => {
             body: { name: "Bronze laptop", serial: "B-1", tier: "bronze" },
             expected: "ValidationFailed/unknownChoice",
             method: "POST",
-            path: "/api/v1/tables/acme.laptop/records",
+            path: listPath("acme.laptop"),
           });
           yield* refusedWith(token, {
             body: { name: "Legacy laptop", serial: "B-2", tier: "legacy" },
             expected: "ValidationFailed/retiredChoice",
             method: "POST",
-            path: "/api/v1/tables/acme.laptop/records",
+            path: listPath("acme.laptop"),
           });
 
-          const asset = yield* http.request(
-            "POST",
-            "/api/v1/tables/acme.asset/records",
-            { body: { name: "Bronze asset", tier: "bronze" }, token }
-          );
+          const asset = yield* http.request("POST", listPath("acme.asset"), {
+            body: { name: "Bronze asset", tier: "bronze" },
+            token,
+          });
 
           assert.strictEqual(asset.status, 201, asset.text);
 
-          const laptop = yield* http.request(
-            "POST",
-            "/api/v1/tables/acme.laptop/records",
-            {
-              body: {
-                name: "Gold laptop",
-                purchased_on: "2026-01-02",
-                serial: "G-1",
-                tier: "gold",
-              },
-              token,
-            }
-          );
+          const laptop = yield* http.request("POST", listPath("acme.laptop"), {
+            body: {
+              name: "Gold laptop",
+              purchasedOn: "2026-01-02",
+              serial: "G-1",
+              tier: "gold",
+            },
+            token,
+          });
 
           assert.strictEqual(laptop.status, 201, laptop.text);
-          assert.strictEqual(
-            objectOf(objectOf(objectOf(laptop.json).record).values).tier,
-            "gold"
-          );
+          assert.strictEqual(objectOf(laptop.json).tier, "gold");
 
           // Updates of laptop K through both endpoints.
           for (const table of ["acme.laptop", "acme.asset"]) {
@@ -243,11 +247,11 @@ describe("choice fields", () => {
 
           assert.strictEqual(kept.status, 200, kept.text);
 
-          const read = yield* recordOf(
+          const read = yield* resourceOf(
             yield* http.get(recordPath("acme.laptop", K), { token })
           );
 
-          assert.strictEqual(read.values.tier, "legacy");
+          assert.strictEqual(read.tier, "legacy");
 
           // Metadata: the parent's whole list, the child's subset, labels.
           assert.deepStrictEqual(
@@ -300,20 +304,14 @@ describe("choice fields", () => {
             version: override.version,
           };
 
-          const parsed = parseJson(JSON.stringify({ operations: [tighten] }));
           const before = yield* committedState;
-
-          const tightened = yield* http.request(
-            "POST",
-            "/api/v1/schema/change-sets",
-            { body: parsed.ok ? parsed.value : null, token }
-          );
+          const tightened = yield* postChangeSet(token, [tighten]);
 
           assert.strictEqual(tightened.status, 409, tightened.text);
 
           const refusal = objectOf(tightened.json);
 
-          assert.strictEqual(refusal._tag, "ExistingDataViolates");
+          assert.strictEqual(refusal.code, "ExistingDataViolates");
           assert.strictEqual(refusal.count, 1);
           assert.deepStrictEqual(refusal.sampleIds, [K]);
           assert.deepStrictEqual(yield* committedState, before);
@@ -347,15 +345,12 @@ describe("choice fields", () => {
           const token = tokens.admin;
 
           const filtered = (table: string, filter: string) =>
-            http.get(
-              `/api/v1/tables/${table}/records?filter=${encodeURIComponent(filter)}`,
-              { token }
-            );
+            http.get(listPath(table, { condition: filter }), { token });
 
           const unknown = yield* filtered("acme.asset", 'tier = "nosuch"');
 
           assert.strictEqual(unknown.status, 400, unknown.text);
-          assert.strictEqual(objectOf(unknown.json)._tag, "InvalidFilter");
+          assert.strictEqual(yield* codeOf(unknown), "InvalidFilter");
           assert.include(unknown.text, "This field has no such choice.");
 
           // A hidden key, and a key outside the child's subset through the
@@ -380,7 +375,7 @@ describe("choice fields", () => {
 
           const rule = yield* http.request(
             "POST",
-            "/api/v1/tables/core.access_rule/records",
+            listPath("core.access_rule"),
             {
               body: {
                 actions: ["read"],
@@ -391,8 +386,8 @@ describe("choice fields", () => {
                 },
                 effect: "deny",
                 name: null,
-                role_ids: [BUILT_IN_ROLE_IDS.authenticated],
-                table_id: ACME.asset,
+                roleIds: [BUILT_IN_ROLE_IDS.authenticated],
+                tableId: ACME.asset,
                 target: "records",
               },
               token,
@@ -400,7 +395,7 @@ describe("choice fields", () => {
           );
 
           assert.strictEqual(rule.status, 422, rule.text);
-          assert.strictEqual(objectOf(rule.json)._tag, "DefinitionInvalid");
+          assert.strictEqual(yield* codeOf(rule), "DefinitionInvalid");
           assert.include(rule.text, "invalidCondition");
           assert.deepStrictEqual(yield* committedState, before);
         })

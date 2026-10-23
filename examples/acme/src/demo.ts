@@ -3,75 +3,99 @@
  * Contracts 3.3 on a fresh database, through the real HTTP API.
  *
  * It signs in as Alice (asset manager) and Bob (employee), prints what each
- * sees and is refused through `/acme.asset` and `/acme.laptop`, performs the
+ * sees and is refused through `/acmeAsset` and `/acmeLaptop`, performs the
  * two-user write scenario on Bob's laptop L, and prints L's history for
  * both users through both endpoints.
  */
-import { HistoryResponseSchema, RecordListSchema } from "@std/api/records";
-import type { RecordJson } from "@std/api/records";
+import { ChangeEntry, EntityRef, Resource } from "@std/api/resource";
 import { AcmeFixture } from "@std/testing/acme-fixture";
 import { TestHttpClient } from "@std/testing/http-client";
 import type { TestResponse } from "@std/testing/http-client";
 import { stringifyJson } from "@std/values/json";
-import { isJsonString } from "@std/values/json-value";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 
 /** Prints one line of the demo. */
 export type Print = (line: string) => Effect.Effect<void>;
 
-const ASSET = "acme.asset";
-const LAPTOP = "acme.laptop";
+const ASSET = "acmeAsset";
+const LAPTOP = "acmeLaptop";
 const TABLES = [ASSET, LAPTOP] as const;
+const MERGE_PATCH = "application/merge-patch+json";
 
-// Audit fields are left out of the printed records to keep lines short.
-const AUDIT_FIELDS: ReadonlySet<string> = new Set([
-  "created_at",
-  "created_by",
-  "updated_at",
-  "updated_by",
+// The resource's own members and its audit attributes are left out of the
+// printed attributes to keep lines short.
+const HIDDEN_MEMBERS: ReadonlySet<string> = new Set([
+  "@baseType",
+  "@schemaLocation",
+  "@type",
+  "createdBy",
+  "creationDate",
+  "href",
+  "id",
+  "lastUpdate",
+  "revision",
+  "updatedBy",
+  "withheld",
 ]);
 
-const recordsPath = (table: string, query = ""): string =>
-  `/api/v1/tables/${table}/records${query}`;
+const collectionPath = (collection: string, query = ""): string =>
+  `/api/v1/${collection}${query}`;
 
-const recordPath = (table: string, id: string): string =>
-  `${recordsPath(table)}/${id}`;
+const resourcePath = (collection: string, id: string): string =>
+  `${collectionPath(collection)}/${id}`;
 
-const decodeList = Schema.decodeUnknownEffect(RecordListSchema);
-const decodeHistory = Schema.decodeUnknownEffect(HistoryResponseSchema);
-const ErrorSchema = Schema.Struct({ _tag: Schema.String });
-const decodeError = Schema.decodeUnknownOption(ErrorSchema);
+const decodeList = Schema.decodeUnknownEffect(Schema.Array(Resource));
+const decodeHistory = Schema.decodeUnknownEffect(Schema.Array(ChangeEntry));
+const decodeRef = Schema.decodeUnknownOption(EntityRef);
+
+const decodeError = Schema.decodeUnknownOption(
+  Schema.Struct({ code: Schema.String })
+);
 
 const outcome = (response: TestResponse): string => {
   const error = decodeError(response.json);
 
   return error._tag === "Some"
-    ? `${response.status} ${error.value._tag}`
+    ? `${response.status} ${error.value.code}`
     : String(response.status);
 };
 
+// A reference shows as its name (or ID), anything else as its JSON.
 const valueText = (value: JsonValue | undefined): string => {
   if (value === undefined) {
     return "";
   }
 
-  return isJsonString(value) ? value : stringifyJson(value);
+  if (isJsonString(value)) {
+    return value;
+  }
+
+  if (isJsonObject(value)) {
+    const ref = decodeRef(value);
+
+    if (ref._tag === "Some") {
+      return ref.value.name ?? ref.value.id;
+    }
+  }
+
+  return stringifyJson(value);
 };
 
-const recordLine = (record: RecordJson): string => {
-  const shown = Object.entries(record.values)
+const resourceLine = (resource: typeof Resource.Type): string => {
+  const shown = Object.entries(resource)
     .flatMap(([name, value]) =>
-      AUDIT_FIELDS.has(name) ? [] : [`${name}=${valueText(value)}`]
+      HIDDEN_MEMBERS.has(name) ? [] : [`${name}=${valueText(value)}`]
     )
     .join(", ");
 
   const withheld =
-    record.withheld === undefined || record.withheld.length === 0
+    resource.withheld === undefined || resource.withheld.length === 0
       ? ""
-      : ` [withheld: ${record.withheld.join(", ")}]`;
+      : ` [withheld: ${resource.withheld.join(", ")}]`;
 
-  return `    ${valueText(record.values.name)} (${record.class} v${record.version}): ${shown}${withheld}`;
+  return `    ${valueText(resource.name)} (${resource["@type"]} r${resource.revision}): ${shown}${withheld}`;
 };
 
 const showLists = Effect.fn("Demo.showLists")(function* showLists(
@@ -83,15 +107,15 @@ const showLists = Effect.fn("Demo.showLists")(function* showLists(
   yield* print("== What each user sees ==");
 
   for (const [name, token] of users) {
-    for (const table of TABLES) {
+    for (const collection of TABLES) {
       const list = yield* decodeList(
-        (yield* http.get(recordsPath(table), { token })).json
+        (yield* http.get(collectionPath(collection), { token })).json
       ).pipe(Effect.orDie);
 
-      yield* print(`  ${name} via /${table}: ${list.records.length} records`);
+      yield* print(`  ${name} via /${collection}: ${list.length} records`);
 
-      for (const record of list.records) {
-        yield* print(recordLine(record));
+      for (const resource of list) {
+        yield* print(resourceLine(resource));
       }
     }
   }
@@ -107,99 +131,109 @@ const showRefusals = Effect.fn("Demo.showRefusals")(function* showRefusals(
 
   yield* print("== What Bob is refused ==");
 
-  for (const table of TABLES) {
-    const hidden = yield* http.get(recordPath(table, K), { token: bob });
+  for (const collection of TABLES) {
+    const hidden = yield* http.get(resourcePath(collection, K), {
+      token: bob,
+    });
 
     yield* print(
-      `  bob GET /${table}/{Alice's laptop K} -> ${outcome(hidden)} (identical to an unknown ID)`
+      `  bob GET /${collection}/{Alice's laptop K} -> ${outcome(hidden)} (identical to an unknown ID)`
     );
   }
 
-  const costFilter = yield* http.get(
-    recordsPath(ASSET, "?filter=cost%20%3E%200"),
+  const costCondition = yield* http.get(
+    collectionPath(ASSET, "?condition=cost%20%3E%200"),
     { token: bob }
   );
 
-  yield* print(`  bob filter "cost > 0" -> ${outcome(costFilter)}`);
+  yield* print(`  bob condition "cost > 0" -> ${outcome(costCondition)}`);
 
-  const diskKey = yield* http.request("PATCH", recordPath(LAPTOP, L), {
-    body: { disk_key: "x" },
-    headers: { "if-match": '"1"' },
+  const diskKey = yield* http.request("PATCH", resourcePath(LAPTOP, L), {
+    body: { diskKey: "x" },
+    headers: { "content-type": MERGE_PATCH, "if-match": '"1"' },
     token: bob,
   });
 
-  yield* print(`  bob PATCH /acme.laptop/L {disk_key} -> ${outcome(diskKey)}`);
+  yield* print(`  bob PATCH /acmeLaptop/L {diskKey} -> ${outcome(diskKey)}`);
 });
 
 const patchL = Effect.fn("Demo.patchL")(function* patchL(
   token: string,
-  table: string,
-  version: number,
+  collection: string,
+  revision: number,
   body: JsonValue
 ) {
   const http = yield* TestHttpClient;
   const fixture = yield* AcmeFixture;
 
-  return yield* http.request("PATCH", recordPath(table, fixture.records.L), {
-    body,
-    headers: { "if-match": `"${version}"` },
-    token,
-  });
+  return yield* http.request(
+    "PATCH",
+    resourcePath(collection, fixture.records.L),
+    {
+      headers: { "content-type": MERGE_PATCH, "if-match": `"${revision}"` },
+      rawBody: JSON.stringify(body),
+      token,
+    }
+  );
 });
 
-const VersionSchema = Schema.Struct({
+const RevisionSchema = Schema.Struct({
   currentVersion: Schema.optionalKey(Schema.Int),
-  record: Schema.optionalKey(Schema.Struct({ version: Schema.Int })),
+  revision: Schema.optionalKey(Schema.Int),
 });
 
-const decodeVersion = Schema.decodeUnknownOption(VersionSchema);
+const decodeRevision = Schema.decodeUnknownOption(RevisionSchema);
 
-const versionNote = (response: TestResponse): string => {
-  const body = decodeVersion(response.json);
+const revisionNote = (response: TestResponse): string => {
+  const body = decodeRevision(response.json);
 
   if (body._tag === "None") {
     return "";
   }
 
-  if (body.value.record !== undefined) {
-    return `, version ${body.value.record.version}`;
+  if (body.value.revision !== undefined) {
+    return `, revision ${body.value.revision}`;
   }
 
   return body.value.currentVersion === undefined
     ? ""
-    : `, current version ${body.value.currentVersion}`;
+    : `, current revision ${body.value.currentVersion}`;
 };
 
 const step = (response: TestResponse): string =>
-  `${outcome(response)}${versionNote(response)}`;
+  `${outcome(response)}${revisionNote(response)}`;
 
 const twoUserWrite = Effect.fn("Demo.twoUserWrite")(function* twoUserWrite(
   print: Print,
   alice: string,
   bob: string
 ) {
-  yield* print("== Two-user write on Bob's laptop L (version 1) ==");
+  yield* print("== Two-user write on Bob's laptop L (revision 1) ==");
 
   yield* print(
-    `  1. bob PATCH /acme.laptop/L {name} -> ${step(yield* patchL(bob, LAPTOP, 1, { name: "L (Bob's)" }))}`
+    `  1. bob PATCH /acmeLaptop/L {name} -> ${step(yield* patchL(bob, LAPTOP, 1, { name: "L (Bob's)" }))}`
   );
   yield* print(
-    `  2. alice PATCH /acme.asset/L {cost} at version 1 -> ${step(yield* patchL(alice, ASSET, 1, { cost: "1300.00" }))}`
+    `  2. alice PATCH /acmeAsset/L {cost} at revision 1 -> ${step(yield* patchL(alice, ASSET, 1, { cost: "1300.00" }))}`
   );
   yield* print(
-    `  3. alice rereads, PATCH /acme.asset/L {cost} at version 2 -> ${step(yield* patchL(alice, ASSET, 2, { cost: "1300.00" }))}`
+    `  3. alice rereads, PATCH /acmeAsset/L {cost} at revision 2 -> ${step(yield* patchL(alice, ASSET, 2, { cost: "1300.00" }))}`
   );
 
-  for (const table of TABLES) {
+  for (const collection of TABLES) {
     yield* print(
-      `  4. bob PATCH /${table}/L {status} -> ${step(yield* patchL(bob, table, 3, { status: "spare" }))}`
+      `  4. bob PATCH /${collection}/L {status} -> ${step(yield* patchL(bob, collection, 3, { status: "spare" }))}`
     );
   }
 
   yield* print(
-    `  5. alice PATCH /acme.asset/L {purchased_on: null} -> ${step(yield* patchL(alice, ASSET, 3, { purchased_on: null }))}`
+    `  5. alice PATCH /acmeAsset/L {purchasedOn: null} -> ${step(yield* patchL(alice, ASSET, 3, { purchasedOn: null }))}`
   );
 });
+
+// The attributes a change entry lists, in API names.
+const changedAttributes = (changes: JsonValue | undefined): string[] =>
+  changes !== undefined && isJsonObject(changes) ? Object.keys(changes) : [];
 
 const showHistory = Effect.fn("Demo.showHistory")(function* showHistory(
   print: Print,
@@ -211,20 +245,20 @@ const showHistory = Effect.fn("Demo.showHistory")(function* showHistory(
   yield* print("== History of L ==");
 
   for (const [name, token] of users) {
-    for (const table of TABLES) {
+    for (const collection of TABLES) {
       const response = yield* http.get(
-        `${recordPath(table, fixture.records.L)}/history`,
+        `${resourcePath(collection, fixture.records.L)}/history`,
         { token }
       );
 
-      const body = yield* decodeHistory(response.json).pipe(Effect.orDie);
+      const history = yield* decodeHistory(response.json).pipe(Effect.orDie);
 
-      const entries = body.entries.map(
+      const entries = history.map(
         (entry) =>
-          `v${entry.version} ${entry.kind} [${Object.keys(entry.changes).join(", ")}]`
+          `r${valueText(entry.revision)} ${entry.kind} [${changedAttributes(entry.changes).join(", ")}]`
       );
 
-      yield* print(`  ${name} via /${table}: ${entries.join("; ")}`);
+      yield* print(`  ${name} via /${collection}: ${entries.join("; ")}`);
     }
   }
 });

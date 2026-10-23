@@ -7,10 +7,10 @@
  * wrote its notes; each version has exactly one change entry, so no two
  * states share a version.
  *
- * The contract states the race over `/api/v2/helpdeskTicketNote` and a
- * TMF621 `PATCH` with and without `If-Match`. Neither route is on main
- * yet; the follow-up `aggregate-race-http` adds those variants once 3G's
- * `/api/v2` and 3I's TMF621 merge (decision 0029). Both are adapters over
+ * The contract states the race over `/api/v1/helpdeskTicketNote` and a
+ * TMF621 `PATCH` with and without `If-Match`. The ticket note and TMF621
+ * are not on main yet; the follow-up `aggregate-race-http` adds those
+ * variants once 3I merges (decision 0029). Both are adapters over
  * these record-service calls: an `If-Match` is `expectedVersion`, a
  * `PATCH` without it reads the version under the aggregate's lock.
  */

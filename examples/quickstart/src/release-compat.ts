@@ -1,24 +1,23 @@
 /**
- * `pnpm release-compat:ci`: the previous release's databases and clients
- * keep working with this branch (CI step "Release compatibility").
+ * `pnpm release-compat:ci`: the previous release's databases upgrade to
+ * this branch (CI step "Release compatibility", a database-upgrade check;
+ * decision 0021, decision 56: clients of the old API are not supported).
  *
  * 1. The tree of the previous release's tag (`previous-release.ts`) is
  *    extracted with `git archive` into a temporary directory (without the
  *    vendored `repos/`) and installed there.
- * 2. Upgrade path, on a disposable empty database: that release's own
- *    `std upgrade`, `std bootstrap-admin`, `std serve` and its own
- *    `examples/quickstart.sh`; then this branch's `std upgrade` on the same
- *    database, `std doctor` (must exit 0), this branch's `std serve`, the
- *    release's quickstart again, unchanged, and this branch's quickstart.
- * 3. Old clients, on a second empty database: this branch's `std upgrade`,
- *    `std bootstrap-admin` and `std serve`, then the release's quickstart
- *    on its first run, so its change sets, user and record requests all
- *    reach this branch's API in the release's wire format.
+ * 2. On a disposable empty database, the release builds a database the way
+ *    it was used: its own `std upgrade`, `std bootstrap-admin`, `std serve`
+ *    and its own `examples/quickstart.sh` (definitions, roles, rules,
+ *    users and records through its own API).
+ * 3. This branch's `std upgrade` upgrades that database, `std doctor` must
+ *    exit 0, and this branch's `std serve` serves this branch's quickstart
+ *    against it, which finds and reuses what the release created.
  *
  * Each quickstart run ends with `std doctor` of the server it runs against.
- * The databases are dropped and the directory removed at the end. Needs
- * git with the release tag (CI checks out with tags), bash, curl, jq and
- * the Postgres at `STD_DATABASE_URL`.
+ * The database is dropped and the directory removed at the end. Needs git
+ * with the release tag (CI checks out with tags), bash, curl, jq and the
+ * Postgres at `STD_DATABASE_URL`.
  */
 import { randomBytes } from "node:crypto";
 
@@ -106,8 +105,8 @@ const serveAndRun = (
   );
 
 /**
- * The upgrade path: the release installs and fills a database, then this
- * branch upgrades it and serves both quickstarts.
+ * The upgrade check: the release installs and fills a database, then this
+ * branch upgrades it and serves its own quickstart.
  * @param release - The previous release.
  * @returns Fails at the first failing step.
  */
@@ -117,50 +116,23 @@ const upgradePath = (release: Release) =>
     const env = databaseEnv(database.url);
 
     yield* Console.log(
-      `\n## Upgrade path: ${release.name} then this branch, on ${database.name}`
+      `\n## Database upgrade: ${release.name} builds it, this branch upgrades it, on ${database.name}`
     );
     yield* std(release, "upgrade", env);
     yield* std(release, "bootstrap-admin", env);
     yield* serveAndRun(release, [[release, "compat-1"]], env);
     yield* std(CURRENT, "upgrade", env);
     yield* std(CURRENT, "doctor", env);
-    yield* serveAndRun(
-      CURRENT,
-      [
-        [release, "compat-2"],
-        [CURRENT, "compat-3"],
-      ],
-      env
-    );
-  }).pipe(Effect.provide(testDatabaseService({ empty: true })));
-
-/**
- * Old clients: the release's quickstart creates everything through this
- * branch's API on a fresh install.
- * @param release - The previous release.
- * @returns Fails at the first failing step.
- */
-const oldClients = (release: Release) =>
-  Effect.gen(function* releaseQuickstartOnFreshInstall() {
-    const database = yield* TestDatabase;
-    const env = databaseEnv(database.url);
-
-    yield* Console.log(
-      `\n## Old clients: ${release.name}'s quickstart on a fresh install of this branch, on ${database.name}`
-    );
-    yield* std(CURRENT, "upgrade", env);
-    yield* std(CURRENT, "bootstrap-admin", env);
-    yield* serveAndRun(CURRENT, [[release, "compat-4"]], env);
+    yield* serveAndRun(CURRENT, [[CURRENT, "compat-2"]], env);
   }).pipe(Effect.provide(testDatabaseService({ empty: true })));
 
 const releaseCompat = Effect.gen(function* releaseCompat() {
   const release = yield* previousRelease;
 
   yield* upgradePath(release);
-  yield* oldClients(release);
 
   return yield* Console.log(
-    `\nrelease-compat:ci: ${PREVIOUS_RELEASE} upgrades to this branch, and its quickstart runs against it`
+    `\nrelease-compat:ci: a ${PREVIOUS_RELEASE} database upgrades to this branch, and this branch's quickstart runs against it`
   );
 });
 

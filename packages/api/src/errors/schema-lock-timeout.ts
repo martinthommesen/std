@@ -20,3 +20,6 @@ export class SchemaLockTimeout extends Schema.TaggedError<
     return `The schema change could not get its locks in ${this.attempts} attempts`;
   }
 }
+
+/** `Retry-After` of `SchemaLockTimeout`, in seconds [judgment]. */
+export const LOCK_TIMEOUT_RETRY_AFTER_SECONDS = 5;

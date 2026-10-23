@@ -12,7 +12,7 @@
  * Model holds what the user typed only as `Redacted`.
  */
 import { Checkbox, Input, Select, Textarea } from "@foldkit/ui";
-import type { MetaChoice, MetaField } from "@std/definitions/table-metadata";
+import type { MetaChoice } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
 import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { Match, Option, Record, pipe } from "effect";
@@ -27,6 +27,7 @@ import {
   sameJson,
   toWriteOnlyValue,
 } from "../../domain/form-input.ts";
+import type { MetaField } from "../../domain/metadata.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { valueText } from "../../domain/value-text.ts";
 import { calendarDateOf } from "../../filter-builder/condition.ts";

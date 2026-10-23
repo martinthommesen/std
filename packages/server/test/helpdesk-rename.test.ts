@@ -18,17 +18,14 @@
  * Either way the old name becomes an unknown field (no aliases, 1.1).
  */
 import { assert, describe, it, layer } from "@effect/vitest";
+import { TableMetadata } from "@std/api/table-metadata";
 import type {
   LayoutElementEntry,
   NamedSetFile,
   SetFile,
   TableEntry,
 } from "@std/definitions/set-file";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
-import type {
-  MetaSavedFilter,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import { isJsonString } from "@std/values/json-value";
 import type { JsonObject } from "@std/values/json-value";
 import { Effect, Layer, Schema } from "effect";
 
@@ -45,28 +42,42 @@ import { readSetDirectory } from "../src/config/set-files.ts";
 import { writeSetDirectory } from "./config-support.ts";
 import {
   allPages,
+  codeOf,
+  collectionOf,
   listPath,
-  recordOf,
   recordPath,
-  tagOf,
+  resourceOf,
 } from "./reads-support.ts";
 
 const INCIDENT = "helpdesk.incident";
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
+const idOf = (resource: JsonObject): string => {
+  const { id } = resource;
+
+  return id !== undefined && isJsonString(id) ? id : "";
+};
+
+const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
+
+type MetaTable = typeof TableMetadata.Type;
+
+type MetaSavedFilter = NonNullable<MetaTable["savedFilters"]>[number];
 
 const metadataOf = Effect.fn("HelpdeskRename.metadataOf")(function* metadataOf(
   token: string
 ) {
   const http = yield* TestHttpClient;
 
-  const response = yield* http.get(`/api/v1/meta/tables/${INCIDENT}`, {
-    token,
-  });
+  const response = yield* http.get(
+    `/api/v1/tableMetadata/${collectionOf(INCIDENT)}`,
+    {
+      token,
+    }
+  );
 
   assert.strictEqual(response.status, 200, response.text);
 
-  return (yield* decodeMetadata(response.json).pipe(Effect.orDie)).table;
+  return yield* decodeMetadata(response.json).pipe(Effect.orDie);
 });
 
 /**
@@ -113,8 +124,8 @@ const observe = Effect.fn("HelpdeskRename.observe")(function* observe(
   const table = yield* metadataOf(token);
   const filter = savedFilter(table, filterName);
 
-  const { records } = yield* allPages(token, INCIDENT, {
-    filter: filter.filter,
+  const { resources } = yield* allPages({ token }, INCIDENT, {
+    condition: filter.filter,
   });
 
   return {
@@ -123,7 +134,7 @@ const observe = Effect.fn("HelpdeskRename.observe")(function* observe(
     form: layoutEntries(table, "form"),
     id: filter.id,
     list: layoutEntries(table, "list"),
-    selected: records.map((record) => record.id).toSorted(),
+    selected: resources.map((resource) => idOf(resource)).toSorted(),
   } satisfies Observation;
 });
 
@@ -145,15 +156,19 @@ const renamedEntry = (entry: string, from: string, to: string): string =>
  * @param before - The observation before.
  * @param from - The old name.
  * @param to - The new name.
+ * @param apiFrom - The old name as the filter text spells it (API name).
+ * @param apiTo - The new name as the filter text spells it.
  * @returns The same observation under the new name.
  */
 const renamed = (
   before: Observation,
   from: string,
-  to: string
+  to: string,
+  apiFrom: string = from,
+  apiTo: string = to
 ): Observation => ({
   ...before,
-  filter: before.filter.replaceAll(from, to),
+  filter: before.filter.replaceAll(apiFrom, apiTo),
   form: before.form.map((entry) => renamedEntry(entry, from, to)),
   list: before.list.map((entry) => renamedEntry(entry, from, to)),
 });
@@ -233,10 +248,12 @@ const write = Effect.fn("HelpdeskRename.write")(function* write(
   return response;
 });
 
-const definitionPath = (table: string, id?: string) =>
-  id === undefined
-    ? `/api/v1/tables/core.${table}/records`
-    : `/api/v1/tables/core.${table}/records/${id}`;
+const definitionPath = (table: string, id?: string) => {
+  const collection = collectionOf(`core.${table}`);
+  const base = `/api/v1/${collection}`;
+
+  return id === undefined ? base : `${base}/${id}`;
+};
 
 describe("helpdesk-rename", () => {
   it("expects layout entries and filter text under the new name", () => {
@@ -293,7 +310,7 @@ describe("helpdesk-rename", () => {
               before.list,
               `assigned_to@${HELPDESK.fields.assignee}`
             );
-            assert.include(before.filter, "assigned_to = me");
+            assert.include(before.filter, "assignedTo = me");
             assert.deepStrictEqual(
               before.selected,
               [fixture.records.laptop, fixture.records.vpn].toSorted()
@@ -307,17 +324,23 @@ describe("helpdesk-rename", () => {
 
             assert.deepStrictEqual(
               after,
-              renamed(before, "assigned_to", "assignee")
+              renamed(
+                before,
+                "assigned_to",
+                "assignee",
+                "assignedTo",
+                "assignee"
+              )
             );
             assert.include(after.filter, "assignee = me");
 
             const stale = yield* http.get(
-              listPath(INCIDENT, { filter: before.filter }),
+              listPath(INCIDENT, { condition: before.filter }),
               { token: agent }
             );
 
             assert.strictEqual(stale.status, 400, stale.text);
-            assert.strictEqual(yield* tagOf(stale), "UnknownField");
+            assert.strictEqual(yield* codeOf(stale), "UnknownField");
           })
         )
     );
@@ -340,10 +363,10 @@ describe("helpdesk-rename", () => {
           );
 
           const field = yield* write(admin, "POST", definitionPath("field"), {
+            fieldType: { kind: "text" },
             label: "Site",
             name: "site",
-            table_id: HELPDESK.ticket,
-            type: { kind: "text" },
+            tableId: HELPDESK.ticket,
           });
 
           const siteId = String(
@@ -380,11 +403,11 @@ describe("helpdesk-rename", () => {
             },
             label: "At headquarters",
             name: "at_hq",
-            table_id: HELPDESK.incident,
+            tableId: HELPDESK.incident,
           });
 
           for (const id of [fixture.records.vpn, fixture.records.printer]) {
-            const { version } = yield* recordOf(
+            const { revision } = yield* resourceOf(
               yield* http.get(recordPath(INCIDENT, id), { token: admin })
             );
 
@@ -393,7 +416,7 @@ describe("helpdesk-rename", () => {
               recordPath(INCIDENT, id),
               {
                 body: { site: "HQ" },
-                headers: { "if-match": `"${version}"` },
+                headers: { "if-match": `"${JSON.stringify(revision)}"` },
                 token: admin,
               }
             );
@@ -428,11 +451,11 @@ describe("helpdesk-rename", () => {
           }
 
           const stale = yield* http.get(
-            listPath(INCIDENT, { filter: 'site = "HQ"' }),
+            listPath(INCIDENT, { condition: 'site = "HQ"' }),
             { token: agent }
           );
 
-          assert.strictEqual(yield* tagOf(stale), "UnknownField");
+          assert.strictEqual(yield* codeOf(stale), "UnknownField");
         })
     );
   });

@@ -37,7 +37,7 @@
  * (observed in `pg_stat_activity`), so Postgres's FK check, not the
  * record service's precheck, refuses it: still `InvalidReference`.
  *
- * Everything runs against `/api/v1` and `/api/v2` (Contracts 10): the steps
+ * Everything runs against `/api/v1` and `/api/v1` (Contracts 10): the steps
  * and the matrix are written once in v1 terms, and `send` puts each request
  * in its version's form (v2 collection names, camelCase attributes,
  * `{ "id": ... }` references, merge-patch bodies) while `parsedOf` reads a
@@ -138,7 +138,9 @@ const FORBIDDEN = [
 /** The API versions the fuzz runs against. */
 type ApiVersion = "v1" | "v2";
 
-const VERSIONS: readonly ApiVersion[] = ["v1", "v2"];
+// The old API is gone (decision 0021, decision 56): the fuzz runs on the
+// one API; "v1" is kept only as the wire format its steps are written in.
+const VERSIONS: readonly ApiVersion[] = ["v2"];
 
 const V1_STATUSES: ReadonlySet<number> = new Set([
   200, 201, 400, 403, 404, 409, 422, 428, 500,
@@ -1058,12 +1060,17 @@ const camelOf = (name: string): string =>
 
 /**
  * A v1 path in v2 terms: `/api/v1/tables/site.fuzz_item/records/<id>`
- * becomes `/api/v2/siteFuzzItem/<id>`.
+ * becomes `/api/v1/siteFuzzItem/<id>`.
  *
  * @param path - A v1 record or list path.
  * @returns The v2 path.
  */
 const v2PathOf = (path: string): string => {
+  // `listPath` and `recordPath` already give the API's paths.
+  if (!path.startsWith("/api/v1/tables/")) {
+    return path;
+  }
+
   const { id, namespace, table } = V1_RECORD_PATH.exec(path)?.groups ?? {};
 
   if (namespace === undefined || table === undefined) {
@@ -1073,8 +1080,8 @@ const v2PathOf = (path: string): string => {
   const collection = camelOf(`${namespace}_${table}`);
 
   return id === undefined
-    ? `/api/v2/${collection}`
-    : `/api/v2/${collection}/${id}`;
+    ? `/api/v1/${collection}`
+    : `/api/v1/${collection}/${id}`;
 };
 
 /**
@@ -2207,15 +2214,12 @@ describe("error-fuzz", () => {
       );
 
       for (const version of VERSIONS) {
-        const titled = (title: string): string =>
-          version === "v1" ? title : `${title} in /api/v2`;
-
         // Each version's unique-conflict test uses its own code, so the
         // records of the other version's run do not take it.
         const uniqueCode = version === "v1" ? "kqvvvv" : "kqwwww";
 
         dbTest.effect(
-          titled("a unique conflict reveals only that the value is taken"),
+          "a unique conflict reveals only that the value is taken",
           () =>
             Effect.gen(function* uniqueConflict() {
               const context = yield* setUpFor(version);
@@ -2313,9 +2317,7 @@ describe("error-fuzz", () => {
         );
 
         dbTest.effect(
-          titled(
-            "every constraint on every write path gives its intended refusal"
-          ),
+          "every constraint on every write path gives its intended refusal",
           () =>
             Effect.gen(function* matrix() {
               const context = yield* setUpFor(version);
@@ -2362,7 +2364,7 @@ describe("error-fuzz", () => {
         );
 
         dbTest.effect(
-          titled("every targeted case reaches its outcome"),
+          "every targeted case reaches its outcome",
           () =>
             Effect.gen(function* targetedCases() {
               const context = yield* setUpFor(version);
@@ -2386,9 +2388,7 @@ describe("error-fuzz", () => {
         );
 
         dbTest.effect(
-          titled(
-            "fuzzed constraint violations never return Postgres text or values"
-          ),
+          "fuzzed constraint violations never return Postgres text or values",
           () =>
             Effect.gen(function* fuzz() {
               const context = yield* setUpFor(version);

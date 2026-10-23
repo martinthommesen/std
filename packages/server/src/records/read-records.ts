@@ -664,7 +664,7 @@ const ALLOWED_FOR_USAGE =
  * @param text - The parameter, if given.
  * @returns The compiled condition, or none.
  */
-const compileAllowedFor = Effect.fn("Records.allowedFor")(
+export const compileAllowedFor = Effect.fn("Records.allowedFor")(
   function* compileAllowedFor(
     scope: ReadScope,
     endpointClassId: DefinitionId,
@@ -716,7 +716,7 @@ const compileAllowedFor = Effect.fn("Records.allowedFor")(
 );
 
 /**
- * What one page of a list reads. `/api/v1` and `/api/v2` parse their own
+ * What one page of a list reads. `/api/v1` and `/api/v1` parse their own
  * parameters into it; everything below is shared, so both versions return
  * the same rows in the same order under the same masks (Contracts 10).
  */
@@ -736,7 +736,7 @@ export interface PageSpec {
   readonly before: CursorPosition | null;
   readonly withCount: boolean;
   readonly withLabels: boolean;
-  /** Whether references carry their visible target's class (v2 EntityRefs). */
+  /** Whether references carry their visible target's class (EntityRefs). */
   readonly withTargets: boolean;
   /** `plain` forces the plain form (see {@link ListRequest}). */
   readonly form: "plain" | "auto" | null;
@@ -1003,7 +1003,7 @@ WHERE ${ID} = ${textParameter(parsedId.value, "uuid")} AND ${view.visibility(BAS
  * masks as `readOne`); IDs the caller cannot see are left out.
  *
  * @param scope - The caller's scope.
- * @param view - The view (a concrete class's, for v2's concrete
+ * @param view - The view (a concrete class's, for the API's concrete
  *   representations through a parent collection).
  * @param ids - Record IDs (lowercase UUIDs).
  * @param options - Selection, labels and targets.

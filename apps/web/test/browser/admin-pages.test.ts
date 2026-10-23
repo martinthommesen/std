@@ -27,6 +27,7 @@ import type { Browser, Page } from "playwright";
 import { inject } from "vitest";
 
 import {
+  API_PREFIX,
   captureApiBodies,
   fillField,
   formControl,
@@ -45,6 +46,7 @@ import {
   rendered,
   revisionNumber,
   saveRecordForm,
+  sentAttributes,
   setPageSize,
   signIn,
 } from "./app.ts";
@@ -106,7 +108,7 @@ const decodeRevision = Schema.decodeUnknownSync(
 const currentRevision = async (page: Page, origin: string): Promise<number> => {
   const response = await page
     .context()
-    .request.get(`${origin}/api/v1/meta/tables`);
+    .request.get(`${origin}${API_PREFIX}/session/current`);
 
   return decodeRevision(await response.text()).schemaRevision;
 };
@@ -217,13 +219,13 @@ const adminEditsAccess = async (
   const rule = await saveRecordForm(page);
 
   assert.strictEqual(rule.status, 201, rule.body);
-  assert.deepStrictEqual(JSON.parse(rule.body), {
+  assert.deepStrictEqual(sentAttributes(rule.body), {
     actions: ["read"],
     condition: statusIsNew,
     effect: "deny",
     fields: [HELPDESK.fields.priority],
-    role_ids: [roleId],
-    table_id: HELPDESK.ticket,
+    roleIds: [roleId],
+    tableId: { id: HELPDESK.ticket },
     target: "fields",
   });
   assert.strictEqual(revisionNumber(rule.revision), atStart + 2);

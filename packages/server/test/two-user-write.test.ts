@@ -16,12 +16,8 @@ import { Effect } from "effect";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
-import {
-  readsTestLayer,
-  recordOf,
-  recordPath,
-  tagOf,
-} from "./reads-support.ts";
+import { objectOf } from "./authz-support.ts";
+import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import { ACME, change, values } from "./schema-support.ts";
 import {
   ASSET,
@@ -125,14 +121,12 @@ describe("two-user-write", () => {
 
         const stale = yield* patch(alice, ASSET, L, n, { cost: "1300.00" });
 
-        assert.strictEqual(stale.status, 409);
-        assert.deepStrictEqual(stale.json, {
-          _tag: "VersionConflict",
-          currentVersion: n + 1,
-        });
+        assert.strictEqual(stale.status, 412);
+        assert.strictEqual(yield* codeOf(stale), "VersionConflict");
+        assert.strictEqual(objectOf(stale.json).currentVersion, n + 1);
         assert.strictEqual(yield* versionOf(L), n + 1);
 
-        const reread = yield* recordOf(
+        const reread = yield* savedOf(
           yield* http.get(recordPath(ASSET, L), { token: alice })
         );
 
@@ -152,11 +146,11 @@ describe("two-user-write", () => {
         }
 
         const purchased = yield* patch(alice, ASSET, L, n + 2, {
-          purchased_on: null,
+          purchasedOn: null,
         });
 
         assert.strictEqual(purchased.status, 422);
-        assert.strictEqual(yield* tagOf(purchased), "ValidationFailed");
+        assert.strictEqual(yield* codeOf(purchased), "ValidationFailed");
         assert.strictEqual(yield* versionOf(L), n + 2);
 
         for (const [token, isBob] of [
@@ -190,13 +184,13 @@ describe("two-user-write", () => {
               yield* create(alice, LAPTOP, {
                 name: `delete via ${table}`,
                 owner: fixture.alice.id,
-                purchased_on: "2026-01-01",
+                purchasedOn: "2026-01-01",
               })
             );
 
             const deleted = yield* remove(alice, table, created.id, 1);
 
-            assert.strictEqual(deleted.status, 200);
+            assert.strictEqual(deleted.status, 204);
             assert.strictEqual(yield* rowsOf('"acme"."asset"', created.id), 0);
             assert.strictEqual(yield* rowsOf('"acme"."laptop"', created.id), 0);
             assert.deepStrictEqual(yield* entriesOf(created.id), [
@@ -215,7 +209,7 @@ describe("two-user-write", () => {
           const http = yield* TestHttpClient;
           const { K } = fixture.records;
 
-          const before = yield* recordOf(
+          const before = yield* savedOf(
             yield* http.get(recordPath(ASSET, K), { token: alice })
           );
 
@@ -225,7 +219,7 @@ describe("two-user-write", () => {
 
           assert.strictEqual(saved.status, 200);
 
-          const after = yield* recordOf(
+          const after = yield* savedOf(
             yield* http.get(recordPath(ASSET, K), { token: alice })
           );
 
@@ -242,7 +236,7 @@ describe("two-user-write", () => {
             name: "K old",
           });
 
-          assert.strictEqual(old.status, 409);
+          assert.strictEqual(old.status, 412);
           assert.strictEqual(yield* versionOf(K), before.version + 1);
           assert.isString(bob);
         })
@@ -264,7 +258,7 @@ describe("two-user-write", () => {
         });
 
         assert.strictEqual(response.status, 409);
-        assert.strictEqual(yield* tagOf(response), "SchemaChanged");
+        assert.strictEqual(yield* codeOf(response), "SchemaChanged");
       })
     );
 

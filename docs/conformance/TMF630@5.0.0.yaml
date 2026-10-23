@@ -9,7 +9,7 @@
 # stated as the pattern without a keyword, which the requirement says. A row
 # built from a lower-case keyword says so too.
 #
-# Each row's note says how STD's generic API v2 relates to it: a Contracts
+# Each row's note says how STD's API relates to it: a Contracts
 # section, an exclusion, client-side, spec-authoring (a rule for writing API
 # documents; STD's served documents follow where the note says so), hubs
 # (3H, Contracts 12), tmf-apis (Contracts 11) or gap; a CONTRADICTION with
@@ -71,13 +71,13 @@ rows:
     level: mandatory
     requirement: Each API specification states the API's purpose, resource and API URLs with version, supported HTTP verbs, JSON as representation, response schemas (and request schemas for POST and PATCH), supported links (optional at level 2) and supported response status codes.
     status: pending
-    note: "spec-authoring: constrains STD's served `/api/v2/openapi.json` and per-table `tableMetadata/{table}/openapi.json` (C10.1, Contracts 6.3)"
+    note: "spec-authoring: constrains STD's served `/api/v1/openapi.json` and per-table `tableMetadata/{table}/openapi.json` (C10.1, Contracts 6.3)"
   - id: TMF630@5.0.0/P1/1.3/spec-in-openapi-3
     source: TMF630 v5.0.0 P1 §1.3 p.10
     level: mandatory
     requirement: The API specification is written in OpenAPI 3.x.
     status: pending
-    note: "spec-authoring: STD generates OpenAPI 3.1 for `/api/v2/openapi.json` and per-table documents (C10.1, Contracts 6.1, 6.3)"
+    note: "spec-authoring: STD generates OpenAPI 3.1 for `/api/v1/openapi.json` and per-table documents (C10.1, Contracts 6.1, 6.3)"
   - id: TMF630@5.0.0/P1/1.5.1/caching-headers-when-caching
     source: TMF630 v5.0.0 P1 §1.5.1 p.11
     level: recommended
@@ -200,7 +200,7 @@ rows:
     level: optional
     requirement: A server may send any header defined by RFC 9110, RFC 9111 or RFC 9112.
     status: pending
-    note: "C10.1: STD sends its own headers (`STD-Schema-Revision`, `Cache-Control`, `Deprecation` on v1) beside the standard ones"
+    note: "C10.1: STD sends its own headers (`STD-Schema-Revision`, `Cache-Control`) beside the standard ones"
   - id: TMF630@5.0.0/P1/1.5.2/server-expects-any-header
     source: TMF630 v5.0.0 P1 §1.5.2 p.12
     level: mandatory
@@ -264,7 +264,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `POST /api/v2/{table}` returns `201` with `Location`"
+    note: "C10.5: `POST /api/v1/{table}` returns `201` with `Location`"
   - id: TMF630@5.0.0/P1/1.5.2/server-may-state-locale
     source: TMF630 v5.0.0 P1 §1.5.2 p.13
     level: optional
@@ -357,7 +357,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5 (Martin 2026-10-22, M2): a stale If-Match on v2 is 412 with the current ETag; v1 keeps 409."
+    note: "C10.5 (Martin 2026-10-22, M2): a stale If-Match is 412 with the current ETag."
   - id: TMF630@5.0.0/P1/1.5.3/if-match-mismatch-returns-current-etag
     source: TMF630 v5.0.0 P1 §1.5.3 p.14
     level: mandatory
@@ -420,8 +420,8 @@ rows:
     requirement: Every API should be secured against unauthorized access, following least privilege. (lowercase 'should' in source)
     status: tested
     tests:
-      - packages/server/test/contracts3-v2.test.ts#contracts3-v2
-    note: "C10.1: every v2 resource except session creation needs a session (`401 Unauthenticated`, Contracts 3.8); access rules decide rows and fields (Contracts 3)"
+      - packages/server/test/contracts3.test.ts#contracts3
+    note: "C10.1: every resource except session creation needs a session (`401 Unauthenticated`, Contracts 3.8); access rules decide rows and fields (Contracts 3)"
   - id: TMF630@5.0.0/P1/2.1/entity-schemas-in-spec
     source: TMF630 v5.0.0 P1 §2.1 p.20
     level: mandatory
@@ -441,7 +441,7 @@ rows:
     level: recommended
     requirement: Resource identifiers should use the Web's URI syntax.
     status: pending
-    note: "C10.1: resources are addressed as `/api/v2/{table}/{id}`; `href` is an absolute URL (C10.2)"
+    note: "C10.1: resources are addressed as `/api/v1/{table}/{id}`; `href` is an absolute URL (C10.2)"
   - id: TMF630@5.0.0/P1/2.3/no-encoded-characters-in-uri
     source: TMF630 v5.0.0 P1 §2.3 p.20
     level: mandatory
@@ -453,7 +453,7 @@ rows:
     level: recommended
     requirement: A resource URI should be the API root (the specification's servers.url) followed by the resource path of alternating resource names and IDs, ending in a resource or task name with optional ID.
     status: pending
-    note: "C10.1: `{apiRoot}` is `/api/v2`, then `{table}[/{id}]` or a fixed resource"
+    note: "C10.1: `{apiRoot}` is `/api/v1`, then `{table}[/{id}]` or a fixed resource"
   - id: TMF630@5.0.0/P1/2.3/https-scheme
     source: TMF630 v5.0.0 P1 §2.3 p.21
     level: recommended
@@ -513,7 +513,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1 (Martin 2026-10-22, M3): a table's collection is its v2 name in lowerCamelCase (helpdeskIncident)."
+    note: "C10.1 (Martin 2026-10-22, M3): a table's collection is its API name in lowerCamelCase (helpdeskIncident)."
   - id: TMF630@5.0.0/P1/2.5/property-names-lower-camel-case
     source: TMF630 v5.0.0 P1 §2.5 p.23
     level: mandatory
@@ -527,7 +527,7 @@ rows:
     level: mandatory
     requirement: Resource names do not expose technical or implementation details.
     status: pending
-    note: "gap: `/api/v2/{table}` uses the qualified name, which is also the Postgres schema and table name (Contracts 1.1, C10.1)"
+    note: "gap: `/api/v1/{table}` uses the qualified name, which is also the Postgres schema and table name (Contracts 1.1, C10.1)"
   - id: TMF630@5.0.0/P1/2.5/no-abbreviation-as-name
     source: TMF630 v5.0.0 P1 §2.5 p.23
     level: mandatory
@@ -587,7 +587,7 @@ rows:
     level: mandatory
     requirement: Collection names carry no 'Collection' suffix; the resource name itself denotes the collection.
     status: pending
-    note: "C10.1: `/api/v2/{table}` is the collection"
+    note: "C10.1: `/api/v1/{table}` is the collection"
   - id: TMF630@5.0.0/P1/2.8/datetime-rfc3339
     source: TMF630 v5.0.0 P1 §2.8 p.24
     level: mandatory
@@ -612,7 +612,7 @@ rows:
     requirement: A server may support HEAD, but only to return response metadata as RFC 9110 defines; HEAD must not be used for anything else.
     status: tested
     tests:
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
+      - packages/server/test/api-review-2.test.ts#api-review-2
     note: "C10.5: HEAD is offered wherever GET is and answers GET's status and headers without a body; OPTIONS is 204 with Allow."
   - id: TMF630@5.0.0/P1/3.1/get-by-id-retrieves-resource
     source: TMF630 v5.0.0 P1 §3.1 p.26
@@ -621,7 +621,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1: `GET /api/v2/{table}/{id}`"
+    note: "C10.1: `GET /api/v1/{table}/{id}`"
   - id: TMF630@5.0.0/P1/3.1/get-collection-queries
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
@@ -629,7 +629,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.3: `GET /api/v2/{table}` with the 10.3 parameters"
+    note: "C10.3: `GET /api/v1/{table}` with the 10.3 parameters"
   - id: TMF630@5.0.0/P1/3.1/post-collection-creates
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
@@ -637,7 +637,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `POST /api/v2/{table}`"
+    note: "C10.5: `POST /api/v1/{table}`"
   - id: TMF630@5.0.0/P1/3.1/patch-partial-update
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
@@ -645,7 +645,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `PATCH /api/v2/{table}/{id}`; gap: no PATCH on a collection"
+    note: "C10.5: `PATCH /api/v1/{table}/{id}`; gap: no PATCH on a collection"
   - id: TMF630@5.0.0/P1/3.1/delete-removes
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
@@ -653,13 +653,13 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `DELETE /api/v2/{table}/{id}`"
+    note: "C10.5: `DELETE /api/v1/{table}/{id}`"
   - id: TMF630@5.0.0/P1/3.1/post-task-executes
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: mandatory
     requirement: An action on an entity is executed by a POST on a collection of task resources. (lowercase 'must' in source)
     status: pending
-    note: "C10.1: `POST /api/v2/formStateCheck`, `POST /api/v2/changeSet`"
+    note: "C10.1: `POST /api/v1/formStateCheck`, `POST /api/v1/changeSet`"
   - id: TMF630@5.0.0/P1/3.1/no-put
     source: TMF630 v5.0.0 P1 §3.1 p.27
     level: recommended
@@ -750,7 +750,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `POST /api/v2/{table}` is `201`; gap: the status of `POST /api/v2/changeSet` (a persisted task) and `session` is not stated"
+    note: "C10.5: `POST /api/v1/{table}` is `201`; gap: the status of `POST /api/v1/changeSet` (a persisted task) and `session` is not stated"
   - id: TMF630@5.0.0/P1/3.3.1/status-201-body-and-location
     source: TMF630 v5.0.0 P1 §3.3.1 p.29
     level: recommended
@@ -790,7 +790,7 @@ rows:
     level: recommended
     requirement: 301 should be used for a resource that moved permanently.
     status: pending
-    note: 'gap: no redirects; v1 paths are deprecated with `Link: rel="successor-version"` rather than redirected (C10.1)'
+    note: "gap: no redirects; STD has one API (C10.1; decision 0021, decision 56)"
   - id: TMF630@5.0.0/P1/3.3.2/status-303-see-other
     source: TMF630 v5.0.0 P1 §3.3.2 p.30
     level: recommended
@@ -857,8 +857,8 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-      - packages/server/test/v2-review.test.ts#v2-review
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
+      - packages/server/test/api-review.test.ts#api-review
+      - packages/server/test/api-review-2.test.ts#api-review-2
     note: "C10.5: every method a resource route does not serve (PUT, unknown methods, POST on /{table}/{id}, ...) is 405 with an accurate Allow, decided by the route alone."
   - id: TMF630@5.0.0/P1/3.3.3/status-406-not-acceptable
     source: TMF630 v5.0.0 P1 §3.3.3 p.31
@@ -894,7 +894,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match on v2."
+    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match."
   - id: TMF630@5.0.0/P1/3.3.3/status-412-if-match-mismatch
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: recommended
@@ -902,7 +902,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match on v2."
+    note: "C10.5 (Martin 2026-10-22, M2): 412 for a stale If-Match."
   - id: TMF630@5.0.0/P1/3.3.3/status-413-too-large
     source: TMF630 v5.0.0 P1 §3.3.3 p.32
     level: mandatory
@@ -1010,7 +1010,7 @@ rows:
     level: recommended
     requirement: Error codes an API supports should be defined in its specification.
     status: pending
-    note: "spec-authoring: constrains `/api/v2/openapi.json` and per-table OpenAPI documents, which should list each `_tag` per operation"
+    note: "spec-authoring: constrains `/api/v1/openapi.json` and per-table OpenAPI documents, which should list each `_tag` per operation"
   - id: TMF630@5.0.0/P1/3.4/error-runtime-extension
     source: TMF630 v5.0.0 P1 §3.4 p.35
     level: recommended
@@ -1058,7 +1058,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.2: a record is one flat JSON object and a list a JSON array (the v1 envelope is gone)"
+    note: "C10.2: a record is one flat JSON object and a list a JSON array (no envelope)"
   - id: TMF630@5.0.0/P1/3.6/sid-data-types
     source: TMF630 v5.0.0 P1 §3.6 p.35
     level: recommended
@@ -1096,7 +1096,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1: `GET /api/v2/{table}/{id}`"
+    note: "C10.1: `GET /api/v1/{table}/{id}`"
   - id: TMF630@5.0.0/P1/4.1/get-single-complete
     source: TMF630 v5.0.0 P1 §4.1 p.39
     level: mandatory
@@ -1150,7 +1150,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1: `GET /api/v2/{table}`"
+    note: "C10.1: `GET /api/v1/{table}`"
   - id: TMF630@5.0.0/P1/4.2/collection-complete-representations
     source: TMF630 v5.0.0 P1 §4.2 p.43
     level: mandatory
@@ -1662,7 +1662,7 @@ rows:
     level: recommended
     requirement: A sub-resource path should allow only GET.
     status: pending
-    note: "C10.1: `GET /api/v2/{table}/{id}/history` is the only sub-resource route"
+    note: "C10.1: `GET /api/v1/{table}/{id}/history` is the only sub-resource route"
   - id: TMF630@5.0.0/P1/4.6.1/sub-resource-writes-via-parent
     source: TMF630 v5.0.0 P1 §4.6.1 p.96
     level: recommended
@@ -1692,7 +1692,7 @@ rows:
     level: mandatory
     requirement: When sub-resources are exposed, the server's response for the parent resource must carry links (RFC 8288 `Link` header, `rel="collection"`) to them.
     status: pending
-    note: "gap: a v2 single-record response carries no `Link` to its `/history` collection (Contracts 10.2, 10.4)"
+    note: "gap: a single-record response carries no `Link` to its `/history` collection (Contracts 10.2, 10.4)"
   - id: TMF630@5.0.0/P1/4.8/sort-parameter-syntax
     source: TMF630 v5.0.0 P1 §4.8 p.99
     level: mandatory
@@ -1706,7 +1706,7 @@ rows:
     level: mandatory
     requirement: An API must use only PATCH to modify a resource's attributes.
     status: pending
-    note: "C10.5: `PATCH /api/v2/{table}/{id}`"
+    note: "C10.5: `PATCH /api/v1/{table}/{id}`"
   - id: TMF630@5.0.0/P1/5.1/no-put
     source: TMF630 v5.0.0 P1 §5.1 p.101
     level: mandatory
@@ -1782,7 +1782,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `POST /api/v2/{table}`"
+    note: "C10.5: `POST /api/v1/{table}`"
   - id: TMF630@5.0.0/P1/6.1/create-sync-201
     source: TMF630 v5.0.0 P1 §6.1 p.117
     level: mandatory
@@ -1840,7 +1840,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.5: `DELETE /api/v2/{table}/{id}`"
+    note: "C10.5: `DELETE /api/v1/{table}/{id}`"
   - id: TMF630@5.0.0/P1/7/delete-no-request-payload
     source: TMF630 v5.0.0 P1 §7 p.126
     level: mandatory
@@ -1866,7 +1866,7 @@ rows:
     level: optional
     requirement: A server may accept a JSON Patch (`application/json-patch+json`) on a collection resource to create, update or delete several members in one atomic request.
     status: pending
-    note: "gap: v2 defines no `PATCH /api/v2/{table}`; bulk writes exist only as jobs (Contracts 7.7), so the Chapter 8 rows below apply only if it is added"
+    note: "gap: the API defines no `PATCH /api/v1/{table}`; bulk writes exist only as jobs (Contracts 7.7), so the Chapter 8 rows below apply only if it is added"
   - id: TMF630@5.0.0/P1/8.1/add-op-for-new-member
     source: TMF630 v5.0.0 P1 §8.1 p.128
     level: mandatory
@@ -1964,13 +1964,13 @@ rows:
     level: mandatory
     requirement: When a task operation creates and persists a task resource, the server must return its `id`, `href`, `@type` and a `Location` header.
     status: pending
-    note: "gap: Contracts 10.1 lists `POST /api/v2/changeSet` (201) but does not state that its response carries `id`, `href`, `@type` and `Location`"
+    note: "gap: Contracts 10.1 lists `POST /api/v1/changeSet` (201) but does not state that its response carries `id`, `href`, `@type` and `Location`"
   - id: TMF630@5.0.0/P1/9.1/task-id-is-task-resource
     source: TMF630 v5.0.0 P1 §9.1 p.139
     level: mandatory
     requirement: An `id` returned by a task operation must identify the task resource that was created.
     status: pending
-    note: "C10.1: a `changeSet` response's `id` is the change set's own ID, read back at `GET /api/v2/changeSet/{id}`"
+    note: "C10.1: a `changeSet` response's `id` is the change set's own ID, read back at `GET /api/v1/changeSet/{id}`"
   - id: TMF630@5.0.0/P1/9.1/task-iterators-optional
     source: TMF630 v5.0.0 P1 §9.1 p.139
     level: optional
@@ -1982,13 +1982,13 @@ rows:
     level: mandatory
     requirement: When a short-running task's resource is persisted, the server must answer 201 Created with the task resource, its `id`, `href` and `@type`, and a `Location` header naming it.
     status: pending
-    note: "C10.1: `POST /api/v2/changeSet` is 201 (1.4); `href`, `@type` and `Location` are not stated (see 9.1/persisted-task-id-href-type-location)"
+    note: "C10.1: `POST /api/v1/changeSet` is 201 (1.4); `href`, `@type` and `Location` are not stated (see 9.1/persisted-task-id-href-type-location)"
   - id: TMF630@5.0.0/P1/9.2/persisted-task-holds-result
     source: TMF630 v5.0.0 P1 §9.2 p.140
     level: recommended
     requirement: A persisted short-running task resource returned to the client should include the operation's result data, if any.
     status: pending
-    note: "C10.1: a `changeSet` response and `GET /api/v2/changeSet/{id}` return the journal entry and steps (1.4)"
+    note: "C10.1: a `changeSet` response and `GET /api/v1/changeSet/{id}` return the journal entry and steps (1.4)"
   - id: TMF630@5.0.0/P1/9.3/long-task-create-persist-in-call
     source: TMF630 v5.0.0 P1 §9.3 p.146
     level: mandatory
@@ -2018,13 +2018,13 @@ rows:
     level: recommended
     requirement: The server should keep a long-running task resource at least for as long as the task is in progress.
     status: pending
-    note: "C10.1: GET /api/v2/changeSet/{id} reads the change-set journal, which is kept (Contracts 1.4)"
+    note: "C10.1: GET /api/v1/changeSet/{id} reads the change-set journal, which is kept (Contracts 1.4)"
   - id: TMF630@5.0.0/P1/9.3/long-task-retain-longer
     source: TMF630 v5.0.0 P1 §9.3 p.146
     level: optional
     requirement: The server may keep the task resource beyond the task's completion, for an implementation-defined period.
     status: pending
-    note: "C10.1: change-set journal entries stay readable through GET /api/v2/changeSet/{id}"
+    note: "C10.1: change-set journal entries stay readable through GET /api/v1/changeSet/{id}"
   - id: TMF630@5.0.0/P1/9.4/long-task-implements-lifecycle
     source: TMF630 v5.0.0 P1 §9.4 p.146
     level: mandatory
@@ -2048,7 +2048,7 @@ rows:
     level: mandatory
     requirement: The server must answer a task operation with 201 Created and the full task resource when the task resource was created and persisted.
     status: pending
-    note: "C10.1: POST /api/v2/changeSet keeps the 201 of Contracts 1.4"
+    note: "C10.1: POST /api/v1/changeSet keeps the 201 of Contracts 1.4"
   - id: TMF630@5.0.0/P1/9.4/task-202-async
     source: TMF630 v5.0.0 P1 §9.4 p.147
     level: mandatory
@@ -2072,7 +2072,7 @@ rows:
     level: mandatory
     requirement: When a task resource is persisted (above all for long-running tasks), the API must offer a GET by the task resource's identifier.
     status: pending
-    note: "C10.1: GET /api/v2/changeSet/{id}"
+    note: "C10.1: GET /api/v1/changeSet/{id}"
   - id: TMF630@5.0.0/P1/9.4/all-tasks-follow-lifecycle
     source: TMF630 v5.0.0 P1 §9.4 p.148
     level: mandatory
@@ -2168,7 +2168,7 @@ rows:
     level: mandatory
     requirement: Where monitoring is supported, the server must create a monitor resource instance for each long-running task that supports monitoring.
     status: pending
-    note: "gap: STD has no monitor resources; a change set's progress is read on GET /api/v2/changeSet/{id} (C10.1)"
+    note: "gap: STD has no monitor resources; a change set's progress is read on GET /api/v1/changeSet/{id} (C10.1)"
   - id: TMF630@5.0.0/P1/10.4/monitor-link-in-initiating-response
     source: TMF630 v5.0.0 P1 §10.4 p.172
     level: mandatory
@@ -2313,9 +2313,9 @@ rows:
     requirement: A server that supports the (optional) history pattern exposes it at {resource}/{id}/history. (lowercase 'must' in the source)
     status: tested
     tests:
-      - packages/server/test/v2-history.test.ts#v2-history
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
-    note: "C10.4 (Martin 2026-10-22, D3): GET /api/v2/{table}/{id}/history and .../history/{changeId}."
+      - packages/server/test/api-history.test.ts#api-history
+      - packages/server/test/api-review-2.test.ts#api-review-2
+    note: "C10.4 (Martin 2026-10-22, D3): GET /api/v1/{table}/{id}/history and .../history/{changeId}."
   - id: TMF630@5.0.0/P1/12.3.1/history-same-pagination
     source: TMF630 v5.0.0 P1 §12.3.1 p.214
     level: mandatory
@@ -2328,7 +2328,7 @@ rows:
     requirement: A server supports on the history collection the same selectors (filter, fields) as on every other collection.
     status: tested
     tests:
-      - packages/server/test/v2-history.test.ts#v2-history
+      - packages/server/test/api-history.test.ts#api-history
     note: "C10.4 (Martin 2026-10-22, D3): history lists take paging, fields and filters on ChangeEntry attributes; filters on record values are refused (3.7)."
   - id: TMF630@5.0.0/P1/12.3/history-links-on-resource
     source: TMF630 v5.0.0 P1 §12.3 p.210
@@ -2336,7 +2336,7 @@ rows:
     requirement: A revisioned resource's response links its history (rel=version-history) and its latest revision (rel=latest-version). (no keyword; shown in the example)
     status: tested
     tests:
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
+      - packages/server/test/api-review-2.test.ts#api-review-2
     note: "C10.4: single-resource answers carry version-history and latest-version, the latest entry the caller may see (3.7)."
   - id: TMF630@5.0.0/P1/12.3.3/history-entry-links
     source: TMF630 v5.0.0 P1 §12.3.3 p.232
@@ -2344,7 +2344,7 @@ rows:
     requirement: A single history entry's response links itself (rel=self), the history (rel=version-history) and the latest revision (rel=latest-version). (no keyword; shown in the example)
     status: tested
     tests:
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
+      - packages/server/test/api-review-2.test.ts#api-review-2
     note: "C10.4: history/{changeId} carries self, version-history and latest-version, among the entries the caller may see."
   - id: TMF630@5.0.0/P1/12.4/history-link-relations
     source: TMF630 v5.0.0 P1 §12.4 p.238
@@ -2352,14 +2352,14 @@ rows:
     requirement: History links use the RFC 5829 relations version-history, latest-version, predecessor-version and successor-version.
     status: tested
     tests:
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
+      - packages/server/test/api-review-2.test.ts#api-review-2
     note: "C10.4: entries also link predecessor-version and successor-version where they exist among the entries the caller may see."
   - id: TMF630@5.0.0/P1/13.1.1/major-version-on-incompatible-change
     source: TMF630 v5.0.0 P1 §13.1.1 p.239
     level: mandatory
     requirement: An API specification author increments the major version for any change that is not backward compatible and forces clients to change. (lowercase 'must' in the source)
     status: pending
-    note: "C10.1: the major version is in the path (v1 frozen, v2 new); spec-authoring for STD's served /api/v2/openapi.json version string"
+    note: "C10.1: the major version is in the path (one API, /api/v1; decision 0021, decision 56); spec-authoring for STD's served /api/v1/openapi.json version string"
   - id: TMF630@5.0.0/P1/13.1.2/minor-change-keeps-major
     source: TMF630 v5.0.0 P1 §13.1.2 p.239
     level: recommended
@@ -2371,13 +2371,13 @@ rows:
     level: mandatory
     requirement: In a minor version, new elements and attributes added to a data type are optional. (lowercase 'must' in the source)
     status: pending
-    note: "C10.7: v2 request schemas decode an absent new property as its default (decision 0017); spec-authoring for STD's served OpenAPI documents"
+    note: "C10.7: request schemas decode an absent new property as its default (decision 0017); spec-authoring for STD's served OpenAPI documents"
   - id: TMF630@5.0.0/P1/13.1.2/minor-cardinality-only-loosens
     source: TMF630 v5.0.0 P1 §13.1.2 p.239
     level: mandatory
     requirement: In a minor version, an attribute's cardinality may change only from mandatory to optional or from lower to higher. (lowercase 'must' in the source)
     status: pending
-    note: "spec-authoring: constrains STD's /api/v2/openapi.json and per-table OpenAPI across minor releases; no Contracts 10 rule states it (gap)"
+    note: "spec-authoring: constrains STD's /api/v1/openapi.json and per-table OpenAPI across minor releases; no Contracts 10 rule states it (gap)"
   - id: TMF630@5.0.0/P1/13.1.2/minor-enum-values-kept
     source: TMF630 v5.0.0 P1 §13.1.2 p.239
     level: mandatory
@@ -2389,7 +2389,7 @@ rows:
     level: mandatory
     requirement: In a minor version that adds operations, every existing operation is kept. (lowercase 'must' in the source)
     status: pending
-    note: "spec-authoring: constrains STD's /api/v2/openapi.json across minor releases; C10.1 keeps v1 frozen and removes it only with a new major path"
+    note: "spec-authoring: constrains STD's /api/v1/openapi.json across minor releases; C10.1 keeps the major version in the path"
   - id: TMF630@5.0.0/P1/13.1.2/minor-new-parameters-optional
     source: TMF630 v5.0.0 P1 §13.1.2 p.239
     level: mandatory
@@ -2401,7 +2401,7 @@ rows:
     level: mandatory
     requirement: In a minor version, the existing parameters of operations are kept. (lowercase 'must' in the source)
     status: pending
-    note: "spec-authoring: constrains STD's /api/v2/openapi.json across minor releases; no Contracts 10 rule states it (gap)"
+    note: "spec-authoring: constrains STD's /api/v1/openapi.json across minor releases; no Contracts 10 rule states it (gap)"
   - id: TMF630@5.0.0/P1/13.1.4/major-version-in-url
     source: TMF630 v5.0.0 P1 §13.1.4 p.240
     level: mandatory
@@ -2409,7 +2409,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.1: STD's generic API lives under /api/v2 (major only); TMF APIs under /tmf-api/<apiName>/v5 (C11.1)"
+    note: "C10.1: STD's generic API lives under /api/v1 (major only); TMF APIs under /tmf-api/<apiName>/v5 (C11.1)"
   - id: TMF630@5.0.0/P1/13.2.2/supported-languages-list
     source: TMF630 v5.0.0 P1 §13.2.2 p.241
     level: recommended
@@ -2511,7 +2511,7 @@ rows:
     level: recommended
     requirement: "A collection implicitly scopes the @type of the resources it holds: a subtype's collection holds only that subtype. (no keyword; stated as the pattern)"
     status: pending
-    note: "C10.1: each class is its own collection /api/v2/{table}; C2.3 endpoint E lists subtree(E), so a subtype collection also holds its own descendants"
+    note: "C10.1: each class is its own collection /api/v1/{table}; C2.3 endpoint E lists subtree(E), so a subtype collection also holds its own descendants"
   - id: TMF630@5.0.0/v4.0.0-P2/1/basetype-names-base-collection
     source: TMF630 v4.0.0 P2 §1 p.3
     level: optional
@@ -2525,7 +2525,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-      - packages/server/test/v2-review.test.ts#v2-review
+      - packages/server/test/api-review.test.ts#api-review
     note: "C10.2 (Martin 2026-10-22, D1): reads and lists through a parent collection return each record's concrete representation under its access rules."
   - id: TMF630@5.0.0/v4.0.0-P2/1/abstract-types-never-returned
     source: TMF630 v4.0.0 P2 §1 p.4
@@ -2621,8 +2621,8 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-      - packages/server/test/v2-review-2.test.ts#v2-review-2
-    note: "C10.2: @schemaLocation is /api/v2/tableMetadata/{class}/schema.json, the caller's JSON Schema of the concrete class; every resource validates against it, typed references included."
+      - packages/server/test/api-review-2.test.ts#api-review-2
+    note: "C10.2: @schemaLocation is /api/v1/tableMetadata/{class}/schema.json, the caller's JSON Schema of the concrete class; every resource validates against it, typed references included."
   - id: TMF630@5.0.0/v4.0.0-P2/2.1/extension-schema-includes-base
     source: TMF630 v4.0.0 P2 §2.1 p.11
     level: mandatory
@@ -2719,7 +2719,7 @@ rows:
     level: recommended
     requirement: The server supports a depth directive on GET that expands referenced resources inline up to the given level. (no keyword; stated as the pattern)
     status: pending
-    note: "gap: v2 has no depth parameter; fields allows one-hop reference paths (assignedTo.name) and an unknown parameter is InvalidRequest (C10.3)"
+    note: "gap: the API has no depth parameter; fields allows one-hop reference paths (assignedTo.name) and an unknown parameter is InvalidRequest (C10.3)"
   - id: TMF630@5.0.0/v4.0.0-P2/3/depth-level-semantics
     source: TMF630 v4.0.0 P2 §3 p.21
     level: recommended
@@ -2737,7 +2737,7 @@ rows:
     level: recommended
     requirement: The server supports an expand parameter that restricts which reference paths are expanded; without it all paths should be expanded, with it only the named paths. (no keyword; stated as the pattern)
     status: pending
-    note: "gap: v2 has no expand parameter (InvalidRequest as unknown, C10.3)"
+    note: "gap: the API has no expand parameter (InvalidRequest as unknown, C10.3)"
   - id: TMF630@5.0.0/v4.0.0-P2/3/depth-default-from-expand
     source: TMF630 v4.0.0 P2 §3 p.21
     level: recommended
@@ -2857,7 +2857,7 @@ rows:
     level: recommended
     requirement: A server supporting hypermedia adds links to the application/json representation without a dedicated media type or media-type negotiation, so existing JSON clients keep working. (no keyword; stated as the pattern)
     status: pending
-    note: "gap: no hypermedia extension; nothing is negotiated by media type in v2 (C10)"
+    note: "gap: no hypermedia extension; nothing is negotiated by media type (C10)"
   - id: TMF630@5.0.0/v4.0.0-P3/2.2/home-new-link-relations
     source: TMF630 v4.0.0 P3 §2.2 p.4
     level: optional
@@ -2887,7 +2887,7 @@ rows:
     level: mandatory
     requirement: Every hypermedia API must have a home document, and an implementation supporting the hypermedia extension must serve the home URI.
     status: pending
-    note: "gap: no home URI; the closest are /api/v2/openapi.json and /api/v2/tableMetadata (C10.1)"
+    note: "gap: no home URI; the closest are /api/v1/openapi.json and /api/v1/tableMetadata (C10.1)"
   - id: TMF630@5.0.0/v4.0.0-P3/2.2/home-get-only
     source: TMF630 v4.0.0 P3 §2.2 p.5
     level: recommended
@@ -2899,7 +2899,7 @@ rows:
     level: mandatory
     requirement: The home URI must return at least a JSON list of links to the API's resource collections.
     status: pending
-    note: "gap: no home URI; GET /api/v2/tableMetadata lists the caller's tables without links (C10.1, C6.3)"
+    note: "gap: no home URI; GET /api/v1/tableMetadata lists the caller's tables without links (C10.1, C6.3)"
   - id: TMF630@5.0.0/v4.0.0-P3/2.3/body-includes-links-with-meaning
     source: TMF630 v4.0.0 P3 §2.3 p.6
     level: mandatory
@@ -3105,19 +3105,19 @@ rows:
     level: optional
     requirement: A server offering export jobs may support export formats besides JSON.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1/export-error-sets-failed
     source: TMF630 v5.0.0 P4 §1 p.6
     level: mandatory
     requirement: When any error occurs during an export, the server must set the export job's status to "Failed".
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1/export-error-log-names-failed-parts
     source: TMF630 v5.0.0 P4 §1 p.6
     level: mandatory
     requirement: When an export fails, the server must record in the job's error log which parts of the export data failed.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-path-in-request
     source: TMF630 v5.0.0 P4 §1.1 p.7
     level: recommended
@@ -3129,7 +3129,7 @@ rows:
     level: recommended
     requirement: The server should return the export job's `path` in the response when the request supplied it.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-query-in-request-optional
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: optional
@@ -3141,31 +3141,31 @@ rows:
     level: recommended
     requirement: The server should return the export job's `query` in the response when the request supplied it.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-status-failed-on-any-error
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: mandatory
     requirement: 'Because an export is treated as atomic, the server must report status "Failed" for an export job in which any error occurred (status values: "Not Started", "Running", "Succeeded", "Failed").'
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-status-in-response
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: mandatory
     requirement: The server must include the system-generated `status` in every export job response.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-creation-date-in-response
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: recommended
     requirement: The server should include the system-generated `creationDate` of the export job in its responses.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-completion-date-when-complete
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: recommended
     requirement: Once the export is complete, the server should include the system-generated `completionDate` in export job responses.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-content-type-when-not-default
     source: TMF630 v5.0.0 P4 §1.1 p.8
     level: mandatory
@@ -3183,19 +3183,19 @@ rows:
     level: recommended
     requirement: The server should include the export destination `url` in export job responses.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-error-log-on-error
     source: TMF630 v5.0.0 P4 §1.1 p.9
     level: recommended
     requirement: When an error occurred, the server should include the system-generated `errorLog` in the export job response.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-error-log-partial-detail
     source: TMF630 v5.0.0 P4 §1.1 p.9
     level: recommended
     requirement: When only part of an export hit an error, the server's error log should say which parts of the export data failed.
     status: pending
-    note: "gap: no ExportJob resource in STD's v2 API"
+    note: "gap: no ExportJob resource in STD's API"
   - id: TMF630@5.0.0/P4/1.1/export-data-access-protected
     source: TMF630 v5.0.0 P4 §1.1 p.9
     level: recommended
@@ -3487,7 +3487,7 @@ rows:
     level: mandatory
     requirement: A server (every REST API) supports the application/json media type by default.
     status: pending
-    note: "C10.2: every v2 resource, list and Error is a JSON document served as application/json"
+    note: "C10.2: every resource, list and Error is a JSON document served as application/json"
   - id: TMF630@5.0.0/P6/2.3.6/function-extensions-side-effect-free
     source: TMF630 v5.0.0 P6 §2.3.6 p.21
     level: mandatory
@@ -3625,7 +3625,7 @@ rows:
     level: mandatory
     requirement: The schema prescriptions of Part 7 bind every API designed from now on. (no keyword; stated as the pattern)
     status: pending
-    note: "spec-authoring: binds the JSON Schema documents STD serves (per-class `/api/v2/tableMetadata/{table}/schema.json`, C10.1/C10.2) and the per-table OpenAPI documents"
+    note: "spec-authoring: binds the JSON Schema documents STD serves (per-class `/api/v1/tableMetadata/{table}/schema.json`, C10.1/C10.2) and the per-table OpenAPI documents"
   - id: TMF630@5.0.0/P7/binding-nature/existing-v5-may-deviate
     source: TMF630 v5.0.0 P7 §Binding nature p.6
     level: optional
@@ -3782,7 +3782,7 @@ rows:
     status: tested
     tests:
       - packages/server/test/tmf630-conformance.test.ts#tmf630-conformance
-    note: "C10.2: a reference's `href` is the target record's URL through its concrete class, readable with GET /api/v2/{table}/{id}"
+    note: "C10.2: a reference's `href` is the target record's URL through its concrete class, readable with GET /api/v1/{table}/{id}"
   - id: TMF630@5.0.0/P7/2.2.1/ref-only-when-semantics-clear
     source: TMF630 v5.0.0 P7 §2.2.1 p.22
     level: recommended
@@ -4484,7 +4484,7 @@ rows:
     level: mandatory
     requirement: Every extension is traced and made visible so that other specializers can reuse it.
     status: pending
-    note: "tmf-apis (C11): a local child class's additions are published as its JSON Schema, named by `@schemaLocation` (`/api/v2/tableMetadata/{class}/schema.json`, C10.2)"
+    note: "tmf-apis (C11): a local child class's additions are published as its JSON Schema, named by `@schemaLocation` (`/api/v1/tableMetadata/{class}/schema.json`, C10.2)"
   - id: TMF630@5.0.0/P8/rule-3/keep-required-attributes
     source: TMF630 v5.0.0 P8 §Rule 3 p.11
     level: mandatory

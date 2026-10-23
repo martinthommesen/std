@@ -1,9 +1,9 @@
 /**
  * `schema-fuzz` (plan Step 1 gate, gate row 1.9; Contracts 1.1, 1.4 to
  * 1.8, 3.8): fuzzed definition writes through the change-set endpoint
- * (`POST /api/v1/schema/change-sets`) and through generic writes on
- * definition tables (`POST`, `PATCH`, `DELETE` on `core.field`,
- * `core.class`, `core.index`, `core.role`, `core.access_rule`) never return
+ * (`POST /api/v1/applyChangeSet`) and through generic writes on
+ * definition tables (`POST`, `PATCH`, `DELETE` on `coreField`,
+ * `coreClass`, `coreIndex`, `coreRole`, `coreAccessRule`) never return
  * Postgres text, constraint names or stored values, and a refused change
  * set commits nothing.
  *
@@ -48,6 +48,7 @@
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Definition, DefinitionKind } from "@std/definitions/definition";
+import { apiAttributeNameOf } from "@std/definitions/names";
 import type { Operation } from "@std/definitions/operation";
 import { setOrigin } from "@std/definitions/requester";
 import {
@@ -92,6 +93,7 @@ import { applyChangeSet } from "../src/schema/change-set.ts";
 import { Transactions } from "../src/sql/transactions.ts";
 import { committedState } from "./committed-state.ts";
 import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
 import {
   addAccessRule,
   addField,
@@ -104,8 +106,6 @@ import {
   insertRecords,
   values,
 } from "./schema-support.ts";
-
-const CHANGE_SETS = "/api/v1/schema/change-sets";
 
 /** Who sends a request. */
 type Caller = "ada" | "pam" | "alice" | "bob";
@@ -139,9 +139,23 @@ const FORBIDDEN = [
   "alter table",
 ];
 
-const STATUSES = new Set([200, 201, 400, 403, 404, 409, 422, 428, 500, 503]);
+const STATUSES = new Set([
+  200, 201, 204, 400, 403, 404, 405, 409, 412, 415, 422, 428, 500, 501, 503,
+]);
 
-/** The members each error body may have besides `_tag`. */
+/** The members of every TMF Error besides its details (Contracts 10.6). */
+const TMF_MEMBERS = [
+  "@baseType",
+  "@schemaLocation",
+  "@type",
+  "code",
+  "message",
+  "reason",
+  "referenceError",
+  "status",
+] as const;
+
+/** The members each error body may have besides the TMF ones. */
 const ERROR_MEMBERS = new Map<string, readonly string[]>([
   ["DefinitionInvalid", ["problems"]],
   ["DefinitionProtected", ["definitionId", "operation", "reason"]],
@@ -161,7 +175,7 @@ const ERROR_MEMBERS = new Map<string, readonly string[]>([
   ["UnknownField", ["field"]],
   ["UnknownTable", ["table"]],
   ["UseRetireOrPurge", ["definitionId", "kind"]],
-  ["ValidationFailed", ["errors"]],
+  ["ValidationFailed", ["fieldErrors"]],
   ["VersionConflict", ["currentVersion"]],
   ["VersionRequired", []],
 ]);
@@ -291,7 +305,7 @@ const textOf = (value: JsonValue | undefined): string =>
  */
 const outcomesOf = (response: TestResponse): string[] => {
   const body = objectOf(response.json);
-  const tag = body._tag === undefined ? undefined : textOf(body._tag);
+  const tag = body.code === undefined ? undefined : textOf(body.code);
 
   const head =
     tag === undefined ? `${response.status}` : `${response.status} ${tag}`;
@@ -300,7 +314,7 @@ const outcomesOf = (response: TestResponse): string[] => {
     (problem) => `DefinitionInvalid:${textOf(objectOf(problem).code)}`
   );
 
-  const errors = arrayOf(body.errors).map(
+  const errors = arrayOf(body.fieldErrors).map(
     (error) => `ValidationFailed:${textOf(objectOf(error)._tag)}`
   );
 
@@ -316,11 +330,13 @@ const outcomesOf = (response: TestResponse): string[] => {
  * @param value - The object.
  * @param what - What it is, for messages.
  * @param allowed - The allowed members.
+ * @param base - Members every such object may have.
  */
 const assertMembers = (
   value: JsonValue | undefined,
   what: string,
-  allowed: readonly string[] | undefined
+  allowed: readonly string[] | undefined,
+  base: readonly string[] = TMF_MEMBERS
 ): void => {
   assert.isDefined(allowed, `undocumented ${what}`);
   assert.isTrue(
@@ -329,7 +345,7 @@ const assertMembers = (
   );
 
   for (const key of Object.keys(objectOf(value))) {
-    assert.include(["_tag", ...(allowed ?? [])], key, `${what}.${key}`);
+    assert.include([...base, ...(allowed ?? [])], key, `${what}.${key}`);
   }
 };
 
@@ -341,26 +357,31 @@ const assertMembers = (
 const checkMembers = (response: TestResponse): void => {
   const body = objectOf(response.json);
 
-  if (body._tag === undefined) {
+  if (body.code === undefined) {
     return;
   }
 
-  const tag = textOf(body._tag);
+  const tag = textOf(body.code);
 
   assertMembers(response.json, tag, ERROR_MEMBERS.get(tag));
 
   for (const problem of arrayOf(body.problems)) {
-    assertMembers(problem, `${tag}.problems[]`, PROBLEM_MEMBERS);
+    assertMembers(problem, `${tag}.problems[]`, PROBLEM_MEMBERS, []);
   }
 
   for (const dependent of arrayOf(body.dependents)) {
-    assertMembers(dependent, `${tag}.dependents[]`, DEPENDENT_MEMBERS);
+    assertMembers(dependent, `${tag}.dependents[]`, DEPENDENT_MEMBERS, []);
   }
 
-  for (const error of arrayOf(body.errors)) {
+  for (const error of arrayOf(body.fieldErrors)) {
     const errorTag = textOf(objectOf(error)._tag);
 
-    assertMembers(error, `${tag}.errors[]`, FIELD_ERROR_MEMBERS.get(errorTag));
+    assertMembers(
+      error,
+      `${tag}.fieldErrors[]`,
+      FIELD_ERROR_MEMBERS.get(errorTag),
+      ["_tag"]
+    );
   }
 };
 
@@ -713,7 +734,7 @@ const genericBody = (operation: Operation) => {
     const value = draft[spec.property];
 
     if (!spec.column.startsWith("enforcement") && value !== undefined) {
-      body[spec.column] = value;
+      body[apiAttributeNameOf(spec.column)] = value;
     }
   }
 
@@ -949,7 +970,7 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
 
     const bodies: Readonly<Record<Oddity, Partial<FuzzRequest>>> = {
       malformedJson: { rawBody: '{"label": "x",' },
-      readOnlyColumn: { body: { owner_layer: "core" } },
+      readOnlyColumn: { body: { ownerLayer: "core" } },
       unknownColumn: { body: { colour: "red" } },
       wrongTypes: { body: { label: 42 } },
     };
@@ -975,7 +996,7 @@ const requestOf = Effect.fn("SchemaFuzz.requestOf")(function* requestOf(
 
     if (bogusType !== undefined) {
       json.definition = { ...objectOf(json.definition), type: bogusType };
-      body.type = bogusType;
+      body[apiAttributeNameOf("type")] = bogusType;
     }
 
     return step.via === "changeSet"
@@ -1268,7 +1289,7 @@ const TARGETED: ReadonlyMap<string, Step> = new Map<string, Step>([
     },
   ],
   [
-    "409 VersionConflict",
+    "412 VersionConflict",
     {
       action: "relabel",
       caller: "ada",

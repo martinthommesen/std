@@ -36,7 +36,6 @@ import {
   PERMISSION_IDS,
   SYSTEM_USER_ID,
 } from "@std/definitions/well-known";
-import { parseJson } from "@std/values/json";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Result } from "effect";
 
@@ -56,13 +55,9 @@ import {
   TABLE as AGGREGATE_TABLE,
   update as updateAggregate,
 } from "./aggregates-support.ts";
-import {
-  readsTestLayer,
-  recordOf,
-  recordPath,
-  tagOf,
-} from "./reads-support.ts";
+import { codeOf, readsTestLayer } from "./reads-support.ts";
 import { ACME_FIELDS, actorOf, USERS } from "./records-support.ts";
+import { postChangeSet } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -72,7 +67,14 @@ import {
   freshId,
   values,
 } from "./schema-support.ts";
-import { LAPTOP, MONITOR, patch, versionOf } from "./writes-support.ts";
+import {
+  LAPTOP,
+  MONITOR,
+  patch,
+  remove,
+  savedOf,
+  versionOf,
+} from "./writes-support.ts";
 
 const SYSTEM: Requester = { roleIds: [], userId: SYSTEM_USER_ID };
 
@@ -289,19 +291,6 @@ const dockLaptops = (prefix: string, runAsId: string | null) =>
     ruleKind: null,
     runAsId,
   });
-
-const postChangeSet = Effect.fn("RuleActions.postChangeSet")(function* post(
-  token: string,
-  operations: readonly Operation[]
-) {
-  const http = yield* TestHttpClient;
-  const parsed = parseJson(JSON.stringify({ operations }));
-
-  return yield* http.request("POST", "/api/v1/schema/change-sets", {
-    body: parsed.ok ? parsed.value : null,
-    token,
-  });
-});
 
 const statusOf = (id: string) =>
   values(
@@ -921,11 +910,11 @@ describe("record-rule-actions", () => {
           const byRule = yield* renameMonitor(bob, M, "sync-1");
 
           assert.deepStrictEqual(
-            [byRule.status, yield* tagOf(byRule)],
-            [own.status, yield* tagOf(own)]
+            [byRule.status, yield* codeOf(byRule)],
+            [own.status, yield* codeOf(own)]
           );
           assert.deepStrictEqual(
-            [own.status, yield* tagOf(own)],
+            [own.status, yield* codeOf(own)],
             [403, "NotAllowed"]
           );
           assert.strictEqual(yield* versionOf(M), monitorBefore);
@@ -954,7 +943,7 @@ describe("record-rule-actions", () => {
           const refused = yield* postChangeSet(ada, [rule.op]);
 
           assert.deepStrictEqual(
-            [refused.status, yield* tagOf(refused)],
+            [refused.status, yield* codeOf(refused)],
             [403, "PermissionRequired"]
           );
 
@@ -991,7 +980,7 @@ describe("record-rule-actions", () => {
 
           const assignment = yield* http.request(
             "POST",
-            "/api/v1/tables/core.user_role/records",
+            "/api/v1/coreUserRole",
             { body: { role, user: fixture.admin.id }, token: ada }
           );
 
@@ -1017,21 +1006,22 @@ describe("record-rule-actions", () => {
           );
 
           // Without the permission the rule fails closed.
-          const held = yield* recordOf(assignment);
+          const held = yield* savedOf(assignment);
 
-          const revoked = yield* http.request(
-            "DELETE",
-            recordPath("core.user_role", held.id),
-            { headers: { "if-match": `"${held.version}"` }, token: ada }
+          const revoked = yield* remove(
+            ada,
+            "core.user_role",
+            held.id,
+            held.version
           );
 
-          assert.strictEqual(revoked.status, 200, revoked.text);
+          assert.strictEqual(revoked.status, 204, revoked.text);
 
           const before = yield* versionOf(M);
           const failed = yield* renameMonitor(bob, M, "runas-2");
 
           assert.deepStrictEqual(
-            [failed.status, yield* tagOf(failed)],
+            [failed.status, yield* codeOf(failed)],
             [403, "NotAllowed"]
           );
           assert.strictEqual(yield* versionOf(M), before);

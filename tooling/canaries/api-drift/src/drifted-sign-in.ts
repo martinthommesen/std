@@ -1,17 +1,18 @@
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
-import { SignInResponseSchema } from "../../../../packages/api/src/auth.ts";
-import { InvalidCredentials } from "../../../../packages/api/src/errors/invalid-credentials.ts";
+import { Session } from "../../../../packages/api/src/session.ts";
+import { READ_ERRORS } from "../../../../packages/api/src/tmf-error.ts";
 
-/** The sign-in group after an incompatible change: `login` is now `username`. */
-export class DriftedSignInGroup extends HttpApiGroup.make("signIn").add(
-  HttpApiEndpoint.post("signIn", "/auth/sign-in", {
-    error: InvalidCredentials,
+/** The session group after an incompatible change: `login` is now `username`. */
+export class DriftedSessionGroup extends HttpApiGroup.make("session").add(
+  HttpApiEndpoint.post("create", "/session", {
+    error: READ_ERRORS,
     payload: Schema.Struct({
       password: Schema.String,
+      tokenDelivery: Schema.optionalKey(Schema.Literals(["body", "cookie"])),
       username: Schema.String,
     }),
-    success: SignInResponseSchema,
+    success: Session.pipe(HttpApiSchema.status(201)),
   })
 ) {}

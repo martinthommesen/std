@@ -102,9 +102,9 @@ export const fieldInfoOf = (field: ReadField): FieldInfo => ({
 });
 
 /**
- * The `/api/v2` name of a read field (Contracts 10.2): its name in
+ * The `/api/v1` name of a read field (Contracts 10.2): its name in
  * lowerCamelCase, and for system fields `revision`, `creationDate`,
- * `createdBy`, `lastUpdate`, `updatedBy`. `class` has none: v2 shows the
+ * `createdBy`, `lastUpdate`, `updatedBy`. `class` has none: the API shows the
  * concrete class as `@type`.
  *
  * @param field - A read field.

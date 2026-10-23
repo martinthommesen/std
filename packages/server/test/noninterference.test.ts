@@ -14,7 +14,15 @@
  *
  * Each sample applies the hidden values of one side, pages through the
  * generated query (so cursors are exercised), applies the other side's
- * values, pages again, and compares every page's exact body.
+ * values, pages again, and compares every page's exact body and its count
+ * and cursor headers (`X-Total-Count`, `X-Result-Count`, and the `Link`
+ * whose `after`/`before` cursors must carry only masked values).
+ *
+ * The API's `condition` text cannot name a class: `class` and `@type` are
+ * not fields (UnknownField, or a syntax error), so the class predicate the
+ * old test generated as an atom is not available inside the generated
+ * AND/OR/NOT expressions. The class restriction is the top-level `@type`
+ * filter instead.
  */
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect } from "effect";
@@ -40,7 +48,7 @@ import type { Arbitrary } from "fast-check";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import type { AcmeData } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { allPages, readsTestLayer } from "./reads-support.ts";
+import { listOf, listPath, readsTestLayer } from "./reads-support.ts";
 import { values } from "./schema-support.ts";
 
 const RUNS = 40;
@@ -67,46 +75,47 @@ interface Hidden {
 
 /** A generated read. */
 interface Query {
-  readonly filter: string | null;
+  readonly condition: string | null;
   readonly sort: string;
   readonly limit: number;
+  /** Restrict to `@type=AcmeLaptop` (`condition` cannot name a class). */
+  readonly laptops: boolean;
 }
 
 const ATOMS = [
   'name = "L"',
   'status = "lost"',
   'status = "in_use"',
-  'purchased_on > "2024-01-01"',
-  'purchased_on < "2025-02-01"',
-  "purchased_on is empty",
-  "docked_to is empty",
-  'docked_to.name = "Alice monitor"',
+  'purchasedOn > "2024-01-01"',
+  'purchasedOn < "2025-02-01"',
+  "purchasedOn is empty",
+  "dockedTo is empty",
+  'dockedTo.name = "Alice monitor"',
   "owner = me",
   'name contains "M"',
-  'class = "acme.laptop"',
 ] as const;
 
-const FILTER: Arbitrary<string> = letrec<{ filter: string }>((tie) => ({
-  filter: oneof(
+const CONDITION: Arbitrary<string> = letrec<{ condition: string }>((tie) => ({
+  condition: oneof(
     { depthSize: "small", withCrossShrink: true },
     constantFrom(...ATOMS),
-    tuple(tie("filter"), tie("filter")).map(
+    tuple(tie("condition"), tie("condition")).map(
       ([left, right]) => `(${left}) and (${right})`
     ),
-    tuple(tie("filter"), tie("filter")).map(
+    tuple(tie("condition"), tie("condition")).map(
       ([left, right]) => `(${left}) or (${right})`
     ),
-    tie("filter").map((inner) => `not (${inner})`)
+    tie("condition").map((inner) => `not (${inner})`)
   ),
-})).filter;
+})).condition;
 
 const SORT_KEYS = [
   "name",
   "status",
-  "purchased_on",
-  "docked_to",
+  "purchasedOn",
+  "dockedTo",
   "owner",
-  "created_at",
+  "creationDate",
 ];
 
 const directed = (keys: readonly string[], descending: readonly boolean[]) =>
@@ -121,7 +130,8 @@ const SORT = subarray(SORT_KEYS, { maxLength: 3 }).chain((keys) =>
 );
 
 const QUERY: Arbitrary<Query> = record({
-  filter: option(FILTER, { nil: null }),
+  condition: option(CONDITION, { nil: null }),
+  laptops: boolean(),
   limit: integer({ max: 4, min: 1 }),
   sort: SORT,
 });
@@ -159,10 +169,12 @@ const sameOutcomes = (left: Hidden, right: Hidden): boolean => {
 };
 
 const queryParameters = (query: Query): Readonly<Record<string, string>> => {
-  const base = { count: "true", labels: "true", limit: String(query.limit) };
+  const base = query.laptops
+    ? { "@type": "AcmeLaptop", limit: String(query.limit) }
+    : { limit: String(query.limit) };
 
   const filtered =
-    query.filter === null ? base : { ...base, filter: query.filter };
+    query.condition === null ? base : { ...base, condition: query.condition };
 
   return query.sort === "" ? filtered : { ...filtered, sort: query.sort };
 };
@@ -213,6 +225,52 @@ const applyHidden = Effect.fn("Noninterference.apply")(function* applyHidden(
   );
 });
 
+/** One page as a caller sees it: the exact body and the count and cursor headers. */
+interface Observed {
+  readonly text: string;
+  readonly total: string | null;
+  readonly results: string | null;
+  readonly link: string | null;
+}
+
+/**
+ * Reads every page of a query, keeping each page's body and its
+ * `X-Total-Count`, `X-Result-Count` and `Link` headers.
+ * @param token - The session.
+ * @param parameters - The query parameters (without `after`).
+ * @returns The pages in order.
+ */
+const readPages = Effect.fn("Noninterference.readPages")(function* readPages(
+  token: string,
+  parameters: Readonly<Record<string, string>>
+) {
+  const http = yield* TestHttpClient;
+  const pages: Observed[] = [];
+  let after: string | undefined;
+
+  do {
+    const response = yield* http.get(
+      listPath(
+        "acme.asset",
+        after === undefined ? parameters : { ...parameters, after }
+      ),
+      { token }
+    );
+
+    const page = yield* listOf(response);
+
+    pages.push({
+      link: response.headers.get("link"),
+      results: response.headers.get("x-result-count"),
+      text: response.text,
+      total: response.headers.get("x-total-count"),
+    });
+    after = page.next;
+  } while (after !== undefined);
+
+  return pages;
+});
+
 /**
  * Applies both sides of a sample and reads every page after each.
  * @param token - Bob's session.
@@ -232,11 +290,11 @@ const observeBoth = Effect.fn("Noninterference.observeBoth")(
     const parameters = queryParameters(query);
 
     yield* applyHidden(records, left);
-    const first = yield* allPages(token, "acme.asset", parameters);
+    const first = yield* readPages(token, parameters);
     yield* applyHidden(records, right);
-    const second = yield* allPages(token, "acme.asset", parameters);
+    const second = yield* readPages(token, parameters);
 
-    return { first: first.texts, second: second.texts };
+    return { first, second };
   }
 );
 

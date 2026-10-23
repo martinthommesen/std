@@ -1,5 +1,5 @@
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { authenticationClient, makeStdClient } from "@std/api/client";
+import { makeStdClient } from "@std/api/client";
 import type { StdClient } from "@std/api/client";
 import { Context, Effect, Layer, Option } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -14,7 +14,7 @@ import type { SchemaRevision } from "./domain/schema-revision.ts";
  * 6.2, 6.4), sent as `STD-Schema-Revision`: a list request sends the
  * revision of the metadata its filter, sort and columns came from, so
  * the server can refuse it with `SchemaChanged` when a relevant change
- * happened since. A request built from no metadata (start-up's `auth/me`,
+ * happened since. A request built from no metadata (start-up's `session/current`,
  * sign-in) sends none, which the contract allows; that is the default.
  */
 export const RequestRevision = Context.Reference<Option.Option<SchemaRevision>>(
@@ -72,8 +72,9 @@ export const responseRevision = (
   parseSchemaRevision(response.headers[SCHEMA_REVISION_HEADER]);
 
 /**
- * The typed client of STD's fixed endpoints, built once for the runtime
- * (its `resources`) from the shared `@std/api` definition.
+ * The typed client of STD's API (Contracts 10), built once for the runtime
+ * (its `resources`) from the shared `@std/api/v1` definition; requests go
+ * through `wire.ts`, which converts names and shapes at the API's edge.
  *
  * Requests go to the page's own origin. The session is the HTTP-only
  * cookie the server sets at sign-in, which the browser sends and no script
@@ -88,9 +89,7 @@ export class StdApi extends Context.Service<StdApi, StdClient>()(
   /** The client over Foldkit's Fetch-backed `HttpClient`. */
   static readonly layer = Layer.effect(
     StdApi,
-    makeStdClient({ webClient: true }).pipe(
-      Effect.provide(authenticationClient())
-    )
+    makeStdClient({ webClient: true })
   ).pipe(
     Layer.provide(
       Layer.effect(

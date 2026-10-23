@@ -5,14 +5,14 @@
  * handles, an incident table extending it (a narrower status subset, an
  * own field, its own form layout), and the user table pickers search.
  */
-import type { RecordJson } from "@std/api/records";
-import type {
-  MetaField,
-  MetaFieldType,
-  MetaTable,
-} from "@std/definitions/table-metadata";
+import { apiAttributeNameOf } from "@std/definitions/names";
+import type { MetaFieldType } from "@std/definitions/table-metadata";
 
-import { USER_TABLE_NAME, revision } from "./table-fixture.ts";
+import { listColumns } from "./domain/list-columns.ts";
+import type { MetaField, MetaTable } from "./domain/metadata.ts";
+import type { RecordJson } from "./domain/record.ts";
+import { defaultSelectionOf, wireFieldOf } from "./domain/wire.ts";
+import { USER_TABLE_NAME, revision, servedAs } from "./table-fixture.ts";
 
 /** The ticket table's name. */
 export const TICKET = "help.ticket";
@@ -27,6 +27,7 @@ const field = (
   type: MetaFieldType,
   overrides: Partial<MetaField> = {}
 ): MetaField => ({
+  apiName: apiAttributeNameOf(overrides.name ?? name),
   autoNumber: null,
   choices: null,
   default: null,
@@ -145,7 +146,7 @@ export const ticketTable: MetaTable = {
   fields: ticketFields,
   formRules: [],
   helpText: null,
-  id: "00000000-0000-4000-8000-0000000f00a0",
+  ...servedAs("00000000-0000-4000-8000-0000000f00a0", TICKET),
   label: "Ticket",
   layouts: {
     form: [
@@ -188,7 +189,7 @@ export const ticketTable: MetaTable = {
 /** The incident table: the ticket's fields (a narrower status list) plus `impact`. */
 export const incidentTable: MetaTable = {
   ...ticketTable,
-  ancestors: [{ id: ticketTable.id, label: "Ticket", name: TICKET }],
+  ancestors: [{ id: ticketTable.classId, label: "Ticket", name: TICKET }],
   fields: [
     ...ticketFields.map((ticketField) =>
       ticketField.id === TICKET_FIELDS.status
@@ -212,7 +213,7 @@ export const incidentTable: MetaTable = {
       }
     ),
   ],
-  id: "00000000-0000-4000-8000-0000000f00b0",
+  ...servedAs("00000000-0000-4000-8000-0000000f00b0", INCIDENT),
   label: "Incident",
   name: INCIDENT,
 };
@@ -244,7 +245,7 @@ export const USERS = {
 
 /** The ticket as an administrator reads it, at version 3. */
 export const ticketRecord: RecordJson = {
-  class: TICKET,
+  class: ticketTable.resourceType,
   id: TICKET_ID,
   labels: { assignee: "Alex Agent" },
   values: {
@@ -281,7 +282,7 @@ export const restrictedTicketRecord: RecordJson = {
 /** An incident read through the ticket endpoint. */
 export const incidentRecord: RecordJson = {
   ...ticketRecord,
-  class: INCIDENT,
+  class: incidentTable.resourceType,
   id: INCIDENT_ID,
   values: { ...ticketRecord.values, status: "new" },
 };
@@ -291,3 +292,19 @@ export const REVISION_5 = revision("5.00000000-0000-4000-8000-000000000c05");
 
 /** Revision 6 (after a change). */
 export const REVISION_6 = revision("6.00000000-0000-4000-8000-000000000c06");
+
+/** The ticket's fields as a write names them (`wire.ts`). */
+export const TICKET_WIRE = ticketTable.fields.map(wireFieldOf);
+
+/** The ticket's fields a read without `fields` returns. */
+export const TICKET_SELECTION = defaultSelectionOf(ticketTable);
+
+/** The related table the tests list (the ticket's fields, another name). */
+export const TASK_TABLE: MetaTable = {
+  ...ticketTable,
+  label: "Task",
+  name: "help.task",
+};
+
+/** The columns a related list of tasks asks for. */
+export const TASK_COLUMNS = listColumns(TASK_TABLE).map(wireFieldOf);

@@ -1,410 +1,375 @@
 /**
- * The typed client of `@std/api` against a live server (Contracts 6.1,
- * 6.2, 6.4): the real HTTP application on Node's HTTP server at an
- * ephemeral port over the acme test database, called through
- * `makeStdClient` (`HttpApiClient.make` on the shared definition) with the
- * fetch client. Typed successes and typed errors for sign-in, `auth/me`,
- * reads, writes, history and sign-out; stale and malformed revisions;
- * the `STD-Schema-Revision` header on every response; and the OpenAPI 3.1
- * document generated from the same definition.
+ * `v2-client`: the typed client derived from the shared `StdApi`
+ * definition (`@std/api/client`) works against the real server: sign-in,
+ * table metadata, every record endpoint, history, and TMF errors.
  */
-import { createServer } from "node:http";
-
-import { NodeHttpServer } from "@effect/platform-node";
 import { assert, describe, it, layer } from "@effect/vitest";
-import { OPENAPI_PATH, SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { authenticationClient, makeStdClient } from "@std/api/client";
-import { Effect, Layer, Redacted, Schema } from "effect";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { isTmfError, makeStdClient } from "@std/api/client";
+import { Effect, Redacted } from "effect";
+import { FetchHttpClient } from "effect/http";
 
-import { AcmeFixture, acmeTestLayer } from "../../testing/src/acme-fixture.ts";
-import { HttpAppLayer } from "../src/http/app.ts";
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
+import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { readsTestLayer } from "./reads-support.ts";
 
-const REVISION = /^\d+\.[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/u;
+const BASE_URL = "http://std.test";
+const RANDOM_ID = "01920c4e-7a3b-7c1d-9a2e-3f4b5c6d7e8f";
 
 /** A revision this database never had. */
 const NEVER_HAD = "999999.019a0000-0000-7000-8000-00000000abcd";
 
-/** The STD API on Node's HTTP server, port 0, over the acme database. */
-const LiveServer = HttpRouter.serve(HttpAppLayer, {
-  disableListenLog: true,
-  disableLogger: true,
-}).pipe(
-  Layer.provideMerge(
-    NodeHttpServer.layer(createServer, { host: "127.0.0.1", port: 0 })
-  ),
-  Layer.provideMerge(acmeTestLayer())
-);
-
-/** Fetch without keep-alive, so the server closes promptly. */
-const Fetch = FetchHttpClient.layer.pipe(
-  Layer.provide(
-    Layer.succeed(FetchHttpClient.RequestInit)({ keepalive: false })
-  )
-);
-
-/** The server's origin, such as `http://127.0.0.1:41234`. */
-const baseUrl = Effect.gen(function* baseUrl() {
-  const server = yield* HttpServer.HttpServer;
-
-  return HttpServer.formatAddress(server.address);
-});
+const REVISION = /^\d+\.[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/u;
 
 /**
- * A typed client sending `token` as the bearer token (none before sign-in).
+ * Runs client effects over the test server's fetch.
  *
- * @param token - The session token, if any.
- * @param schemaRevision - The revision to state, if any.
- * @returns The client.
+ * @param fetch - The test server's fetch.
+ * @returns A function that provides the fetch client to an effect.
  */
-const clientFor = (token?: string, schemaRevision?: string) =>
-  Effect.gen(function* makeClient() {
-    const url = yield* baseUrl;
-
-    return yield* makeStdClient(
-      schemaRevision === undefined
-        ? { baseUrl: url }
-        : { baseUrl: url, schemaRevision }
-    ).pipe(
-      Effect.provide(
-        authenticationClient(
-          token === undefined ? undefined : Redacted.make(token)
-        )
-      )
+const fetchWith =
+  (fetch: typeof FetchHttpClient.Fetch.Service) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provide(FetchHttpClient.layer),
+      Effect.provideService(FetchHttpClient.Fetch, fetch)
     );
-  });
-
-/**
- * Signs in through the typed client.
- *
- * @param login - The login.
- * @returns The session token.
- */
-const signIn = (login: string) =>
-  Effect.gen(function* signInWithClient() {
-    const client = yield* clientFor();
-
-    const session = yield* client.signIn.signIn({
-      payload: { login, password: `${login}-password` },
-    });
-
-    return session.token;
-  });
-
-/**
- * A plain request, for the response headers.
- *
- * @param path - The path.
- * @param init - Fetch options.
- * @returns The response.
- */
-const fetchRaw = (path: string, init: RequestInit = {}) =>
-  Effect.gen(function* fetchResponse() {
-    const url = yield* baseUrl;
-
-    return yield* Effect.promise(
-      async () => await fetch(`${url}${path}`, { ...init, keepalive: false })
-    );
-  });
-
-const ASSET = "acme.asset";
-
-/** The parts of an OpenAPI document the test reads. */
-const decodeOpenApi = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      openapi: Schema.String,
-      paths: Schema.Record(Schema.String, Schema.Unknown),
-    })
-  )
-);
 
 describe("api-client", () => {
-  it("states the revision header the client sends", () => {
-    assert.strictEqual(SCHEMA_REVISION_HEADER, "std-schema-revision");
+  it("recognizes TMF errors by code", () => {
+    const failure = { code: "NotFound", reason: "x" };
+
+    assert.isTrue(isTmfError("NotFound", "UnknownTable")(failure));
+    assert.isFalse(isTmfError("Unauthenticated")(failure));
+    assert.isFalse(isTmfError("NotFound")(new Error("NotFound")));
   });
 
-  layer(Layer.merge(LiveServer, Fetch), { excludeTestServices: true })(
-    (dbTest) => {
-      dbTest.effect("signs in, reads and refuses with typed errors", () =>
-        Effect.gen(function* reads() {
-          const { records } = yield* AcmeFixture;
-          const bob = yield* clientFor(yield* signIn("bob"));
-          const alice = yield* clientFor(yield* signIn("alice"));
+  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect("the typed client signs in, reads, writes and fails", () =>
+      Effect.gen(function* typedClient() {
+        const http = yield* TestHttpClient;
+        const { records } = yield* AcmeFixture;
 
-          const me = yield* bob.session.me();
-          assert.deepStrictEqual(me.roles.map((role) => role.name).toSorted(), [
-            "authenticated",
-            "employee",
-          ]);
+        const withFetch = fetchWith(http.fetch);
 
-          const list = yield* bob.records.list({
-            params: { table: ASSET },
-            query: { count: "true", sort: "name" },
-          });
+        const anonymous = yield* withFetch(
+          makeStdClient({ baseUrl: BASE_URL })
+        );
 
-          assert.deepStrictEqual(
-            list.records.map((record) => record.values.name),
-            ["L", "M", "S"]
-          );
-          assert.strictEqual(list.count, 3);
+        const session = yield* withFetch(
+          anonymous.session.create({
+            payload: {
+              login: "alice",
+              password: "alice-password",
+              tokenDelivery: "body",
+            },
+          })
+        );
 
-          const laptop = yield* bob.records.get({
-            params: { id: records.L, table: "acme.laptop" },
-            query: {},
-          });
+        assert.strictEqual(session.tokenDelivery, "body");
 
-          assert.strictEqual(laptop.record.class, "acme.laptop");
-          assert.notProperty(laptop.record.values, "cost");
+        const client = yield* withFetch(
+          makeStdClient({
+            baseUrl: BASE_URL,
+            token: Redacted.make(session.token ?? ""),
+          })
+        );
 
-          const hidden = yield* bob.records
-            .get({ params: { id: records.K, table: ASSET }, query: {} })
-            .pipe(Effect.flip);
+        const current = yield* withFetch(client.session.current());
 
-          assert.strictEqual(hidden._tag, "NotFound");
+        assert.strictEqual(current.user.id, session.user.id);
 
-          const platform = yield* bob.records
-            .list({ params: { table: "core.change" }, query: {} })
-            .pipe(Effect.flip);
+        const tables = yield* withFetch(client.tableMetadata.list());
+        const asset = tables.find((entry) => entry.name === "acme.asset");
 
-          assert.strictEqual(platform._tag, "UnknownTable");
+        assert.strictEqual(asset?.id, "acmeAsset");
+        assert.strictEqual(asset?.resourceType, "AcmeAsset");
 
-          const unknownField = yield* bob.records
-            .list({ params: { table: ASSET }, query: { sort: "cost" } })
-            .pipe(Effect.flip);
+        const metadata = yield* withFetch(
+          client.tableMetadata.get({ params: { table: "acmeAsset" } })
+        );
 
-          assert.strictEqual(unknownField._tag, "UnknownField");
+        assert.strictEqual(metadata.name, "acme.asset");
+        assert.include(
+          metadata.fields.map((field) => field.apiName),
+          "status"
+        );
 
-          const asAlice = yield* alice.records.get({
-            params: { id: records.K, table: ASSET },
-            query: { labels: "true" },
-          });
+        const [page, response] = yield* withFetch(
+          client.records.list({
+            params: { table: "acmeAsset" },
+            query: { condition: 'status = "spare"', limit: "50" },
+            responseMode: "decoded-and-response",
+          })
+        );
 
-          assert.strictEqual(asAlice.record.values.name, "K");
+        assert.isString(response.headers["std-schema-revision"]);
+        assert.isTrue(page.every((resource) => resource.status === "spare"));
 
-          const wrong = yield* (yield* clientFor()).signIn
-            .signIn({ payload: { login: "alice", password: "wrong" } })
-            .pipe(Effect.flip);
+        const created = yield* withFetch(
+          client.records.create({
+            params: { table: "acmeAsset" },
+            payload: { name: "Typed", status: "spare" },
+          })
+        );
 
-          assert.strictEqual(wrong._tag, "InvalidCredentials");
-        })
-      );
+        const ids = { id: created.id, table: "acmeAsset" };
 
-      dbTest.effect("writes, history and sign-out through the client", () =>
-        Effect.gen(function* writes() {
-          const { alice: aliceUser } = yield* AcmeFixture;
-          const token = yield* signIn("alice");
-          const alice = yield* clientFor(token);
-
-          const created = yield* alice.records.create({
-            params: { table: "acme.monitor" },
-            payload: { name: "client monitor", owner: aliceUser.id },
-          });
-
-          const { id } = created.record;
-          assert.strictEqual(created.record.version, 1);
-
-          const updated = yield* alice.records.update({
+        const merged = yield* withFetch(
+          client.records.patch({
             headers: { "if-match": '"1"' },
-            params: { id, table: ASSET },
-            payload: { status: "spare" },
-          });
+            params: ids,
+            payload: { name: "Typed 2" },
+          })
+        );
 
-          assert.strictEqual(updated.record.version, 2);
+        assert.strictEqual(merged.name, "Typed 2");
 
-          const conflict = yield* alice.records
-            .update({
-              headers: { "if-match": '"1"' },
-              params: { id, table: ASSET },
-              payload: { status: "in_use" },
-            })
-            .pipe(Effect.flip);
+        const patched = yield* withFetch(
+          client.records.patch({
+            headers: { "if-match": '"2"' },
+            params: ids,
+            payload: [{ op: "replace", path: "/name", value: "Typed 3" }],
+          })
+        );
 
-          assert.strictEqual(conflict._tag, "VersionConflict");
+        assert.strictEqual(patched.name, "Typed 3");
 
-          const required = yield* alice.records
-            .update({
-              headers: {},
-              params: { id, table: ASSET },
-              payload: { name: "x" },
-            })
-            .pipe(Effect.flip);
+        const history = yield* withFetch(
+          client.records.history({ params: ids, query: { limit: "10" } })
+        );
 
-          assert.strictEqual(required._tag, "VersionRequired");
+        assert.strictEqual(history.length, 3);
 
-          const history = yield* alice.records.history({
-            params: { id, table: "acme.monitor" },
+        const [first] = history;
+
+        const entry = yield* withFetch(
+          client.records.historyEntry({
+            params: { ...ids, changeId: first?.id ?? "" },
             query: {},
-          });
+          })
+        );
 
-          assert.deepStrictEqual(
-            history.entries.map((entry) => `${entry.version}:${entry.kind}`),
-            ["1:create", "2:update"]
+        assert.strictEqual(entry.id, first?.id);
+
+        yield* withFetch(
+          client.records.delete({ headers: { "if-match": '"3"' }, params: ids })
+        );
+
+        const missing = yield* withFetch(
+          client.records.get({ params: ids, query: {} })
+        ).pipe(Effect.flip);
+
+        assert.isTrue(isTmfError("NotFound")(missing));
+
+        // Alice's own laptop through the parent collection, one field.
+        const viaParent = yield* withFetch(
+          client.records.get({
+            params: { id: records.K, table: "acmeAsset" },
+            query: { fields: "name" },
+          })
+        );
+
+        assert.strictEqual(viaParent.id, records.K);
+
+        const unknownId = yield* withFetch(
+          client.records.get({
+            params: { id: RANDOM_ID, table: "acmeAsset" },
+            query: {},
+          })
+        ).pipe(Effect.flip);
+
+        assert.isTrue(isTmfError("NotFound")(unknownId));
+      })
+    );
+
+    dbTest.effect(
+      "a stale or malformed stated revision is a typed failure",
+      () =>
+        Effect.gen(function* statedRevision() {
+          const http = yield* TestHttpClient;
+
+          const token = Redacted.make(
+            yield* http.signIn("bob", "bob-password")
           );
 
-          const removed = yield* alice.records.remove({
-            headers: { "if-match": '"2"' },
-            params: { id, table: "acme.monitor" },
-          });
+          const withFetch = fetchWith(http.fetch);
 
-          assert.strictEqual(removed.version, 3);
+          const stale = yield* withFetch(
+            makeStdClient({
+              baseUrl: BASE_URL,
+              schemaRevision: NEVER_HAD,
+              token,
+            })
+          );
 
-          const gone = yield* alice.records
-            .get({ params: { id, table: ASSET }, query: {} })
-            .pipe(Effect.flip);
+          const malformed = yield* withFetch(
+            makeStdClient({
+              baseUrl: BASE_URL,
+              schemaRevision: "12.not-a-uuid",
+              token,
+            })
+          );
 
-          assert.strictEqual(gone._tag, "NotFound");
+          const listed = yield* withFetch(
+            stale.records.list({ params: { table: "acmeAsset" }, query: {} })
+          ).pipe(Effect.flip);
 
-          yield* alice.session.signOut();
+          assert.isTrue(isTmfError("SchemaChanged")(listed));
 
-          const ended = yield* alice.session.me().pipe(Effect.flip);
-          assert.strictEqual(ended._tag, "Unauthenticated");
-        })
-      );
+          const current = yield* withFetch(stale.session.current()).pipe(
+            Effect.flip
+          );
 
-      dbTest.effect("stale and malformed revisions are typed errors", () =>
-        Effect.gen(function* revisions() {
-          const token = yield* signIn("bob");
-          const stale = yield* clientFor(token, NEVER_HAD);
-          const malformed = yield* clientFor(token, "12.not-a-uuid");
+          assert.isTrue(isTmfError("SchemaChanged")(current));
 
-          const listed = yield* stale.records
-            .list({ params: { table: ASSET }, query: {} })
-            .pipe(Effect.flip);
+          const bad = yield* withFetch(
+            malformed.records.list({
+              params: { table: "acmeAsset" },
+              query: {},
+            })
+          ).pipe(Effect.flip);
 
-          assert.strictEqual(listed._tag, "SchemaChanged");
-
-          const me = yield* stale.session.me().pipe(Effect.flip);
-          assert.strictEqual(me._tag, "SchemaChanged");
-
-          const signedIn = yield* stale.signIn
-            .signIn({ payload: { login: "bob", password: "bob-password" } })
-            .pipe(Effect.flip);
-
-          assert.strictEqual(signedIn._tag, "SchemaChanged");
-
-          const bad = yield* malformed.records
-            .list({ params: { table: ASSET }, query: {} })
-            .pipe(Effect.flip);
-
-          assert.strictEqual(bad._tag, "InvalidSchemaRevision");
-
-          const badMe = yield* malformed.session.me().pipe(Effect.flip);
-          assert.strictEqual(badMe._tag, "InvalidSchemaRevision");
+          assert.isTrue(isTmfError("InvalidSchemaRevision")(bad));
 
           // Sign-out checks the format but never refuses a stale client.
-          yield* stale.session.signOut();
+          yield* withFetch(stale.session.signOut());
         })
-      );
+    );
 
-      dbTest.effect("every response carries the revision header", () =>
-        Effect.gen(function* headers() {
-          const { records } = yield* AcmeFixture;
-          const token = yield* signIn("bob");
-          const bearer = { authorization: `Bearer ${token}` };
-          const json = { "content-type": "application/json" };
+    dbTest.effect("sign-out through the client ends the session", () =>
+      Effect.gen(function* signOut() {
+        const http = yield* TestHttpClient;
 
-          const responses = [
-            yield* fetchRaw("/api/v1/auth/sign-in", {
-              body: JSON.stringify({ login: "bob", password: "bob-password" }),
-              headers: json,
-              method: "POST",
-            }),
-            yield* fetchRaw("/api/v1/auth/sign-in", {
-              body: JSON.stringify({ login: "bob", password: "wrong" }),
-              headers: json,
-              method: "POST",
-            }),
-            yield* fetchRaw("/api/v1/auth/me", { headers: bearer }),
-            yield* fetchRaw("/api/v1/auth/me"),
-            yield* fetchRaw(`/api/v1/tables/${ASSET}/records`, {
-              headers: bearer,
-            }),
-            yield* fetchRaw(`/api/v1/tables/${ASSET}/records/${records.K}`, {
-              headers: bearer,
-            }),
-            yield* fetchRaw(
-              `/api/v1/tables/${ASSET}/records/${records.L}/history`,
-              { headers: bearer }
-            ),
-            yield* fetchRaw(`/api/v1/tables/${ASSET}/records`, {
-              body: "{",
-              headers: { ...bearer, ...json },
-              method: "POST",
-            }),
-            yield* fetchRaw("/api/v1/no-such-route"),
-            yield* fetchRaw(OPENAPI_PATH),
-          ];
+        const token = Redacted.make(
+          yield* http.signIn("alice", "alice-password")
+        );
 
-          for (const response of responses) {
-            assert.match(
-              response.headers.get(SCHEMA_REVISION_HEADER) ?? "",
-              REVISION,
-              `${response.status} ${response.url}`
-            );
-          }
+        const withFetch = fetchWith(http.fetch);
 
-          assert.deepStrictEqual(
-            responses.map((response) => response.status),
-            [200, 401, 200, 401, 200, 404, 200, 400, 404, 200]
-          );
-        })
-      );
+        const client = yield* withFetch(
+          makeStdClient({ baseUrl: BASE_URL, token })
+        );
 
-      dbTest.effect(
-        "reads table metadata and the per-table OpenAPI document",
-        () =>
-          Effect.gen(function* metadata() {
-            const bob = yield* clientFor(yield* signIn("bob"));
+        yield* withFetch(client.session.current());
+        yield* withFetch(client.session.signOut());
 
-            const asset = yield* bob.metadata.table({
-              params: { table: ASSET },
-            });
+        const ended = yield* withFetch(client.session.current()).pipe(
+          Effect.flip
+        );
 
-            assert.strictEqual(asset.table.name, ASSET);
-            assert.notInclude(
-              asset.table.fields.map((field) => field.name),
-              "cost"
-            );
+        assert.isTrue(isTmfError("Unauthenticated")(ended));
+      })
+    );
 
-            const document = yield* bob.metadata.tableOpenApi({
-              params: { table: ASSET },
-            });
+    dbTest.effect("refusals and hidden records are TMF errors", () =>
+      Effect.gen(function* refusals() {
+        const http = yield* TestHttpClient;
+        const { records } = yield* AcmeFixture;
 
-            assert.strictEqual(document.openapi, "3.1.0");
-            assert.strictEqual(
-              document["x-std-schema-revision"],
-              asset.schemaRevision
-            );
+        const withFetch = fetchWith(http.fetch);
 
-            const hidden = yield* bob.metadata
-              .table({ params: { table: "core.change" } })
-              .pipe(Effect.flip);
-
-            assert.strictEqual(hidden._tag, "UnknownTable");
+        const bob = yield* withFetch(
+          makeStdClient({
+            baseUrl: BASE_URL,
+            token: Redacted.make(yield* http.signIn("bob", "bob-password")),
           })
-      );
+        );
 
-      dbTest.effect("serves the OpenAPI 3.1 document of the definition", () =>
-        Effect.gen(function* openApi() {
-          const response = yield* fetchRaw(OPENAPI_PATH);
+        // Alice's laptop is hidden from Bob like a record that is not there.
+        const hidden = yield* withFetch(
+          bob.records.get({
+            params: { id: records.K, table: "acmeAsset" },
+            query: {},
+          })
+        ).pipe(Effect.flip);
 
-          const text = yield* Effect.promise(async () => await response.text());
+        assert.isTrue(isTmfError("NotFound")(hidden));
 
-          const document = yield* decodeOpenApi(text).pipe(Effect.orDie);
+        const platform = yield* withFetch(
+          bob.records.list({ params: { table: "coreChange" }, query: {} })
+        ).pipe(Effect.flip);
 
-          assert.strictEqual(response.status, 200);
-          assert.isTrue(document.openapi.startsWith("3.1"));
-          assert.includeMembers(Object.keys(document.paths), [
-            "/api/v1/auth/sign-in",
-            "/api/v1/auth/me",
-            "/api/v1/auth/sign-out",
-            "/api/v1/tables/{table}/records",
-            "/api/v1/tables/{table}/records/{id}",
-            "/api/v1/tables/{table}/records/{id}/history",
-          ]);
-        })
-      );
-    }
-  );
+        assert.isTrue(isTmfError("UnknownTable")(platform));
+
+        const anonymous = yield* withFetch(
+          makeStdClient({ baseUrl: BASE_URL })
+        );
+
+        const wrong = yield* withFetch(
+          anonymous.session.create({
+            payload: {
+              login: "alice",
+              password: "wrong",
+              tokenDelivery: "body",
+            },
+          })
+        ).pipe(Effect.flip);
+
+        assert.isTrue(isTmfError("InvalidCredentials")(wrong));
+      })
+    );
+
+    dbTest.effect("a write the caller may not make is a typed NotAllowed", () =>
+      Effect.gen(function* writeRefused() {
+        const http = yield* TestHttpClient;
+        const { alice } = yield* AcmeFixture;
+
+        const withFetch = fetchWith(http.fetch);
+
+        const bob = yield* withFetch(
+          makeStdClient({
+            baseUrl: BASE_URL,
+            token: Redacted.make(yield* http.signIn("bob", "bob-password")),
+          })
+        );
+
+        // Bob may create only assets he owns.
+        const refused = yield* withFetch(
+          bob.records.create({
+            params: { table: "acmeAsset" },
+            payload: {
+              name: "Not mine",
+              owner: { id: alice.id },
+              status: "spare",
+            },
+          })
+        ).pipe(Effect.flip);
+
+        assert.isTrue(
+          isTmfError("NotAllowed")(refused),
+          JSON.stringify(refused)
+        );
+      })
+    );
+
+    dbTest.effect("the response headers carry the revision and the ETag", () =>
+      Effect.gen(function* responseHeaders() {
+        const http = yield* TestHttpClient;
+        const { records } = yield* AcmeFixture;
+
+        const withFetch = fetchWith(http.fetch);
+
+        const client = yield* withFetch(
+          makeStdClient({
+            baseUrl: BASE_URL,
+            token: Redacted.make(yield* http.signIn("alice", "alice-password")),
+          })
+        );
+
+        const [resource, response] = yield* withFetch(
+          client.records.get({
+            params: { id: records.K, table: "acmeAsset" },
+            query: {},
+            responseMode: "decoded-and-response",
+          })
+        );
+
+        assert.match(response.headers["std-schema-revision"] ?? "", REVISION);
+        assert.strictEqual(
+          response.headers.etag,
+          `"${String(resource.revision)}"`
+        );
+      })
+    );
+  });
 });

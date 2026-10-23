@@ -1,17 +1,3 @@
-/**
- * Races between renames and the form's requests in flight (decision 0020,
- * review round 3), as a property: random interleavings of a save answered
- * at an old revision, the form's and the concrete class's metadata at old
- * and new revisions (a rename of the edited field, and a back-reference
- * renamed, removed and made again), record rereads, and related-list
- * answers. Whatever the order:
- *
- * - the user's later edit is never dropped (nothing in these definitions
- *   warrants dropping it, so not even with a note);
- * - a related list's answer is taken only by the list instance that asked.
- */
-import type { RecordJson } from "@std/api/records";
-import type { MetaTable } from "@std/definitions/table-metadata";
 import { Option, Schema, pipe } from "effect";
 import {
   array as arrayOf,
@@ -28,6 +14,20 @@ import { AsyncData } from "foldkit";
 import { describe, expect, it } from "vitest";
 
 import { FieldInput } from "../../domain/form-input.ts";
+import type { MetaTable } from "../../domain/metadata.ts";
+/**
+ * Races between renames and the form's requests in flight (decision 0020,
+ * review round 3), as a property: random interleavings of a save answered
+ * at an old revision, the form's and the concrete class's metadata at old
+ * and new revisions (a rename of the edited field, and a back-reference
+ * renamed, removed and made again), record rereads, and related-list
+ * answers. Whatever the order:
+ *
+ * - the user's later edit is never dropped (nothing in these definitions
+ *   warrants dropping it, so not even with a note);
+ * - a related list's answer is taken only by the list instance that asked.
+ */
+import type { RecordJson } from "../../domain/record.ts";
 import { SchemaRevision } from "../../domain/schema-revision.ts";
 import {
   INCIDENT_ID,
@@ -70,7 +70,7 @@ const renamedFrom = (step: Step, table: MetaTable): MetaTable =>
         ...table,
         fields: table.fields.map((field) =>
           field.id === TICKET_FIELDS.shortDescription
-            ? { ...field, name: "summary" }
+            ? { ...field, apiName: "summary", name: "summary" }
             : field
         ),
       };

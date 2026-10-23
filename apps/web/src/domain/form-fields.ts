@@ -1,3 +1,8 @@
+import type { JsonValue } from "@std/values/json-value";
+import { Option } from "effect";
+
+import { createBaseValue } from "./form-input.ts";
+import type { MetaField, MetaTable } from "./metadata.ts";
 /**
  * Which fields a record's form shows, in which sections, and how each one
  * shows (Contracts 6.3, 6.3a, 6.5, 6.6) [judgment, decision 0020].
@@ -23,12 +28,7 @@
  * - `Editable`: everything else; `perRecord` is editable and the server
  *   decides.
  */
-import type { RecordJson } from "@std/api/records";
-import type { MetaField, MetaTable } from "@std/definitions/table-metadata";
-import type { JsonValue } from "@std/values/json-value";
-import { Option } from "effect";
-
-import { createBaseValue } from "./form-input.ts";
+import type { RecordJson } from "./record.ts";
 
 /** One section of a form: its label, if any, and its fields in order. */
 export interface FormSection {

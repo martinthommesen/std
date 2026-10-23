@@ -56,7 +56,9 @@ Innermost first: each changed or proposed part not itself in the settling set is
 4. **Derive rules read their own working image.** While settling, `applyDeriveRules` replaces the record's own entry in the live images with the image its derive rules are writing, so a later derive rule that follows a reference back to the record (a self-referencing peer) reads what earlier rules set.
 5. **The browser evaluator refuses owner paths too.** `evaluateInBrowser` runs the same guard as `evaluateCondition` and `compileNodeToSql`.
 
-Merging main (3G's `/api/v2`): `AggregateNotSettled` is a declared `422` TMF Error subtype on `/api/v2`; the reference type in table metadata carries `aggregate: true` (v2's `tableMetadata` shows field types as metadata does; its `schema.json` shows no per-field write rules, so nothing more is added there); `/api/v1` shows the three aggregate problem codes as their nearest `v0.0.2` codes (`extendsCycle`, `invalidType`), and its frozen OpenAPI document gains `AggregateNotSettled` among the write 422s, the optional `aggregate` of reference metadata and the aggregate condition members (the `v1-frozen` hash and its list of additions). Persistence evaluates no JSON Patch, so its `PatchTestFailed` is a defect.
+Merging main (3G's TMF630 API, built as `/api/v2`): `AggregateNotSettled` is a declared `422` TMF Error subtype; the reference type in table metadata carries `aggregate: true` (`tableMetadata` shows field types as metadata does; its `schema.json` shows no per-field write rules, so nothing more is added there). Persistence evaluates no JSON Patch, so its `PatchTestFailed` is a defect.
+
+API consolidation (decision 0021, decision 56; decision 0025): the old `/api/v1` is deleted and the TMF630 API is `/api/v1`, so the frozen-v1 additions this workstream made (the nearest `v0.0.2` codes `extendsCycle` and `invalidType` for the three aggregate problem codes, and the `v1-frozen` hash) are gone with it. On `/api/v1` the aggregate behavior is the record service's, through the TMF shapes: `AggregateNotSettled` as a TMF `Error`; an owner reference `Required` on create and `ReadOnlyField` on a change, in `fieldErrors`; the class graph's refusals through `applyChangeSet` as `DefinitionInvalid` with their own problem codes (`aggregateSecondOwner`, `aggregateCycle`, `aggregateTooDeep`); and a system write's errors naming only fields the caller can read on the proposed record (`InvalidReference` with `field` for a reader, `ValidationFailed` with empty `fieldErrors` for a caller who cannot read the field).
 
 ## Rolling upgrades (8.8)
 
@@ -88,7 +90,7 @@ No platform migration. `aggregate` on a reference type and the new condition ope
 | system-write errors (review 3) | `aggregate-finalize.test.ts#a system write's validation errors name only fields the acting user can read` |
 | live reference targets (review 4) | `aggregate-finalize.test.ts#a reference a rule follows reads the settling image, also a change an earlier pass proposed` |
 | part conditions refused by SQL (review 5) | `packages/conditions/test/quantifier-profiles.test.ts#a part condition's owner paths never reach the SQL compiler or the plain evaluator` |
-| `/api/v2` | `packages/server/test/aggregate-v2.test.ts#an owner reference shows in the table metadata, and an aggregate that does not settle is a 422 TMF Error` |
+| `/api/v1` | `packages/server/test/aggregate-api.test.ts#an owner reference shows in the table metadata, and an aggregate that does not settle is a 422 TMF Error`, `#an owner reference is required and read-only after create, and the class graph's refusals keep their problem codes`, `#a system write names in its errors only fields the caller can read on the proposed record` |
 | hidden fields in reference and constraint errors (review 2, item 3 and new) | `aggregate-finalize.test.ts#a system write's validation errors name only fields the acting user can read` |
 | derive rules reading their own working image (review 2, item 4) | `aggregate-finalize.test.ts#a derive rule following a reference back to its own record reads the image earlier derive rules wrote` |
 | persisted at most once | `aggregate-finalize.test.ts#a write into an owner this transaction already persisted is AggregateNotSettled, and nothing commits` |
@@ -102,7 +104,7 @@ The change, request and ticket shapes are test-fixture classes in the local `sit
 
 ## Follow-ups
 
-- `aggregate-race-http`: the contract states `aggregate-race` over `/api/v2/helpdeskTicketNote` and a TMF621 `PATCH` with and without `If-Match`. Neither route is on main; once 3G's `/api/v2` and 3I's TMF621 merge, add the HTTP variants on top of the record-service test (an `If-Match` is `expectedVersion`; without it the adapter locks the aggregate and reads the version under the lock, as `patchLatest` does). Every multi-save adapter must run inside `aggregateOperation`.
+- `aggregate-race-http`: the contract states `aggregate-race` over `/api/v1/helpdeskTicketNote` and a TMF621 `PATCH` with and without `If-Match`. `helpdesk.ticket_note` and TMF621 are not on main; once 3I merges, add the HTTP variants on top of the record-service test (an `If-Match` is `expectedVersion`; without it the adapter locks the aggregate and reads the version under the lock, as `patchLatest` does). Every multi-save adapter must run inside `aggregateOperation`.
 - Contracts 3.8's error table needs an `AggregateNotSettled` row (422); this workstream may not edit 3.8.
 - Text syntax for `anyPart`, `allParts`, `partsChanged` and `owner.` paths (5.10 mentions `owner.f`), with `parse(print(a)) = a`.
 - Retiring or purging an owner reference is not handled specially: a retired owner reference stays an owner reference.

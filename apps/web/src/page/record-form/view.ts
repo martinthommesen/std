@@ -5,8 +5,6 @@
  * history (Foldkit UI Disclosure each).
  */
 import { Dialog, Fieldset } from "@foldkit/ui";
-import type { RecordJson } from "@std/api/records";
-import type { MetaField } from "@std/definitions/table-metadata";
 import { isJsonString } from "@std/values/json-value";
 import { Match, Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
@@ -14,6 +12,8 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { formSections } from "../../domain/form-fields.ts";
 import type { FormSection } from "../../domain/form-fields.ts";
+import type { MetaField } from "../../domain/metadata.ts";
+import type { RecordJson } from "../../domain/record.ts";
 import { changeText, droppedText } from "../../domain/stale-edits.ts";
 import { homeRouter, recordRouter, tableListRouter } from "../../route.ts";
 import { buttonView } from "../../view/controls.ts";
@@ -97,7 +97,7 @@ const recordFactsView = (
           `${meta.table.label} · version ${record.version}`,
           ...Option.match(classMetaOf(model), {
             onNone: () =>
-              record.class === meta.table.name
+              record.class === meta.table.resourceType
                 ? []
                 : [` · a ${record.class} record`],
             onSome: (concrete) => [
@@ -302,6 +302,14 @@ const submissionView = (model: Model, h: HtmlBuilder<Message>): Html =>
     Match.tag("Saved", () =>
       h.p([h.Role("status"), h.Class("notice")], ["Saved."])
     ),
+    Match.tag("SavedUnread", () =>
+      h.p(
+        [h.Role("status"), h.Class("notice")],
+        [
+          "Saved. The record could not be read back: reload it to see what it holds before saving again.",
+        ]
+      )
+    ),
     Match.tag("Unchanged", () =>
       h.p(
         [h.Role("status"), h.Class("notice")],
@@ -491,7 +499,10 @@ const isSaving = (model: Model): boolean =>
   Submission.guards.Saving(model.submission);
 
 const isSaveBlocked = (model: Model): boolean =>
-  isSaving(model) || isReloading(model) || isRecordOutdated(model);
+  isSaving(model) ||
+  isReloading(model) ||
+  isRecordOutdated(model) ||
+  Submission.guards.SavedUnread(model.submission);
 
 const saveText = (model: Model): string => {
   if (isSaving(model)) {
