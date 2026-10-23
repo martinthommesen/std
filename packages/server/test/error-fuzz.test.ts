@@ -37,21 +37,16 @@
  * (observed in `pg_stat_activity`), so Postgres's FK check, not the
  * record service's precheck, refuses it: still `InvalidReference`.
  *
- * Everything runs against `/api/v1` and `/api/v1` (Contracts 10): the steps
- * and the matrix are written once in v1 terms, and `send` puts each request
- * in its version's form (v2 collection names, camelCase attributes,
- * `{ "id": ... }` references, merge-patch bodies) while `parsedOf` reads a
- * v2 response (a TMF `Error`, a resource with `revision`) as the v1 shape
- * the checks know. Where v2 differs (a stale `If-Match` is 412, deletes are
- * 204, error bodies carry the TMF members) the checks take the version.
- * Writes to definition tables answer 405 in v2 and are not part of the
- * fuzz, which writes only to record tables.
+ * Everything runs against the current `/api/v1` API (Contracts 10):
+ * camelCase attributes, reference objects, flat resources with `revision`
+ * and TMF errors with `code` and `fieldErrors`. Definition-table writes
+ * answer 405 and are not part of this record-table fuzz.
  */
 import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
-import { isJsonNumber, isJsonObject } from "@std/values/json-value";
+import { isJsonObject } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Deferred, Effect, Fiber, Option, Schema } from "effect";
 import type { Scope } from "effect";
@@ -135,27 +130,13 @@ const FORBIDDEN = [
   TRIGGER_SECRET,
 ];
 
-/** The API versions the fuzz runs against. */
-type ApiVersion = "v1" | "v2";
-
-// The old API is gone (decision 0021, decision 56): the fuzz runs on the
-// one API; "v1" is kept only as the wire format its steps are written in.
-const VERSIONS: readonly ApiVersion[] = ["v2"];
-
-const V1_STATUSES: ReadonlySet<number> = new Set([
-  200, 201, 400, 403, 404, 409, 422, 428, 500,
-]);
-
-// v2: a stale If-Match is 412 and a delete is 204.
-const V2_STATUSES: ReadonlySet<number> = new Set([
+/** Documented record-write responses: Contracts 3.8 and 10. */
+const STATUSES: ReadonlySet<number> = new Set([
   200, 201, 204, 400, 403, 404, 409, 412, 422, 428, 500,
 ]);
 
-const statusesOf = (version: ApiVersion): ReadonlySet<number> =>
-  version === "v2" ? V2_STATUSES : V1_STATUSES;
-
-/** The members of a v2 error besides its details (Contracts 10.6). */
-const V2_BASE_MEMBERS = [
+/** The members of a TMF error besides its details (Contracts 10.6). */
+const BASE_MEMBERS = [
   "@baseType",
   "@schemaLocation",
   "@type",
@@ -167,14 +148,7 @@ const V2_BASE_MEMBERS = [
 
 const MERGE_PATCH = "application/merge-patch+json";
 
-/** Attributes whose values are references (`{ "id": ... }` in v2). */
-const REFERENCE_ATTRIBUTES: ReadonlySet<string> = new Set([
-  "dockedTo",
-  "owner",
-  "parent",
-]);
-
-/** v2's system attributes, which a resource shows besides its values. */
+/** System attributes, which a resource shows besides its values. */
 const SYSTEM_ATTRIBUTES: ReadonlySet<string> = new Set([
   "@baseType",
   "@schemaLocation",
@@ -188,7 +162,7 @@ const SYSTEM_ATTRIBUTES: ReadonlySet<string> = new Set([
   "updatedBy",
 ]);
 
-/** The members each error body may have besides `_tag`. */
+/** The members each TMF error may have besides its base members. */
 const ERROR_MEMBERS = new Map<string, readonly string[]>([
   ["InvalidReference", ["field"]],
   ["InvalidRequest", ["message", "parameter"]],
@@ -197,7 +171,7 @@ const ERROR_MEMBERS = new Map<string, readonly string[]>([
   ["Referenced", []],
   ["UnknownField", ["field"]],
   ["UnknownTable", ["table"]],
-  ["ValidationFailed", ["errors"]],
+  ["ValidationFailed", ["fieldErrors"]],
   ["VersionConflict", ["currentVersion"]],
   ["VersionRequired", []],
 ]);
@@ -224,25 +198,13 @@ const REQUIRED_OUTCOMES = [
   "403 NotAllowed",
   "404 NotFound",
   "409 Referenced",
-  "409 VersionConflict",
+  "412 VersionConflict",
   "422 InvalidReference",
   "422 ValidationFailed",
   "428 VersionRequired",
   "500",
   "notUnique",
 ];
-
-/**
- * An outcome as a version labels it: v2 answers a stale If-Match with 412.
- *
- * @param version - The API version.
- * @param outcome - A required outcome (v1 labels).
- * @returns The label in that version.
- */
-const outcomeLabel = (version: ApiVersion, outcome: string): string =>
-  version === "v2" && outcome === "409 VersionConflict"
-    ? "412 VersionConflict"
-    : outcome;
 
 // Letters that are not hex digits, so a stored token never appears inside
 // a UUID by chance.
@@ -699,6 +661,9 @@ const resolveRef = (model: Model, choice: RefChoice): Resolved => {
   }
 };
 
+const referenceValue = (value: JsonValue): JsonValue =>
+  isString(value) ? { id: value } : value;
+
 const bodyOf = (
   model: Model,
   generated: Readonly<Record<string, ValueChoice>>
@@ -706,7 +671,9 @@ const bodyOf = (
   Object.fromEntries(
     Object.entries(generated).map(([key, value]) => [
       key,
-      value instanceof RefValue ? resolveRef(model, value.choice).value : value,
+      value instanceof RefValue
+        ? referenceValue(resolveRef(model, value.choice).value)
+        : value,
     ])
   );
 
@@ -744,84 +711,44 @@ const FieldErrorBodySchema = Schema.Struct({
   reason: Schema.optionalKey(Schema.String),
 });
 
-/** What the checks read from a response body. */
-const ResponseBodySchema = Schema.Struct({
-  _tag: Schema.optionalKey(Schema.String),
-  errors: Schema.optionalKey(Schema.Array(FieldErrorBodySchema)),
-  record: Schema.optionalKey(
-    Schema.Struct({
-      id: Schema.String,
-      values: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-      version: Schema.Int,
-    })
-  ),
+/** What the checks read from a TMF error. */
+const ErrorBodySchema = Schema.Struct({
+  code: Schema.optionalKey(Schema.String),
+  fieldErrors: Schema.optionalKey(Schema.Array(FieldErrorBodySchema)),
 });
 
-type ResponseBody = typeof ResponseBodySchema.Type;
+type ErrorBody = typeof ErrorBodySchema.Type;
 
-const decodeBody = Schema.decodeUnknownOption(ResponseBodySchema);
+const decodeError = Schema.decodeUnknownOption(ErrorBodySchema);
 
-/** Members with a value, as an object.
- * @param entries - Name and value pairs.
- * @returns The object. */
-const presentMembers = (
-  entries: readonly (readonly [string, JsonValue | undefined])[]
-): JsonObject =>
-  Object.fromEntries(
-    entries.filter(
-      (entry): entry is readonly [string, JsonValue] => entry[1] !== undefined
-    )
-  );
+const decodeResource = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.String,
+    revision: Schema.Int,
+  })
+);
 
 /**
- * A v2 body in the v1 shape the checks read: a TMF `Error` becomes
- * `{ _tag, errors }`, a resource `{ record: { id, values, version } }`.
- * A v1 body is returned as is.
- *
- * @param json - A response's JSON.
- * @returns The body in v1 terms.
- */
-const normalizedOf = (json: JsonValue | undefined): JsonValue | undefined => {
-  if (json === undefined || !isJsonObject(json)) {
-    return json;
-  }
-
-  if (json["@baseType"] === "Error") {
-    const { code, fieldErrors } = json;
-
-    return presentMembers([
-      ["_tag", isString(code) ? code : undefined],
-      ["errors", Array.isArray(fieldErrors) ? fieldErrors : undefined],
-    ]);
-  }
-
-  const { id, revision } = json;
-
-  if (isString(id) && revision !== undefined && isJsonNumber(revision)) {
-    return {
-      record: {
-        id,
-        values: presentMembers(
-          Object.keys(json)
-            .filter((key) => !SYSTEM_ATTRIBUTES.has(key))
-            .map((key) => [key, json[key]] as const)
-        ),
-        version: revision,
-      },
-    };
-  }
-
-  return json;
-};
-
-/**
- * The parts of a response body the checks read.
- *
+ * The error members needed by the oracle, directly from the wire.
  * @param response - A response.
- * @returns The decoded body; no members when it does not decode.
+ * @returns The decoded error members, or none when the body does not decode.
  */
-const parsedOf = (response: TestResponse): ResponseBody =>
-  Option.getOrElse(decodeBody(normalizedOf(response.json)), () => ({}));
+const errorOf = (response: TestResponse): ErrorBody =>
+  response.json !== undefined &&
+  isJsonObject(response.json) &&
+  response.json["@baseType"] === "Error"
+    ? Option.getOrElse(decodeError(response.json), () => ({}))
+    : {};
+
+const savedOf = (response: TestResponse) =>
+  Option.getOrUndefined(decodeResource(response.json));
+
+const attributesOf = (response: TestResponse): JsonValue[] =>
+  response.json !== undefined && isJsonObject(response.json)
+    ? Object.entries(response.json)
+        .filter(([key]) => !SYSTEM_ATTRIBUTES.has(key))
+        .map(([, value]) => value)
+    : [];
 
 /** What the checks need to know about one request. */
 interface Sent {
@@ -829,8 +756,6 @@ interface Sent {
   readonly body: JsonValue | undefined;
   /** The record the request targets, if the model knows it. */
   readonly target: Tracked | null;
-  /** The API version (default `v1`). */
-  readonly version?: ApiVersion;
 }
 
 const textsOf = (value: JsonValue | undefined): string[] => {
@@ -863,14 +788,14 @@ const secretsOf = (body: JsonObject): Set<string> =>
  * @returns `<status> <tag>` and, for a unique conflict, `notUnique`.
  */
 const outcomesOf = (response: TestResponse): readonly string[] => {
-  const body = parsedOf(response);
+  const body = errorOf(response);
 
-  const notUnique = (body.errors ?? []).some(
+  const notUnique = (body.fieldErrors ?? []).some(
     (error) => error.reason === "notUnique"
   );
 
   return [
-    `${response.status} ${body._tag ?? ""}`.trim(),
+    `${response.status} ${body.code ?? ""}`.trim(),
     ...(notUnique ? ["notUnique"] : []),
   ];
 };
@@ -906,34 +831,20 @@ const assertMembers = (
  * @param response - A response.
  */
 const checkErrorMembers = (response: TestResponse): void => {
-  const body = parsedOf(response);
-  const tag = body._tag;
+  const body = errorOf(response);
+  const tag = body.code;
 
   if (tag === undefined) {
     return;
   }
 
+  assertMembers(response.json, tag, ERROR_MEMBERS.get(tag), BASE_MEMBERS);
+
   const json = response.json ?? null;
-  const isV2 = isJsonObject(json) && json["@baseType"] === "Error";
-
-  if (isV2) {
-    // v2: the TMF members, and `fieldErrors` for `ValidationFailed`.
-    assertMembers(
-      response.json,
-      tag,
-      tag === "ValidationFailed" ? ["fieldErrors"] : ERROR_MEMBERS.get(tag),
-      V2_BASE_MEMBERS
-    );
-  } else {
-    assertMembers(response.json, tag, ERROR_MEMBERS.get(tag));
-  }
-
-  const errorsMember = isV2 ? "fieldErrors" : "errors";
-  const raw = isJsonObject(json) ? json[errorsMember] : undefined;
-
+  const raw = isJsonObject(json) ? json.fieldErrors : undefined;
   const rawErrors: readonly JsonValue[] = Array.isArray(raw) ? raw : [];
 
-  for (const [index, error] of (body.errors ?? []).entries()) {
+  for (const [index, error] of (body.fieldErrors ?? []).entries()) {
     assertMembers(
       rawErrors[index],
       error._tag,
@@ -944,10 +855,6 @@ const checkErrorMembers = (response: TestResponse): void => {
       assert.isTrue(UNIQUE_FIELDS.has(error.field), `notUnique ${error.field}`);
       assert.strictEqual(error.message, NOT_UNIQUE_MESSAGE);
     }
-  }
-
-  if (tag === "Referenced" && !isV2) {
-    assert.strictEqual(response.text, '{"_tag":"Referenced"}');
   }
 };
 
@@ -966,10 +873,7 @@ const checkResponse = (
   const where = `${sent.path} ${JSON.stringify(sent.body ?? null)} -> ${response.status} ${response.text}`;
   const text = response.text.toLowerCase();
 
-  assert.isTrue(
-    statusesOf(sent.version ?? "v1").has(response.status),
-    `status: ${where}`
-  );
+  assert.isTrue(STATUSES.has(response.status), `status: ${where}`);
 
   if (response.status === 500) {
     assert.strictEqual(response.text, "", `a 500 with a body: ${where}`);
@@ -982,15 +886,16 @@ const checkResponse = (
   const requestText =
     `${sent.path} ${JSON.stringify(sent.body ?? null)}`.toLowerCase();
 
-  const saved = parsedOf(response).record;
+  const saved = savedOf(response);
   const succeeded = response.status < 400;
+  const savedAttributes = saved === undefined ? [] : attributesOf(response);
 
   // Values a response may repeat: what the request sent and, on success
   // only, the saved record's own projection. A refusal shows no stored
   // value, not even the target record's.
   const allowed = new Set([
     ...textsOf(sent.body),
-    ...(succeeded ? textsOf(saved?.values) : []),
+    ...(succeeded ? textsOf(savedAttributes) : []),
   ]);
 
   // IDs a response may show: the actors, what the request named, and the
@@ -998,7 +903,7 @@ const checkResponse = (
   const shown = new Set([
     ...model.actors,
     ...(saved === undefined ? [] : [saved.id]),
-    ...textsOf(saved?.values),
+    ...textsOf(savedAttributes),
   ]);
 
   for (const tracked of model.records) {
@@ -1022,7 +927,6 @@ interface FuzzContext {
   readonly admin: string;
   readonly alice: string;
   readonly model: Model;
-  readonly version: ApiVersion;
 }
 
 /** One request of a step. */
@@ -1035,77 +939,7 @@ interface StepRequest {
   readonly target: Tracked | null;
 }
 
-const optionsOf = (request: StepRequest): TestRequestOptions =>
-  request.body === undefined
-    ? { headers: request.headers ?? {}, token: request.token }
-    : {
-        body: request.body,
-        headers: request.headers ?? {},
-        token: request.token,
-      };
-
-const V1_RECORD_PATH =
-  /^\/api\/v1\/tables\/(?<namespace>[a-z_]+)\.(?<table>[a-z_]+)\/records(?:\/(?<id>.*))?$/u;
-
-const WORD_BREAK = /_(?<letter>[a-z])/gu;
-
-/**
- * An underscore name in lowerCamelCase.
- *
- * @param name - `purchased_on`.
- * @returns `purchasedOn`.
- */
-const camelOf = (name: string): string =>
-  name.replaceAll(WORD_BREAK, (_match, letter: string) => letter.toUpperCase());
-
-/**
- * A v1 path in v2 terms: `/api/v1/tables/site.fuzz_item/records/<id>`
- * becomes `/api/v1/siteFuzzItem/<id>`.
- *
- * @param path - A v1 record or list path.
- * @returns The v2 path.
- */
-const v2PathOf = (path: string): string => {
-  // `listPath` and `recordPath` already give the API's paths.
-  if (!path.startsWith("/api/v1/tables/")) {
-    return path;
-  }
-
-  const { id, namespace, table } = V1_RECORD_PATH.exec(path)?.groups ?? {};
-
-  if (namespace === undefined || table === undefined) {
-    throw new Error(`not a v1 record path: ${path}`);
-  }
-
-  const collection = camelOf(`${namespace}_${table}`);
-
-  return id === undefined
-    ? `/api/v1/${collection}`
-    : `/api/v1/${collection}/${id}`;
-};
-
-/**
- * A v1 body in v2 terms: camelCase attributes and references as
- * `{ "id": ... }` (other values, such as a number, stay as they are).
- *
- * @param body - A v1 body.
- * @returns The v2 body.
- */
-const v2BodyOf = (body: JsonObject): JsonObject =>
-  Object.fromEntries(
-    Object.entries(body).map(([key, value]): [string, JsonValue] => {
-      const name = camelOf(key);
-
-      return [
-        name,
-        REFERENCE_ATTRIBUTES.has(name) && isString(value)
-          ? { id: value }
-          : value,
-      ];
-    })
-  );
-
-const v2OptionsOf = (request: StepRequest): TestRequestOptions => {
+const optionsOf = (request: StepRequest): TestRequestOptions => {
   const patch = request.method === "PATCH";
 
   const headers = patch
@@ -1116,7 +950,7 @@ const v2OptionsOf = (request: StepRequest): TestRequestOptions => {
     return { headers, token: request.token };
   }
 
-  const body = v2BodyOf(request.body);
+  const { body } = request;
 
   return patch
     ? { headers, rawBody: JSON.stringify(body), token: request.token }
@@ -1127,19 +961,15 @@ const send = Effect.fn("ErrorFuzz.send")(function* send(
   context: FuzzContext,
   request: StepRequest
 ) {
-  const { version } = context;
-
-  const path = version === "v2" ? v2PathOf(request.path) : request.path;
-
   const response = yield* context.http.request(
     request.method,
-    path,
-    version === "v2" ? v2OptionsOf(request) : optionsOf(request)
+    request.path,
+    optionsOf(request)
   );
 
   checkResponse(
     context.model,
-    { body: request.body, path, target: request.target, version },
+    { body: request.body, path: request.path, target: request.target },
     response
   );
 
@@ -1159,7 +989,7 @@ const track = (
   added: { readonly kind: TrackedKind; readonly concrete: string },
   body: JsonObject
 ): void => {
-  const saved = parsedOf(response).record;
+  const saved = savedOf(response);
 
   if (response.status === 201 && saved !== undefined) {
     model.records.push({
@@ -1168,7 +998,7 @@ const track = (
       id: saved.id,
       kind: added.kind,
       secrets: secretsOf(body),
-      version: saved.version,
+      version: saved.revision,
     });
   }
 };
@@ -1178,10 +1008,10 @@ const noteUpdate = (
   response: TestResponse,
   body: JsonObject
 ): void => {
-  const saved = parsedOf(response).record;
+  const saved = savedOf(response);
 
   if (target !== null && response.status === 200 && saved !== undefined) {
-    target.version = saved.version;
+    target.version = saved.revision;
 
     for (const secret of secretsOf(body)) {
       target.secrets.add(secret);
@@ -1249,7 +1079,6 @@ const runItemStep = Effect.fn("ErrorFuzz.itemStep")(function* runItemStep(
     token: context.admin,
   });
 
-  // v1 answers a delete with the record (200), v2 with 204.
   if (response.status < 300 && target !== null) {
     target.deleted = true;
   }
@@ -1332,9 +1161,9 @@ const runAliceCreate = Effect.fn("ErrorFuzz.aliceCreate")(
     const table = step.laptop ? LAPTOP : ASSET;
 
     const body: JsonObject = Object.fromEntries([
-      ["docked_to", resolveRef(model, step.dockedTo).value],
+      ["dockedTo", referenceValue(resolveRef(model, step.dockedTo).value)],
       ["name", step.name],
-      ["purchased_on", step.purchasedOn],
+      ["purchasedOn", step.purchasedOn],
       ...(step.laptop ? [["serial", step.serial] as const] : []),
     ]);
 
@@ -1360,9 +1189,9 @@ const runAliceUpdate = Effect.fn("ErrorFuzz.aliceUpdate")(
     }
 
     const body: JsonObject = {
-      docked_to: resolveRef(model, step.dockedTo).value,
+      dockedTo: referenceValue(resolveRef(model, step.dockedTo).value),
       name: step.name,
-      purchased_on: step.purchasedOn,
+      purchasedOn: step.purchasedOn,
     };
 
     const response = yield* send(context, {
@@ -1527,12 +1356,9 @@ const prepare = Effect.gen(function* prepare() {
 /**
  * Signs in the admin and Alice; the model starts with the acme records.
  *
- * @param version - The API version the context sends to.
  * @returns The context.
  */
-const setUpFor = Effect.fn("ErrorFuzz.setUp")(function* setUpFor(
-  version: ApiVersion
-) {
+const setUp = Effect.fn("ErrorFuzz.setUp")(function* setUp() {
   const fixture = yield* AcmeFixture;
   const http = yield* TestHttpClient;
   const sql = yield* SqlClient.SqlClient;
@@ -1559,7 +1385,7 @@ const setUpFor = Effect.fn("ErrorFuzz.setUp")(function* setUpFor(
     records: acmeRecords,
   };
 
-  return { admin, alice, http, model, version } satisfies FuzzContext;
+  return { admin, alice, http, model } satisfies FuzzContext;
 });
 
 const RUNS = 50;
@@ -1670,11 +1496,11 @@ const cellKey = (cell: Cell): string =>
  * @returns The outcome text.
  */
 const outcomeText = (response: TestResponse): string => {
-  const body = parsedOf(response);
+  const body = errorOf(response);
 
   const details =
-    body._tag === "ValidationFailed"
-      ? (body.errors ?? []).map((error) =>
+    body.code === "ValidationFailed"
+      ? (body.fieldErrors ?? []).map((error) =>
           [error._tag, error.field, error.reason]
             .filter((part) => part !== undefined)
             .join(":")
@@ -1683,9 +1509,9 @@ const outcomeText = (response: TestResponse): string => {
 
   const json = response.json ?? null;
   const reference = isJsonObject(json) ? json.field : undefined;
-  const field = body._tag === "InvalidReference" ? textsOf(reference) : [];
+  const field = body.code === "InvalidReference" ? textsOf(reference) : [];
 
-  return [String(response.status), body._tag, ...details, ...field]
+  return [String(response.status), body.code, ...details, ...field]
     .filter((part) => part !== undefined)
     .join(" ");
 };
@@ -1758,7 +1584,7 @@ const freshRecord = Effect.fn("ErrorMatrix.freshRecord")(function* freshRecord(
     body
   );
 
-  return { body, id: parsedOf(response).record?.id ?? "" };
+  return { body, id: savedOf(response)?.id ?? "" };
 });
 
 /** Some backend of this database waits for a lock. */
@@ -1809,8 +1635,8 @@ const provoking = (
   })),
   ownerCheck: Effect.succeed({ qty: -1 }),
   ownerNotNull: Effect.succeed({ note: null }),
-  reference: Effect.sync(() => ({ parent: randomUUID() })),
-  referenceBackstop: Effect.sync(() => ({ parent: randomUUID() })),
+  reference: Effect.sync(() => ({ parent: { id: randomUUID() } })),
+  referenceBackstop: Effect.sync(() => ({ parent: { id: randomUUID() } })),
   referenced: Effect.succeed({}),
   required: Effect.succeed({ name: null }),
   type: Effect.succeed({ qty: "many" }),
@@ -1846,9 +1672,6 @@ const withDeliveries = Effect.fn("ErrorMatrix.withDeliveries")(
   }
 );
 
-/** Whether a matrix has subscribed to the fuzz class yet. */
-const matrixState = { subscribed: false };
-
 const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
   context: FuzzContext,
   cell: Cell
@@ -1858,7 +1681,7 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
   if (cell.op === "delete") {
     const target = yield* freshRecord(context, cell.endpoint);
 
-    yield* freshRecord(context, ITEM, { parent: target.id });
+    yield* freshRecord(context, ITEM, { parent: { id: target.id } });
 
     return yield* withDeliveries(
       send(context, {
@@ -1919,9 +1742,9 @@ const takeCell = Effect.fn("ErrorMatrix.cell")(function* takeCell(
 
   yield* Deferred.await(deleted);
 
-  const writing = yield* withDeliveries(write({ parent: target.id })).pipe(
-    Effect.forkChild
-  );
+  const writing = yield* withDeliveries(
+    write({ parent: { id: target.id } })
+  ).pipe(Effect.forkChild);
 
   yield* waitUntil(someoneWaitsOnALock);
   yield* Deferred.succeed(release, true);
@@ -2043,7 +1866,7 @@ const TARGETED_CASES: ReadonlyMap<string, TargetedCase> = new Map<
           adminSends(
             context,
             "DELETE",
-            recordPath(USER, parsedOf(created).record?.id ?? ""),
+            recordPath(USER, savedOf(created)?.id ?? ""),
             { headers: { "if-match": '"1"' } }
           )
         )
@@ -2063,7 +1886,7 @@ const TARGETED_CASES: ReadonlyMap<string, TargetedCase> = new Map<
       Effect.gen(function* referenced() {
         const target = yield* freshRecord(context, ITEM);
 
-        yield* freshRecord(context, ITEM, { parent: target.id });
+        yield* freshRecord(context, ITEM, { parent: { id: target.id } });
 
         return yield* adminSends(
           context,
@@ -2076,7 +1899,7 @@ const TARGETED_CASES: ReadonlyMap<string, TargetedCase> = new Map<
       }),
   ],
   [
-    "409 VersionConflict",
+    "412 VersionConflict",
     (context) =>
       patchFresh(context, { name: "nmstale" }, { "if-match": '"7"' }),
   ],
@@ -2084,7 +1907,7 @@ const TARGETED_CASES: ReadonlyMap<string, TargetedCase> = new Map<
     "422 InvalidReference",
     (context) =>
       adminSends(context, "POST", listPath(ITEM), {
-        body: { ...validBody(ITEM), parent: randomUUID() },
+        body: { ...validBody(ITEM), parent: { id: randomUUID() } },
       }),
   ],
   [
@@ -2156,8 +1979,9 @@ describe("error-fuzz", () => {
         model,
         sent,
         syntheticResponse(422, {
-          _tag: "ValidationFailed",
-          errors: [
+          "@baseType": "Error",
+          code: "ValidationFailed",
+          fieldErrors: [
             {
               _tag: "InvalidValue",
               field: "name",
@@ -2175,13 +1999,11 @@ describe("error-fuzz", () => {
         model,
         sent,
         syntheticResponse(200, {
-          record: {
-            class: ITEM,
-            id: target.id,
-            values: { name: "nmnewvalue", note: "ntkeptnote" },
-            version: 3,
-          },
-          schemaRevision: 1,
+          "@type": "SiteFuzzItem",
+          id: target.id,
+          name: "nmnewvalue",
+          note: "ntkeptnote",
+          revision: 3,
         })
       );
     });
@@ -2192,8 +2014,9 @@ describe("error-fuzz", () => {
         model,
         sent,
         syntheticResponse(422, {
-          _tag: "ValidationFailed",
-          errors: [
+          "@baseType": "Error",
+          code: "ValidationFailed",
+          fieldErrors: [
             {
               _tag: "InvalidValue",
               field: "name",
@@ -2213,229 +2036,209 @@ describe("error-fuzz", () => {
         () => prepare
       );
 
-      for (const version of VERSIONS) {
-        // Each version's unique-conflict test uses its own code, so the
-        // records of the other version's run do not take it.
-        const uniqueCode = version === "v1" ? "kqvvvv" : "kqwwww";
+      const uniqueCode = "kqwwww";
 
-        dbTest.effect(
-          "a unique conflict reveals only that the value is taken",
-          () =>
-            Effect.gen(function* uniqueConflict() {
-              const context = yield* setUpFor(version);
+      dbTest.effect(
+        "a unique conflict reveals only that the value is taken",
+        () =>
+          Effect.gen(function* uniqueConflict() {
+            const context = yield* setUp();
 
-              const first = yield* send(context, {
-                body: { code: uniqueCode, name: "nmfirst", note: "ntfirst" },
+            const first = yield* send(context, {
+              body: { code: uniqueCode, name: "nmfirst", note: "ntfirst" },
+              method: "POST",
+              path: listPath(ITEM),
+              target: null,
+              token: context.admin,
+            });
+
+            assert.strictEqual(first.status, 201, first.text);
+
+            const firstId = savedOf(first)?.id ?? "";
+
+            const again = yield* send(context, {
+              body: {
+                code: uniqueCode.toUpperCase(),
+                name: "nmsecond",
+                note: "ntsecond",
+              },
+              method: "POST",
+              path: listPath(SPECIAL),
+              target: null,
+              token: context.admin,
+            });
+
+            assert.strictEqual(again.status, 422, again.text);
+
+            const notUnique = {
+              _tag: "InvalidValue",
+              field: "code",
+              message: NOT_UNIQUE_MESSAGE,
+              reason: "notUnique",
+            };
+
+            assert.strictEqual(errorOf(again).code, "ValidationFailed");
+            assert.deepStrictEqual(errorOf(again).fieldErrors, [notUnique]);
+
+            assert.notInclude(again.text, firstId);
+            assert.notInclude(again.text, "nmfirst");
+
+            // A delete refused by a reference says nothing else.
+            const child = yield* send(context, {
+              body: {
+                name: "nmchild",
+                note: "ntchild",
+                parent: { id: firstId },
+              },
+              method: "POST",
+              path: listPath(ITEM),
+              target: null,
+              token: context.admin,
+            });
+
+            assert.strictEqual(child.status, 201, child.text);
+
+            const refused = yield* send(context, {
+              headers: { "if-match": '"1"' },
+              method: "DELETE",
+              path: recordPath(ITEM, firstId),
+              target: null,
+              token: context.admin,
+            });
+
+            assert.strictEqual(refused.status, 409, refused.text);
+            assert.strictEqual(errorOf(refused).code, "Referenced");
+
+            // The owner's constraints and trigger: an empty 500.
+            for (const body of [
+              { code: "kqcheck", name: "nmneg", note: "nt", qty: -1 },
+              { code: "kqnull", name: "nmnull", note: null },
+              { code: "kqboom", name: "boom", note: "nt" },
+            ]) {
+              const response = yield* send(context, {
+                body,
                 method: "POST",
                 path: listPath(ITEM),
                 target: null,
                 token: context.admin,
               });
 
-              assert.strictEqual(first.status, 201, first.text);
+              assert.strictEqual(response.status, 500, JSON.stringify(body));
+              assert.strictEqual(response.text, "");
+            }
+          })
+      );
 
-              const firstId = parsedOf(first).record?.id ?? "";
+      dbTest.effect(
+        "every constraint on every write path gives its intended refusal",
+        () =>
+          Effect.gen(function* matrix() {
+            const context = yield* setUp();
+            const seen = new Map<string, string>();
+            const snapshot = yield* (yield* Catalog).refresh;
 
-              const again = yield* send(context, {
-                body: {
-                  code: uniqueCode.toUpperCase(),
-                  name: "nmsecond",
-                  note: "ntsecond",
-                },
-                method: "POST",
-                path: listPath(SPECIAL),
-                target: null,
-                token: context.admin,
-              });
+            // Every committed save of the fuzz hierarchy writes a delivery
+            // row; a refused one must leave none.
+            yield* subscribe({
+              classId: snapshot.classByName(ITEM)?.id ?? "",
+              identityId: (yield* AcmeFixture).alice.id,
+            });
 
-              assert.strictEqual(again.status, 422, again.text);
-
-              const notUnique = {
-                _tag: "InvalidValue",
-                field: "code",
-                message: NOT_UNIQUE_MESSAGE,
-                reason: "notUnique",
-              };
-
-              assert.strictEqual(parsedOf(again)._tag, "ValidationFailed");
-              assert.deepStrictEqual(parsedOf(again).errors, [notUnique]);
-
-              if (version === "v1") {
-                assert.deepStrictEqual(again.json, {
-                  _tag: "ValidationFailed",
-                  errors: [notUnique],
-                });
-              }
-
-              assert.notInclude(again.text, firstId);
-              assert.notInclude(again.text, "nmfirst");
-
-              // A delete refused by a reference says nothing else.
-              const child = yield* send(context, {
-                body: { name: "nmchild", note: "ntchild", parent: firstId },
-                method: "POST",
-                path: listPath(ITEM),
-                target: null,
-                token: context.admin,
-              });
-
-              assert.strictEqual(child.status, 201, child.text);
-
-              const refused = yield* send(context, {
-                headers: { "if-match": '"1"' },
-                method: "DELETE",
-                path: recordPath(ITEM, firstId),
-                target: null,
-                token: context.admin,
-              });
-
-              assert.strictEqual(refused.status, 409, refused.text);
-              assert.strictEqual(parsedOf(refused)._tag, "Referenced");
-
-              if (version === "v1") {
-                assert.strictEqual(refused.text, '{"_tag":"Referenced"}');
-              }
-
-              // The owner's constraints and trigger: an empty 500.
-              for (const body of [
-                { code: "kqcheck", name: "nmneg", note: "nt", qty: -1 },
-                { code: "kqnull", name: "nmnull", note: null },
-                { code: "kqboom", name: "boom", note: "nt" },
-              ]) {
-                const response = yield* send(context, {
-                  body,
-                  method: "POST",
-                  path: listPath(ITEM),
-                  target: null,
-                  token: context.admin,
-                });
-
-                assert.strictEqual(response.status, 500, JSON.stringify(body));
-                assert.strictEqual(response.text, "");
-              }
-            })
-        );
-
-        dbTest.effect(
-          "every constraint on every write path gives its intended refusal",
-          () =>
-            Effect.gen(function* matrix() {
-              const context = yield* setUpFor(version);
-              const seen = new Map<string, string>();
-              const snapshot = yield* (yield* Catalog).refresh;
-
-              // Every committed save of the fuzz hierarchy writes a delivery
-              // row; a refused one must leave none. One subscription serves
-              // both versions' matrices.
-              if (!matrixState.subscribed) {
-                matrixState.subscribed = true;
-                yield* subscribe({
-                  classId: snapshot.classByName(ITEM)?.id ?? "",
-                  identityId: (yield* AcmeFixture).alice.id,
-                });
-              }
-
-              // The subscription is live: a valid create leaves one row.
-              assert.strictEqual(
-                yield* withDeliveries(
-                  freshRecord(context, SPECIAL).pipe(
-                    Effect.as(syntheticResponse(201, { _tag: "Created" }))
+            // The subscription is live: a valid create leaves one row.
+            assert.strictEqual(
+              yield* withDeliveries(
+                freshRecord(context, SPECIAL).pipe(
+                  Effect.map(({ id }) =>
+                    syntheticResponse(201, { id, revision: 1 })
                   )
-                ),
-                "201 Created +1 deliveries"
-              );
-
-              for (const cell of MATRIX) {
-                seen.set(cellKey(cell), yield* takeCell(context, cell));
-              }
-
-              assert.deepStrictEqual(
-                Object.fromEntries(seen),
-                Object.fromEntries(
-                  MATRIX.map((cell) => [
-                    cellKey(cell),
-                    INTENDED[cell.constraint],
-                  ])
                 )
-              );
-              assert.lengthOf(MATRIX, 36);
-            }),
-          TIMEOUT
-        );
+              ),
+              "201 +1 deliveries"
+            );
 
-        dbTest.effect(
-          "every targeted case reaches its outcome",
-          () =>
-            Effect.gen(function* targetedCases() {
-              const context = yield* setUpFor(version);
+            for (const cell of MATRIX) {
+              seen.set(cellKey(cell), yield* takeCell(context, cell));
+            }
 
-              assert.sameMembers(
-                [...TARGETED_CASES.keys()],
-                [...REQUIRED_OUTCOMES]
-              );
+            assert.deepStrictEqual(
+              Object.fromEntries(seen),
+              Object.fromEntries(
+                MATRIX.map((cell) => [cellKey(cell), INTENDED[cell.constraint]])
+              )
+            );
+            assert.lengthOf(MATRIX, 36);
+          }),
+        TIMEOUT
+      );
 
-              for (const [outcome, targeted] of TARGETED_CASES) {
-                const response = yield* targeted(context);
+      dbTest.effect(
+        "every targeted case reaches its outcome",
+        () =>
+          Effect.gen(function* targetedCases() {
+            const context = yield* setUp();
 
-                assert.include(
-                  outcomesOf(response),
-                  outcomeLabel(version, outcome),
-                  response.text
-                );
+            assert.sameMembers(
+              [...TARGETED_CASES.keys()],
+              [...REQUIRED_OUTCOMES]
+            );
+
+            for (const [outcome, targeted] of TARGETED_CASES) {
+              const response = yield* targeted(context);
+
+              assert.include(outcomesOf(response), outcome, response.text);
+            }
+          }),
+        TIMEOUT
+      );
+
+      dbTest.effect(
+        "fuzzed constraint violations never return Postgres text or values",
+        () =>
+          Effect.gen(function* fuzz() {
+            const context = yield* setUp();
+            const services = yield* Effect.context<Services>();
+            const run = Effect.runPromiseWith(services);
+
+            const result = yield* Effect.promise(
+              async () => await checkSequences(context, run)
+            );
+
+            assert.isFalse(
+              result.failed,
+              `counterexample ${JSON.stringify(result.counterexample)} (seed ${result.seed}): ${String(result.errorInstance)}`
+            );
+
+            const seen = context.model.outcomes;
+
+            // The targeted phase: a case for every outcome the random
+            // phase missed, through the same requests and checks.
+            const missed = REQUIRED_OUTCOMES.filter(
+              (outcome) => !seen.has(outcome)
+            );
+
+            for (const outcome of missed) {
+              const targeted = TARGETED_CASES.get(outcome);
+
+              assert.isDefined(targeted, `no targeted case for ${outcome}`);
+
+              if (targeted !== undefined) {
+                yield* targeted(context);
               }
-            }),
-          TIMEOUT
-        );
+            }
 
-        dbTest.effect(
-          "fuzzed constraint violations never return Postgres text or values",
-          () =>
-            Effect.gen(function* fuzz() {
-              const context = yield* setUpFor(version);
-              const services = yield* Effect.context<Services>();
-              const run = Effect.runPromiseWith(services);
-
-              const result = yield* Effect.promise(
-                async () => await checkSequences(context, run)
+            for (const outcome of REQUIRED_OUTCOMES) {
+              assert.isTrue(
+                seen.has(outcome),
+                `never reached ${outcome}: ${JSON.stringify([...seen])}`
               );
+            }
 
-              assert.isFalse(
-                result.failed,
-                `counterexample ${JSON.stringify(result.counterexample)} (seed ${result.seed}): ${String(result.errorInstance)}`
-              );
-
-              const seen = context.model.outcomes;
-
-              // The targeted phase: a case for every outcome the random
-              // phase missed, through the same requests and checks.
-              const missed = REQUIRED_OUTCOMES.filter(
-                (outcome) => !seen.has(outcomeLabel(version, outcome))
-              );
-
-              for (const outcome of missed) {
-                const targeted = TARGETED_CASES.get(outcome);
-
-                assert.isDefined(targeted, `no targeted case for ${outcome}`);
-
-                if (targeted !== undefined) {
-                  yield* targeted(context);
-                }
-              }
-
-              for (const outcome of REQUIRED_OUTCOMES) {
-                assert.isTrue(
-                  seen.has(outcomeLabel(version, outcome)),
-                  `never reached ${outcome}: ${JSON.stringify([...seen])}`
-                );
-              }
-
-              yield* Effect.logInfo(
-                `error-fuzz ${version}: ${RUNS} runs; outcomes the targeted phase reached: ${missed.join(", ") || "none"}`
-              );
-            }),
-          TIMEOUT
-        );
-      }
+            yield* Effect.logInfo(
+              `error-fuzz: ${RUNS} runs; outcomes the targeted phase reached: ${missed.join(", ") || "none"}`
+            );
+          }),
+        TIMEOUT
+      );
     }
   );
 });

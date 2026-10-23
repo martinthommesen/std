@@ -39,6 +39,7 @@ import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { loadSetDirectory } from "../src/config/load-set.ts";
 import { readSetDirectory } from "../src/config/set-files.ts";
+import { numberOf } from "./api-support.ts";
 import { writeSetDirectory } from "./config-support.ts";
 import {
   allPages,
@@ -48,6 +49,8 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
+import { definitionVersion } from "./schema-paths-support.ts";
+import { patch } from "./writes-support.ts";
 
 const INCIDENT = "helpdesk.incident";
 
@@ -222,11 +225,6 @@ const renamingSet = (files: readonly NamedSetFile[]): NamedSetFile[] =>
     path: file.path,
   }));
 
-const versionOf = (id: string) =>
-  Effect.gen(function* readVersion() {
-    return (yield* (yield* Catalog).refresh).get(id)?.version ?? 0;
-  });
-
 const write = Effect.fn("HelpdeskRename.write")(function* write(
   token: string,
   method: "POST" | "PATCH",
@@ -239,7 +237,9 @@ const write = Effect.fn("HelpdeskRename.write")(function* write(
   const response = yield* http.request(method, path, {
     body,
     headers:
-      method === "PATCH" ? { "if-match": `"${yield* versionOf(id)}"` } : {},
+      method === "PATCH"
+        ? { "if-match": `"${yield* definitionVersion(id)}"` }
+        : {},
     token,
   });
 
@@ -411,14 +411,12 @@ describe("helpdesk-rename", () => {
               yield* http.get(recordPath(INCIDENT, id), { token: admin })
             );
 
-            const saved = yield* http.request(
-              "PATCH",
-              recordPath(INCIDENT, id),
-              {
-                body: { site: "HQ" },
-                headers: { "if-match": `"${JSON.stringify(revision)}"` },
-                token: admin,
-              }
+            const saved = yield* patch(
+              admin,
+              INCIDENT,
+              id,
+              numberOf(revision),
+              { site: "HQ" }
             );
 
             assert.strictEqual(saved.status, 200, saved.text);

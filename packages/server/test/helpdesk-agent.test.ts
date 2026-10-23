@@ -27,6 +27,7 @@ import {
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestResponse } from "../../testing/src/http-client.ts";
+import { numberOf } from "./api-support.ts";
 import {
   allPages,
   collectionOf,
@@ -35,6 +36,7 @@ import {
   recordPath,
   resourceOf,
 } from "./reads-support.ts";
+import { patch } from "./writes-support.ts";
 
 const INCIDENT = "helpdesk.incident";
 const TICKET = "helpdesk.ticket";
@@ -111,11 +113,7 @@ const patchRecord = Effect.fn("HelpdeskAgent.patch")(function* patchRecord(
     yield* http.get(recordPath(INCIDENT, id), { token: tokens.admin })
   );
 
-  return yield* http.request("PATCH", recordPath(INCIDENT, id), {
-    body,
-    headers: { "if-match": `"${JSON.stringify(revision)}"` },
-    token: tokens.caller,
-  });
+  return yield* patch(tokens.caller, INCIDENT, id, numberOf(revision), body);
 });
 
 const refusalTag = (response: TestResponse) =>

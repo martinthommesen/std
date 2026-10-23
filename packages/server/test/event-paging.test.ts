@@ -8,7 +8,6 @@ import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
-import { TestClock } from "effect/testing";
 
 import { ACME, AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
@@ -20,25 +19,11 @@ import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { asArray, asObject, textOf, apiCallers } from "./api-support.ts";
 import { hubTestLayer, listener, register } from "./hub-support.ts";
+import { nextOf } from "./paging.ts";
 import { change } from "./schema-support.ts";
-
-const test = it.effect;
 
 const ASSET = `${API_PREFIX}/acmeAsset`;
 const EVENTS = `${TMF688_PREFIX}/topic/record:acmeAsset/event`;
-
-const nextOf = (link: string | null): string | undefined => {
-  const entry = link?.split(", ").find((part) => part.endsWith('; rel="next"'));
-  const href = entry?.slice(1, entry.indexOf(">"));
-
-  if (href === undefined) {
-    return undefined;
-  }
-
-  const url = new URL(href);
-
-  return `${url.pathname}${url.search}`;
-};
 
 const resourceOf = (event: JsonValue | undefined) =>
   asObject(asObject(asObject(event).event).acmeAsset);
@@ -73,6 +58,8 @@ const markLookupPending = Effect.gen(function* markLookupPending() {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM core.platform_migration WHERE id = 22`;
 });
+
+const test = it.live;
 
 describe("event history and paging regressions", () => {
   test("unauthorized changes cannot strand a visible older event or expose their IDs in continuation", () =>
@@ -113,7 +100,7 @@ describe("event history and paging regressions", () => {
         resourceOf(asArray(follow.json)[0]).id,
         asObject(visible.json).id
       );
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 
   test("the full-payload work budget falls back to authorized resource identity without failing the page", () =>
     Effect.gen(function* payloadBudget() {
@@ -139,7 +126,7 @@ describe("event history and paging regressions", () => {
         ]);
         assert.strictEqual(resourceOf(event).id, id);
       }
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 
   test("more than 1000 versions list and GET correct early and latest images with bounded reconstruction", () =>
     Effect.gen(function* longHistory() {
@@ -263,7 +250,7 @@ describe("event history and paging regressions", () => {
         ),
         0
       );
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 
   test("hidden-only candidates and filtered types fill further batches, and exhausted scans have opaque continuations", () =>
     Effect.gen(function* scanContinuation() {
@@ -349,7 +336,7 @@ describe("event history and paging regressions", () => {
         (yield* http.get(`${next}&eventType=Other`, admin)).status,
         400
       );
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 
   test("client lists seek newest first beyond 1000 rows and masked rows do not imply completion or false totals", () =>
     Effect.gen(function* clientPaging() {
@@ -434,5 +421,5 @@ describe("event history and paging regressions", () => {
       const end = yield* http.get(`${path}?limit=2`, admin);
       assert.strictEqual(end.headers.get("x-total-count"), "1");
       assert.isUndefined(nextOf(end.headers.get("link")));
-    }).pipe(Effect.provide(hubTestLayer), Effect.scoped, TestClock.withLive));
+    }).pipe(Effect.provide(hubTestLayer)));
 });

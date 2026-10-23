@@ -39,14 +39,6 @@ import {
 
 const EMPTY: Preflight = { hasRows: () => false };
 
-const orThrow = <A, E extends Error>(result: Result.Result<A, E>): A => {
-  if (Result.isFailure(result)) {
-    throw result.failure;
-  }
-
-  return result.success;
-};
-
 const loadInMemory = (
   snapshot: ConfigSnapshot,
   directory: string,
@@ -54,10 +46,10 @@ const loadInMemory = (
 ) =>
   readSetDirectory(directory).pipe(
     Effect.map((files) => {
-      const resolved = orThrow(resolveSet(files, snapshot, required));
-      const operations = orThrow(planSet(resolved, snapshot));
+      const resolved = Result.getOrThrow(resolveSet(files, snapshot, required));
+      const operations = Result.getOrThrow(planSet(resolved, snapshot));
 
-      return orThrow(
+      return Result.getOrThrow(
         applyOperations(
           snapshot,
           operations,
@@ -133,7 +125,7 @@ const snapshotStatements = Effect.gen(function* planSnapshot() {
     "00000000-0000-4000-8000-000000000005"
   );
 
-  const populated = orThrow(
+  const populated = Result.getOrThrow(
     applyOperations(
       acme.after,
       [
@@ -173,19 +165,17 @@ describe("ddl-forms", () => {
       const statements = yield* snapshotStatements;
       const ddl = statements.filter((text) => !text.startsWith("--"));
 
+      const forms = new Set<string>();
+
       for (const statement of ddl) {
         const checked = checkDdl(statement);
 
         assert.isTrue(checked.ok, statement);
+
+        if (checked.ok) {
+          forms.add(checked.form);
+        }
       }
-
-      const forms = new Set(
-        ddl.flatMap((statement) => {
-          const checked = checkDdl(statement);
-
-          return checked.ok ? [checked.form] : [];
-        })
-      );
 
       assert.includeMembers(
         [...forms],

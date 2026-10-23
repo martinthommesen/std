@@ -6,13 +6,13 @@ import { StdApi } from "@std/api/api";
 import { FormStateRequest } from "@std/api/form-state";
 import type { JsonValue } from "@std/values/json-value";
 import { Effect, Exit, Result, Schema } from "effect";
-import { TestClock } from "effect/testing";
 
 import {
   HELPDESK,
   HelpdeskFixture,
 } from "../../testing/src/helpdesk-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import type { TestRequestOptions } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { editDefinition } from "../src/config/config-service.ts";
 import { runUpgrade } from "../src/config/upgrade.ts";
@@ -36,6 +36,18 @@ import {
 } from "./schema-support.ts";
 import { create, patch, savedOf } from "./writes-support.ts";
 
+const checkFormState = Effect.fn("FormTest.checkFormState")(
+  function* checkFormState(options: TestRequestOptions) {
+    const http = yield* TestHttpClient;
+
+    return yield* http.request(
+      "POST",
+      StdApi.groups.records.endpoints.formState.path,
+      options
+    );
+  }
+);
+
 const preview = Effect.fn("FormTest.preview")(function* preview(
   values: Readonly<Record<string, JsonValue>>,
   login?: string
@@ -48,7 +60,7 @@ const preview = Effect.fn("FormTest.preview")(function* preview(
 });
 
 describe("form-state", () => {
-  it.effect(
+  it.live(
     "part proposals match save owner refusals for notes and parties, and empty proposals are read-only",
     () =>
       Effect.gen(function* partOwnerOracle() {
@@ -96,19 +108,15 @@ describe("form-state", () => {
           assert.strictEqual(created.status, 201, created.text);
           const record = yield* savedOf(created);
 
-          const checkedCreate = yield* http.request(
-            "POST",
-            "/api/v1/checkFormState",
-            {
-              body: {
-                id: null,
-                revision: null,
-                table: part.table,
-                values: part.body,
-              },
-              token: agent,
-            }
-          );
+          const checkedCreate = yield* checkFormState({
+            body: {
+              id: null,
+              revision: null,
+              table: part.table,
+              values: part.body,
+            },
+            token: agent,
+          });
 
           const savedCreate = yield* create(agent, part.name, part.body);
           assert.strictEqual(checkedCreate.status, 403, checkedCreate.text);
@@ -118,19 +126,15 @@ describe("form-state", () => {
 
           // A stale revision still refuses the owner before revealing a version.
           for (const revision of [record.version, record.version + 1]) {
-            const checkedEdit = yield* http.request(
-              "POST",
-              "/api/v1/checkFormState",
-              {
-                body: {
-                  id: record.id,
-                  revision,
-                  table: part.table,
-                  values: part.edit,
-                },
-                token: agent,
-              }
-            );
+            const checkedEdit = yield* checkFormState({
+              body: {
+                id: record.id,
+                revision,
+                table: part.table,
+                values: part.edit,
+              },
+              token: agent,
+            });
 
             const savedEdit = yield* patch(
               agent,
@@ -175,10 +179,10 @@ describe("form-state", () => {
           assert.strictEqual(verdict.revision, record.version);
           assert.strictEqual(verdict.values.ticket, textOf(ticket.id));
         }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "an empty proposal for a colleague's incident returns masked read-only states, while an edit is still refused",
     () =>
       Effect.gen(function* readOnlyIncident() {
@@ -227,10 +231,10 @@ describe("form-state", () => {
         });
 
         assert.deepStrictEqual(unchanged, record);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "invalid proposal envelopes name the key path without echoing the submitted value",
     () =>
       Effect.gen(function* privateDecoder() {
@@ -248,7 +252,7 @@ describe("form-state", () => {
           table: { private: "private-table" },
           values: "private-values",
         })) {
-          const reply = yield* http.request("POST", "/api/v1/checkFormState", {
+          const reply = yield* checkFormState({
             body: {
               id: null,
               revision: null,
@@ -263,7 +267,7 @@ describe("form-state", () => {
           assert.include(reply.text, `body.${key}`);
           assert.notInclude(reply.text, "private-");
         }
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
   it("documents one task resource and validates the proposal envelope", () => {
@@ -290,7 +294,7 @@ describe("form-state", () => {
       )
     );
   });
-  it.effect(
+  it.live(
     "derives the proposed priority, returns all field states, and saves no record",
     () =>
       Effect.gen(function* formCase1() {
@@ -327,10 +331,10 @@ describe("form-state", () => {
         });
 
         assert.deepStrictEqual(after, before);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "versioned proposals use the concrete class through a parent and never change the stored version",
     () =>
       Effect.gen(function* formCase2() {
@@ -378,10 +382,10 @@ describe("form-state", () => {
           .pipe(Effect.exit);
 
         assert.isTrue(Exit.isFailure(stale));
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "masks unreadable fields on proposals and derives a note author without an editable picker",
     () =>
       Effect.gen(function* formCase3() {
@@ -442,9 +446,9 @@ describe("form-state", () => {
           .pipe(Effect.exit);
 
         assert.isTrue(Exit.isFailure(denied));
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
-  it.effect(
+  it.live(
     "checks existing and proposed access, then hides a denied record's version",
     () =>
       Effect.gen(function* accessOrdering() {
@@ -467,7 +471,7 @@ describe("form-state", () => {
           values: Readonly<Record<string, JsonValue>>,
           revision = 1
         ) =>
-          http.request("POST", "/api/v1/checkFormState", {
+          checkFormState({
             body: { id, revision, table: "helpdeskIncident", values },
             token,
           });
@@ -511,10 +515,10 @@ describe("form-state", () => {
         assert.strictEqual(denied.status, 404, denied.text);
         assert.strictEqual(textOf(asObject(denied.json).code), "NotFound");
         assert.notInclude(denied.text, "currentVersion");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "checks stale metadata even when the proposal does not name the changed field",
     () =>
       Effect.gen(function* staleMetadata() {
@@ -537,7 +541,7 @@ describe("form-state", () => {
           values: {},
         };
 
-        const before = yield* http.request("POST", "/api/v1/checkFormState", {
+        const before = yield* checkFormState({
           body,
           cookie: token,
           headers,
@@ -554,7 +558,7 @@ describe("form-state", () => {
           },
         ]);
 
-        const stale = yield* http.request("POST", "/api/v1/checkFormState", {
+        const stale = yield* checkFormState({
           body,
           cookie: token,
           headers,
@@ -563,16 +567,16 @@ describe("form-state", () => {
         assert.strictEqual(stale.status, 409, stale.text);
         assert.strictEqual(textOf(asObject(stale.json).code), "SchemaChanged");
 
-        const withoutClient = yield* http.request(
-          "POST",
-          "/api/v1/checkFormState",
-          { body, cookie: token, webClient: false }
-        );
+        const withoutClient = yield* checkFormState({
+          body,
+          cookie: token,
+          webClient: false,
+        });
 
         assert.strictEqual(withoutClient.status, 401, withoutClient.text);
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
-  it.effect(
+  it.live(
     "a local form override survives an unchanged set upgrade without changing API acceptance",
     () =>
       Effect.gen(function* localFormOverride() {
@@ -608,9 +612,9 @@ describe("form-state", () => {
         assert.strictEqual(record.priority, "5");
 
         return yield* Effect.void;
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
-  it.effect("hidden values cannot change a form-state outcome", () =>
+  it.live("hidden values cannot change a form-state outcome", () =>
     Effect.gen(function* hiddenOracle() {
       const amount = addField(HELPDESK.ticket, "visible_amount", {
         kind: "decimal",
@@ -671,10 +675,10 @@ describe("form-state", () => {
       assert.deepStrictEqual(after.messages, before.messages);
       assert.strictEqual(before.fields.shortDescription?.readOnly, false);
       assert.isFalse(Object.hasOwn(after.values, "internalCost"));
-    }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+    }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "a denied edit gets the save's exact refusal and reveals no conditionally readable derived output",
     () =>
       Effect.gen(function* deniedOracle() {
@@ -761,7 +765,7 @@ describe("form-state", () => {
           "private-derived-output"
         );
 
-        const check = yield* http.request("POST", "/api/v1/checkFormState", {
+        const check = yield* checkFormState({
           body: {
             id: textOf(record.id),
             revision: 1,
@@ -771,10 +775,12 @@ describe("form-state", () => {
           token,
         });
 
-        const save = yield* http.request(
-          "PATCH",
-          `/api/v1/helpdeskIncident/${textOf(record.id)}`,
-          { body: values, headers: { "if-match": '"1"' }, token }
+        const save = yield* patch(
+          token,
+          "helpdesk.incident",
+          textOf(record.id),
+          1,
+          values
         );
 
         assert.strictEqual(check.status, 403, check.text);
@@ -784,10 +790,10 @@ describe("form-state", () => {
         assert.notInclude(check.text, "oracleOutput");
 
         return yield* Effect.void;
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "derive-added existing access is checked before invalid supplied values, just as on save",
     () =>
       Effect.gen(function* deriveAccessOrdering() {
@@ -823,7 +829,7 @@ describe("form-state", () => {
 
         const values = { priority: "invalid-choice" };
 
-        const check = yield* http.request("POST", "/api/v1/checkFormState", {
+        const check = yield* checkFormState({
           body: {
             id: textOf(record.id),
             revision: 1,
@@ -833,10 +839,12 @@ describe("form-state", () => {
           token,
         });
 
-        const save = yield* http.request(
-          "PATCH",
-          `/api/v1/helpdeskIncident/${textOf(record.id)}`,
-          { body: values, headers: { "if-match": '"1"' }, token }
+        const save = yield* patch(
+          token,
+          "helpdesk.incident",
+          textOf(record.id),
+          1,
+          values
         );
 
         assert.strictEqual(check.status, 403, check.text);
@@ -844,10 +852,10 @@ describe("form-state", () => {
         assert.deepStrictEqual(check.json, save.json);
 
         return yield* Effect.void;
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "a required password with a form rule accepts presence without decoding a surrogate credential",
     () =>
       Effect.gen(function* passwordPresence() {
@@ -904,10 +912,10 @@ describe("form-state", () => {
 
         assert.strictEqual(verdict.fields.label?.required, true);
         assert.isFalse(Object.hasOwn(verdict.values, "password"));
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 
-  it.effect(
+  it.live(
     "invalid proposal envelopes keep the failing key in the HTTP error",
     () =>
       Effect.gen(function* invalidEnvelope() {
@@ -919,7 +927,7 @@ describe("form-state", () => {
           fixture.admin.password
         );
 
-        const response = yield* http.request("POST", "/api/v1/checkFormState", {
+        const response = yield* checkFormState({
           body: {
             id: null,
             revision: "invalid",
@@ -931,6 +939,6 @@ describe("form-state", () => {
 
         assert.strictEqual(response.status, 400, response.text);
         assert.include(response.text, "revision");
-      }).pipe(Effect.provide(itilLayer), TestClock.withLive)
+      }).pipe(Effect.provide(itilLayer))
   );
 });
