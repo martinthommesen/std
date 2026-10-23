@@ -15,6 +15,7 @@ import {
 } from "effect";
 
 import { writeRows } from "../records/sql-run.ts";
+import { DatabaseConfig } from "../sql/database-config.ts";
 
 /** NIST rev.3 §5.2.2 / rev.4 §3.2.2: 100 failures; quiet-window deviation below. */
 export const SIGN_IN_FAILURE_CEILING = 100;
@@ -212,6 +213,9 @@ export class SignInAdmission extends Context.Service<
       source: string,
       effect: Effect.Effect<A, E, R>
     ) => Effect.Effect<A, E | SignInThrottled, R>;
+    readonly transaction: <A, E, R>(
+      effect: Effect.Effect<A, E, R>
+    ) => Effect.Effect<A, E | SignInThrottled, R>;
     readonly verify: <A, E, R>(
       effect: Effect.Effect<A, E, R>
     ) => Effect.Effect<A, E | SignInThrottled, R>;
@@ -226,6 +230,43 @@ export class SignInAdmission extends Context.Service<
         Schema.Int.check(Schema.isGreaterThanOrEqualTo(2)),
         "UV_THREADPOOL_SIZE"
       ).pipe(Config.withDefault(4));
+
+      const database = yield* DatabaseConfig;
+
+      if (database.maxConnections < 4) {
+        return yield* Effect.die(
+          new Error(
+            `database_max_connections=${database.maxConnections}; sign-in requires at least 4 connections: one sign-in and one coalesced revision-header lookup must leave half the pool for unrelated work.`
+          )
+        );
+      }
+
+      // Reserve half the SQL pool for unrelated API work, including one slot
+      // inside the sign-in share for the coalesced fallback revision lookup.
+      // Default pool=10: two sign-in transactions + at most one header lookup
+      // use at most 3/10 (30%). Pool=4: one + one uses half. Minimum four follows
+      // those two concurrent SQL roles and the half-pool reservation (0038).
+      const transactionSlots = Math.min(
+        SIGN_IN_KDF_MAX_CONCURRENCY,
+        Math.floor(database.maxConnections / 2) - 1
+      );
+
+      const transactions = yield* Semaphore.make(transactionSlots);
+
+      const transaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        transactions
+          .withPermitsIfAvailable(1)(effect)
+          .pipe(
+            Effect.flatMap((result) =>
+              Option.isSome(result)
+                ? Effect.succeed(result.value)
+                : Effect.fail(
+                    new SignInThrottled({
+                      message: `sign_in_transaction_slots=${transactionSlots}; database_max_connections=${database.maxConnections}; asked for 1 additional sign-in transaction. Retry later.`,
+                    })
+                  )
+            )
+          );
 
       const concurrency = Math.min(SIGN_IN_KDF_MAX_CONCURRENCY, pool - 1);
       const workers = yield* Semaphore.make(concurrency);
@@ -261,7 +302,7 @@ export class SignInAdmission extends Context.Service<
           );
         });
 
-      return SignInAdmission.of({ run, verify });
+      return SignInAdmission.of({ run, transaction, verify });
     })
   );
 }

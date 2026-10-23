@@ -441,25 +441,27 @@ export const FixedRoutes = Layer.unwrap(
             });
           }
 
-          const result = yield* Effect.uninterruptible(
-            transactions.maintenance(deleteExpiredSessions()).pipe(
-              Effect.andThen(
-                inRequest(
-                  request,
-                  Effect.gen(function* signInRequest() {
-                    yield* checkUnscopedRevision(stated);
+          const result = yield* admission.transaction(
+            Effect.uninterruptible(
+              transactions.maintenance(deleteExpiredSessions()).pipe(
+                Effect.andThen(
+                  inRequest(
+                    request,
+                    Effect.gen(function* signInRequest() {
+                      yield* checkUnscopedRevision(stated);
 
-                    return yield* signIn(
-                      yield* (yield* Catalog).current,
-                      body.login,
-                      body.password,
-                      source
-                    ).pipe(Effect.provideService(SignInAdmission, admission));
-                  }).pipe(
-                    Effect.map(Result.succeed),
-                    Effect.catchTag(
-                      ["InvalidCredentials", "SignInThrottled"],
-                      committedSignInRefusal
+                      return yield* signIn(
+                        yield* (yield* Catalog).current,
+                        body.login,
+                        body.password,
+                        source
+                      ).pipe(Effect.provideService(SignInAdmission, admission));
+                    }).pipe(
+                      Effect.map(Result.succeed),
+                      Effect.catchTag(
+                        ["InvalidCredentials", "SignInThrottled"],
+                        committedSignInRefusal
+                      )
                     )
                   )
                 )

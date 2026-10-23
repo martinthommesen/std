@@ -1,10 +1,11 @@
 import { createServer, request as nodeRequest } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
-import { Deferred, Effect, Layer } from "effect";
+import { Deferred, Effect, Fiber, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { SqlClient } from "effect/sql";
 
+import type { TestHttpClientApi } from "../../testing/src/http-client.ts";
 import { TestDatabase } from "../../testing/src/test-database.ts";
 import { answerApiFailures } from "../src/http/api-cache.ts";
 import { HttpAppLayer } from "../src/http/app.ts";
@@ -244,3 +245,72 @@ export const edgeUpload = Effect.fn("Test.edgeUpload")(function* edgeUpload(
     settled: Deferred.isDone(response),
   };
 });
+
+/**
+ * A web-adapter upload whose next pull acknowledges that the previous chunk
+ * was consumed. Zero buffering prevents a competing capacity probe from racing
+ * the last chunk of an unobserved TCP upload.
+ * @param http - Real application test client.
+ * @param token - Disposable session token.
+ * @param bytes - Retained body bytes.
+ * @returns EOF control and the eventual response after retained bytes are observed.
+ */
+export const edgeWebUpload = Effect.fn("Test.edgeWebUpload")(
+  function* edgeWebUpload(
+    http: TestHttpClientApi,
+    token: string,
+    bytes: number
+  ) {
+    const retained = yield* Deferred.make<boolean>();
+    const close = yield* Deferred.make<() => void>();
+    let sent = false;
+
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (sent) {
+            Deferred.doneUnsafe(retained, Effect.succeed(true));
+
+            return;
+          }
+
+          sent = true;
+          controller.enqueue(Buffer.from(`{${" ".repeat(bytes - 2)}}`));
+        },
+        start(controller) {
+          Deferred.doneUnsafe(
+            close,
+            Effect.succeed(() => {
+              controller.close();
+            })
+          );
+        },
+      },
+      { highWaterMark: 0 }
+    );
+
+    const response = yield* Effect.promise(async (signal) => {
+      const init: RequestInit = {
+        body,
+        duplex: "half",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+        signal,
+      };
+
+      return await http.fetch("http://std.test/api/v1/acmeMonitor", init);
+    }).pipe(Effect.forkScoped);
+
+    yield* Deferred.await(retained);
+
+    return {
+      finish: Effect.flatMap(Deferred.await(close), (finish) =>
+        Effect.sync(finish)
+      ),
+      response: Fiber.join(response),
+    };
+  }
+);

@@ -15,7 +15,12 @@ import {
 } from "../src/http/body-limits.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { Transactions } from "../src/sql/transactions.ts";
-import { edgeRequest, edgeServer, edgeUpload } from "./http-edge-support.ts";
+import {
+  edgeRequest,
+  edgeServer,
+  edgeUpload,
+  edgeWebUpload,
+} from "./http-edge-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
 import { ACME, addField, ensureSite, values } from "./schema-support.ts";
 import { waitUntil } from "./support.ts";
@@ -249,7 +254,7 @@ describe("http-edge-round2", () => {
     );
 
     dbTest.effect(
-      "accepts a multi-long-text record just under 16 MiB and refuses 16 MiB + 1",
+      "accepts a multi-long-text record just under the measured record budget and refuses one byte over",
       () =>
         Effect.gen(function* recordBudget() {
           const http = yield* TestHttpClient;
@@ -270,7 +275,7 @@ describe("http-edge-round2", () => {
             ...Object.fromEntries(
               Array.from({ length: 5 }, (_, index) => [
                 `edgeLong${index}`,
-                "😀".repeat(800_000),
+                "😀".repeat(Math.floor((BODY_MAX_BYTES - 1024) / (5 * 4))),
               ])
             ),
           });
@@ -313,29 +318,19 @@ describe("http-edge-round2", () => {
 
           const slots = Math.floor(BODY_IN_FLIGHT_MAX_BYTES / BODY_MAX_BYTES);
 
-          const allUploads = yield* forEach(
-            Array.from({ length: slots + 12 }, () => 0),
-            () =>
-              edgeUpload(origin, "/api/v1/acmeMonitor", token, BODY_MAX_BYTES)
+          const uploads = yield* forEach(
+            Array.from({ length: slots }, () => 0),
+            () => edgeWebUpload(http, token, BODY_MAX_BYTES)
           );
 
-          // Wait for actual responses, without a competing read stealing a slot.
+          // Wait until all actual body bytes are retained, without EOF. The
+          // refused request itself is the public observation of full capacity.
           yield* waitUntil(
-            forEach(allUploads, (upload) => upload.settled).pipe(
-              Effect.map((done) => done.filter(Boolean).length === 12)
-            )
+            edgeRequest(origin, "/api/v1/acmeMonitor", {
+              body: "{}",
+              headers: { authorization: `Bearer ${token}` },
+            }).pipe(Effect.map((response) => response.status === 503))
           );
-          const uploads = [];
-
-          for (const upload of allUploads) {
-            if (yield* upload.settled) {
-              assert.strictEqual(yield* upload.response, 503);
-            } else {
-              uploads.push(upload);
-            }
-          }
-
-          assert.strictEqual(uploads.length, slots);
 
           for (const path of [
             "/api/v1/acmeMonitor",
@@ -343,11 +338,7 @@ describe("http-edge-round2", () => {
           ]) {
             const refused = yield* edgeRequest(origin, path, {
               body: "{}",
-              finish: false,
-              headers: {
-                authorization: `Bearer ${token}`,
-                "content-length": String(BODY_MAX_BYTES),
-              },
+              headers: { authorization: `Bearer ${token}` },
             });
 
             assert.strictEqual(refused.status, 503, refused.text);
@@ -355,12 +346,18 @@ describe("http-edge-round2", () => {
               refused.text,
               `body_in_flight_max_bytes=${BODY_IN_FLIGHT_MAX_BYTES}`
             );
-            assert.include(refused.text, `asked for ${BODY_MAX_BYTES}`);
+            assert.include(refused.text, "asked for 2 additional bytes");
             assert.strictEqual(
               refused.headers["retry-after"],
               String(BODY_RETRY_SECONDS)
             );
           }
+
+          const signIn = yield* edgeRequest(origin, "/api/v1/session", {
+            body: JSON.stringify({ login: "bob", password: "bob-password" }),
+          });
+
+          assert.strictEqual(signIn.status, 201, signIn.text);
 
           const chunked = yield* edgeRequest(origin, "/api/v1/acmeMonitor", {
             body: "{}",
@@ -385,8 +382,7 @@ describe("http-edge-round2", () => {
           assert.strictEqual(web.status, 503, web.text);
           assert.include(web.text, "asked for 2 additional bytes");
 
-          // The twelve excess incomplete uploads were refused above; admitted
-          // slow bodies must retain no pooled transaction while waiting for EOF.
+          // Retained incomplete uploads hold bytes, never SQL, while awaiting EOF.
           const current = yield* edgeRequest(
             origin,
             "/api/v1/session/current",
@@ -407,7 +403,7 @@ describe("http-edge-round2", () => {
 
           for (const upload of uploads) {
             yield* upload.finish;
-            assert.strictEqual(yield* upload.response, 422);
+            assert.strictEqual((yield* upload.response).status, 422);
           }
 
           const aborted = yield* edgeUpload(

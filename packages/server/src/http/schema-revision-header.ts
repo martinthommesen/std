@@ -11,7 +11,7 @@
  * revision in a request transaction of its own.
  */
 import { SCHEMA_REVISION_HEADER } from "@std/api/api";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { HttpEffect, HttpRouter, HttpServerResponse } from "effect/http";
 import type { HttpServerRequest } from "effect/http/HttpServerRequest";
 
@@ -51,11 +51,15 @@ export const SchemaRevisionHeaderLayer = HttpRouter.middleware(
     const { request: inRequest } = yield* Transactions;
     const classify = apiKindOf(yield* HttpRouter.RouterConfig);
 
-    const current = inRequest(
+    // Share only an in-flight fallback lookup. A zero TTL retains no completed
+    // revision, so later requests still read fresh state. Without coalescing,
+    // every rejected sign-in opens another transaction after its admission gate.
+    // Effect 4.0.5 cachedWithTTL joins the pending run before checking expiry.
+    const current = yield* inRequest(
       Effect.gen(function* currentRevision() {
         return yield* RequestRevision;
       })
-    ).pipe(Effect.orDie);
+    ).pipe(Effect.orDie, Effect.cachedWithTTL(Duration.zero));
 
     return (httpEffect) =>
       HttpEffect.withPreResponseHandler(httpEffect, (request, response) =>

@@ -689,10 +689,27 @@ describe("http-edge-limits", () => {
             { concurrency: "unbounded" }
           );
 
-          assert.isTrue(
-            responses.every((response) => response.status === 201),
-            JSON.stringify(responses)
-          );
+          // Only two may enter SQL at once. Retry fail-fast refusals after the
+          // admitted pair commits, preserving four successful issuances and the
+          // original oldest-session/cap assertions under concurrent issuance.
+          for (const [index, response] of responses.entries()) {
+            if (response.status === 429) {
+              assert.include(response.text, "sign_in_transaction_slots=2");
+
+              const retried = yield* edgeRequest(origin, SESSION, {
+                body: JSON.stringify({
+                  login: "bob",
+                  password: "bob-password",
+                }),
+                localAddress: `127.0.0.${241 + index}`,
+              });
+
+              assert.strictEqual(retried.status, 201, retried.text);
+            } else {
+              assert.strictEqual(response.status, 201, response.text);
+            }
+          }
+
           assert.deepStrictEqual(
             yield* values(
               "SELECT count(*)::text AS value FROM core.session WHERE user_id = $1::uuid AND expires_at > now()",

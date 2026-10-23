@@ -25,11 +25,18 @@ const refused = (schema: string) => () =>
     parameter: "body",
   });
 
-const decodeCreate = Schema.decodeUnknownEffect(ResourceCreate);
-const decodeMerge = Schema.decodeUnknownEffect(ResourcePatch);
+// parseJson already guarantees JSON values. Validate only envelope members here;
+// the owning field decoder validates each value to the depth its type requires.
+const decodeCreate = Schema.decodeUnknownEffect(ResourceCreate.schema);
+const decodeMerge = Schema.decodeUnknownEffect(ResourcePatch.schema);
 
 const decodeOperations = Schema.decodeUnknownEffect(
-  Schema.Array(JsonPatchOperation)
+  Schema.Array(
+    JsonPatchOperation.mapFields((fields) => ({
+      ...fields,
+      value: Schema.optionalKey(Schema.Unknown),
+    }))
+  )
 );
 
 const decodeSession = Schema.decodeUnknownEffect(SessionCreate);

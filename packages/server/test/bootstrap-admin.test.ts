@@ -73,8 +73,8 @@ const recordEntries = (recordId: string) =>
   ).pipe(Effect.map(([count]) => Number(count)));
 
 const testLayer = InstanceSettings.layer.pipe(
-  Layer.provideMerge(schemaTestLayer()),
-  Layer.provideMerge(SignInAdmission.layer)
+  Layer.provideMerge(SignInAdmission.layer),
+  Layer.provideMerge(schemaTestLayer())
 );
 
 describe("bootstrap-admin", () => {

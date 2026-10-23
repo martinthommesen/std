@@ -252,10 +252,14 @@ export const headersOf = (
   const forbiddenBody =
     tag === "InvalidRequest" && body.parameter === "body" && body.limit === 0;
 
+  const stalledBody =
+    tag === "InvalidRequest" && body.parameter === "body_min_bytes_per_second";
+
   if (
     tag === "BodyTooLarge" ||
     tag === "BodyCapacityExceeded" ||
-    forbiddenBody
+    forbiddenBody ||
+    stalledBody
   ) {
     headers.set("connection", "close");
   }

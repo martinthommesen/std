@@ -6,16 +6,18 @@ import { BodyTooLarge } from "@std/api/errors/body-too-large";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { SESSION_BODY_MAX_BYTES } from "@std/api/session";
 import { apiTableNameOf } from "@std/definitions/names";
-import { Effect, Stream, Predicate, Semaphore } from "effect";
+import { Clock, Effect, Schedule, Stream, Predicate, Semaphore } from "effect";
 import { FindMyWay, HttpRouter } from "effect/http";
 import { HttpServerRequest } from "effect/http/HttpServerRequest";
 
+import { SIGN_IN_KDF_MAX_CONCURRENCY } from "../auth/sign-in-limits.ts";
 import { tmfErrorResponse } from "./api/tmf-error.ts";
 import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
 
-/** Record-write budget: Martin, 2026-10-23, decision 0038; measured JSON
- * parsing costs ~30 ms/MiB and 28x RSS, accepting ~0.5 s at 16 MiB. */
-export const BODY_MAX_BYTES = 16_777_216;
+/** Record-write latency budget: decision 0038, corrected record-route probes
+ * (2026-10-23). 16 MiB still exceeded Martin's ~0.5 s target after the redundant
+ * JSON decoder was removed; the repeated 4 MiB measurements are recorded there. */
+export const BODY_MAX_BYTES = 4_194_304;
 
 /** Definition budget: largest shipped complete change set = 103,713 bytes,
  * 202 operations (http-edge-limits test, 2026-10-23); 1 MiB gives 10.11x
@@ -33,15 +35,39 @@ export const HUB_BODY_MAX_BYTES = 131_072;
  * serialize to under 100 bytes; 1 KiB leaves over 10x envelope/whitespace headroom. */
 export const TASK_BODY_MAX_BYTES = 1024;
 
-/** Process byte budget: review measured 28x RSS amplification on a 4,192 MiB
- * heap (2026-10-23). 32 MiB reserves at most 896 MiB at that amplification, leaving
- * 3,296 MiB for normal work. Smaller heaps reserve at most a quarter / 28.
- * Reservations cover framed or actually retained bytes until the
- * response is built, including parsing, decoded work and transaction retries. */
-export const BODY_IN_FLIGHT_MAX_BYTES = Math.min(
-  33_554_432,
-  Math.floor(getHeapStatistics().heap_size_limit / (28 * 4))
-);
+/** Process byte budget: corrected probes measured about 184 MiB RSS growth for
+ * a 4 MiB wrong-kind record (~46x), versus the review's original 55x.
+ * Round up to 64x for allocator/GC headroom. A quarter of V8 heap protects
+ * ordinary work; four maximum record bodies consume 16 MiB / 1 GiB amplified
+ * on the measured 4,192 MiB heap. Smaller heaps admit whole record budgets.
+ * Receipt: decision 0038, round 3 measurements, 2026-10-23.
+ * Hold actual retained bytes through parsing, work, retries and response. */
+export const BODY_IN_FLIGHT_MAX_BYTES =
+  BODY_MAX_BYTES *
+  Math.min(
+    4,
+    Math.floor(getHeapStatistics().heap_size_limit / (64 * 4 * BODY_MAX_BYTES))
+  );
+
+/** Sign-in has two KDF workers, so its separate retained-body budget holds
+ * two maximum 64-KiB credential envelopes; it never consumes record capacity. */
+export const SESSION_BODY_IN_FLIGHT_MAX_BYTES =
+  SESSION_BODY_MAX_BYTES * SIGN_IN_KDF_MAX_CONCURRENCY;
+
+/** Upload rate budget: half the 1 Mbit/s minimum uplink in the UK broadband
+ * universal-service specification (125,000 / 2 bytes/s), allowing protocol and
+ * contention overhead. https://www.legislation.gov.uk/uksi/2018/445/schedule/1/made
+ * Read 2026-10-23; decision 0038. */
+export const BODY_MIN_BYTES_PER_SECOND = 62_500;
+
+/** Initial progress allowance: RFC 6298 §§2.1,5.5 starts RTO at one second
+ * and doubles it; 8 s covers the first 1+2+4 s retransmission waits.
+ * https://www.rfc-editor.org/rfc/rfc6298.html (2026-10-23). */
+export const BODY_READ_GRACE_MS = 8000;
+
+/** Check once per initial 1-second TCP RTO (RFC 6298 §2.1); at most one
+ * such interval beyond the progress allowance before an incomplete read fails. */
+const BODY_PROGRESS_INTERVAL_MS = 1000;
 
 /** Temporary overload recovery advice: one second, exceeding the accepted
  * ~0.5 s maximum JSON pause; TMF630 v5 P1 §3.3.4 p.33 (decision 0038). */
@@ -49,6 +75,10 @@ export const BODY_RETRY_SECONDS = 1;
 
 // One semaphore for every listener/application in this process.
 const bodyCapacity = Semaphore.makeUnsafe(BODY_IN_FLIGHT_MAX_BYTES);
+
+const sessionBodyCapacity = Semaphore.makeUnsafe(
+  SESSION_BODY_IN_FLIGHT_MAX_BYTES
+);
 
 const bodyLimits = (config: Partial<FindMyWay.RouterConfig>) => {
   const routes = FindMyWay.make<number>(config);
@@ -92,6 +122,7 @@ type BodyReadError = BodyTooLarge | InvalidRequest | BodyCapacityExceeded;
 
 interface BodyPolicy {
   readonly limit: number;
+  readonly received: () => number;
   readonly reserve: (received: number) => BodyCapacityExceeded | undefined;
 }
 
@@ -201,7 +232,7 @@ const nodeBody = (source: IncomingMessage, policy: BodyPolicy) =>
  * Reads bytes with backpressure and stops at the first overflowing chunk.
  * Used by every JSON and DELETE reader; errors never become an empty body.
  */
-const readBody = Effect.fn("Http.readBody")(function* readBody(
+const readBodyBytes = Effect.fn("Http.readBodyBytes")(function* readBodyBytes(
   request: HttpServerRequest
 ) {
   const policy = policies.get(request.source);
@@ -255,6 +286,39 @@ const readBody = Effect.fn("Http.readBody")(function* readBody(
   return Buffer.concat(chunks, received).toString("utf-8");
 });
 
+// Race the reader, not SQL or parsing. Effect interruption removes Node listeners
+// and pauses the source before the actionable error closes the connection.
+const readBody = Effect.fn("Http.readBody")(function* readBody(
+  request: HttpServerRequest
+) {
+  const started = yield* Clock.currentTimeMillis;
+
+  const progress = Effect.gen(function* bodyProgress() {
+    const elapsed = (yield* Clock.currentTimeMillis) - started;
+    const received = policies.get(request.source)?.received() ?? 0;
+
+    const required =
+      (Math.max(0, elapsed - BODY_READ_GRACE_MS) * BODY_MIN_BYTES_PER_SECOND) /
+      1000;
+
+    if (received < required) {
+      return yield* new InvalidRequest({
+        limit: BODY_MIN_BYTES_PER_SECOND,
+        message: `body_min_bytes_per_second=${BODY_MIN_BYTES_PER_SECOND}; body_read_grace_ms=${BODY_READ_GRACE_MS}; received ${received} bytes in ${elapsed} ms; required at least ${Math.ceil(required)} bytes.`,
+        parameter: "body_min_bytes_per_second",
+        received,
+      });
+    }
+
+    return yield* Effect.void;
+  }).pipe(
+    Effect.repeat(Schedule.spaced(BODY_PROGRESS_INTERVAL_MS)),
+    Effect.andThen(Effect.never)
+  );
+
+  return yield* Effect.raceFirst(readBodyBytes(request), progress);
+});
+
 // Requests can be read again after a retried SQL transaction. Like Effect's
 // Node incoming-message reader, cache the bounded result, including failures.
 // The source survives request wrappers; weak keys release completed requests.
@@ -306,17 +370,25 @@ export const BodyLimitsLayer = HttpRouter.middleware(
           );
         }
 
-        // Node enforces Content-Length framing, so reserve that exact length
-        // before reading. Web adapters and chunked uploads reserve actual bytes
-        // cumulatively before retaining each chunk. Tiny writes must not pay
-        // the maximum record budget (aggregate-race-http exercises concurrency).
-        const framed = request.source instanceof IncomingMessage ? length : 0;
+        // Declared bytes consume no memory. Charge each received chunk before
+        // retaining it, identically for framed, chunked and web requests.
+        const session = limit === SESSION_BODY_MAX_BYTES;
+        const capacity = session ? sessionBodyCapacity : bodyCapacity;
+
+        const capacityLimit = session
+          ? SESSION_BODY_IN_FLIGHT_MAX_BYTES
+          : BODY_IN_FLIGHT_MAX_BYTES;
+
+        const capacityName = session
+          ? "session_body_in_flight_max_bytes"
+          : "body_in_flight_max_bytes";
+
         let reserved = 0;
 
         const reserve = (
           received: number
         ): BodyCapacityExceeded | undefined => {
-          const asked = Math.max(framed, received) - reserved;
+          const asked = received - reserved;
 
           if (asked <= 0) {
             return undefined;
@@ -324,10 +396,10 @@ export const BodyLimitsLayer = HttpRouter.middleware(
 
           // takeIfAvailable never suspends in Effect 4.0.5 (Semaphore.ts).
           // Synchronous acquisition is required inside Node's readable callback.
-          if (!Effect.runSync(bodyCapacity.takeIfAvailable(asked))) {
+          if (!Effect.runSync(capacity.takeIfAvailable(asked))) {
             return new BodyCapacityExceeded({
-              limit: BODY_IN_FLIGHT_MAX_BYTES,
-              message: `body_in_flight_max_bytes=${BODY_IN_FLIGHT_MAX_BYTES}; asked for ${asked} additional bytes. Retry after capacity is released.`,
+              limit: capacityLimit,
+              message: `${capacityName}=${capacityLimit}; asked for ${asked} additional bytes. Retry after capacity is released.`,
               requested: asked,
               retryAfterSeconds: BODY_RETRY_SECONDS,
             });
@@ -338,12 +410,16 @@ export const BodyLimitsLayer = HttpRouter.middleware(
           return undefined;
         };
 
-        policies.set(request.source, { limit, reserve });
+        policies.set(request.source, {
+          limit,
+          received: () => reserved,
+          reserve,
+        });
 
         return yield* app.pipe(
           Effect.ensuring(
             Effect.suspend(() =>
-              reserved > 0 ? bodyCapacity.release(reserved) : Effect.void
+              reserved > 0 ? capacity.release(reserved) : Effect.void
             )
           )
         );
