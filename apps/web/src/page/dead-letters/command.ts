@@ -1,7 +1,9 @@
 import { isTmfError } from "@std/api/client";
+import { FilterIssueSchema } from "@std/api/errors/schemas";
 import type { TmfErrorSubtypes } from "@std/api/tmf-error";
 import { TmfError } from "@std/api/tmf-error";
-import { Effect, Result, Schema } from "effect";
+import { FieldErrorSchema } from "@std/definitions/field-errors";
+import { Effect, Option, Result, Schema } from "effect";
 import { Command } from "foldkit";
 
 import { StdApi } from "../../std-client.ts";
@@ -10,27 +12,13 @@ import { Action } from "./model.ts";
 
 const ERROR_TEXT = new Map<string, string>(
   Object.entries({
-    AggregateNotSettled:
-      "Rules could not settle the action record; no delivery change was committed.",
-    DefinitionInvalid: "A definition used by this action is invalid.",
-    DefinitionProtected: "A protected definition prevented this action.",
-    DependencyConflict: "Another definition depends on the requested change.",
-    ExistingDataViolates: "Existing records prevent the requested change.",
     FieldsConflict:
       "The request includes and excludes the same attribute. Refresh the page.",
-    HookDepthExceeded:
-      "Record rules nested too deeply; no delivery change was committed.",
-    InvalidCredentials: "The sign-in credentials were refused. Sign in again.",
     InvalidCursor: "The page cursor does not match the sort. Refresh the list.",
     InvalidFilter: "The delivery filter is invalid. Check the subscription ID.",
-    InvalidReference:
-      "A record referenced by this action is no longer available.",
-    InvalidRequest:
-      "A request parameter is invalid. Check the subscription ID and page size.",
+    InvalidRequest: "A request parameter is invalid.",
     InvalidSchemaRevision:
       "The request's schema revision is invalid. Refresh the page.",
-    InvalidTransition:
-      "A record rule refused this state change; no delivery change was committed.",
     MethodNotAllowed:
       "The server does not offer this operation. Refresh the page.",
     NotAllowed: "Your access rules do not allow this operation.",
@@ -38,60 +26,76 @@ const ERROR_TEXT = new Map<string, string>(
       "The delivery is no longer dead, no longer exists, or your operator access has changed. Refresh the list.",
     NotImplemented:
       "The request uses a query feature the server does not implement.",
-    PatchTestFailed:
-      "The requested change no longer matches the record. Refresh the page.",
-    PermissionRequired: "A permission required for this action is missing.",
-    PurgeRefused:
-      "The requested purge was refused. Check the definition's state.",
-    RecordInSave:
-      "A rule tried to save a record already being saved; no delivery change was committed.",
-    Referenced: "Another record refers to this record and prevents the action.",
-    RuleRefused:
-      "A record rule refused the action; no delivery change was committed.",
     SchemaBusy:
       "A schema change is running. Wait for it to finish, then refresh.",
     SchemaChanged:
       "The schema has changed. Refresh the page before trying again.",
     SchemaLockTimeout:
       "The schema change could not get its locks. Try again after it finishes.",
-    SchemaNeedsAttention:
-      "A schema change needs administrator attention before this action can run.",
-    UnknownField:
-      "The request names an unknown or unreadable attribute. Refresh the page.",
+    SubscriptionNotServed:
+      "The subscription is not served. Restore an active, enabled subscription and a worker handler, then retry; or discard the delivery.",
+    UnknownField: "The request names an unknown or unreadable attribute.",
     UnknownTable:
       "The action record's table is unavailable to you. Refresh your session and metadata.",
     UnsupportedMediaType:
       "The request used an unsupported content type. Refresh the page.",
-    UseRetireOrPurge:
-      "This definition must be retired or purged through schema administration.",
     ValidationFailed:
       "The action record failed validation; no delivery change was committed.",
-    VersionConflict:
-      "Another operator changed the record. Refresh before trying again.",
-    VersionRequired:
-      "The request is missing the record version. Refresh the page.",
-  } satisfies Readonly<
-    Record<
-      Exclude<
-        keyof typeof TmfErrorSubtypes,
-        "Unauthenticated" | "SubscriptionNotServed"
-      >,
-      string
-    >
-  >)
+  } satisfies Partial<Record<keyof typeof TmfErrorSubtypes, string>>)
 );
 
 const failureText = (error: typeof TmfError.Type): string => {
+  if (
+    error.code === "InvalidRequest" ||
+    error.code === "UnknownField" ||
+    error.code === "FieldsConflict"
+  ) {
+    const detail =
+      error.code === "InvalidRequest" ? error.parameter : error.field;
+
+    const problem = error.message ?? error.reason;
+
+    return Option.match(Schema.decodeUnknownOption(Schema.String)(detail), {
+      onNone: () => problem,
+      onSome: (name) => `${name}: ${problem}`,
+    });
+  }
+
+  if (error.code === "InvalidFilter") {
+    const maybeIssues = Schema.decodeUnknownOption(
+      Schema.NonEmptyArray(FilterIssueSchema)
+    )(error.issues);
+
+    return Option.match(maybeIssues, {
+      onNone: () => ERROR_TEXT.get(error.code) ?? error.reason,
+      onSome: (issues) => issues.map((issue) => issue.message).join(" "),
+    });
+  }
+
+  if (error.code === "ValidationFailed") {
+    const maybeErrors = Schema.decodeUnknownOption(
+      Schema.NonEmptyArray(FieldErrorSchema)
+    )(error.fieldErrors);
+
+    return Option.match(maybeErrors, {
+      onNone: () => ERROR_TEXT.get(error.code) ?? error.reason,
+      onSome: (errors) =>
+        errors
+          .map(
+            (issue) =>
+              `${issue.field}: ${"message" in issue ? issue.message : issue._tag}`
+          )
+          .join("; "),
+    });
+  }
+
   if (error.code === "SubscriptionNotServed") {
-    return (
-      error.message ??
-      "The subscription is not served. Restore an active, enabled subscription and a worker handler, then retry; or discard the delivery."
-    );
+    return error.message ?? ERROR_TEXT.get(error.code) ?? error.reason;
   }
 
   return (
     ERROR_TEXT.get(error.code) ??
-    `${error.code}: ${error.reason}. Refresh before trying again.`
+    `${error.code}: ${error.message ?? error.reason}. Refresh before trying again.`
   );
 };
 

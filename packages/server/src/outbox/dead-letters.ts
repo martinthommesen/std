@@ -33,7 +33,7 @@ import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { createRecord } from "../records/save-pipeline.ts";
+import { makeDeadDeliveryActionWriter } from "../records/save-pipeline.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
 import { CurrentTransaction } from "../sql/transaction-context.ts";
@@ -196,6 +196,8 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
   }
 );
 
+const appendDeadDeliveryAction = makeDeadDeliveryActionWriter();
+
 /**
  * Atomically changes one dead row and stores its operator action through the
  * record service. A refused or rolled-back transition leaves no action record.
@@ -265,15 +267,12 @@ const updateDead = Effect.fn("Outbox.updateDead")(function* updateDead(
         ? sql`UPDATE core.delivery SET status = 'pending', attempts = 0, next_attempt_at = now(), finished_at = NULL WHERE id = ${deliveryId}::int8 AND status = 'dead'`
         : sql`UPDATE core.delivery SET status = 'done', finished_at = now() WHERE id = ${deliveryId}::int8 AND status = 'dead'`;
 
-      const saved = yield* createRecord({
-        body: {
-          action,
-          delivery_id: deliveryId,
-          occurred_at: formatDateTime(yield* Clock.currentTimeMillis),
-          state: "completed",
-          subscription_id: row.subscription_id,
-        },
-        endpointClassId: PLATFORM_CLASS_IDS.dead_delivery_action,
+      const saved = yield* appendDeadDeliveryAction({
+        action,
+        delivery_id: deliveryId,
+        occurred_at: formatDateTime(yield* Clock.currentTimeMillis),
+        state: "completed",
+        subscription_id: row.subscription_id,
       });
 
       yield* wakeWorkerAfterCommit;

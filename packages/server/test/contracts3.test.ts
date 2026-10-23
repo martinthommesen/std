@@ -1943,24 +1943,18 @@ describe("platform-tables", () => {
             );
 
             // An empty create on a definition table is an incomplete
-            // change set (ValidationFailed). Stored actions also validate
-            // required fields; journals remain refused (NotAllowed).
+            // change set (ValidationFailed). Every other platform table
+            // is refused (NotAllowed).
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
-
-            const storedAction =
-              snapshot.classByName(table)?.id ===
-              PLATFORM_CLASS_IDS.dead_delivery_action;
-
-            const validatedCreate = definitionTable || storedAction;
 
             assert.strictEqual(
               response.status,
-              validatedCreate ? 422 : 403,
+              definitionTable ? 422 : 403,
               `POST ${table}`
             );
             assert.strictEqual(
               codeOf(response),
-              validatedCreate ? "ValidationFailed" : "NotAllowed"
+              definitionTable ? "ValidationFailed" : "NotAllowed"
             );
           }
 

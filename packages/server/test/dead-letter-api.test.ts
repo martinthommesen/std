@@ -77,6 +77,56 @@ describe("dead-letter API", () => {
       })
   );
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "task POST ignores client fields and stores only server action, time, outcome and subscription",
+      () =>
+        Effect.gen(function* serverFields() {
+          const { admin } = yield* apiCallers;
+          const fixture = yield* AcmeFixture;
+          const seeded = yield* seedDeadLetters(admin);
+          const http = yield* TestHttpClient;
+          const occurredAt = "2000-01-01T00:00:00.000Z";
+
+          for (const [path, deliveryId, action] of [
+            [RETRY, seeded.firstId, "retry"],
+            [DISCARD, seeded.secondId, "discard"],
+          ] as const) {
+            const response = yield* http.request("POST", path, {
+              ...admin,
+              body: {
+                action: action === "retry" ? "discard" : "retry",
+                createdBy: randomUUID(),
+                deliveryId,
+                occurredAt,
+                state: "failed",
+                subscriptionId: randomUUID(),
+              },
+            });
+
+            assert.strictEqual(response.status, 201, response.text);
+            const record = asObject(response.json);
+            assert.strictEqual(record.action, action);
+            assert.strictEqual(record.deliveryId, deliveryId);
+            assert.strictEqual(record.subscriptionId, seeded.subscriptionId);
+            assert.strictEqual(record.state, "completed");
+            assert.isString(record.occurredAt);
+            assert.notStrictEqual(record.occurredAt, occurredAt);
+            assert.strictEqual(asObject(record.createdBy).id, fixture.admin.id);
+
+            const history = yield* http.get(
+              `${new URL(textOf(record.href)).pathname}/history`,
+              admin
+            );
+
+            assert.lengthOf(asArray(history.json), 1);
+            assert.strictEqual(
+              asObject(asObject(asArray(history.json)[0]).actor).id,
+              fixture.admin.id
+            );
+          }
+        })
+    );
+
     dbTest.effect("stored actions produce ordinary outbox events", () =>
       Effect.gen(function* actionEvents() {
         const { admin } = yield* apiCallers;

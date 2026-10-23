@@ -7,7 +7,8 @@
  *   (`core.change`, the journal, the config-layer tables) refuses every
  *   generic create, update and delete with `NotAllowed` (decision 0014):
  *   it is not creatable and no field is writable. The stored data class
- *   core.dead_delivery_action uses ordinary record saves (decision 0037).
+ *   core.dead_delivery_action is appended only by its internal task writer
+ *   (decision 0037).
  * - A definition table's generic writes become one-operation change sets
  *   (Contracts 1.4, `definition-writes.ts`). Columns no write may set
  *   (system, owner, protection, enforcement) are `no`; `state` is never
@@ -28,7 +29,6 @@ import type {
 import type { DefinitionId } from "@std/definitions/ids";
 import { RENAMABLE, RETIRABLE, UPDATABLE } from "@std/definitions/operation";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 
 import { TABLE_OF } from "../catalog/definition-tables.ts";
 import { DEFINITION_KIND_OF_TABLE } from "./change-sets.ts";
@@ -108,8 +108,7 @@ export const genericWriteLimits = (snapshot: ConfigSnapshot): WriteLimits => {
   };
 
   const platform = (classId: DefinitionId): boolean =>
-    snapshot.class(classId)?.storage === "platform" &&
-    classId !== PLATFORM_CLASS_IDS.dead_delivery_action;
+    snapshot.class(classId)?.storage === "platform";
 
   return {
     creatable: (classId) => !platform(classId) || kindOf(classId) !== undefined,

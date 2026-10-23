@@ -72,3 +72,10 @@ accessRules:
     table: core.user
     target: records
     actions: [delete]
+  - id: edb47a5e-5f6d-4ad3-bcf7-bdb655ce8d80
+    description: Dead-delivery actions are appended only by their tasks, never edited or deleted.
+    effect: deny
+    roles: [authenticated]
+    table: core.dead_delivery_action
+    target: records
+    actions: [create, update, delete]

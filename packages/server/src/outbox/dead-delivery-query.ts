@@ -8,9 +8,9 @@ import {
   textParameter,
 } from "@std/conditions/sql-fragment";
 import type { SqlFragment } from "@std/conditions/sql-fragment";
-import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import type { FieldType } from "@std/values/field-type";
 import { Effect, Option } from "effect";
+import { constUndefined } from "effect/Function";
 
 import type { ListQuery } from "../http/api/query.ts";
 import {
@@ -88,7 +88,7 @@ export const deadDeliveryScope = Effect.fn("Outbox.deadDeliveryScope")(
         : identSql(alias, field.name);
 
     const view: ReadView = {
-      ...base.view(PLATFORM_CLASS_IDS.subscription),
+      anyVisible: true,
       byApiName: (name) => byApiName.get(name),
       byId: (id) => byId.get(id),
       byName: (name) => byName.get(name),
@@ -99,13 +99,25 @@ export const deadDeliveryScope = Effect.fn("Outbox.deadDeliveryScope")(
       membership: () => rawSql("TRUE"),
       output: value,
       readable: () => rawSql("TRUE"),
+      schema: {
+        byId: constUndefined,
+        byName: constUndefined,
+        classId: CLASS_ID,
+        classIds: [CLASS_ID],
+        fields: [],
+        rows: {
+          groups: [{ classIds: [CLASS_ID], decision: { kind: "always" } }],
+        },
+      },
       value,
       visibility: () => rawSql("TRUE"),
       visibilityBranches: () => [rawSql("TRUE")],
     };
 
     const scope: ReadScope = {
-      ...base,
+      caller: base.caller,
+      context: base.context,
+      snapshot: base.snapshot,
       view: (id, exact) => (id === CLASS_ID ? view : base.view(id, exact)),
     };
 

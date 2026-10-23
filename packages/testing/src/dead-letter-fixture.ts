@@ -106,7 +106,7 @@ export const seedDeadLetters = Effect.fn("DeadLetterFixture.seed")(
     yield* sql`UPDATE core.delivery SET status = 'dead', attempts = 1, finished_at = now(), last_error = 'DeliveryFailed: listener refused' WHERE subscription_id = ${subscriptionId}::uuid`;
 
     const rows = yield* decodeRows(Schema.Struct({ id: Schema.String }))(
-      yield* sql`SELECT id::text AS id FROM core.delivery WHERE subscription_id = ${subscriptionId}::uuid ORDER BY id`
+      yield* sql`SELECT id::text AS id FROM core.delivery WHERE subscription_id = ${subscriptionId}::uuid ORDER BY core.delivery.id`
     );
 
     const [first, second] = rows;
@@ -139,7 +139,7 @@ export const deadLetterStates = Effect.fn("DeadLetterFixture.states")(
     return yield* decodeRows(
       Schema.Struct({ attempts: Schema.Int, status: Schema.String })
     )(
-      yield* sql`SELECT status, attempts FROM core.delivery WHERE subscription_id = ${subscriptionId}::uuid ORDER BY id`
+      yield* sql`SELECT status, attempts FROM core.delivery WHERE subscription_id = ${subscriptionId}::uuid ORDER BY core.delivery.id`
     );
   }
 );

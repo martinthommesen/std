@@ -240,6 +240,7 @@ export interface SaveResult {
 }
 
 const API_CAUSE: ChangeCause = { kind: "api" };
+const DEAD_DELIVERY_ACTION_CREATE = Symbol("DeadDeliveryActionCreate");
 
 // The stored values of a record's json fields, by name.
 const storedJsonOf = (
@@ -317,17 +318,16 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
  * routes them to one-operation change sets first (Contracts 1.4,
  * `http/handlers.ts` and `http/definition-writes.ts`). What reaches this
  * guard is every other platform table (the journal, `core.change`, the
- * config-layer tables), refused for every caller. `core.dead_delivery_action`
- * is a data class stored by the platform migration: it uses ordinary saves,
- * access rules, history and outbox production (Contracts 4.6).
+ * config-layer tables and stored dead-delivery actions), refused for every
+ * caller. Only the private writer returned by `makeDeadDeliveryActionWriter`
+ * can create an action through the pipeline (Contracts 4.6, decision 0037).
  */
 const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
   function* refusePlatformTable(
     snapshot: ConfigSnapshot,
     classId: DefinitionId
   ) {
-    return snapshot.class(classId)?.storage === "platform" &&
-      classId !== PLATFORM_CLASS_IDS.dead_delivery_action
+    return snapshot.class(classId)?.storage === "platform"
       ? yield* new NotAllowed()
       : undefined;
   }
@@ -850,7 +850,8 @@ const lockOwnersOf = Effect.fn("Records.lockOwnersOf")(function* lockOwnersOf(
 const createInTransaction = Effect.fn("Records.createInTransaction")(
   function* createInRequest(
     input: CreateInput,
-    body: JsonObject
+    body: JsonObject,
+    platformCreate?: typeof DEAD_DELIVERY_ACTION_CREATE
   ): Effect.fn.Return<SaveResult, CreateFailure, CreateServices> {
     yield* checkDepth(yield* SaveStack);
 
@@ -870,7 +871,9 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     const resolved = yield* resolveBody(snapshot, input, body, "create");
 
-    yield* refusePlatformTable(snapshot, classId);
+    if (platformCreate !== DEAD_DELIVERY_ACTION_CREATE) {
+      yield* refusePlatformTable(snapshot, classId);
+    }
 
     const fields = effectiveById(snapshot, classId);
     const rules = rulesById(snapshot, fields, { input, update: false });
@@ -974,14 +977,16 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     const after = yield* reload(snapshot, classId, id);
 
-    yield* access.checkProposed({
-      action: "create",
-      classId,
-      endpointClassId: classId,
-      id,
-      snapshot,
-      written: supplied,
-    });
+    if (platformCreate !== DEAD_DELIVERY_ACTION_CREATE) {
+      yield* access.checkProposed({
+        action: "create",
+        classId,
+        endpointClassId: classId,
+        id,
+        snapshot,
+        written: supplied,
+      });
+    }
 
     const entry = yield* recordChange(snapshot, {
       after,
@@ -1659,6 +1664,31 @@ export const createRecord = Effect.fn("Records.create")(function* createRecord(
     )
   );
 }, poisonIfNested);
+
+/**
+ * Issues the dead-letter module's internal append capability (decision 0014).
+ * The returned writer creates only this class, with validation, the real
+ * Actor, history, ordinary read projection and outbox events. Generic saves
+ * never receive its private create authority; updates and deletes have none.
+ *
+ * @returns The writer held privately by the dead-letter module.
+ */
+export const makeDeadDeliveryActionWriter = () =>
+  Effect.fn("Records.appendDeadDeliveryAction")(
+    function* appendDeadDeliveryAction(body: JsonObject) {
+      const endpointClassId = PLATFORM_CLASS_IDS.dead_delivery_action;
+      const { request } = yield* Transactions;
+
+      return yield* request(
+        createInTransaction(
+          { body, endpointClassId },
+          body,
+          DEAD_DELIVERY_ACTION_CREATE
+        ).pipe(Effect.flatMap((saved) => finishSave(saved, endpointClassId)))
+      );
+    },
+    poisonIfNested
+  );
 
 /**
  * Updates a record through any endpoint of its hierarchy whose subtree

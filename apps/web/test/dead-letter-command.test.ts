@@ -112,11 +112,7 @@ describe("dead-letter HTTP Commands", () => {
           { code: "NotFound", phrase: "no longer dead", status: 404 },
           { code: "SchemaChanged", phrase: "schema has changed", status: 409 },
           { code: "NotAllowed", phrase: "access rules", status: 403 },
-          {
-            code: "InvalidRequest",
-            phrase: "parameter is invalid",
-            status: 400,
-          },
+          { code: "InvalidRequest", phrase: "InvalidRequest", status: 400 },
           { code: "InvalidFilter", phrase: "filter is invalid", status: 400 },
           {
             code: "ValidationFailed",
@@ -172,6 +168,85 @@ describe("dead-letter HTTP Commands", () => {
           Message.FailedOperateDeadDelivery({ error: message })
         );
       })
+  );
+
+  it.effect(
+    "shows server parameter and attribute details, with a code-bearing fallback",
+    () =>
+      Effect.gen(function* details() {
+        for (const [code, status, detail, expected] of [
+          [
+            "InvalidRequest",
+            400,
+            { message: "Expected a UUID.", parameter: "subscriptionId" },
+            "subscriptionId: Expected a UUID.",
+          ],
+          [
+            "UnknownField",
+            400,
+            { field: "subscriptionTypo", message: "No such field" },
+            "subscriptionTypo: No such field",
+          ],
+          [
+            "FieldsConflict",
+            409,
+            {
+              field: "attempts",
+              message: "fields includes and excludes the same attribute",
+            },
+            "attempts: fields includes and excludes the same attribute",
+          ],
+          [
+            "InvalidFilter",
+            400,
+            {
+              issues: [
+                {
+                  message: "subscriptionId requires a UUID.",
+                  reason: "invalidLiteral",
+                },
+              ],
+            },
+            "subscriptionId requires a UUID.",
+          ],
+          [
+            "PermissionRequired",
+            403,
+            { message: "Unexpected route error" },
+            "PermissionRequired: Unexpected route error. Refresh before trying again.",
+          ],
+        ] as const) {
+          const api = fakeStdApi({
+            "/api/v1/deadDelivery": tmfError(code, status, detail),
+          });
+
+          assert.deepStrictEqual(
+            yield* LoadDeadLetters(args).effect.pipe(Effect.provide(api.layer)),
+            Message.FailedLoadDeadLetters({
+              error: expected,
+              requestId: args.requestId,
+            })
+          );
+        }
+      })
+  );
+
+  it.effect("shows the server's action validation fields", () =>
+    Effect.gen(function* validationDetails() {
+      const api = fakeStdApi({
+        "/api/v1/retryDeadDelivery": tmfError("ValidationFailed", 422, {
+          fieldErrors: [{ _tag: "Required", field: "occurredAt" }],
+        }),
+      });
+
+      assert.deepStrictEqual(
+        yield* OperateDeadDelivery({
+          action: "retry",
+          deliveryId: delivery.id,
+        }).effect.pipe(Effect.provide(api.layer)),
+        Message.FailedOperateDeadDelivery({ error: "occurredAt: Required" })
+      );
+    })
   );
 
   it.effect("session expiry has dedicated load and operation Messages", () =>
