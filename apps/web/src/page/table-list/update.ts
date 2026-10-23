@@ -119,6 +119,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     filterLoad: FilterLoad.Settled(),
     generation: 0,
     id: config.id,
+    isFilterOpen: false,
     isReloadDue: false,
     maybeAppRevision: config.maybeAppRevision,
     maybeNotice: Option.none(),
@@ -1122,4 +1123,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         table: table.name,
         target: TargetMetadata.Success({ data: table }),
       }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ToggledFilter: ({ isOpen }) => ({
+      model: modifyFields(model, { isFilterOpen: () => isOpen }),
+    }),
   });

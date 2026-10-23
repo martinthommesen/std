@@ -35,6 +35,15 @@ import { view } from "./view.ts";
 
 const ASSETS = "acme.asset";
 
+/**
+ * A saved filter's button.
+ *
+ * @param name - Its label, or "All records".
+ * @returns Its locator.
+ */
+const savedFilter = (name: string) =>
+  within(role("group", { name: "Saved filters" }), role("button", { name }));
+
 const BOB_ID = "019a0000-0000-7000-8000-0000000000b0";
 
 const AM_ID = "019a0000-0000-7000-8000-0000000000a1";
@@ -327,6 +336,16 @@ describe("list page", () => {
     scene(
       { update, view },
       given(loaded),
+      // The builder is collapsed behind "Filter" until the user opens it.
+      expect(role("button", { name: "Filter" })).toHaveAttr(
+        "aria-expanded",
+        "false"
+      ),
+      click(role("button", { name: "Filter" })),
+      expect(role("button", { name: "Filter" })).toHaveAttr(
+        "aria-expanded",
+        "true"
+      ),
       click(role("button", { name: "Add condition" })),
       inside(
         role("group", { name: "Condition 1" }),
@@ -351,7 +370,10 @@ describe("list page", () => {
       expect(role("status")).toHaveText("2 records"),
       expect(
         within(role("group", { name: "Condition 1" }), label("Value"))
-      ).toHaveValue("27")
+      ).toHaveValue("27"),
+      expect(
+        role("button", { name: "Filter, 1 condition applied" })
+      ).toHaveAttr("aria-expanded", "true")
     );
   });
 
@@ -479,9 +501,10 @@ describe("list page failures", () => {
     scene(
       { update, view },
       given(withSaved),
-      expect(label("Saved filter")).toHaveValue(""),
-      expect(role("option", { name: "Lost assets" })).toExist(),
-      change(label("Saved filter"), "00000000-0000-4000-8000-0000000005f1"),
+      expect(savedFilter("All records")).toHaveAttr("aria-pressed", "true"),
+      expect(savedFilter("Lost assets")).toHaveAttr("aria-pressed", "false"),
+      // One click applies a saved filter.
+      click(savedFilter("Lost assets")),
       Command.resolveAll(
         [ReplaceListUrl, Message.CompletedReplaceListUrl()],
         [
@@ -494,9 +517,12 @@ describe("list page failures", () => {
         ]
       ),
       expectOutMessage(OutMessage.SawRevision({ revision: REVISION_3 })),
-      expect(label("Saved filter")).toHaveValue(
-        "00000000-0000-4000-8000-0000000005f1"
-      )
+      expect(savedFilter("Lost assets")).toHaveAttr("aria-pressed", "true"),
+      expect(savedFilter("All records")).toHaveAttr("aria-pressed", "false"),
+      // The "Filter" button counts the applied conditions.
+      expect(
+        role("button", { name: "Filter, 1 condition applied" })
+      ).toHaveAttr("aria-expanded", "false")
     );
   });
 });

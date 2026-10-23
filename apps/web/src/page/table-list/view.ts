@@ -1,12 +1,17 @@
+import { Button, Disclosure } from "@foldkit/ui";
 /**
- * The list page's view: the table's heading, the filter builder, the
- * count, the page size and the pager, and the records table with sortable
- * column headers. Each row carries its record's ID (`data-record-id`) and
- * links to the record's form; each cell says whether it shows a value, a
- * stored empty, a restricted field or one that was not delivered
- * (`data-cell`).
+ * The list page's view: the table's heading with "New", a toolbar (the
+ * "Filter" button with the number of applied conditions, the saved
+ * filters as one-click buttons, the count, the page size and the pager),
+ * the filter builder behind the "Filter" button (a Foldkit UI
+ * Disclosure, closed at first), and the records table with sortable
+ * column headers and a header row that stays visible. Each row carries
+ * its record's ID (`data-record-id`) and opens the record's form from
+ * anywhere on the row through the first column's link; each cell says
+ * whether it shows a value, a stored empty, a restricted field or one
+ * that was not delivered (`data-cell`).
  */
-import { Button } from "@foldkit/ui";
+import type { Expr } from "@std/conditions/ast";
 import { Option, Record } from "effect";
 import { AsyncData, Submodel } from "foldkit";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -18,6 +23,15 @@ import type { MetaField } from "../../domain/metadata.ts";
 import { view as filterBuilderView } from "../../filter-builder/view.ts";
 import { homeRouter, newRecordRouter, tableListRouter } from "../../route.ts";
 import { buttonView, selectField } from "../../view/controls.ts";
+import {
+  chevronLeft,
+  chevronNext,
+  funnel,
+  plus,
+  sortAscending,
+  sortBoth,
+  sortDescending,
+} from "../../view/icons.ts";
 import { recordCellView, recordIdCellView } from "../../view/record-cell.ts";
 import { view as notFoundView } from "../not-found.ts";
 import { Message } from "./message.ts";
@@ -28,58 +42,93 @@ const HEADING_ID = "table-list-heading";
 
 const RECORDS_HEADING_ID = "table-list-records-heading";
 
-/** The element ID of the saved filter select. */
-export const SAVED_FILTER_ID = "table-list-saved-filter";
+/** The ID of the filter's disclosure (its button is `<id>-button`). */
+export const FILTER_DISCLOSURE_ID = "table-list-filter";
 
-const CUSTOM_FILTER = "custom";
+/** The ID of the group of saved filter buttons. */
+export const SAVED_FILTERS_ID = "table-list-saved-filters";
+
+/** The text of the saved filter button that clears the filter. */
+export const ALL_RECORDS_TEXT = "All records";
 
 /**
- * The saved filters of the table, as a select: choosing one applies it;
- * "No filter" clears the filter. The select shows the saved filter the
- * list applies, or "Your own filter" for any other.
+ * How many conditions a filter holds: its atoms, through every group and
+ * negation.
+ *
+ * @param condition - The applied condition.
+ * @returns The number of conditions.
+ */
+export const conditionCount = (condition: Expr): number => {
+  if (condition.op === "and" || condition.op === "or") {
+    return condition.args.reduce(
+      (sum, argument) => sum + conditionCount(argument),
+      0
+    );
+  }
+
+  return condition.op === "not" ? conditionCount(condition.arg) : 1;
+};
+
+const appliedConditionCount = (model: Model): number =>
+  Option.match(model.query.maybeCondition, {
+    onNone: () => 0,
+    onSome: conditionCount,
+  });
+
+/**
+ * The saved filters of the table, as one button each, after "All
+ * records", which clears the filter. The button of the saved filter the
+ * list applies is pressed; while the list applies a filter of the user's
+ * own, none is.
  *
  * @param model - The page.
  * @param h - The builder.
- * @returns The select, or nothing when the table has none.
+ * @returns The group, or nothing when the table has no saved filters.
  */
-const savedFilterView = (model: Model, h: HtmlBuilder<Message>): Html => {
+const savedFiltersView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const saved = savedFiltersOf(model);
 
   if (saved.length === 0) {
     return h.empty;
   }
 
-  const value = Option.match(appliedSavedFilter(model), {
-    onNone: () =>
-      Option.isSome(model.query.maybeCondition) ? CUSTOM_FILTER : "",
-    onSome: (filter) => filter.id,
-  });
+  const maybeApplied = appliedSavedFilter(model);
+
+  const isUnfiltered = Option.isNone(model.query.maybeCondition);
+
+  const chip = (id: string, text: string, isPressed: boolean) =>
+    Button.view(
+      {
+        onClick: Message.SelectedSavedFilter({ savedFilterId: id }),
+        toView: (attributes) =>
+          h.keyed("button")(
+            id === "" ? "all-records" : id,
+            [
+              ...attributes.button,
+              h.AriaPressed(isPressed ? "true" : "false"),
+              h.Class("button button-ghost"),
+            ],
+            [text]
+          ),
+      },
+      h
+    );
 
   return h.div(
-    [h.Class("saved-filters")],
     [
-      selectField(
-        {
-          id: SAVED_FILTER_ID,
-          label: "Saved filter",
-          onChange: (savedFilterId) =>
-            Message.SelectedSavedFilter({
-              savedFilterId:
-                savedFilterId === CUSTOM_FILTER ? "" : savedFilterId,
-            }),
-          options: [
-            { label: "No filter", value: "" },
-            ...(value === CUSTOM_FILTER
-              ? [{ label: "Your own filter", value: CUSTOM_FILTER }]
-              : []),
-            ...saved.map((filter) => ({
-              label: filter.label,
-              value: filter.id,
-            })),
-          ],
-          value,
-        },
-        h
+      h.Id(SAVED_FILTERS_ID),
+      h.Role("group"),
+      h.AriaLabel("Saved filters"),
+      h.Class("saved-filters"),
+    ],
+    [
+      chip("", ALL_RECORDS_TEXT, isUnfiltered),
+      ...saved.map((filter) =>
+        chip(
+          filter.id,
+          filter.label,
+          Option.exists(maybeApplied, (applied) => applied.id === filter.id)
+        )
       ),
     ]
   );
@@ -103,7 +152,11 @@ const sortOf = (
   return current.isDescending ? "descending" : "ascending";
 };
 
-const SORT_MARKS = { ascending: " ▲", descending: " ▼", none: "" } as const;
+const SORT_ICONS = {
+  ascending: sortAscending,
+  descending: sortDescending,
+  none: sortBoth,
+} as const;
 
 const headerView = (
   field: MetaField,
@@ -125,12 +178,12 @@ const headerView = (
           onClick: Message.ClickedSortColumn({ fieldId: field.id }),
           toView: (attributes) =>
             h.button(
-              [...attributes.button, h.Class("button button-quiet")],
+              [...attributes.button, h.Class("sort-button")],
               [
                 field.label,
                 // NOTE: the column header's `aria-sort` states the order;
                 // the arrow only shows it.
-                h.span([h.AriaHidden(true)], [SORT_MARKS[direction]]),
+                SORT_ICONS[direction](),
               ]
             ),
         },
@@ -148,37 +201,44 @@ const recordsTable = (
 ): Html => {
   const columns = listColumns(meta.table);
 
-  return h.table(
+  return h.div(
+    [h.Class("table-scroll")],
     [
-      h.Class("records"),
-      h.AriaLabelledBy(RECORDS_HEADING_ID),
-      h.AriaBusy(AsyncData.isPending(model.records)),
-    ],
-    [
-      h.thead(
-        [],
+      h.table(
         [
-          h.tr(
+          h.Class("records"),
+          h.AriaLabelledBy(RECORDS_HEADING_ID),
+          h.AriaBusy(AsyncData.isPending(model.records)),
+        ],
+        [
+          h.thead(
             [],
-            columns.length === 0
-              ? [h.keyed("th")(ID_FIELD, [h.Scope("col")], [ID_LABEL])]
-              : columns.map((field) => headerView(field, model.query.sort, h))
+            [
+              h.tr(
+                [],
+                columns.length === 0
+                  ? [h.keyed("th")(ID_FIELD, [h.Scope("col")], [ID_LABEL])]
+                  : columns.map((field) =>
+                      headerView(field, model.query.sort, h)
+                    )
+              ),
+            ]
+          ),
+          h.tbody(
+            [],
+            page.records.map((record) =>
+              h.keyed("tr")(
+                record.id,
+                [h.DataAttribute("record-id", record.id)],
+                columns.length === 0
+                  ? [recordIdCellView(meta.table, record, h)]
+                  : columns.map((field, index) =>
+                      recordCellView(meta.table, record, field, index === 0, h)
+                    )
+              )
+            )
           ),
         ]
-      ),
-      h.tbody(
-        [],
-        page.records.map((record) =>
-          h.keyed("tr")(
-            record.id,
-            [h.DataAttribute("record-id", record.id)],
-            columns.length === 0
-              ? [recordIdCellView(meta.table, record, h)]
-              : columns.map((field, index) =>
-                  recordCellView(meta.table, record, field, index === 0, h)
-                )
-          )
-        )
       ),
     ]
   );
@@ -202,6 +262,8 @@ const pagerView = (
         {
           isDisabled:
             model.cursors.length < 2 || AsyncData.isPending(model.records),
+          isIconOnly: true,
+          maybeIcon: Option.some(chevronLeft()),
           onClick: Message.ClickedPreviousPage(),
           text: "Previous page",
           variant: "quiet",
@@ -214,6 +276,8 @@ const pagerView = (
           isDisabled:
             Option.isNone(page.maybeNextCursor) ||
             AsyncData.isPending(model.records),
+          isIconOnly: true,
+          maybeIcon: Option.some(chevronNext()),
           onClick: Message.ClickedNextPage(),
           text: "Next page",
           variant: "quiet",
@@ -228,18 +292,23 @@ const pageSizeView = (model: Model, h: HtmlBuilder<Message>): Html => {
     ? PAGE_SIZES
     : [...PAGE_SIZES, model.query.pageSize].toSorted((a, b) => a - b);
 
-  return selectField(
-    {
-      id: PAGE_SIZE_ID,
-      label: "Records per page",
-      onChange: (pageSize) => Message.SelectedPageSize({ pageSize }),
-      options: sizes.map((size) => ({
-        label: String(size),
-        value: String(size),
-      })),
-      value: String(model.query.pageSize),
-    },
-    h
+  return h.div(
+    [h.Class("page-size")],
+    [
+      selectField(
+        {
+          id: PAGE_SIZE_ID,
+          label: "Records per page",
+          onChange: (pageSize) => Message.SelectedPageSize({ pageSize }),
+          options: sizes.map((size) => ({
+            label: String(size),
+            value: String(size),
+          })),
+          value: String(model.query.pageSize),
+        },
+        h
+      ),
+    ]
   );
 };
 
@@ -283,54 +352,37 @@ const listFailureView = (
         ]
       );
 
+/**
+ * The toolbar's end: the count, the page size and the pager, once a page
+ * of records is on screen.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The toolbar's end, or nothing while no page has loaded.
+ */
+const pagingView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  Option.match(AsyncData.getData(model.records), {
+    onNone: () => h.empty,
+    onSome: (page) =>
+      h.div(
+        [h.Class("toolbar-end")],
+        [
+          h.p([h.Role("status"), h.Class("list-count")], [countText(page)]),
+          pageSizeView(model, h),
+          pagerView(model, page, h),
+        ]
+      ),
+  });
+
 const loadedListView = (
   meta: TableMeta,
   model: Model,
   page: RecordPage,
   h: HtmlBuilder<Message>
-): readonly Html[] => [
-  h.div(
-    [h.Class("list-toolbar")],
-    [
-      h.p([h.Role("status"), h.Class("list-count")], [countText(page)]),
-      pageSizeView(model, h),
-      pagerView(model, page, h),
-    ]
-  ),
+): Html =>
   page.records.length === 0
     ? h.p([h.Class("placeholder")], ["No records match."])
-    : recordsTable(meta, model, page, h),
-];
-
-const recordsView = (
-  meta: TableMeta,
-  model: Model,
-  h: HtmlBuilder<Message>
-): Html =>
-  h.section(
-    [
-      h.Class("panel"),
-      h.AriaLabelledBy(RECORDS_HEADING_ID),
-      // NOTE: busy while any request for records is under way, so a reload
-      // of an empty list ("No records match." kept on screen) is told apart
-      // from its answer, as the table's own `aria-busy` does for rows.
-      h.AriaBusy(AsyncData.isPending(model.records)),
-    ],
-    [
-      h.h2([h.Id(RECORDS_HEADING_ID)], ["Records"]),
-      ...AsyncData.match(model.records, {
-        onFailure: (error) => [listFailureView(model, error, h)],
-        onIdle: () => [],
-        onLoading: () => [h.p([h.Role("status")], ["Loading records…"])],
-        onRefreshing: (page) => loadedListView(meta, model, page, h),
-        onStale: ({ data, error }) => [
-          listFailureView(model, error, h),
-          ...loadedListView(meta, model, data, h),
-        ],
-        onSuccess: (page) => loadedListView(meta, model, page, h),
-      }),
-    ]
-  );
+    : recordsTable(meta, model, page, h);
 
 const loadingTables = (model: Model): ReadonlySet<string> =>
   new Set(
@@ -338,6 +390,140 @@ const loadingTables = (model: Model): ReadonlySet<string> =>
       AsyncData.isLoading(target) ? [table] : []
     )
   );
+
+const filterButtonText = (count: number): string => {
+  if (count === 0) {
+    return "Filter";
+  }
+
+  return count === 1
+    ? "Filter, 1 condition applied"
+    : `Filter, ${count} conditions applied`;
+};
+
+/** The two halves of the filter's disclosure, shown apart. */
+interface FilterDisclosure {
+  /** The "Filter" button, in the toolbar. */
+  readonly button: Html;
+  /** The filter builder, below the toolbar. */
+  readonly panel: Html;
+}
+
+/**
+ * The "Filter" button and, below the toolbar, the filter builder it shows
+ * and hides (Foldkit UI Disclosure). The button counts the applied
+ * conditions; the builder stays mounted while closed (inert), so its
+ * draft survives closing it.
+ *
+ * @param model - The page.
+ * @param h - The builder.
+ * @returns The button and the panel.
+ */
+const filterDisclosure = (
+  model: Model,
+  h: HtmlBuilder<Message>
+): FilterDisclosure => {
+  const count = appliedConditionCount(model);
+
+  const config = {
+    id: FILTER_DISCLOSURE_ID,
+    isOpen: model.isFilterOpen,
+    onToggle: (isOpen: boolean) => Message.ToggledFilter({ isOpen }),
+  };
+
+  return {
+    button: Disclosure.view(
+      {
+        ...config,
+        ariaLabel: filterButtonText(count),
+        toView: ({ button }) =>
+          h.button(
+            [...button, h.Class("button button-quiet filter-toggle")],
+            [
+              funnel(),
+              "Filter",
+              count === 0
+                ? h.empty
+                : h.span(
+                    [h.Class("count-badge"), h.AriaHidden(true)],
+                    [String(count)]
+                  ),
+            ]
+          ),
+      },
+      h
+    ),
+    panel: Disclosure.view(
+      {
+        ...config,
+        toView: ({ animatePanel, panel }) =>
+          animatePanel(
+            h.div(
+              [...panel, h.Class("filter-panel")],
+              [
+                Option.match(scopeOf(model), {
+                  onNone: () => h.empty,
+                  onSome: (scope) =>
+                    h.submodel({
+                      model: model.builder,
+                      slotId: "filter-builder",
+                      toParentMessage: (message) =>
+                        Message.GotFilterBuilderMessage({ message }),
+                      view: filterBuilderView,
+                      viewInputs: {
+                        loadingTables: loadingTables(model),
+                        scope,
+                      },
+                    }),
+                }),
+              ]
+            )
+          ),
+      },
+      h
+    ),
+  };
+};
+
+const recordsView = (
+  meta: TableMeta,
+  model: Model,
+  h: HtmlBuilder<Message>
+): Html => {
+  const filter = filterDisclosure(model, h);
+
+  return h.section(
+    [
+      h.Class("panel list-panel"),
+      h.AriaLabelledBy(RECORDS_HEADING_ID),
+      // NOTE: busy while any request for records is under way, so a reload
+      // of an empty list ("No records match." kept on screen) is told apart
+      // from its answer, as the table's own `aria-busy` does for rows.
+      h.AriaBusy(AsyncData.isPending(model.records)),
+    ],
+    [
+      h.h2([h.Id(RECORDS_HEADING_ID), h.Class("visually-hidden")], ["Records"]),
+      h.div(
+        [h.Class("list-toolbar")],
+        [filter.button, savedFiltersView(model, h), pagingView(model, h)]
+      ),
+      filter.panel,
+      ...AsyncData.match(model.records, {
+        onFailure: (error) => [listFailureView(model, error, h)],
+        onIdle: () => [],
+        onLoading: () => [
+          h.p([h.Role("status"), h.Class("placeholder")], ["Loading records…"]),
+        ],
+        onRefreshing: (page) => [loadedListView(meta, model, page, h)],
+        onStale: ({ data, error }) => [
+          listFailureView(model, error, h),
+          loadedListView(meta, model, data, h),
+        ],
+        onSuccess: (page) => [loadedListView(meta, model, page, h)],
+      }),
+    ]
+  );
+};
 
 /**
  * When a refresh of the table's definition failed: the page keeps the
@@ -388,7 +574,7 @@ const tableView = (
                   h.Href(newRecordRouter({ table: meta.table.name })),
                   h.Class("button button-primary"),
                 ],
-                [`New ${meta.table.label}`]
+                [plus(), `New ${meta.table.label}`]
               )
             : h.empty,
         ]
@@ -399,19 +585,6 @@ const tableView = (
           h.p([h.Role("status"), h.Class("notice")], [notice]),
       }),
       staleMetadataView(model, h),
-      savedFilterView(model, h),
-      Option.match(scopeOf(model), {
-        onNone: () => h.empty,
-        onSome: (scope) =>
-          h.submodel({
-            model: model.builder,
-            slotId: "filter-builder",
-            toParentMessage: (message) =>
-              Message.GotFilterBuilderMessage({ message }),
-            view: filterBuilderView,
-            viewInputs: { loadingTables: loadingTables(model), scope },
-          }),
-      }),
       recordsView(meta, model, h),
     ]
   );
@@ -445,13 +618,18 @@ export const view = Submodel.defineView<Model, Message>((model, h) =>
                 [h.Role("alert"), h.Class(ALERT_CLASS)],
                 ["The table could not be loaded. Try again."]
               ),
-              buttonView(
-                {
-                  onClick: Message.ClickedRetry(),
-                  text: TRY_AGAIN,
-                  variant: "primary",
-                },
-                h
+              h.div(
+                [],
+                [
+                  buttonView(
+                    {
+                      onClick: Message.ClickedRetry(),
+                      text: TRY_AGAIN,
+                      variant: "primary",
+                    },
+                    h
+                  ),
+                ]
               ),
             ]
           ),

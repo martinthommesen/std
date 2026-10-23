@@ -141,6 +141,9 @@ export type Address = typeof Address.Type;
  *   dropped when it fails, so the position always matches the rows shown.
  * - `generation`: the number of the latest list request; an older answer
  *   is ignored.
+ * - `isFilterOpen`: whether the filter builder is shown; it starts
+ *   collapsed behind the "Filter" button, which counts the applied
+ *   conditions.
  * - `isReloadDue`: a refreshed definition changed the applied sort (a
  *   field went away or can no longer be sorted by); the list asks again
  *   from the first page once the metadata and target tables have settled.
@@ -162,6 +165,7 @@ export const Model = Schema.Struct({
   filterLoad: FilterLoad,
   generation: Schema.Int,
   id: Schema.Int,
+  isFilterOpen: Schema.Boolean,
   isReloadDue: Schema.Boolean,
   maybeAppRevision: Schema.Option(SchemaRevision),
   maybeNotice: Schema.Option(Schema.String),

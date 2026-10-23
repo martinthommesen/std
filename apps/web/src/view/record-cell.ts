@@ -28,9 +28,15 @@ export const CELL_STATE = {
   Shown: "value",
 } as const satisfies Record<Cell["_tag"], string>;
 
-const cellContent = <Message>(cell: Cell, h: HtmlBuilder<Message>): Html =>
+const cellContent = <Message>(
+  cell: Cell,
+  isChoice: boolean,
+  h: HtmlBuilder<Message>
+): Html =>
   Match.value(cell).pipe(
-    Match.tag("Shown", ({ text }) => h.span([], [text])),
+    Match.tag("Shown", ({ text }) =>
+      h.span(isChoice ? [h.Class("badge")] : [], [text])
+    ),
     Match.tag("Empty", () =>
       h.span(
         [h.Class("cell-empty")],
@@ -64,7 +70,7 @@ const recordLink = <Message>(
   h.a(
     [
       h.Href(recordRouter({ id: record.id, table: table.name })),
-      h.Class("link"),
+      h.Class("link row-link"),
     ],
     [text]
   );
@@ -91,13 +97,13 @@ export const recordCellView = <Message>(
 
   const content = isFirst
     ? recordLink(table, record, linkText(cell, record), h)
-    : cellContent(cell, h);
+    : cellContent(cell, field.type.kind === "choice", h);
 
   return h.keyed("td")(
     field.id,
     [h.DataAttribute("cell", CELL_STATE[cell._tag])],
     isFirst && cell._tag !== "Shown"
-      ? [content, " ", cellContent(cell, h)]
+      ? [content, " ", cellContent(cell, false, h)]
       : [content]
   );
 };
