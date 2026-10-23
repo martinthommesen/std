@@ -12,7 +12,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { PinsFile, Specification } from "@std/tmf/pins";
-import { decodePinsFile, matrixFileName } from "@std/tmf/pins";
+import { decodePinsFile, GateStepSchema, matrixFileName } from "@std/tmf/pins";
 import { Predicate, Result, Schema } from "effect";
 import { parse as parseYaml } from "yaml";
 
@@ -29,11 +29,6 @@ export type GateName = (typeof gateSteps)[number];
 
 const rowIdPattern = /^[A-Za-z0-9-]+@v?\d+(?:\.\d+)*\/[A-Za-z0-9._@{}/-]+$/u;
 
-const StepSchema = Schema.Int.check(
-  Schema.isGreaterThanOrEqualTo(3),
-  Schema.isLessThanOrEqualTo(5)
-);
-
 // Fields every row has (Contracts 15.1). `level` is what the source states.
 const rowFields = {
   id: Schema.String.check(Schema.isPattern(rowIdPattern)),
@@ -43,7 +38,7 @@ const rowFields = {
   requirement: Schema.NonEmptyString,
   source: Schema.NonEmptyString,
   // The step whose gate covers the row; defaults to the specification's.
-  step: Schema.optionalKey(StepSchema),
+  step: Schema.optionalKey(GateStepSchema),
 };
 
 /** A matrix row: `tested` with tests, `excluded` by a decision, or `pending`. */

@@ -47,18 +47,6 @@ const testModules: ReadonlySet<string> = new Set(["vitest", "@effect/vitest"]);
 
 const testExports: ReadonlySet<string> = new Set(["describe", "it"]);
 
-// Modifiers that make a test (and everything inside it) not run, run only
-// conditionally, invert its result, or generate its title.
-const notRunModifiers: ReadonlySet<string> = new Set([
-  "each",
-  "fails",
-  "for",
-  "runIf",
-  "skip",
-  "skipIf",
-  "todo",
-]);
-
 /** The call chain under a callee: `describe.skipIf(x)` → root and names. */
 interface CalleeChain {
   readonly properties: readonly string[];
@@ -366,14 +354,10 @@ export const readTestTitles = (
       properties[0] === "effect" &&
       call.node.callee.type === "MemberExpression";
 
-    const modified = properties.some((property) =>
-      notRunModifiers.has(property)
-    );
-
     const testBody = testBodyOf(call.node);
     const title = literalTitle(call.node.arguments[0]);
     const placed = admitted.has(call.node.start);
-    const runs = (plain || effect) && !modified && testBody !== undefined;
+    const runs = (plain || effect) && testBody !== undefined;
 
     if (placed && runs && title !== undefined) {
       titles.add(title);

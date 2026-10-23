@@ -3,12 +3,13 @@ import { Schema } from "effect";
 import { parsePlPgSQLSync, parseSync } from "libpg-query";
 import type { CreateFunctionStmt, Node } from "libpg-query";
 
-const JsonObject = Schema.Record(Schema.String, Schema.Json);
-
 type ParseTree = Schema.Json;
 
-const isObject = Schema.is(JsonObject);
-const isArray = Schema.is(Schema.Array(Schema.Json));
+const isObject = (value: ParseTree): value is Schema.JsonObject =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const isArray = (value: ParseTree): value is Schema.JsonArray =>
+  Array.isArray(value);
 
 const Expression = Schema.Struct({
   parseMode: Schema.optionalKey(Schema.Finite),
@@ -85,7 +86,7 @@ const checkExpression = (tree: ParseTree): void => {
   checkSql(parseSync(sql));
 };
 
-const checkPlKeys = (tree: typeof JsonObject.Type): void => {
+const checkPlKeys = (tree: Schema.JsonObject): void => {
   for (const key of Object.keys(tree)) {
     if (
       key === "dynquery" ||

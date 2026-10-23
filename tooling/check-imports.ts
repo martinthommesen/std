@@ -20,7 +20,7 @@ import { parseArgs } from "node:util";
 import { Schema } from "effect";
 
 import { findPlainImportProblems } from "./lib/plain-imports.ts";
-import { scannedExtensions } from "./lib/plain-resolve.ts";
+import { makeManifestReader, scannedExtensions } from "./lib/plain-resolve.ts";
 import { report, runCheck } from "./lib/report.ts";
 import type { WorkspacePackage } from "./lib/workspace.ts";
 import {
@@ -131,9 +131,10 @@ await runCheck(checkName, () => {
   );
 
   const packages = selected.filter((pkg) => pkg.profile === "plain");
+  const readManifest = makeManifestReader();
 
   const results = packages.map((pkg) =>
-    checkPackage(pkg, { allowedDependencies, workspace })
+    checkPackage(pkg, { allowedDependencies, readManifest, workspace })
   );
 
   const fileCount = results.reduce(

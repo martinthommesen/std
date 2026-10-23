@@ -47,6 +47,7 @@ import { parse as parseYaml } from "yaml";
 
 import { judgeKitRun, normalizeCaseTitle } from "../lib/ctk-report.ts";
 import { withKitSession } from "../lib/ctk-session.ts";
+import { runCheck } from "../lib/report.ts";
 import { runCommand } from "../lib/run.ts";
 import { repoRoot } from "../lib/workspace.ts";
 import { readZipEntry } from "../lib/zip.ts";
@@ -121,8 +122,12 @@ const cachedZip = async (kit: ConformanceKit): Promise<Buffer> => {
 
   const file = path.join(cache, path.basename(new URL(kit.zipUrl).pathname));
 
-  if (existsSync(file) && sha256(readFileSync(file)) === kit.zipSha256) {
-    return readFileSync(file);
+  if (existsSync(file)) {
+    const bytes = readFileSync(file);
+
+    if (sha256(bytes) === kit.zipSha256) {
+      return bytes;
+    }
   }
 
   const response = await fetch(kit.zipUrl);
@@ -345,12 +350,5 @@ const main = async (): Promise<void> => {
 };
 
 if (import.meta.main) {
-  try {
-    await main();
-  } catch (error) {
-    process.stderr.write(
-      `ctk: ${error instanceof Error ? error.message : String(error)}\n`
-    );
-    process.exitCode = 1;
-  }
+  await runCheck("ctk", main);
 }
