@@ -11,24 +11,22 @@ import {
   tuple,
 } from "fast-check";
 
-import type { Expr, Path } from "../src/ast.ts";
+import type { Expr } from "../src/ast.ts";
 import {
   evaluateFormConditionInBrowser,
   evaluateInBrowser,
 } from "../src/browser.ts";
-import { checkCondition } from "../src/check.ts";
 import { ConditionDefectError } from "../src/defect.ts";
 import type { ImageSource, RecordImage } from "../src/evaluate-core.ts";
 import { evaluateCondition } from "../src/evaluate.ts";
 import { negationNormalForm } from "../src/nnf.ts";
 import type { NnfNode } from "../src/nnf.ts";
-import { resolveCondition } from "../src/resolve.ts";
 import type { ConditionContext } from "../src/resolve.ts";
 import { simplifyForCaller } from "../src/simplify.ts";
 import { makeResolved } from "../src/typed.ts";
 import type { ResolvedCondition } from "../src/typed.ts";
-import { assetRowsArb, exprArb, personRowsArb } from "./support/generate.ts";
-import { sourceFor } from "./support/images.ts";
+import { assetRowArb, exprArb, personRowsArb } from "./support/generate.ts";
+import { EMPTY_ASSET, maskImage, sourceFor } from "./support/images.ts";
 import { PERSON_IDS, UUID_POOL } from "./support/pools.ts";
 import {
   ASSET,
@@ -36,6 +34,9 @@ import {
   fixtureView,
   LAPTOP,
   PERSON_FIELDS as P,
+  path,
+  prepareCondition,
+  resolveFor,
 } from "./support/schema.ts";
 
 const CONTEXT: ConditionContext = {
@@ -45,42 +46,28 @@ const CONTEXT: ConditionContext = {
   timeZone: "Europe/Berlin",
 };
 
-const path = (...fields: readonly { readonly id: string }[]): Path => ({
-  path: fields.map((field) => field.id),
-});
-
 const prepare = (
   expr: Expr,
   profile: ConditionProfile = "recordRule",
   classId = ASSET,
   context: ConditionContext = CONTEXT
-): ResolvedCondition => {
-  const checked = checkCondition(expr, {
-    classId,
-    profile,
-    profileOptions: { accessRuleHops: 1, myGroups: true },
-    purpose: "evaluate",
-    view: fixtureView,
-  });
+): ResolvedCondition =>
+  prepareCondition(
+    expr,
+    {
+      classId,
+      profile,
+      profileOptions: { accessRuleHops: 1, myGroups: true },
+      purpose: "evaluate",
+      view: fixtureView,
+    },
+    context
+  );
 
-  if (!checked.ok) {
-    throw checked.error;
-  }
-
-  const resolved = resolveCondition(checked.value, context);
-
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-
-  return resolved.value;
-};
-
-const FULL: RecordImage = Object.fromEntries(
-  Object.values(A).map((field) => [field.id, null])
-);
-
-const image = (values: RecordImage): RecordImage => ({ ...FULL, ...values });
+const image = (values: RecordImage): RecordImage => ({
+  ...EMPTY_ASSET,
+  ...values,
+});
 
 const run = (expr: Expr, source: ImageSource): boolean =>
   evaluateCondition(prepare(expr), source);
@@ -260,7 +247,7 @@ describe("TypeScript evaluator", () => {
       );
     }, ConditionDefectError);
     assert.throws(() => {
-      run({ arg: path(A.name), op: "changed" }, { record: FULL });
+      run({ arg: path(A.name), op: "changed" }, { record: EMPTY_ASSET });
     }, ConditionDefectError);
     assert.throws(() => {
       evaluateCondition(
@@ -273,7 +260,7 @@ describe("TypeScript evaluator", () => {
             timeZone: "UTC",
           }
         ),
-        { record: FULL }
+        { record: EMPTY_ASSET }
       );
     }, ConditionDefectError);
   });
@@ -429,23 +416,19 @@ describe("browser evaluator", () => {
           dropped: subarray(allIds),
           expr: exprArb({ classId: ASSET, depth: 4, profile: "formRule" }),
           people: personRowsArb,
-          rows: assetRowsArb(1),
+          row: assetRowArb(ASSET),
         }),
-        ({ dropped, expr, people, rows }) => {
-          const [row] = rows;
-
-          const checked = checkCondition(expr, {
-            classId: ASSET,
-            profile: "formRule",
-            purpose: "evaluate",
-            view: fixtureView,
-          });
-
-          if (row === undefined || row.classId !== ASSET || !checked.ok) {
-            return;
-          }
-
-          const resolved = resolveCondition(checked.value, CONTEXT);
+        ({ dropped, expr, people, row }) => {
+          const resolved = resolveFor(
+            expr,
+            {
+              classId: ASSET,
+              profile: "formRule",
+              purpose: "evaluate",
+              view: fixtureView,
+            },
+            CONTEXT
+          );
 
           if (!resolved.ok) {
             return;
@@ -531,23 +514,19 @@ describe("negation normal form and simplification", () => {
         tuple(
           exprArb({ classId: LAPTOP, depth: 6, profile: "recordRule" }),
           personRowsArb,
-          assetRowsArb(1)
+          assetRowArb(LAPTOP)
         ),
-        ([expr, people, rows]) => {
-          const [row] = rows;
-
-          const checked = checkCondition(expr, {
-            classId: LAPTOP,
-            profile: "recordRule",
-            purpose: "evaluate",
-            view: fixtureView,
-          });
-
-          if (row === undefined || row.classId !== LAPTOP || !checked.ok) {
-            return;
-          }
-
-          const resolved = resolveCondition(checked.value, CONTEXT);
+        ([expr, people, row]) => {
+          const resolved = resolveFor(
+            expr,
+            {
+              classId: LAPTOP,
+              profile: "recordRule",
+              purpose: "evaluate",
+              view: fixtureView,
+            },
+            CONTEXT
+          );
 
           if (!resolved.ok) {
             return;
@@ -579,24 +558,11 @@ describe("negation normal form and simplification", () => {
           exprArb({ classId: ASSET, depth: 5, profile: "formRule" }),
           subarray(ids),
           personRowsArb,
-          assetRowsArb(1),
+          assetRowArb(ASSET),
           constantFrom(...UUID_POOL)
         ),
-        ([expr, hiddenIds, people, rows, me]) => {
-          const [row] = rows;
+        ([expr, hiddenIds, people, row, me]) => {
           const hidden = new Set(hiddenIds);
-
-          if (row === undefined || row.classId !== ASSET) {
-            return;
-          }
-
-          const masked = (values: RecordImage): RecordImage =>
-            Object.fromEntries(
-              Object.entries(values).map(([id, value]) => [
-                id,
-                hidden.has(id) ? null : value,
-              ])
-            );
 
           const full = sourceFor(row, people);
 
@@ -604,26 +570,26 @@ describe("negation normal form and simplification", () => {
             previous:
               full.previous === null || full.previous === undefined
                 ? null
-                : masked(full.previous),
-            record: masked(full.record),
+                : maskImage(full.previous, hidden),
+            record: maskImage(full.record, hidden),
             targets: full.targets ?? new Map(),
           };
 
           const context = { ...CONTEXT, me };
 
           const evaluate = (condition: Expr): boolean | undefined => {
-            const checked = checkCondition(condition, {
-              classId: ASSET,
-              profile: "formRule",
-              purpose: "evaluate",
-              view: fixtureView,
-            });
+            const resolved = resolveFor(
+              condition,
+              {
+                classId: ASSET,
+                profile: "formRule",
+                purpose: "evaluate",
+                view: fixtureView,
+              },
+              context
+            );
 
-            const resolved = checked.ok
-              ? resolveCondition(checked.value, context)
-              : undefined;
-
-            return resolved?.ok === true
+            return resolved.ok
               ? evaluateCondition(resolved.value, source)
               : undefined;
           };

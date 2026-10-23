@@ -25,11 +25,18 @@ import {
   textParameter,
 } from "../src/sql-fragment.ts";
 import { compileCondition, compileNegatedCondition } from "../src/sql.ts";
-import type { SqlHooks } from "../src/sql.ts";
 import type { ResolvedCondition } from "../src/typed.ts";
 import { hooks as fixtureHooks } from "./support/differential.ts";
 import { exprArb } from "./support/generate.ts";
-import { ASSET, fixtureView, LAPTOP, stableId } from "./support/schema.ts";
+import {
+  ASSET,
+  fixtureView,
+  LAPTOP,
+  stableId,
+  rowId,
+  identHooks,
+  prepareCondition,
+} from "./support/schema.ts";
 
 const CONTEXT: ConditionContext = {
   me: stableId(0x1_00_00),
@@ -55,37 +62,21 @@ const identView = staticClassView([
   { fields: [NAME, CODE], id: IDENT, parentId: null },
 ]);
 
-const identHooks: SqlHooks = {
-  column: (source, column) => identSql(source.alias, column.name),
-  join: () => {
-    throw new Error("No references here.");
-  },
-};
-
 const resolved = (
   expr: Expr,
   classId = IDENT,
   view = identView
-): ResolvedCondition => {
-  const checkedCondition = checkCondition(expr, {
-    classId,
-    profile: "filter",
-    purpose: "store",
-    view,
-  });
-
-  if (!checkedCondition.ok) {
-    throw checkedCondition.error;
-  }
-
-  const result = resolveCondition(checkedCondition.value, CONTEXT);
-
-  if (!result.ok) {
-    throw result.error;
-  }
-
-  return result.value;
-};
+): ResolvedCondition =>
+  prepareCondition(
+    expr,
+    {
+      classId,
+      profile: "filter",
+      purpose: "store",
+      view,
+    },
+    CONTEXT
+  );
 
 const eq = (target: FieldInfo, value: string): Expr => ({
   left: { path: [target.id] },
@@ -109,9 +100,6 @@ const LITERAL_ROW = 4242;
 const LITERAL_ROWS = 20_000;
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
-
-const literalId = (prefix: string, n: number): string =>
-  `${prefix}${n.toString(16).padStart(12, "0")}`;
 
 /**
  * One field per kind with a comparison class, its column's values over
@@ -182,7 +170,7 @@ const LITERAL_CASES: readonly {
   },
   {
     field: literalField(10, "external", { kind: "uuid" }),
-    literal: literalId("00000000-0000-7000-8000-", LITERAL_ROW),
+    literal: stableId(LITERAL_ROW),
     values: "('00000000-0000-7000-8000-' || lpad(to_hex(n), 12, '0'))::uuid",
   },
   {
@@ -190,7 +178,7 @@ const LITERAL_CASES: readonly {
       kind: "reference",
       targetClassId: LITERAL,
     }),
-    literal: literalId("00000000-0000-7000-9000-", LITERAL_ROW),
+    literal: rowId(LITERAL_ROW),
     values: "('00000000-0000-7000-9000-' || lpad(to_hex(n), 12, '0'))::uuid",
   },
   {

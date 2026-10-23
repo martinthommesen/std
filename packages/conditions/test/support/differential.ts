@@ -7,12 +7,9 @@
  * `COALESCE(e, false)` and checks that `e` and `not e` partition the rows.
  */
 import type { StoredOrPlaintext } from "@std/values/compare";
-import type {
-  ConditionProfile,
-  FieldKind,
-  FieldType,
-} from "@std/values/field-type";
-import { postgresColumn } from "@std/values/field-type";
+import { getOrThrow } from "@std/values/field-error";
+import type { ConditionProfile } from "@std/values/field-type";
+import { parameterCast, postgresColumn } from "@std/values/field-type";
 import { stringifyJson } from "@std/values/json";
 import {
   isJsonBoolean,
@@ -33,12 +30,10 @@ import { SqlClient } from "effect/sql";
 import type { SqlError } from "effect/sql/SqlError";
 
 import type { Expr } from "../../src/ast.ts";
-import { checkCondition } from "../../src/check.ts";
 import type { FieldInfo } from "../../src/class-view.ts";
 import type { ImageSource, RecordImage } from "../../src/evaluate-core.ts";
 import { evaluateCondition } from "../../src/evaluate.ts";
 import type { ProfileOptions } from "../../src/profile.ts";
-import { resolveCondition } from "../../src/resolve.ts";
 import type { ConditionContext } from "../../src/resolve.ts";
 import {
   identSql,
@@ -56,25 +51,21 @@ import {
 import type { SqlHooks } from "../../src/sql.ts";
 import type { AssetRow, PersonRow } from "./generate.ts";
 import { MASKED_FIELDS } from "./generate.ts";
+import { maskImage } from "./images.ts";
 import {
-  ASSET_FIELDS,
+  ASSET_LIST,
   fixtureField,
   fixtureView,
   LAPTOP,
-  LAPTOP_FIELDS,
+  LAPTOP_LIST,
   PERSON_LIST,
+  resolveFor,
 } from "./schema.ts";
 import type { FixtureField } from "./schema.ts";
 
-const ASSET_LIST: readonly FixtureField[] = Object.values(ASSET_FIELDS);
-const LAPTOP_LIST: readonly FixtureField[] = Object.values(LAPTOP_FIELDS);
-
-const columnType = (type: FieldType): string =>
-  type.kind === "boolean" ? "boolean" : postgresColumn(type).sqlType;
-
 const columns = (fields: readonly FixtureField[]): string =>
   fields
-    .map((field) => `"${field.column}" ${columnType(field.type)}`)
+    .map((field) => `"${field.column}" ${postgresColumn(field.type).sqlType}`)
     .join(", ");
 
 /** Creates the fixture tables (in a fresh database). */
@@ -95,17 +86,6 @@ export const createTables: Effect.Effect<void, SqlError, SqlClient.SqlClient> =
       `CREATE TABLE IF NOT EXISTS previous (id uuid PRIMARY KEY, ${columns([...ASSET_LIST, ...LAPTOP_LIST])})`
     );
   });
-
-const CASTS = new Map<FieldKind, string>([
-  ["choice", "text"],
-  ["longText", "text"],
-  ["password", "text"],
-  ["secret", "bytea"],
-  ["text", "text"],
-]);
-
-const castOf = (field: FixtureField): string =>
-  CASTS.get(field.type.kind) ?? columnType(field.type);
 
 const scalarText = (json: JsonValue): string => {
   if (isJsonString(json)) {
@@ -164,7 +144,7 @@ const insert = (
 
     const casts = [
       ...spec.fixed.map((column) => column.cast),
-      ...spec.fields.map((field) => castOf(field)),
+      ...spec.fields.map((field) => parameterCast(field.type.kind)),
     ];
 
     const values: (string | null)[] = [];
@@ -255,14 +235,6 @@ type DriverValue = string | number | boolean | null;
 
 type TextRow = Readonly<Record<string, DriverValue>>;
 
-const fail = (what: string): never => {
-  throw new Error(`Unexpected ${what} read back from Postgres.`);
-};
-
-const decoded = <A>(
-  result: { readonly ok: true; readonly value: A } | { readonly ok: false }
-): A => (result.ok ? result.value : fail("text"));
-
 // Unset write-only fields arrive in both forms an image may carry: null and
 // { set: false } (Contracts 6.5); both mean empty.
 const writeOnlyState = (
@@ -295,24 +267,24 @@ export const readValue = (
 
   switch (field.type.kind) {
     case "bigInteger": {
-      return decoded(parseInt8Text(String(raw)));
+      return getOrThrow(parseInt8Text(String(raw)));
     }
 
     case "decimal": {
-      return decoded(parseNumericText(String(raw)));
+      return getOrThrow(parseNumericText(String(raw)));
     }
 
     case "date": {
-      return decoded(parseDateText(String(raw)));
+      return getOrThrow(parseDateText(String(raw)));
     }
 
     case "dateTime": {
-      return decoded(parseTimestamptzText(String(raw)));
+      return getOrThrow(parseTimestamptzText(String(raw)));
     }
 
     case "json":
     case "condition": {
-      return decoded(parseJsonbText(String(raw)));
+      return getOrThrow(parseJsonbText(String(raw)));
     }
 
     case "password":
@@ -368,10 +340,14 @@ const selectList = (
 const imageOf = (
   row: TextRow,
   fields: readonly FixtureField[],
-  unset: "null" | "state" = "null"
+  unset: "null" | "state" = "null",
+  prefix = ""
 ): RecordImage =>
   Object.fromEntries(
-    fields.map((field) => [field.id, readValue(field, row[field.id], unset)])
+    fields.map((field) => [
+      field.id,
+      readValue(field, row[`${prefix}${field.id}`], unset),
+    ])
   );
 
 /** The read-back images, keyed by record ID. */
@@ -427,24 +403,10 @@ export const readBack = (
       const record = imageOf(row, own, unset);
 
       const masked: RecordImage =
-        row.readable === true
-          ? record
-          : Object.fromEntries(
-              Object.entries(record).map(([id, value]) => [
-                id,
-                MASKED_FIELDS.has(id) ? null : value,
-              ])
-            );
+        row.readable === true ? record : maskImage(record, MASKED_FIELDS);
 
       const previous =
-        row.has_previous === true
-          ? Object.fromEntries(
-              own.map((field) => [
-                field.id,
-                readValue(field, row[`p_${field.id}`], unset),
-              ])
-            )
-          : null;
+        row.has_previous === true ? imageOf(row, own, unset, "p_") : null;
 
       sources.set(String(row.id), { previous, record: masked, targets });
     }
@@ -557,19 +519,19 @@ export const runCase = (
     let comparisons = 0;
 
     for (const expr of differential.exprs) {
-      const result = checkCondition(expr, {
-        classId: differential.classId,
-        profile: differential.profile,
-        profileOptions: differential.profileOptions,
-        purpose: "store",
-        view: fixtureView,
-      });
+      const resolved = resolveFor(
+        expr,
+        {
+          classId: differential.classId,
+          profile: differential.profile,
+          profileOptions: differential.profileOptions,
+          purpose: "store",
+          view: fixtureView,
+        },
+        differential.context
+      );
 
-      const resolved = result.ok
-        ? resolveCondition(result.value, differential.context)
-        : undefined;
-
-      if (resolved === undefined || !resolved.ok) {
+      if (!resolved.ok) {
         refused += 1;
         continue;
       }
@@ -592,22 +554,27 @@ export const runCase = (
         sql`SELECT "r"."id"::text AS id, ${asBooleanValue(positive.predicate)} AS v, ${asBooleanValue(negative.predicate)} AS nv ${baseFrom(differential.classId)} ${positive.joins} ${negative.joins}`
       );
 
-      const values = yield* client.unsafe<{
-        readonly id: string;
-        readonly v: boolean;
-        readonly nv: boolean;
-      }>(select.text, select.values);
+      const { values, where, negatedWhere } = yield* Effect.all(
+        {
+          negatedWhere: idsWhere(
+            differential.classId,
+            negative.joins,
+            negative.predicate
+          ),
 
-      const where = yield* idsWhere(
-        differential.classId,
-        positive.joins,
-        positive.predicate
-      );
+          values: client.unsafe<{
+            readonly id: string;
+            readonly v: boolean;
+            readonly nv: boolean;
+          }>(select.text, select.values),
 
-      const negatedWhere = yield* idsWhere(
-        differential.classId,
-        negative.joins,
-        negative.predicate
+          where: idsWhere(
+            differential.classId,
+            positive.joins,
+            positive.predicate
+          ),
+        },
+        { concurrency: "unbounded" }
       );
 
       for (const row of values) {

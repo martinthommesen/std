@@ -11,7 +11,7 @@ import { secretState } from "@std/values/write-only";
 import { assert as check, property, record, subarray } from "fast-check";
 
 import { decodeExpr, exprDepth } from "../src/ast.ts";
-import type { Expr, Path } from "../src/ast.ts";
+import type { Expr } from "../src/ast.ts";
 import { evaluateInBrowser } from "../src/browser.ts";
 import { checkCondition, checkConditionJson } from "../src/check.ts";
 import { ConditionDefectError } from "../src/defect.ts";
@@ -24,20 +24,22 @@ import { parseCondition } from "../src/syntax-parse.ts";
 import { printCondition } from "../src/syntax-print.ts";
 import { makeChecked } from "../src/typed.ts";
 import type { ResolvedCondition } from "../src/typed.ts";
-import { assetRowsArb, exprArb, personRowsArb } from "./support/generate.ts";
-import { sourceFor } from "./support/images.ts";
+import { assetRowArb, exprArb, personRowsArb } from "./support/generate.ts";
+import { EMPTY_ASSET, EMPTY_PERSON, sourceFor } from "./support/images.ts";
 import { PERSON_IDS } from "./support/pools.ts";
 import {
   ASSET,
   ASSET_FIELDS as A,
   fixtureView,
   PERSON_FIELDS as P,
-  PERSON_LIST,
   PERSON_VIP,
+  path,
+  prepareCondition,
+  resolveFor,
 } from "./support/schema.ts";
 
 const CONTEXT: ConditionContext = {
-  me: "00000000-0000-7000-8000-000000010000",
+  me: PERSON_IDS[0] ?? "",
   now: Date.UTC(2026, 9, 20, 12),
   timeZone: "UTC",
 };
@@ -45,55 +47,27 @@ const CONTEXT: ConditionContext = {
 const UNASSIGNED = "͸";
 const DEEP = 2000;
 
-const path = (...fields: readonly { readonly id: string }[]): Path => ({
-  path: fields.map((field) => field.id),
-});
-
 const prepare = (
   expr: Expr,
   profile: "formRule" | "filter" = "formRule"
-): ResolvedCondition => {
-  const checked = checkCondition(expr, {
-    classId: ASSET,
-    profile,
-    purpose: "evaluate",
-    view: fixtureView,
-  });
+): ResolvedCondition =>
+  prepareCondition(
+    expr,
+    {
+      classId: ASSET,
+      profile,
+      purpose: "evaluate",
+      view: fixtureView,
+    },
+    CONTEXT
+  );
 
-  if (!checked.ok) {
-    throw checked.error;
-  }
-
-  const resolved = resolveCondition(checked.value, CONTEXT);
-
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-
-  return resolved.value;
-};
-
-const EMPTY_ASSET: RecordImage = Object.fromEntries(
-  Object.values(A).map((field) => [field.id, null])
-);
-
-const EMPTY_PERSON: RecordImage = Object.fromEntries(
-  PERSON_LIST.map((field) => [field.id, null])
-);
-
-// `depth` nots around an atom.
-const nestedAround = (depth: number, atom: Expr): Expr => {
-  let expr = atom;
-
-  for (let level = 0; level < depth; level += 1) {
-    expr = { arg: expr, op: "not" };
-  }
-
-  return expr;
-};
-
-const nested = (depth: number, wrap: (inner: Expr) => Expr): Expr => {
-  let expr: Expr = { op: "true" };
+const nested = (
+  depth: number,
+  wrap: (inner: Expr) => Expr,
+  start?: Expr
+): Expr => {
+  let expr: Expr = start ?? { op: "true" };
 
   for (let level = 0; level < depth; level += 1) {
     expr = wrap(expr);
@@ -232,7 +206,7 @@ describe("the boolean rewrite keeps the condition's depth", () => {
       right: path(A.owner, PERSON_VIP),
     };
 
-    const expr = nestedAround(63, atom);
+    const expr = nested(63, (inner) => ({ arg: inner, op: "not" }), atom);
 
     const simplified = simplifyForCaller(expr, {
       classId: ASSET,
@@ -357,23 +331,19 @@ describe("the browser checks code points on every text read", () => {
           expr: exprArb({ classId: ASSET, depth: 4, profile: "formRule" }),
           people: personRowsArb,
           poisoned: subarray(textIds),
-          rows: assetRowsArb(1),
+          row: assetRowArb(ASSET),
         }),
-        ({ expr, people, poisoned, rows }) => {
-          const [row] = rows;
-
-          const checked = checkCondition(expr, {
-            classId: ASSET,
-            profile: "formRule",
-            purpose: "evaluate",
-            view: fixtureView,
-          });
-
-          if (row === undefined || row.classId !== ASSET || !checked.ok) {
-            return;
-          }
-
-          const resolved = resolveCondition(checked.value, CONTEXT);
+        ({ expr, people, poisoned, row }) => {
+          const resolved = resolveFor(
+            expr,
+            {
+              classId: ASSET,
+              profile: "formRule",
+              purpose: "evaluate",
+              view: fixtureView,
+            },
+            CONTEXT
+          );
 
           if (!resolved.ok) {
             return;

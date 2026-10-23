@@ -52,7 +52,14 @@ import {
   personRowsArb,
 } from "./support/generate.ts";
 import { DATE_TIME_POOL, UUID_POOL, ZONES } from "./support/pools.ts";
-import { ASSET, LAPTOP } from "./support/schema.ts";
+import {
+  ASSET,
+  ASSET_FIELDS as A,
+  LAPTOP,
+  LAPTOP_FIELDS as L,
+  path as fieldPath,
+  PERSON_FIELDS as P,
+} from "./support/schema.ts";
 
 const NIGHTLY = process.env.STD_DIFFERENTIAL === "nightly";
 
@@ -494,6 +501,38 @@ describe("time limit", () => {
 });
 
 describe("coverage gate", () => {
+  it("keeps atom order and duplicates, counting only paths reachable from the class", () => {
+    const expr: Expr = {
+      args: [
+        { left: fieldPath(A.owner, P.name), op: "eq", right: { value: "x" } },
+        { arg: { arg: fieldPath(A.count), op: "empty" }, op: "not" },
+        { arg: fieldPath(A.count), op: "empty" },
+        { arg: fieldPath(P.name), op: "changed" },
+        { arg: fieldPath(), op: "empty" },
+        { arg: fieldPath(L.ram), op: "notEmpty" },
+        { op: "true" },
+      ],
+      op: "and",
+    };
+
+    assert.deepStrictEqual(coverageKeys(expr, ASSET), [
+      "eq|text:ci",
+      "empty|integer",
+      "empty|integer",
+      "changed|?",
+      "empty|?",
+      "notEmpty|?",
+    ]);
+    assert.deepStrictEqual(coverageKeys(expr, LAPTOP), [
+      "eq|text:ci",
+      "empty|integer",
+      "empty|integer",
+      "changed|?",
+      "empty|?",
+      "notEmpty|integer",
+    ]);
+  });
+
   it("lists permitted combinations for every profile, Subscription included", () => {
     for (const profile of PROFILES) {
       assert.isAbove(permittedCombinations(profile).length, 50);

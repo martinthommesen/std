@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ConditionProfile } from "@std/values/field-type";
 
-import type { Expr, Path, Value } from "../src/ast.ts";
+import type { Expr, Value } from "../src/ast.ts";
 import { checkCondition, checkConditionJson } from "../src/check.ts";
 import type { CheckOptions } from "../src/check.ts";
 import type { IssueReason } from "../src/issue.ts";
@@ -13,11 +13,9 @@ import {
   LAPTOP_FIELDS as L,
   PERSON_FIELDS as P,
   RETIRED_FIELD,
+  path,
+  issueReasons,
 } from "./support/schema.ts";
-
-const path = (...fields: readonly { readonly id: string }[]): Path => ({
-  path: fields.map((field) => field.id),
-});
 
 const options = (
   profile: ConditionProfile,
@@ -34,11 +32,7 @@ const reasons = (
   expr: Expr,
   profile: ConditionProfile = "filter",
   extra: Partial<CheckOptions> = {}
-): IssueReason[] => {
-  const result = checkCondition(expr, options(profile, extra));
-
-  return result.ok ? [] : result.error.issues.map((found) => found.reason);
-};
+): IssueReason[] => issueReasons(checkCondition(expr, options(profile, extra)));
 
 const list = (size: number): Expr => ({
   left: path(A.count),
