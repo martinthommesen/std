@@ -1217,6 +1217,49 @@ const runStep = async (scope: Locator, step: ConditionStep) => {
 };
 
 /**
+ * Opens the navigation's Administration group (the platform's tables and
+ * the administration pages), which starts closed; nothing happens when
+ * it is open or the user has none.
+ *
+ * @param page - A signed-in page.
+ * @returns Nothing, once the group is shown.
+ */
+export const showAdministration = async (page: Page): Promise<void> => {
+  const administration = page
+    .getByRole("navigation", { name: "Tables" })
+    .getByRole("button", { name: /^Administration/u });
+
+  await page
+    .getByRole("navigation", { name: "Tables" })
+    .waitFor({ state: "attached" });
+
+  if (
+    (await administration.count()) > 0 &&
+    (await administration.getAttribute("aria-expanded")) !== "true"
+  ) {
+    await administration.click();
+    await rendered(page);
+  }
+};
+
+/**
+ * Opens the list page's filter builder, which starts closed behind the
+ * "Filter" button (it counts the applied conditions in its name); nothing
+ * happens when it is open.
+ *
+ * @param page - A list page.
+ * @returns Nothing, once the builder is shown.
+ */
+export const showFilter = async (page: Page): Promise<void> => {
+  const toggle = page.getByRole("button", { name: /^Filter\b/u });
+
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+    await rendered(page);
+  }
+};
+
+/**
  * Runs the steps of one condition in order.
  *
  * @param page - A list page.
@@ -1229,6 +1272,8 @@ export const buildCondition = async (
   number: number,
   steps: readonly ConditionStep[]
 ): Promise<void> => {
+  await showFilter(page);
+
   const scope = condition(page, number);
 
   await scope.waitFor({ state: "attached" });
@@ -1249,6 +1294,20 @@ export const buildCondition = async (
  * @returns Nothing.
  */
 export const addCondition = async (page: Page): Promise<void> => {
+  const conditions = page.getByRole("group", {
+    includeHidden: true,
+    name: /^Condition \d+$/u,
+  });
+
+  const before = await conditions.count();
+
+  await showFilter(page);
+
+  // Opening the builder on an empty filter starts its first condition.
+  if ((await conditions.count()) > before) {
+    return;
+  }
+
   await page
     .getByRole("button", { exact: true, name: "Add condition" })
     .click();
@@ -1269,6 +1328,7 @@ export const addGroup = async (
   const name =
     groupNumber === 1 ? "Add group" : `Add group to Group ${groupNumber}`;
 
+  await showFilter(page);
   await page.getByRole("button", { exact: true, name }).click();
   await rendered(page);
 };
@@ -1284,6 +1344,7 @@ export const addConditionTo = async (
   page: Page,
   groupNumber: number
 ): Promise<void> => {
+  await showFilter(page);
   await page
     .getByRole("button", {
       exact: true,
@@ -1319,6 +1380,7 @@ export const setMatch = async (
  * @returns Nothing, once the list is settled.
  */
 export const applyFilter = async (page: Page): Promise<void> => {
+  await showFilter(page);
   await rendered(page);
   await reloadingList(page, async () => {
     await page.getByRole("button", { name: "Apply filter" }).click();
@@ -1332,6 +1394,7 @@ export const applyFilter = async (page: Page): Promise<void> => {
  * @returns Nothing, once the list is settled.
  */
 export const clearFilter = async (page: Page): Promise<void> => {
+  await showFilter(page);
   await reloadingList(page, async () => {
     await page.getByRole("button", { name: "Clear filter" }).click();
   });
@@ -1347,10 +1410,19 @@ export const navigationTables = async (page: Page): Promise<string[]> => {
   const nav = page.getByRole("navigation", { name: "Tables" });
 
   await nav.waitFor({ state: "attached" });
+  await showAdministration(page);
 
+  // NOTE: the Administration group also holds pages (dead letters), in a
+  // navigation of their own; only the tables' links count here.
   return await nav
     .getByRole("link")
-    .evaluateAll((links) => links.map((link) => link.textContent ?? ""));
+    .evaluateAll((links) =>
+      links.flatMap((link) =>
+        (link.getAttribute("href") ?? "").startsWith("/tables/")
+          ? [link.textContent ?? ""]
+          : []
+      )
+    );
 };
 
 // A SECOND CLIENT
@@ -1696,29 +1768,27 @@ export const valuesHiddenFrom = async (
 
 /**
  * The saved filters the list page offers, by label, in order (without
- * "No filter" and "Your own filter").
+ * "All records", which clears the filter).
  *
  * @param page - A list page.
  * @returns The labels.
  */
 export const savedFilterLabels = async (page: Page): Promise<string[]> => {
-  const select = page.getByLabel("Saved filter");
+  const group = page.getByRole("group", { name: "Saved filters" });
 
-  await select.waitFor({ state: "attached" });
+  await group.waitFor({ state: "attached" });
 
-  const labels = await select
-    .locator("option")
-    .evaluateAll((options) =>
-      options.map((option) => option.textContent ?? "")
+  const labels = await group
+    .getByRole("button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.textContent ?? "")
     );
 
-  return labels.filter(
-    (label) => label !== "No filter" && label !== "Your own filter"
-  );
+  return labels.filter((label) => label !== "All records");
 };
 
 /**
- * Applies a saved filter from the list page's select and waits for the
+ * Applies a saved filter with one click on its button and waits for the
  * list.
  *
  * @param page - A list page.
@@ -1730,7 +1800,10 @@ export const applySavedFilter = async (
   label: string
 ): Promise<void> => {
   await reloadingList(page, async () => {
-    await page.getByLabel("Saved filter").selectOption({ label });
+    await page
+      .getByRole("group", { name: "Saved filters" })
+      .getByRole("button", { exact: true, name: label })
+      .click();
   });
 };
 

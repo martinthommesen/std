@@ -1,3 +1,4 @@
+import { Dialog, Menu } from "@foldkit/ui";
 import { Effect, Option } from "effect";
 import { AsyncData } from "foldkit";
 import { make as makeDate } from "foldkit/calendar";
@@ -14,6 +15,7 @@ import {
   LoadExternal,
   NavigateInternal,
   ReplaceUrl,
+  SaveShellPreferences,
   SignOut,
 } from "./command.ts";
 import { FieldInput } from "./domain/form-input.ts";
@@ -30,6 +32,11 @@ import { init } from "./main.ts";
 import { Message } from "./message.ts";
 import type { CurrentUser, SignedInModel } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
+import {
+  NAVIGATION_DRAWER_ID,
+  initLeaveDialog,
+  initNavigationDrawer,
+} from "./navigation-drawer.ts";
 import { Message as RecordFormMessage } from "./page/record-form/message.ts";
 import { FormMode } from "./page/record-form/model.ts";
 import {
@@ -44,8 +51,12 @@ import {
   ReplaceListUrl,
 } from "./page/table-list/command.ts";
 import { Message as TableListMessage } from "./page/table-list/message.ts";
-import { AppRoute, homeRouter, signInRouter } from "./route.ts";
+import { AppRoute, PLAIN_LIST, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
+import {
+  DEFAULT_SHELL_PREFERENCES,
+  StoredShellPreferences,
+} from "./shell-preferences.ts";
 import {
   ASSET_FIELDS,
   REVISION_3,
@@ -56,8 +67,18 @@ import {
   summaryOf,
 } from "./table-fixture.ts";
 import { update } from "./update.ts";
+import { initUserMenu } from "./user-menu.ts";
 
-const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
+/** Choosing "Sign out" in the (closed, as in the fixtures) user menu. */
+const selectedSignOut = Message.GotUserMenuMessage({
+  message: Menu.Message.SelectedItem({ index: 0, item: "SignOut" }),
+});
+
+/** The flags of a browser that stored no preferences yet. */
+const firstVisit = { storedPreferences: StoredShellPreferences.Absent() };
+
+const checkingAt = (pathname: string) =>
+  init(firstVisit, urlOf(pathname)).model;
 
 const loadedTables = Command.resolve(
   LoadTables,
@@ -113,10 +134,14 @@ const namesAndArgs = (
 
 describe("start-up", () => {
   it("asks the server for the session", () => {
-    const initial = init(urlOf("/"));
+    const initial = init(firstVisit, urlOf("/"));
 
     expect(initial.model).toStrictEqual(
-      Model.CheckingSession({ route: AppRoute.Home() })
+      Model.CheckingSession({
+        maybePreferenceProblem: Option.none(),
+        preferences: DEFAULT_SHELL_PREFERENCES,
+        route: AppRoute.Home(),
+      })
     );
     expect(initial.commands).toStrictEqual([LoadCurrentUser()]);
   });
@@ -249,7 +274,11 @@ describe("start-up", () => {
   });
 
   it("an unreachable server can be retried, and fail again", () => {
-    const unavailable = Model.SessionUnavailable({ route: AppRoute.Home() });
+    const unavailable = Model.SessionUnavailable({
+      maybePreferenceProblem: Option.none(),
+      preferences: DEFAULT_SHELL_PREFERENCES,
+      route: AppRoute.Home(),
+    });
 
     story(
       update,
@@ -261,7 +290,11 @@ describe("start-up", () => {
       message(Message.ClickedRetrySessionCheck()),
       model((app) => {
         expect(app).toStrictEqual(
-          Model.CheckingSession({ route: AppRoute.Home() })
+          Model.CheckingSession({
+            maybePreferenceProblem: Option.none(),
+            preferences: DEFAULT_SHELL_PREFERENCES,
+            route: AppRoute.Home(),
+          })
         );
       }),
       Command.expectExact(LoadCurrentUser()),
@@ -313,16 +346,22 @@ describe("signing in", () => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "leaveDialog",
           "maybeDeadLetters",
+          "maybeLeaveIntent",
+          "maybePreferenceProblem",
           "maybeRecordForm",
           "maybeRevision",
           "maybeTableList",
+          "navigationDrawer",
           "nextPageId",
+          "preferences",
           "route",
           "sessionId",
           "signOutRequest",
           "tables",
           "user",
+          "userMenu",
         ]);
       }),
       Command.expectExact(
@@ -427,7 +466,7 @@ describe("signing out", () => {
     story(
       update,
       given(pagesOpened),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
@@ -459,7 +498,7 @@ describe("signing out", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       model((app) => {
         expect(app).toStrictEqual(
           modifyFields(adaAtHome, {
@@ -486,7 +525,7 @@ describe("signing out", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       model((app) => {
         expect(app).toStrictEqual(
@@ -495,7 +534,7 @@ describe("signing out", () => {
           })
         );
       }),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.expectExact(
         SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
       ),
@@ -518,7 +557,7 @@ describe("signing out", () => {
     story(
       update,
       given(pending),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.expectNone(),
       model((app) => {
         expect(app).toStrictEqual(pending);
@@ -530,7 +569,7 @@ describe("signing out", () => {
     story(
       update,
       given(signInOpenedDirectly),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       message(Message.SucceededSignOut({ sessionId: 1 })),
       message(Message.FailedSignOut({ sessionId: 1 })),
       Command.expectNone(),
@@ -555,16 +594,22 @@ describe("answers of an earlier session", () => {
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
   const bobEntering = Model.SignedIn({
+    leaveDialog: initLeaveDialog(),
     maybeDeadLetters: Option.none(),
+    maybeLeaveIntent: Option.none(),
+    maybePreferenceProblem: Option.none(),
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),
     maybeTableList: Option.none(),
+    navigationDrawer: initNavigationDrawer(),
     nextPageId: 1,
+    preferences: DEFAULT_SHELL_PREFERENCES,
     route: AppRoute.Home(),
     sessionId: 2,
     signOutRequest: SignOutRequest.Idle(),
     tables: Tables.Loading(),
     user: bob,
+    userMenu: initUserMenu(),
   });
 
   it("each session's requests carry its number, and the next session gets the next one", () => {
@@ -576,7 +621,7 @@ describe("answers of an earlier session", () => {
       })
     );
 
-    const adaSigningOut = update(adaEntered.model, Message.ClickedSignOut());
+    const adaSigningOut = update(adaEntered.model, selectedSignOut);
 
     // Ada's session ends before her table list or sign-out is answered.
     const adaEnded = update(
@@ -732,6 +777,168 @@ describe("navigation", () => {
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
       })
+    );
+  });
+
+  it("the skip link moves focus to main and leaves the address as it is", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(
+        Message.ClickedLink({
+          request: UrlRequest.Internal({
+            url: { ...urlOf(homeRouter()), hash: Option.some("main") },
+          }),
+        })
+      ),
+      Command.expectExact(FocusMain()),
+      Command.resolve(FocusMain, Message.CompletedFocusMain()),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      })
+    );
+  });
+
+  it("the navigation drawer opens as a modal dialog, focusing its first link, and closes on the next page", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(Message.ClickedOpenNavigation()),
+      Command.expectExact(
+        Dialog.ShowDialog({
+          focusSelector: `#${NAVIGATION_DRAWER_ID} .nav-link`,
+          id: NAVIGATION_DRAWER_ID,
+        })
+      ),
+      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
+      model((app) => {
+        expect(signedIn(app).navigationDrawer.isOpen).toBeTruthy();
+      }),
+      // Following one of its links closes it; the new page takes focus.
+      message(Message.ChangedUrl({ url: urlOf("/no/such/page") })),
+      model((app) => {
+        expect(signedIn(app).navigationDrawer.isOpen).toBeFalsy();
+      }),
+      Command.resolveAll(
+        [Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()],
+        [FocusMain, Message.CompletedFocusMain()]
+      )
+    );
+  });
+
+  it("the Administration group remembers whether it is open, and says when the browser does not keep it", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(Message.ToggledAdministration({ isOpen: true })),
+      Command.expectExact(
+        SaveShellPreferences({ preferences: { isAdministrationOpen: true } })
+      ),
+      Command.resolve(
+        SaveShellPreferences,
+        Message.FailedSaveShellPreferences()
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences.isAdministrationOpen).toBeTruthy();
+        expect(signedIn(app).maybePreferenceProblem).toStrictEqual(
+          Option.some("Unsaved")
+        );
+      }),
+      message(Message.ToggledAdministration({ isOpen: false })),
+      Command.resolve(
+        SaveShellPreferences,
+        Message.CompletedSaveShellPreferences()
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences.isAdministrationOpen).toBeFalsy();
+        expect(signedIn(app).maybePreferenceProblem).toStrictEqual(
+          Option.none()
+        );
+      }),
+      // The preferences go with the session to the next state.
+      message(selectedSignOut),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      ),
+      model((app) => {
+        expect(
+          Model.guards.SignedOut(app) && app.preferences.isAdministrationOpen
+        ).toBeFalsy();
+      })
+    );
+  });
+
+  it.each([
+    ["could not be read", StoredShellPreferences.Unreadable(), "Unreadable"],
+    ["held something else", StoredShellPreferences.Invalid(), "Invalid"],
+  ] as const)(
+    "storage that %s starts with the defaults and keeps the problem into the signed-in state, until a store succeeds",
+    (_case, storedPreferences, problem) => {
+      story(
+        update,
+        given(init({ storedPreferences }, urlOf("/")).model),
+        model((app) => {
+          expect(app).toStrictEqual(
+            Model.CheckingSession({
+              maybePreferenceProblem: Option.some(problem),
+              preferences: DEFAULT_SHELL_PREFERENCES,
+              route: AppRoute.Home(),
+            })
+          );
+        }),
+        message(
+          Message.SucceededLoadCurrentUser({
+            maybeRevision: Option.some(REVISION_3),
+            maybeUser: Option.some(ada),
+          })
+        ),
+        Command.resolve(LoadTables, Message.FailedLoadTables({ sessionId: 1 })),
+        model((app) => {
+          expect(signedIn(app).maybePreferenceProblem).toStrictEqual(
+            Option.some(problem)
+          );
+        }),
+        message(Message.ToggledAdministration({ isOpen: true })),
+        Command.resolve(
+          SaveShellPreferences,
+          Message.CompletedSaveShellPreferences()
+        ),
+        model((app) => {
+          expect(signedIn(app).maybePreferenceProblem).toStrictEqual(
+            Option.none()
+          );
+        })
+      );
+    }
+  );
+
+  it("start-up takes the stored preferences into the signed-in state", () => {
+    const opened = { isAdministrationOpen: true };
+
+    story(
+      update,
+      given(
+        init(
+          {
+            storedPreferences: StoredShellPreferences.Stored({
+              preferences: opened,
+            }),
+          },
+          urlOf("/")
+        ).model
+      ),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences).toStrictEqual(opened);
+      }),
+      Command.resolve(LoadTables, Message.FailedLoadTables({ sessionId: 1 }))
     );
   });
 });
@@ -1025,7 +1232,7 @@ describe("review fixes: pages and revisions", () => {
 
   it("a deep link's first requests carry the revision session/current stated", () => {
     const entered = update(
-      init(urlOf("/tables/acme.asset")).model,
+      init(firstVisit, urlOf("/tables/acme.asset")).model,
       Message.SucceededLoadCurrentUser({
         maybeRevision: Option.some(REVISION_3),
         maybeUser: Option.some(ada),
@@ -1129,6 +1336,31 @@ describe("the form pages", () => {
     ).toStrictEqual([
       Option.some(FormMode.Edit({ recordId: RECORD_A })),
       Option.some(FormMode.Create()),
+    ]);
+  });
+
+  it("a form opened from a list keeps that list's address, and one opened directly the plain list", () => {
+    const fromList = update(
+      adaAtHome,
+      Message.ChangedUrl({
+        url: {
+          ...urlOf(`/tables/acme.asset/records/${RECORD_A}`),
+          search: Option.some("limit=50&sort=-name"),
+        },
+      })
+    );
+
+    expect(
+      [fromList.model, atRecordA.model].map((app) =>
+        formOf(app).pipe(Option.map((page) => page.listQuery))
+      )
+    ).toStrictEqual([
+      Option.some({
+        filter: Option.none(),
+        limit: Option.some("50"),
+        sort: Option.some("-name"),
+      }),
+      Option.some(PLAIN_LIST),
     ]);
   });
 
@@ -1243,7 +1475,9 @@ describe("the form pages", () => {
     expect(
       Model.guards.SignedOut(ended.model) ? ended.model.maybeReturnRoute : null
     ).toStrictEqual(
-      Option.some(AppRoute.Record({ id: RECORD_A, table: ASSETS }))
+      Option.some(
+        AppRoute.Record({ ...PLAIN_LIST, id: RECORD_A, table: ASSETS })
+      )
     );
   });
 });

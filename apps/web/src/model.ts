@@ -1,3 +1,4 @@
+import { Dialog, Menu } from "@foldkit/ui";
 import { CurrentSession } from "@std/api/session";
 import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
@@ -10,6 +11,21 @@ import { Model as RecordFormModel } from "./page/record-form/model.ts";
 import { Model as SignInModel } from "./page/sign-in/sign-in.ts";
 import { Model as TableListModel } from "./page/table-list/model.ts";
 import { AppRoute, SignedInRoute, SignedOutRoute } from "./route.ts";
+import { PreferenceProblem, ShellPreferences } from "./shell-preferences.ts";
+
+/**
+ * What the user asked for that would leave a form with unsaved edits, held
+ * while the leave confirmation asks: to follow an in-app link (its
+ * address), or to sign out.
+ */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const LeaveIntent = defineTaggedUnion({
+  FollowLink: { url: Schema.String },
+  SignOut: {},
+});
+
+/** What the user asked for that would leave a form with unsaved edits. */
+export type LeaveIntent = typeof LeaveIntent.Type;
 
 /** Where a sign-out request stands. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -67,27 +83,52 @@ export type Tables = typeof Tables.schema.Type;
  *   never here: it lives in the HTTP-only cookie.
  * - `SignedOut` carries both counters (`nextPageId`, `nextSessionId`), so
  *   the next session's pages and requests get numbers no earlier one had.
+ * - Every state carries the shell's `preferences`, read from the browser at
+ *   start-up, so a session that starts later still opens the navigation as
+ *   the user left it, and why they are not as the user left them when the
+ *   browser could not read or store them (`maybePreferenceProblem`), which
+ *   the navigation says. Signed in, the shell also holds the navigation
+ *   drawer of narrow screens (Foldkit UI Dialog), the user menu (Foldkit
+ *   UI Menu), and the leave confirmation (Foldkit UI Dialog) with what the
+ *   user asked for while the form held unsaved edits (`maybeLeaveIntent`):
+ *   to follow a link, or to sign out.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const Model = defineTaggedUnion({
-  CheckingSession: { route: AppRoute },
-  SessionUnavailable: { route: AppRoute },
+  CheckingSession: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    preferences: ShellPreferences,
+    route: AppRoute,
+  },
+  SessionUnavailable: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
+    preferences: ShellPreferences,
+    route: AppRoute,
+  },
   SignedIn: {
+    leaveDialog: Dialog.Model,
     maybeDeadLetters: Schema.Option(DeadLettersModel),
+    maybeLeaveIntent: Schema.Option(LeaveIntent),
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeRecordForm: Schema.Option(RecordFormModel),
     maybeRevision: Schema.Option(SchemaRevision),
     maybeTableList: Schema.Option(TableListModel),
+    navigationDrawer: Dialog.Model,
     nextPageId: Schema.Int,
+    preferences: ShellPreferences,
     route: SignedInRoute,
     sessionId: Schema.Int,
     signOutRequest: SignOutRequest,
     tables: Tables.schema,
     user: CurrentSession,
+    userMenu: Menu.Model,
   },
   SignedOut: {
+    maybePreferenceProblem: Schema.Option(PreferenceProblem),
     maybeReturnRoute: Schema.Option(SignedInRoute),
     nextPageId: Schema.Int,
     nextSessionId: Schema.Int,
+    preferences: ShellPreferences,
     route: SignedOutRoute,
     signIn: SignInModel,
   },
@@ -98,6 +139,9 @@ export type Model = typeof Model.Type;
 
 /** The signed-in state. */
 export type SignedInModel = typeof Model.SignedIn.Type;
+
+/** The start-up state, while the server is asked for the session. */
+export type CheckingSessionModel = typeof Model.CheckingSession.Type;
 
 /** The signed-out state. */
 export type SignedOutModel = typeof Model.SignedOut.Type;

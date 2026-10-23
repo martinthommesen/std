@@ -2,6 +2,7 @@
 import { Option } from "effect";
 import {
   Command,
+  Mount,
   click,
   expect,
   given,
@@ -15,7 +16,11 @@ import { modifyFields } from "foldkit/struct";
 import { describe, it } from "vitest";
 
 import { REVISION_5 } from "../../form-fixture.ts";
-import { LoadFormState, FocusField } from "./command.ts";
+import {
+  FocusField,
+  KeepFocusClearOfActionBar,
+  LoadFormState,
+} from "./command.ts";
 import {
   closedFormVerdict,
   pendingForm,
@@ -24,8 +29,14 @@ import {
 } from "./form-rules-fixture.ts";
 import { Message } from "./message.ts";
 import { FormStateVerdict, WriteError } from "./model.ts";
-import { update } from "./update.ts";
+import { FORM_MESSAGES_ID, update } from "./update.ts";
 import { view } from "./view.ts";
+
+/** The action bar's Mount, which keeps focused fields clear of it. */
+const acknowledgeActionBar = Mount.resolve(
+  KeepFocusClearOfActionBar,
+  Message.CompletedKeepFocusClearOfActionBar()
+);
 
 describe("accessible form rules", () => {
   it("renders a colleague's readable record as values with a neutral note and no editable controls or Save", () => {
@@ -41,6 +52,7 @@ describe("accessible form rules", () => {
           })
         ).model
       ),
+      acknowledgeActionBar,
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
       expect(text("You can view this record but not change it.")).toExist(),
       expect(selector("[data-field] input")).toBeAbsent(),
@@ -67,6 +79,7 @@ describe("accessible form rules", () => {
           maybeFormStateInFlight: () => Option.none(),
         })
       ),
+      acknowledgeActionBar,
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
       expect(
         text(
@@ -97,6 +110,27 @@ describe("accessible form rules", () => {
       expect(label("Tracking")).toBeAbsent(),
       click(role("button", { name: "Create" })),
       expect(text("This field is required.")).toExist(),
+      Command.resolve(FocusField, Message.CompletedFocusField())
+    );
+  });
+
+  it("while Save waits on a failed check, the action bar says so and leads to the alert", () => {
+    scene(
+      { update, view },
+      given(
+        modifyFields(pendingForm, {
+          formState: () =>
+            FormStateVerdict.Failure({ error: WriteError.Unavailable() }),
+          maybeFormStateInFlight: () => Option.none(),
+        })
+      ),
+      acknowledgeActionBar,
+      // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion step
+      expect(text("Save waits: the form check failed.")).toExist(),
+      expect(text("Checking form rules…")).toBeAbsent(),
+      expect(role("button", { name: "Create" })).toBeDisabled(),
+      click(role("button", { name: "Show the reason" })),
+      Command.expectExact(FocusField({ elementId: FORM_MESSAGES_ID })),
       Command.resolve(FocusField, Message.CompletedFocusField())
     );
   });

@@ -464,3 +464,63 @@ describe("a search refused with SchemaChanged", () => {
     );
   });
 });
+
+describe("the picker's toggle button", () => {
+  it("lists the first targets when the field already holds a value", () => {
+    const closed = after(
+      openPickerWith(userTable),
+      Message.GotPickerMessage({
+        fieldId: ASSIGNEE,
+        message: Combobox.Message.Closed({
+          isClearable: true,
+          restingInputValue: "Alex Agent",
+        }),
+      })
+    );
+
+    story(
+      update,
+      given(closed),
+      model((page) => {
+        expect(page.edits[ASSIGNEE]).toBeUndefined();
+        expect(ticketRecord.values.assignee).toBe(USERS.alex);
+        expect(pickerOf(page).combobox.isOpen).toBeFalsy();
+      }),
+      message(
+        Message.GotPickerMessage({
+          fieldId: ASSIGNEE,
+          message: Combobox.Message.PressedToggleButton({
+            isClearable: true,
+            restingInputValue: "Alex Agent",
+          }),
+        })
+      ),
+      model((page) => {
+        expect(pickerOf(page).combobox.isOpen).toBeTruthy();
+        expect(pickerOf(page).query).toBe("");
+        expect(AsyncData.isPending(pickerOf(page).results)).toBeTruthy();
+      }),
+      Command.expectHas(SearchTargets),
+      Command.resolveAll(
+        [Combobox.FocusInput, Combobox.Message.CompletedFocusInput()],
+        [
+          SearchTargets,
+          found(1, [
+            { id: USERS.alex, label: "Alex Agent" },
+            { id: USERS.sam, label: "Sam Agent" },
+          ]),
+        ]
+      ),
+      model((page) => {
+        expect(pickerOf(page).results).toStrictEqual(
+          PickerResults.Success({
+            data: [
+              { id: USERS.alex, label: "Alex Agent" },
+              { id: USERS.sam, label: "Sam Agent" },
+            ],
+          })
+        );
+      })
+    );
+  });
+});

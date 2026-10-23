@@ -12,7 +12,7 @@ import { inject } from "vitest";
 
 import { urlOf } from "../../src/fixture.ts";
 import { AppRoute, deadLettersRouter, urlToAppRoute } from "../../src/route.ts";
-import { signIn } from "./app.ts";
+import { showAdministration, signIn } from "./app.ts";
 import {
   launchBrowser,
   stdServe,
@@ -50,6 +50,8 @@ describe("dead-letter administration", () => {
               name: "Ada",
               password: "ada-password",
             });
+            // The page is in the navigation's Administration group.
+            await showAdministration(page);
             await page
               .getByRole("link", { exact: true, name: "Dead letters" })
               .click();
@@ -150,6 +152,8 @@ describe("dead-letter administration", () => {
               name: "Ada",
               password: "ada-password",
             });
+            // The page is in the navigation's Administration group.
+            await showAdministration(page);
             await page
               .getByRole("link", { exact: true, name: "Dead letters" })
               .click();

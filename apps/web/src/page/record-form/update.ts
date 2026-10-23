@@ -14,6 +14,7 @@
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
 import type { FormState } from "@std/api/form-state";
 import type { MetaRelatedList } from "@std/definitions/table-metadata";
+import { isJsonObject, isJsonString } from "@std/values/json-value";
 import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
 import type { CalendarDate } from "foldkit/calendar";
@@ -23,6 +24,7 @@ import { fieldShowOf } from "../../domain/form-fields.ts";
 import { FieldInput } from "../../domain/form-input.ts";
 import { listColumns, listFieldsParameter } from "../../domain/list-columns.ts";
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
+import type { HistoryEntry } from "../../domain/record.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
@@ -43,7 +45,8 @@ import {
   wireFieldOf,
 } from "../../domain/wire.ts";
 import { calendarDateOf, isoDateOf } from "../../filter-builder/condition.ts";
-import { recordRouter, tableListRouter } from "../../route.ts";
+import { PLAIN_LIST, recordRouter, tableListRouter } from "../../route.ts";
+import type { ListQuery } from "../../route.ts";
 import type { StdApi } from "../../std-client.ts";
 import { Metadata, TargetMetadata } from "../table-list/model.ts";
 import type { MetaError, RecordPage } from "../table-list/model.ts";
@@ -51,10 +54,10 @@ import {
   CreateRecord,
   DeleteRecord,
   FocusField,
-  LoadActorNames,
   LoadClassMetadata,
   LoadFormMetadata,
   LoadHistory,
+  LoadHistoryLabels,
   LoadRecord,
   LoadRelatedMetadata,
   LoadRelatedRecords,
@@ -62,6 +65,7 @@ import {
   NavigateAway,
   ReadToday,
   SearchTargets,
+  USER_TABLE,
   UpdateRecord,
 } from "./command.ts";
 import { forgetServerErrors, recordFieldEdit } from "./field-edit.ts";
@@ -177,6 +181,9 @@ const FALLBACK_TODAY: CalendarDate = { day: 1, month: 1, year: 2000 };
 /** The element ID of the delete confirmation. */
 export const DELETE_DIALOG_ID = "record-delete-dialog";
 
+/** The element ID of the messages at the top of the form. */
+export const FORM_MESSAGES_ID = "record-form-messages";
+
 // INIT
 
 /** What a form page opens with. */
@@ -189,6 +196,12 @@ export interface InitConfig {
   readonly mode: FormMode;
   /** The latest revision the app has seen, sent with the first request. */
   readonly maybeAppRevision: Option.Option<SchemaRevision>;
+  /**
+   * The list the form was opened from, from the route; none when it was
+   * opened from no list (a link, the home page), which is the table's
+   * plain list.
+   */
+  readonly listQuery?: ListQuery;
 }
 
 /**
@@ -219,13 +232,15 @@ export const init = (config: InitConfig): UpdateReturn => ({
     formState: FormStateVerdict.Idle(),
     generation: 0,
     history: {
-      actorNames: {},
       entries: HistoryEntries.Idle(),
+      failedLabelTables: [],
       generation: 0,
       isOpen: false,
+      labels: {},
     },
     id: config.id,
     isShowingProblems: false,
+    listQuery: config.listQuery ?? PLAIN_LIST,
     maybeAppRevision: config.maybeAppRevision,
     maybeEditsFrom: Option.none(),
     maybeFormStateInFlight: Option.none(),
@@ -992,6 +1007,72 @@ const toggleHistory = (model: Model, isOpen: boolean): UpdateReturn => {
 const refreshHistory: Step = (model) =>
   AsyncData.isIdle(model.history.entries) ? { model } : requestHistory(model);
 
+/**
+ * The records a history names, by table: the users who made the changes
+ * (`core.user`) and the old and new targets of every changed reference,
+ * each table's IDs once, in the order they first appear.
+ *
+ * @param entries - The history's entries.
+ * @returns The IDs, by table.
+ */
+export const historyRecordsOf = (
+  entries: readonly HistoryEntry[]
+): Readonly<Record<string, readonly string[]>> => {
+  const named = entries.flatMap((entry) => [
+    { id: entry.actor, table: USER_TABLE },
+    ...Record.toEntries(entry.changes).flatMap(([name, change]) => {
+      const field = entry.fields[name];
+
+      if (field?.type.kind !== "reference" || !isJsonObject(change)) {
+        return [];
+      }
+
+      const { target } = field.type;
+
+      if (target === null) {
+        return [];
+      }
+
+      return [change.before, change.after].flatMap((value) =>
+        value !== undefined && isJsonString(value)
+          ? [{ id: value, table: target }]
+          : []
+      );
+    }),
+  ]);
+
+  const tables = [...new Set(named.map((record) => record.table))];
+
+  return Object.fromEntries(
+    tables.map((table) => [
+      table,
+      [
+        ...new Set(
+          named.flatMap((record) => (record.table === table ? [record.id] : []))
+        ),
+      ],
+    ])
+  );
+};
+
+/**
+ * The API name of a table's display field, when the form knows it: the
+ * users' `name`, or a reference target whose metadata the form loaded.
+ *
+ * @param model - The page.
+ * @param table - The table.
+ * @returns The API name, or none (the Command then reads the metadata).
+ */
+const knownDisplayFieldOf = (
+  model: Model,
+  table: string
+): Option.Option<MetaField> =>
+  pipe(
+    Record.get(model.targets, table),
+    Option.flatMap(AsyncData.getData),
+    Option.flatMap(displayFieldOf)
+  );
+
 const receiveHistory = (
   model: Model,
   generation: number,
@@ -1001,31 +1082,61 @@ const receiveHistory = (
     return { model };
   }
 
-  const unknownActors = [
-    ...new Set(entries.map((entry) => entry.actor)),
-  ].filter((actor) => !Record.has(model.history.actorNames, actor));
+  const unknown = Record.toEntries(historyRecordsOf(entries)).flatMap(
+    ([table, ids]) => {
+      const known = Option.getOrElse(
+        Record.get(model.history.labels, table),
+        () => ({})
+      );
+
+      const missing = ids.filter((id) => !Record.has(known, id));
+
+      return missing.length === 0 ? [] : [{ ids: missing, table }];
+    }
+  );
 
   const shown = modifyFields(model, {
     history: (history) =>
       modifyFields(history, {
         entries: () => HistoryEntries.Success({ data: entries }),
+        failedLabelTables: () => [],
       }),
   });
 
   return Option.match(metaOf(model), {
     onNone: () => ({ model: shown }),
-    onSome: (meta) =>
-      unknownActors.length === 0
-        ? { model: shown }
-        : {
-            commands: [
-              LoadActorNames({
-                revision: meta.revision,
-                userIds: unknownActors,
-              }),
-            ],
-            model: shown,
-          },
+    onSome: (meta) => ({
+      commands: unknown.map(({ ids, table }) =>
+        LoadHistoryLabels({
+          ids,
+          maybeDisplayField: knownDisplayFieldOf(model, table),
+          revision: meta.revision,
+          table,
+        })
+      ),
+      model: shown,
+    }),
+  });
+};
+
+/**
+ * The history with the display values of one table's records added to
+ * those it knows.
+ *
+ * @param history - The history panel.
+ * @param table - The records' table.
+ * @param labels - Their display values, by record ID.
+ * @returns The panel.
+ */
+const withHistoryLabels = (
+  history: Model["history"],
+  table: string,
+  labels: Readonly<Record<string, string>>
+): Model["history"] => {
+  const known = Option.getOrElse(Record.get(history.labels, table), () => ({}));
+
+  return modifyFields(history, {
+    labels: Record.set(table, Record.union(known, labels, keepExisting)),
   });
 };
 
@@ -1636,7 +1747,17 @@ const updatePicker = (
     ]);
   }
 
-  return message._tag === "Opened"
+  // NOTE: the toggle button opens the Combobox without an `Opened`
+  // Message, so its opening asks for the first targets too; otherwise a
+  // field that already holds a value showed an empty, closed list.
+  const isOpenedByButton =
+    message._tag === "PressedToggleButton" &&
+    !Option.exists(
+      Record.get(model.pickers, fieldId),
+      (picker) => picker.combobox.isOpen
+    );
+
+  return message._tag === "Opened" || isOpenedByButton
     ? Update.combine(folded.model, [() => folded, searchTargets(fieldId, "")])
     : folded;
 };
@@ -2565,7 +2686,11 @@ const receiveSave = (
   const navigation = wasCreating
     ? [
         NavigateAway({
-          url: recordRouter({ id: saved.id, table: model.table }),
+          url: recordRouter({
+            ...model.listQuery,
+            id: saved.id,
+            table: model.table,
+          }),
         }),
       ]
     : [];
@@ -2838,13 +2963,14 @@ const failDelete = (model: Model, error: WriteError): UpdateReturn => {
     : { model: refused };
 };
 
-const listUrlOf = (table: string): string =>
-  tableListRouter({
-    filter: Option.none(),
-    limit: Option.none(),
-    sort: Option.none(),
-    table,
-  });
+/**
+ * The address of the list the form was opened from.
+ *
+ * @param model - The page.
+ * @returns The list's address.
+ */
+export const listUrlOf = (model: Model): string =>
+  tableListRouter({ ...model.listQuery, table: model.table });
 
 // RETRY
 
@@ -3005,7 +3131,14 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSave: () => save(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ClickedShowRefusal: () => ({
+      commands: [FocusField({ elementId: FORM_MESSAGES_ID })],
+      model,
+    }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedFocusField: () => ({ model }),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    CompletedKeepFocusClearOfActionBar: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     CompletedNavigateAway: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
@@ -3019,8 +3152,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedDeleteRecord: ({ error }) => failDelete(model, error),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    FailedLoadActorNames: () => ({ model }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadClassMetadata: ({ error, resourceType, revision }) => ({
       model: isClassAnswerFor(model, resourceType, revision)
@@ -3039,6 +3170,16 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadHistory: ({ error, generation }) =>
       failHistory(model, generation, error),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    FailedLoadHistoryLabels: ({ table }) => ({
+      model: modifyFields(model, {
+        history: (history) =>
+          modifyFields(history, {
+            failedLabelTables: (tables) =>
+              tables.includes(table) ? tables : [...tables, table],
+          }),
+      }),
+    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadRecord: ({ error, generation, maybeRevision }) =>
       failRecord(model, generation, error, maybeRevision),
@@ -3067,26 +3208,19 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotPickerMessage: ({ fieldId, message: pickerMessage }) =>
       updatePicker(model, fieldId, pickerMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    PressedSaveShortcut: () => save(model),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SelectedChoice: ({ fieldId, key }) =>
       editField(model, fieldId, () => FieldInput.Choice({ key })),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededDeleteRecord: ({ maybeRevision }) =>
       sawRevision(
         {
-          commands: [NavigateAway({ url: listUrlOf(model.table) })],
+          commands: [NavigateAway({ url: listUrlOf(model) })],
           model: modifyFields(model, { deletion: () => Deletion.Idle() }),
         },
         maybeRevision
       ),
-    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
-    SucceededLoadActorNames: ({ names }) => ({
-      model: modifyFields(model, {
-        history: (history) =>
-          modifyFields(history, {
-            actorNames: (known) => Record.union(known, names, keepExisting),
-          }),
-      }),
-    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadClassMetadata: ({ revision, table }) =>
       isClassAnswerFor(model, table.resourceType, revision)
@@ -3109,6 +3243,12 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         ]),
         maybeRevision
       ),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    SucceededLoadHistoryLabels: ({ labels, table }) => ({
+      model: modifyFields(model, {
+        history: (history) => withHistoryLabels(history, table, labels),
+      }),
+    }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadRecord: ({ generation, maybeRevision, purpose, record }) =>
       receiveRecord(model, generation, record, purpose, maybeRevision),

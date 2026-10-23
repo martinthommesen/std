@@ -1,4 +1,4 @@
-import { Match, Schema, pipe } from "effect";
+import { Match, Option, Schema, pipe } from "effect";
 import { Route } from "foldkit";
 import { defineRouteUnion, literal, slash, string } from "foldkit/route";
 
@@ -13,14 +13,30 @@ import { defineRouteUnion, literal, slash, string } from "foldkit/route";
  *   them against the table's metadata; the route keeps them as text.
  * - `Record`: `/tables/:table/records/:id`, one record's form.
  * - `NewRecord`: `/tables/:table/new`, the form that creates a record.
+ *
+ * A form opened from a list keeps that list's `filter`, `sort` and
+ * `limit` in its own query, so "Back to the list", a delete and a create
+ * return to the list the user was working through; a form opened
+ * otherwise has none and goes back to the table's plain list.
  */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
 export const AppRoute = defineRouteUnion({
   DeadLetters: {},
   Home: {},
-  NewRecord: { table: Schema.String },
+  NewRecord: {
+    filter: Schema.Option(Schema.String),
+    limit: Schema.Option(Schema.String),
+    sort: Schema.Option(Schema.String),
+    table: Schema.String,
+  },
   NotFound: { path: Schema.String },
-  Record: { id: Schema.String, table: Schema.String },
+  Record: {
+    filter: Schema.Option(Schema.String),
+    id: Schema.String,
+    limit: Schema.Option(Schema.String),
+    sort: Schema.Option(Schema.String),
+    table: Schema.String,
+  },
   SignIn: {},
   TableList: {
     filter: Schema.Option(Schema.String),
@@ -35,6 +51,36 @@ export type AppRoute = typeof AppRoute.Type;
 
 /** A table's list page. */
 export type TableListRoute = typeof AppRoute.TableList.Type;
+
+/**
+ * A list's state as its address holds it: the filter, the sort and the
+ * page size, as text (`TableList`), and the list a form was opened from
+ * (`Record`, `NewRecord`).
+ */
+// oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
+export const ListQuery = Schema.Struct({
+  filter: Schema.Option(Schema.String),
+  limit: Schema.Option(Schema.String),
+  sort: Schema.Option(Schema.String),
+});
+
+/** A list's state as its address holds it. */
+export type ListQuery = typeof ListQuery.Type;
+
+/** The table's plain list: no filter, the default sort and page size. */
+export const PLAIN_LIST: ListQuery = {
+  filter: Option.none(),
+  limit: Option.none(),
+  sort: Option.none(),
+};
+
+const listQueryParameters = Route.query(
+  Schema.Struct({
+    filter: Schema.OptionFromOptional(Schema.String),
+    limit: Schema.OptionFromOptional(Schema.String),
+    sort: Schema.OptionFromOptional(Schema.String),
+  })
+);
 
 /** The pages a signed-in user can be on. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md); TypeScript keeps values and types apart
@@ -77,30 +123,32 @@ export const signInRouter = pipe(
 export const tableListRouter = pipe(
   literal("tables"),
   slash(string("table")),
-  Route.query(
-    Schema.Struct({
-      filter: Schema.OptionFromOptional(Schema.String),
-      limit: Schema.OptionFromOptional(Schema.String),
-      sort: Schema.OptionFromOptional(Schema.String),
-    })
-  ),
+  listQueryParameters,
   Route.mapTo(AppRoute.TableList)
 );
 
-/** `/tables/:table/records/:id`: one record. */
+/**
+ * `/tables/:table/records/:id?filter=&sort=&limit=`: one record, opened
+ * from the list the query names.
+ */
 export const recordRouter = pipe(
   literal("tables"),
   slash(string("table")),
   slash(literal("records")),
   slash(string("id")),
+  listQueryParameters,
   Route.mapTo(AppRoute.Record)
 );
 
-/** `/tables/:table/new`: the form that creates a record. */
+/**
+ * `/tables/:table/new?filter=&sort=&limit=`: the form that creates a
+ * record, opened from the list the query names.
+ */
 export const newRecordRouter = pipe(
   literal("tables"),
   slash(string("table")),
   slash(literal("new")),
+  listQueryParameters,
   Route.mapTo(AppRoute.NewRecord)
 );
 
@@ -127,9 +175,13 @@ export const signedInRouteToUrl = (route: SignedInRoute): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => homeRouter()),
     Match.tag("DeadLetters", () => deadLettersRouter()),
-    Match.tag("NewRecord", ({ table }) => newRecordRouter({ table })),
+    Match.tag("NewRecord", ({ filter, limit, sort, table }) =>
+      newRecordRouter({ filter, limit, sort, table })
+    ),
     Match.tag("NotFound", ({ path }) => path),
-    Match.tag("Record", ({ id, table }) => recordRouter({ id, table })),
+    Match.tag("Record", ({ filter, id, limit, sort, table }) =>
+      recordRouter({ filter, id, limit, sort, table })
+    ),
     Match.tag("TableList", ({ filter, limit, sort, table }) =>
       tableListRouter({ filter, limit, sort, table })
     ),
