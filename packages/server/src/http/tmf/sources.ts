@@ -311,7 +311,17 @@ const concreteRecords = Effect.fn("Tmf.concreteRecords")(
       }
     }
 
-    return records.map((record) => concrete.get(record.id) ?? record);
+    // A record the second read no longer sees (hidden or deleted between
+    // the two statements) is left out, never served from the first read.
+    return records.flatMap((record) => {
+      if (!byClass.has(record.classId)) {
+        return [record];
+      }
+
+      const own = concrete.get(record.id);
+
+      return own === undefined ? [] : [own];
+    });
   }
 );
 
@@ -504,37 +514,51 @@ ORDER BY c.record_version`;
 const LIVE = "r";
 
 /**
- * A record's history rows for some fields and the fields the caller may
- * still read: with a scope, read with the live record's visibility and
- * field predicates in the same statement, so one snapshot decides both (as
- * the history endpoint's read does); without one (a delivery, whose
- * payload decided readability at its version), the entries alone.
+ * A record's history rows for some fields, and which of the record's
+ * fields the caller may still read: with a scope, read with the live
+ * record's visibility and field predicates in the same statement, so one
+ * snapshot decides both (as the history endpoint's read does); without one
+ * (a delivery, whose payload decided readability at its version), the
+ * entries alone, every field as read.
  *
  * @param record - The record as read.
- * @param fieldIds - The history fields readable on it.
+ * @param historyFields - The history fields readable on it.
  * @param scope - The caller's scope, for a live read.
- * @returns The entry rows and the readable fields.
+ * @returns The entry rows and the fields still readable (null: all).
  */
 const historyRows = Effect.fnUntraced(function* historyRows(
   record: SourceRecord,
-  fieldIds: readonly string[],
+  historyFields: readonly string[],
   scope: ReadScope | undefined
 ) {
   if (scope === undefined) {
     return {
-      readable: new Set(fieldIds),
+      live: null,
       rows: yield* readRows(
-        entriesSql(textParameter(record.id, "uuid"), record.version, fieldIds)
+        entriesSql(
+          textParameter(record.id, "uuid"),
+          record.version,
+          historyFields
+        )
       ),
     };
   }
 
   const view = scope.view(record.classId, true);
 
+  // Every stored field the record was read with, and the history fields.
+  const fieldIds = [
+    ...new Set([
+      ...historyFields,
+      ...[...record.values.keys()].flatMap((key) =>
+        view.byId(key) === undefined ? [] : [key]
+      ),
+    ]),
+  ];
+
   const predicates = fieldIds.map((fieldId, index) => {
     const field = view.byId(fieldId);
     const holds = field === undefined ? sql`FALSE` : view.readable(LIVE, field);
-
     const column = identSql(`f${index}`);
 
     return sql`(${view.visibility(LIVE)} AND ${holds})::text AS ${column}`;
@@ -543,33 +567,63 @@ const historyRows = Effect.fnUntraced(function* historyRows(
   const rows = yield* readRows(
     sql`SELECT ${joinSql(predicates, ", ")}, "h".*
 FROM ${recordRelation(scope.snapshot, record.classId)} AS ${identSql(LIVE)}
-LEFT JOIN LATERAL (${entriesSql(identSql(LIVE, "id"), record.version, fieldIds)}) AS "h" ON true
+LEFT JOIN LATERAL (${entriesSql(identSql(LIVE, "id"), record.version, historyFields)}) AS "h" ON true
 WHERE ${identSql(LIVE, "id")} = ${textParameter(record.id, "uuid")}
 ORDER BY "h"."version_text"::bigint`
   );
 
   const [first] = rows;
 
+  // A record gone or hidden since: no field is readable any more.
+  const live: ReadonlySet<string> = new Set(
+    fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
+  );
+
   return {
-    readable: new Set(
-      fieldIds.filter((_, index) => first?.[`f${index}`] === "true")
-    ),
+    denied: new Set(fieldIds.filter((fieldId) => !live.has(fieldId))),
+    live,
     rows: rows.filter((row) => row.id !== null && row.id !== undefined),
   };
 });
 
 /**
+ * A record's values without the fields the live read denied, and without
+ * the paths through a denied reference: every attribute rendered from one
+ * is then dropped, as a source the caller cannot read.
+ *
+ * @param record - The record as read.
+ * @param denied - The fields denied on the live record.
+ * @returns The record.
+ */
+const withoutDenied = (
+  record: SourceRecord,
+  denied: ReadonlySet<string>
+): SourceRecord =>
+  denied.size === 0
+    ? record
+    : {
+        ...record,
+        values: new Map(
+          [...record.values].filter(
+            ([key]) => !denied.has(pathOf(key)?.reference ?? key)
+          )
+        ),
+      };
+
+/**
  * Adds to each record the change entries its selected history-backed
  * attributes render from (`ValueAttribute.history`; TMF621's
  * `statusChangeHistory`, Contracts 11.2): the entries up to the version
- * the record was read at, so the history matches the resource returned,
- * with only the history sources the caller can read (3.7). With a scope,
- * those are the sources it could read on the record as read and can still
- * read on the live record, decided in the history's own statement, so a
- * mask that a concurrent write turned on is never bypassed. Only records
- * where the caller can read every source of the attribute are read, since
- * the attribute renders only then. The attribute renders every entry, so
- * no page bounds them (TMF621 UG v5.0.1: an embedded history).
+ * the record was read at, so the history matches the resource returned.
+ * With a scope (an HTTP read), the history's own statement also decides,
+ * on the live record, which of the record's fields the caller may still
+ * read: the history shows only those history sources, and every other
+ * field it denies leaves the record's values, so no attribute is rendered
+ * from it (decision 0035: a write committed between the resource's read
+ * and the history's turned a mask on). Only records where the caller can
+ * read every source of the attribute are read, since the attribute
+ * renders only then. The attribute renders every entry, so no page bounds
+ * them (TMF621 UG v5.0.1: an embedded history).
  *
  * @param attributes - The resource's attributes.
  * @param records - The records as read.
@@ -598,7 +652,7 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
   const result: SourceRecord[] = [];
 
   for (const record of records) {
-    const fieldIds = [
+    const historyFields = [
       ...new Set(
         needing.flatMap((attribute) =>
           attribute.sources.every((source) => record.values.has(source))
@@ -608,13 +662,20 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
       ),
     ];
 
-    if (fieldIds.length === 0) {
+    if (historyFields.length === 0) {
       result.push(record);
     } else {
-      const { readable, rows } = yield* historyRows(record, fieldIds, scope);
+      const read = yield* historyRows(record, historyFields, scope);
+
+      const readable = new Set(
+        historyFields.filter(
+          (fieldId) => read.live === null || read.live.has(fieldId)
+        )
+      );
+
       const steps: HistoryStep[] = [];
 
-      for (const row of rows) {
+      for (const row of read.rows) {
         const entry = yield* entryOfRow(
           yield* decodeEntryRow(row).pipe(Effect.orDie),
           readable
@@ -623,7 +684,10 @@ export const withHistory = Effect.fn("Tmf.withHistory")(function* withHistory(
         steps.push(stepOf(entry));
       }
 
-      result.push({ ...record, history: steps });
+      const live =
+        read.live === null ? record : withoutDenied(record, read.denied);
+
+      result.push({ ...live, history: steps });
     }
   }
 

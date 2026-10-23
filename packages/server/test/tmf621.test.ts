@@ -767,17 +767,102 @@ describe("tmf621", () => {
         assert.strictEqual(raced.status, 200, raced.text);
         assert.notInclude(raced.text, "private resolution reason");
 
-        // The history matches the version returned: no resolve in it.
-        assert.deepStrictEqual(
+        // The history ends at the version returned: no resolve in it.
+        assert.notInclude(
           arrayOf(bodyOf(raced), "statusChangeHistory").map(
             (item) => item.status
           ),
-          [bodyOf(raced).status]
+          "resolved"
         );
 
         const fresh = yield* agent.get(path);
 
         assert.notInclude(fresh.text, "private resolution reason");
+      }).pipe(Effect.provide(historyRaceLayer), TestClock.withLive)
+  );
+
+  it.effect(
+    "a resolve committed mid-read that hides a field drops every attribute rendered from it, the status reason and a seeded status history",
+    () =>
+      Effect.gen(function* maskedMidRead() {
+        const cases = [
+          {
+            body: { statusChangeReason: "private seeded reason" },
+            field: TICKET_FIELD_IDS.statusReason,
+            secret: "private seeded reason",
+          },
+          {
+            body: {
+              statusChangeHistory: [
+                {
+                  "@type": "StatusChange",
+                  status: "acknowledged",
+                  statusChangeDate: "2026-01-01T00:00:00Z",
+                  statusChangeReason: "private seeded history",
+                },
+              ],
+            },
+            field: TICKET_FIELD_IDS.statusChangeHistory,
+            secret: "private seeded history",
+          },
+        ];
+
+        for (const { body, field, secret } of cases) {
+          // Agents may not read the field on a resolved ticket.
+          yield* change([
+            {
+              definition: {
+                actions: ["read"],
+                active: true,
+                classId: HELPDESK_CLASS_IDS.ticket,
+                condition: {
+                  left: { path: [TICKET_FIELD_IDS.status] },
+                  op: "eq",
+                  right: { value: "resolved" },
+                },
+                description: null,
+                effect: "deny",
+                id: randomUUID(),
+                kind: "accessRule",
+                name: null,
+                owner: { layer: "local" },
+                protected: false,
+                roleIds: [HELPDESK.agentRole],
+                target: { fields: [field], kind: "fields" },
+              },
+              op: "createAccessRule",
+            },
+          ]);
+
+          const admin = yield* tmf621As("admin");
+          const agent = yield* tmf621As("agent");
+          const ticket = yield* open(admin, body);
+          const path = `${TICKETS}/${textOf(ticket.id)}`;
+          const before = yield* agent.get(path);
+
+          assert.include(before.text, secret);
+
+          const run = Effect.runPromiseWith(yield* Effect.context());
+
+          historyInterleave.next = async () => {
+            const resolved = await run(
+              admin.patch(path, { status: "resolved" })
+            );
+
+            assert.strictEqual(resolved.status, 200, resolved.text);
+          };
+
+          const raced = yield* agent.get(path);
+          const fresh = yield* agent.get(path);
+
+          assert.isNull(historyInterleave.next, "the interleave ran");
+          assert.strictEqual(raced.status, 200, raced.text);
+          // The raced read is of the version before the resolve.
+          assert.strictEqual(etagOf(raced), etagOf(before));
+          assert.notStrictEqual(etagOf(fresh), etagOf(before));
+          assert.notInclude(raced.text, secret);
+          assert.notInclude(fresh.text, secret);
+        }
       }).pipe(Effect.provide(historyRaceLayer), TestClock.withLive)
   );
 
