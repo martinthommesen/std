@@ -1,6 +1,7 @@
 /** SQL paging and current-access noninterference through the history HTTP interface. */
 import { assert, describe, it, layer } from "@effect/vitest";
-import { Effect, Layer, Tracer } from "effect";
+import { rawSql, renderSql } from "@std/conditions/sql-fragment";
+import { Effect, Layer, Schema, Tracer } from "effect";
 import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
 
@@ -10,6 +11,9 @@ import type {
   TestRequestOptions,
   TestResponse,
 } from "../../testing/src/http-client.ts";
+import { historyStatement } from "../src/records/history-query.ts";
+import { encodeCursor } from "../src/records/read-cursor.ts";
+import { decodeRows } from "../src/sql/rows.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import {
   apiCallers,
@@ -253,6 +257,232 @@ describe("api-history-paging", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped, TestClock.withLive));
 
   layer(testLayer, { excludeTestServices: true })((dbTest) => {
+    dbTest.effect(
+      "deep offsets fetch full rows only for the selected keys",
+      () =>
+        Effect.gen(function* deepOffset() {
+          const sql = yield* SqlClient.SqlClient;
+          const { path, caller } = yield* createHistory(LARGE_HISTORY);
+          const recordId = path.slice(path.lastIndexOf("/") + 1);
+          // Leave two candidates at the tail: one response entry and its lookahead.
+          const offset = LARGE_HISTORY - 2;
+          const limit = 1;
+          yield* sql`VACUUM ANALYZE core.change`;
+
+          const statement = historyStatement(
+            {
+              recordId,
+              selection: {
+                after: null,
+                before: null,
+                count: false,
+                kind: "page",
+                limit,
+                offset,
+                range: null,
+                reversed: false,
+              },
+            },
+            () => rawSql("TRUE")
+          );
+
+          const { text, values } = renderSql(statement);
+
+          const rows = yield* decodeRows(
+            Schema.Struct({ "QUERY PLAN": Schema.String })
+          )(
+            yield* sql.unsafe(
+              `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF) ${text}`,
+              values
+            )
+          );
+
+          const lines = rows.map((row) => row["QUERY PLAN"]);
+          const plan = lines.join("\n");
+          yield* Effect.logInfo("history deep offset plan", {
+            limit,
+            offset,
+            plan,
+          });
+
+          const heapScans = lines.filter((line) =>
+            /(?:Index|Seq|Bitmap Heap) Scan .*on change /u.test(line)
+          );
+
+          assert.isNotEmpty(heapScans, plan);
+          assert.include(plan, "Index Only Scan using change_record_version");
+
+          for (const line of heapScans) {
+            const actual =
+              /rows=(?<rows>\d+(?:\.\d+)?) loops=(?<loops>\d+)/u.exec(line);
+
+            assert.isNotNull(actual, line);
+
+            const fetched =
+              Number(actual?.groups?.rows) * Number(actual?.groups?.loops);
+
+            assert.isAtMost(fetched, limit + 1, plan);
+          }
+
+          const response = yield* (yield* TestHttpClient).get(
+            `${path}/history?offset=${offset}&limit=${limit}`,
+            caller
+          );
+
+          assert.strictEqual(response.status, 200, response.text);
+          assert.deepStrictEqual(versions(response), [LARGE_HISTORY - 1]);
+        })
+    );
+
+    dbTest.effect(
+      "cursor links omit empty opposite pages at either end, including filtered ends",
+      () =>
+        Effect.gen(function* oppositeEnds() {
+          const http = yield* TestHttpClient;
+          const { path, caller } = yield* createHistory(9);
+
+          for (const filter of ["", "&revision.gte=3&revision.lte=7"]) {
+            const low = encodeCursor([], { id: "0", values: [] });
+            const high = encodeCursor([], { id: "1000", values: [] });
+
+            const first = yield* http.get(
+              `${path}/history?after=${low}&limit=3${filter}`,
+              caller
+            );
+
+            const last = yield* http.get(
+              `${path}/history?before=${high}&limit=3${filter}`,
+              caller
+            );
+
+            assert.strictEqual(first.status, 200, first.text);
+            assert.strictEqual(last.status, 200, last.text);
+            assert.deepStrictEqual(
+              versions(first),
+              filter === "" ? [1, 2, 3] : [3, 4, 5]
+            );
+            assert.deepStrictEqual(
+              versions(last),
+              filter === "" ? [7, 8, 9] : [5, 6, 7]
+            );
+            assert.isUndefined(linkOf(first, "prev"));
+            assert.isUndefined(linkOf(last, "next"));
+            const next = yield* http.get(linkOf(first, "next") ?? "", caller);
+
+            const previous = yield* http.get(
+              linkOf(last, "prev") ?? "",
+              caller
+            );
+
+            assert.isNotEmpty(versions(next));
+            assert.isNotEmpty(versions(previous));
+          }
+        })
+    );
+
+    dbTest.effect(
+      "both cursor bounds survive repeated forward and backward navigation with stable totals",
+      () =>
+        Effect.gen(function* boundedRange() {
+          const http = yield* TestHttpClient;
+          const { path, caller } = yield* createHistory(11);
+          const after = encodeCursor([], { id: "3", values: [] });
+          const before = encodeCursor([], { id: "10", values: [] });
+
+          const first = yield* http.get(
+            `${path}/history?after=${after}&before=${before}&limit=2`,
+            caller
+          );
+
+          const second = yield* http.get(linkOf(first, "next") ?? "", caller);
+          const third = yield* http.get(linkOf(second, "next") ?? "", caller);
+
+          const backSecond = yield* http.get(
+            linkOf(third, "prev") ?? "",
+            caller
+          );
+
+          const backFirst = yield* http.get(
+            linkOf(backSecond, "prev") ?? "",
+            caller
+          );
+
+          const forwardAgain = yield* http.get(
+            linkOf(backFirst, "next") ?? "",
+            caller
+          );
+
+          for (const page of [
+            first,
+            second,
+            third,
+            backSecond,
+            backFirst,
+            forwardAgain,
+          ]) {
+            assert.strictEqual(page.status, 200, page.text);
+            assert.strictEqual(page.headers.get("x-total-count"), "11");
+          }
+
+          assert.deepStrictEqual(versions(first), [4, 5]);
+          assert.deepStrictEqual(versions(second), [6, 7]);
+          assert.deepStrictEqual(versions(third), [8, 9]);
+          assert.deepStrictEqual(backSecond.json, second.json);
+          assert.deepStrictEqual(backFirst.json, first.json);
+          assert.deepStrictEqual(forwardAgain.json, second.json);
+          assert.isUndefined(linkOf(first, "prev"));
+          assert.isUndefined(linkOf(backFirst, "prev"));
+          assert.isUndefined(linkOf(third, "next"));
+
+          // Reusing two continuation cursors explicitly starts their narrower range.
+          const lower =
+            new URL(
+              `http://localhost${linkOf(first, "next") ?? ""}`
+            ).searchParams.get("after") ?? "";
+
+          const upper =
+            new URL(
+              `http://localhost${linkOf(third, "prev") ?? ""}`
+            ).searchParams.get("before") ?? "";
+
+          const narrowed = yield* http.get(
+            withQuery(`${path}/history`, [
+              ["after", lower],
+              ["before", upper],
+              ["limit", "1"],
+            ]),
+            caller
+          );
+
+          const narrowedNext = yield* http.get(
+            linkOf(narrowed, "next") ?? "",
+            caller
+          );
+
+          assert.deepStrictEqual(versions(narrowed), [6]);
+          assert.deepStrictEqual(versions(narrowedNext), [7]);
+          assert.isUndefined(linkOf(narrowed, "prev"));
+          assert.isUndefined(linkOf(narrowedNext, "next"));
+
+          const invalidRange = Buffer.from(
+            JSON.stringify({
+              i: "5",
+              k: [],
+              range: { after: "broken", before: "10" },
+              s: [],
+            }),
+            "utf-8"
+          ).toString("base64url");
+
+          const refused = yield* http.get(
+            `${path}/history?after=${invalidRange}`,
+            caller
+          );
+
+          assert.strictEqual(refused.status, 400);
+        })
+    );
+
     dbTest.effect(
       "cursor traversal equals the complete small history exactly once in version order",
       () =>

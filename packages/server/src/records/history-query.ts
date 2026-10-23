@@ -32,10 +32,8 @@ import {
 } from "@std/values/postgres-text";
 import { Effect, Schema } from "effect";
 
-import { Transactions } from "../sql/transactions.ts";
 import { ChangeCauseSchema, ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeCause, ChangeKind } from "./change-entry.ts";
-import { readRows } from "./sql-run.ts";
 import type { TextRow } from "./sql-run.ts";
 
 /** Filters on history entries; every given filter must match. */
@@ -58,7 +56,7 @@ export interface HistoryInput {
   /** The fields whose changes the caller may see. */
   readonly readable: ReadonlySet<DefinitionId>;
   readonly filter?: HistoryFilter;
-  readonly selection?: HistorySelection;
+  readonly selection: HistorySelection;
 }
 
 /** One entry as the caller may see it. */
@@ -180,18 +178,15 @@ export type HistorySelection =
       readonly after: string | null;
       readonly before: string | null;
       readonly count: boolean;
+      readonly reversed: boolean;
+      /** Original exclusive bounds, retained by cursor navigation in either direction. */
+      readonly range: {
+        readonly after: string;
+        readonly before: string;
+      } | null;
     }
   | { readonly kind: "entry"; readonly changeId: string }
   | { readonly kind: "latest" };
-
-/** Contracts 10.3's default page: no caller can accidentally read an unbounded history. */
-export const DEFAULT_HISTORY_SELECTION: HistorySelection = {
-  after: null,
-  before: null,
-  count: true,
-  kind: "page",
-  limit: 100,
-};
 
 const NULL_TEXT = rawSql("NULL::text");
 
@@ -288,16 +283,14 @@ export const historyStatement = (
   input: Omit<HistoryInput, "readable">,
   readable: (id: DefinitionId) => SqlFragment
 ): SqlFragment => {
-  const selection = input.selection ?? DEFAULT_HISTORY_SELECTION;
+  const { selection } = input;
   const record = sql`c.record_id = ${textParameter(input.recordId, "uuid")}`;
   const base = [record, ...filterSql(input.filter ?? {}, readable)];
   const window = [...base];
 
   const reversed =
     selection.kind === "latest" ||
-    (selection.kind === "page" &&
-      selection.before !== null &&
-      selection.after === null);
+    (selection.kind === "page" && selection.reversed);
 
   if (selection.kind === "entry") {
     window.push(sql`c.id = ${textParameter(selection.changeId, "uuid")}`);
@@ -313,6 +306,13 @@ export const historyStatement = (
     if (selection.before !== null) {
       window.push(
         sql`c.record_version < ${textParameter(selection.before, "int8")}`
+      );
+    }
+
+    if (selection.range !== null) {
+      window.push(
+        sql`c.record_version > ${textParameter(selection.range.after, "int8")}`,
+        sql`c.record_version < ${textParameter(selection.range.before, "int8")}`
       );
     }
   }
@@ -335,26 +335,56 @@ export const historyStatement = (
     const comparison = direction === "before" ? rawSql("<") : rawSql(">");
     const order = direction === "before" ? rawSql("DESC") : rawSql("ASC");
 
-    return sql`(SELECT c.id::text FROM core."change" c WHERE ${record} AND c.record_version ${comparison} (SELECT version_text::bigint FROM selected LIMIT 1) ORDER BY c.record_version ${order} LIMIT 1)`;
+    return sql`(SELECT c.id::text FROM core."change" c WHERE ${record} AND c.record_version ${comparison} (SELECT record_version FROM selected LIMIT 1) ORDER BY c.record_version ${order} LIMIT 1)`;
+  };
+
+  const opposite = () => {
+    if (
+      selection.kind !== "page" ||
+      (selection.after === null && selection.before === null)
+    ) {
+      return rawSql("'false'::text");
+    }
+
+    const clauses = [...base];
+    clauses.push(
+      reversed
+        ? sql`c.record_version > (SELECT max(record_version) FROM selected)`
+        : sql`c.record_version < (SELECT min(record_version) FROM selected)`
+    );
+
+    if (selection.range !== null) {
+      clauses.push(
+        sql`c.record_version > ${textParameter(selection.range.after, "int8")}`,
+        sql`c.record_version < ${textParameter(selection.range.before, "int8")}`
+      );
+    }
+
+    return sql`EXISTS(SELECT 1 FROM core."change" c WHERE ${joinSql(clauses, " AND ")})::text`;
   };
 
   const limit = selection.kind === "page" ? selection.limit + 1 : 1;
   const offset = selection.kind === "page" ? (selection.offset ?? 0) : 0;
 
   return sql`WITH selected AS MATERIALIZED (
+    SELECT c.record_id, c.record_version
+    FROM core."change" c WHERE ${joinSql(window, " AND ")}
+    ORDER BY c.record_version ${reversed ? rawSql("DESC") : rawSql("ASC")}
+    LIMIT ${textParameter(String(limit), "int8")} OFFSET ${textParameter(String(offset), "int8")}
+  ), entries AS MATERIALIZED (
     SELECT c.id::text AS id, c.operation_id::text AS operation_id,
       c.record_version::text AS version_text, c.kind::text AS kind,
       c.actor_id::text AS actor_id, c.occurred_at::text AS occurred_at,
       c.schema_revision::text AS schema_revision, c.cause::text AS cause, c.fields::text AS fields
-    FROM core."change" c WHERE ${joinSql(window, " AND ")}
-    ORDER BY c.record_version ${reversed ? rawSql("DESC") : rawSql("ASC")}
-    LIMIT ${textParameter(String(limit), "int8")} OFFSET ${textParameter(String(offset), "int8")}
+    FROM selected JOIN core."change" c
+      ON c.record_id = selected.record_id AND c.record_version = selected.record_version
   ), navigation AS MATERIALIZED (
     SELECT ${count} AS total, ${latest} AS latest_id,
-      ${neighbor("before")} AS predecessor_id, ${neighbor("after")} AS successor_id
+      ${neighbor("before")} AS predecessor_id, ${neighbor("after")} AS successor_id,
+      ${opposite()} AS opposite_exists
   )
-  SELECT selected.*, navigation.* FROM navigation LEFT JOIN selected ON true
-  ORDER BY selected.version_text::bigint ${reversed ? rawSql("DESC") : rawSql("ASC")}`;
+  SELECT entries.*, navigation.* FROM navigation LEFT JOIN entries ON true
+  ORDER BY entries.version_text::bigint ${reversed ? rawSql("DESC") : rawSql("ASC")}`;
 };
 
 /**
@@ -368,7 +398,7 @@ export const historyPageOfRows = Effect.fn("History.pageOfRows")(
   function* historyPageOfRows(
     rows: readonly TextRow[],
     readable: ReadonlySet<DefinitionId>,
-    selection: HistorySelection = DEFAULT_HISTORY_SELECTION
+    selection: HistorySelection
   ) {
     const candidates = rows.filter(
       (row) => row.id !== null && row.id !== undefined
@@ -395,19 +425,23 @@ export const historyPageOfRows = Effect.fn("History.pageOfRows")(
       );
     }
 
-    if (
-      selection.kind === "page" &&
-      selection.before !== null &&
-      selection.after === null
-    ) {
+    const reversed = selection.kind === "page" && selection.reversed;
+
+    if (reversed) {
       entries.reverse();
     }
 
     const [first] = rows;
 
+    const hasMore =
+      selection.kind === "page" && candidates.length > selection.limit;
+
+    const hasOpposite = first?.opposite_exists === "true";
+
     return {
       entries,
-      hasMore: selection.kind === "page" && candidates.length > selection.limit,
+      hasNext: reversed ? hasOpposite : hasMore,
+      hasPrevious: reversed ? hasMore : hasOpposite,
       latestId: first?.latest_id ?? undefined,
       predecessorId: first?.predecessor_id ?? undefined,
       successorId: first?.successor_id ?? undefined,
@@ -416,28 +450,5 @@ export const historyPageOfRows = Effect.fn("History.pageOfRows")(
           ? undefined
           : Number(first.total),
     };
-  }
-);
-
-/**
- * Read a bounded page of a record's change entries with an explicit readable set.
- * @param input - Record, readable fields, SQL filters and window.
- * @returns The selected entries in numeric version order, plus continuation and count metadata.
- */
-export const readHistory = Effect.fn("Records.readHistory")(
-  function* readHistory(input: HistoryInput) {
-    const { request } = yield* Transactions;
-
-    return yield* request(
-      Effect.gen(function* readEntries() {
-        const rows = yield* readRows(
-          historyStatement(input, (id) =>
-            input.readable.has(id) ? rawSql("TRUE") : rawSql("FALSE")
-          )
-        );
-
-        return yield* historyPageOfRows(rows, input.readable, input.selection);
-      })
-    );
   }
 );

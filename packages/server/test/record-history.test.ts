@@ -9,10 +9,10 @@ import { assert, describe, it, layer } from "@effect/vitest";
 import { USER_CLASS_ID } from "@std/definitions/well-known";
 import { Cause, Effect, Exit } from "effect";
 
-import { readHistory } from "../src/records/history-query.ts";
 import type {
   HistoryEntry,
   HistoryFilter,
+  HistorySelection,
 } from "../src/records/history-query.ts";
 import {
   createRecord,
@@ -22,6 +22,7 @@ import {
 import {
   asUser,
   recordsTestLayer,
+  readHistory,
   setUpAcme,
   USERS,
 } from "./records-support.ts";
@@ -34,6 +35,17 @@ const READABLE_WITHOUT_COST: ReadonlySet<string> = new Set([
   ACME.purchasedOn,
   ACME.serial,
 ]);
+
+// This fixture creates at most four versions; one lookahead belongs to SQL paging.
+const HISTORY_PAGE: HistorySelection = {
+  after: null,
+  before: null,
+  count: true,
+  kind: "page",
+  limit: 4,
+  range: null,
+  reversed: false,
+};
 
 const POSTGRES_TEXT = [
   "duplicate key",
@@ -70,9 +82,12 @@ const toVersions = (entries: readonly HistoryEntry[]): readonly number[] =>
   entries.map((entry) => entry.version);
 
 const versionsOf = (recordId: string, filter: HistoryFilter) =>
-  readHistory({ filter, readable: READABLE_WITHOUT_COST, recordId }).pipe(
-    Effect.map(({ entries }) => toVersions(entries))
-  );
+  readHistory({
+    filter,
+    readable: READABLE_WITHOUT_COST,
+    recordId,
+    selection: HISTORY_PAGE,
+  }).pipe(Effect.map(({ entries }) => toVersions(entries)));
 
 describe("record-history", () => {
   it("never returns a field outside the readable set", () => {
@@ -120,6 +135,7 @@ describe("record-history", () => {
           const { entries } = yield* readHistory({
             readable: READABLE_WITHOUT_COST,
             recordId: laptop.id,
+            selection: HISTORY_PAGE,
           });
 
           assert.deepStrictEqual(
@@ -144,6 +160,7 @@ describe("record-history", () => {
           const { entries: withCost } = yield* readHistory({
             readable: new Set([...READABLE_WITHOUT_COST, ACME.cost]),
             recordId: laptop.id,
+            selection: HISTORY_PAGE,
           });
 
           assert.deepStrictEqual(withCost[2]?.fields, {
@@ -197,6 +214,7 @@ describe("record-history", () => {
             "9ecc19c5-8401-4887-ac05-d5dbdd937297",
           ]),
           recordId: monitor.id,
+          selection: HISTORY_PAGE,
         });
 
         assert.deepStrictEqual(entries[1]?.fields, {

@@ -47,11 +47,7 @@ import { FALSE_SQL, TRUE_SQL } from "./access-sql.ts";
 import { ChangeKindSchema } from "./change-entry.ts";
 import type { ChangeKind } from "./change-entry.ts";
 import { entryDefinitions } from "./history-definitions.ts";
-import {
-  historyStatement,
-  historyPageOfRows,
-  DEFAULT_HISTORY_SELECTION,
-} from "./history-query.ts";
+import { historyStatement, historyPageOfRows } from "./history-query.ts";
 import type {
   HistoryEntry,
   HistoryFilter,
@@ -76,7 +72,7 @@ export interface HistoryRequest {
   readonly kind?: string;
   readonly field?: string;
   readonly attributes?: HistoryFilter["attributes"];
-  readonly selection?: HistorySelection;
+  readonly selection: HistorySelection;
 }
 
 const listOf = (text: string | undefined): readonly string[] | undefined =>
@@ -298,9 +294,7 @@ const liveHistory = Effect.fn("History.live")(function* liveHistory(
 
   const reversed =
     selection.kind === "latest" ||
-    (selection.kind === "page" &&
-      selection.before !== null &&
-      selection.after === null);
+    (selection.kind === "page" && selection.reversed);
 
   const rows = yield* readRows(
     sql`SELECT ${joinSql(columns, ", ")}
@@ -397,7 +391,7 @@ const deletedHistory = Effect.fn("History.deleted")(function* deletedHistory(
       {
         filter,
         recordId: id,
-        selection: request.selection ?? DEFAULT_HISTORY_SELECTION,
+        selection: request.selection,
       },
       (fieldId) => (readable.has(fieldId) ? TRUE_SQL : FALSE_SQL)
     )
@@ -462,7 +456,7 @@ export const recordHistory = Effect.fn("Records.history")(
       ? purgedFields(scope.snapshot, concrete)
       : [];
 
-    const selection = request.selection ?? DEFAULT_HISTORY_SELECTION;
+    const { selection } = request;
 
     if (selection.kind === "entry" && !parseUuid(selection.changeId).ok) {
       return yield* new NotFound();

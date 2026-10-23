@@ -1,3 +1,4 @@
+import { InvalidCursor } from "@std/api/errors/invalid-cursor";
 /**
  * History of `/api/v1/{table}/{id}` (Contracts 10.4; TMF630 v5.0.0 Part 1
  * §12 pp.206-238): a record's `ChangeEntry` resources (`@baseType`
@@ -24,14 +25,14 @@ import {
   isJsonString,
 } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import { Effect } from "effect";
+import { parseInt8Text } from "@std/values/postgres-text";
+import { Effect, Schema } from "effect";
 
 import { recordHistory } from "../../records/history-endpoint.ts";
 import type {
   HistoryAttributeFilter,
   HistorySelection,
 } from "../../records/history-query.ts";
-import { decodeCursor, encodeCursor } from "../../records/read-cursor.ts";
 import { currentReadScope } from "../../records/read-records.ts";
 import type { ReadScope } from "../../records/read-view.ts";
 import { checkRequestRevision } from "../stale-request.ts";
@@ -41,6 +42,7 @@ import type { RouteInput } from "./records.ts";
 import { queryOf } from "./request.ts";
 import { entityRef, recordHref } from "./resource.ts";
 
+// Page-size policy: Contracts 10.3 (TMF630 v5.0.0 Part 1 §4.5.1 pp.75–77).
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 const NON_NEGATIVE_INTEGER = /^\d+$/u;
@@ -251,6 +253,73 @@ const PAGING_PARAMETERS: ReadonlySet<string> = new Set([
   "count",
 ]);
 
+const HistoryVersion = Schema.String.check(
+  Schema.makeFilter((value) => parseInt8Text(value).ok)
+);
+
+// The range travels inside the opaque cursor, separately from the moving position.
+// Keeping it out of the filters also keeps X-Total-Count unchanged during navigation.
+const HistoryCursor = Schema.fromJsonString(
+  Schema.Struct({
+    i: HistoryVersion,
+    k: Schema.Tuple([]),
+    range: Schema.optionalKey(
+      Schema.Struct({ after: HistoryVersion, before: HistoryVersion })
+    ),
+    s: Schema.Tuple([]),
+  })
+);
+
+const decodeHistoryCursor = Effect.fn("Api.historyCursor")(
+  function* decodeHistoryCursor(text: string | null) {
+    if (text === null) {
+      return null;
+    }
+
+    return yield* Schema.decodeEffect(HistoryCursor)(
+      Buffer.from(text, "base64url").toString("utf-8")
+    ).pipe(Effect.mapError(() => new InvalidCursor()));
+  }
+);
+
+const encodeHistoryCursor = (
+  version: number,
+  range: Extract<HistorySelection, { kind: "page" }>["range"]
+): string => {
+  const cursor: typeof HistoryCursor.Type = {
+    i: String(version),
+    k: [],
+    s: [],
+  };
+
+  return Buffer.from(
+    Schema.encodeSync(HistoryCursor)(
+      range === null ? cursor : { ...cursor, range }
+    ),
+    "utf-8"
+  ).toString("base64url");
+};
+
+const historyCursors = Effect.fn("Api.historyCursors")(function* historyCursors(
+  afterText: string | null,
+  beforeText: string | null
+) {
+  const after = yield* decodeHistoryCursor(afterText);
+  const before = yield* decodeHistoryCursor(beforeText);
+  let range = after?.range ?? before?.range ?? null;
+
+  if (after !== null && before !== null) {
+    range = { after: after.i, before: before.i };
+  }
+
+  return {
+    after: after?.i ?? null,
+    before: before?.i ?? null,
+    range,
+    reversed: before !== null && after === null,
+  };
+});
+
 const historyPaging = Effect.fn("Api.historyWindow")(function* historyPaging(
   input: RouteInput
 ) {
@@ -284,22 +353,14 @@ const historyPaging = Effect.fn("Api.historyWindow")(function* historyPaging(
     return yield* invalid("count", "Expected true or false.");
   }
 
-  const after =
-    afterText === null ? null : (yield* decodeCursor([], afterText, "int8")).id;
-
-  const before =
-    beforeText === null
-      ? null
-      : (yield* decodeCursor([], beforeText, "int8")).id;
+  const cursors = yield* historyCursors(afterText, beforeText);
+  const fromCursor = afterText !== null || beforeText !== null;
 
   // History keeps its existing default offset links; explicit cursors/count opt into keyset links.
-  const cursorPage =
-    offsetText === null &&
-    (after !== null || before !== null || countText !== null);
+  const cursorPage = offsetText === null && (fromCursor || countText !== null);
 
   const selection = {
-    after,
-    before,
+    ...cursors,
     count: !cursorPage || countText !== "false",
     kind: "page",
     limit,
@@ -308,7 +369,7 @@ const historyPaging = Effect.fn("Api.historyWindow")(function* historyPaging(
 
   return {
     cursorPage,
-    fromCursor: after !== null || before !== null,
+    fromCursor,
     limit,
     offset,
     selection,
@@ -380,9 +441,8 @@ const parseHistoryQuery = Effect.fn("Api.historyQuery")(function* parseQuery(
     ...actions.map((values) => ({
       column: "kind" as const,
       comparison: "eq" as const,
-      values: values.map(
-        (action) =>
-          [...ACTIONS].find(([, name]) => name === action)?.[0] ?? action
+      values: [...ACTIONS].flatMap(([kind, name]) =>
+        values.includes(name) ? [kind] : []
       ),
     })),
     ...actors.map((values) => ({
@@ -600,36 +660,16 @@ export const historyIn = Effect.fn("Api.history")(function* historyIn(
     const [first] = page.entries;
     const last = page.entries.at(-1);
 
-    const reversed =
-      query.selection.kind === "page" &&
-      query.selection.before !== null &&
-      query.selection.after === null;
-
-    if (
-      query.fromCursor &&
-      first !== undefined &&
-      (!reversed || page.hasMore)
-    ) {
+    if (query.fromCursor && first !== undefined && page.hasPrevious) {
       links.push(
-        `${linkTo(input, { before: encodeCursor([], { id: String(first.version), values: [] }) })}; rel="prev"`
+        `${linkTo(input, { before: encodeHistoryCursor(first.version, query.selection.range) })}; rel="prev"`
       );
     }
 
-    if (last !== undefined && (reversed || page.hasMore)) {
-      const after = encodeCursor([], { id: String(last.version), values: [] });
-
-      const next =
-        query.selection.after !== null && query.selection.before !== null
-          ? linkTo(input, {
-              after,
-              before: encodeCursor([], {
-                id: query.selection.before,
-                values: [],
-              }),
-            })
-          : linkTo(input, { after });
-
-      links.push(`${next}; rel="next"`);
+    if (last !== undefined && page.hasNext) {
+      links.push(
+        `${linkTo(input, { after: encodeHistoryCursor(last.version, query.selection.range) })}; rel="next"`
+      );
     }
 
     if (latest !== undefined) {
