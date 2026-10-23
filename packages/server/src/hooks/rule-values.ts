@@ -14,7 +14,9 @@
  */
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import type { RuleAssignment } from "@std/definitions/rule-definition";
+import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { decodeIn, encodeOut } from "@std/values/codec";
+import { formatDateTime } from "@std/values/date-time";
 import type { FieldType } from "@std/values/field-type";
 import { isBigint, isNumber, isString } from "@std/values/field-value";
 import type { DecodedInput } from "@std/values/field-value";
@@ -126,7 +128,7 @@ const incremented = (type: FieldType, value: DecodedInput): DecodedInput => {
  * @param sources - The record, the `forEach` record, `me` and `now`.
  * @returns The input value.
  */
-export const ruleValue = (
+const ruleValue = (
   assignment: RuleAssignment,
   type: FieldType,
   sources: ValueSources
@@ -139,7 +141,7 @@ export const ruleValue = (
 
   if ("ctx" in value) {
     return value.ctx === "now"
-      ? converted(type, new Date(sources.now).toISOString())
+      ? converted(type, formatDateTime(sources.now))
       : converted(type, sources.me);
   }
 
@@ -159,6 +161,27 @@ export const ruleValue = (
   }
 
   return incremented(type, read(sources.record, value.increment));
+};
+
+/**
+ * Resolve an assigned field and its value under the current configuration.
+ * @param snapshot - The configuration owning the assigned field.
+ * @param assignment - The field and value form.
+ * @param sources - The records and evaluation context the value reads.
+ * @returns The field and converted value; an unknown field is a definition defect.
+ */
+export const assignedValue = (
+  snapshot: ConfigSnapshot,
+  assignment: RuleAssignment,
+  sources: ValueSources
+) => {
+  const field = snapshot.field(assignment.fieldId);
+
+  if (field === undefined) {
+    throw new RangeError(`Rule field ${assignment.fieldId} is unknown.`);
+  }
+
+  return { field, value: ruleValue(assignment, field.type, sources) };
 };
 
 /**

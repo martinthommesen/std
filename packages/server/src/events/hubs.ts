@@ -1,3 +1,4 @@
+import type { Caller } from "@std/access/rules";
 import { recordDecision, knowsTable, fieldDecision } from "@std/access/rules";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { NotAllowed } from "@std/api/errors/not-allowed";
@@ -35,7 +36,6 @@ import type { ActingUser } from "../auth/actor.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { parseListQuery } from "../http/api/query.ts";
-import { collectionNameOf } from "../http/api/table-names.ts";
 import { knownOn } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
 import { parseTmfListQuery } from "../http/tmf/query.ts";
@@ -45,6 +45,7 @@ import type { ReadScope } from "../records/read-view.ts";
 import { applyChangeSet } from "../schema/change-set.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { callbackUrl } from "./callback.ts";
+import { RESOURCE_TOPIC_PREFIX, resourceTopicName } from "./resource-topics.ts";
 import { TooManyRequests } from "./too-many-requests.ts";
 
 const REGISTRATION_WINDOW = "1 minute";
@@ -204,6 +205,30 @@ const refuseUnstoredFilters = Effect.fnUntraced(function* refuseUnstoredFilters(
   return yield* Effect.void;
 });
 
+const authorizeQueryFields = Effect.fn("Hubs.authorizeQueryFields")(
+  function* authorizeQueryFields(
+    snapshot: ConfigSnapshot,
+    actor: Caller,
+    classId: string,
+    queryFieldIds: readonly string[]
+  ) {
+    for (const fieldId of queryFieldIds) {
+      for (const child of snapshot.subtree(classId)) {
+        if (
+          fieldDecision(snapshot, actor, "read", child.id, fieldId).kind !==
+          "always"
+        ) {
+          return yield* new UnknownField({
+            field: snapshot.field(fieldId)?.name ?? "query",
+          });
+        }
+      }
+    }
+
+    return yield* Effect.void;
+  }
+);
+
 /** Parse event selection and resource filters using the shared TMF630 grammar. */
 export const prepareRegistration = Effect.fn("Hubs.prepare")(
   function* prepareRegistration(
@@ -303,18 +328,12 @@ export const prepareRegistration = Effect.fn("Hubs.prepare")(
       ? null
       : yield* conditionOf(parsed.condition.value.expr);
 
-    for (const fieldId of queryFieldIds) {
-      for (const child of scope.snapshot.subtree(target.classId)) {
-        if (
-          fieldDecision(scope.snapshot, scope.caller, "read", child.id, fieldId)
-            .kind !== "always"
-        ) {
-          return yield* new UnknownField({
-            field: scope.snapshot.field(fieldId)?.name ?? "query",
-          });
-        }
-      }
-    }
+    yield* authorizeQueryFields(
+      scope.snapshot,
+      scope.caller,
+      target.classId,
+      queryFieldIds
+    );
 
     return {
       attributeCondition,
@@ -431,18 +450,12 @@ export const registerHub = Effect.fn("Hubs.register")(function* registerHub(
           return yield* new NotFound();
         }
 
-        for (const fieldId of registration.queryFieldIds) {
-          for (const child of snapshot.subtree(registration.target.classId)) {
-            if (
-              fieldDecision(snapshot, current, "read", child.id, fieldId)
-                .kind !== "always"
-            ) {
-              return yield* new UnknownField({
-                field: snapshot.field(fieldId)?.name ?? "query",
-              });
-            }
-          }
-        }
+        yield* authorizeQueryFields(
+          snapshot,
+          current,
+          registration.target.classId,
+          registration.queryFieldIds
+        );
 
         const sql = yield* SqlClient.SqlClient;
 
@@ -561,25 +574,25 @@ export const genericTarget = (
 ): HubTarget | undefined => {
   const resource = new URLSearchParams(query ?? "").get("resource");
 
-  const table = snapshot.all("class").find((entry) => {
-    const savedThroughRecords =
-      entry.storage === "standard" ||
-      entry.id === PLATFORM_CLASS_IDS.dead_delivery_action;
+  if (resource === null) {
+    return undefined;
+  }
 
-    return (
-      entry.state === "active" &&
-      savedThroughRecords &&
-      knowsTable(snapshot, actor, entry.id) &&
-      collectionNameOf(snapshot, entry.id) === resource
+  const table = snapshot
+    .all("class")
+    .find(
+      (entry) =>
+        resourceTopicName(snapshot, entry.id) ===
+          `${RESOURCE_TOPIC_PREFIX}${resource}` &&
+        knowsTable(snapshot, actor, entry.id)
     );
-  });
 
   return table === undefined
     ? undefined
     : {
         api: "generic",
         classId: table.id,
-        resource: resource ?? "",
+        resource,
         topicId: null,
       };
 };

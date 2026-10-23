@@ -29,7 +29,7 @@
  *   possible types it names makes no delivery (`acceptsHubEvent`).
  */
 import type { HubConfiguration } from "@std/definitions/hub";
-import { eventEnvelope, eventTypesOf, TMF688_BASE_PATH } from "@std/tmf/events";
+import { eventEnvelope, eventTypesOf } from "@std/tmf/events";
 import type {
   Attribute,
   ChangeView,
@@ -51,10 +51,24 @@ import {
   typeAttributesFor,
 } from "../http/tmf/context.ts";
 import type { MappedResource } from "../http/tmf/context.ts";
-import { sourceValuesOf } from "../http/tmf/sources.ts";
+import { sourceKeysOf, sourceValuesOf } from "../http/tmf/sources.ts";
 import type { Delivery, RenderPrepared } from "../outbox/delivery-effects.ts";
 import type { ChangeKind } from "../records/change-entry.ts";
-import { eventIdOf } from "./event-id.ts";
+import { eventIdOf, topicEventHref } from "./event-id.ts";
+
+/** Hub fields used to authorize and render notifications. */
+export type EventHub = Pick<
+  HubConfiguration,
+  "api" | "resource" | "eventTypes" | "origin" | "queryFieldIds" | "topicId"
+>;
+
+/** A change's rendering input, independent of worker claims and subscription policy. */
+export type EventDelivery = Pick<
+  Delivery,
+  "changeId" | "recordId" | "recordVersion" | "payload" | "snapshot"
+> & {
+  readonly subscription: { readonly hub?: EventHub | null };
+};
 
 /**
  * The mapped resource a hub was registered on, when its API is a shipped
@@ -64,7 +78,7 @@ import { eventIdOf } from "./event-id.ts";
  * @returns The API and resource, or undefined.
  */
 export const mappedResourceOfHub = (
-  hub: HubConfiguration
+  hub: Pick<HubConfiguration, "api" | "resource">
 ): MappedResource | undefined => {
   const api = SHIPPED_TMF_APIS.find((candidate) => candidate.spec === hub.api);
   const resource = api?.resources.find((entry) => entry.name === hub.resource);
@@ -91,7 +105,7 @@ export const possibleEventTypes = (
 
 // The image before an update: the version's image with each change's
 // previous value.
-const beforeImageOf = (delivery: Delivery): JsonObject => {
+const beforeImageOf = (delivery: EventDelivery): JsonObject => {
   const before = new Map(Object.entries(delivery.payload.image));
 
   for (const [fieldId, change] of Object.entries(delivery.payload.changes)) {
@@ -104,7 +118,7 @@ const beforeImageOf = (delivery: Delivery): JsonObject => {
 };
 
 const changeViewOf = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   readable: ReadonlySet<string>,
   beforeReadable: ReadonlySet<string>
 ): ChangeView => {
@@ -126,13 +140,15 @@ const changeViewOf = (
   };
 };
 
-// The owner fields an attribute renders from (an array's: its owner
-// items'), a path source by its reference.
-const sourcesOf = (attribute: Attribute): readonly SourceKey[] =>
-  (attribute.kind === "parts"
-    ? (attribute.ownerItems ?? []).flatMap((owner) => owner.sources)
-    : [...attribute.sources, ...(attribute.optionalSources ?? [])]
-  ).map((source) => pathOf(source)?.reference ?? source);
+/**
+ * Owner fields an attribute renders from; path sources depend on their reference.
+ * @param attribute - A value or parts attribute.
+ * @returns The owner source keys.
+ */
+export const sourcesOf = (attribute: Attribute): readonly SourceKey[] =>
+  [...sourceKeysOf([attribute])].map(
+    (source) => pathOf(source)?.reference ?? source
+  );
 
 /**
  * The attributes a payload renders for one event type (Contracts 12.1).
@@ -201,8 +217,8 @@ const withClears = (
 
 /** What rendering a mapped hub's events needs from the generic path. */
 export interface MappedEventInput {
-  readonly delivery: Delivery;
-  readonly hub: HubConfiguration;
+  readonly delivery: EventDelivery;
+  readonly hub: EventHub;
   readonly mapped: MappedResource;
   /** The fields the identity can read on the version's image. */
   readonly readable: ReadonlySet<string>;
@@ -311,7 +327,7 @@ export const mappedHubEvents = (
         domain: hub.api,
         eventId,
         eventType: rule.type,
-        href: `${hub.origin}${TMF688_BASE_PATH}/topic/${encodeURIComponent(mapped.resource.name)}/event/${eventId}`,
+        href: topicEventHref(hub.origin, mapped.resource.name, eventId),
         occurredAt: formatDateTime(payload.occurredAt),
         operationId: payload.operationId,
         renderedAt: formatDateTime(input.renderedAt),

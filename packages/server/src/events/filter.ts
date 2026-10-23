@@ -4,7 +4,7 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { Schema } from "effect";
 
 import type { ChangeKind } from "../records/change-entry.ts";
-import { recordEventType } from "./event-id.ts";
+import { hubEventType } from "./event-id.ts";
 import { mappedResourceOfHub, possibleEventTypes } from "./tmf-events.ts";
 
 /** An event is outside the hub's type selection, independently of read rights. */
@@ -36,11 +36,9 @@ export const acceptsHubEvent = (
     return true;
   }
 
-  let eventType = recordEventType(kind);
-
   // A mapped TMF API names its own types; the exact ones a change gives
   // are decided when the delivery is rendered (decision 0035).
-  const mapped = hub.api === "TMF688" ? undefined : mappedResourceOfHub(hub);
+  const mapped = mappedResourceOfHub(hub);
 
   if (mapped !== undefined) {
     const wanted = new Set(hub.eventTypes);
@@ -51,31 +49,26 @@ export const acceptsHubEvent = (
     );
   }
 
-  if (hub.api === "TMF688") {
-    if (classId === EVENT_CLASS_IDS.topic) {
-      const types = {
-        create: "TopicCreateEvent",
-        delete: "TopicDeleteEvent",
-        update: "TopicChangeEvent",
-      };
+  let eventType = hubEventType(hub, classId, kind);
 
-      eventType = types[kind];
-    } else if (classId === EVENT_CLASS_IDS.event && kind === "create") {
-      eventType = "EventCreateEvent";
+  if (eventType === undefined) {
+    return false;
+  }
 
-      if (hub.topicId !== null) {
-        const field = snapshot.fieldByName(classId, "payload");
-        const payload = field === undefined ? undefined : values.get(field.id);
+  if (
+    hub.api === "TMF688" &&
+    classId === EVENT_CLASS_IDS.event &&
+    kind === "create" &&
+    hub.topicId !== null
+  ) {
+    const field = snapshot.fieldByName(classId, "payload");
+    const payload = field === undefined ? undefined : values.get(field.id);
 
-        if (!Schema.is(Schema.Struct({ eventType: Schema.String }))(payload)) {
-          return true;
-        }
-
-        ({ eventType } = payload);
-      }
-    } else {
-      return false;
+    if (!Schema.is(Schema.Struct({ eventType: Schema.String }))(payload)) {
+      return true;
     }
+
+    ({ eventType } = payload);
   }
 
   return hub.eventTypes.length === 0 || hub.eventTypes.includes(eventType);

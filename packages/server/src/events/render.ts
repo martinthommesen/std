@@ -5,24 +5,33 @@ import { dependenciesOf } from "@std/definitions/dependencies";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { apiAttributeNameOf } from "@std/definitions/names";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
-import { eventEnvelope, TMF688_BASE_PATH } from "@std/tmf/events";
+import { eventEnvelope } from "@std/tmf/events";
 import { formatDateTime } from "@std/values/date-time";
 import { isJsonString } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { Schema, Result } from "effect";
 
 import { collectionNameOf, typeNameOf } from "../http/api/table-names.ts";
-import type {
-  Delivery,
-  ExternalDeliveryEffect,
-} from "../outbox/delivery-effects.ts";
+import type { ExternalDeliveryEffect } from "../outbox/delivery-effects.ts";
 import {
   decodedImage,
   PayloadUnreadable,
   readabilityOf,
   versionImage,
 } from "../outbox/delivery-payload.ts";
-import { eventIdOf } from "./event-id.ts";
+import {
+  eventIdOf,
+  clientEvent,
+  CLIENT_EVENT_TYPE,
+  hubEventType,
+  topicHref,
+  topicEventHref,
+} from "./event-id.ts";
+import {
+  RESOURCE_TOPIC_PREFIX,
+  resourceTopicRecordId,
+} from "./resource-topics.ts";
+import type { EventDelivery } from "./tmf-events.ts";
 import { mappedHubEvents, mappedResourceOfHub } from "./tmf-events.ts";
 
 const topicClasses = new WeakMap<ConfigSnapshot, ReadonlyMap<string, string>>();
@@ -43,7 +52,7 @@ const resourceTopicClass = (
       snapshot
         .all("class")
         .map((definition) => [
-          eventIdOf(definition.id, "TMF688.ResourceTopic"),
+          resourceTopicRecordId(definition.id),
           definition.id,
         ])
     );
@@ -67,9 +76,17 @@ interface ResourceImage {
 interface Notification {
   readonly eventType: string;
   readonly resourceName: string;
-  readonly resource: ResourceImage;
+  readonly resource: JsonObject & {
+    readonly id: string;
+    readonly href: string;
+  };
   readonly direct: boolean;
 }
+
+const derivedGraphs = new WeakMap<
+  ConfigSnapshot,
+  Map<string, ReadonlyMap<string, ReadonlySet<string>>>
+>();
 
 /**
  * Source fields recorded by active rules that write a field.
@@ -81,6 +98,19 @@ export const derivedSources = (
   snapshot: ConfigSnapshot,
   classId: string
 ): ReadonlyMap<string, ReadonlySet<string>> => {
+  let graphs = derivedGraphs.get(snapshot);
+
+  if (graphs === undefined) {
+    graphs = new Map();
+    derivedGraphs.set(snapshot, graphs);
+  }
+
+  const known = graphs.get(classId);
+
+  if (known !== undefined) {
+    return known;
+  }
+
   const sources = new Map<string, Set<string>>();
   const lineage = new Set(snapshot.lineage(classId).map((entry) => entry.id));
 
@@ -107,6 +137,8 @@ export const derivedSources = (
       }
     }
   }
+
+  graphs.set(classId, sources);
 
   return sources;
 };
@@ -137,7 +169,7 @@ const sourcesReadable = (
 };
 
 const knownReadability = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   context: RenderContext,
   previous: boolean
 ) => {
@@ -165,7 +197,7 @@ const knownReadability = (
       );
 };
 
-const allowedFields = (delivery: Delivery, context: RenderContext) => {
+const allowedFields = (delivery: EventDelivery, context: RenderContext) => {
   const current = knownReadability(delivery, context, false);
 
   const before =
@@ -204,7 +236,7 @@ const representedValue = (
     : value;
 
 const resourceImage = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   fields: readonly string[],
   origin: string
 ): ResourceImage => {
@@ -241,14 +273,8 @@ const resourceImage = (
   return resource;
 };
 
-const EVENT_KIND = {
-  create: "Create",
-  delete: "Delete",
-  update: "AttributeValueChange",
-} as const;
-
 const clientNotification = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   readable: ReadonlySet<string>
 ): Notification | undefined => {
   const { snapshot, payload, subscription } = delivery;
@@ -282,7 +308,7 @@ const clientNotification = (
   }
 
   const input = decoded.success;
-  const { eventId, eventType, "@type": type } = input;
+  const { eventType } = input;
 
   if (hub.topicId !== null && hub.topicId !== topicId) {
     return undefined;
@@ -296,23 +322,18 @@ const clientNotification = (
     return undefined;
   }
 
-  const resource: ResourceImage = {
-    ...input,
-    "@type": type,
-    href: `${hub.origin}${TMF688_BASE_PATH}/topic/${encodeURIComponent(topicId)}/event/${encodeURIComponent(eventId)}`,
-    id: eventId,
-  };
+  const resource = clientEvent(input, topicId, hub.origin);
 
   return {
     direct: hub.topicId !== null,
-    eventType: "EventCreateEvent",
+    eventType: CLIENT_EVENT_TYPE,
     resource,
     resourceName: "event",
   };
 };
 
 const notificationOf = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   fields: readonly string[],
   readable: ReadonlySet<string>
 ): Notification | undefined => {
@@ -323,13 +344,18 @@ const notificationOf = (
   }
 
   const { payload, snapshot } = delivery;
-  const kind = EVENT_KIND[payload.kind];
+  const eventType = hubEventType(hub, payload.classId, payload.kind);
+
+  if (eventType === undefined) {
+    return undefined;
+  }
+
   const resource = resourceImage(delivery, fields, hub.origin);
 
   if (hub.api !== "TMF688") {
     return {
       direct: false,
-      eventType: `Record${kind}Event`,
+      eventType,
       resource,
       resourceName: collectionNameOf(snapshot, payload.classId),
     };
@@ -359,12 +385,11 @@ const notificationOf = (
 
   return {
     direct: false,
-    eventType:
-      payload.kind === "update" ? "TopicChangeEvent" : `Topic${kind}Event`,
+    eventType,
     resource: {
       ...resource,
       "@type": "Topic",
-      href: `${hub.origin}${TMF688_BASE_PATH}/topic/${encodeURIComponent(publicId)}`,
+      href: topicHref(hub.origin, publicId),
       id: publicId,
     },
     resourceName: "topic",
@@ -379,7 +404,7 @@ const notificationOf = (
  * @returns Authorized notifications, or none for notAuthorized.
  */
 export const renderHubEvents = (
-  delivery: Delivery,
+  delivery: EventDelivery,
   context: RenderContext,
   options: { readonly identityOnly?: boolean } = {}
 ): readonly JsonObject[] => {
@@ -414,7 +439,7 @@ export const renderHubEvents = (
   // A hub on a mapped TMF API gets that API's own events (decision 0035);
   // an owner's aggregate save that changed none of its fields can still
   // change its arrays.
-  const mapped = hub.api === "TMF688" ? undefined : mappedResourceOfHub(hub);
+  const mapped = mappedResourceOfHub(hub);
 
   if (mapped !== undefined) {
     return mappedHubEvents({
@@ -460,14 +485,14 @@ export const renderHubEvents = (
   const topicId =
     hub.api === "TMF688"
       ? notification.resourceName
-      : `record:${notification.resourceName}`;
+      : `${RESOURCE_TOPIC_PREFIX}${notification.resourceName}`;
 
   return [
     eventEnvelope({
       domain: hub.api,
       eventId,
       eventType: notification.eventType,
-      href: `${hub.origin}${TMF688_BASE_PATH}/topic/${encodeURIComponent(topicId)}/event/${eventId}`,
+      href: topicEventHref(hub.origin, topicId, eventId),
       occurredAt: formatDateTime(delivery.payload.occurredAt),
       operationId: delivery.payload.operationId,
       renderedAt: formatDateTime(context.now),

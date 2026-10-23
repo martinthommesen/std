@@ -30,7 +30,11 @@ import { RuleRefused } from "@std/api/errors/rule-refused";
 import type { RecordImage } from "@std/conditions/evaluate-core";
 import type { RecordRuleDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
-import type { RuleKind, RuleOperation } from "@std/definitions/rule-definition";
+import type {
+  RuleAction,
+  RuleKind,
+  RuleOperation,
+} from "@std/definitions/rule-definition";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import type { DecodedInput } from "@std/values/field-value";
 import { Effect } from "effect";
@@ -40,7 +44,7 @@ import type { StoredRecord } from "../records/stored-record.ts";
 import { imageOf, ruleConditionHolds } from "./rule-condition.ts";
 import type { RuleContext } from "./rule-condition.ts";
 import { selectRules } from "./rule-selection.ts";
-import { ruleValue } from "./rule-values.ts";
+import { assignedValue } from "./rule-values.ts";
 
 /** What `derive` rules run on (4.9's settling uses it directly). */
 export interface DeriveInput {
@@ -100,15 +104,8 @@ const setValues = (
       for (const assignment of action.values.filter(
         (entry) => !(kept && supplied.has(entry.fieldId))
       )) {
-        const field = snapshot.field(assignment.fieldId);
-
-        if (field === undefined) {
-          throw new RangeError(`Rule field ${assignment.fieldId} is unknown.`);
-        }
-
-        const value = ruleValue(assignment, field.type, {
-          me: context.me,
-          now: context.now,
+        const { value } = assignedValue(snapshot, assignment, {
+          ...context,
           record: { id: null, image },
           source: null,
         });
@@ -138,26 +135,18 @@ export const applyDeriveRules = Effect.fn("Rules.applyDerive")(
       phase: "before",
     });
 
-    // The working image replaces the record's own settling image: a later
-    // rule that follows a reference back to the record sees what earlier
-    // rules set.
-    const live =
-      input.live === undefined
-        ? undefined
-        : new Map<string, RecordImage>([
-            ...input.live.images,
-            ...(input.live.recordId === null
-              ? []
-              : [[input.live.recordId, image] as const]),
-          ]);
-
     for (const rule of rules) {
       const holds = yield* ruleConditionHolds(
         input.snapshot,
         rule,
-        live === undefined
+        input.live === undefined
           ? { previous: input.previous, record: image }
-          : { live, previous: input.previous, record: image },
+          : {
+              live: input.live.images,
+              liveRecordId: input.live.recordId,
+              previous: input.previous,
+              record: image,
+            },
         input.context
       );
 
@@ -172,6 +161,18 @@ export const applyDeriveRules = Effect.fn("Rules.applyDerive")(
   }
 );
 
+/**
+ * The API error specified by a rule's refusal action.
+ * @param action - The refusal's code and message.
+ * @returns The corresponding typed error.
+ */
+export const refusalError = (
+  action: Extract<RuleAction, { readonly type: "refuse" }>
+) =>
+  action.code === "InvalidTransition"
+    ? new InvalidTransition({ message: action.message })
+    : new RuleRefused({ message: action.message });
+
 const refusalOf = (rule: RecordRuleDefinition) => {
   const [refusal] = rule.actions.flatMap((action) =>
     action.type === "refuse" ? [action] : []
@@ -181,9 +182,7 @@ const refusalOf = (rule: RecordRuleDefinition) => {
     throw new RangeError(`Rule ${rule.id} has no refuse action.`);
   }
 
-  return refusal.code === "InvalidTransition"
-    ? new InvalidTransition({ message: refusal.message })
-    : new RuleRefused({ message: refusal.message });
+  return refusalError(refusal);
 };
 
 /**

@@ -1,5 +1,3 @@
-import type { SubscriptionDefinition } from "@std/definitions/definition";
-import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import { DefinitionIdSchema } from "@std/definitions/ids";
 import type { JsonObject } from "@std/values/json-value";
 import { Clock, Effect, Schema } from "effect";
@@ -19,6 +17,7 @@ import { decodeRows } from "../sql/rows.ts";
 import { invalidAfter } from "./event-cursor.ts";
 import type { EventPosition } from "./event-cursor.ts";
 import { renderHubEvents } from "./render.ts";
+import type { EventHub } from "./tmf-events.ts";
 import type { EventTopic } from "./tmf688-resources.ts";
 
 /** One bounded raw candidate batch with authorized renderings and its seek key. */
@@ -49,6 +48,29 @@ const rowsOf = decodeRows(
     record_id: Schema.String,
     version: Schema.FiniteFromString,
   })
+);
+
+const resourceEventRows = Effect.fn("Tmf688.resourceEventRows")(
+  function* resourceEventRows(
+    eventId: string,
+    classIds: readonly string[],
+    lookupPending: boolean
+  ) {
+    const sql = yield* SqlClient.SqlClient;
+
+    const rows =
+      yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+        Effect.flatMap(rowsOf)
+      );
+
+    if (rows.length > 0 || !lookupPending) {
+      return rows;
+    }
+
+    return yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.change c WHERE core.record_event_id(c.id, c.kind) = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
+      Effect.flatMap(rowsOf)
+    );
+  }
 );
 
 /** Render resource history under precisely the same policy as callback delivery. */
@@ -83,49 +105,22 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
     let rows =
       eventId === undefined
         ? yield* readPage.pipe(Effect.flatMap(rowsOf))
-        : yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
-            Effect.flatMap(rowsOf)
+        : yield* resourceEventRows(
+            eventId,
+            classIds,
+            options.lookupPending === true
           );
-
-    if (
-      eventId !== undefined &&
-      rows.length === 0 &&
-      options.lookupPending === true
-    ) {
-      rows =
-        yield* sql`SELECT c.record_id::text AS record_id, c.record_version::text AS version, c.id::text AS id, c.occurred_at::text AS occurred_at FROM core.change c WHERE core.record_event_id(c.id, c.kind) = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
-          Effect.flatMap(rowsOf)
-        );
-    }
 
     const complete = rows.length <= limit;
     rows = rows.slice(0, limit);
 
-    const subscription: SubscriptionDefinition = {
-      classId: topic.target.classId,
-      condition: null,
-      deadLetter: "block",
-      enabled: true,
-      hub: {
-        api: "generic",
-        callback: "https://unused.invalid/",
-        eventTypes: [],
-        origin,
-        query: null,
-        queryFieldIds: [],
-        resource: topic.target.resource,
-        topicId: topic.resource.id,
-      },
-      id: EVENT_CLASS_IDS.resource,
-      identityId: actor.userId,
-      kind: "subscription",
-      maxAttempts: 10,
-      name: "resource_history",
-      operations: ["create", "update", "delete"],
-      owner: { layer: "local" },
-      protected: false,
-      state: "active",
-      version: 1,
+    const hub: EventHub = {
+      api: "generic",
+      eventTypes: [],
+      origin,
+      queryFieldIds: [],
+      resource: topic.target.resource,
+      topicId: topic.resource.id,
     };
 
     const candidates = [];
@@ -177,15 +172,12 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
         rendered.push(
           ...renderHubEvents(
             {
-              attempts: 0,
-              cause: { kind: "api" },
               changeId: entry.changeId,
-              deliveryId: "history",
               payload,
               recordId: row.record_id,
               recordVersion: row.version,
               snapshot,
-              subscription,
+              subscription: { hub },
             },
             { actor, entries, now, origins, prepared: null, timeZone },
             { identityOnly: index >= (options.fullPayloads ?? limit) }
@@ -213,11 +205,6 @@ export const listResourceEvents = Effect.fn("Tmf688.listResourceEvents")(
   }
 );
 
-const EventPositionRow = Schema.Struct({
-  id: Schema.String,
-  occurredAt: Schema.String,
-});
-
 /** Resolve the public event-ID extension to a raw keyset position. */
 export const resourceEventPosition = Effect.fn("Tmf688.resourceEventPosition")(
   function* resourceEventPosition(
@@ -231,19 +218,7 @@ export const resourceEventPosition = Effect.fn("Tmf688.resourceEventPosition")(
 
     const snapshot = yield* (yield* Catalog).current;
     const classIds = snapshot.subtreeIds(topic.target.classId);
-    const sql = yield* SqlClient.SqlClient;
-
-    let rows =
-      yield* sql`SELECT c.id::text AS id, c.occurred_at::text AS "occurredAt" FROM core.resource_event e JOIN core.change c ON c.id = e.change_id WHERE e.event_id = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
-        Effect.flatMap(decodeRows(EventPositionRow))
-      );
-
-    if (rows.length === 0 && lookupPending) {
-      rows =
-        yield* sql`SELECT c.id::text AS id, c.occurred_at::text AS "occurredAt" FROM core.change c WHERE core.record_event_id(c.id, c.kind) = ${eventId}::uuid AND c.record_class_id = ANY(${classIds}::uuid[]) LIMIT 1`.pipe(
-          Effect.flatMap(decodeRows(EventPositionRow))
-        );
-    }
+    const rows = yield* resourceEventRows(eventId, classIds, lookupPending);
 
     const [row] = rows;
 
@@ -251,6 +226,6 @@ export const resourceEventPosition = Effect.fn("Tmf688.resourceEventPosition")(
       return yield* invalidAfter();
     }
 
-    return row;
+    return { id: row.id, occurredAt: row.occurred_at };
   }
 );

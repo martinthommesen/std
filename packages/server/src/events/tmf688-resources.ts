@@ -2,12 +2,11 @@ import { knowsTable } from "@std/access/rules";
 import { InvalidRequest } from "@std/api/errors/invalid-request";
 import { MethodNotAllowed } from "@std/api/errors/method-not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
-import { EventCreate, TopicCreate, TMF688_PREFIX } from "@std/api/tmf688";
+import { EventCreate, TopicCreate } from "@std/api/tmf688";
 import {
   EVENT_CLASS_IDS,
   EVENT_PAYLOAD_FIELD_ID,
 } from "@std/definitions/event-ids";
-import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import {
   isJsonObject,
@@ -20,7 +19,7 @@ import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
-import { collectionNameOf } from "../http/api/table-names.ts";
+import { tableOfCollection } from "../http/api/table-names.ts";
 import { encodeCursor } from "../records/read-cursor.ts";
 import { systemField } from "../records/read-field.ts";
 import { getRecord, listRecords } from "../records/read-records.ts";
@@ -29,8 +28,10 @@ import { createRecord, deleteRecord } from "../records/save-pipeline.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { invalidAfter } from "./event-cursor.ts";
 import type { EventPosition } from "./event-cursor.ts";
+import { clientEvent, topicHref } from "./event-id.ts";
 import type { HubTarget } from "./hubs.ts";
 import type { EventBatch } from "./resource-events.ts";
+import { RESOURCE_TOPIC_PREFIX, resourceTopicName } from "./resource-topics.ts";
 
 const objectOf = (value: JsonValue | undefined): JsonObject =>
   value !== undefined && isJsonObject(value) ? value : {};
@@ -64,19 +65,10 @@ const resourceTopics = Effect.gen(function* resourceTopics() {
   const snapshot = yield* (yield* Catalog).current;
 
   return snapshot.all("class").flatMap((entry) => {
-    const savedThroughRecords =
-      entry.storage === "standard" ||
-      entry.id === PLATFORM_CLASS_IDS.dead_delivery_action;
+    const name = resourceTopicName(snapshot, entry.id);
 
-    return entry.state === "active" &&
-      savedThroughRecords &&
-      knowsTable(snapshot, actor, entry.id)
-      ? [
-          {
-            classId: entry.id,
-            id: `record:${collectionNameOf(snapshot, entry.id)}`,
-          },
-        ]
+    return name !== null && knowsTable(snapshot, actor, entry.id)
+      ? [{ classId: entry.id, id: name }]
       : [];
   });
 });
@@ -88,7 +80,7 @@ const topicRepresentation = (
 ): TopicResource => {
   const resource: TopicResource = {
     "@type": "Topic",
-    href: `${origin}${TMF688_PREFIX}/topic/${encodeURIComponent(id)}`,
+    href: topicHref(origin, id),
     id,
     name: values.name ?? "",
   };
@@ -109,19 +101,31 @@ export const getTopic = Effect.fn("Tmf688.getTopic")(function* getTopic(
   id: string,
   origin: string
 ) {
-  const resource = (yield* resourceTopics).find((entry) => entry.id === id);
+  if (id.startsWith(RESOURCE_TOPIC_PREFIX)) {
+    const snapshot = yield* (yield* Catalog).current;
+    const actor = yield* Actor;
+    const resource = id.slice(RESOURCE_TOPIC_PREFIX.length);
+    const table = tableOfCollection(snapshot, resource);
 
-  if (resource !== undefined) {
-    return {
-      resource: topicRepresentation(origin, id, { name: id }),
-      target: {
-        api: "generic",
-        classId: resource.classId,
-        resource: id.slice("record:".length),
-        topicId: id,
-      },
-      version: null,
-    } satisfies EventTopic;
+    const definition =
+      table === undefined ? undefined : snapshot.classByName(table);
+
+    if (
+      definition !== undefined &&
+      resourceTopicName(snapshot, definition.id) === id &&
+      knowsTable(snapshot, actor, definition.id)
+    ) {
+      return {
+        resource: topicRepresentation(origin, id, { name: id }),
+        target: {
+          api: "generic",
+          classId: definition.id,
+          resource,
+          topicId: id,
+        },
+        version: null,
+      } satisfies EventTopic;
+    }
   }
 
   const read = yield* getRecord({ id, table: "core.event_topic" });
@@ -205,7 +209,7 @@ export const createTopic = Effect.fn("Tmf688.createTopic")(
       )
     );
 
-    if (input.name.startsWith("record:")) {
+    if (input.name.startsWith(RESOURCE_TOPIC_PREFIX)) {
       return yield* new InvalidRequest({
         message: "The record: prefix is reserved for resource topics.",
         parameter: "name",
@@ -277,22 +281,6 @@ const receivedEvent = Effect.fn("Tmf688.receivedEvent")(function* receivedEvent(
   }
 
   return { ...input, eventTime } satisfies JsonObject;
-});
-
-/** The client supplied event's stable ID is preserved across reads and callbacks.
- * @param payload - The client-supplied event content.
- * @param topicId - The containing topic ID.
- * @param origin - The public server origin.
- * @returns The addressable client event.
- */
-export const clientEvent = (
-  payload: JsonObject,
-  topicId: string,
-  origin: string
-): JsonObject & { readonly id: string; readonly href: string } => ({
-  ...payload,
-  href: `${origin}${TMF688_PREFIX}/topic/${encodeURIComponent(topicId)}/event/${encodeURIComponent(textOf(payload.eventId))}`,
-  id: textOf(payload.eventId),
 });
 
 /** Store a client event, including history and deliveries, in the caller's transaction. */
@@ -402,9 +390,8 @@ const clientRecordId = Effect.fn("Tmf688.clientRecordId")(
   }
 );
 
-/** Retrieve by the public event ID, under the same authorization as a list. */
-export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
-  function* findClientEvent(
+const authorizedClientEvent = Effect.fn("Tmf688.authorizedClientEvent")(
+  function* authorizedClientEvent(
     topicId: string,
     eventId: string,
     origin: string,
@@ -423,7 +410,26 @@ export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
       return yield* new NotFound();
     }
 
-    return clientEvent(payload, topicId, origin);
+    return { id, resource: clientEvent(payload, topicId, origin) };
+  }
+);
+
+/** Retrieve by the public event ID, under the same authorization as a list. */
+export const findClientEvent = Effect.fn("Tmf688.findClientEvent")(
+  function* findClientEvent(
+    topicId: string,
+    eventId: string,
+    origin: string,
+    lookupPending: boolean
+  ) {
+    const authorized = yield* authorizedClientEvent(
+      topicId,
+      eventId,
+      origin,
+      lookupPending
+    );
+
+    return authorized.resource;
   }
 );
 
@@ -435,10 +441,12 @@ export const clientEventPosition = Effect.fn("Tmf688.clientEventPosition")(
     origin: string,
     lookupPending: boolean
   ) {
-    yield* findClientEvent(topicId, eventId, origin, lookupPending).pipe(
-      Effect.catchTag("NotFound", () => Effect.fail(invalidAfter()))
-    );
-    const id = yield* clientRecordId(topicId, eventId, lookupPending);
+    const { id } = yield* authorizedClientEvent(
+      topicId,
+      eventId,
+      origin,
+      lookupPending
+    ).pipe(Effect.catchTag("NotFound", () => Effect.fail(invalidAfter())));
 
     return { id };
   }
