@@ -301,6 +301,31 @@ const persist = Effect.fn("Aggregates.persist")(function* persist<E, R>(
 });
 
 /**
+ * Poisons the running transaction when an effect ends in any failure: a
+ * typed error, a defect or an interruption (a timeout included). The
+ * finalizer itself runs uninterruptibly (`Effect.onError`), so a caller
+ * that catches the failure, or interrupts the effect half way, can never
+ * commit the writes it made.
+ *
+ * @param reason - Why the transaction is refused, for the log.
+ * @returns The effect, poisoning on any failure.
+ */
+export const poisonOnAnyFailure =
+  (reason: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    effect.pipe(
+      Effect.onError(() =>
+        Effect.serviceOption(CurrentTransaction).pipe(
+          Effect.flatMap((transaction) =>
+            Option.isSome(transaction)
+              ? transaction.value.refuseCommit(reason)
+              : Effect.void
+          )
+        )
+      )
+    );
+
+/**
  * Finalizes the touched aggregates of the running transaction, cascades
  * included (Contracts 4.9). Any failure poisons the transaction, so it
  * never commits, whoever catches the error.
@@ -349,16 +374,6 @@ export const finalizeAggregates = <E, R>(ops: PersistOps<E, R>) =>
       yield* persist(set, ops);
     }
   }).pipe(
-    Effect.tapError(() =>
-      Effect.serviceOption(CurrentTransaction).pipe(
-        Effect.flatMap((transaction) =>
-          Option.isSome(transaction)
-            ? transaction.value.refuseCommit(
-                "finalizing the transaction's aggregates failed"
-              )
-            : Effect.void
-        )
-      )
-    ),
+    poisonOnAnyFailure("finalizing the transaction's aggregates failed"),
     Effect.withSpan("Aggregates.finalize")
   );

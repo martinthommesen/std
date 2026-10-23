@@ -14,6 +14,7 @@ import type { JsonObject } from "@std/values/json-value";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 
 import { runAfterCommitRule } from "../src/hooks/after-commit-rules.ts";
+import { AggregateScope } from "../src/records/aggregate-state.ts";
 import { ChangeCauseSchema } from "../src/records/change-entry.ts";
 import type { ChangeCause } from "../src/records/change-entry.ts";
 import { SaveHooks } from "../src/records/save-hooks.ts";
@@ -21,6 +22,7 @@ import type { SaveHooksApi } from "../src/records/save-hooks.ts";
 import {
   aggregateOperation,
   deleteRecord,
+  finalizeTouchedAggregates,
 } from "../src/records/save-pipeline.ts";
 import { StatementLog } from "../src/sql/statement-log.ts";
 import { Transactions } from "../src/sql/transactions.ts";
@@ -46,6 +48,7 @@ import {
 import type { Entry } from "./aggregates-support.ts";
 import { USERS } from "./records-support.ts";
 import { addRecordRule, change, freshId, values } from "./schema-support.ts";
+import { refusalOf } from "./support.ts";
 
 const WRITE_STATEMENT = /^\s*(?:insert|update|delete)\b/iu;
 
@@ -147,6 +150,103 @@ const watchingSettles = (
         windows.push([start, (yield* log.texts).length]);
       }),
   });
+
+/**
+ * An `afterCommit` rule on tickets named with a prefix: when one is
+ * closed, its effect adds a note to it. Creates the rule and its carrier.
+ * @param prefix - The tickets' name prefix.
+ * @returns The carrier subscription's ID.
+ */
+const afterCommitCarrierOf = Effect.fn("Finalize.afterCommitCarrier")(
+  function* afterCommitCarrierOf(prefix: string) {
+    const carrier = freshId();
+
+    yield* change([
+      {
+        definition: {
+          classId: C.ticket.id,
+          condition: null,
+          deadLetter: "block",
+          enabled: true,
+          id: carrier,
+          identityId: SYSTEM_USER_ID,
+          kind: "subscription",
+          maxAttempts: 10,
+          name: `ag_closed_${carrier.slice(0, 8)}`,
+          operations: ["update"],
+          owner: { layer: "local" },
+          protected: false,
+        },
+        op: "createSubscription",
+      },
+      addRecordRule(C.ticket.id, {
+        actions: [
+          {
+            classId: C.note.id,
+            forEach: {
+              classId: C.ticket.id,
+              where: {
+                left: { path: [F.ticketName.id] },
+                op: "eq",
+                right: { path: [F.ticketName.id], scope: "record" },
+              },
+            },
+            type: "createEach",
+            values: [
+              {
+                fieldId: F.noteTicket.id,
+                value: { copy: { fieldId: null, from: "source" } },
+              },
+              { fieldId: F.noteBody.id, value: { value: "closing" } },
+            ],
+          },
+        ],
+        condition: {
+          args: [
+            {
+              left: { path: [F.ticketName.id] },
+              op: "startsWith",
+              right: prefix,
+            },
+            { arg: { path: [F.ticketStatus.id] }, op: "changed" },
+            {
+              left: { path: [F.ticketStatus.id] },
+              op: "eq",
+              right: { value: "closed" },
+            },
+          ],
+          op: "and",
+        },
+        operations: ["update"],
+        phase: "afterCommit",
+        ruleKind: null,
+        subscriptionId: carrier,
+      }).op,
+    ]);
+
+    return carrier;
+  }
+);
+
+/**
+ * An after-commit effect's shape: a part save whose finalization is
+ * deferred, then finalization, whose failure (a defect, a timeout's
+ * interruption) the caller catches.
+ * @param ticketId - The ticket.
+ * @param body - The note.
+ * @returns Nothing; the transaction must not commit.
+ */
+const noteThenCaughtFinalization = Effect.fn("Finalize.caught")(
+  function* noteThenCaughtFinalization(ticketId: string, body: string) {
+    yield* create(C.note.id, { body, ticket: ticketId }).pipe(
+      Effect.provideService(AggregateScope, { deferred: true })
+    );
+    yield* finalizeTouchedAggregates.pipe(
+      Effect.timeout("300 millis"),
+      Effect.catchCause(() => Effect.void)
+    );
+  }
+);
 
 describe("aggregate-finalize", () => {
   it("an aggregate save's cause reads as a system cause with its parts and rules", () => {
@@ -798,66 +898,7 @@ describe("aggregate-finalize", () => {
       "an after-commit effect's writes into an aggregate are finalized in its delivery transaction",
       () =>
         Effect.gen(function* afterCommit() {
-          const carrier = freshId();
-
-          yield* change([
-            {
-              definition: {
-                classId: C.ticket.id,
-                condition: null,
-                deadLetter: "block",
-                enabled: true,
-                id: carrier,
-                identityId: SYSTEM_USER_ID,
-                kind: "subscription",
-                maxAttempts: 10,
-                name: "ag_ticket_closed",
-                operations: ["update"],
-                owner: { layer: "local" },
-                protected: false,
-              },
-              op: "createSubscription",
-            },
-            addRecordRule(C.ticket.id, {
-              actions: [
-                {
-                  classId: C.note.id,
-                  forEach: {
-                    classId: C.ticket.id,
-                    where: {
-                      left: { path: [F.ticketName.id] },
-                      op: "eq",
-                      right: { path: [F.ticketName.id], scope: "record" },
-                    },
-                  },
-                  type: "createEach",
-                  values: [
-                    {
-                      fieldId: F.noteTicket.id,
-                      value: { copy: { fieldId: null, from: "source" } },
-                    },
-                    { fieldId: F.noteBody.id, value: { value: "closing" } },
-                  ],
-                },
-              ],
-              condition: {
-                args: [
-                  { arg: { path: [F.ticketStatus.id] }, op: "changed" },
-                  {
-                    left: { path: [F.ticketStatus.id] },
-                    op: "eq",
-                    right: { value: "closed" },
-                  },
-                ],
-                op: "and",
-              },
-              operations: ["update"],
-              phase: "afterCommit",
-              ruleKind: null,
-              subscriptionId: carrier,
-            }).op,
-          ]);
-
+          const carrier = yield* afterCommitCarrierOf("t-closing");
           const ticket = yield* create(C.ticket.id, { name: "t-closing" });
 
           const closed = yield* update(C.ticket.id, TABLE.ticket, ticket.id, {
@@ -999,6 +1040,72 @@ describe("aggregate-finalize", () => {
             aggregateOf(yield* lastEntry(ticket.id))?.parts ?? [],
             2
           );
+        })
+    );
+
+    dbTest.effect(
+      "a caught defect in finalization and an interrupted settling poison the transaction: nothing commits",
+      () =>
+        Effect.gen(function* poisoned() {
+          const hooks = yield* SaveHooks;
+          const { request } = yield* Transactions;
+
+          const broken = {
+            dying: SaveHooks.of({
+              ...hooks,
+              settle: () => Effect.die(new Error("settling broke")),
+            }),
+            hanging: SaveHooks.of({ ...hooks, settle: () => Effect.never }),
+          };
+
+          for (const [how, settling] of Object.entries(broken)) {
+            const ticket = yield* create(C.ticket.id, { name: `t-${how}` });
+
+            // An after-commit effect's shape: the saves, then finalization,
+            // whose failure the caller catches.
+            const exit = yield* request(
+              noteThenCaughtFinalization(ticket.id, how)
+            ).pipe(Effect.provideService(SaveHooks, settling), Effect.exit);
+
+            assert.isDefined(refusalOf(exit), how);
+            assert.strictEqual(
+              yield* count(
+                `SELECT count(*)::text AS value FROM ${TABLE.note} WHERE ticket = $1::uuid`,
+                [ticket.id]
+              ),
+              0,
+              how
+            );
+            assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 1);
+          }
+
+          // The same through an after-commit rule whose effect is cut short.
+          const carrier = yield* afterCommitCarrierOf("t-cut-");
+          const ticket = yield* create(C.ticket.id, { name: "t-cut-1" });
+
+          const closed = yield* update(C.ticket.id, TABLE.ticket, ticket.id, {
+            status: "closed",
+          });
+
+          const exit = yield* request(
+            runAfterCommitRule({
+              changeId: closed.changeId ?? "",
+              subscriptionId: carrier,
+            }).pipe(
+              Effect.timeout("300 millis"),
+              Effect.catchCause(() => Effect.void)
+            )
+          ).pipe(Effect.provideService(SaveHooks, broken.hanging), Effect.exit);
+
+          assert.isDefined(refusalOf(exit));
+          assert.strictEqual(
+            yield* count(
+              `SELECT count(*)::text AS value FROM ${TABLE.note} WHERE ticket = $1::uuid`,
+              [ticket.id]
+            ),
+            0
+          );
+          assert.strictEqual(yield* versionOf(TABLE.ticket, ticket.id), 2);
         })
     );
 
