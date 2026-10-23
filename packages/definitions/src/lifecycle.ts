@@ -49,10 +49,9 @@ import { guardChange } from "./guards.ts";
 import type { DefinitionId } from "./ids.ts";
 import { NEVER_DELETED, PURGEABLE, RENAMABLE, RETIRABLE } from "./operation.ts";
 import type { Operation } from "./operation.ts";
-import { PermissionRequired } from "./permission-required.ts";
 import { problem } from "./problems.ts";
 import { PurgeRefused } from "./purge-refused.ts";
-import { hasPermission } from "./requester.ts";
+import { permissionRefusal } from "./requester.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 import { UseRetireOrPurge } from "./use-retire-or-purge.ts";
 import { SCHEMA_PURGE_PERMISSION_ID } from "./well-known.ts";
@@ -277,23 +276,6 @@ const retireFieldBlockers = (
   );
 
 /**
- * Whether a class and every ancestor are active: only then are its records
- * writable and its fields count as non-retired.
- *
- * @param view - The configuration so far.
- * @param classId - The class.
- * @returns True when the class is active with all its ancestors.
- */
-export const isActiveLineage = (
-  view: ConfigSnapshot,
-  classId: DefinitionId
-): boolean => {
-  const lineage = view.lineage(classId);
-
-  return lineage.length > 0 && lineage.every(isActive);
-};
-
-/**
  * What keeps a table from being retired: an active child class, or an
  * active reference field pointing at it or condition field naming it,
  * whatever its own table's state and including the table's own fields
@@ -411,7 +393,6 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
   const view = viewOf(work);
   const edges = dependentsOf(view, current.id);
   const blocking = blockersForRetire(current, edges, work.retiredInChangeSet);
-  const blockingSet = new Set(blocking);
 
   if (conflict(work, current, "retire", blocking)) {
     return;
@@ -439,7 +420,7 @@ export const retire = (work: Work, operation: Op<"retire">): void => {
     next,
     note(
       allowed.localOverride,
-      edges.filter((edge) => !blockingSet.has(edge)),
+      edges,
       loosened.map((override) => override.id)
     )
   );
@@ -718,20 +699,14 @@ const purgePreconditions = (
     return refusal("confirmation");
   }
 
-  // Checked by the permission's stable ID; its name only labels the error.
-  const permissionId = SCHEMA_PURGE_PERMISSION_ID;
+  const permission = permissionRefusal(
+    work.snapshot,
+    work.context.requester,
+    SCHEMA_PURGE_PERMISSION_ID
+  );
 
-  if (!hasPermission(work.snapshot, work.context.requester, permissionId)) {
-    const permission = work.snapshot.get(permissionId);
-
-    refuse(
-      work,
-      new PermissionRequired({
-        permission:
-          permission?.kind === "permission" ? permission.name : permissionId,
-        permissionId,
-      })
-    );
+  if (permission !== undefined) {
+    refuse(work, permission);
 
     return false;
   }
@@ -906,16 +881,3 @@ export const deleteDefinition = (work: Work, operation: Op<"delete">): void => {
     )
   );
 };
-
-/**
- * Whether a field may be written: it is active and its class and every
- * ancestor are active (Contracts 1.6).
- *
- * @param view - The configuration.
- * @param field - A field.
- * @returns True when writes to it are accepted.
- */
-export const isWritableField = (
-  view: ConfigSnapshot,
-  field: FieldDefinition
-): boolean => isActive(field) && isActiveLineage(view, field.classId);

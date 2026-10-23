@@ -65,7 +65,6 @@ export interface Work {
    * (Contracts 1.7).
    */
   readonly retiredInChangeSet: ReadonlySet<DefinitionId>;
-  readonly order: DefinitionId[];
   readonly problems: DefinitionProblem[];
   readonly refusals: ChangeSetRefusal[];
   readonly applied: Operation[];
@@ -96,7 +95,6 @@ export const startWork = (
   current: new Map(),
   key,
   notes: [],
-  order: [],
   problems: [],
   refusals: [],
   retiredInChangeSet: new Set(
@@ -185,10 +183,6 @@ export const decodeAs = (
 };
 
 const put = (work: Work, next: Definition): void => {
-  if (!work.current.has(next.id)) {
-    work.order.push(next.id);
-  }
-
   work.current.set(next.id, next);
   work.changeCount += 1;
 };

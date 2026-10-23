@@ -351,6 +351,11 @@ export const effectiveField = (
   return effective;
 };
 
+const fieldsBySnapshot = new WeakMap<
+  ConfigSnapshot,
+  Map<DefinitionId, readonly EffectiveField[]>
+>();
+
 /**
  * The effective schema of class C: the live fields of C and its ancestors
  * (root's first) with stacked overrides, retired fields included and
@@ -363,10 +368,26 @@ export const effectiveField = (
 export const effectiveFields = (
   snapshot: ConfigSnapshot,
   classId: DefinitionId
-): readonly EffectiveField[] =>
-  snapshot
+): readonly EffectiveField[] => {
+  const byClass =
+    fieldsBySnapshot.get(snapshot) ??
+    new Map<DefinitionId, readonly EffectiveField[]>();
+
+  const cached = byClass.get(classId);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const fields = snapshot
     .fields(classId)
     .map((field) => effectiveField(snapshot, classId, field));
+
+  byClass.set(classId, fields);
+  fieldsBySnapshot.set(snapshot, byClass);
+
+  return fields;
+};
 
 /**
  * The fields a read returns when it selects nothing explicitly: the active

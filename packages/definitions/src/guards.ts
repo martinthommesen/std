@@ -27,11 +27,11 @@ import type {
   ClassDefinition,
   Definition,
   OverrideDraft,
-  Owner,
 } from "./definition.ts";
 import type { DefinitionId } from "./ids.ts";
 import type { CreateOperation } from "./operation.ts";
-import { isCoreOrigin, originOwns, ownerOfOrigin } from "./requester.ts";
+import { PROTECTED_OVERRIDABLE } from "./overridable.ts";
+import { isCoreOrigin, originOwns } from "./requester.ts";
 
 /** What a guard says about a change it allows. */
 export interface Allowed {
@@ -40,7 +40,7 @@ export interface Allowed {
 }
 
 /** The properties anyone may change on a protected definition. */
-const DESCRIPTIVE: ReadonlySet<string> = new Set(["label", "helpText"]);
+const DESCRIPTIVE: ReadonlySet<string> = new Set(PROTECTED_OVERRIDABLE);
 
 /** The operations a guard checks on existing definitions. */
 export type GuardedAction =
@@ -154,14 +154,6 @@ export const guardChange = (
   return {
     localOverride: describes && !originOwns(work.context.origin, target.owner),
   };
-};
-
-const sameOwner = (left: Owner, right: Owner): boolean => {
-  if (left.layer === "app" && right.layer === "app") {
-    return left.setId === right.setId;
-  }
-
-  return left.layer === right.layer;
 };
 
 /**
@@ -327,7 +319,7 @@ export const guardNewDefinition = (
   operation: CreateOperation["op"] | "setOverride",
   definition: NewDefinition
 ): boolean => {
-  const reason = sameOwner(definition.owner, ownerOfOrigin(work.context.origin))
+  const reason = originOwns(work.context.origin, definition.owner)
     ? (storageProblem(work, definition) ??
       namespaceProblem(work, definition) ??
       attachProblem(work, hostOf(work, definition)))

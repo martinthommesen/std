@@ -18,6 +18,7 @@ import { isActive, OwnerSchema } from "./definition.ts";
 import type { Owner } from "./definition.ts";
 import { DefinitionIdSchema } from "./ids.ts";
 import type { DefinitionId } from "./ids.ts";
+import { PermissionRequired } from "./permission-required.ts";
 import type { ConfigSnapshot } from "./snapshot.ts";
 import { SYSTEM_USER_ID } from "./well-known.ts";
 
@@ -138,4 +139,29 @@ export const hasPermission = (
         grant.permissionId === permissionId &&
         activeRole(grant.roleId)
     );
+};
+
+/**
+ * The refusal for a missing permission, labelled from the starting snapshot.
+ *
+ * @param snapshot - The configuration the change set starts from.
+ * @param requester - The requester.
+ * @param permissionId - The permission's stable ID.
+ * @returns The refusal, or undefined when the permission is held.
+ */
+export const permissionRefusal = (
+  snapshot: ConfigSnapshot,
+  requester: Requester,
+  permissionId: DefinitionId
+): PermissionRequired | undefined => {
+  if (hasPermission(snapshot, requester, permissionId)) {
+    return undefined;
+  }
+
+  const permission = snapshot.getKind("permission", permissionId);
+
+  return new PermissionRequired({
+    permission: permission?.name ?? permissionId,
+    permissionId,
+  });
 };
