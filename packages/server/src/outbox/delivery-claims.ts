@@ -234,7 +234,12 @@ const byRowId = (left: ClaimedDelivery, right: ClaimedDelivery): number => {
   return order < 0n ? -1 : 1;
 };
 
-const intervalOf = (duration: Duration.Duration): string =>
+/**
+ * PostgreSQL interval text for a duration, in milliseconds.
+ * @param duration - The interval's duration.
+ * @returns PostgreSQL interval input.
+ */
+export const intervalOf = (duration: Duration.Duration): string =>
   `${Duration.toMillis(duration)} milliseconds`;
 
 const refuseNested = Effect.die(

@@ -74,7 +74,7 @@ import {
 } from "effect";
 import { SqlClient } from "effect/sql";
 
-import { Actor, effectiveRoles, readUserRoles } from "../auth/actor.ts";
+import { Actor, loadActor } from "../auth/actor.ts";
 import type { ActingUser } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
 import { InstanceSettings } from "../config/instance-settings.ts";
@@ -90,6 +90,7 @@ import { WORKER_CHANNEL } from "../sql/wake-up.ts";
 import { AttemptRefused } from "./attempt-refused.ts";
 import {
   claimInTransaction,
+  intervalOf,
   markDone,
   markFailed,
   releaseClaim,
@@ -111,7 +112,7 @@ import {
   deliveriesLeaseLost,
   refreshDeadGauge,
 } from "./metrics.ts";
-import { resolveServed } from "./served.ts";
+import { resolveServed, subscriptionState } from "./served.ts";
 import type { Served } from "./served.ts";
 
 /** How the worker runs. */
@@ -288,10 +289,9 @@ const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
     });
   }
 
-  const users = yield* readUserRoles(snapshot, [identityId]);
-  const user = users.get(identityId);
+  const actor = yield* loadActor(snapshot, identityId);
 
-  if (user === undefined || !user.active) {
+  if (actor.roleIds.length === 0) {
     if (subscription.hub !== null && subscription.hub !== undefined) {
       return yield* new EventNotAuthorized();
     }
@@ -299,20 +299,20 @@ const identityOf = Effect.fn("Outbox.identity")(function* identityOf(
     return yield* new DeliveryFailed({ reason: IDENTITY_UNAVAILABLE });
   }
 
-  const actor: ActingUser = {
-    roleIds: effectiveRoles(snapshot, true, user.roleIds),
-    userId: identityId,
-  };
-
   return actor;
 });
 
 /** What preparation hands the effect. */
-interface Prepared {
+interface Prepared<Kind extends DeliveryEffect["kind"]> {
   readonly actor: ActingUser;
   readonly delivery: Delivery;
-  readonly effect: DeliveryEffect;
+  readonly effect: DeliveryEffect & { readonly kind: Kind };
 }
+
+const isEffectKind = <Kind extends DeliveryEffect["kind"]>(
+  effect: DeliveryEffect,
+  kind: Kind
+): effect is DeliveryEffect & { readonly kind: Kind } => effect.kind === kind;
 
 /**
  * Builds what an effect receives, inside a request transaction: the
@@ -320,20 +320,23 @@ interface Prepared {
  * (`AttemptRefused` "configuration" when it no longer runs an effect of
  * the claimed kind), its current identity, and the payload from history.
  */
-const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
-  kind: DeliveryEffect["kind"],
-  claimed: ClaimedDelivery
-) {
+const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare<
+  Kind extends DeliveryEffect["kind"],
+>(kind: Kind, claimed: ClaimedDelivery) {
   yield* (yield* WorkerProbes).preparing(claimed);
   const snapshot = yield* (yield* Catalog).current;
   const handlers = yield* DeliveryHandlers;
   const served = resolveServed(snapshot, handlers, claimed.subscriptionId);
 
-  if (served === undefined || served.effect.kind !== kind) {
+  if (served === undefined) {
     return yield* new AttemptRefused({ reason: "configuration" });
   }
 
-  const { subscription } = served;
+  const { subscription, effect } = served;
+
+  if (!isEffectKind(effect, kind)) {
+    return yield* new AttemptRefused({ reason: "configuration" });
+  }
 
   const actor = yield* identityOf(snapshot, subscription);
 
@@ -438,37 +441,14 @@ const prepare = Effect.fn("Outbox.prepareDelivery")(function* prepare(
     return {
       actor,
       delivery: { ...delivery, events },
-      effect: served.effect,
-    } satisfies Prepared;
+      effect,
+    } satisfies Prepared<Kind>;
   }
 
-  return { actor, delivery, effect: served.effect } satisfies Prepared;
+  return { actor, delivery, effect } satisfies Prepared<Kind>;
 });
 
 const overdue = new AttemptRefused({ reason: "deadline" });
-
-/**
- * Runs `effect` only before the deadline, and interrupts it there with
- * `AttemptRefused` "deadline": for everything before the handler.
- *
- * @param deadline - Epoch milliseconds.
- * @returns The bounded effect.
- */
-const beforeDeadline =
-  (deadline: number) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Clock.currentTimeMillis.pipe(
-      Effect.flatMap((now) =>
-        now >= deadline
-          ? Effect.fail(overdue)
-          : effect.pipe(
-              Effect.timeoutOrElse({
-                duration: Duration.millis(deadline - now),
-                orElse: () => Effect.fail(overdue),
-              })
-            )
-      )
-    );
 
 /**
  * The time left before the deadline, or `AttemptRefused` "deadline" when
@@ -485,6 +465,27 @@ const timeLeft = (deadline: number) =>
         : Effect.succeed(Duration.millis(deadline - now))
     )
   );
+
+/**
+ * Runs `effect` only before the deadline, and interrupts it there with
+ * `AttemptRefused` "deadline": for everything before the handler.
+ *
+ * @param deadline - Epoch milliseconds.
+ * @returns The bounded effect.
+ */
+const beforeDeadline =
+  (deadline: number) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    timeLeft(deadline).pipe(
+      Effect.flatMap((duration) =>
+        effect.pipe(
+          Effect.timeoutOrElse({
+            duration,
+            orElse: () => Effect.fail(overdue),
+          })
+        )
+      )
+    );
 
 /**
  * One attempt: preparation, the handler and `done`, under the deadline.
@@ -509,10 +510,6 @@ const attemptOf = (
             beforeDeadline(deadline)
           );
 
-          if (prepared.effect.kind !== "record") {
-            return yield* new AttemptRefused({ reason: "configuration" });
-          }
-
           const left = yield* timeLeft(deadline);
 
           yield* prepared.effect
@@ -533,10 +530,6 @@ const attemptOf = (
     const prepared = yield* request(prepare(kind, claimed)).pipe(
       beforeDeadline(deadline)
     );
-
-    if (prepared.effect.kind !== "external") {
-      return yield* new AttemptRefused({ reason: "configuration" });
-    }
 
     const left = yield* timeLeft(deadline);
 
@@ -642,10 +635,10 @@ const refusedOutcome = Effect.fnUntraced(function* refusedOutcome(
 
   return yield* releaseClaim(claimed).pipe(
     Effect.as<AttemptOutcome>("released"),
-    Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
-    Effect.catchTag("DatabaseError", () =>
-      Effect.succeed<AttemptOutcome>("unrecorded")
-    )
+    Effect.catchTags({
+      DatabaseError: unrecordedOutcome,
+      LeaseLost: leaseLostOutcome,
+    })
   );
 });
 
@@ -725,7 +718,7 @@ export const runDelivery = Effect.fn("Outbox.runDelivery")(
       maxAttempts: served.subscription.maxAttempts,
     }).pipe(
       Effect.map((outcome): AttemptOutcome => outcome),
-      Effect.catchTag("LeaseLost", () => Effect.succeed(LEASE_LOST)),
+      Effect.catchTag("LeaseLost", leaseLostOutcome),
       Effect.catchTag("DatabaseError", (databaseError) =>
         Effect.logWarning(
           `Outbox delivery ${claimed.id}: the failure was not recorded (SQLSTATE ${databaseError.sqlState})`
@@ -816,7 +809,7 @@ export const workerPass = Effect.fn("Outbox.workerPass")(
       .subscriptions()
       .filter(
         (subscription) =>
-          resolveServed(snapshot, handlers, subscription.id) !== undefined
+          subscriptionState(snapshot, handlers, subscription) === "served"
       );
 
     // oxlint-disable-next-line github/array-foreach -- Effect.forEach, not Array.prototype.forEach
@@ -868,10 +861,7 @@ export const deleteOldDeliveries = Effect.fn("Outbox.deleteOldDeliveries")(
                  LIMIT $2::int8
                  FOR UPDATE SKIP LOCKED)
                RETURNING id::text AS id`,
-              [
-                `${Duration.toMillis(DONE_RETENTION)} milliseconds`,
-                String(RETENTION_BATCH),
-              ]
+              [intervalOf(DONE_RETENTION), String(RETENTION_BATCH)]
             )
           ),
           Effect.flatMap(decodeDeleted)
