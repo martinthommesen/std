@@ -19,7 +19,7 @@
 import type {
   ChangeEntry as ChangeEntrySchema,
   Resource as ResourceSchema,
-} from "@std/api/v2/resource";
+} from "@std/api/resource";
 import { apiAttributeNameOf, apiTableNameOf } from "@std/definitions/names";
 import { Option, Predicate, Schema, pipe } from "effect";
 

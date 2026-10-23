@@ -36,7 +36,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime } from "@effect/platform-node";
-import { authenticationClient, makeStdClient } from "@std/api/client";
+import { makeStdClient } from "@std/api/client";
 import { TestDatabase, testDatabaseService } from "@std/testing/test-database";
 import { Console, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -92,42 +92,45 @@ const dropAliceRoles = Effect.fn("QuickstartCi.dropAliceRoles")(
       "\n### A partial setup: delete Alice's role assignment before the rerun"
     );
 
-    const anonymous = yield* makeStdClient({ baseUrl }).pipe(
-      Effect.provide(authenticationClient())
-    );
+    const anonymous = yield* makeStdClient({ baseUrl });
 
-    const session = yield* anonymous.signIn.signIn({
-      payload: { login: ADMIN_LOGIN, password: PASSWORDS.admin },
+    const session = yield* anonymous.session.create({
+      payload: {
+        login: ADMIN_LOGIN,
+        password: PASSWORDS.admin,
+        tokenDelivery: "body",
+      },
     });
 
-    const admin = yield* makeStdClient({ baseUrl }).pipe(
-      Effect.provide(authenticationClient(Redacted.make(session.token)))
-    );
+    const admin = yield* makeStdClient({
+      baseUrl,
+      token: Redacted.make(session.token ?? ""),
+    });
 
     const users = yield* admin.records.list({
-      params: { table: "core.user" },
-      query: { filter: 'login = "alice"' },
+      params: { table: "coreUser" },
+      query: { condition: 'login = "alice"' },
     });
 
-    const alice = users.records[0]?.id ?? "";
+    const alice = users[0]?.id ?? "";
 
     const assignments = yield* admin.records.list({
-      params: { table: "core.user_role" },
-      query: { filter: `user = "${alice}"` },
+      params: { table: "coreUserRole" },
+      query: { condition: `user = "${alice}"` },
     });
 
-    for (const assignment of assignments.records) {
-      yield* admin.records.remove({
-        headers: { "if-match": `"${assignment.version}"` },
-        params: { id: assignment.id, table: "core.user_role" },
+    for (const assignment of assignments) {
+      yield* admin.records.delete({
+        headers: { "if-match": `"${assignment.revision ?? 0}"` },
+        params: { id: assignment.id, table: "coreUserRole" },
       });
     }
 
     yield* Console.log(
-      `deleted ${assignments.records.length} role assignment(s) of alice`
+      `deleted ${assignments.length} role assignment(s) of alice`
     );
 
-    return assignments.records.length;
+    return assignments.length;
   },
   Effect.provide(Fetch)
 );

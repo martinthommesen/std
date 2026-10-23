@@ -33,7 +33,7 @@ import { recordRelation } from "./relation.ts";
 
 /**
  * How a read's names are spelled: definition names (`/api/v1`) or API
- * names (`/api/v2`, Contracts 10.2: lowerCamelCase, no `class`).
+ * names (`/api/v1`, Contracts 10.2: lowerCamelCase, no `class`).
  */
 export type Naming = "definition" | "api";
 
@@ -329,7 +329,7 @@ const exactTextField = (info: FieldInfo): FieldInfo =>
     : info;
 
 /**
- * A class view whose text fields compare unmodified values (v2's TMF
+ * A class view whose text fields compare unmodified values (the API's TMF
  * attribute filters, D4): the same fields, with `caseSensitive` set.
  *
  * @param view - The caller's filter view.
@@ -453,7 +453,7 @@ export const parseFilterText = Effect.fn("ReadQuery.parseFilterText")(
  * @param expr - The condition.
  * @param spans - Where its nodes came from in filter text, if it did.
  * @param options - `exactText`: text compares unmodified values, whatever
- *   each field's configured case behavior (v2's TMF attribute filters,
+ *   each field's configured case behavior (the API's TMF attribute filters,
  *   Martin 2026-10-22, D4; v1 and `condition` keep the field's); and the
  *   prefix of the condition's join aliases, distinct per compiled filter
  *   of one statement.

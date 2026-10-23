@@ -1,4 +1,4 @@
-import { isTmfError } from "@std/api/v2/client";
+import { isTmfError } from "@std/api/client";
 import { Effect, Option, Schema } from "effect";
 import { Command } from "foldkit";
 import { today } from "foldkit/calendar";

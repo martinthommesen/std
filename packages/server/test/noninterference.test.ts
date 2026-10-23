@@ -67,46 +67,47 @@ interface Hidden {
 
 /** A generated read. */
 interface Query {
-  readonly filter: string | null;
+  readonly condition: string | null;
   readonly sort: string;
   readonly limit: number;
+  /** Restrict to `@type=AcmeLaptop` (the old `class` atom). */
+  readonly laptops: boolean;
 }
 
 const ATOMS = [
   'name = "L"',
   'status = "lost"',
   'status = "in_use"',
-  'purchased_on > "2024-01-01"',
-  'purchased_on < "2025-02-01"',
-  "purchased_on is empty",
-  "docked_to is empty",
-  'docked_to.name = "Alice monitor"',
+  'purchasedOn > "2024-01-01"',
+  'purchasedOn < "2025-02-01"',
+  "purchasedOn is empty",
+  "dockedTo is empty",
+  'dockedTo.name = "Alice monitor"',
   "owner = me",
   'name contains "M"',
-  'class = "acme.laptop"',
 ] as const;
 
-const FILTER: Arbitrary<string> = letrec<{ filter: string }>((tie) => ({
-  filter: oneof(
+const CONDITION: Arbitrary<string> = letrec<{ condition: string }>((tie) => ({
+  condition: oneof(
     { depthSize: "small", withCrossShrink: true },
     constantFrom(...ATOMS),
-    tuple(tie("filter"), tie("filter")).map(
+    tuple(tie("condition"), tie("condition")).map(
       ([left, right]) => `(${left}) and (${right})`
     ),
-    tuple(tie("filter"), tie("filter")).map(
+    tuple(tie("condition"), tie("condition")).map(
       ([left, right]) => `(${left}) or (${right})`
     ),
-    tie("filter").map((inner) => `not (${inner})`)
+    tie("condition").map((inner) => `not (${inner})`)
   ),
-})).filter;
+})).condition;
 
 const SORT_KEYS = [
   "name",
   "status",
-  "purchased_on",
-  "docked_to",
+  "purchasedOn",
+  "dockedTo",
   "owner",
-  "created_at",
+  "creationDate",
 ];
 
 const directed = (keys: readonly string[], descending: readonly boolean[]) =>
@@ -121,7 +122,8 @@ const SORT = subarray(SORT_KEYS, { maxLength: 3 }).chain((keys) =>
 );
 
 const QUERY: Arbitrary<Query> = record({
-  filter: option(FILTER, { nil: null }),
+  condition: option(CONDITION, { nil: null }),
+  laptops: boolean(),
   limit: integer({ max: 4, min: 1 }),
   sort: SORT,
 });
@@ -159,10 +161,12 @@ const sameOutcomes = (left: Hidden, right: Hidden): boolean => {
 };
 
 const queryParameters = (query: Query): Readonly<Record<string, string>> => {
-  const base = { count: "true", labels: "true", limit: String(query.limit) };
+  const base = query.laptops
+    ? { "@type": "AcmeLaptop", limit: String(query.limit) }
+    : { limit: String(query.limit) };
 
   const filtered =
-    query.filter === null ? base : { ...base, filter: query.filter };
+    query.condition === null ? base : { ...base, condition: query.condition };
 
   return query.sort === "" ? filtered : { ...filtered, sort: query.sort };
 };
@@ -232,9 +236,9 @@ const observeBoth = Effect.fn("Noninterference.observeBoth")(
     const parameters = queryParameters(query);
 
     yield* applyHidden(records, left);
-    const first = yield* allPages(token, "acme.asset", parameters);
+    const first = yield* allPages({ token }, "acme.asset", parameters);
     yield* applyHidden(records, right);
-    const second = yield* allPages(token, "acme.asset", parameters);
+    const second = yield* allPages({ token }, "acme.asset", parameters);
 
     return { first: first.texts, second: second.texts };
   }

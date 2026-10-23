@@ -12,17 +12,17 @@ import { randomUUID } from "node:crypto";
 
 import { assert, describe, it, layer } from "@effect/vitest";
 import type { Requester } from "@std/definitions/requester";
-import { TableMetadataSchema } from "@std/definitions/table-metadata";
 import { BUILT_IN_ROLE_IDS } from "@std/definitions/well-known";
 import type { JsonObject } from "@std/values/json-value";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { applyChangeSet } from "../src/schema/change-set.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { readsTestLayer } from "./reads-support.ts";
+import { codeOf, collectionOf, readsTestLayer } from "./reads-support.ts";
+import { CHANGE_SETS } from "./schema-paths-support.ts";
 import {
   ACME,
   addField,
@@ -31,24 +31,27 @@ import {
   ensureSite,
   values,
 } from "./schema-support.ts";
+import { create, patch, remove } from "./writes-support.ts";
 
 const PURGER: Requester = {
   roleIds: [BUILT_IN_ROLE_IDS.schema_purger],
   userId: randomUUID(),
 };
 
-const decodeMetadata = Schema.decodeUnknownEffect(TableMetadataSchema);
-
 const filtersOf = Effect.fn("SavedFilters.filtersOf")(function* filtersOf(
   token: string,
   table: string
 ) {
   const http = yield* TestHttpClient;
-  const response = yield* http.get(`/api/v1/meta/tables/${table}`, { token });
-  const body = yield* decodeMetadata(response.json).pipe(Effect.orDie);
 
-  return (body.table.savedFilters ?? []).map(
-    (filter) => `${filter.name}: ${filter.filter}`
+  const response = yield* http.get(
+    `/api/v1/tableMetadata/${collectionOf(table)}`,
+    { token }
+  );
+
+  return arrayOf(objectOf(response.json).savedFilters).map(
+    (filter) =>
+      `${textOf(objectOf(filter).name)}: ${textOf(objectOf(filter).filter)}`
   );
 });
 
@@ -83,7 +86,7 @@ const filterBody = (
   condition,
   label: name,
   name,
-  table_id: classId,
+  tableId: classId,
 });
 
 const notEmpty = (fieldId: string) => ({
@@ -97,16 +100,15 @@ describe("saved-filters", () => {
       condition: { op: "true" },
       label: "lost",
       name: "lost",
-      table_id: ACME.asset,
+      tableId: ACME.asset,
     });
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "served only to callers who may read every field they name, as list API filter text",
+      "served only to callers who may read every field they name, as list API filter text in API names",
       () =>
         Effect.gen(function* served() {
-          const http = yield* TestHttpClient;
           const { tokens } = yield* signInAll;
 
           for (const body of [
@@ -122,10 +124,10 @@ describe("saved-filters", () => {
             }),
             filterBody("serials", ACME.laptop, notEmpty(ACME.serial)),
           ]) {
-            const created = yield* http.request(
-              "POST",
-              "/api/v1/tables/core.saved_filter/records",
-              { body, token: tokens.admin }
+            const created = yield* create(
+              tokens.admin,
+              "core.saved_filter",
+              body
             );
 
             assert.strictEqual(created.status, 201, created.text);
@@ -206,39 +208,32 @@ describe("saved-filters", () => {
           for (const entry of cases) {
             const before = yield* committedState;
 
-            const generic = yield* http.request(
-              "POST",
-              "/api/v1/tables/core.saved_filter/records",
-              {
-                body: filterBody(entry.filterName, ACME.asset, entry.condition),
-                token: tokens.admin,
-              }
+            const generic = yield* create(
+              tokens.admin,
+              "core.saved_filter",
+              filterBody(entry.filterName, ACME.asset, entry.condition)
             );
 
-            const endpoint = yield* http.request(
-              "POST",
-              "/api/v1/schema/change-sets",
-              {
-                body: {
-                  operations: [
-                    {
-                      definition: {
-                        classId: ACME.asset,
-                        condition: entry.condition,
-                        id: randomUUID(),
-                        kind: "savedFilter",
-                        label: entry.filterName,
-                        name: entry.filterName,
-                        owner: { layer: "local" },
-                        protected: false,
-                      },
-                      op: "createSavedFilter",
+            const endpoint = yield* http.request("POST", CHANGE_SETS, {
+              body: {
+                operations: [
+                  {
+                    definition: {
+                      classId: ACME.asset,
+                      condition: entry.condition,
+                      id: randomUUID(),
+                      kind: "savedFilter",
+                      label: entry.filterName,
+                      name: entry.filterName,
+                      owner: { layer: "local" },
+                      protected: false,
                     },
-                  ],
-                },
-                token: tokens.admin,
-              }
-            );
+                    op: "createSavedFilter",
+                  },
+                ],
+              },
+              token: tokens.admin,
+            });
 
             for (const response of [generic, endpoint]) {
               assert.strictEqual(
@@ -247,7 +242,7 @@ describe("saved-filters", () => {
                 `${entry.name}: ${response.text}`
               );
               assert.strictEqual(
-                objectOf(response.json)._tag,
+                yield* codeOf(response),
                 "DefinitionInvalid",
                 entry.name
               );
@@ -262,7 +257,6 @@ describe("saved-filters", () => {
       "retiring a field a saved filter reads is reported, its purge refused until the filter is deleted; a table purge takes filters along",
       () =>
         Effect.gen(function* lifecycle() {
-          const http = yield* TestHttpClient;
           const { tokens } = yield* signInAll;
 
           yield* ensureSite;
@@ -309,14 +303,12 @@ describe("saved-filters", () => {
           );
 
           // Retire: allowed, the filter reported, no longer served.
-          const retired = yield* http.request(
-            "PATCH",
-            `/api/v1/tables/core.field/records/${extra.id}`,
-            {
-              body: { state: "retired" },
-              headers: { "if-match": `"${yield* versionOf(extra.id)}"` },
-              token: tokens.admin,
-            }
+          const retired = yield* patch(
+            tokens.admin,
+            "core.field",
+            extra.id,
+            yield* versionOf(extra.id),
+            { state: "retired" }
           );
 
           assert.strictEqual(retired.status, 200, retired.text);
@@ -339,16 +331,14 @@ describe("saved-filters", () => {
           assert.include(JSON.stringify(refused), "DependencyConflict");
           assert.include(JSON.stringify(refused), filterId);
 
-          const deleted = yield* http.request(
-            "DELETE",
-            `/api/v1/tables/core.saved_filter/records/${filterId}`,
-            {
-              headers: { "if-match": `"${yield* versionOf(filterId)}"` },
-              token: tokens.admin,
-            }
+          const deleted = yield* remove(
+            tokens.admin,
+            "core.saved_filter",
+            filterId,
+            yield* versionOf(filterId)
           );
 
-          assert.strictEqual(deleted.status, 200, deleted.text);
+          assert.strictEqual(deleted.status, 204, deleted.text);
           assert.strictEqual((yield* purge(extra.id))._tag, "Success");
 
           // A table purge takes its remaining filter along.
@@ -372,7 +362,7 @@ describe("saved-filters", () => {
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
     dbTest.effect(
-      "through /api/v2 a saved filter is written as a change set and served in API names, as condition takes it",
+      "through /api/v1 a saved filter is written as a change set and served in API names, as condition takes it",
       () =>
         Effect.gen(function* servedInApiNames() {
           const http = yield* TestHttpClient;
@@ -384,26 +374,19 @@ describe("saved-filters", () => {
 
           yield* change([inService.op]);
 
-          const created = yield* http.request(
-            "POST",
-            "/api/v2/coreSavedFilter",
-            {
-              body: {
-                condition: notEmpty(inService.id),
-                label: "In service",
-                name: "in_service_set",
-                tableId: ACME.asset,
-              },
-              token: tokens.admin,
-            }
-          );
+          const created = yield* create(tokens.admin, "core.saved_filter", {
+            condition: notEmpty(inService.id),
+            label: "In service",
+            name: "in_service_set",
+            tableId: ACME.asset,
+          });
 
           assert.strictEqual(created.status, 201, created.text);
           assert.deepStrictEqual(yield* filtersOf(tokens.admin, "acme.asset"), [
-            "in_service_set: in_service is not empty",
+            "in_service_set: inService is not empty",
           ]);
 
-          const metadata = yield* http.get("/api/v2/tableMetadata/acmeAsset", {
+          const metadata = yield* http.get("/api/v1/tableMetadata/acmeAsset", {
             token: tokens.admin,
           });
 
@@ -414,7 +397,7 @@ describe("saved-filters", () => {
           assert.strictEqual(saved?.filter, "inService is not empty");
 
           const listed = yield* http.get(
-            `/api/v2/acmeAsset?condition=${encodeURIComponent(textOf(saved?.filter))}`,
+            `/api/v1/acmeAsset?condition=${encodeURIComponent(textOf(saved?.filter))}`,
             { token: tokens.admin }
           );
 

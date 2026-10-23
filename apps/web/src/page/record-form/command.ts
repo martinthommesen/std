@@ -1,3 +1,4 @@
+import { isTmfError } from "@std/api/client";
 /**
  * The form page's Commands: metadata, the record, saves and deletes with
  * `If-Match`, the reference pickers' searches, related lists and history.
@@ -7,7 +8,6 @@
  * API's edge (`wire.ts`) with the fields the request was built from.
  */
 import { SchemaChangeSchema } from "@std/api/errors/schemas";
-import { isTmfError } from "@std/api/v2/client";
 import { FieldErrorSchema } from "@std/definitions/field-errors";
 import { isJsonString } from "@std/values/json-value";
 import { Effect, Option, Predicate, Result, Schema } from "effect";

@@ -1,7 +1,7 @@
 /**
  * The version invariant property test through HTTP (Contracts 4.2, 4.6 and
  * their acceptance tests; the Step 1 gate): random creates, updates and
- * deletes by Alice and Bob through `/acme.asset` and `/acme.laptop` give
+ * deletes by Alice and Bob through `/acmeAsset` and `/acmeLaptop` give
  * every logical record change entries for exactly versions 1..n, a delete
  * included as the last version, and outbox rows exactly for the matching
  * subscriptions of each entry, with the entry's version.
@@ -145,14 +145,10 @@ const CLASSES: Readonly<Record<Endpoint, string>> = {
 };
 
 /** Every response a save may give; anything else fails the property. */
-const EXPECTED_STATUSES = new Set([200, 201, 403, 404, 409, 422]);
+const EXPECTED_STATUSES = new Set([200, 201, 204, 403, 404, 412, 422]);
 
 const isSuccess = (response: TestResponse): boolean =>
-  response.status === 200 || response.status === 201;
-
-const DeletedBodySchema = Schema.Struct({ version: Schema.Int });
-
-const decodeDeleted = Schema.decodeUnknownEffect(DeletedBodySchema);
+  response.status === 200 || response.status === 201 || response.status === 204;
 
 const ifMatch = (target: Tracked, stale: boolean): number =>
   stale ? target.version + 1 : target.version;
@@ -165,7 +161,7 @@ const createBody = (world: World, step: Extract<Step, { op: "create" }>) => {
   };
 
   return step.endpoint === "laptop"
-    ? { ...body, purchased_on: "2026-04-01" }
+    ? { ...body, purchasedOn: "2026-04-01" }
     : body;
 };
 
@@ -214,11 +210,10 @@ const changeTarget = Effect.fn("HttpInvariant.changeTarget")(
       ifMatch(target, step.stale)
     );
 
+    // The delete is the record's last version; the answer has no body.
     if (isSuccess(response)) {
-      const deleted = yield* decodeDeleted(response.json).pipe(Effect.orDie);
-
       target.deleted = true;
-      target.version = deleted.version;
+      target.version += 1;
     }
 
     return response;

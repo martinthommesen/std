@@ -25,13 +25,18 @@ import { Catalog } from "../src/catalog/catalog.ts";
 import { revisionHeaderValue } from "../src/http/schema-revision-header.ts";
 import { arrayOf, objectOf, signInAll, textOf } from "./authz-support.ts";
 import { committedState } from "./committed-state.ts";
-import { listPath, readsTestLayer, recordPath } from "./reads-support.ts";
+import {
+  codeOf,
+  listPath,
+  readsTestLayer,
+  recordPath,
+} from "./reads-support.ts";
 import { ACME, addField, change } from "./schema-support.ts";
 
 const EMPLOYEE = "29e6b30c-84cd-4f18-96a4-9ee11fe1db7b";
 const local = { owner: { layer: "local" }, protected: false } as const;
 
-const PICKER = "acme.asset/dock";
+const PICKER = "acmeAsset/dock";
 
 /**
  * A condition on one asset field.
@@ -118,21 +123,15 @@ const limitDock = Effect.fn("AllowedRecords.limitDock")(function* limitDock(
 });
 
 const namesOf = (response: TestResponse): string[] =>
-  arrayOf(objectOf(response.json).records).map((record) =>
-    textOf(objectOf(objectOf(record).values).name)
-  );
+  arrayOf(response.json).map((resource) => textOf(objectOf(resource).name));
 
-// The body without its revision.
-const bodyOf = (response: TestResponse): string =>
-  response.text.replace(/"schemaRevision":\d+/u, '"schemaRevision":0');
-
-const patchDock = (token: string, id: string, target: string, version = 1) =>
+const patchDock = (token: string, id: string, target: string, revision = 1) =>
   Effect.gen(function* patchDockRequest() {
     const http = yield* TestHttpClient;
 
     return yield* http.request("PATCH", recordPath("acme.asset", id), {
       body: { dock: target },
-      headers: { "if-match": `"${version}"` },
+      headers: { "if-match": `"${revision}"` },
       token,
     });
   });
@@ -142,29 +141,17 @@ const versionOf = (token: string, id: string) =>
     const http = yield* TestHttpClient;
     const response = yield* http.get(recordPath("acme.asset", id), { token });
 
-    return Number(objectOf(objectOf(response.json).record).version);
+    return Number(objectOf(response.json).revision);
   });
 
-// A refusal's status, tag and parameter.
-const tagAndParameter = (response: TestResponse) => [
+// A refusal's status and code.
+const statusAndCode = (response: TestResponse) => [
   response.status,
-  textOf(objectOf(response.json)._tag),
-  textOf(objectOf(response.json).parameter ?? ""),
+  textOf(objectOf(response.json).code),
 ];
 
-// A v2 list as a caller sees it.
-const v2List = (collection: string, query: string, token: string) =>
-  Effect.gen(function* listV2() {
-    const http = yield* TestHttpClient;
-
-    return yield* http.get(`/api/v2/${collection}?${query}`, { token });
-  });
-
-const v2Ids = (response: TestResponse): string[] =>
-  arrayOf(response.json).map((item) => textOf(objectOf(item).id));
-
 describe("allowed-records", () => {
-  it("names the picker's field as table/field", () => {
+  it("names the picker's field as collection/attribute", () => {
     assert.strictEqual(PICKER.split("/").length, 2);
   });
 
@@ -180,18 +167,15 @@ describe("allowed-records", () => {
 
           for (const token of [tokens.alice, tokens.bob, tokens.admin]) {
             for (const table of ["acme.asset", "acme.laptop", "acme.monitor"]) {
-              for (const filter of [
+              for (const condition of [
                 undefined,
                 'name starts with "L"',
                 'not (name = "M")',
               ]) {
-                const base = {
-                  allowedFor: PICKER,
-                  count: "true",
-                  sort: "name",
-                };
+                const base = { allowedFor: PICKER, sort: "name" };
 
-                const query = filter === undefined ? base : { ...base, filter };
+                const query =
+                  condition === undefined ? base : { ...base, condition };
 
                 const picked = yield* http.get(listPath(table, query), {
                   token,
@@ -199,18 +183,22 @@ describe("allowed-records", () => {
 
                 const plain = yield* http.get(
                   listPath(table, {
-                    count: "true",
-                    filter:
-                      filter === undefined
+                    condition:
+                      condition === undefined
                         ? 'status = "in_use"'
-                        : `(${filter}) and status = "in_use"`,
+                        : `(${condition}) and status = "in_use"`,
                     sort: "name",
                   }),
                   { token }
                 );
 
                 assert.strictEqual(picked.status, 200, picked.text);
-                assert.strictEqual(bodyOf(picked), bodyOf(plain), table);
+                assert.strictEqual(picked.text, plain.text, table);
+                assert.strictEqual(
+                  picked.headers.get("x-total-count"),
+                  plain.headers.get("x-total-count"),
+                  table
+                );
                 assert.notInclude(picked.text, "allowedRecords");
               }
             }
@@ -226,13 +214,13 @@ describe("allowed-records", () => {
 
           // Metadata never shows the condition, to anyone.
           for (const token of [tokens.bob, tokens.admin]) {
-            const meta = yield* http.get("/api/v1/meta/tables/acme.asset", {
+            const meta = yield* http.get("/api/v1/tableMetadata/acmeAsset", {
               token,
             });
 
-            const dock = arrayOf(
-              objectOf(objectOf(meta.json).table).fields
-            ).find((field) => objectOf(field).name === "dock");
+            const dock = arrayOf(objectOf(meta.json).fields).find(
+              (field) => objectOf(field).name === "dock"
+            );
 
             assert.deepStrictEqual(objectOf(dock).type, {
               kind: "reference",
@@ -299,14 +287,14 @@ describe("allowed-records", () => {
           // M is docked to L (previous test); now only spare assets qualify.
           yield* limitDock(dockId, compare(ACME.status, "eq", "spare"));
 
-          const version = yield* versionOf(tokens.bob, records.M);
+          const revision = yield* versionOf(tokens.bob, records.M);
 
           const kept = yield* http.request(
             "PATCH",
             recordPath("acme.asset", records.M),
             {
               body: { dock: records.L, name: "M" },
-              headers: { "if-match": `"${version}"` },
+              headers: { "if-match": `"${revision}"` },
               token: tokens.bob,
             }
           );
@@ -318,7 +306,7 @@ describe("allowed-records", () => {
             recordPath("acme.asset", records.M),
             {
               body: { dock: records.L, name: "M2" },
-              headers: { "if-match": `"${version}"` },
+              headers: { "if-match": `"${revision}"` },
               token: tokens.bob,
             }
           );
@@ -334,7 +322,7 @@ describe("allowed-records", () => {
           );
 
           assert.strictEqual(refused.status, 422, refused.text);
-          assert.include(refused.text, "InvalidReference");
+          assert.strictEqual(yield* codeOf(refused), "InvalidReference");
 
           yield* http.request("PATCH", recordPath("acme.asset", records.M), {
             body: { name: "M" },
@@ -387,9 +375,9 @@ describe("allowed-records", () => {
             );
 
             return {
-              picked: bodyOf(picked),
+              picked: picked.text,
               written: written.status,
-              writtenTag: textOf(objectOf(written.json)._tag ?? "ok"),
+              writtenCode: textOf(objectOf(written.json).code ?? "ok"),
             };
           });
 
@@ -407,10 +395,7 @@ describe("allowed-records", () => {
           const costly = yield* observe;
 
           assert.deepStrictEqual(
-            {
-              picked: costly.picked.includes('"records":[]'),
-              written: costly.written,
-            },
+            { picked: costly.picked === "[]", written: costly.written },
             { picked: true, written: 422 }
           );
 
@@ -454,51 +439,57 @@ describe("allowed-records", () => {
             http.get(listPath(table, { allowedFor }), { token });
 
           for (const malformed of [
-            "acme.asset",
+            "acmeAsset",
             "/dock",
-            "acme.asset/",
-            "acme.asset/dock/x",
+            "acmeAsset/",
+            "acmeAsset/dock/x",
           ]) {
             assert.deepStrictEqual(
-              tagAndParameter(yield* as("acme.asset", malformed)),
-              [400, "InvalidRequest", "allowedFor"],
+              statusAndCode(yield* as("acme.asset", malformed)),
+              [400, "InvalidRequest"],
               malformed
             );
           }
 
           // Not a reference; a reference whose target is a descendant of
           // the endpoint.
-          for (const wrong of ["acme.asset/name", "acme.asset/dock_laptop"]) {
+          for (const wrong of ["acmeAsset/name", "acmeAsset/dockLaptop"]) {
             assert.deepStrictEqual(
-              tagAndParameter(yield* as("acme.asset", wrong)),
-              [400, "InvalidRequest", "allowedFor"],
+              statusAndCode(yield* as("acme.asset", wrong)),
+              [400, "InvalidRequest"],
               wrong
             );
           }
 
           assert.strictEqual(
-            (yield* as("acme.laptop", "acme.asset/dock_laptop")).status,
+            (yield* as("acme.laptop", "acmeAsset/dockLaptop")).status,
             200
           );
 
           // A table or field the caller cannot name is unknown, exactly as
           // a missing one.
-          const hiddenTable = yield* as("acme.asset", "core.change/fields");
-          const missingTable = yield* as("acme.asset", "acme.nosuch/fields");
+          const hiddenTable = yield* as("acme.asset", "coreChange/fields");
+          const missingTable = yield* as("acme.asset", "acmeNosuch/fields");
 
-          assert.strictEqual(hiddenTable.status, 404);
+          assert.deepStrictEqual(statusAndCode(hiddenTable), [
+            404,
+            "UnknownTable",
+          ]);
           assert.strictEqual(
-            hiddenTable.text.replace("core.change", "<t>"),
-            missingTable.text.replace("acme.nosuch", "<t>")
+            hiddenTable.text.replace("coreChange", "<t>"),
+            missingTable.text.replace("acmeNosuch", "<t>")
           );
 
-          const hiddenField = yield* as("acme.asset", "acme.asset/cost");
-          const missingField = yield* as("acme.asset", "acme.asset/nosuch");
+          const hiddenField = yield* as("acme.asset", "acmeAsset/cost");
+          const missingField = yield* as("acme.asset", "acmeAsset/nosuch");
 
-          assert.strictEqual(hiddenField.status, 400);
+          assert.deepStrictEqual(statusAndCode(hiddenField), [
+            400,
+            "UnknownField",
+          ]);
           assert.strictEqual(
-            hiddenField.text.replace('"cost"', "<f>"),
-            missingField.text.replace('"nosuch"', "<f>")
+            hiddenField.text.replace("cost", "<f>"),
+            missingField.text.replace("nosuch", "<f>")
           );
           assert.deepStrictEqual(yield* committedState, before);
         })
@@ -535,6 +526,7 @@ describe("allowed-records", () => {
           const stale = yield* read(PICKER);
 
           assert.strictEqual(stale.status, 409, stale.text);
+          assert.strictEqual(yield* codeOf(stale), "SchemaChanged");
           assert.deepStrictEqual(
             arrayOf(objectOf(stale.json).changes).map((entry) => [
               objectOf(entry).field,
@@ -544,68 +536,6 @@ describe("allowed-records", () => {
           );
           assert.strictEqual((yield* read()).status, 200);
         })
-    );
-  });
-
-  layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "through /api/v2, allowedFor=<collection>/<attribute> equals the list filtered by the condition, and refuses what it cannot name like v1",
-      () =>
-        Effect.gen(function* pickerV2() {
-          yield* setup;
-
-          const { tokens } = yield* signInAll;
-
-          for (const token of [tokens.alice, tokens.bob, tokens.admin]) {
-            for (const collection of [
-              "acmeAsset",
-              "acmeLaptop",
-              "acmeMonitor",
-            ]) {
-              const picked = yield* v2List(
-                collection,
-                "allowedFor=acmeAsset/dock&sort=name",
-                token
-              );
-
-              const plain = yield* v2List(
-                collection,
-                `condition=${encodeURIComponent('status = "in_use"')}&sort=name`,
-                token
-              );
-
-              assert.strictEqual(picked.status, 200, picked.text);
-              assert.deepStrictEqual(v2Ids(picked), v2Ids(plain), collection);
-              assert.strictEqual(
-                picked.headers.get("x-total-count"),
-                plain.headers.get("x-total-count")
-              );
-            }
-          }
-
-          const refusals = [
-            ["allowedFor=noSuchTable/dock", 404, "UnknownTable"],
-            ["allowedFor=acmeAsset/noSuchField", 400, "UnknownField"],
-            ["allowedFor=acmeAsset", 400, "InvalidRequest"],
-            ["allowedFor=acmeAsset/name", 400, "InvalidRequest"],
-          ] as const;
-
-          for (const [query, status, code] of refusals) {
-            const refused = yield* v2List("acmeAsset", query, tokens.bob);
-
-            assert.strictEqual(
-              refused.status,
-              status,
-              `${query}: ${refused.text}`
-            );
-            assert.strictEqual(
-              textOf(objectOf(refused.json).code),
-              code,
-              query
-            );
-          }
-        }),
-      { timeout: 120_000 }
     );
   });
 });

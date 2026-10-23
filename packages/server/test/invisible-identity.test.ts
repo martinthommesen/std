@@ -13,9 +13,8 @@ import { Effect } from "effect";
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import type { TestRequestOptions } from "../../testing/src/http-client.ts";
-import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
-import { asObject, V2 } from "./v2-support.ts";
-import { ASSET, LAPTOP } from "./writes-support.ts";
+import { asObject, API } from "./api-support.ts";
+import { readsTestLayer } from "./reads-support.ts";
 
 /** One request shape, applied to a record ID. */
 interface Probe {
@@ -25,7 +24,7 @@ interface Probe {
   readonly options: TestRequestOptions;
 }
 
-/** How an API version spells its by-ID paths and body media type. */
+/** How the API spells its by-ID paths and a merge patch's media type. */
 interface Api {
   readonly asset: (id: string) => string;
   readonly laptop: (id: string) => string;
@@ -33,15 +32,9 @@ interface Api {
   readonly patchType: string;
 }
 
-const V1_API: Api = {
-  asset: (id) => recordPath(ASSET, id),
-  laptop: (id) => recordPath(LAPTOP, id),
-  patchType: "application/json",
-};
-
-const V2_API: Api = {
-  asset: (id) => `${V2.asset}/${id}`,
-  laptop: (id) => `${V2.laptop}/${id}`,
+const PATHS: Api = {
+  asset: (id) => `${API.asset}/${id}`,
+  laptop: (id) => `${API.laptop}/${id}`,
   patchType: "application/merge-patch+json",
 };
 
@@ -143,36 +136,24 @@ const probes = (token: string, api: Api): readonly Probe[] => [
   },
 ];
 
-const VERSIONS = [
-  [
-    "v1",
-    "an invisible record and an unknown ID give byte-identical responses",
-    V1_API,
-  ],
-  [
-    "v2",
-    "an invisible record and an unknown ID give byte-identical responses in /api/v2",
-    V2_API,
-  ],
-] as const;
-
 describe("invisible-identity", () => {
   it("covers every by-ID route", () => {
-    const methods = new Set(probes("t", V2_API).map((probe) => probe.method));
+    const methods = new Set(probes("t", PATHS).map((probe) => probe.method));
 
     assert.deepStrictEqual([...methods].toSorted(), ["DELETE", "GET", "PATCH"]);
   });
 
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
-    for (const [version, title, api] of VERSIONS) {
-      dbTest.effect(title, () =>
+    dbTest.effect(
+      "an invisible record and an unknown ID give byte-identical responses",
+      () =>
         Effect.gen(function* identical() {
           const http = yield* TestHttpClient;
           const fixture = yield* AcmeFixture;
           const bob = yield* http.signIn("bob", "bob-password");
           const unknown = randomUUID();
 
-          for (const probe of probes(bob, api)) {
+          for (const probe of probes(bob, PATHS)) {
             const hidden = yield* http.request(
               probe.method,
               probe.path(fixture.records.K),
@@ -185,20 +166,11 @@ describe("invisible-identity", () => {
               probe.options
             );
 
-            assert.strictEqual(
-              hidden.status,
-              missing.status,
-              `${version} ${probe.name}`
-            );
-            assert.strictEqual(
-              hidden.text,
-              missing.text,
-              `${version} ${probe.name}`
-            );
+            assert.strictEqual(hidden.status, missing.status, probe.name);
+            assert.strictEqual(hidden.text, missing.text, probe.name);
           }
         })
-      );
-    }
+    );
 
     dbTest.effect(
       "on a visible record the same parameters give their own errors",
@@ -210,34 +182,7 @@ describe("invisible-identity", () => {
           const { L } = fixture.records;
 
           const unknownField = yield* http.get(
-            historyPath((id) => recordPath(LAPTOP, id), "field=nosuchfield")(L),
-            { token: bob }
-          );
-
-          assert.strictEqual(unknownField.status, 400);
-          assert.strictEqual(yield* tagOf(unknownField), "UnknownField");
-
-          const badDate = yield* http.get(
-            historyPath((id) => recordPath(ASSET, id), "since=yesterday")(L),
-            { token: bob }
-          );
-
-          assert.strictEqual(badDate.status, 400);
-          assert.strictEqual(yield* tagOf(badDate), "InvalidRequest");
-        })
-    );
-
-    dbTest.effect(
-      "on a visible record the same parameters give their own errors in /api/v2",
-      () =>
-        Effect.gen(function* visibleV2() {
-          const http = yield* TestHttpClient;
-          const fixture = yield* AcmeFixture;
-          const bob = yield* http.signIn("bob", "bob-password");
-          const { L } = fixture.records;
-
-          const unknownField = yield* http.get(
-            historyPath(V2_API.laptop, "field=nosuchfield")(L),
+            historyPath(PATHS.laptop, "field=nosuchfield")(L),
             { token: bob }
           );
 
@@ -245,7 +190,7 @@ describe("invisible-identity", () => {
           assert.strictEqual(asObject(unknownField.json).code, "UnknownField");
 
           const badDate = yield* http.get(
-            historyPath(V2_API.asset, "since=yesterday")(L),
+            historyPath(PATHS.asset, "since=yesterday")(L),
             { token: bob }
           );
 

@@ -1,5 +1,5 @@
 /**
- * `UnsupportedMediaType` (Contracts 10.5, HTTP 415, `/api/v2` only): a
+ * `UnsupportedMediaType` (Contracts 10.5, HTTP 415, `/api/v1` only): a
  * `PATCH` body in a media type STD does not accept, such as
  * `application/json-patch-query+json` (exclusion E15). `accepted` lists the
  * ones it does.

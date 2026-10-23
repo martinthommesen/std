@@ -1,56 +1,67 @@
 /**
- * The current session (Contracts 3.1): who it acts as, and sign-out.
- * Sign-out ends the session whichever way it was presented; when that was
- * the web app's session cookie, the response also clears the cookie.
- *
- * Both check a stated `STD-Schema-Revision` for its format (6.4). `me`
- * also refuses a revision this database never had at that number with
- * `409 SchemaChanged` (no changes listed: it names no field); sign-out
- * never refuses for staleness, so a stale client can always end its
- * session. [judgment]
+ * The session endpoints of `/api/v1` (Contracts 10.5).
  */
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api";
 
-import { Authentication } from "./authentication.ts";
-import { InvalidSchemaRevision } from "./errors/invalid-schema-revision.ts";
-import { SchemaChanged } from "./errors/schema-changed.ts";
+import { EntityRef } from "./resource.ts";
+import { READ_ERRORS, UnsupportedMediaTypeError } from "./tmf-error.ts";
 
-/** A role the current user holds. */
-export const HeldRoleSchema = Schema.Struct({
+/** The request body of a sign-in. */
+export const SessionCreate = Schema.Struct({
+  login: Schema.String,
+  password: Schema.String,
+  tokenDelivery: Schema.optionalKey(Schema.Literals(["body", "cookie"])),
+}).annotate({ identifier: "SessionCreate" });
+
+/**
+ * The session a sign-in creates; `token` only when delivered in the body.
+ */
+export const Session = Schema.Struct({
+  "@type": Schema.Literal("Session"),
+  expiresAt: Schema.String,
+  href: Schema.String,
+  id: Schema.Literal("current"),
+  token: Schema.optionalKey(Schema.String),
+  tokenDelivery: Schema.Literals(["body", "cookie"]),
+  user: EntityRef,
+}).annotate({ identifier: "Session" });
+
+/** One of the caller's roles. */
+export const SessionRole = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
   name: Schema.String,
-});
-
-/** A role the current user holds. */
-export type HeldRole = typeof HeldRoleSchema.Type;
+}).annotate({ identifier: "SessionRole" });
 
 /**
- * The acting user of the session, their display name (`core.user.name`)
- * and their effective roles: `authenticated` plus the live roles assigned
- * to them, sorted by ID.
+ * The current session as `GET /session/current` shows it: the user, the
+ * display name, the roles and the schema revision; never the token or its
+ * expiry.
  */
-export const CurrentUserSchema = Schema.Struct({
+export const CurrentSession = Schema.Struct({
+  "@type": Schema.Literal("Session"),
+  href: Schema.String,
+  id: Schema.Literal("current"),
   name: Schema.String,
-  roles: Schema.Array(HeldRoleSchema),
+  roles: Schema.Array(SessionRole),
   schemaRevision: Schema.Int,
-  userId: Schema.String,
-});
+  user: EntityRef,
+}).annotate({ identifier: "CurrentSession" });
 
-/** The acting user of the session. */
-export type CurrentUser = typeof CurrentUserSchema.Type;
-
-/** `GET /auth/me` and `POST /auth/sign-out`, for a signed-in session. */
-export class SessionGroup extends HttpApiGroup.make("session")
-  .add(
-    HttpApiEndpoint.get("me", "/auth/me", {
-      error: [InvalidSchemaRevision, SchemaChanged],
-      success: CurrentUserSchema,
-    }),
-    HttpApiEndpoint.post("signOut", "/auth/sign-out", {
-      error: InvalidSchemaRevision,
-      success: HttpApiSchema.NoContent,
-    })
-  )
-  .middleware(Authentication) {}
+/** `POST /session`, `GET` and `DELETE /session/current`. */
+export class SessionGroup extends HttpApiGroup.make("session").add(
+  HttpApiEndpoint.post("create", "/session", {
+    error: [...READ_ERRORS, UnsupportedMediaTypeError],
+    payload: SessionCreate,
+    success: Session.pipe(HttpApiSchema.status(201)),
+  }),
+  HttpApiEndpoint.get("current", "/session/current", {
+    error: READ_ERRORS,
+    success: CurrentSession,
+  }),
+  HttpApiEndpoint.delete("signOut", "/session/current", {
+    error: READ_ERRORS,
+    success: HttpApiSchema.NoContent,
+  })
+) {}

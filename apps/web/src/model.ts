@@ -1,5 +1,5 @@
-import { CurrentSession } from "@std/api/v2/session";
-import { TableMetadataSummary } from "@std/api/v2/table-metadata";
+import { CurrentSession } from "@std/api/session";
+import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
 import { AsyncData } from "foldkit";
 import { defineTaggedUnion } from "foldkit/schema";

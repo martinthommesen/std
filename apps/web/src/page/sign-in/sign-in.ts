@@ -1,6 +1,6 @@
 import { Button, Input } from "@foldkit/ui";
-import { isTmfError } from "@std/api/v2/client";
-import { CurrentSession } from "@std/api/v2/session";
+import { isTmfError } from "@std/api/client";
+import { CurrentSession } from "@std/api/session";
 import { Effect, Match, Option, Redacted, Schema } from "effect";
 import { Command, Dom, FieldValidation, Submodel } from "foldkit";
 import type { Update } from "foldkit";

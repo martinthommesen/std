@@ -569,8 +569,8 @@ describe("loading a stored filter", () => {
 });
 
 describe("list Commands against the server", () => {
-  const LIST_PATH = "/api/v2/acmeAsset";
-  const META_PATH = "/api/v2/tableMetadata/acmeAsset";
+  const LIST_PATH = "/api/v1/acmeAsset";
+  const META_PATH = "/api/v1/tableMetadata/acmeAsset";
   const OWNER = "019a0000-0000-7000-8000-000000000001";
 
   it("a list request sends its revision and the query, and reads the revision the response states", async () => {

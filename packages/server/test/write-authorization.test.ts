@@ -12,7 +12,8 @@ import { Effect } from "effect";
 
 import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
-import { readsTestLayer, recordPath, tagOf } from "./reads-support.ts";
+import { objectOf } from "./authz-support.ts";
+import { codeOf, readsTestLayer, recordPath } from "./reads-support.ts";
 import {
   ASSET,
   create,
@@ -58,7 +59,7 @@ describe("write-authorization", () => {
         });
 
         assert.strictEqual(handOver.status, 403);
-        assert.strictEqual(yield* tagOf(handOver), "NotAllowed");
+        assert.strictEqual(yield* codeOf(handOver), "NotAllowed");
         assert.strictEqual(yield* versionOf(L), before);
         assert.lengthOf(yield* entriesOf(L), 1);
 
@@ -104,7 +105,7 @@ describe("write-authorization", () => {
         );
 
         assert.strictEqual(onLaptop.status, 403);
-        assert.strictEqual(yield* tagOf(onLaptop), "NotAllowed");
+        assert.strictEqual(yield* codeOf(onLaptop), "NotAllowed");
       })
     );
 
@@ -119,21 +120,21 @@ describe("write-authorization", () => {
         });
 
         assert.strictEqual(serialViaAsset.status, 400);
-        assert.strictEqual(yield* tagOf(serialViaAsset), "UnknownField");
+        assert.strictEqual(yield* codeOf(serialViaAsset), "UnknownField");
 
         const diskKey = yield* patch(bob, LAPTOP, L, version, {
-          disk_key: "X",
+          diskKey: "X",
         });
 
         const misspelled = yield* patch(bob, LAPTOP, L, version, {
-          disk_kee: "X",
+          diskKee: "X",
         });
 
         assert.strictEqual(diskKey.status, 400);
-        assert.strictEqual(yield* tagOf(diskKey), "UnknownField");
+        assert.strictEqual(yield* codeOf(diskKey), "UnknownField");
         assert.strictEqual(
-          diskKey.text.replace("disk_key", "?"),
-          misspelled.text.replace("disk_kee", "?")
+          diskKey.text.replace("diskKey", "?"),
+          misspelled.text.replace("diskKee", "?")
         );
         assert.strictEqual(yield* versionOf(L), version);
       })
@@ -162,16 +163,16 @@ describe("write-authorization", () => {
         assert.strictEqual(noOp.status, 200);
         assert.strictEqual(yield* versionOf(L), version + 1);
 
-        // purchased_on is hidden on lost S: an equal value and a different
+        // purchasedOn is hidden on lost S: an equal value and a different
         // one have the same effect.
         const sVersion = (yield* versionOf(S)) ?? 0;
 
         const equal = yield* patch(bob, ASSET, S, sVersion, {
-          purchased_on: "2023-03-10",
+          purchasedOn: "2023-03-10",
         });
 
         const different = yield* patch(bob, ASSET, S, sVersion, {
-          purchased_on: "2020-01-01",
+          purchasedOn: "2020-01-01",
         });
 
         assert.strictEqual(equal.status, different.status);
@@ -187,19 +188,19 @@ describe("write-authorization", () => {
         const version = (yield* versionOf(M)) ?? 0;
 
         const hidden = yield* patch(bob, ASSET, M, version, {
-          docked_to: AM,
+          dockedTo: AM,
         });
 
         const missing = yield* patch(bob, ASSET, M, version, {
-          docked_to: randomUUID(),
+          dockedTo: randomUUID(),
         });
 
         assert.strictEqual(hidden.status, 422);
-        assert.strictEqual(yield* tagOf(hidden), "InvalidReference");
+        assert.strictEqual(yield* codeOf(hidden), "InvalidReference");
         assert.strictEqual(hidden.text, missing.text);
 
         const created = yield* create(bob, ASSET, {
-          docked_to: AM,
+          dockedTo: AM,
           name: "dock",
           owner: fixture.bob.id,
         });
@@ -266,7 +267,7 @@ describe("write-authorization", () => {
           const { alice, bob, fixture } = yield* tokens;
           const { AM, M } = fixture.records;
 
-          const { values = {}, version } = yield* savedOf(
+          const { values, version } = yield* savedOf(
             yield* http.get(recordPath(MONITOR, M), { token: alice })
           );
 
@@ -278,7 +279,7 @@ describe("write-authorization", () => {
           assert.strictEqual(costAndStatus.status, 200, costAndStatus.text);
 
           const size = yield* patch(alice, MONITOR, M, version + 1, {
-            size_inches: 32,
+            sizeInches: 32,
           });
 
           assert.strictEqual(size.status, 200, size.text);
@@ -304,7 +305,7 @@ describe("write-authorization", () => {
               { status: { after: "repair", before: values.status ?? null } },
               table
             );
-            // No rule lets an employee read `size_inches` (rule 8 grants
+            // No rule lets an employee read `sizeInches` (rule 8 grants
             // only a laptop's serial): the entry is there, its change is not.
             assert.deepStrictEqual(
               seen.entries.find((entry) => entry.version === version + 2)
@@ -315,7 +316,7 @@ describe("write-authorization", () => {
             assert.isTrue(
               seen.entries.every(
                 (entry) =>
-                  !("cost" in entry.changes || "size_inches" in entry.changes)
+                  !("cost" in entry.changes || "sizeInches" in entry.changes)
               ),
               table
             );
@@ -341,7 +342,7 @@ describe("write-authorization", () => {
               aliceSees.entries.find((entry) => entry.version === version + 2)
                 ?.changes,
               {
-                size_inches: { after: 32, before: values.size_inches ?? null },
+                sizeInches: { after: 32, before: values.sizeInches ?? null },
               },
               table
             );
@@ -371,7 +372,7 @@ describe("write-authorization", () => {
         const response = yield* remove(alice, MONITOR, AM, version);
 
         assert.strictEqual(response.status, 409);
-        assert.deepStrictEqual(response.json, { _tag: "Referenced" });
+        assert.strictEqual(yield* codeOf(response), "Referenced");
         assert.strictEqual(yield* versionOf(AM), version);
       })
     );
@@ -402,7 +403,7 @@ describe("write-authorization", () => {
     );
 
     dbTest.effect(
-      "If-Match: missing is 428, stale is 409 with the current version",
+      "If-Match: missing is 428, stale is 412 with the current version",
       () =>
         Effect.gen(function* ifMatch() {
           const { alice, fixture } = yield* tokens;
@@ -414,17 +415,15 @@ describe("write-authorization", () => {
           });
 
           assert.strictEqual(missing.status, 428);
-          assert.strictEqual(yield* tagOf(missing), "VersionRequired");
+          assert.strictEqual(yield* codeOf(missing), "VersionRequired");
 
           const stale = yield* patch(alice, ASSET, K, version - 1, {
             name: "K2",
           });
 
-          assert.strictEqual(stale.status, 409);
-          assert.deepStrictEqual(stale.json, {
-            _tag: "VersionConflict",
-            currentVersion: version,
-          });
+          assert.strictEqual(stale.status, 412);
+          assert.strictEqual(yield* codeOf(stale), "VersionConflict");
+          assert.strictEqual(objectOf(stale.json).currentVersion, version);
           assert.strictEqual(yield* versionOf(K), version);
         })
     );
@@ -454,23 +453,21 @@ describe("write-authorization", () => {
 
           const invalid = yield* patch(alice, LAPTOP, K, version, {
             cost: 12.5,
-            purchased_on: null,
+            purchasedOn: null,
           });
 
           assert.strictEqual(invalid.status, 422);
-          assert.deepStrictEqual(invalid.json, {
-            _tag: "ValidationFailed",
-            errors: [
-              { _tag: "Required", field: "purchased_on" },
-              {
-                _tag: "InvalidValue",
-                field: "cost",
-                message:
-                  'Expected a string such as "12.50"; JSON numbers lose precision.',
-                reason: "wrongJsonType",
-              },
-            ],
-          });
+          assert.strictEqual(yield* codeOf(invalid), "ValidationFailed");
+          assert.deepStrictEqual(objectOf(invalid.json).fieldErrors, [
+            { _tag: "Required", field: "purchasedOn" },
+            {
+              _tag: "InvalidValue",
+              field: "cost",
+              message:
+                'Expected a string such as "12.50"; JSON numbers lose precision.',
+              reason: "wrongJsonType",
+            },
+          ]);
         })
     );
   });
