@@ -33,6 +33,7 @@ import type { ActingUser } from "../auth/actor.ts";
 import type { DatabaseError } from "../sql/errors.ts";
 import type { RequestRevision } from "../sql/request-revision.ts";
 import { existingTargets } from "./save-sql.ts";
+import type { ReferenceTarget } from "./save-sql.ts";
 import type { StoredRecord } from "./stored-record.ts";
 
 /** What the seam's methods may use: the save's transaction. */
@@ -64,11 +65,8 @@ export interface ProposedCheck {
   readonly written: ReadonlySet<DefinitionId>;
 }
 
-/** The reference targets a write names, for one target class. */
-export interface TargetCheck {
-  readonly snapshot: ConfigSnapshot;
-  readonly targetClassId: DefinitionId;
-  readonly ids: readonly string[];
+/** A reference target checked against the caller's view. */
+export interface TargetCheck extends ReferenceTarget {
   /**
    * The reference field's allowed-records condition (decision 0020), which
    * a target must also satisfy in the caller's view: null for none,
@@ -189,13 +187,15 @@ export interface WriteAccessApi {
     InTransaction
   >;
   /**
-   * The IDs among `ids` that exist, that the caller can see (3.6) and that
-   * satisfy the allowed-records condition in the caller's view; a
-   * missing ID becomes `InvalidReference`.
+   * The field IDs whose targets exist, that the caller can see (3.6) and
+   * that satisfy each field's allowed-records condition in the caller's
+   * view. All targets are checked in one statement; the pipeline reports
+   * the first refused field in its original order.
    */
-  readonly visibleTargets: (
-    input: TargetCheck
-  ) => Effect.Effect<ReadonlySet<string>, SqlError, InTransaction>;
+  readonly visibleTargets: (input: {
+    readonly snapshot: ConfigSnapshot;
+    readonly targets: readonly TargetCheck[];
+  }) => Effect.Effect<ReadonlySet<DefinitionId>, SqlError, InTransaction>;
   /**
    * The response record, with the caller's read rights; only `id` and
    * `version` when the record is no longer visible (3.9).
@@ -272,8 +272,7 @@ const ALLOW_ALL: WriteAccessApi = {
         input.snapshot.fields(input.record.classId).map((field) => field.id)
       )
     ),
-  visibleTargets: (input) =>
-    existingTargets(input.snapshot, input.targetClassId, input.ids),
+  visibleTargets: (input) => existingTargets(input.snapshot, input.targets),
 };
 
 const userAccess = new WeakMap<WriteAccessApi, WriteAccessApi>();

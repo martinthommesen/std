@@ -143,16 +143,31 @@ const makeView = (
     field.system !== undefined ||
     schema.byId(field.id)?.readability === "always";
 
+  const masks = new Map<string, SqlFragment>();
+  const visibilityByAlias = new Map<string, SqlFragment>();
+
   const readable = (alias: string, field: ReadField): SqlFragment => {
     if (isAlways(field)) {
       return TRUE_SQL;
     }
 
+    const key = `${alias}\u0000${field.id}`;
+    const existing = masks.get(key);
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
     const entry = schema.byId(field.id);
 
-    return entry === undefined
-      ? rawSql("FALSE")
-      : groupsSql(snapshot, { groups: entry.groups }, alias, context);
+    const predicate =
+      entry === undefined
+        ? rawSql("FALSE")
+        : groupsSql(snapshot, { groups: entry.groups }, alias, context);
+
+    masks.set(key, predicate);
+
+    return predicate;
   };
 
   const column = (alias: string, field: ReadField): SqlFragment =>
@@ -191,8 +206,18 @@ const makeView = (
     readable,
     schema,
     value: (alias, field) => masked(alias, field, column(alias, field)),
-    visibility: (alias) =>
-      sql`(${classIn(alias, schema.classIds)} AND ${groupsSql(snapshot, schema.rows, alias, context)})`,
+    visibility: (alias) => {
+      const existing = visibilityByAlias.get(alias);
+
+      if (existing !== undefined) {
+        return existing;
+      }
+
+      const predicate = sql`(${classIn(alias, schema.classIds)} AND ${groupsSql(snapshot, schema.rows, alias, context)})`;
+      visibilityByAlias.set(alias, predicate);
+
+      return predicate;
+    },
     visibilityBranches: (alias) =>
       branchesSql(snapshot, schema.rows, alias, context),
   };

@@ -32,7 +32,6 @@ import type { FieldAction } from "@std/access/rules";
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import type { SqlFragment } from "@std/conditions/sql-fragment";
 import {
-  arrayParameter,
   identSql,
   joinSql,
   rawSql,
@@ -53,6 +52,7 @@ import type { AccessContext } from "./access-sql.ts";
 import { compileAllowedRecords, filterClassView } from "./read-query.ts";
 import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
+import type { ReadScope } from "./read-view.ts";
 import {
   isNameable,
   proposedRelation,
@@ -126,8 +126,20 @@ const makeRuleWriteAccess = (
     timeZone: settings.timeZone,
   };
 
-  const scopeOf = (snapshot: ConfigSnapshot) =>
-    makeReadScope(snapshot, actor, context);
+  const scopes = new WeakMap<ConfigSnapshot, ReadScope>();
+
+  const scopeOf = (snapshot: ConfigSnapshot): ReadScope => {
+    const existing = scopes.get(snapshot);
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const scope = makeReadScope(snapshot, actor, context);
+    scopes.set(snapshot, scope);
+
+    return scope;
+  };
 
   const allowed = Effect.fn("WriteAccess.allowed")(function* allowed(
     check: RuleCheck
@@ -296,41 +308,45 @@ ${byId(input.snapshot, owner.classId, owner.id)}`
       ),
     visibleTargets: Effect.fn("WriteAccess.visibleTargets")(
       function* visibleTargets(input) {
-        if (input.ids.length === 0) {
-          return new Set<string>();
+        if (input.targets.length === 0) {
+          return new Set<DefinitionId>();
         }
 
         const scope = scopeOf(input.snapshot);
-        const view = scope.view(input.targetClassId);
 
-        // The allowed-records condition in the caller's view (decision
-        // 0020): hidden values count as empty, so whether a target is
-        // refused reveals nothing about them.
-        const limit =
-          input.allowedRecords === null
-            ? undefined
-            : compileAllowedRecords(
-                scope,
-                input.targetClassId,
-                input.allowedRecords,
-                ALIAS
-              );
+        const branches = input.targets.map((target) => {
+          const view = scope.view(target.targetClassId);
 
-        const rows = yield* readRows(
-          sql`SELECT ${identSql(ALIAS, "id")}::text AS "id"
-FROM ${recordRelation(input.snapshot, input.targetClassId)} AS ${identSql(ALIAS)}${limit === undefined ? rawSql("") : sql` ${limit.joins}`}
-WHERE ${identSql(ALIAS, "id")} = ANY(${arrayParameter(input.ids, "uuid")})
+          // Hidden values count as empty in allowed-records conditions
+          // (decision 0020), just as for a single target.
+          const limit =
+            target.allowedRecords === null
+              ? undefined
+              : compileAllowedRecords(
+                  scope,
+                  target.targetClassId,
+                  target.allowedRecords,
+                  ALIAS
+                );
+
+          return sql`SELECT ${textParameter(target.fieldId, "uuid")}::text AS "field_id"
+FROM ${recordRelation(input.snapshot, target.targetClassId)} AS ${identSql(ALIAS)}${limit === undefined ? rawSql("") : sql` ${limit.joins}`}
+WHERE ${identSql(ALIAS, "id")} = ${textParameter(target.id, "uuid")}
   AND ${view.visibility(ALIAS)}${
     limit === undefined
       ? rawSql("")
       : sql`
   AND (${limit.predicate})`
-  }`
-        );
+  }`;
+        });
+
+        const rows = yield* readRows(joinSql(branches, "\nUNION ALL\n"));
 
         const visible: ReadonlySet<string> = new Set(
           rows.flatMap((row) =>
-            row.id === null || row.id === undefined ? [] : [row.id]
+            row.field_id === null || row.field_id === undefined
+              ? []
+              : [row.field_id]
           )
         );
 

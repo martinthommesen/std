@@ -8,6 +8,7 @@ import { ValidationFailed } from "@std/api/errors/validation-failed";
 import { VersionConflict } from "@std/api/errors/version-conflict";
 import { ownerReferenceOf } from "@std/definitions/aggregates";
 import { allowedRecordsOf } from "@std/definitions/allowed-records";
+import type { FieldDefinition } from "@std/definitions/definition";
 /**
  * The save pipeline (Contracts 2.2, 3.9, 4.1, 4.2): create, update and
  * delete of one logical record, each in one request transaction (joined
@@ -126,7 +127,7 @@ import {
   userAccessOf,
   WriteAccess,
 } from "./write-access.ts";
-import type { InTransaction } from "./write-access.ts";
+import type { InTransaction, TargetCheck } from "./write-access.ts";
 import { decodeWriteBody, resolveWriteBody } from "./write-body.ts";
 import type { WriteBody } from "./write-body.ts";
 import { WriteOnlyValues } from "./write-only-values.ts";
@@ -239,19 +240,9 @@ const effectiveById = (
   );
 
 const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
-  snapshot: ConfigSnapshot,
-  input: SaveInput,
   body: JsonObject,
-  action: "create" | "update"
+  nameable: readonly FieldDefinition[]
 ) {
-  const access = yield* WriteAccess;
-
-  const nameable = access.nameable({
-    action,
-    endpointClassId: input.endpointClassId,
-    snapshot,
-  });
-
   const resolved = resolveWriteBody(body, nameable);
 
   return Result.isSuccess(resolved)
@@ -360,9 +351,8 @@ const failIfInvalid = Effect.fn("Records.validate")(function* validate(
 /**
  * Checks that every reference value the write sets names a target the
  * caller can see (3.6) and that satisfies the field's allowed-records
- * condition in the caller's view (decision 0020): one check per written
- * reference field, in field
- * order; the first failure is reported.
+ * condition in the caller's view (decision 0020): all written references
+ * are checked in one statement; the first failure in field order is reported.
  */
 const checkReferences = Effect.fn("Records.checkReferences")(
   function* checkReferences(
@@ -374,6 +364,8 @@ const checkReferences = Effect.fn("Records.checkReferences")(
   ) {
     const access = yield* WriteAccess;
 
+    const targets: (TargetCheck & { readonly fieldName: string })[] = [];
+
     for (const [fieldId, value] of values) {
       const field = fields.get(fieldId);
       const { type } = field ?? {};
@@ -384,19 +376,24 @@ const checkReferences = Effect.fn("Records.checkReferences")(
         isString(value) &&
         written.has(fieldId)
       ) {
-        const visible = yield* access.visibleTargets({
+        targets.push({
           allowedRecords: allowedRecordsOf(field.field.type),
-          ids: [value],
-          snapshot,
+          fieldId,
+          fieldName: field.field.name,
+          id: value,
           targetClassId: type.targetClassId,
         });
+      }
+    }
 
-        if (!visible.has(value)) {
-          return yield* withShownFields(
-            new InvalidReference({ field: field.field.name }),
-            shown
-          );
-        }
+    const visible = yield* access.visibleTargets({ snapshot, targets });
+
+    for (const target of targets) {
+      if (!visible.has(target.fieldId)) {
+        return yield* withShownFields(
+          new InvalidReference({ field: target.fieldName }),
+          shown
+        );
       }
     }
 
@@ -830,7 +827,14 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
     yield* refuseRetiredClass(snapshot, classId);
 
-    const resolved = yield* resolveBody(snapshot, input, body, "create");
+    const resolved = yield* resolveBody(
+      body,
+      access.nameable({
+        action: "create",
+        endpointClassId: input.endpointClassId,
+        snapshot,
+      })
+    );
 
     if (platformCreate !== DEAD_DELIVERY_ACTION_CREATE) {
       yield* refusePlatformTable(snapshot, classId);
@@ -1151,12 +1155,13 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     const snapshot = yield* (yield* Catalog).current;
     const access = yield* WriteAccess;
 
-    const resolved: WriteBody = yield* resolveBody(
+    const nameable = access.nameable({
+      action: "update",
+      endpointClassId: input.endpointClassId,
       snapshot,
-      input,
-      body,
-      "update"
-    );
+    });
+
+    const resolved: WriteBody = yield* resolveBody(body, nameable);
 
     const lock = updateLock(snapshot, input.endpointClassId, [
       ...resolved.entries.keys(),
@@ -1176,8 +1181,6 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
       input.evaluate === undefined
         ? resolved
         : yield* resolveBody(
-            snapshot,
-            input,
             yield* input.evaluate({
               projection: yield* project(
                 snapshot,
@@ -1186,7 +1189,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
               ),
               storedJson: storedJsonOf(snapshot, record),
             }),
-            "update"
+            nameable
           );
 
     yield* protectServiceIdentity(
@@ -1234,11 +1237,12 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     });
 
     const proposal = finalizeUpdate(rules, hooked, record);
+    const proposalChanges = changedValues(fields, proposal.values, record);
     yield* protectServiceIdentity(
       snapshot,
       classId,
       record.id,
-      changedValues(fields, proposal.values, record),
+      proposalChanges,
       record
     );
 
@@ -1277,10 +1281,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
 
     yield* checkReferences(snapshot, fields, proposal.values, written, shown);
 
-    const changes = new Map([
-      ...changedValues(fields, proposal.values, record),
-      ...assignedChanges,
-    ]);
+    const changes = new Map([...proposalChanges, ...assignedChanges]);
 
     const writes = yield* columnWrites(fields, changes);
 

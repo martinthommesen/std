@@ -17,6 +17,13 @@
  * - Deletes remove the root row with a version check; the level FKs
  *   cascade (the only cascade, 2.1).
  */
+import {
+  identSql,
+  joinSql,
+  rawSql,
+  sql as fragmentSql,
+  textParameter,
+} from "@std/conditions/sql-fragment";
 import type { FieldDefinition } from "@std/definitions/definition";
 import type { DefinitionId } from "@std/definitions/ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
@@ -29,6 +36,7 @@ import { indexKey } from "../schema/ddl.ts";
 import { quoteIdent, tableName } from "../schema/sql-text.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import { readRows } from "./sql-run.ts";
 import type { StoredRecord } from "./stored-record.ts";
 import { columnText, parseStoredText } from "./stored-values.ts";
 import type { BoundValue } from "./stored-values.ts";
@@ -157,6 +165,88 @@ const storedOf = (
 };
 
 /**
+ * Reads records of a known concrete class, all levels joined (inner
+ * joins: a record missing a level row is absent, 2.2 item 2).
+ *
+ * @param snapshot - The configuration.
+ * @param classId - The record's concrete class.
+ * @param ids - The record IDs.
+ * @returns The records by ID; missing records are left out.
+ */
+export const loadRecords = Effect.fn("Records.loadRecords")(
+  function* loadRecords(
+    snapshot: ConfigSnapshot,
+    classId: DefinitionId,
+    ids: readonly string[]
+  ) {
+    if (ids.length === 0) {
+      return new Map<string, StoredRecord>();
+    }
+
+    const sql = yield* SqlClient.SqlClient;
+    const lineage = snapshot.lineage(classId);
+    const levelOf = new Map(lineage.map((level, index) => [level.id, index]));
+    const fields = snapshot.fields(classId);
+    const root = levelAlias(0);
+
+    const columns = [
+      `${root}.id::text AS id`,
+      `${root}.class_id::text AS class_id`,
+      `${root}.version::text AS version`,
+      `${root}.created_at::text AS created_at`,
+      `${root}.created_by::text AS created_by`,
+      `${root}.updated_at::text AS updated_at`,
+      `${root}.updated_by::text AS updated_by`,
+      ...fields.map(
+        (field, index) =>
+          `${columnText(field, levelAlias(levelOf.get(field.classId) ?? 0))} AS ${fieldAlias(index)}`
+      ),
+    ];
+
+    const joins = lineage
+      .slice(1)
+      .map(
+        (level, index) =>
+          `JOIN ${tableName(snapshot, level.id)} ${levelAlias(index + 1)} ON ${levelAlias(index + 1)}.id = ${root}.id`
+      );
+
+    const rows = yield* readOnly(
+      sql.unsafe(
+        `SELECT ${columns.join(", ")}
+       FROM ${tableName(snapshot, lineage[0]?.id ?? classId)} ${root}
+       ${joins.join("\n")}
+       WHERE ${root}.id = ANY($1::uuid[])`,
+        [ids]
+      )
+    );
+
+    const systems = yield* decodeSystem(rows);
+    const texts = yield* decodeFieldTexts(rows);
+
+    return new Map(
+      systems.map((system, rowIndex): [string, StoredRecord] => [
+        system.id,
+        {
+          classId: system.class_id,
+          createdAt: timeOf(system.created_at),
+          createdBy: system.created_by,
+          id: system.id,
+          updatedAt: timeOf(system.updated_at),
+          updatedBy: system.updated_by,
+          values: new Map<DefinitionId, StoredValue | null>(
+            fields.map((field, index) => [
+              field.id,
+              storedOf(field, texts[rowIndex]?.[fieldAlias(index)]),
+            ])
+          ),
+          version: Number(system.version),
+        },
+      ])
+    );
+  }
+);
+
+/**
  * Reads a record of a known concrete class, all levels joined (inner
  * joins: a record missing a level row is absent, 2.2 item 2).
  *
@@ -170,67 +260,11 @@ export const loadRecord = Effect.fn("Records.loadRecord")(function* loadRecord(
   classId: DefinitionId,
   id: string
 ) {
-  const sql = yield* SqlClient.SqlClient;
-  const lineage = snapshot.lineage(classId);
-  const levelOf = new Map(lineage.map((level, index) => [level.id, index]));
-  const fields = snapshot.fields(classId);
-  const root = levelAlias(0);
+  const [record] = (yield* loadRecords(snapshot, classId, [id])).values();
 
-  const columns = [
-    `${root}.id::text AS id`,
-    `${root}.class_id::text AS class_id`,
-    `${root}.version::text AS version`,
-    `${root}.created_at::text AS created_at`,
-    `${root}.created_by::text AS created_by`,
-    `${root}.updated_at::text AS updated_at`,
-    `${root}.updated_by::text AS updated_by`,
-    ...fields.map(
-      (field, index) =>
-        `${columnText(field, levelAlias(levelOf.get(field.classId) ?? 0))} AS ${fieldAlias(index)}`
-    ),
-  ];
-
-  const joins = lineage
-    .slice(1)
-    .map(
-      (level, index) =>
-        `JOIN ${tableName(snapshot, level.id)} ${levelAlias(index + 1)} ON ${levelAlias(index + 1)}.id = ${root}.id`
-    );
-
-  const rows = yield* readOnly(
-    sql.unsafe(
-      `SELECT ${columns.join(", ")}
-       FROM ${tableName(snapshot, lineage[0]?.id ?? classId)} ${root}
-       ${joins.join("\n")}
-       WHERE ${root}.id = $1::uuid`,
-      [id]
-    )
-  );
-
-  const [system] = yield* decodeSystem(rows);
-  const [texts] = yield* decodeFieldTexts(rows);
-
-  if (system === undefined || texts === undefined) {
-    return Option.none<StoredRecord>();
-  }
-
-  const values = new Map<DefinitionId, StoredValue | null>(
-    fields.map((field, index) => [
-      field.id,
-      storedOf(field, texts[fieldAlias(index)]),
-    ])
-  );
-
-  return Option.some<StoredRecord>({
-    classId: system.class_id,
-    createdAt: timeOf(system.created_at),
-    createdBy: system.created_by,
-    id: system.id,
-    updatedAt: timeOf(system.updated_at),
-    updatedBy: system.updated_by,
-    values,
-    version: Number(system.version),
-  });
+  return record === undefined
+    ? Option.none<StoredRecord>()
+    : Option.some(record);
 });
 
 /** A column to write and its bound value. */
@@ -461,41 +495,46 @@ export const deleteRecordRows = Effect.fn("Records.deleteRecordRows")(
   }
 );
 
+/** A reference field and the record it proposes to name. */
+export interface ReferenceTarget {
+  readonly fieldId: DefinitionId;
+  readonly targetClassId: DefinitionId;
+  readonly id: string;
+}
+
 /**
- * The IDs among `ids` that have a row in the target class's table (which
- * holds every record of its subtree).
+ * The fields whose proposed targets have a row in the target class's
+ * table (which holds every record of its subtree).
  *
  * @param snapshot - The configuration.
- * @param targetClassId - The reference's target class.
- * @param ids - Lowercase UUIDs.
- * @returns The existing IDs.
+ * @param targets - Reference fields and their proposed target records.
+ * @returns The field IDs whose targets exist.
  */
 export const existingTargets = Effect.fn("Records.existingTargets")(
   function* existingTargets(
     snapshot: ConfigSnapshot,
-    targetClassId: DefinitionId,
-    ids: readonly string[]
+    targets: readonly ReferenceTarget[]
   ) {
-    if (ids.length === 0) {
-      return new Set<string>();
+    if (targets.length === 0) {
+      return new Set<DefinitionId>();
     }
 
-    const sql = yield* SqlClient.SqlClient;
+    const branches = targets.map(
+      (target) =>
+        fragmentSql`SELECT ${textParameter(target.fieldId, "uuid")}::text AS "field_id"
+FROM ${rawSql(tableName(snapshot, target.targetClassId))} AS ${identSql("t")}
+WHERE ${identSql("t", "id")} = ${textParameter(target.id, "uuid")}`
+    );
 
-    const rows = yield* readOnly(
-      sql.unsafe(
-        `SELECT t.id::text AS id
-         FROM ${tableName(snapshot, targetClassId)} t
-         WHERE t.id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid)`,
-        [JSON.stringify(ids)]
+    const rows = yield* readRows(joinSql(branches, "\nUNION ALL\n"));
+
+    return new Set(
+      rows.flatMap((row) =>
+        row.field_id === null || row.field_id === undefined
+          ? []
+          : [row.field_id]
       )
     );
-
-    const found: ReadonlySet<string> = new Set(
-      (yield* decodeId(rows)).map((row) => row.id)
-    );
-
-    return found;
   }
 );
 

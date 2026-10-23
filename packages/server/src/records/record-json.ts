@@ -21,70 +21,9 @@
 import { encodeOut } from "@std/values/codec";
 import { getOrThrow } from "@std/values/field-error";
 import type { FieldType } from "@std/values/field-type";
-import type { StoredValue } from "@std/values/field-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
-import {
-  parseDateText,
-  parseInt8Text,
-  parseJsonbText,
-  parseNumericText,
-  parseTimestamptzText,
-} from "@std/values/postgres-text";
-import { parseUuid } from "@std/values/uuid";
-import { secretState } from "@std/values/write-only";
 
-const storedValueOf = (type: FieldType, text: string): StoredValue => {
-  switch (type.kind) {
-    case "text":
-    case "longText":
-    case "choice": {
-      return text;
-    }
-
-    case "integer": {
-      return Number(text);
-    }
-
-    case "bigInteger": {
-      return getOrThrow(parseInt8Text(text));
-    }
-
-    case "decimal": {
-      return getOrThrow(parseNumericText(text));
-    }
-
-    case "boolean": {
-      return text === "true";
-    }
-
-    case "date": {
-      return getOrThrow(parseDateText(text));
-    }
-
-    case "dateTime": {
-      return getOrThrow(parseTimestamptzText(text));
-    }
-
-    case "reference":
-    case "uuid": {
-      return getOrThrow(parseUuid(text));
-    }
-
-    case "password":
-    case "secret": {
-      return secretState(text === "true");
-    }
-
-    case "json":
-    case "condition": {
-      return getOrThrow(parseJsonbText(text));
-    }
-
-    default: {
-      return type satisfies never;
-    }
-  }
-};
+import { parseStoredText } from "./stored-values.ts";
 
 /**
  * The canonical JSON of a value read as text.
@@ -97,7 +36,10 @@ export const encodeTextValue = (
   type: FieldType,
   text: string | null
 ): JsonValue =>
-  encodeOut(type, text === null ? null : storedValueOf(type, text));
+  encodeOut(
+    type,
+    text === null ? null : getOrThrow(parseStoredText(type.kind, text))
+  );
 
 /** The parts of one record's JSON. */
 export interface RecordParts {

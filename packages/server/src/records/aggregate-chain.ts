@@ -1,6 +1,6 @@
 import {
   identSql,
-  rawSql,
+  joinSql,
   sql,
   textParameter,
 } from "@std/conditions/sql-fragment";
@@ -30,8 +30,8 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { isString } from "@std/values/field-value";
 import { Effect, Option } from "effect";
 
-import { tableName } from "../schema/sql-text.ts";
-import { loadRoot, rootTable } from "./save-sql.ts";
+import { recordRelation } from "./relation.ts";
+import { loadRoot } from "./save-sql.ts";
 import { readRows } from "./sql-run.ts";
 
 /** One owner of a chain. */
@@ -67,27 +67,44 @@ const readLink = Effect.fn("Records.readOwnerLink")(function* readLink(
   classId: DefinitionId,
   id: string
 ) {
-  const [root] = yield* readRows(
-    sql`SELECT "class_id"::text AS "class_id" FROM ${rawSql(rootTable(snapshot, classId))} WHERE "id" = ${textParameter(id, "uuid")}`
+  const root = snapshot.root(classId);
+
+  if (root === undefined) {
+    return yield* Effect.die(new RangeError(`Unknown class ${classId}`));
+  }
+
+  const references = new Map(
+    snapshot.subtree(root.id).flatMap((level) => {
+      const reference = ownerReferenceOf(snapshot, level.id);
+
+      return reference === undefined
+        ? []
+        : [[reference.id, reference] as const];
+    })
   );
 
-  const concrete = root?.class_id;
+  const columns = [
+    sql`${identSql("r", "class_id")}::text AS "class_id"`,
+    ...[...references.values()].map(
+      (reference) =>
+        sql`${identSql("r", reference.name)}::text AS ${identSql(reference.id)}`
+    ),
+  ];
+
+  const [row] = yield* readRows(
+    sql`SELECT ${joinSql(columns, ", ")}
+FROM ${recordRelation(snapshot, root.id)} AS ${identSql("r")}
+WHERE ${identSql("r", "id")} = ${textParameter(id, "uuid")}`
+  );
+
+  const concrete = row?.class_id;
 
   if (!isString(concrete)) {
     return Option.none<Link>();
   }
 
   const reference = ownerReferenceOf(snapshot, concrete);
-
-  if (reference === undefined) {
-    return Option.some<Link>({ classId: concrete, ownerId: null });
-  }
-
-  const [row] = yield* readRows(
-    sql`SELECT ${identSql("t", reference.name)}::text AS "owner" FROM ${rawSql(tableName(snapshot, reference.classId))} AS ${identSql("t")} WHERE ${identSql("t", "id")} = ${textParameter(id, "uuid")}`
-  );
-
-  const owner = row?.owner;
+  const owner = reference === undefined ? null : row?.[reference.id];
 
   return Option.some<Link>({
     classId: concrete,
