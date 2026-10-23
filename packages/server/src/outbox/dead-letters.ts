@@ -17,25 +17,31 @@ import { recordDecision } from "@std/access/rules";
  * - Discard: `dead` to `done` without running the effect. Under `block`
  *   this releases the record's later versions. The row keeps `last_error`
  *   and is deleted with the other `done` rows after 7 days; the discard is
- *   logged with the operator's user ID.
+ *   recorded through the record service with the operator as actor.
  *
  * The API and Foldkit operator view are described in decision 0037.
  */
 import { NotAllowed } from "@std/api/errors/not-allowed";
 import { NotFound } from "@std/api/errors/not-found";
+import { SubscriptionNotServed } from "@std/api/errors/subscription-not-served";
 import type { AccessAction } from "@std/definitions/definition";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
+import { formatDateTime } from "@std/values/date-time";
 import { parseTimestamptzText } from "@std/values/postgres-text";
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema, SchemaGetter, SchemaIssue } from "effect";
 import { SqlClient } from "effect/sql";
 
 import { Actor } from "../auth/actor.ts";
 import { Catalog } from "../catalog/catalog.ts";
+import { createRecord } from "../records/save-pipeline.ts";
 import { decodeRows } from "../sql/rows.ts";
 import { readOnly } from "../sql/statement-marks.ts";
+import { CurrentTransaction } from "../sql/transaction-context.ts";
 import { Transactions } from "../sql/transactions.ts";
 import { wakeWorkerAfterCommit } from "../sql/wake-up.ts";
+import { DeliveryHandlers } from "./delivery-effects.ts";
 import { refreshDeadGauge } from "./metrics.ts";
+import { subscriptionState } from "./served.ts";
 
 /** A dead delivery, as the admin view lists it. */
 export interface DeadDelivery {
@@ -70,10 +76,29 @@ export interface DeadListInput {
 /** The largest page of dead deliveries. */
 export const DEAD_LIST_MAX = 1000;
 
+/** PostgreSQL timestamp text decoded without inventing a missing instant. */
+export const DeadDeliveryTimestamp = Schema.String.pipe(
+  Schema.decodeTo(Schema.Finite, {
+    decode: SchemaGetter.transformEffect((text: string) => {
+      const parsed = parseTimestamptzText(text);
+
+      return parsed.ok
+        ? Effect.succeed(parsed.value)
+        : Effect.fail(
+            new SchemaIssue.InvalidValue(
+              { message: "Invalid dead delivery finished_at timestamp" },
+              text
+            )
+          );
+    }),
+    encode: SchemaGetter.transform(formatDateTime),
+  })
+);
+
 const DeadRowSchema = Schema.Struct({
   attempts: Schema.Int,
   change_id: Schema.String,
-  finished_at: Schema.String,
+  finished_at: DeadDeliveryTimestamp,
   id: Schema.String,
   last_error: Schema.NullOr(Schema.String),
   record_id: Schema.String,
@@ -82,8 +107,6 @@ const DeadRowSchema = Schema.Struct({
 });
 
 const decodeDead = decodeRows(DeadRowSchema);
-
-const decodeId = decodeRows(Schema.Struct({ id: Schema.String }));
 
 const DIGITS = /^\d{1,19}$/u;
 
@@ -157,12 +180,10 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
     const dead: DeadDelivery[] = [];
 
     for (const row of yield* decodeDead(rows)) {
-      const finished = parseTimestamptzText(row.finished_at);
-
       dead.push({
         attempts: row.attempts,
         changeId: row.change_id,
-        finishedAt: finished.ok ? finished.value : 0,
+        finishedAt: row.finished_at,
         id: row.id,
         lastError: row.last_error,
         recordId: row.record_id,
@@ -175,103 +196,110 @@ export const listDeadDeliveries = Effect.fn("Outbox.listDeadDeliveries")(
   }
 );
 
-/** Counts matching dead deliveries after the same subscription read check. */
-export const countDeadDeliveries = Effect.fn("Outbox.countDeadDeliveries")(
-  function* countDeadDeliveries(subscriptionId?: string) {
-    return yield* (yield* Transactions).request(
-      Effect.gen(function* countDead() {
-        yield* requireDeadLetterAdmin("read");
-        const sql = yield* SqlClient.SqlClient;
-
-        const rows = yield* decodeRows(
-          Schema.Struct({ total: Schema.FiniteFromString })
-        )(
-          yield* readOnly(sql`SELECT count(*)::text AS total FROM core.delivery
-          WHERE status = 'dead' AND (${subscriptionId ?? null}::uuid IS NULL
-            OR subscription_id = ${subscriptionId ?? null}::uuid)`)
-        );
-
-        return rows[0]?.total ?? 0;
-      })
-    );
-  }
-);
-
 /**
- * Runs an update of one dead row as an admin; `NotFound` when the row is
- * not dead (or does not exist).
+ * Atomically changes one dead row and stores its operator action through the
+ * record service. A refused or rolled-back transition leaves no action record.
  */
 const updateDead = Effect.fn("Outbox.updateDead")(function* updateDead(
   deliveryId: string,
-  assignment: string
+  action: "retry" | "discard"
 ) {
   if (!DIGITS.test(deliveryId)) {
     return yield* new NotFound();
   }
 
-  const { request } = yield* Transactions;
+  const transactions = yield* Transactions;
 
-  const changed = yield* request(
+  return yield* transactions.request(
     Effect.gen(function* changeDead() {
       yield* requireDeadLetterAdmin("update");
       const sql = yield* SqlClient.SqlClient;
 
-      const rows = yield* decodeId(
-        yield* sql.unsafe(
-          `UPDATE core.delivery SET ${assignment}
-           WHERE id = $1::int8 AND status = 'dead'
-           RETURNING id::text AS id`,
-          [deliveryId]
-        )
+      const [row] = yield* decodeRows(
+        Schema.Struct({ subscription_id: Schema.String })
+      )(
+        yield* readOnly(sql`SELECT subscription_id::text AS subscription_id FROM core.delivery
+        WHERE id = ${deliveryId}::int8 AND status = 'dead' FOR UPDATE`)
       );
 
-      if (rows.length === 0) {
+      if (row === undefined) {
         return yield* new NotFound();
       }
 
-      yield* wakeWorkerAfterCommit;
+      if (action === "retry") {
+        const snapshot = yield* (yield* Catalog).current;
 
-      return rows.length;
+        const subscriptions = new Map(
+          snapshot
+            .all("subscription")
+            .map((subscription) => [subscription.id, subscription])
+        );
+
+        const state = subscriptionState(
+          snapshot,
+          yield* DeliveryHandlers,
+          subscriptions.get(row.subscription_id)
+        );
+
+        if (state !== "served") {
+          let remedy =
+            "restore an active, enabled subscription and its worker handler, then retry; or discard this delivery";
+
+          if (state === "disabled") {
+            remedy = "enable it, then retry";
+          }
+
+          if (state === "noHandler") {
+            remedy = "configure a worker handler, then retry";
+          }
+
+          return yield* new SubscriptionNotServed({
+            message: `Subscription ${row.subscription_id} is ${state}; ${remedy}.`,
+            state,
+            subscriptionId: row.subscription_id,
+          });
+        }
+      }
+
+      yield* action === "retry"
+        ? sql`UPDATE core.delivery SET status = 'pending', attempts = 0, next_attempt_at = now(), finished_at = NULL WHERE id = ${deliveryId}::int8 AND status = 'dead'`
+        : sql`UPDATE core.delivery SET status = 'done', finished_at = now() WHERE id = ${deliveryId}::int8 AND status = 'dead'`;
+
+      const saved = yield* createRecord({
+        body: {
+          action,
+          delivery_id: deliveryId,
+          occurred_at: formatDateTime(yield* Clock.currentTimeMillis),
+          state: "completed",
+          subscription_id: row.subscription_id,
+        },
+        endpointClassId: PLATFORM_CLASS_IDS.dead_delivery_action,
+      });
+
+      yield* wakeWorkerAfterCommit;
+      yield* (yield* CurrentTransaction).afterCommit(
+        refreshDeadGauge().pipe(
+          Effect.provideService(Transactions, transactions),
+          Effect.orDie,
+          Effect.asVoid
+        )
+      );
+
+      return saved;
     })
   );
-
-  yield* refreshDeadGauge();
-
-  return changed;
 });
 
-/**
- * Retries a dead delivery: `pending`, due now, attempts reset. Admins only.
- *
- * @param deliveryId - The row ID, in decimal.
- * @returns Nothing; `NotFound` unless the row is dead.
- */
+/** Retry a served subscription's dead delivery and record the committed action. */
 export const retryDeadDelivery = Effect.fn("Outbox.retryDeadDelivery")(
   function* retryDeadDelivery(deliveryId: string) {
-    yield* updateDead(
-      deliveryId,
-      "status = 'pending', attempts = 0, next_attempt_at = now(), finished_at = NULL"
-    );
-
-    yield* Effect.logInfo(
-      `Outbox delivery ${deliveryId} retried by user ${(yield* Actor).userId}`
-    );
+    return yield* updateDead(deliveryId, "retry");
   }
 );
 
-/**
- * Discards a dead delivery: `done` without its effect, releasing later
- * versions under `block`. Admins only.
- *
- * @param deliveryId - The row ID, in decimal.
- * @returns Nothing; `NotFound` unless the row is dead.
- */
+/** Discard in any subscription state and record the committed action. */
 export const discardDeadDelivery = Effect.fn("Outbox.discardDeadDelivery")(
   function* discardDeadDelivery(deliveryId: string) {
-    yield* updateDead(deliveryId, "status = 'done', finished_at = now()");
-
-    yield* Effect.logInfo(
-      `Outbox delivery ${deliveryId} discarded by user ${(yield* Actor).userId}`
-    );
+    return yield* updateDead(deliveryId, "discard");
   }
 );

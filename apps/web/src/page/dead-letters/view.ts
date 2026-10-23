@@ -24,10 +24,26 @@ const rowView = (
     [
       h.td([], [delivery.id]),
       h.td([], [delivery.subscriptionId ?? ""]),
-      h.td([], [delivery.recordId ?? ""]),
-      h.td([], [String(delivery.recordVersion ?? "")]),
+      h.td(
+        [],
+        [
+          delivery.withheld?.includes("recordId") === true
+            ? "Restricted"
+            : (delivery.recordId ?? ""),
+        ]
+      ),
+      h.td(
+        [],
+        [
+          delivery.withheld?.includes("recordVersion") === true
+            ? "Restricted"
+            : String(delivery.recordVersion ?? ""),
+        ]
+      ),
       h.td([], [delivery.changeId ?? ""]),
       h.td([], [String(delivery.attempts ?? "")]),
+      h.td([], [delivery.finishedAt ?? "Time unavailable"]),
+      h.td([], [delivery.subscriptionState ?? "State unavailable"]),
       h.td([], [delivery.lastError ?? "No error recorded"]),
       h.td([], [delivery.deadLetterPolicy ?? "Subscription unavailable"]),
       h.td(
@@ -35,7 +51,7 @@ const rowView = (
         [
           buttonView(
             {
-              isDisabled,
+              isDisabled: isDisabled || delivery.subscriptionState !== "served",
               onClick: Message.ClickedAction({ action: "retry", delivery }),
               text: `Retry ${delivery.id}`,
               variant: "quiet",
@@ -80,7 +96,7 @@ const confirmationOf = (
       "Under skip, later deliveries may already have run. A retry can arrive after newer versions.";
   }
 
-  return `Delivery ${delivery.id}. ${effect} ${policy}`;
+  return `Delivery ${delivery.id}. Subscription ${delivery.subscriptionId ?? "unknown"} is ${delivery.subscriptionState ?? "unknown"}. ${effect} ${policy}`;
 };
 
 const confirmationContentView = (
@@ -174,6 +190,8 @@ const tableView = (
                   "Version",
                   "Change",
                   "Attempts",
+                  "Time of death",
+                  "Subscription state",
                   "Last error",
                   "Policy",
                   "Actions",
@@ -269,17 +287,6 @@ const filtersView = (
           label: "Subscription ID",
           onInput: (value) => Message.UpdatedSubscription({ value }),
           value: model.subscriptionId,
-        },
-        h
-      ),
-      selectField(
-        {
-          id: "dead-letter-status",
-          isDisabled: isBusy,
-          label: "Status",
-          onChange: (value) => Message.UpdatedStatus({ value }),
-          options: [{ label: "Dead", value: "dead" }],
-          value: model.status,
         },
         h
       ),

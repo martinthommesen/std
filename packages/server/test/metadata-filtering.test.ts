@@ -629,6 +629,26 @@ describe("metadata filtering", () => {
           )) {
             const { body } = yield* metadataOf(tokens.admin, table);
 
+            if (table === "core.dead_delivery_action") {
+              assert.isTrue(body.table.creatable, table);
+
+              for (const name of [
+                "delivery_id",
+                "subscription_id",
+                "action",
+                "state",
+                "occurred_at",
+              ]) {
+                assert.deepStrictEqual(
+                  fieldOf(body.table, name).write,
+                  { create: "yes", update: "yes" },
+                  name
+                );
+              }
+
+              continue;
+            }
+
             assert.isFalse(body.table.creatable, table);
             assert.isTrue(
               body.table.fields.every(

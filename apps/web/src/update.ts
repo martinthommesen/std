@@ -911,7 +911,7 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotSignInMessage: ({ message: signInMessage }) =>
       foldSignIn(model, signInMessage),
-    // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     GotTableListMessage: ({ message: tableListMessage, pageId }) =>
       foldTableList(pageId)(model, tableListMessage),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag

@@ -28,7 +28,6 @@ export const Operation = defineTaggedUnion({
 /** The operator page, with no payload values or credentials. */
 // oxlint-disable-next-line no-redeclare -- a Schema and its type alias share the name (FOLDKIT.md)
 export const Model = Schema.Struct({
-  appliedStatus: Schema.String,
   appliedSubscriptionId: Schema.String,
   deliveries: Deliveries.schema,
   dialog: Dialog.Model,
@@ -37,7 +36,6 @@ export const Model = Schema.Struct({
   offset: Schema.Int,
   operation: Operation,
   requestId: Schema.Int,
-  status: Schema.String,
   subscriptionId: Schema.String,
 });
 

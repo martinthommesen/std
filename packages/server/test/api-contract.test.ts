@@ -348,7 +348,7 @@ describe("api-contract", () => {
               body: { deliveryId: deliveryId ?? "" },
             };
 
-            yield* exchange("POST", `/api/v1/${taskPath}`, options, 200);
+            yield* exchange("POST", `/api/v1/${taskPath}`, options, 201);
             yield* exchange("POST", `/api/v1/${taskPath}`, options, 404);
           }
 

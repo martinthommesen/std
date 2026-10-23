@@ -58,6 +58,7 @@ import {
 } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
+  PLATFORM_CLASS_IDS,
   SYSTEM_USER_ID,
   PARTY_CLASS_IDS,
   PARTY_FIELD_IDS,
@@ -316,14 +317,17 @@ const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
  * routes them to one-operation change sets first (Contracts 1.4,
  * `http/handlers.ts` and `http/definition-writes.ts`). What reaches this
  * guard is every other platform table (the journal, `core.change`, the
- * config-layer tables), refused for every caller.
+ * config-layer tables), refused for every caller. `core.dead_delivery_action`
+ * is a data class stored by the platform migration: it uses ordinary saves,
+ * access rules, history and outbox production (Contracts 4.6).
  */
 const refusePlatformTable = Effect.fn("Records.refusePlatformTable")(
   function* refusePlatformTable(
     snapshot: ConfigSnapshot,
     classId: DefinitionId
   ) {
-    return snapshot.class(classId)?.storage === "platform"
+    return snapshot.class(classId)?.storage === "platform" &&
+      classId !== PLATFORM_CLASS_IDS.dead_delivery_action
       ? yield* new NotAllowed()
       : undefined;
   }

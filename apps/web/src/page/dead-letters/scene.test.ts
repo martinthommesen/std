@@ -26,6 +26,8 @@ describe("dead-letter page view", () => {
       given(loaded),
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- Foldkit's scene assertion
       expect(role("table", { name: "Outbox dead deliveries" })).toExist(),
+      expect(text(delivery.finishedAt ?? "")).toExist(),
+      expect(text("served")).toExist(),
       click(role("button", { name: `Discard ${delivery.id}` })),
       expect(role("dialog", { name: "Discard this delivery?" })).toExist(),
       expect(text(/discarding releases later deliveries/u)).toExist(),
@@ -55,6 +57,34 @@ describe("dead-letter page view", () => {
         })
       ),
       expect(text("No dead deliveries match these filters.")).toExist()
+    );
+  });
+
+  it("shows unavailable subscriptions and Restricted identities, while discard remains available", () => {
+    const restrictedDelivery = {
+      "@type": "DeadDelivery" as const,
+      href: delivery.href,
+      id: delivery.id,
+      subscriptionState: "disabled" as const,
+      withheld: ["recordId", "recordVersion"],
+    };
+
+    const page = modifyFields(loaded, {
+      deliveries: () =>
+        Deliveries.Success({
+          data: { deliveries: [restrictedDelivery], total: 1 },
+        }),
+    });
+
+    scene(
+      { update, view },
+      given(page),
+      expect(text("disabled")).toExist(),
+      expect(role("button", { name: `Retry ${delivery.id}` })).toBeDisabled(),
+      expect(role("button", { name: `Discard ${delivery.id}` })).toBeEnabled(),
+      expect(role("table", { name: "Outbox dead deliveries" })).toContainText(
+        "Restricted"
+      )
     );
   });
 
@@ -136,7 +166,7 @@ describe("dead-letter page view", () => {
           limit: 25,
           offset: 0,
           requestId: 2,
-          status: "dead",
+
           subscriptionId: "",
         })
       ),

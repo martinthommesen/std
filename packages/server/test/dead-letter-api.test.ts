@@ -1,14 +1,35 @@
 /** Dead-letter operator API, Contracts 3.8, 4.6 and 10; decision 0037. */
+import { randomUUID } from "node:crypto";
+
 import { assert, describe, it, layer } from "@effect/vitest";
 import { DeliveryId } from "@std/api/dead-letters";
-import { Duration, Effect, Redacted, Result, Schema } from "effect";
+import { setOrigin } from "@std/definitions/requester";
+import {
+  BUILT_IN_ROLE_IDS,
+  PLATFORM_CLASS_IDS,
+} from "@std/definitions/well-known";
+import {
+  Context,
+  Duration,
+  Layer,
+  Effect,
+  Metric,
+  Redacted,
+  Result,
+  Schema,
+} from "effect";
 import { FetchHttpClient } from "effect/http";
 import { SqlClient } from "effect/sql";
 
 import { makeStdClient } from "../../api/src/client.ts";
+import { AcmeFixture } from "../../testing/src/acme-fixture.ts";
 import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
+import { Catalog } from "../src/catalog/catalog.ts";
+import { DeadDeliveryTimestamp } from "../src/outbox/dead-letters.ts";
 import { claimDeliveries } from "../src/outbox/delivery-claims.ts";
+import { deadDeliveries } from "../src/outbox/metrics.ts";
+import { applyChangeSet } from "../src/schema/change-set.ts";
 import { asArray, asObject, apiCallers, idsOf, textOf } from "./api-support.ts";
 import { deliveriesWhere } from "./outbox-support.ts";
 import { readsTestLayer } from "./reads-support.ts";
@@ -40,7 +61,55 @@ describe("dead-letter API", () => {
       )
     );
   });
+  it.effect(
+    "undecodable finished_at fails with a schema error instead of inventing an instant",
+    () =>
+      Effect.gen(function* badTimestamp() {
+        const result = yield* Effect.result(
+          Schema.decodeEffect(DeadDeliveryTimestamp)("infinity")
+        );
+
+        assert.isTrue(Result.isFailure(result));
+
+        if (Result.isFailure(result)) {
+          assert.strictEqual(result.failure._tag, "SchemaError");
+        }
+      })
+  );
   layer(readsTestLayer(), { excludeTestServices: true })((dbTest) => {
+    dbTest.effect("stored actions produce ordinary outbox events", () =>
+      Effect.gen(function* actionEvents() {
+        const { admin } = yield* apiCallers;
+        const seeded = yield* seedDeadLetters(admin);
+        const http = yield* TestHttpClient;
+
+        const hub = yield* http.request("POST", "/api/v1/hub", {
+          ...admin,
+          body: {
+            "@type": "Hub",
+            callback: "https://example.com/actions",
+            query: "resource=coreDeadDeliveryAction",
+          },
+        });
+
+        assert.strictEqual(hub.status, 201, hub.text);
+
+        const action = yield* http.request("POST", DISCARD, {
+          ...admin,
+          body: { deliveryId: seeded.firstId },
+        });
+
+        assert.strictEqual(action.status, 201, action.text);
+
+        const events = yield* deliveriesWhere(
+          "subscription_id = $1::uuid AND record_id = $2::uuid",
+          [asObject(hub.json).id, asObject(action.json).id]
+        );
+
+        assert.lengthOf(events, 1);
+      })
+    );
+
     dbTest.effect(
       "lists, filters, projects and pages without payload values; typed client and HEAD agree",
       () =>
@@ -50,12 +119,26 @@ describe("dead-letter API", () => {
           const http = yield* TestHttpClient;
           const path = `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&status=dead&limit=1`;
           const first = yield* http.get(path, admin);
-          assert.strictEqual(first.status, 200);
+          assert.strictEqual(first.status, 200, first.text);
           assert.deepStrictEqual(idsOf(first), [seeded.firstId]);
           assert.strictEqual(first.headers.get("x-total-count"), "2");
           assert.strictEqual(first.headers.get("x-result-count"), "1");
           assert.include(first.headers.get("link") ?? "", 'rel="next"');
-          assert.notInclude(first.text, "payload");
+          assert.sameMembers(Object.keys(asObject(asArray(first.json)[0])), [
+            "@type",
+            "id",
+            "href",
+            "subscriptionId",
+            "changeId",
+            "recordId",
+            "recordVersion",
+            "attempts",
+            "lastError",
+            "finishedAt",
+            "status",
+            "deadLetterPolicy",
+            "subscriptionState",
+          ]);
           const resource = asObject(asArray(first.json)[0]);
           assert.strictEqual(resource.deadLetterPolicy, "block");
           assert.strictEqual(resource.recordId, seeded.recordId);
@@ -169,7 +252,7 @@ describe("dead-letter API", () => {
             responses
               .map(({ status }) => status)
               .toSorted((left, right) => left - right),
-            [200, 404]
+            [201, 404]
           );
 
           const [row] = yield* deliveriesWhere("id = $1::int8", [
@@ -221,7 +304,7 @@ describe("dead-letter API", () => {
             body: { deliveryId: seeded.firstId },
           });
 
-          assert.strictEqual(discarded.status, 200, discarded.text);
+          assert.strictEqual(discarded.status, 201, discarded.text);
           assert.strictEqual(asObject(discarded.json).state, "completed");
           assert.strictEqual(
             (yield* deliveriesWhere("id = $1::int8", [seeded.firstId]))[0]
@@ -311,7 +394,7 @@ describe("dead-letter API", () => {
           );
           const sql = yield* SqlClient.SqlClient;
           yield* sql`UPDATE core.delivery SET status = 'dead', finished_at = now() WHERE subscription_id = ${seeded.subscriptionId}::uuid`;
-          const query = `subscriptionId=${seeded.subscriptionId}&status=dead&limit=1&fields=attempts`;
+          const query = `subscriptionId=${seeded.subscriptionId}&status=dead&limit=1&fields=attempts&offset=0`;
           const first = yield* http.get(`${COLLECTION}?${query}`, admin);
           const firstLinks = linksOf(first.headers.get("link") ?? "");
           assert.sameMembers(
@@ -320,7 +403,7 @@ describe("dead-letter API", () => {
           );
 
           const middle = yield* http.get(
-            `${COLLECTION}?${query}&offset=1`,
+            `${COLLECTION}?${query.replace("offset=0", "offset=1")}`,
             admin
           );
 
@@ -359,7 +442,7 @@ describe("dead-letter API", () => {
           assert.strictEqual(last.headers.get("x-result-count"), "1");
 
           const empty = yield* http.get(
-            `${COLLECTION}?${query}&offset=9`,
+            `${COLLECTION}?${query.replace("offset=0", "offset=9")}`,
             admin
           );
 
@@ -381,6 +464,494 @@ describe("dead-letter API", () => {
           );
         })
     );
+    dbTest.effect(
+      "retry racing discard commits exactly one action with readable history",
+      () =>
+        Effect.gen(function* race() {
+          const { admin, bob } = yield* apiCallers;
+          const fixture = yield* AcmeFixture;
+          const seeded = yield* seedDeadLetters(admin);
+          const http = yield* TestHttpClient;
+
+          const before = yield* http.get(
+            `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
+            admin
+          );
+
+          assert.deepStrictEqual(before.json, []);
+
+          const outcomes = yield* Effect.all(
+            [RETRY, DISCARD].map((path) =>
+              http.request("POST", path, {
+                ...admin,
+                body: { deliveryId: seeded.firstId },
+              })
+            ),
+            { concurrency: "unbounded" }
+          );
+
+          assert.sameMembers(
+            outcomes.map(({ status }) => status),
+            [201, 404]
+          );
+          const success = outcomes.find(({ status }) => status === 201);
+          assert.isDefined(success);
+          const resource = asObject(success?.json);
+          const location = success?.headers.get("location") ?? "";
+          assert.strictEqual(location, resource.href);
+          const path = new URL(location).pathname;
+          const read = yield* http.get(path, admin);
+          assert.deepStrictEqual(read.json, resource);
+          assert.strictEqual(
+            (yield* http.request("HEAD", path, admin)).status,
+            200
+          );
+          assert.strictEqual((yield* http.get(path, bob)).status, 404);
+          assert.strictEqual(asObject(resource.createdBy).id, fixture.admin.id);
+          assert.strictEqual(resource.subscriptionId, seeded.subscriptionId);
+          assert.strictEqual(resource.state, "completed");
+          assert.isString(resource.occurredAt);
+          assert.include(
+            success?.headers.get("link") ?? "",
+            'rel="version-history"'
+          );
+          const history = yield* http.get(`${path}/history`, admin);
+          assert.strictEqual(history.status, 200, history.text);
+          assert.lengthOf(asArray(history.json), 1);
+          assert.strictEqual(
+            asObject(asObject(asArray(history.json)[0]).actor).id,
+            fixture.admin.id
+          );
+
+          const actions = yield* http.get(
+            `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
+            admin
+          );
+
+          assert.lengthOf(asArray(actions.json), 1);
+        })
+    );
+
+    dbTest.effect(
+      "retry under block holds the next version, while skip permits an older retry through the API",
+      () =>
+        Effect.gen(function* policies() {
+          const { admin } = yield* apiCallers;
+          const http = yield* TestHttpClient;
+          const sql = yield* SqlClient.SqlClient;
+
+          for (const policy of ["block", "skip"] as const) {
+            const seeded = yield* seedDeadLetters(admin, policy);
+            yield* sql`UPDATE core.delivery SET status = 'pending', attempts = 0, finished_at = NULL WHERE id = ${seeded.secondId}::int8`;
+
+            const input = {
+              deadLetter: policy,
+              lease: Duration.minutes(1),
+              limit: 10,
+              maxAttempts: 1,
+              subscriptionId: seeded.subscriptionId,
+            };
+
+            const later = yield* claimDeliveries(input);
+            assert.deepStrictEqual(
+              later.map(({ id }) => id),
+              policy === "skip" ? [seeded.secondId] : []
+            );
+
+            if (policy === "skip") {
+              yield* sql`UPDATE core.delivery SET status = 'done', lease_until = NULL, lease_token = NULL, finished_at = now() WHERE id = ${seeded.secondId}::int8`;
+            }
+
+            const retried = yield* http.request("POST", RETRY, {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(retried.status, 201, retried.text);
+            const first = yield* claimDeliveries(input);
+            assert.deepStrictEqual(
+              first.map(({ id }) => id),
+              [seeded.firstId]
+            );
+            assert.lengthOf(
+              yield* claimDeliveries(input),
+              0,
+              "a retried block delivery must still hold the next version"
+            );
+          }
+        })
+    );
+
+    dbTest.effect(
+      "disabled and deleted hubs and subscriptions without handlers refuse retry and permit discard",
+      () =>
+        Effect.gen(function* unavailableSubscriptions() {
+          const { admin } = yield* apiCallers;
+          const http = yield* TestHttpClient;
+
+          for (const state of ["disabled", "deleted", "noHandler"] as const) {
+            const seeded = yield* seedDeadLetters(admin);
+
+            if (state === "deleted") {
+              const removed = yield* http.request(
+                "DELETE",
+                `/api/v1/hub/${seeded.subscriptionId}`,
+                admin
+              );
+
+              assert.strictEqual(removed.status, 204, removed.text);
+            } else {
+              const changed = yield* http.request(
+                "POST",
+                "/api/v1/applyChangeSet",
+                {
+                  ...admin,
+                  body: {
+                    operations: [
+                      {
+                        changes:
+                          state === "disabled"
+                            ? { enabled: false }
+                            : { hub: null },
+                        id: seeded.subscriptionId,
+                        op: "update",
+                        version: 1,
+                      },
+                    ],
+                  },
+                }
+              );
+
+              assert.strictEqual(changed.status, 201, changed.text);
+            }
+
+            const entry = yield* http.get(
+              `${COLLECTION}/${seeded.firstId}`,
+              admin
+            );
+
+            assert.strictEqual(
+              asObject(entry.json).subscriptionState,
+              state === "deleted" ? "purged" : state,
+              entry.text
+            );
+
+            const refusal = yield* http.request("POST", RETRY, {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(refusal.status, 409, refusal.text);
+            assert.strictEqual(
+              asObject(refusal.json).code,
+              "SubscriptionNotServed"
+            );
+            assert.include(
+              textOf(asObject(refusal.json).message),
+              seeded.subscriptionId
+            );
+            assert.include(
+              textOf(asObject(refusal.json).message),
+              state === "deleted" ? "purged" : state
+            );
+
+            const absent = yield* http.get(
+              `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
+              admin
+            );
+
+            assert.deepStrictEqual(absent.json, []);
+
+            const discarded = yield* http.request("POST", DISCARD, {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(discarded.status, 201, discarded.text);
+          }
+        })
+    );
+
+    dbTest.effect(
+      "persisted retired and purged subscription states refuse retry and still allow discard",
+      () =>
+        Effect.gen(function* historicalStates() {
+          const { admin } = yield* apiCallers;
+          const sql = yield* SqlClient.SqlClient;
+
+          for (const state of ["retired", "purged"] as const) {
+            const seeded = yield* seedDeadLetters(admin);
+            // Subscription lifecycle commands permit deletion, not retirement.
+            // Exercise historical persisted states with a fresh real catalog.
+            yield* sql`UPDATE core.subscription SET state = ${state} WHERE id = ${seeded.subscriptionId}::uuid`;
+
+            const services = yield* Layer.build(
+              Layer.fresh(
+                TestHttpClient.layer.pipe(Layer.provide(Catalog.layer))
+              )
+            );
+
+            const http = Context.get(services, TestHttpClient);
+
+            const entry = yield* http.get(
+              `${COLLECTION}/${seeded.firstId}`,
+              admin
+            );
+
+            assert.strictEqual(
+              asObject(entry.json).subscriptionState,
+              state,
+              entry.text
+            );
+
+            const refusal = yield* http.request("POST", RETRY, {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(refusal.status, 409, refusal.text);
+            assert.strictEqual(asObject(refusal.json).state, state);
+            assert.deepStrictEqual(
+              (yield* http.get(
+                `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
+                admin
+              )).json,
+              []
+            );
+
+            const discarded = yield* http.request("POST", DISCARD, {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(discarded.status, 201, discarded.text);
+            yield* sql`UPDATE core.subscription SET state = 'active' WHERE id = ${seeded.subscriptionId}::uuid`;
+          }
+        }).pipe(Effect.scoped)
+    );
+
+    dbTest.effect(
+      "an operator without record access gets restricted identities in resources, filters and cursors",
+      () =>
+        Effect.gen(function* restricted() {
+          const { admin } = yield* apiCallers;
+          const seeded = yield* seedDeadLetters(admin);
+          const snapshot = yield* (yield* Catalog).refresh;
+          const classId = snapshot.classByName("acme.asset")?.id ?? "";
+          const ruleId = randomUUID();
+          yield* applyChangeSet({
+            operations: [
+              {
+                definition: {
+                  actions: ["read"],
+                  active: true,
+                  classId,
+                  condition: null,
+                  description: "Hide this delivery's record from the operator",
+                  effect: "deny",
+                  id: ruleId,
+                  kind: "accessRule",
+                  name: `dead_${ruleId.replaceAll("-", "")}`,
+                  owner: { layer: "local" },
+                  protected: false,
+                  roleIds: [BUILT_IN_ROLE_IDS.admin],
+                  target: { kind: "records" },
+                },
+                op: "createAccessRule",
+              },
+            ],
+          });
+          const http = yield* TestHttpClient;
+          assert.strictEqual(
+            (yield* http.get(`/api/v1/acmeAsset/${seeded.recordId}`, admin))
+              .status,
+            404
+          );
+
+          const response = yield* http.get(
+            `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&sort=recordVersion&limit=1`,
+            admin
+          );
+
+          assert.strictEqual(response.status, 200, response.text);
+          const entry = asObject(asArray(response.json)[0]);
+          assert.notProperty(entry, "recordId");
+          assert.notProperty(entry, "recordVersion");
+          assert.sameMembers(
+            [...asArray(entry.withheld)],
+            ["recordId", "recordVersion"]
+          );
+
+          const filtered = yield* http.get(
+            `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&recordId=${seeded.recordId}`,
+            admin
+          );
+
+          assert.deepStrictEqual(filtered.json, []);
+          assert.strictEqual(filtered.headers.get("x-total-count"), "0");
+          yield* applyChangeSet({
+            operations: [{ id: ruleId, op: "delete", version: 1 }],
+          });
+        })
+    );
+
+    dbTest.effect(
+      "unconditional read without update cannot run tasks, and non-admin HEAD is hidden",
+      () =>
+        Effect.gen(function* readOnlyOperator() {
+          const { admin, bob } = yield* apiCallers;
+          const seeded = yield* seedDeadLetters(admin);
+          const snapshot = yield* (yield* Catalog).refresh;
+          const employee = snapshot.roleByName("employee")?.id ?? "";
+          const ruleId = randomUUID();
+          yield* applyChangeSet({
+            operations: [
+              {
+                definition: {
+                  actions: ["read"],
+                  active: true,
+                  classId: PLATFORM_CLASS_IDS.subscription,
+                  condition: null,
+                  description: "Read-only operator fixture",
+                  effect: "allow",
+                  id: ruleId,
+                  kind: "accessRule",
+                  name: `dead_${ruleId.replaceAll("-", "")}`,
+                  owner: { layer: "core" },
+                  protected: false,
+                  roleIds: [employee],
+                  target: { kind: "records" },
+                },
+                op: "createAccessRule",
+              },
+            ],
+            origin: setOrigin({ layer: "core" }),
+          });
+          const http = yield* TestHttpClient;
+          assert.strictEqual((yield* http.get(COLLECTION, bob)).status, 200);
+
+          for (const path of [RETRY, DISCARD]) {
+            const denied = yield* http.request("POST", path, {
+              ...bob,
+              body: { deliveryId: seeded.firstId },
+            });
+
+            assert.strictEqual(denied.status, 404, denied.text);
+          }
+
+          yield* applyChangeSet({
+            operations: [{ id: ruleId, op: "delete", version: 1 }],
+            origin: setOrigin({ layer: "core" }),
+          });
+
+          for (const path of [COLLECTION, `${COLLECTION}/${seeded.firstId}`]) {
+            const head = yield* http.request("HEAD", path, bob);
+            assert.strictEqual(head.status, 404);
+            assert.strictEqual(head.text, "");
+          }
+        })
+    );
+
+    dbTest.effect(
+      "the collection accepts in lists, repeated comparisons, condition, sort and bidirectional cursor pages",
+      () =>
+        Effect.gen(function* standardQuery() {
+          const { admin } = yield* apiCallers;
+          const seeded = yield* seedDeadLetters(admin);
+          const http = yield* TestHttpClient;
+
+          for (const filter of [
+            "attempts=1,2",
+            "attempts=1;2",
+            "attempts=1&attempts=2",
+            "attempts.gte=1&attempts.gte=2",
+            "condition=attempts%20%3D%201",
+          ]) {
+            const response = yield* http.get(
+              `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&${filter}&sort=-recordVersion&limit=1&fields=attempts,recordVersion`,
+              admin
+            );
+
+            assert.strictEqual(response.status, 200, response.text);
+            assert.deepStrictEqual(idsOf(response), [seeded.secondId]);
+            assert.strictEqual(response.headers.get("x-total-count"), "2");
+
+            const next = new URL(
+              linksOf(response.headers.get("link") ?? "").get("next") ?? ""
+            );
+
+            const second = yield* http.get(
+              `${next.pathname}${next.search}`,
+              admin
+            );
+
+            assert.deepStrictEqual(idsOf(second), [seeded.firstId]);
+
+            const prev = new URL(
+              linksOf(second.headers.get("link") ?? "").get("prev") ?? ""
+            );
+
+            assert.deepStrictEqual(
+              idsOf(yield* http.get(`${prev.pathname}${prev.search}`, admin)),
+              [seeded.secondId]
+            );
+          }
+
+          const noCount = yield* http.get(
+            `${COLLECTION}?subscriptionId=${seeded.subscriptionId}&count=false`,
+            admin
+          );
+
+          assert.isNull(noCount.headers.get("x-total-count"));
+
+          for (const query of ["typo=x", "fields=typo", "sort=typo"]) {
+            const unknown = yield* http.get(`${COLLECTION}?${query}`, admin);
+            assert.strictEqual(unknown.status, 400, unknown.text);
+            assert.strictEqual(asObject(unknown.json).code, "UnknownField");
+          }
+
+          const invalid = yield* http.get(
+            `${COLLECTION}?offset=0&after=bad`,
+            admin
+          );
+
+          assert.strictEqual(asObject(invalid.json).code, "InvalidRequest");
+        })
+    );
+
+    dbTest.effect(
+      "a late request refusal rolls back the transition, action, history and post-commit gauge",
+      () =>
+        Effect.gen(function* rollback() {
+          const { admin } = yield* apiCallers;
+          const seeded = yield* seedDeadLetters(admin);
+          const http = yield* TestHttpClient;
+          const before = yield* Metric.value(deadDeliveries);
+
+          const refused = yield* http.request(
+            "POST",
+            `${RETRY}?fields=unknownAttribute`,
+            { ...admin, body: { deliveryId: seeded.firstId } }
+          );
+
+          assert.strictEqual(refused.status, 400, refused.text);
+          assert.strictEqual(asObject(refused.json).code, "UnknownField");
+          assert.strictEqual(
+            (yield* deliveriesWhere("id = $1::int8", [seeded.firstId]))[0]
+              ?.status,
+            "dead"
+          );
+          assert.deepStrictEqual(
+            (yield* http.get(
+              `/api/v1/coreDeadDeliveryAction?deliveryId=${seeded.firstId}`,
+              admin
+            )).json,
+            []
+          );
+          assert.deepStrictEqual(yield* Metric.value(deadDeliveries), before);
+        })
+    );
+
     dbTest.effect(
       "single GET and HEAD reject unknown or repeated directives; conflicting fields are 409",
       () =>

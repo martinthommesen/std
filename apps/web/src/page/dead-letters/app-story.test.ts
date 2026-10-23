@@ -26,8 +26,7 @@ describe("dead-letter session integration", () => {
     const expired = update(
       opened,
       AppMessage.GotDeadLettersMessage({
-        message: Message.FailedLoadDeadLetters({
-          error: "SessionEnded",
+        message: Message.LoadDeadLettersSessionEnded({
           requestId: page.requestId,
         }),
         pageId: page.id,
@@ -67,8 +66,7 @@ describe("dead-letter session integration", () => {
     expect(Option.getOrThrow(returned.maybeDeadLetters).id).not.toBe(page.id);
 
     const stale = AppMessage.GotDeadLettersMessage({
-      message: Message.FailedLoadDeadLetters({
-        error: "SessionEnded",
+      message: Message.LoadDeadLettersSessionEnded({
         requestId: page.requestId,
       }),
       pageId: page.id,
@@ -105,8 +103,7 @@ describe("dead-letter session integration", () => {
     expect(update(returned, reply).model).toBe(returned);
 
     const ended = AppMessage.GotDeadLettersMessage({
-      message: Message.FailedLoadDeadLetters({
-        error: "SessionEnded",
+      message: Message.LoadDeadLettersSessionEnded({
         requestId: first.requestId,
       }),
       pageId: first.id,

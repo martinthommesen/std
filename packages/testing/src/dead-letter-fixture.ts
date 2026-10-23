@@ -10,10 +10,10 @@ import { TestHttpClient } from "./http-client.ts";
 import type { TestRequestOptions, TestResponse } from "./http-client.ts";
 
 // oxlint-disable-next-line unicorn/throw-new-error -- Schema.TaggedError is a class factory
-class DeadLetterFixtureFailed extends Schema.TaggedError<DeadLetterFixtureFailed>()(
-  "DeadLetterFixtureFailed",
-  { expected: Schema.Int, status: Schema.Int }
-) {}
+class DeadLetterFixtureFailed extends Schema.TaggedError<
+  DeadLetterFixtureFailed,
+  { readonly brand: unique symbol }
+>()("DeadLetterFixtureFailed", { expected: Schema.Int, status: Schema.Int }) {}
 
 const checked = Effect.fn("DeadLetterFixture.checked")(function* checked(
   response: TestResponse,
@@ -56,6 +56,16 @@ export const seedDeadLetters = Effect.fn("DeadLetterFixture.seed")(
               condition: null,
               deadLetter: policy,
               enabled: true,
+              hub: {
+                api: "generic",
+                callback: "https://example.com/events",
+                eventTypes: [],
+                origin: "http://std.test",
+                query: "resource=acmeAsset",
+                queryFieldIds: [],
+                resource: "acmeAsset",
+                topicId: null,
+              },
               id: subscriptionId,
               identityId: fixture.admin.id,
               kind: "subscription",

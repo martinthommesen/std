@@ -4,7 +4,9 @@
  * return `UnknownTable`, identical to a table that does not exist. The
  * same holds for every platform and config table and every route, for
  * every non-admin. Admins read them through the built-in allow-all rule.
- * No caller writes them through the record service: a generic write on a
+ * Stored dead-delivery actions use ordinary record saves (decision 0037).
+ * No caller writes the other platform classes through the record service:
+ * a generic write on a
  * definition table becomes a one-operation change set (Contracts 1.4,
  * checked by the schema service), and every other platform table (the
  * journal, `core.change`, the config-layer tables) is refused. Internal tables of the
@@ -254,7 +256,7 @@ describe("platform-tables", () => {
     );
 
     dbTest.effect(
-      "admins read platform tables but never write them generically",
+      "admins read platform tables, refuse journal writes and validate stored actions",
       () =>
         Effect.gen(function* adminWrites() {
           const http = yield* TestHttpClient;
@@ -362,17 +364,24 @@ describe("platform-tables", () => {
 
             // Definition tables take the change-set path, where an empty
             // body is no definition: its required columns are missing
-            // (decision 0020); every other platform table is refused.
+            // (decision 0020). Stored actions use normal field validation;
+            // journals and other platform tables are still refused.
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
+
+            const storedAction =
+              snapshot.classByName(table)?.id ===
+              PLATFORM_CLASS_IDS.dead_delivery_action;
+
+            const validatedCreate = definitionTable || storedAction;
 
             assert.strictEqual(
               response.status,
-              definitionTable ? 422 : 403,
+              validatedCreate ? 422 : 403,
               `POST ${table}`
             );
             assert.strictEqual(
               yield* codeOf(response),
-              definitionTable ? "ValidationFailed" : "NotAllowed"
+              validatedCreate ? "ValidationFailed" : "NotAllowed"
             );
           }
 
@@ -390,6 +399,55 @@ describe("platform-tables", () => {
           assert.deepStrictEqual(yield* changeCount(), before);
           assert.deepStrictEqual(yield* ruleText(), ruleBefore);
           assert.strictEqual(yield* deliveries(), deliveriesBefore);
+        })
+    );
+
+    dbTest.effect(
+      "stored action data uses ordinary validation, writes and history while remaining hidden from non-admins",
+      () =>
+        Effect.gen(function* actionData() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+
+          const body = {
+            action: "discard",
+            deliveryId: "1",
+            occurredAt: "2026-10-23T10:00:00.000Z",
+            state: "completed",
+            subscriptionId: randomUUID(),
+          };
+
+          const invalid = yield* http.request(
+            "POST",
+            "/api/v1/coreDeadDeliveryAction",
+            { body: { ...body, action: "unknown" }, token: tokens.admin }
+          );
+
+          assert.strictEqual(invalid.status, 422, invalid.text);
+          assert.strictEqual(yield* codeOf(invalid), "ValidationFailed");
+
+          const created = yield* http.request(
+            "POST",
+            "/api/v1/coreDeadDeliveryAction",
+            { body, token: tokens.admin }
+          );
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const location = new URL(created.headers.get("location") ?? "")
+            .pathname;
+
+          const read = yield* http.get(location, { token: tokens.admin });
+          assert.deepStrictEqual(read.json, created.json);
+          assert.strictEqual(
+            (yield* http.get(`${location}/history`, { token: tokens.admin }))
+              .status,
+            200
+          );
+          assert.strictEqual(
+            (yield* http.get(location, { token: tokens.bob })).status,
+            404
+          );
         })
     );
 

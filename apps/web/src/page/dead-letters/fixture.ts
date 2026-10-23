@@ -17,6 +17,7 @@ export const delivery: typeof DeadDelivery.Type = {
   recordVersion: 2,
   status: "dead",
   subscriptionId: "019a0000-0000-7000-8000-000000000003",
+  subscriptionState: "served",
 };
 
 /** The server's first page, ready for operator actions. */

@@ -695,13 +695,18 @@ export interface ListQuery {
 const cursorsOf = Effect.fn("ApiQuery.cursors")(function* cursorsOf(
   sortKeys: readonly SortKey[],
   after: string | undefined,
-  before: string | undefined
+  before: string | undefined,
+  identityType: "uuid" | "int8"
 ) {
   return {
     after:
-      after === undefined ? undefined : yield* decodeCursor(sortKeys, after),
+      after === undefined
+        ? undefined
+        : yield* decodeCursor(sortKeys, after, identityType),
     before:
-      before === undefined ? undefined : yield* decodeCursor(sortKeys, before),
+      before === undefined
+        ? undefined
+        : yield* decodeCursor(sortKeys, before, identityType),
   } satisfies PageCursors;
 });
 
@@ -749,7 +754,14 @@ export const parseListQuery = Effect.fn("ApiQuery.parseList")(
     const limit = yield* parseLimit(yield* single(query, "limit"));
     const offset = yield* parseOffset(offsetText);
     const count = yield* parseCount(yield* single(query, "count"));
-    const cursors = yield* cursorsOf(sortKeys, after, before);
+
+    const cursors = yield* cursorsOf(
+      sortKeys,
+      after,
+      before,
+      view.byName("id")?.type.kind === "bigInteger" ? "int8" : "uuid"
+    );
+
     // A page asked for with `offset` is an offset page; any other page
     // (the first one, or one asked for with a cursor) is a cursor page,
     // whose `next` is a cursor: keyset paging is stable across changes

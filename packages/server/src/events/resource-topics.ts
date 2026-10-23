@@ -1,6 +1,7 @@
 import type { Definition } from "@std/definitions/definition";
 import { EVENT_CLASS_IDS } from "@std/definitions/event-ids";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
+import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Clock, Effect, Schema } from "effect";
 import { SqlClient } from "effect/sql";
 
@@ -18,7 +19,9 @@ import { eventIdOf } from "./event-id.ts";
 const topicName = (snapshot: ConfigSnapshot, id: string): string | null => {
   const definition = snapshot.class(id);
 
-  return definition?.state === "active" && definition.storage === "standard"
+  return definition?.state === "active" &&
+    (definition.storage === "standard" ||
+      definition.id === PLATFORM_CLASS_IDS.dead_delivery_action)
     ? `record:${collectionNameOf(snapshot, id)}`
     : null;
 };

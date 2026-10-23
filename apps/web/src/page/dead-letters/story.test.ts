@@ -50,7 +50,7 @@ describe("dead-letter page", () => {
           limit: 25,
           offset: 0,
           requestId: 2,
-          status: "dead",
+
           subscriptionId: "",
         })
       ),
@@ -137,7 +137,7 @@ describe("dead-letter page", () => {
           limit: 25,
           offset: 0,
           requestId: 2,
-          status: "dead",
+
           subscriptionId: delivery.subscriptionId ?? "",
         })
       ),
@@ -157,7 +157,7 @@ describe("dead-letter page", () => {
           limit: 10,
           offset: 0,
           requestId: 3,
-          status: "dead",
+
           subscriptionId: delivery.subscriptionId ?? "",
         })
       ),
@@ -171,13 +171,41 @@ describe("dead-letter page", () => {
     );
   });
 
+  it("an unavailable retry does not enter confirmation", () => {
+    const unavailable = { ...delivery, subscriptionState: "disabled" as const };
+
+    const result = update(
+      loaded,
+      Message.ClickedAction({ action: "retry", delivery: unavailable })
+    );
+
+    expect(result.model).toBe(loaded);
+    expect(result.commands).toBeUndefined();
+  });
+
+  it("operation session expiry returns to the parent session flow", () => {
+    const confirming = update(
+      loaded,
+      Message.ClickedAction({ action: "retry", delivery })
+    ).model;
+
+    const executing = update(confirming, Message.ClickedConfirm()).model;
+    story(
+      update,
+      given(executing),
+      message(Message.OperateDeadDeliverySessionEnded()),
+      expectOutMessage(OutMessage.SessionEnded()),
+      model((page) => {
+        expect(page.operation._tag).toBe("Executing");
+      })
+    );
+  });
+
   it("reports an ended session to the parent", () => {
     story(
       update,
       given(init(1).model),
-      message(
-        Message.FailedLoadDeadLetters({ error: "SessionEnded", requestId: 1 })
-      ),
+      message(Message.LoadDeadLettersSessionEnded({ requestId: 1 })),
       expectOutMessage(OutMessage.SessionEnded()),
       model((page) => {
         expect(page.deliveries._tag).toBe("Loading");

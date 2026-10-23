@@ -174,3 +174,7 @@ Regressions, each through the change-set endpoint and a generic `POST` checked a
 - 1.7: a child class of `core.user_role`, and an index and an override on `core.role` and on `core.user_role`, through both forms.
 
 **Can-fail evidence** (each check removed by hand, the suites run, the change reverted): platform storage allowed (the endpoint returns 500 again, the engine test gets `PlatformTableMismatch`); no host for a child class, an index or an override (each falls through to validation, `422 DefinitionInvalid` instead of `403`); `condition_on` dropped from the table-naming kinds (the condition retire is accepted, the condition purge reaches validation as 422); self-references excluded from the retire blockers (the self-referencing table retires); references from retired tables excluded (the hub retires); the condition clause dropped from the purge blockers (422); history without its field filter (Bob sees `cost` and `size_inches` through both monitor endpoints); history without its row check (Bob gets Alice's monitor's history, 200).
+
+## Stored action data exception (2026-10-23, decision 0037)
+
+Martin's decision to store dead-delivery operator actions through the ordinary record service narrows the blanket platform write guard above: the new data class `core.dead_delivery_action` is saved normally, under its core-layer access rules, with history and outbox events. Definition writes still use change sets; platform journals and config-layer tables still refuse generic record writes. Decision 0037 records this exception and its proving tests.

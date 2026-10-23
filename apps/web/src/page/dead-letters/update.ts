@@ -26,7 +26,6 @@ const load = (model: Model): UpdateReturn => ({
       limit: model.limit,
       offset: model.offset,
       requestId: model.requestId + 1,
-      status: model.appliedStatus,
       subscriptionId: model.appliedSubscriptionId,
     }),
   ],
@@ -42,7 +41,6 @@ const load = (model: Model): UpdateReturn => ({
  */
 export const init = (id: number): UpdateReturn =>
   load({
-    appliedStatus: "dead",
     appliedSubscriptionId: "",
     deliveries: Deliveries.Idle(),
     dialog: Dialog.init({ id: "dead-letter-confirmation" }),
@@ -51,7 +49,6 @@ export const init = (id: number): UpdateReturn =>
     offset: 0,
     operation: Operation.Idle(),
     requestId: 0,
-    status: "dead",
     subscriptionId: "",
   });
 
@@ -102,14 +99,9 @@ const isBusy = (model: Model) =>
   AsyncData.isPending(model.deliveries) ||
   Operation.guards.Executing(model.operation);
 
-const failure = (model: Model, error: string): UpdateReturn =>
-  error === "SessionEnded"
-    ? { model, outMessage: OutMessage.SessionEnded() }
-    : {
-        model: modifyFields(model, {
-          operation: () => Operation.Failed({ error }),
-        }),
-      };
+const failure = (model: Model, error: string): UpdateReturn => ({
+  model: modifyFields(model, { operation: () => Operation.Failed({ error }) }),
+});
 
 /** Pure transitions; every successful operation is followed by a server read.
  * @param model - The current page.
@@ -119,21 +111,30 @@ const failure = (model: Model, error: string): UpdateReturn =>
 export const update = (model: Model, message: Message) =>
   Message.match<UpdateReturn>(message, {
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
-    ClickedAction: ({ action, delivery }) =>
-      isBusy(model) || !Operation.guards.Idle(model.operation)
-        ? { model }
-        : openDialog(
-            modifyFields(model, {
-              operation: () => Operation.Confirming({ action, delivery }),
-            })
-          ),
+    ClickedAction: ({ action, delivery }) => {
+      const unavailable =
+        action === "retry" && delivery.subscriptionState !== "served";
+
+      if (
+        isBusy(model) ||
+        !Operation.guards.Idle(model.operation) ||
+        unavailable
+      ) {
+        return { model };
+      }
+
+      return openDialog(
+        modifyFields(model, {
+          operation: () => Operation.Confirming({ action, delivery }),
+        })
+      );
+    },
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
     ClickedApplyFilters: () =>
       isBusy(model)
         ? { model }
         : load(
             modifyFields(model, {
-              appliedStatus: () => model.status,
               appliedSubscriptionId: () => model.subscriptionId,
               offset: () => 0,
               operation: () => Operation.Idle(),
@@ -188,10 +189,6 @@ export const update = (model: Model, message: Message) =>
         return { model };
       }
 
-      if (error === "SessionEnded") {
-        return failure(model, error);
-      }
-
       return {
         model: modifyFields(model, {
           deliveries: () => Deliveries.Failure({ error }),
@@ -206,6 +203,16 @@ export const update = (model: Model, message: Message) =>
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
     GotDialogMessage: ({ message: dialogMessage }) =>
       foldDialog(model, dialogMessage),
+    // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
+    LoadDeadLettersSessionEnded: ({ requestId }) =>
+      requestId === model.requestId
+        ? { model, outMessage: OutMessage.SessionEnded() }
+        : { model },
+    // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
+    OperateDeadDeliverySessionEnded: () =>
+      Operation.guards.Executing(model.operation)
+        ? { model, outMessage: OutMessage.SessionEnded() }
+        : { model },
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
     SelectedPageSize: ({ value }) =>
       isBusy(model) || !["10", "25", "100"].includes(value)
@@ -232,10 +239,6 @@ export const update = (model: Model, message: Message) =>
             })
           )
         : { model },
-    // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
-    UpdatedStatus: ({ value }) => ({
-      model: modifyFields(model, { status: () => value }),
-    }),
     // oxlint-disable-next-line sonarjs/function-name -- keyed by the Message tag
     UpdatedSubscription: ({ value }) => ({
       model: modifyFields(model, { subscriptionId: () => value }),

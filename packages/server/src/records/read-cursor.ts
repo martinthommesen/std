@@ -151,13 +151,15 @@ const equal = ({ expression, key }: CompiledKey, value: string | null) =>
  * @param id - The `id` column.
  * @param reversed - Whether the order is reversed (`orderBy`'s
  *   `reversed`, keys flipped): then the rows strictly before it.
+ * @param identityType - UUID record IDs or int8 delivery IDs.
  * @returns The predicate.
  */
 export const cursorPredicate = (
   keys: readonly CompiledKey[],
   position: CursorPosition,
   id: SqlFragment,
-  reversed = false
+  reversed = false,
+  identityType: "uuid" | "int8" = "uuid"
 ): SqlFragment => {
   const disjuncts: SqlFragment[] = [];
   const beyond = rawSql(reversed ? "<" : ">");
@@ -171,7 +173,7 @@ export const cursorPredicate = (
 
     const last =
       key === undefined
-        ? sql`${id} ${beyond} ${textParameter(position.id, "uuid")}`
+        ? sql`${id} ${beyond} ${textParameter(position.id, identityType)}`
         : after(key, position.values[index] ?? null);
 
     if (last !== undefined) {
@@ -272,10 +274,15 @@ const validKeyText = (type: FieldType, text: string): boolean => {
  *
  * @param keys - The request's sort keys.
  * @param text - The cursor parameter.
+ * @param identityType - UUID record IDs or int8 delivery IDs.
  * @returns The position, or `InvalidCursor`.
  */
 export const decodeCursor = Effect.fn("ReadCursor.decode")(
-  function* decodeCursor(keys: readonly SortKey[], text: string) {
+  function* decodeCursor(
+    keys: readonly SortKey[],
+    text: string,
+    identityType: "uuid" | "int8" = "uuid"
+  ) {
     const json = Buffer.from(text, "base64url").toString("utf-8");
 
     const cursor = yield* decodeCursorJson(json).pipe(
@@ -300,7 +307,12 @@ export const decodeCursor = Effect.fn("ReadCursor.decode")(
         );
       });
 
-    if (!sameSort || !validValues || !parseUuid(cursor.i).ok) {
+    const validId =
+      identityType === "uuid"
+        ? parseUuid(cursor.i).ok
+        : parseInt8Text(cursor.i).ok;
+
+    if (!sameSort || !validValues || !validId) {
       return yield* new InvalidCursor();
     }
 

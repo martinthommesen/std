@@ -1843,7 +1843,7 @@ describe("platform-tables", () => {
     );
 
     dbTest.effect(
-      "platform-tables: admins read platform tables but never write them generically",
+      "platform-tables: admins read platform tables, refuse journal writes and validate stored actions",
       () =>
         Effect.gen(function* adminWrites() {
           const http = yield* TestHttpClient;
@@ -1943,18 +1943,24 @@ describe("platform-tables", () => {
             );
 
             // An empty create on a definition table is an incomplete
-            // change set (ValidationFailed); every other platform table is
-            // refused (NotAllowed).
+            // change set (ValidationFailed). Stored actions also validate
+            // required fields; journals remain refused (NotAllowed).
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
+
+            const storedAction =
+              snapshot.classByName(table)?.id ===
+              PLATFORM_CLASS_IDS.dead_delivery_action;
+
+            const validatedCreate = definitionTable || storedAction;
 
             assert.strictEqual(
               response.status,
-              definitionTable ? 422 : 403,
+              validatedCreate ? 422 : 403,
               `POST ${table}`
             );
             assert.strictEqual(
               codeOf(response),
-              definitionTable ? "ValidationFailed" : "NotAllowed"
+              validatedCreate ? "ValidationFailed" : "NotAllowed"
             );
           }
 

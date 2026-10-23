@@ -4041,6 +4041,360 @@
     ],
     "triggers": []
   },
+  "core.dead_delivery_action": {
+    "columns": [
+      {
+        "default": null,
+        "name": "id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "class_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "version",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "created_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "created_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "updated_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      },
+      {
+        "default": null,
+        "name": "updated_by",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "delivery_id",
+        "notNull": true,
+        "type": "bigint"
+      },
+      {
+        "default": null,
+        "name": "subscription_id",
+        "notNull": true,
+        "type": "uuid"
+      },
+      {
+        "default": null,
+        "name": "action",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "state",
+        "notNull": true,
+        "type": "text"
+      },
+      {
+        "default": null,
+        "name": "occurred_at",
+        "notNull": true,
+        "type": "timestamp(3) with time zone"
+      }
+    ],
+    "constraints": [
+      {
+        "check": "CHECK ((action = ANY (ARRAY['retry'::text, 'discard'::text])))",
+        "columns": ["action"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_action_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["action"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_action_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_class_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_created_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["created_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_created_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((delivery_id > 0))",
+        "columns": ["delivery_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_delivery_id_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["delivery_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_delivery_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["occurred_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_occurred_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((state = 'completed'::text))",
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_state_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["state"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_state_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["subscription_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_subscription_id_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_at"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_updated_at_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["updated_by"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_updated_by_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((version > 0))",
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_version_check",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["version"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "dead_delivery_action_version_not_null",
+        "referencedColumns": [],
+        "references": null,
+        "type": "n",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_pk_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "p",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": "CHECK ((class_id = '6ef83f5d-41c6-4acb-943c-4bc82503aa92'::uuid))",
+        "columns": ["class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_sc_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "c",
+        "updateAction": " ",
+        "validated": true
+      },
+      {
+        "check": null,
+        "columns": ["id", "class_id"],
+        "deferrable": false,
+        "deferred": false,
+        "deleteAction": " ",
+        "name": "std_uq_6ef83f5d41c64acb943c4bc82503aa92",
+        "referencedColumns": [],
+        "references": null,
+        "type": "u",
+        "updateAction": " ",
+        "validated": true
+      }
+    ],
+    "indexes": [
+      {
+        "included": [],
+        "keys": ["id"],
+        "method": "btree",
+        "name": "std_pk_6ef83f5d41c64acb943c4bc82503aa92",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      },
+      {
+        "included": [],
+        "keys": ["id", "class_id"],
+        "method": "btree",
+        "name": "std_uq_6ef83f5d41c64acb943c4bc82503aa92",
+        "predicate": null,
+        "unique": true,
+        "valid": true
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "function": "core.refuse_class_change",
+        "name": "std_tg_6ef83f5d41c64acb943c4bc82503aa92",
+        "type": 19,
+        "when": "old.class_id IS DISTINCT FROM new.class_id"
+      }
+    ]
+  },
   "core.definition_revision": {
     "columns": [
       {

@@ -1,7 +1,14 @@
 /** Outbox operator resources and synchronous tasks (Contracts 4.6; decision 0037). */
 import { Schema } from "effect";
-import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
+import {
+  HttpApiEndpoint,
+  HttpApiGroup,
+  HttpApiSchema,
+  OpenApi,
+} from "effect/http-api";
 
+import { ListQuery } from "./records.ts";
+import { Resource } from "./resource.ts";
 import { READ_ERRORS, WRITE_ERRORS } from "./tmf-error.ts";
 
 /** The decimal identity of a delivery, within PostgreSQL int8. */
@@ -26,6 +33,17 @@ export const DeadDelivery = Schema.Struct({
   recordVersion: Schema.optionalKey(Schema.Int),
   status: Schema.optionalKey(Schema.Literal("dead")),
   subscriptionId: Schema.optionalKey(Schema.String),
+  subscriptionState: Schema.optionalKey(
+    Schema.Literals([
+      "served",
+      "disabled",
+      "retired",
+      "purged",
+      "deleted",
+      "noHandler",
+    ])
+  ),
+  withheld: Schema.optionalKey(Schema.Array(Schema.String)),
 }).annotate({ identifier: "DeadDelivery" });
 
 /** The existing dead delivery on which the task acts. */
@@ -33,15 +51,9 @@ export const DeadDeliveryTaskCreate = Schema.Struct({
   deliveryId: DeliveryId,
 }).annotate({ identifier: "DeadDeliveryTaskCreate" });
 
-/** A completed, non-persisted operator task. */
-export const DeadDeliveryTask = Schema.Struct({
-  "@type": Schema.Literals(["RetryDeadDelivery", "DiscardDeadDelivery"]),
-  deliveryId: Schema.String,
-  state: Schema.Literal("completed"),
-}).annotate({ identifier: "DeadDeliveryTask" });
-
-/** Named list directives and equality filters; ordering is ascending delivery ID. */
+/** Standard collection directives and named filters; further attributes are open-ended. */
 export const DeadDeliveryQuery = {
+  ...ListQuery,
   fields: Schema.optionalKey(Schema.String),
   limit: Schema.optionalKey(Schema.String),
   offset: Schema.optionalKey(Schema.String),
@@ -57,7 +69,7 @@ export class DeadLettersGroup extends HttpApiGroup.make("deadLetters").add(
     success: Schema.Array(DeadDelivery),
   }).annotate(
     OpenApi.Description,
-    "Dead deliveries only. Equality filters: subscriptionId, status (dead). Offset and limit (1–1000, default 100), fields (including ! exclusions and none). X-Total-Count and X-Result-Count; Link rel=self/first/prev/next/last. Ordered by decimal ID. No payload values."
+    "Dead deliveries only, with Contracts 10.3 filters, sort, offset and cursor paging, fields and count. Identity fields of unreadable records are withheld before querying. No payload values."
   ),
   HttpApiEndpoint.get("get", "/deadDelivery/:id", {
     error: READ_ERRORS,
@@ -68,17 +80,17 @@ export class DeadLettersGroup extends HttpApiGroup.make("deadLetters").add(
   HttpApiEndpoint.post("retry", "/retryDeadDelivery", {
     error: WRITE_ERRORS,
     payload: DeadDeliveryTaskCreate,
-    success: DeadDeliveryTask,
+    success: Resource.pipe(HttpApiSchema.status(201)),
   }).annotate(
     OpenApi.Description,
-    "Synchronous non-persisted task, 200 completed. Resets attempts and queues the dead delivery. A stale or concurrent loser gets 404 NotFound."
+    "Stored CoreDeadDeliveryAction, 201 with Location. Resets attempts and queues the dead delivery. A stale or concurrent loser gets 404 NotFound."
   ),
   HttpApiEndpoint.post("discard", "/discardDeadDelivery", {
     error: WRITE_ERRORS,
     payload: DeadDeliveryTaskCreate,
-    success: DeadDeliveryTask,
+    success: Resource.pipe(HttpApiSchema.status(201)),
   }).annotate(
     OpenApi.Description,
-    "Synchronous non-persisted task, 200 completed. Marks dead as done without running its effect, releasing later blocked deliveries. Audited. A stale or concurrent loser gets 404 NotFound."
+    "Stored CoreDeadDeliveryAction, 201 with Location. Marks dead as done without running its effect, releasing later blocked deliveries. A stale or concurrent loser gets 404 NotFound."
   )
 ) {}

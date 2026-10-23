@@ -59,7 +59,7 @@ describe("dead-letter session view", () => {
       click(role("button", { name: "Refresh" })),
       Command.resolve(
         LoadDeadLetters,
-        Message.FailedLoadDeadLetters({ error: "SessionEnded", requestId: 2 })
+        Message.LoadDeadLettersSessionEnded({ requestId: 2 })
       ),
       Command.resolveAll(
         [ReplaceUrl, AppMessage.CompletedReplaceUrl()],

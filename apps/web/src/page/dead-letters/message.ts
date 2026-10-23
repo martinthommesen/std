@@ -17,10 +17,11 @@ export const Message = defineMessageUnion({
   FailedLoadDeadLetters: { error: Schema.String, requestId: Schema.Int },
   FailedOperateDeadDelivery: { error: Schema.String },
   GotDialogMessage: { message: Dialog.Message },
+  LoadDeadLettersSessionEnded: { requestId: Schema.Int },
+  OperateDeadDeliverySessionEnded: {},
   SelectedPageSize: { value: Schema.String },
   SucceededLoadDeadLetters: { page: Page, requestId: Schema.Int },
   SucceededOperateDeadDelivery: {},
-  UpdatedStatus: { value: Schema.String },
   UpdatedSubscription: { value: Schema.String },
 });
 
