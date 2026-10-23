@@ -12,49 +12,10 @@ import { ConditionDefectError } from "./defect.ts";
  * so `changed(f)` is `notEmpty(f)`) and `previous: record` on delete (so
  * `changed` is false).
  */
-import { evaluateNode, imageReader } from "./evaluate-core.ts";
+import { imageReader, twoValued } from "./evaluate-core.ts";
 import type { ImageSource } from "./evaluate-core.ts";
 import { refuseAggregateConstructs } from "./owner-scope.ts";
-import type { ResolvedCondition, ResolvedNode } from "./typed.ts";
-
-/**
- * Whether a resolved tree still holds a context value the caller did not
- * provide.
- *
- * @param node - A resolved tree.
- * @returns True when some operand is `unavailable`.
- */
-export const hasUnavailableContext = (node: ResolvedNode): boolean => {
-  switch (node.op) {
-    case "and":
-    case "or": {
-      return node.args.some((arg) => hasUnavailableContext(arg));
-    }
-
-    case "not": {
-      return hasUnavailableContext(node.arg);
-    }
-
-    case "compare": {
-      return node.right.kind === "unavailable";
-    }
-
-    case "in": {
-      return node.right.some((operand) => operand.kind === "unavailable");
-    }
-
-    case "const":
-    case "empty":
-    case "pattern":
-    case "changed": {
-      return false;
-    }
-
-    default: {
-      return node satisfies never;
-    }
-  }
-};
+import type { ResolvedCondition } from "./typed.ts";
 
 /**
  * Evaluates a resolved condition on complete images.
@@ -72,13 +33,7 @@ export const evaluateCondition = (
   // Owner paths and quantifiers belong to the aggregate evaluator (5.10).
   refuseAggregateConstructs(condition.root);
 
-  if (hasUnavailableContext(condition.root)) {
-    throw new ConditionDefectError(
-      "A context value was not provided to the resolver."
-    );
-  }
-
-  const verdict = evaluateNode(
+  return twoValued(
     condition.root,
     imageReader(source, {
       missing: (what) => {
@@ -86,10 +41,4 @@ export const evaluateCondition = (
       },
     })
   );
-
-  if (verdict === "unknown") {
-    throw new ConditionDefectError("The two-valued evaluator met Unknown.");
-  }
-
-  return verdict;
 };

@@ -33,9 +33,8 @@ import type { Expr, Path } from "./ast.ts";
 import { checkCondition } from "./check.ts";
 import type { CheckOptions } from "./check.ts";
 import { ConditionDefectError } from "./defect.ts";
-import { evaluateNode, imageReader } from "./evaluate-core.ts";
-import type { PathReader, RecordImage } from "./evaluate-core.ts";
-import { hasUnavailableContext } from "./evaluate.ts";
+import { imageReader, twoValued } from "./evaluate-core.ts";
+import type { RecordImage } from "./evaluate-core.ts";
 import { invalid, issue, valid } from "./issue.ts";
 import type {
   AstPathSegment,
@@ -536,20 +535,31 @@ const failOnMissing = {
   },
 };
 
-const twoValued = (node: ResolvedNode, read: PathReader): boolean => {
-  if (hasUnavailableContext(node)) {
-    throw new ConditionDefectError(
-      "A context value was not provided to the resolver."
+const partMatcher = (
+  where: ResolvedNode,
+  source: Pick<AggregateSource, "owner" | "previous" | "targets">
+): ((part: RecordImage) => boolean) => {
+  const ownerReader = imageReader(
+    {
+      previous: source.previous ?? emptyLike(source.owner),
+      record: source.owner,
+      targets: source.targets,
+    },
+    failOnMissing
+  );
+
+  return (part) => {
+    const partReader = imageReader(
+      { previous: part, record: part, targets: source.targets },
+      failOnMissing
     );
-  }
 
-  const verdict = evaluateNode(node, read);
-
-  if (verdict === "unknown") {
-    throw new ConditionDefectError("The two-valued evaluator met Unknown.");
-  }
-
-  return verdict;
+    return twoValued(where, (path: TypedPath, image) =>
+      path.scope === "owner"
+        ? ownerReader(path, image)
+        : partReader(path, image)
+    );
+  };
 };
 
 /**
@@ -565,25 +575,7 @@ export const partMatches = (
   where: ResolvedNode,
   part: RecordImage,
   source: Pick<AggregateSource, "owner" | "previous" | "targets">
-): boolean => {
-  const partReader = imageReader(
-    { previous: part, record: part, targets: source.targets },
-    failOnMissing
-  );
-
-  const ownerReader = imageReader(
-    {
-      previous: source.previous ?? emptyLike(source.owner),
-      record: source.owner,
-      targets: source.targets,
-    },
-    failOnMissing
-  );
-
-  return twoValued(where, (path: TypedPath, image) =>
-    path.scope === "owner" ? ownerReader(path, image) : partReader(path, image)
-  );
-};
+): boolean => partMatcher(where, source)(part);
 
 const evaluateTree = (
   node: AggregateNode<ResolvedNode>,
@@ -619,8 +611,7 @@ const evaluateTree = (
     case "parts": {
       const parts = source.parts(node.classId);
 
-      const matches = (part: RecordImage) =>
-        partMatches(node.where, part, source);
+      const matches = partMatcher(node.where, source);
 
       return node.quantifier === "any"
         ? parts.some(matches)

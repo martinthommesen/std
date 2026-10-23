@@ -3,6 +3,12 @@
  * types (Contracts 5.4, 6.5). The checker and the differential test's
  * coverage gate both read these tables, so "permitted" means one thing.
  */
+import {
+  comparisonClass,
+  FIELD_KINDS,
+  isOrdered,
+  isTextKind,
+} from "@std/values/field-type";
 import type { ConditionProfile, FieldKind } from "@std/values/field-type";
 
 import type { AtomOperator } from "./ast.ts";
@@ -117,29 +123,13 @@ export const profileRules = (
   }
 };
 
-const EQUALITY_KINDS: readonly FieldKind[] = [
-  "text",
-  "longText",
-  "integer",
-  "bigInteger",
-  "decimal",
-  "boolean",
-  "date",
-  "dateTime",
-  "choice",
-  "reference",
-  "uuid",
-];
+const EQUALITY_KINDS: readonly FieldKind[] = FIELD_KINDS.filter(
+  (kind) => comparisonClass(kind) !== null
+);
 
-const ORDERED_KINDS: readonly FieldKind[] = [
-  "integer",
-  "bigInteger",
-  "decimal",
-  "date",
-  "dateTime",
-];
+const ORDERED_KINDS: readonly FieldKind[] = FIELD_KINDS.filter(isOrdered);
 
-const TEXT_KINDS: readonly FieldKind[] = ["text", "longText"];
+const TEXT_KINDS: readonly FieldKind[] = FIELD_KINDS.filter(isTextKind);
 
 const EMPTY_KINDS: readonly FieldKind[] = [
   "text",

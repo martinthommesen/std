@@ -16,9 +16,7 @@ import type {
 import type {
   AccessRuleDefinition,
   Definition,
-  GrantDefinition,
   IndexDefinition,
-  PermissionDefinition,
   RoleDefinition,
 } from "../src/definition.ts";
 import {
@@ -30,12 +28,12 @@ import type { Operation } from "../src/operation.ts";
 import { LOCAL_ORIGIN, setOrigin, SYSTEM_REQUESTER } from "../src/requester.ts";
 import type { Requester } from "../src/requester.ts";
 import type { ConfigSnapshot } from "../src/snapshot.ts";
-import { PERMISSION_IDS } from "../src/well-known.ts";
 import {
   field,
   freshId,
   KEY,
   namespace,
+  purgeAuthorization,
   override,
   snapshotOf,
   table,
@@ -56,37 +54,14 @@ const role = (name: string): RoleDefinition => ({
   version: 1,
 });
 
-const PURGE_PERMISSION: PermissionDefinition = {
-  helpText: null,
-  id: PERMISSION_IDS["schema.purge"],
-  kind: "permission",
-  label: "Purge",
-  name: "schema.purge",
-  owner: { layer: "core" },
-  protected: true,
-  state: "active",
-  version: 1,
-};
-
-const PURGER = role("schema_purger");
-
-const PURGE_GRANT: GrantDefinition = {
-  id: freshId(),
-  kind: "grant",
-  owner: { layer: "core" },
-  permissionId: PURGE_PERMISSION.id,
-  protected: true,
-  roleId: PURGER.id,
-  state: "active",
-  version: 1,
-};
+const {
+  context: asPurger,
+  grant: PURGE_GRANT,
+  permission: PURGE_PERMISSION,
+  role: PURGER,
+} = purgeAuthorization();
 
 const ADMIN = role("admin");
-
-const asPurger: ApplyContext = {
-  origin: LOCAL_ORIGIN,
-  requester: { roleIds: [PURGER.id], userId: freshId() },
-};
 
 const asAdmin: ApplyContext = {
   origin: LOCAL_ORIGIN,

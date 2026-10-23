@@ -3,15 +3,21 @@ import type { FieldType } from "@std/values/field-type";
 /**
  * Small builders for definition tests.
  */
+import type { ApplyContext } from "../src/apply.ts";
 import type {
   ClassDefinition,
   Definition,
   FieldDefinition,
+  GrantDefinition,
   NamespaceDefinition,
   OverrideDefinition,
+  PermissionDefinition,
+  RoleDefinition,
 } from "../src/definition.ts";
+import { LOCAL_ORIGIN } from "../src/requester.ts";
 import type { SetFile } from "../src/set-file.ts";
 import { ConfigSnapshot } from "../src/snapshot.ts";
+import { PERMISSION_IDS } from "../src/well-known.ts";
 
 let counter = 0;
 
@@ -27,6 +33,57 @@ export const freshId = (): string => {
   counter += 1;
 
   return `00000000-0000-4000-8000-${counter.toString(16).padStart(12, "0")}`;
+};
+
+/**
+ * Authorization for purging definitions without granting the admin role.
+ * @returns The role, permission, grant and matching application context.
+ */
+export const purgeAuthorization = () => {
+  const role: RoleDefinition = {
+    helpText: null,
+    id: freshId(),
+    kind: "role",
+    label: "schema_purger",
+    name: "schema_purger",
+    owner: { layer: "local" },
+    protected: false,
+    state: "active",
+    version: 1,
+  };
+
+  const permission: PermissionDefinition = {
+    helpText: null,
+    id: PERMISSION_IDS["schema.purge"],
+    kind: "permission",
+    label: "Purge",
+    name: "schema.purge",
+    owner: { layer: "core" },
+    protected: true,
+    state: "active",
+    version: 1,
+  };
+
+  const grant: GrantDefinition = {
+    id: freshId(),
+    kind: "grant",
+    owner: { layer: "core" },
+    permissionId: permission.id,
+    protected: true,
+    roleId: role.id,
+    state: "active",
+    version: 1,
+  };
+
+  return {
+    context: {
+      origin: LOCAL_ORIGIN,
+      requester: { roleIds: [role.id], userId: freshId() },
+    } satisfies ApplyContext,
+    grant,
+    permission,
+    role,
+  };
 };
 
 /** The key of test snapshots. */

@@ -20,26 +20,20 @@ import type {
   ApplyError,
   AppliedChangeSet,
 } from "../src/apply.ts";
-import type {
-  Definition,
-  GrantDefinition,
-  PermissionDefinition,
-  RoleDefinition,
-} from "../src/definition.ts";
+import type { Definition } from "../src/definition.ts";
 import { dependenciesOf } from "../src/dependencies.ts";
 import { EMPTY_LAYERS } from "../src/layers.ts";
 import type { Operation } from "../src/operation.ts";
-import { LOCAL_ORIGIN } from "../src/requester.ts";
 import type { NamedSetFile } from "../src/set-file.ts";
 import { decodeSetFile, resolveSet } from "../src/set-resolve.ts";
 import { planSetUpgrade } from "../src/set-upgrade.ts";
 import { ConfigSnapshot } from "../src/snapshot.ts";
-import { PERMISSION_IDS } from "../src/well-known.ts";
 import {
   field,
   freshId,
   KEY,
   namespace,
+  purgeAuthorization,
   snapshotOf,
   table,
 } from "./fixtures.ts";
@@ -48,44 +42,12 @@ const at = (revision: number) => ({ changeSetId: KEY.changeSetId, revision });
 
 const local = { owner: { layer: "local" }, protected: false } as const;
 
-const PURGER: RoleDefinition = {
-  ...local,
-  helpText: null,
-  id: freshId(),
-  kind: "role",
-  label: "Purger",
-  name: "schema_purger",
-  state: "active",
-  version: 1,
-};
-
-const PURGE_PERMISSION: PermissionDefinition = {
-  helpText: null,
-  id: PERMISSION_IDS["schema.purge"],
-  kind: "permission",
-  label: "Purge",
-  name: "schema.purge",
-  owner: { layer: "core" },
-  protected: true,
-  state: "active",
-  version: 1,
-};
-
-const PURGE_GRANT: GrantDefinition = {
-  id: freshId(),
-  kind: "grant",
-  owner: { layer: "core" },
-  permissionId: PURGE_PERMISSION.id,
-  protected: true,
-  roleId: PURGER.id,
-  state: "active",
-  version: 1,
-};
-
-const asPurger: ApplyContext = {
-  origin: LOCAL_ORIGIN,
-  requester: { roleIds: [PURGER.id], userId: freshId() },
-};
+const {
+  context: asPurger,
+  grant: PURGE_GRANT,
+  permission: PURGE_PERMISSION,
+  role: PURGER,
+} = purgeAuthorization();
 
 /**
  * `asset.status = "spare"`.
