@@ -7,8 +7,17 @@
  */
 import type { FieldType } from "@std/values/field-type";
 
+import type { Expr, Path } from "../../src/ast.ts";
+import { checkCondition } from "../../src/check.ts";
+import type { CheckOptions } from "../../src/check.ts";
 import { staticClassView } from "../../src/class-view.ts";
 import type { ClassView, FieldInfo } from "../../src/class-view.ts";
+import type { ConditionResult, IssueReason } from "../../src/issue.ts";
+import { resolveCondition } from "../../src/resolve.ts";
+import type { ConditionContext } from "../../src/resolve.ts";
+import { identSql } from "../../src/sql-fragment.ts";
+import type { SqlHooks } from "../../src/sql.ts";
+import type { ResolvedCondition } from "../../src/typed.ts";
 
 /**
  * A fixture stable ID.
@@ -18,6 +27,84 @@ import type { ClassView, FieldInfo } from "../../src/class-view.ts";
  */
 export const stableId = (n: number): string =>
   `00000000-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
+
+/**
+ * An asset row's fixture ID, distinct from definition and person IDs.
+ *
+ * @param n - The row index.
+ * @returns A lowercase UUIDv7-shaped ID.
+ */
+export const rowId = (n: number): string =>
+  `00000000-0000-7000-9000-${n.toString(16).padStart(12, "0")}`;
+
+/**
+ * A current-image path through fixture fields.
+ *
+ * @param fields - The fields in path order.
+ * @returns The path.
+ */
+export const path = (...fields: readonly { readonly id: string }[]): Path => ({
+  path: fields.map((entry) => entry.id),
+});
+
+/**
+ * Checks and resolves an expression, preserving either step's refusal.
+ *
+ * @param expr - The expression.
+ * @param options - Its check context.
+ * @param context - Its evaluation context.
+ * @returns A resolved condition or its refusal.
+ */
+export const resolveFor = (
+  expr: Expr,
+  options: CheckOptions,
+  context: ConditionContext
+): ConditionResult<ResolvedCondition> => {
+  const checked = checkCondition(expr, options);
+
+  return checked.ok ? resolveCondition(checked.value, context) : checked;
+};
+
+/**
+ * Checks and resolves a fixture expression, throwing on either refusal.
+ *
+ * @param expr - The expression.
+ * @param options - Its check context.
+ * @param context - Its evaluation context.
+ * @returns The resolved condition.
+ */
+export const prepareCondition = (
+  expr: Expr,
+  options: CheckOptions,
+  context: ConditionContext
+): ResolvedCondition => {
+  const resolved = resolveFor(expr, options, context);
+
+  if (!resolved.ok) {
+    throw resolved.error;
+  }
+
+  return resolved.value;
+};
+
+/**
+ * The issue reasons of a refused condition, or none for a valid condition.
+ *
+ * @param result - A check or resolution result.
+ * @returns Its issue reasons in their reported order.
+ */
+export const issueReasons = (
+  result: ConditionResult<unknown>
+): IssueReason[] =>
+  result.ok ? [] : result.error.issues.map((found) => found.reason);
+
+/** Column-by-name compiler hooks for fixtures without references. */
+export const identHooks: SqlHooks = {
+  column: (source, column) => identSql(source.alias, column.name),
+  join: () => {
+    throw new Error("No references here.");
+  },
+};
 
 /** The reference target class. */
 export const PERSON = stableId(0x1_00);
@@ -120,11 +207,18 @@ export const PERSON_LIST: readonly FixtureField[] = [
   PERSON_VIP,
 ];
 
+/** Own fields of `asset`. */
+export const ASSET_LIST: readonly FixtureField[] = Object.values(ASSET_FIELDS);
+
+/** Own fields of `laptop`. */
+export const LAPTOP_LIST: readonly FixtureField[] =
+  Object.values(LAPTOP_FIELDS);
+
 /** Every fixture field. */
 export const ALL_FIELDS: readonly FixtureField[] = [
   ...PERSON_LIST,
-  ...Object.values(ASSET_FIELDS),
-  ...Object.values(LAPTOP_FIELDS),
+  ...ASSET_LIST,
+  ...LAPTOP_LIST,
   RETIRED_FIELD,
 ];
 
@@ -132,11 +226,11 @@ export const ALL_FIELDS: readonly FixtureField[] = [
 export const fixtureView: ClassView = staticClassView([
   { fields: PERSON_LIST, id: PERSON, parentId: null },
   {
-    fields: [...Object.values(ASSET_FIELDS), RETIRED_FIELD],
+    fields: [...ASSET_LIST, RETIRED_FIELD],
     id: ASSET,
     parentId: null,
   },
-  { fields: Object.values(LAPTOP_FIELDS), id: LAPTOP, parentId: ASSET },
+  { fields: LAPTOP_LIST, id: LAPTOP, parentId: ASSET },
 ]);
 
 /**

@@ -3,46 +3,41 @@ import { formatDateTime, parseDateTime } from "@std/values/date-time";
 import { getOrThrow } from "@std/values/field-error";
 import type { ConditionProfile } from "@std/values/field-type";
 
-import type { Expr, Path, Value } from "../src/ast.ts";
+import type { Expr, Value } from "../src/ast.ts";
 import { checkCondition } from "../src/check.ts";
 import { resolveCondition, timeZoneFor } from "../src/resolve.ts";
 import type { ConditionContext } from "../src/resolve.ts";
 import type { ResolvedNode } from "../src/typed.ts";
-import { ASSET, ASSET_FIELDS as A, fixtureView } from "./support/schema.ts";
+import {
+  ASSET,
+  ASSET_FIELDS as A,
+  fixtureView,
+  path,
+  prepareCondition,
+} from "./support/schema.ts";
 
 const HOUR = 3_600_000;
 
 const at = (text: string): number => getOrThrow(parseDateTime(text));
 
-const path = (field: { readonly id: string }): Path => ({ path: [field.id] });
-
 const resolve = (
   expr: Expr,
   context: Partial<ConditionContext> & { readonly now: number },
   profile: ConditionProfile = "filter"
-): ResolvedNode => {
-  const checked = checkCondition(expr, {
-    classId: ASSET,
-    profile,
-    purpose: "store",
-    view: fixtureView,
-  });
-
-  if (!checked.ok) {
-    throw checked.error;
-  }
-
-  const resolved = resolveCondition(checked.value, {
-    timeZone: "UTC",
-    ...context,
-  });
-
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-
-  return resolved.value.root;
-};
+): ResolvedNode =>
+  prepareCondition(
+    expr,
+    {
+      classId: ASSET,
+      profile,
+      purpose: "store",
+      view: fixtureView,
+    },
+    {
+      timeZone: "UTC",
+      ...context,
+    }
+  ).root;
 
 // The literal bounds of a resolved tree, in order, as canonical text.
 const bounds = (node: ResolvedNode): string[] => {

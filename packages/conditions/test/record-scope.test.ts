@@ -19,15 +19,19 @@ import type { RecordImage } from "../src/evaluate-core.ts";
 import { evaluateCondition } from "../src/evaluate.ts";
 import { resolveCondition } from "../src/resolve.ts";
 import type { ConditionContext } from "../src/resolve.ts";
-import { identSql, renderSql, sql } from "../src/sql-fragment.ts";
+import { renderSql, sql } from "../src/sql-fragment.ts";
 import { compileCondition } from "../src/sql.ts";
 import { printCondition } from "../src/syntax-print.ts";
+import { EMPTY_ASSET } from "./support/images.ts";
 import {
   ASSET,
   ASSET_FIELDS as A,
   fixtureView,
   PERSON,
   PERSON_FIELDS as P,
+  identHooks,
+  issueReasons,
+  prepareCondition,
 } from "./support/schema.ts";
 
 const WITHOUT_RECORD: CheckOptions = {
@@ -46,37 +50,24 @@ const RECORD_ID: Path = { path: [], scope: "record" };
 const PERSON_ID = "0192f000-0000-7000-8000-0000000000aa";
 
 const asset = (values: RecordImage): RecordImage => ({
-  ...Object.fromEntries(Object.values(A).map((entry) => [entry.id, null])),
+  ...EMPTY_ASSET,
   ...values,
 });
 
 type RuleRecord = NonNullable<ConditionContext["record"]>;
 
 const holds = (expr: Expr, record: RuleRecord, image: RecordImage): boolean => {
-  const checked = checkCondition(expr, OPTIONS);
-
-  if (!checked.ok) {
-    throw checked.error;
-  }
-
-  const resolved = resolveCondition(checked.value, {
+  const resolved = prepareCondition(expr, OPTIONS, {
     now: Date.UTC(2026, 9, 22),
     record,
     timeZone: "UTC",
   });
 
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-
-  return evaluateCondition(resolved.value, { record: image });
+  return evaluateCondition(resolved, { record: image });
 };
 
-const reasons = (expr: Expr, options: CheckOptions = OPTIONS) => {
-  const checked = checkCondition(expr, options);
-
-  return checked.ok ? [] : checked.error.issues.map((entry) => entry.reason);
-};
+const reasons = (expr: Expr, options: CheckOptions = OPTIONS) =>
+  issueReasons(checkCondition(expr, options));
 
 describe("record-scope", () => {
   it("compares a reference with the rule's record ID", () => {
@@ -264,13 +255,7 @@ layer(testDatabaseLayer({ empty: true }), { excludeTestServices: true })(
 
               const compiled = compileCondition(resolved.value, {
                 alias: "r",
-                hooks: {
-                  column: (source, column) =>
-                    identSql(source.alias, column.name),
-                  join: () => {
-                    throw new Error("No references here.");
-                  },
-                },
+                hooks: identHooks,
               });
 
               const query = renderSql(

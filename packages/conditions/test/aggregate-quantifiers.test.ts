@@ -52,6 +52,7 @@ import type { Compare, Expr, In, Path } from "../src/ast.ts";
 import { staticClassView } from "../src/class-view.ts";
 import type { FieldInfo } from "../src/class-view.ts";
 import type { RecordImage } from "../src/evaluate-core.ts";
+import { issueReasons } from "./support/schema.ts";
 
 const OWNER = "0f000000-0000-4000-8000-000000000001";
 const PART = "0f000000-0000-4000-8000-000000000002";
@@ -567,10 +568,7 @@ describe("aggregate-quantifiers", () => {
     );
 
     assert.isFalse(checked.ok);
-    assert.deepStrictEqual(
-      checked.ok ? [] : checked.error.issues.map((found) => found.reason),
-      ["notAPart"]
-    );
+    assert.deepStrictEqual(issueReasons(checked), ["notAPart"]);
   });
 
   it("a part condition refuses changed, a part's previous and nested quantifiers", () => {

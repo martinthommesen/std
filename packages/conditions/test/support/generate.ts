@@ -1,14 +1,25 @@
-import { dateFromEpochDay, dateToEpochDay, parseDate } from "@std/values/date";
 /**
  * fast-check generators over the fixture schema: stored rows in canonical
  * JSON, and conditions permitted in a profile, to depth 6. Shared by the
  * evaluator property tests and the differential test against Postgres.
  */
 import {
+  dateFromCivil,
+  dateFromEpochDay,
+  dateToEpochDay,
+  MAX_YEAR,
+  MIN_YEAR,
+} from "@std/values/date";
+import {
   formatDateTime,
   MAX_DATE_TIME,
   MIN_DATE_TIME,
 } from "@std/values/date-time";
+import {
+  DECIMAL_MAX_PRECISION,
+  formatDecimal,
+  makeDecimal,
+} from "@std/values/decimal";
 import { getOrThrow } from "@std/values/field-error";
 import type { ConditionProfile, FieldKind } from "@std/values/field-type";
 import { isCaseSensitive, comparisonClass } from "@std/values/field-type";
@@ -25,7 +36,6 @@ import {
   option,
   record,
   string,
-  subarray,
   tuple,
 } from "fast-check";
 import type { Arbitrary } from "fast-check";
@@ -70,12 +80,13 @@ import {
 import {
   ASSET,
   ASSET_FIELDS,
+  ASSET_LIST,
   LAPTOP,
-  LAPTOP_FIELDS,
+  LAPTOP_LIST,
   PERSON,
   PERSON_LIST,
+  rowId,
 } from "./schema.ts";
-import type { FixtureField } from "./schema.ts";
 
 /** Canonical JSON values keyed by field ID. */
 export type JsonImage = Readonly<Record<string, JsonValue>>;
@@ -107,31 +118,22 @@ export const MASKED_FIELDS: ReadonlySet<string> = new Set([
   ASSET_FIELDS.owner.id,
 ]);
 
-const MAX_DECIMAL_COEFFICIENT = 10n ** 38n - 1n;
+const MAX_DECIMAL_COEFFICIENT = 10n ** BigInt(DECIMAL_MAX_PRECISION) - 1n;
 const DECIMAL_SCALE = 6;
 
-const formatScaled = (coefficient: bigint): string => {
-  const negative = coefficient < 0n;
+const MIN_EPOCH_DAY = dateToEpochDay(
+  getOrThrow(dateFromCivil({ day: 1, month: 1, year: MIN_YEAR }))
+);
 
-  const digits = (negative ? -coefficient : coefficient)
-    .toString()
-    .padStart(DECIMAL_SCALE + 1, "0");
-
-  const point = digits.length - DECIMAL_SCALE;
-
-  return `${negative ? "-" : ""}${digits.slice(0, point)}.${digits.slice(point)}`;
-};
-
-const MIN_EPOCH_DAY = dateToEpochDay(getOrThrow(parseDate("0001-01-01")));
-const MAX_EPOCH_DAY = dateToEpochDay(getOrThrow(parseDate("9999-12-31")));
+const MAX_EPOCH_DAY = dateToEpochDay(
+  getOrThrow(dateFromCivil({ day: 31, month: 12, year: MAX_YEAR }))
+);
 
 const dateArb: Arbitrary<string> = oneof(
   constantFrom(...DATE_POOL),
-  integer({ max: MAX_EPOCH_DAY, min: MIN_EPOCH_DAY }).map((day) => {
-    const date = dateFromEpochDay(day);
-
-    return date.ok ? date.value : "2026-01-01";
-  })
+  integer({ max: MAX_EPOCH_DAY, min: MIN_EPOCH_DAY }).map((day) =>
+    getOrThrow(dateFromEpochDay(day))
+  )
 );
 
 const dateTimeArb: Arbitrary<string> = oneof(
@@ -183,10 +185,10 @@ const PRESENT_VALUES = {
   decimal: oneof(
     constantFrom(...DECIMAL_POOL),
     bigInt({ max: MAX_DECIMAL_COEFFICIENT, min: -MAX_DECIMAL_COEFFICIENT }).map(
-      formatScaled
+      (coefficient) => formatDecimal(makeDecimal(coefficient, DECIMAL_SCALE))
     ),
     integer({ max: 3_000_000, min: -3_000_000 }).map((n) =>
-      formatScaled(BigInt(n))
+      formatDecimal(makeDecimal(BigInt(n), DECIMAL_SCALE))
     )
   ),
   integer: oneof(constantFrom(...INTEGER_POOL), integer()),
@@ -224,12 +226,15 @@ const imageArb = (fields: readonly FieldInfo[]): Arbitrary<JsonImage> =>
     )
   );
 
-const ASSET_LIST: readonly FixtureField[] = Object.values(ASSET_FIELDS);
+const LAPTOP_ALL_FIELDS: readonly FieldInfo[] = [...ASSET_LIST, ...LAPTOP_LIST];
 
-const LAPTOP_LIST: readonly FixtureField[] = [
-  ...ASSET_LIST,
-  ...Object.values(LAPTOP_FIELDS),
-];
+const fieldsOf = (classId: string): readonly FieldInfo[] => {
+  if (classId === PERSON) {
+    return PERSON_LIST;
+  }
+
+  return classId === LAPTOP ? LAPTOP_ALL_FIELDS : ASSET_LIST;
+};
 
 /** Person rows: one per target ID. */
 export const personRowsArb: Arbitrary<readonly PersonRow[]> = tuple(
@@ -244,25 +249,34 @@ export const personRowsArb: Arbitrary<readonly PersonRow[]> = tuple(
   )
 );
 
-const assetRowArb = (index: number): Arbitrary<AssetRow> =>
-  boolean().chain((laptop) => {
-    const fields = laptop ? LAPTOP_LIST : ASSET_LIST;
+/**
+ * A row of the requested fixture class.
+ *
+ * @param classId - Asset or laptop.
+ * @param index - The row's ID within a generated case.
+ * @returns The arbitrary.
+ */
+export const assetRowArb = (
+  classId: string,
+  index = 0
+): Arbitrary<AssetRow> => {
+  const fields = fieldsOf(classId);
 
-    return record({
-      previous: option(imageArb(fields), { freq: 3, nil: null }),
-      readable: oneof(
-        { arbitrary: constant(true), weight: 4 },
-        { arbitrary: constant(false), weight: 1 }
-      ),
-      values: imageArb(fields),
-    }).map(({ previous, readable, values }): AssetRow => ({
-      classId: laptop ? LAPTOP : ASSET,
-      id: `00000000-0000-7000-9000-${index.toString(16).padStart(12, "0")}`,
-      previous,
-      readable,
-      values,
-    }));
-  });
+  return record({
+    previous: option(imageArb(fields), { freq: 3, nil: null }),
+    readable: oneof(
+      { arbitrary: constant(true), weight: 4 },
+      { arbitrary: constant(false), weight: 1 }
+    ),
+    values: imageArb(fields),
+  }).map(({ previous, readable, values }): AssetRow => ({
+    classId,
+    id: rowId(index),
+    previous,
+    readable,
+    values,
+  }));
+};
 
 /**
  * Asset and laptop rows.
@@ -272,23 +286,18 @@ const assetRowArb = (index: number): Arbitrary<AssetRow> =>
  */
 export const assetRowsArb = (maxRows: number): Arbitrary<readonly AssetRow[]> =>
   integer({ max: maxRows, min: 1 }).chain((count) =>
-    tuple(...Array.from({ length: count }, (_, index) => assetRowArb(index)))
+    tuple(
+      ...Array.from({ length: count }, (_, index) =>
+        boolean().chain((laptop) => assetRowArb(laptop ? LAPTOP : ASSET, index))
+      )
+    )
   );
 
 /** A path the generator may use, with the field it reads. */
 export interface Candidate {
   readonly ids: readonly string[];
   readonly field: FieldInfo;
-  readonly hops: number;
 }
-
-const fieldsOf = (classId: string): readonly FieldInfo[] => {
-  if (classId === PERSON) {
-    return PERSON_LIST;
-  }
-
-  return classId === LAPTOP ? LAPTOP_LIST : ASSET_LIST;
-};
 
 /**
  * Every path from a class within a hop limit.
@@ -307,7 +316,7 @@ export const pathsFrom = (classId: string, maxHops: number): Candidate[] => {
   ): void => {
     for (const field of fieldsOf(current)) {
       const ids = [...prefix, field.id];
-      out.push({ field, hops, ids });
+      out.push({ field, ids });
 
       if (field.type.kind === "reference" && hops < maxHops) {
         walk(field.type.targetClassId, ids, hops + 1);
@@ -340,9 +349,6 @@ export const kindKey = (field: FieldInfo): string => {
 const KINDS_BY_KEY: ReadonlyMap<string, FieldKind> = new Map(
   ASSET_LIST.map((field) => [kindKey(field), field.type.kind])
 );
-
-/** Every kind key of the fixture. */
-export const KIND_KEYS: readonly string[] = [...KINDS_BY_KEY.keys()];
 
 /**
  * Every permitted (operator, type) pair of a profile, as coverage keys.
@@ -469,7 +475,6 @@ const valueArb = (rules: ProfileRules, field: FieldInfo): Arbitrary<Value> => {
 };
 
 interface Generator {
-  readonly spec: GenerationSpec;
   readonly rules: ProfileRules;
   readonly candidates: readonly Candidate[];
 }
@@ -645,7 +650,6 @@ export const exprArb = (spec: GenerationSpec): Arbitrary<Expr> => {
   const generator: Generator = {
     candidates: pathsFrom(spec.classId, rules.maxHops),
     rules,
-    spec,
   };
 
   const atoms = ATOM_OPERATORS.flatMap((operator) => {
@@ -706,7 +710,6 @@ export const atomArb = (
   const generator: Generator = {
     candidates: pathsFrom(spec.classId, rules.maxHops),
     rules,
-    spec,
   };
 
   const candidates = fitting(generator, operator).filter(
@@ -726,42 +729,44 @@ export const atomArb = (
  * @returns Keys such as `eq|text:ci`, one per atom.
  */
 export const coverageKeys = (expr: Expr, classId: string): string[] => {
-  const candidates = pathsFrom(classId, 3);
+  const kindsByPath = new Map(
+    pathsFrom(classId, 3).map((candidate) => [
+      candidate.ids.join("/"),
+      kindKey(candidate.field),
+    ])
+  );
 
-  const keyOf = (path: Path): string => {
-    const found = candidates.find(
-      (candidate) => candidate.ids.join("/") === path.path.join("/")
-    );
+  const keyOf = (path: Path): string =>
+    kindsByPath.get(path.path.join("/")) ?? "?";
 
-    return found === undefined ? "?" : kindKey(found.field);
+  const walk = (node: Expr): string[] => {
+    if (isJunction(node)) {
+      return node.args.flatMap(walk);
+    }
+
+    if (node.op === "not") {
+      return walk(node.arg);
+    }
+
+    if (
+      isCompare(node) ||
+      isIn(node) ||
+      isPatternTest(node) ||
+      node.op === "inPeriod"
+    ) {
+      return [`${node.op}|${keyOf(node.left)}`];
+    }
+
+    if (
+      node.op === "empty" ||
+      node.op === "notEmpty" ||
+      node.op === "changed"
+    ) {
+      return [`${node.op}|${keyOf(node.arg)}`];
+    }
+
+    return [];
   };
 
-  if (isJunction(expr)) {
-    return expr.args.flatMap((arg) => coverageKeys(arg, classId));
-  }
-
-  if (expr.op === "not") {
-    return coverageKeys(expr.arg, classId);
-  }
-
-  if (
-    isCompare(expr) ||
-    isIn(expr) ||
-    isPatternTest(expr) ||
-    expr.op === "inPeriod"
-  ) {
-    return [`${expr.op}|${keyOf(expr.left)}`];
-  }
-
-  if (expr.op === "empty" || expr.op === "notEmpty" || expr.op === "changed") {
-    return [`${expr.op}|${keyOf(expr.arg)}`];
-  }
-
-  return [];
+  return walk(expr);
 };
-
-/**
- * A random subset of the profile's context: `me` and `myGroups` from the
- * UUID pool, `now` from the DST pool.
- */
-export const groupsArb: Arbitrary<readonly string[]> = subarray([...UUID_POOL]);

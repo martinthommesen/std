@@ -21,9 +21,9 @@ import type { FieldInfo } from "../src/class-view.ts";
 import { ConditionDefectError } from "../src/defect.ts";
 import { evaluateCondition } from "../src/evaluate.ts";
 import { PROFILES } from "../src/profile.ts";
-import { identSql } from "../src/sql-fragment.ts";
 import { compileCondition } from "../src/sql.ts";
 import { makeResolved } from "../src/typed.ts";
+import { identHooks, issueReasons } from "./support/schema.ts";
 
 const OWNER = "0e000000-0000-4000-8000-000000000001";
 const PART = "0e000000-0000-4000-8000-000000000002";
@@ -99,7 +99,7 @@ describe("quantifier-profiles", () => {
       );
 
       assert.deepStrictEqual(
-        checked.ok ? [] : checked.error.issues.map((found) => found.reason),
+        issueReasons(checked),
         ["scopeNotAllowed"],
         profile
       );
@@ -161,12 +161,7 @@ describe("quantifier-profiles", () => {
     assert.throws(() => {
       compileCondition(smuggled, {
         alias: "p",
-        hooks: {
-          column: (source, column) => identSql(source.alias, column.name),
-          join: () => {
-            throw new Error("No references here.");
-          },
-        },
+        hooks: identHooks,
       });
     }, ConditionDefectError);
     assert.throws(() => {

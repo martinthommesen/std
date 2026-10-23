@@ -3,13 +3,39 @@
  */
 import { decodeIn } from "@std/values/codec";
 import type { StoredOrPlaintext } from "@std/values/compare";
+import { getOrThrow } from "@std/values/field-error";
 import type { JsonValue } from "@std/values/json-value";
 import { secretState } from "@std/values/write-only";
 
 import type { ImageSource, RecordImage } from "../../src/evaluate-core.ts";
 import type { AssetRow, JsonImage, PersonRow } from "./generate.ts";
 import { MASKED_FIELDS } from "./generate.ts";
-import { fixtureField } from "./schema.ts";
+import { ASSET_LIST, fixtureField, PERSON_LIST } from "./schema.ts";
+
+/** An all-empty asset image. */
+export const EMPTY_ASSET: RecordImage = Object.fromEntries(
+  ASSET_LIST.map((field) => [field.id, null])
+);
+
+/** An all-empty person image. */
+export const EMPTY_PERSON: RecordImage = Object.fromEntries(
+  PERSON_LIST.map((field) => [field.id, null])
+);
+
+/**
+ * Masks selected fields as empty in a complete image.
+ *
+ * @param image - The stored image.
+ * @param ids - The hidden field IDs.
+ * @returns The masked image.
+ */
+export const maskImage = (
+  image: RecordImage,
+  ids: ReadonlySet<string>
+): RecordImage =>
+  Object.fromEntries(
+    Object.entries(image).map(([id, value]) => [id, ids.has(id) ? null : value])
+  );
 
 /**
  * The stored value of a canonical JSON value.
@@ -32,13 +58,7 @@ export const storedValue = (
     return secretState(true);
   }
 
-  const decoded = decodeIn(field.type, json);
-
-  if (!decoded.ok) {
-    throw decoded.error;
-  }
-
-  return decoded.value;
+  return getOrThrow(decodeIn(field.type, json));
 };
 
 /**
