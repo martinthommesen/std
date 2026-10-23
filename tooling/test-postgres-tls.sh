@@ -4,8 +4,10 @@ set -eu
 umask 077
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/std-tls.XXXXXXXX")
 container="std-tls-test-$(basename "$fixture")"
+compose_container="$container-compose"
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
+  docker rm -f -v "$compose_container" >/dev/null 2>&1 || true
   rm -rf "$fixture"
 }
 trap cleanup EXIT HUP INT TERM
@@ -80,6 +82,27 @@ docker exec "$container" sh -ec '
   test "$before" != "$(sha256sum /std-ca/ca.crt)"
   test "$(stat -c %a /var/lib/postgresql/std-tls/server.key)" = 600
 '
+
+# The compose service's real start: the script, then Postgres, on a fresh data
+# volume (the image's anonymous one), reached over verified TLS. The checks
+# above pass `true`, so they never start Postgres through the script.
+docker run -d --name "$compose_container" \
+  -e POSTGRES_USER=std -e POSTGRES_PASSWORD=std -e POSTGRES_DB=std \
+  -v "$PWD/docker/postgres-tls.sh:/usr/local/bin/std-postgres-tls.sh:ro" \
+  --entrypoint sh postgres:18 /usr/local/bin/std-postgres-tls.sh postgres >/dev/null
+attempt=0
+until [ "$(docker exec -e PGPASSWORD=std "$compose_container" psql \
+  'host=127.0.0.1 user=std dbname=std sslmode=verify-full sslrootcert=/std-ca/ca.crt' \
+  -Atc 'SHOW ssl' 2>/dev/null)" = on ]; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 60 ] ||
+     [ "$(docker inspect -f '{{.State.Running}}' "$compose_container")" != true ]; then
+    docker logs "$compose_container"
+    exit 1
+  fi
+  sleep 1
+done
+docker rm -f -v "$compose_container" >/dev/null
 
 # Reuse this same isolated container to prove mandatory TLS has no fallback.
 docker exec "$container" psql -U std -d std -c 'ALTER SYSTEM SET ssl = off' >/dev/null

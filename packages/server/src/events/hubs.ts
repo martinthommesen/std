@@ -455,15 +455,18 @@ export const genericTarget = (
 ): HubTarget | undefined => {
   const resource = new URLSearchParams(query ?? "").get("resource");
 
-  const table = snapshot
-    .all("class")
-    .find(
-      (entry) =>
-        entry.state === "active" &&
-        entry.storage === "standard" &&
-        knowsTable(snapshot, actor, entry.id) &&
-        collectionNameOf(snapshot, entry.id) === resource
+  const table = snapshot.all("class").find((entry) => {
+    const savedThroughRecords =
+      entry.storage === "standard" ||
+      entry.id === PLATFORM_CLASS_IDS.dead_delivery_action;
+
+    return (
+      entry.state === "active" &&
+      savedThroughRecords &&
+      knowsTable(snapshot, actor, entry.id) &&
+      collectionNameOf(snapshot, entry.id) === resource
     );
+  });
 
   return table === undefined
     ? undefined

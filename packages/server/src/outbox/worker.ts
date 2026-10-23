@@ -95,7 +95,7 @@ import {
   releaseClaim,
 } from "./delivery-claims.ts";
 import type { ClaimedDelivery } from "./delivery-claims.ts";
-import { DeliveryHandlers, effectFor } from "./delivery-effects.ts";
+import { DeliveryHandlers } from "./delivery-effects.ts";
 import type { Delivery, DeliveryEffect } from "./delivery-effects.ts";
 import { DeliveryFailed } from "./delivery-failed.ts";
 import {
@@ -111,6 +111,8 @@ import {
   deliveriesLeaseLost,
   refreshDeadGauge,
 } from "./metrics.ts";
+import { resolveServed } from "./served.ts";
+import type { Served } from "./served.ts";
 
 /** How the worker runs. */
 export interface WorkerSettingsValues {
@@ -247,43 +249,6 @@ export const WorkerProbes = Context.Reference<WorkerProbesApi>(
  */
 export const leaseOf = (settings: WorkerSettingsValues): Duration.Duration =>
   Duration.sum(settings.effectTimeout, settings.leaseMargin);
-
-/** A subscription and the effect that serves it. */
-export interface Served {
-  readonly subscription: SubscriptionDefinition;
-  readonly effect: DeliveryEffect;
-}
-
-/**
- * A subscription as a configuration serves it: active, enabled and served
- * by a handler, with that handler's effect.
- *
- * @param snapshot - The configuration.
- * @param handlers - The worker's handlers.
- * @param subscriptionId - The subscription.
- * @returns It and its effect, or undefined when it is not served.
- */
-const resolveServed = (
-  snapshot: ConfigSnapshot,
-  handlers: DeliveryHandlers["Service"],
-  subscriptionId: DefinitionId
-): Served | undefined => {
-  const subscription = snapshot
-    .subscriptions()
-    .find((candidate) => candidate.id === subscriptionId);
-
-  if (
-    subscription === undefined ||
-    subscription.state !== "active" ||
-    !subscription.enabled
-  ) {
-    return undefined;
-  }
-
-  const effect = effectFor(handlers, subscription, snapshot);
-
-  return effect === undefined ? undefined : { effect, subscription };
-};
 
 /** How one attempt ended. */
 export type AttemptOutcome =

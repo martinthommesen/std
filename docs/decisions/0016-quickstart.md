@@ -39,7 +39,7 @@ What it does, each step under a heading: two change sets through `POST /api/v1/s
 
 The quickstart needs a database where the `acme` namespace is free: the `acme` app set (`examples/acme`, loaded with `std upgrade --set examples/acme`) reserves it (Contracts 1.8), and the first change set is then refused.
 
-`std doctor` runs through `STD_DOCTOR_COMMAND` (default `docker compose exec -T server pnpm --silent std doctor`): doctor is a CLI command that reads the database directly (Contracts 1.10), not an endpoint.
+`std doctor` runs through `STD_DOCTOR_COMMAND` (default `docker compose exec -T server sh docker/quickstart-entrypoint.sh pnpm --silent std doctor`): doctor is a CLI command that reads the database directly (Contracts 1.10), not an endpoint.
 
 ## CI
 

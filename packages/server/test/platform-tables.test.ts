@@ -4,7 +4,9 @@
  * return `UnknownTable`, identical to a table that does not exist. The
  * same holds for every platform and config table and every route, for
  * every non-admin. Admins read them through the built-in allow-all rule.
- * No caller writes them through the record service: a generic write on a
+ * Stored dead-delivery actions have a private append capability (0037).
+ * No caller writes platform classes through generic record saves:
+ * a generic write on a
  * definition table becomes a one-operation change set (Contracts 1.4,
  * checked by the schema service), and every other platform table (the
  * journal, `core.change`, the config-layer tables) is refused. Internal tables of the
@@ -23,9 +25,11 @@ import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import { PLATFORM_CLASS_IDS } from "@std/definitions/well-known";
 import { Effect } from "effect";
 
+import { seedDeadLetters } from "../../testing/src/dead-letter-fixture.ts";
 import { TestHttpClient } from "../../testing/src/http-client.ts";
 import { Catalog } from "../src/catalog/catalog.ts";
 import { DEFINITION_KIND_OF_TABLE } from "../src/http/change-sets.ts";
+import { asArray, asObject } from "./api-support.ts";
 import { deliveries, listNames, signInAll } from "./authz-support.ts";
 import type { Who } from "./authz-support.ts";
 import {
@@ -35,7 +39,7 @@ import {
   readsTestLayer,
   recordPath,
 } from "./reads-support.ts";
-import { change, freshId, values } from "./schema-support.ts";
+import { addField, change, freshId, values } from "./schema-support.ts";
 
 /** Config tables that are not platform tables but hold no data for users. */
 const CONFIG_TABLES = ["core.user_role"] as const;
@@ -254,7 +258,7 @@ describe("platform-tables", () => {
     );
 
     dbTest.effect(
-      "admins read platform tables but never write them generically",
+      "admins read platform tables, refuse journal writes and validate stored actions",
       () =>
         Effect.gen(function* adminWrites() {
           const http = yield* TestHttpClient;
@@ -362,7 +366,7 @@ describe("platform-tables", () => {
 
             // Definition tables take the change-set path, where an empty
             // body is no definition: its required columns are missing
-            // (decision 0020); every other platform table is refused.
+            // (decision 0020). Every other platform table is refused.
             const definitionTable = DEFINITION_KIND_OF_TABLE.has(table);
 
             assert.strictEqual(
@@ -390,6 +394,135 @@ describe("platform-tables", () => {
           assert.deepStrictEqual(yield* changeCount(), before);
           assert.deepStrictEqual(yield* ruleText(), ruleBefore);
           assert.strictEqual(yield* deliveries(), deliveriesBefore);
+        })
+    );
+
+    dbTest.effect(
+      "admins cannot forge, rewrite or erase stored actions through any generic write path",
+      () =>
+        Effect.gen(function* immutableActions() {
+          const http = yield* TestHttpClient;
+          const { tokens } = yield* signInAll;
+          const admin = { token: tokens.admin };
+          const seeded = yield* seedDeadLetters(admin);
+          const collection = "/api/v1/coreDeadDeliveryAction";
+
+          const body = {
+            action: "discard",
+            deliveryId: seeded.firstId,
+            occurredAt: "2000-01-01T00:00:00.000Z",
+            state: "completed",
+            subscriptionId: randomUUID(),
+          };
+
+          const forged = yield* http.request("POST", collection, {
+            ...admin,
+            body,
+          });
+
+          assert.strictEqual(forged.status, 403, forged.text);
+          assert.strictEqual(yield* codeOf(forged), "NotAllowed");
+          assert.deepStrictEqual(
+            (yield* http.get(
+              `${collection}?deliveryId=${seeded.firstId}`,
+              admin
+            )).json,
+            []
+          );
+          assert.strictEqual(
+            (yield* http.get(`/api/v1/deadDelivery/${seeded.firstId}`, admin))
+              .status,
+            200
+          );
+
+          const created = yield* http.request(
+            "POST",
+            "/api/v1/discardDeadDelivery",
+            {
+              ...admin,
+              body: { deliveryId: seeded.firstId },
+            }
+          );
+
+          assert.strictEqual(created.status, 201, created.text);
+
+          const location = new URL(created.headers.get("location") ?? "")
+            .pathname;
+
+          const history = yield* http.get(`${location}/history`, admin);
+
+          for (const [method, patch, contentType, status, code] of [
+            ["PATCH", body, "application/merge-patch+json", 403, "NotAllowed"],
+            [
+              "PATCH",
+              [{ op: "replace", path: "/subscriptionId", value: randomUUID() }],
+              "application/json-patch+json",
+              403,
+              "NotAllowed",
+            ],
+            ["PUT", body, "application/json", 405, "MethodNotAllowed"],
+            ["DELETE", null, "application/json", 403, "NotAllowed"],
+          ] as const) {
+            const options = {
+              ...admin,
+              headers: { "content-type": contentType, "if-match": '"1"' },
+            };
+
+            const response = yield* patch === null
+              ? http.request(method, location, options)
+              : http.request(method, location, { ...options, body: patch });
+
+            assert.strictEqual(response.status, status, response.text);
+            assert.strictEqual(yield* codeOf(response), code);
+          }
+
+          const changeSet = yield* http.request(
+            "POST",
+            "/api/v1/applyChangeSet",
+            {
+              ...admin,
+              body: {
+                operations: [
+                  addField(PLATFORM_CLASS_IDS.dead_delivery_action, "forged", {
+                    kind: "text",
+                  }).op,
+                ],
+              },
+            }
+          );
+
+          assert.strictEqual(changeSet.status, 403, changeSet.text);
+          assert.strictEqual(yield* codeOf(changeSet), "DefinitionProtected");
+
+          assert.deepStrictEqual(
+            (yield* http.get(location, admin)).json,
+            created.json
+          );
+          assert.deepStrictEqual(
+            (yield* http.get(`${location}/history`, admin)).json,
+            history.json
+          );
+          assert.lengthOf(asArray(history.json), 1);
+          assert.strictEqual(
+            (yield* http.get(location, { token: tokens.bob })).status,
+            404
+          );
+
+          const metadata = yield* http.get(
+            "/api/v1/tableMetadata/coreDeadDeliveryAction",
+            admin
+          );
+
+          assert.strictEqual(metadata.status, 200, metadata.text);
+          const table = asObject(metadata.json);
+          assert.strictEqual(table.creatable, false);
+
+          for (const field of asArray(table.fields)) {
+            assert.deepStrictEqual(asObject(field).write, {
+              create: "no",
+              update: "no",
+            });
+          }
         })
     );
 

@@ -1216,6 +1216,32 @@ const runStep = async (scope: Locator, step: ConditionStep) => {
 };
 
 /**
+ * Opens the navigation's Administration group (the platform's tables and
+ * the administration pages), which starts closed; nothing happens when
+ * it is open or the user has none.
+ *
+ * @param page - A signed-in page.
+ * @returns Nothing, once the group is shown.
+ */
+export const showAdministration = async (page: Page): Promise<void> => {
+  const administration = page
+    .getByRole("navigation", { name: "Tables" })
+    .getByRole("button", { name: /^Administration/u });
+
+  await page
+    .getByRole("navigation", { name: "Tables" })
+    .waitFor({ state: "attached" });
+
+  if (
+    (await administration.count()) > 0 &&
+    (await administration.getAttribute("aria-expanded")) !== "true"
+  ) {
+    await administration.click();
+    await rendered(page);
+  }
+};
+
+/**
  * Opens the list page's filter builder, which starts closed behind the
  * "Filter" button (it counts the applied conditions in its name); nothing
  * happens when it is open.
@@ -1383,22 +1409,19 @@ export const navigationTables = async (page: Page): Promise<string[]> => {
   const nav = page.getByRole("navigation", { name: "Tables" });
 
   await nav.waitFor({ state: "attached" });
+  await showAdministration(page);
 
-  // The platform's tables are in the Administration group, closed at
-  // first: open it, so that every table's link is shown.
-  const administration = nav.getByRole("button", { name: /^Administration/u });
-
-  if (
-    (await administration.count()) > 0 &&
-    (await administration.getAttribute("aria-expanded")) !== "true"
-  ) {
-    await administration.click();
-    await rendered(page);
-  }
-
+  // NOTE: the Administration group also holds pages (dead letters), in a
+  // navigation of their own; only the tables' links count here.
   return await nav
     .getByRole("link")
-    .evaluateAll((links) => links.map((link) => link.textContent ?? ""));
+    .evaluateAll((links) =>
+      links.flatMap((link) =>
+        (link.getAttribute("href") ?? "").startsWith("/tables/")
+          ? [link.textContent ?? ""]
+          : []
+      )
+    );
 };
 
 // A SECOND CLIENT

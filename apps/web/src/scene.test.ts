@@ -35,11 +35,11 @@ import {
   signInRedirectedFromHome,
 } from "./fixture.ts";
 import { Message } from "./message.ts";
-import { Model } from "./model.ts";
+import { Model, Tables } from "./model.ts";
 import { Message as SignInMessage, SignIn } from "./page/sign-in/sign-in.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
-import { REVISION_3, adaTables } from "./table-fixture.ts";
+import { REVISION_3, adaTables, summaryOf } from "./table-fixture.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
 
@@ -145,6 +145,37 @@ describe("app", () => {
         "aria-expanded",
         "false"
       )
+    );
+  });
+
+  it("the Administration group holds the dead letters page for whoever may read subscriptions", () => {
+    const withSubscriptions = modifyFields(adaAtHome, {
+      route: () => AppRoute.DeadLetters(),
+      tables: () =>
+        Tables.Success({
+          data: {
+            revision: REVISION_3,
+            tables: [
+              ...adaTables.tables,
+              summaryOf("core.subscription", "Subscription", true),
+            ],
+          },
+        }),
+    });
+
+    scene(
+      { update, view },
+      given(withSubscriptions),
+      expect(
+        within(
+          role("navigation", { name: "Administration pages" }),
+          role("link", { name: "Dead letters" })
+        )
+      ).toHaveAttr("aria-current", "page"),
+      expect(
+        within(primaryNav, role("link", { name: "Dead letters" }))
+      ).not.toExist(),
+      expect(administrationButton).toContainText("3")
     );
   });
 

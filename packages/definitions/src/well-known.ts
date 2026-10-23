@@ -23,6 +23,7 @@ export const PLATFORM_CLASS_IDS = {
   config_conflict: "b7281780-9441-46f3-9d58-f14b812a59c2",
   config_override: "225c71f0-e411-4e5e-a01c-aebdd779a2c5",
   config_set: "0b70df4d-c000-4b9a-aa7f-8b5b92f1afce",
+  dead_delivery_action: "6ef83f5d-41c6-4acb-943c-4bc82503aa92",
   field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
   field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",
   index: "3e7e3e31-2fef-4414-9c85-e37a441a8809",

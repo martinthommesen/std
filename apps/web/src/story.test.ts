@@ -336,6 +336,7 @@ describe("signing in", () => {
           "_tag",
           "isNavigationOpen",
           "isPreferenceSaveFailed",
+          "maybeDeadLetters",
           "maybeRecordForm",
           "maybeRevision",
           "maybeTableList",
@@ -581,6 +582,7 @@ describe("answers of an earlier session", () => {
   const bobEntering = Model.SignedIn({
     isNavigationOpen: false,
     isPreferenceSaveFailed: false,
+    maybeDeadLetters: Option.none(),
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),
     maybeTableList: Option.none(),

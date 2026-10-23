@@ -30,6 +30,7 @@ export const ada: CurrentUser = {
 export const adaAtHome = Model.SignedIn({
   isNavigationOpen: false,
   isPreferenceSaveFailed: false,
+  maybeDeadLetters: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
@@ -49,6 +50,7 @@ export const adaAtHome = Model.SignedIn({
 export const adaEnteringHome = Model.SignedIn({
   isNavigationOpen: false,
   isPreferenceSaveFailed: false,
+  maybeDeadLetters: Option.none(),
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),

@@ -13,6 +13,7 @@ import {
 import { Message } from "./message.ts";
 import { SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";
+import { view as deadLettersView } from "./page/dead-letters/view.ts";
 import { tableHref, view as homeView } from "./page/home.ts";
 import { view as notFoundView } from "./page/not-found.ts";
 import {
@@ -24,7 +25,7 @@ import {
   title as tableListTitle,
   view as tableListView,
 } from "./page/table-list/view.ts";
-import { homeRouter, signInRouter } from "./route.ts";
+import { deadLettersRouter, homeRouter, signInRouter } from "./route.ts";
 import type { AppRoute } from "./route.ts";
 import { USER_MENU_ITEMS, UserMenu } from "./user-menu.ts";
 import type { UserMenuItem } from "./user-menu.ts";
@@ -45,17 +46,21 @@ const SIDEBAR_SECTION_CLASS = "sidebar-section";
 
 const ADMINISTRATION_ID = "administration";
 
-/** The links of the primary navigation, by route tag. */
-const NAV_ITEMS = ["Home"] as const;
+/** The route links of the navigation, by route tag. */
+type NavItem = "Home" | "DeadLetters";
 
-type NavItem = (typeof NAV_ITEMS)[number];
+/** The links of the primary navigation. */
+const PRIMARY_ITEMS: readonly NavItem[] = ["Home"];
 
-const NAV_LABELS = { Home: "Home" } as const satisfies Record<NavItem, string>;
+const NAV_LABELS = {
+  DeadLetters: "Dead letters",
+  Home: "Home",
+} as const satisfies Record<NavItem, string>;
 
-const NAV_HREFS = { Home: homeRouter } as const satisfies Record<
-  NavItem,
-  () => string
->;
+const NAV_HREFS = {
+  DeadLetters: deadLettersRouter,
+  Home: homeRouter,
+} as const satisfies Record<NavItem, () => string>;
 
 /**
  * What every state renders: a skip link, the header, `main` holding the
@@ -109,15 +114,32 @@ const currentTable = (route: AppRoute): Option.Option<string> =>
     Match.orElse(() => Option.none())
   );
 
-const primaryNavView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
+/**
+ * A navigation of route links (Foldkit UI Nav: `aria-current` on the
+ * current one): the primary navigation, and the Administration group's
+ * pages.
+ *
+ * @param config - Its label, items, current route and class.
+ * @param h - The builder.
+ * @returns The navigation.
+ */
+const routeNavView = (
+  config: {
+    readonly ariaLabel: string;
+    readonly className: string;
+    readonly current: AppRoute;
+    readonly items: readonly NavItem[];
+  },
+  h: HtmlBuilder<Message>
+): Html =>
   Nav.view<NavItem>({
-    ariaLabel: "Primary",
-    isItemCurrent: (item) => current._tag === item,
-    items: NAV_ITEMS,
+    ariaLabel: config.ariaLabel,
+    isItemCurrent: (item) => config.current._tag === item,
+    items: config.items,
     toHref: (item) => NAV_HREFS[item](),
     toView: ({ items, nav }) =>
       h.nav(
-        [...nav, h.Class(SIDEBAR_SECTION_CLASS)],
+        [...nav, h.Class(config.className)],
         [
           h.ul(
             [h.Class("nav-list")],
@@ -137,6 +159,21 @@ const primaryNavView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
         ]
       ),
   });
+
+/**
+ * The Administration group's pages the user may open: the dead letters
+ * of the event hubs for whoever may read `core.subscription` (the page's
+ * own rule, `page/dead-letters`).
+ *
+ * @param tables - The tables the user can open.
+ * @returns The pages.
+ */
+const administrationPagesOf = (
+  tables: readonly MetaTableSummary[]
+): readonly NavItem[] =>
+  tables.some(({ name }) => name === "core.subscription")
+    ? ["DeadLetters"]
+    : [];
 
 const tablesNavList = (
   model: SignedInModel,
@@ -177,8 +214,12 @@ const tablesNavList = (
           )
         );
 
+      const pages = administrationPagesOf(tables);
+
+      const administrationCount = pages.length + groups.administration.length;
+
       const administrationView =
-        groups.administration.length === 0
+        administrationCount === 0
           ? h.empty
           : Disclosure.view(
               {
@@ -199,9 +240,9 @@ const tablesNavList = (
                             [
                               h.span(
                                 [h.Class("visually-hidden")],
-                                [", tables: "]
+                                [", entries: "]
                               ),
-                              String(groups.administration.length),
+                              String(administrationCount),
                             ]
                           ),
                         ]
@@ -209,7 +250,23 @@ const tablesNavList = (
                       animatePanel(
                         h.div(
                           [...panel, h.Class("nav-group-panel")],
-                          [listOf(groups.administration)]
+                          [
+                            // NOTE: the group's pages come first, as their
+                            // own navigation inside the tables'; the
+                            // platform's tables follow.
+                            pages.length === 0
+                              ? h.empty
+                              : routeNavView(
+                                  {
+                                    ariaLabel: "Administration pages",
+                                    className: "nav-group-pages",
+                                    current: model.route,
+                                    items: pages,
+                                  },
+                                  h
+                                ),
+                            listOf(groups.administration),
+                          ]
                         )
                       ),
                     ]
@@ -304,7 +361,15 @@ const sidebarView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
             h.OnKeyDownPreventDefault(closeOnEscape(model.isNavigationOpen)),
           ],
           [
-            primaryNavView(model.route, h),
+            routeNavView(
+              {
+                ariaLabel: "Primary",
+                className: SIDEBAR_SECTION_CLASS,
+                current: model.route,
+                items: PRIMARY_ITEMS,
+              },
+              h
+            ),
             tablesNavView(model, h),
             model.isPreferenceSaveFailed
               ? h.p(
@@ -415,6 +480,19 @@ const signedInPageView = (
 ): Html =>
   Match.value(model.route).pipe(
     Match.tag("Home", () => homeView(model.user, model.tables, h)),
+    Match.tag("DeadLetters", () =>
+      Option.match(model.maybeDeadLetters, {
+        onNone: () => h.empty,
+        onSome: (page) =>
+          h.submodel({
+            model: page,
+            slotId: "dead-letters",
+            toParentMessage: (message) =>
+              Message.GotDeadLettersMessage({ message, pageId: page.id }),
+            view: deadLettersView,
+          }),
+      })
+    ),
     Match.tag("NotFound", ({ path }) =>
       notFoundView(path, { href: homeRouter(), text: "Go to the home page" }, h)
     ),
@@ -467,7 +545,10 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
           ]
         ),
       ],
-      mainClass: MAIN_CLASS,
+      mainClass:
+        model.route._tag === "DeadLetters"
+          ? `${MAIN_CLASS} dead-letters-main`
+          : MAIN_CLASS,
       page: signedInPageView(model, h),
       side: [navigationScrimView(model, h), sidebarView(model, h)],
     },
@@ -565,6 +646,7 @@ const routeTitle = (
 ): string =>
   Match.value(route).pipe(
     Match.tag("Home", () => "Home"),
+    Match.tag("DeadLetters", () => "Dead letters"),
     Match.tag("NotFound", () => "Page not found"),
     Match.tag("Record", "NewRecord", ({ table }) =>
       Option.match(maybeRecordForm, {

@@ -24,6 +24,7 @@ import type { Operation } from "@std/definitions/operation";
 import {
   BUILT_IN_ROLE_IDS,
   PERMISSION_IDS,
+  PLATFORM_CLASS_IDS,
   SYSTEM_USER_ID,
   USER_CLASS_ID,
 } from "@std/definitions/well-known";
@@ -89,6 +90,13 @@ const BUILT_IN_RULES = {
     classId: null,
     effect: "allow",
     roleIds: [BUILT_IN_ROLE_IDS.admin],
+    target: { kind: "records" },
+  },
+  "edb47a5e-5f6d-4ad3-bcf7-bdb655ce8d80": {
+    actions: ["create", "update", "delete"],
+    classId: PLATFORM_CLASS_IDS.dead_delivery_action,
+    effect: "deny",
+    roleIds: [BUILT_IN_ROLE_IDS.authenticated],
     target: { kind: "records" },
   },
 } as const;
@@ -454,7 +462,7 @@ describe("built-ins", () => {
               WHERE id = ANY($1::uuid[]) AND active AND protected`,
               [Object.keys(BUILT_IN_RULES)]
             ),
-            ["5"]
+            [String(Object.keys(BUILT_IN_RULES).length)]
           );
         })
     );
