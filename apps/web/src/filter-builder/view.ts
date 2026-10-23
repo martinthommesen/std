@@ -30,12 +30,16 @@ import {
 } from "./condition.ts";
 import type { ConditionScope } from "./condition.ts";
 import { Message, nodeElementId } from "./filter-builder.ts";
-import { FilterOperator, Junction, ValueSource } from "./model.ts";
+import {
+  FilterOperator,
+  Junction,
+  NowUnit,
+  PeriodUnit,
+  TodayUnit,
+  ValueSource,
+} from "./model.ts";
 import type { Condition, FilterNode, Group, Model, Operand } from "./model.ts";
 import {
-  NOW_UNITS,
-  PERIOD_UNITS,
-  TODAY_UNITS,
   operatorLabel,
   operatorsFor,
   valueSourceLabel,
@@ -66,6 +70,7 @@ interface NodeContext {
   readonly model: Model;
   readonly inputs: ViewInputs;
   readonly table: MetaTable;
+  readonly fieldOptionsByTable: ReadonlyMap<MetaTable, readonly SelectOption[]>;
   readonly numbers: ReadonlyMap<number, number>;
   readonly problems: ReadonlyMap<number, string>;
 }
@@ -131,6 +136,25 @@ const removeView = (
 const fieldOptions = (fields: readonly MetaField[]): readonly SelectOption[] =>
   fields.map((field) => ({ label: field.label, value: field.id }));
 
+const offeredFieldOptions = (
+  context: NodeContext,
+  table: MetaTable,
+  selectedId: string
+): readonly SelectOption[] => {
+  const options = Option.getOrThrow(
+    Option.fromNullishOr(context.fieldOptionsByTable.get(table))
+  );
+
+  return selectedId === "" ||
+    options.some((option) => option.value === selectedId)
+    ? options
+    : fieldOptions(
+        table.fields.filter(
+          (field) => isFilterable(field) || field.id === selectedId
+        )
+      );
+};
+
 const fieldSelect = (
   context: NodeContext,
   condition: Condition,
@@ -138,17 +162,13 @@ const fieldSelect = (
 ): Html => {
   const [firstId = ""] = condition.path;
 
-  const offered = context.table.fields.filter(
-    (field) => isFilterable(field) || field.id === firstId
-  );
-
   return selectField(
     {
       id: elementId(context.model, condition.id, "field"),
       label: "Field",
       onChange: (fieldId) =>
         Message.SelectedField({ conditionId: condition.id, fieldId }),
-      options: fieldOptions(offered),
+      options: offeredFieldOptions(context, context.table, firstId),
       value: firstId,
     },
     h
@@ -206,11 +226,7 @@ const targetSelect = (
             }),
           options: [
             { label: `(the ${first.label} itself)`, value: THE_REFERENCE },
-            ...fieldOptions(
-              target.fields.filter(
-                (field) => isFilterable(field) || field.id === secondId
-              )
-            ),
+            ...offeredFieldOptions(context, target, secondId),
           ],
           value: secondId,
         },
@@ -482,7 +498,7 @@ const operandView = (
         "From now: -1 is one unit ago.",
         h
       ),
-      unitSelect(context, condition, NOW_UNITS, unit, h),
+      unitSelect(context, condition, NowUnit.literals, unit, h),
     ]),
     Match.tag("Instant", (instant) => [
       datePicker(condition, instant, h),
@@ -524,7 +540,7 @@ const operandView = (
         "0 is the current period, -1 the previous one.",
         h
       ),
-      unitSelect(context, condition, PERIOD_UNITS, unit, h),
+      unitSelect(context, condition, PeriodUnit.literals, unit, h),
     ]),
     Match.tag("Today", ({ offset, unit }) => [
       offsetInput(
@@ -534,7 +550,7 @@ const operandView = (
         "From today: -1 is one unit ago.",
         h
       ),
-      unitSelect(context, condition, TODAY_UNITS, unit, h),
+      unitSelect(context, condition, TodayUnit.literals, unit, h),
     ]),
     Match.tag("Typed", ({ text }) => [
       typedValue(context, condition, field, text, h),
@@ -608,7 +624,7 @@ const conditionView = (
     resolvePath(condition.path, context.inputs.scope),
     {
       onNone: () => [fieldSelect(context, condition, h)],
-      onSome: ({ field }) => [
+      onSome: (field) => [
         fieldSelect(context, condition, h),
         targetSelect(context, condition, h),
         operatorSelect(context, condition, field, h),
@@ -808,10 +824,18 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
         onNone: () => h.empty,
         onSome: (table) => {
           const context: NodeContext = {
+            fieldOptionsByTable: new Map(
+              Array.from(inputs.scope.tables.values(), (scopeTable) => [
+                scopeTable,
+                fieldOptions(scopeTable.fields.filter(isFilterable)),
+              ])
+            ),
             inputs,
             model,
             numbers: numbersOf(model.root),
-            problems: problemsByCondition(model.root, inputs.scope),
+            problems: model.isShowingProblems
+              ? problemsByCondition(model.root, inputs.scope)
+              : new Map(),
             table,
           };
 

@@ -6,17 +6,26 @@
  */
 import { DatePicker } from "@foldkit/ui";
 import { operatorFitsKind } from "@std/conditions/profile";
+import { FIELD_KINDS } from "@std/values/field-type";
 import type { FieldKind } from "@std/values/field-type";
 import { Match, Option } from "effect";
 import type { CalendarDate } from "foldkit/calendar";
 
 import type { MetaField } from "../domain/metadata.ts";
 import { FilterOperator, Operand } from "./model.ts";
-import type { NowUnit, PeriodUnit, TodayUnit, ValueSource } from "./model.ts";
+import type { ValueSource } from "./model.ts";
 
 /** Every filter operator, in the order the builder lists them. */
 export const FILTER_OPERATORS: readonly FilterOperator[] =
   FilterOperator.literals;
+
+const OPERATORS_BY_KIND: ReadonlyMap<FieldKind, readonly FilterOperator[]> =
+  new Map(
+    FIELD_KINDS.map((kind) => [
+      kind,
+      FILTER_OPERATORS.filter((operator) => operatorFitsKind(operator, kind)),
+    ])
+  );
 
 /** The table that holds users: `me` compares with references to it. */
 export const USER_TABLE = "core.user";
@@ -28,7 +37,7 @@ export const USER_TABLE = "core.user";
  * @returns The operators, in builder order.
  */
 export const operatorsFor = (kind: FieldKind): readonly FilterOperator[] =>
-  FILTER_OPERATORS.filter((operator) => operatorFitsKind(operator, kind));
+  OPERATORS_BY_KIND.get(kind) ?? [];
 
 /** The comparisons `eq` to `ge`, which take a value, `me`, `now` or `rel`. */
 const COMPARISONS: ReadonlySet<FilterOperator> = new Set([
@@ -157,33 +166,6 @@ export const valueSourceOf = (operand: Operand): ValueSource =>
     Match.tag("FromNow", () => "fromNow" as const),
     Match.orElse(() => "value" as const)
   );
-
-/** Units of a date relative to today, in builder order. */
-export const TODAY_UNITS: readonly TodayUnit[] = [
-  "day",
-  "week",
-  "month",
-  "year",
-];
-
-/** Units of an instant relative to now, in builder order. */
-export const NOW_UNITS: readonly NowUnit[] = [
-  "minute",
-  "hour",
-  "day",
-  "week",
-  "month",
-  "year",
-];
-
-/** Units of `inPeriod`, in builder order. */
-export const PERIOD_UNITS: readonly PeriodUnit[] = [
-  "day",
-  "week",
-  "month",
-  "quarter",
-  "year",
-];
 
 /** What a new operand needs besides the field. */
 export interface OperandContext {

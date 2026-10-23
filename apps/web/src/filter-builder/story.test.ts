@@ -26,8 +26,9 @@ import {
   update,
   withToday,
 } from "./filter-builder.ts";
+import { Condition, Group, Negation, Operand } from "./model.ts";
 import type { Model } from "./model.ts";
-import { conditionsOf } from "./tree.ts";
+import { conditionsOf, findNode, replaceNode } from "./tree.ts";
 
 const ASSETS = "acme.asset";
 
@@ -479,5 +480,55 @@ describe("filter builder: empty groups", () => {
     expect(
       Result.isFailure(currentCondition(typedName, assetsOnly))
     ).toBeTruthy();
+  });
+});
+
+describe("filter builder tree", () => {
+  const first = Condition({
+    id: 1,
+    operand: Operand.Typed({ text: "x" }),
+    operator: "eq",
+    path: [ASSET_FIELDS.name],
+  });
+
+  const second = Condition({
+    id: 2,
+    operand: Operand.Typed({ text: "y" }),
+    operator: "eq",
+    path: [ASSET_FIELDS.name],
+  });
+
+  const untouched = Negation({
+    child: Group({ children: [second], id: 3, junction: "or" }),
+    id: 4,
+  });
+
+  const root = Group({
+    children: [Negation({ child: first, id: 5 }), untouched],
+    id: 0,
+    junction: "and",
+  });
+
+  const replacement = Condition({
+    id: 1,
+    operand: Operand.Typed({ text: "z" }),
+    operator: "eq",
+    path: [ASSET_FIELDS.name],
+  });
+
+  it("shares untouched groups and negations when replacing a node", () => {
+    const replaced = replaceNode(root, first.id, () => replacement);
+
+    expect(replaced).not.toBe(root);
+    expect(Option.getOrThrow(findNode(replaced, first.id))).toBe(replacement);
+    expect(Option.getOrThrow(findNode(replaced, untouched.id))).toBe(
+      Option.getOrThrow(findNode(root, untouched.id))
+    );
+  });
+
+  it("returns the original tree for a no-op or an absent node", () => {
+    expect(replaceNode(root, second.id, (found) => found)).toBe(root);
+    expect(replaceNode(root, -1, () => replacement)).toBe(root);
+    expect(findNode(root, -1)).toStrictEqual(Option.none());
   });
 });

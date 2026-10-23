@@ -1,3 +1,4 @@
+import { DatePicker } from "@foldkit/ui";
 import type { Expr, Value } from "@std/conditions/ast";
 import { parseCondition } from "@std/conditions/syntax-parse";
 import { printCondition } from "@std/conditions/syntax-print";
@@ -40,6 +41,7 @@ import {
   loadCondition,
   parseOffset,
   toCondition,
+  pickerIdOf,
 } from "./condition.ts";
 import type { ConditionScope, Loaded } from "./condition.ts";
 import { Condition, Operand } from "./model.ts";
@@ -339,27 +341,6 @@ const printAndParse = (expr: Expr): Result.Result<Expr, string> => {
     : Result.fail(parsed.error.message);
 };
 
-const loadPicker = () => {
-  const loaded = loadCondition(
-    {
-      left: { path: [ASSET_FIELDS.purchasedOn] },
-      op: "eq",
-      right: { value: "2026-01-01" },
-    },
-    loadContext
-  );
-
-  if (
-    Result.isFailure(loaded) ||
-    loaded.success.root._tag !== "Condition" ||
-    !Operand.guards.Day(loaded.success.root.operand)
-  ) {
-    throw new Error("no picker");
-  }
-
-  return loaded.success.root.operand.picker;
-};
-
 describe("filter builder and the condition AST", () => {
   it("loads every AST it shows and gives it back unchanged", () => {
     assertProperty(
@@ -459,7 +440,10 @@ describe("filter builder and the condition AST", () => {
         id: 1,
         operand: Operand.Instant({
           maybeDate: Option.some({ day: 25, month: 10, year: 2026 }),
-          picker: loadPicker(),
+          picker: DatePicker.init({
+            id: pickerIdOf(loadContext.builderId, 1),
+            today: loadContext.today,
+          }),
           time: "09:30",
         }),
         operator: "ge",
