@@ -40,6 +40,7 @@ import {
   formFieldText,
   formOutcome,
   historyEntryTexts,
+  hiddenValuesChecker,
   openNewRecordForm,
   openRecordForm,
   openRelatedList,
@@ -53,7 +54,10 @@ import {
   waitForForm,
 } from "./app.ts";
 import type { Visitor } from "./app.ts";
-import { appendToLayout as appendShownLayout } from "./shown.ts";
+import {
+  addLocalFields,
+  appendToLayout as appendShownLayout,
+} from "./shown.ts";
 import {
   callWhenConnected,
   devToolsMcp,
@@ -274,7 +278,7 @@ const agentCreatesAnIncident = async (
 
 // RESTRICTED FIELDS
 
-const restrictedFieldNeverReachesTheBrowser = async (
+const openRestrictedIncident = async (
   browser: Browser,
   origin: string,
   fixture: HelpdeskData
@@ -299,9 +303,7 @@ const restrictedFieldNeverReachesTheBrowser = async (
   const responses = await captureApiBodies(page);
   const requests = captureApiRequestBodies(page);
 
-  const nothingHiddenAfter = async (step: string) => {
-    await assertHiddenValuesAbsent(page, everything, hidden, step);
-  };
+  const nothingHiddenAfter = hiddenValuesChecker(page, everything, hidden);
 
   await signIn(page, origin, visitorOf(fixture.agent));
   await nothingHiddenAfter("sign-in");
@@ -320,22 +322,15 @@ const restrictedFieldNeverReachesTheBrowser = async (
   await historyEntryTexts(page);
   await nothingHiddenAfter("open its history");
 
-  await fillField(page, "Description", "Payroll asks again.");
+  return { nothingHiddenAfter, page, requests, responses };
+};
 
-  const refused = await saveRecordForm(page);
-
-  await nothingHiddenAfter("a refused save");
-
-  // The agent may not change another agent's incident.
-  assert.strictEqual(refused.status, 403);
-  assert.deepStrictEqual(decodeBody(refused.body), {
-    description: "Payroll asks again.",
-  });
-  assert.include(await formOutcome(page), "You are not allowed");
-  assert.strictEqual(
-    await formControl(page, "Description").inputValue(),
-    "Payroll asks again."
-  );
+const finishRestrictedIncident = async (
+  origin: string,
+  fixture: HelpdeskData,
+  opened: Awaited<ReturnType<typeof openRestrictedIncident>>
+) => {
+  const { page, responses, requests, nothingHiddenAfter } = opened;
 
   await openTableList(page, origin, INCIDENTS);
   await nothingHiddenAfter("the incident list");
@@ -355,7 +350,35 @@ const restrictedFieldNeverReachesTheBrowser = async (
   assert.notInclude(sent, "customerEmail");
   assert.notInclude(sent, "internal_cost");
   assert.notInclude(sent, "internalCost");
-  await context.close();
+  await page.context().close();
+};
+
+const restrictedFieldNeverReachesTheBrowser = async (
+  browser: Browser,
+  origin: string,
+  fixture: HelpdeskData
+) => {
+  const opened = await openRestrictedIncident(browser, origin, fixture);
+  const { page, nothingHiddenAfter } = opened;
+
+  await fillField(page, "Description", "Payroll asks again.");
+
+  const refused = await saveRecordForm(page);
+
+  await nothingHiddenAfter("a refused save");
+
+  // The agent may not change another agent's incident.
+  assert.strictEqual(refused.status, 403);
+  assert.deepStrictEqual(decodeBody(refused.body), {
+    description: "Payroll asks again.",
+  });
+  assert.include(await formOutcome(page), "You are not allowed");
+  assert.strictEqual(
+    await formControl(page, "Description").inputValue(),
+    "Payroll asks again."
+  );
+
+  await finishRestrictedIncident(origin, fixture, opened);
 };
 
 const restrictedFieldAndFormStateNeverReachTheBrowser = async (
@@ -370,46 +393,8 @@ const restrictedFieldAndFormStateNeverReachTheBrowser = async (
     [HELPDESK.fields.customerEmail]
   );
 
-  const hidden = await valuesHiddenFrom(origin, HELPDESK_TABLES, {
-    reader: await bearerToken(origin, visitorOf(fixture.admin)),
-    viewer: await bearerToken(origin, visitorOf(fixture.agent)),
-  });
-
-  // The derivation finds the other agent's customer emails and every
-  // internal cost.
-  assert.includeMembers(hidden, [
-    "kim@example.com",
-    "pat@example.com",
-    ...HELPDESK_COSTS,
-  ]);
-  assert.notInclude(hidden, "jo@example.com");
-
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  const everything = await captureResponses(page);
-  const responses = await captureApiBodies(page);
-  const requests = captureApiRequestBodies(page);
-
-  const nothingHiddenAfter = async (step: string) => {
-    await assertHiddenValuesAbsent(page, everything, hidden, step);
-  };
-
-  await signIn(page, origin, visitorOf(fixture.agent));
-  await nothingHiddenAfter("sign-in");
-  // The password incident is the other agent's: its customer email is
-  // withheld; the internal cost is never readable for agents.
-  await openRecordForm(page, origin, incident(fixture.records.password));
-  await nothingHiddenAfter("open the other agent's incident");
-
-  assert.strictEqual(
-    await formFieldState(page, "customer_email"),
-    "restricted"
-  );
-  assert.include(await formFieldText(page, "customer_email"), "Restricted");
-  assert.isNull(await formFieldState(page, "internal_cost"));
-
-  await historyEntryTexts(page);
-  await nothingHiddenAfter("open its history");
+  const opened = await openRestrictedIncident(browser, origin, fixture);
+  const { page, nothingHiddenAfter } = opened;
 
   await page
     .getByText("You can view this record but not change it.", { exact: true })
@@ -448,25 +433,7 @@ const restrictedFieldAndFormStateNeverReachTheBrowser = async (
     "Payroll asks again."
   );
 
-  await openTableList(page, origin, INCIDENTS);
-  await nothingHiddenAfter("the incident list");
-  await openRecordForm(page, origin, incident(fixture.records.password));
-  await nothingHiddenAfter("reopen the incident");
-
-  const responseBodies = await responses();
-  const received = responseBodies.join("\n");
-  const sent = requests().join("\n");
-
-  assert.include(received, '"withheld":["customerEmail"]');
-  assert.notInclude(received, "pat@example.com");
-  assert.notInclude(received, "internal_cost");
-  assert.notInclude(received, "internalCost");
-  assert.notInclude(received, "20.00");
-  assert.notInclude(sent, "customer_email");
-  assert.notInclude(sent, "customerEmail");
-  assert.notInclude(sent, "internal_cost");
-  assert.notInclude(sent, "internalCost");
-  await context.close();
+  await finishRestrictedIncident(origin, fixture, opened);
 };
 
 // A FIELD DENIED ON THE CHILD, READ THROUGH THE PARENT
@@ -664,44 +631,26 @@ const decodeLayout = Schema.decodeUnknownSync(
  * @returns Nothing.
  */
 const addEscalationContact = async (origin: string, token: string) => {
-  const fieldId = randomUUID();
-
-  const added = await apiCall(origin, token, {
-    body: {
-      operations: [
-        {
-          definition: {
-            classId: HELPDESK.incident,
-            default: null,
-            helpText: null,
-            id: fieldId,
-            kind: "field",
-            label: "Escalation contact",
-            name: "escalation_contact",
-            numberPrefix: null,
-            owner: { layer: "local" },
-            protected: false,
-            readOnly: false,
-            required: false,
-            type: {
-              allowedRecords: {
-                left: { path: [CORE_USER_LOGIN] },
-                op: "ne",
-                right: { value: "agent2" },
-              },
-              kind: "reference",
-              targetClassId: CORE_USER_CLASS,
-            },
-          },
-          op: "addField",
+  const [fieldId] = await addLocalFields(origin, token, HELPDESK.incident, [
+    [
+      "escalation_contact",
+      "Escalation contact",
+      {
+        allowedRecords: {
+          left: { path: [CORE_USER_LOGIN] },
+          op: "ne",
+          right: { value: "agent2" },
         },
-      ],
-    },
-    method: "POST",
-    path: "/applyChangeSet",
-  });
+        kind: "reference",
+        targetClassId: CORE_USER_CLASS,
+      },
+      null,
+    ],
+  ]);
 
-  assert.include([200, 201], added.status, added.text);
+  if (fieldId === undefined) {
+    throw new Error("No ID returned for local field escalation_contact");
+  }
 
   const path = `/${collectionOf("core.layout")}/${HELPDESK.layouts.incidentForm}`;
 
