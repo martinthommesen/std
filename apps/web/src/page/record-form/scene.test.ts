@@ -410,6 +410,10 @@ describe("the record form", () => {
       expect(role("alert")).toContainText(
         "Someone else saved this record first"
       ),
+      // The action bar, where the user clicked, says it too.
+      expect(selector(".action-status")).toContainText(
+        "Not saved: someone else saved this record first."
+      ),
       expect(label("Short description (required)")).toHaveValue("Mine"),
       click(role("button", { name: "Reload the record, keeping my changes" })),
       Command.resolve(

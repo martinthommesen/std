@@ -10,11 +10,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   FocusMain,
+  FocusNavigation,
   LoadCurrentUser,
   LoadTables,
   LoadExternal,
   NavigateInternal,
   ReplaceUrl,
+  SaveShellPreferences,
   SignOut,
 } from "./command.ts";
 import { FieldInput } from "./domain/form-input.ts";
@@ -756,6 +758,102 @@ describe("navigation", () => {
       model((app) => {
         expect(app).toStrictEqual(adaAtHome);
       })
+    );
+  });
+
+  it("the skip link moves focus to main and leaves the address as it is", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(
+        Message.ClickedLink({
+          request: UrlRequest.Internal({
+            url: { ...urlOf(homeRouter()), hash: Option.some("main") },
+          }),
+        })
+      ),
+      Command.expectExact(FocusMain()),
+      Command.resolve(FocusMain, Message.CompletedFocusMain()),
+      model((app) => {
+        expect(app).toStrictEqual(adaAtHome);
+      })
+    );
+  });
+
+  it("the navigation drawer opens with focus in it and closes on the next page", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(Message.ToggledNavigation({ isOpen: true })),
+      Command.expectExact(FocusNavigation()),
+      Command.resolve(FocusNavigation, Message.CompletedFocusNavigation()),
+      model((app) => {
+        expect(signedIn(app).isNavigationOpen).toBeTruthy();
+      }),
+      message(Message.ChangedUrl({ url: urlOf("/no/such/page") })),
+      model((app) => {
+        expect(signedIn(app).isNavigationOpen).toBeFalsy();
+      }),
+      Command.resolve(FocusMain, Message.CompletedFocusMain())
+    );
+  });
+
+  it("the Administration group remembers whether it is open, and says when the browser does not keep it", () => {
+    story(
+      update,
+      given(adaAtHome),
+      message(Message.ToggledAdministration({ isOpen: true })),
+      Command.expectExact(
+        SaveShellPreferences({ preferences: { isAdministrationOpen: true } })
+      ),
+      Command.resolve(
+        SaveShellPreferences,
+        Message.FailedSaveShellPreferences()
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences.isAdministrationOpen).toBeTruthy();
+        expect(signedIn(app).isPreferenceSaveFailed).toBeTruthy();
+      }),
+      message(Message.ToggledAdministration({ isOpen: false })),
+      Command.resolve(
+        SaveShellPreferences,
+        Message.CompletedSaveShellPreferences()
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences.isAdministrationOpen).toBeFalsy();
+        expect(signedIn(app).isPreferenceSaveFailed).toBeFalsy();
+      }),
+      // The preferences go with the session to the next state.
+      message(selectedSignOut),
+      Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
+      Command.resolveAll(
+        [ReplaceUrl, Message.CompletedReplaceUrl()],
+        [FocusMain, Message.CompletedFocusMain()]
+      ),
+      model((app) => {
+        expect(
+          Model.guards.SignedOut(app) && app.preferences.isAdministrationOpen
+        ).toBeFalsy();
+      })
+    );
+  });
+
+  it("start-up takes the stored preferences into the signed-in state", () => {
+    const opened = { isAdministrationOpen: true };
+
+    story(
+      update,
+      given(init(opened, urlOf("/")).model),
+      message(
+        Message.SucceededLoadCurrentUser({
+          maybeRevision: Option.some(REVISION_3),
+          maybeUser: Option.some(ada),
+        })
+      ),
+      model((app) => {
+        expect(signedIn(app).preferences).toStrictEqual(opened);
+      }),
+      Command.resolve(LoadTables, Message.FailedLoadTables({ sessionId: 1 }))
     );
   });
 });

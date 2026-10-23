@@ -371,7 +371,7 @@ const submissionAlertView = (model: Model, h: HtmlBuilder<Message>): Html =>
                     {
                       onClick: Message.ClickedReloadRecord(),
                       text: "Reload the record, keeping my changes",
-                      variant: "primary",
+                      variant: "quiet",
                     },
                     h
                   )
@@ -427,6 +427,19 @@ const actionStateOf = (model: Model): ActionState =>
  * @param h - The builder.
  * @returns The status.
  */
+/**
+ * What the action bar says of a refused save, in a few words; the alert
+ * at the top of the form says the rest.
+ *
+ * @param submission - The save's state.
+ * @returns The note.
+ */
+const refusalNoteOf = (submission: Submission): string =>
+  Submission.guards.Failed(submission) &&
+  WriteError.guards.VersionConflict(submission.error)
+    ? "Not saved: someone else saved this record first."
+    : "Not saved: the reason is at the top of the form.";
+
 const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const state = actionStateOf(model);
 
@@ -434,7 +447,7 @@ const actionStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
     Match.when("failed", () => [
       h.span(
         [h.Class("action-status-quiet")],
-        ["Not saved: the reason is at the top of the form."]
+        [refusalNoteOf(model.submission)]
       ),
       buttonView(
         {

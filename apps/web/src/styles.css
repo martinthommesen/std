@@ -40,6 +40,11 @@
   --color-danger: #b3261e;
   --color-danger-surface: #fcebea;
   --color-danger-border: #ecb4b0;
+  /* The confirm button of a destructive dialog, the same in both themes
+     (white on it: 6.5:1, and 8.9:1 on hover). */
+  --color-danger-solid: #b3261e;
+  --color-danger-solid-hover: #8f1d17;
+  --color-danger-solid-text: #ffffff;
   --color-success: #1b6a3a;
   --color-success-surface: #e7f4ec;
   --color-warning: #7d5200;
@@ -196,6 +201,7 @@ h3 {
 
 p {
   margin: 0;
+  text-wrap: pretty;
 }
 
 code {
@@ -542,7 +548,7 @@ a {
   transition: transform var(--duration) var(--ease-out);
 }
 
-[aria-expanded="true"] > .chevron {
+[aria-expanded="true"] .chevron {
   transform: rotate(90deg);
 }
 
@@ -660,12 +666,12 @@ a {
 }
 
 .button-danger-solid {
-  color: #ffffff;
-  background: #b3261e;
+  color: var(--color-danger-solid-text);
+  background: var(--color-danger-solid);
 }
 
 .button-danger-solid:hover:not([data-disabled]) {
-  background: #8f1d17;
+  background: var(--color-danger-solid-hover);
 }
 
 .button-ghost {
@@ -1031,6 +1037,12 @@ select.control-input {
   text-align: center;
 }
 
+.filter-toggle[aria-expanded="true"] {
+  color: var(--color-accent-subtle-text);
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+}
+
 .filter-panel {
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-sunken);
@@ -1081,7 +1093,7 @@ select.control-input {
 /* Narrower, the table scrolls sideways in its own container, which a
    sticky header row would stick to, not to the window: it stays put. */
 @media (width < 64rem) {
-  .records thead th {
+  .table-scroll .records thead th {
     position: static;
   }
 

@@ -10,6 +10,7 @@ import {
   LoadCurrentUser,
   LoadExternal,
   LoadTables,
+  MAIN_ID,
   NavigateInternal,
   ReplaceUrl,
   SaveShellPreferences,
@@ -843,10 +844,17 @@ export const update = (model: Model, message: Message) =>
     ClickedLink: ({ request }) =>
       Match.value(request).pipe(
         withUpdateReturn,
-        Match.tag("Internal", ({ url }) => ({
-          commands: [NavigateInternal({ url: urlToString(url) })],
-          model,
-        })),
+        // NOTE: the runtime takes every same-origin link click, the skip
+        // link's `#main` too; that one moves focus to `main` and leaves the
+        // address as it is.
+        Match.tag("Internal", ({ url }) =>
+          Option.contains(url.hash, MAIN_ID)
+            ? { commands: [FocusMain()], model }
+            : {
+                commands: [NavigateInternal({ url: urlToString(url) })],
+                model,
+              }
+        ),
         Match.tag("External", ({ href }) => ({
           commands: [LoadExternal({ href })],
           model,
