@@ -1,10 +1,15 @@
-import { Button, Nav } from "@foldkit/ui";
+import { Button, Disclosure, Nav } from "@foldkit/ui";
 import { Match, Option } from "effect";
 import { AsyncData } from "foldkit";
+import { childAttributes } from "foldkit/html";
 import type { Document, Html, HtmlBuilder } from "foldkit/html";
 
-import { MAIN_ID } from "./command.ts";
+import { MAIN_ID, NAVIGATION_TOGGLE_ID } from "./command.ts";
 import type { MetaTableSummary } from "./domain/metadata.ts";
+import {
+  ADMINISTRATION_LABEL,
+  navigationGroupsOf,
+} from "./domain/navigation.ts";
 import { Message } from "./message.ts";
 import { SignOutRequest } from "./model.ts";
 import type { Model, SignedInModel, SignedOutModel } from "./model.ts";
@@ -21,12 +26,24 @@ import {
 } from "./page/table-list/view.ts";
 import { homeRouter, signInRouter } from "./route.ts";
 import type { AppRoute } from "./route.ts";
+import { USER_MENU_ITEMS, UserMenu } from "./user-menu.ts";
+import type { UserMenuItem } from "./user-menu.ts";
+import {
+  chevronDown,
+  chevronRight,
+  menuLines,
+  signOut as signOutIcon,
+} from "./view/icons.ts";
 
 const APP_NAME = "STD";
 
-const WIDE_MAIN_CLASS = "main";
+const MAIN_CLASS = "main";
 
 const NARROW_MAIN_CLASS = "main main-narrow";
+
+const SIDEBAR_SECTION_CLASS = "sidebar-section";
+
+const ADMINISTRATION_ID = "administration";
 
 /** The links of the primary navigation, by route tag. */
 const NAV_ITEMS = ["Home"] as const;
@@ -41,8 +58,8 @@ const NAV_HREFS = { Home: homeRouter } as const satisfies Record<
 >;
 
 /**
- * What every state renders: a header, a `main` holding the page and, when
- * signed in, the navigation to the tables beside it.
+ * What every state renders: a skip link, the header, `main` holding the
+ * page and, when signed in, the navigation beside it.
  */
 interface ShellConfig {
   readonly header: readonly Html[];
@@ -55,13 +72,21 @@ const shellView = (config: ShellConfig, h: HtmlBuilder<Message>): Html =>
   h.div(
     [h.Class("app")],
     [
+      h.a([h.Href(`#${MAIN_ID}`), h.Class("skip-link")], ["Skip to content"]),
       h.header([h.Class("app-header")], config.header),
       h.div(
-        [h.Class("app-body")],
+        [
+          h.Class(
+            config.side === undefined ? "app-body app-body-plain" : "app-body"
+          ),
+        ],
         [
           // NOTE: the navigation follows `main` in the document, so the
           // page's h1 comes first; the stylesheet shows it on the left.
-          h.main([h.Id(MAIN_ID), h.Class(config.mainClass)], [config.page]),
+          h.main(
+            [h.Id(MAIN_ID), h.Class(config.mainClass), h.Tabindex(-1)],
+            [config.page]
+          ),
           config.side ?? h.empty,
         ]
       ),
@@ -74,7 +99,17 @@ const brandLinkView = (href: string, h: HtmlBuilder<Message>): Html =>
 const brandView = (h: HtmlBuilder<Message>): Html =>
   h.span([h.Class("brand")], [APP_NAME]);
 
-const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
+// THE NAVIGATION
+
+const currentTable = (route: AppRoute): Option.Option<string> =>
+  Match.value(route).pipe(
+    Match.tag("TableList", "Record", "NewRecord", ({ table }) =>
+      Option.some(table)
+    ),
+    Match.orElse(() => Option.none())
+  );
+
+const primaryNavView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
   Nav.view<NavItem>({
     ariaLabel: "Primary",
     isItemCurrent: (item) => current._tag === item,
@@ -82,7 +117,7 @@ const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
     toHref: (item) => NAV_HREFS[item](),
     toView: ({ items, nav }) =>
       h.nav(
-        [...nav, h.Class("primary-nav")],
+        [...nav, h.Class(SIDEBAR_SECTION_CLASS)],
         [
           h.ul(
             [h.Class("nav-list")],
@@ -103,76 +138,100 @@ const navView = (current: AppRoute, h: HtmlBuilder<Message>): Html =>
       ),
   });
 
-const currentTable = (route: AppRoute): Option.Option<string> =>
-  Match.value(route).pipe(
-    Match.tag("TableList", "Record", "NewRecord", ({ table }) =>
-      Option.some(table)
-    ),
-    Match.orElse(() => Option.none())
-  );
-
-/**
- * A table's namespace: the part of its name before the first dot.
- *
- * @param table - The table's name, such as `helpdesk.incident`.
- * @returns The namespace, such as `helpdesk`.
- */
-const namespaceOf = (table: string): string => table.split(".")[0] ?? table;
-
 const tablesNavList = (
+  model: SignedInModel,
   tables: readonly MetaTableSummary[],
-  current: AppRoute,
   h: HtmlBuilder<Message>
 ): Html => {
-  const labels = new Map(tables.map((table) => [table.name, table.label]));
+  const groups = navigationGroupsOf(tables);
+
+  const ordered = [
+    ...groups.apps.flatMap((group) => group.tables),
+    ...groups.administration,
+  ];
+
+  const labels = new Map(ordered.map((table) => [table.name, table.label]));
 
   return Nav.view({
     ariaLabel: "Tables",
-    isItemCurrent: (table) => Option.contains(currentTable(current), table),
-    items: tables.map((table) => table.name),
+    isItemCurrent: (table) => Option.contains(currentTable(model.route), table),
+    items: ordered.map((table) => table.name),
     toHref: tableHref,
     toView: ({ items, nav }) => {
-      const namespaces = [
-        ...new Set(items.map((item) => namespaceOf(item.value))),
-      ];
+      const links = new Map(items.map((item) => [item.value, item.link]));
 
-      const listOf = (shown: typeof items) =>
+      const listOf = (shown: readonly MetaTableSummary[]) =>
         h.ul(
-          [h.Class("nav-list nav-list-vertical")],
-          shown.map((item) =>
+          [h.Class("nav-list")],
+          shown.map((table) =>
             h.keyed("li")(
-              item.value,
+              table.name,
               [],
               [
                 h.a(
-                  [...item.link, h.Class("nav-link")],
-                  [labels.get(item.value) ?? item.value]
+                  [...(links.get(table.name) ?? []), h.Class("nav-link")],
+                  [labels.get(table.name) ?? table.name]
                 ),
               ]
             )
           )
         );
 
+      const administrationView =
+        groups.administration.length === 0
+          ? h.empty
+          : Disclosure.view(
+              {
+                id: ADMINISTRATION_ID,
+                isOpen: model.preferences.isAdministrationOpen,
+                onToggle: (isOpen) => Message.ToggledAdministration({ isOpen }),
+                toView: ({ animatePanel, button, panel }) =>
+                  h.div(
+                    [h.Class(SIDEBAR_SECTION_CLASS)],
+                    [
+                      h.button(
+                        [...button, h.Class("nav-group-button")],
+                        [
+                          chevronRight(),
+                          h.span([], [ADMINISTRATION_LABEL]),
+                          h.span(
+                            [h.Class("nav-group-count")],
+                            [
+                              h.span(
+                                [h.Class("visually-hidden")],
+                                [", tables: "]
+                              ),
+                              String(groups.administration.length),
+                            ]
+                          ),
+                        ]
+                      ),
+                      animatePanel(
+                        h.div(
+                          [...panel, h.Class("nav-group-panel")],
+                          [listOf(groups.administration)]
+                        )
+                      ),
+                    ]
+                  ),
+              },
+              h
+            );
+
       return h.nav(
         [...nav, h.Class("tables-nav")],
         [
-          h.h2([h.Class("tables-nav-heading")], ["Tables"]),
-          ...(namespaces.length < 2
-            ? [listOf(items)]
-            : namespaces.map((namespace) =>
-                h.keyed("div")(
-                  namespace,
-                  [h.Class("tables-nav-group")],
-                  [
-                    h.h3([h.Class("tables-nav-namespace")], [namespace]),
-                    listOf(
-                      items.filter(
-                        (item) => namespaceOf(item.value) === namespace
-                      )
-                    ),
-                  ]
-                )
-              )),
+          ...groups.apps.map((group) =>
+            h.keyed("div")(
+              group.namespace,
+              [h.Class(SIDEBAR_SECTION_CLASS)],
+              [
+                h.h2([h.Class("sidebar-heading")], [group.namespace]),
+                listOf(group.tables),
+              ]
+            )
+          ),
+          administrationView,
         ]
       );
     },
@@ -182,8 +241,73 @@ const tablesNavList = (
 const tablesNavView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
   Option.match(AsyncData.getData(model.tables), {
     onNone: () => h.empty,
-    onSome: (catalog) => tablesNavList(catalog.tables, model.route, h),
+    onSome: (catalog) => tablesNavList(model, catalog.tables, h),
   });
+
+/**
+ * The navigation drawer is a disclosure whose button sits in the header
+ * and whose panel is the sidebar; both halves are rendered from the same
+ * state, each by its own `Disclosure.view` call.
+ *
+ * @param model - The signed-in state.
+ * @returns The disclosure's state and toggle.
+ */
+const navigationDisclosure = (model: SignedInModel) => ({
+  id: NAVIGATION_TOGGLE_ID,
+  isOpen: model.isNavigationOpen,
+  onToggle: (isOpen: boolean) => Message.ToggledNavigation({ isOpen }),
+});
+
+const sidebarView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
+  Disclosure.view(
+    {
+      ...navigationDisclosure(model),
+      toView: ({ panel }) =>
+        h.aside(
+          [...panel, h.Class("sidebar"), h.AriaLabel("Navigation")],
+          [
+            primaryNavView(model.route, h),
+            tablesNavView(model, h),
+            model.isPreferenceSaveFailed
+              ? h.p(
+                  [h.Role("status"), h.Class("control-hint sidebar-section")],
+                  [
+                    "This browser did not store whether Administration is open; it starts closed next time.",
+                  ]
+                )
+              : h.empty,
+          ]
+        ),
+    },
+    h
+  );
+
+const navigationToggleView = (
+  model: SignedInModel,
+  h: HtmlBuilder<Message>
+): Html =>
+  Disclosure.view(
+    {
+      ...navigationDisclosure(model),
+      ariaLabel: "Navigation",
+      toView: ({ button }) =>
+        h.button(
+          [...button, h.Class("header-button nav-toggle")],
+          [menuLines()]
+        ),
+    },
+    h
+  );
+
+// THE USER MENU
+
+const initialsOf = (name: string): string =>
+  name
+    .split(/\s+/u)
+    .filter((part) => part !== "")
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
 
 const signOutFailureView = (
   signOutRequest: SignOutRequest,
@@ -196,46 +320,56 @@ const signOutFailureView = (
       )
     : h.empty;
 
-const signOutButtonView = (
-  signOutRequest: SignOutRequest,
-  h: HtmlBuilder<Message>
-): Html => {
-  const isPending = SignOutRequest.guards.Pending(signOutRequest);
+const userMenuView = (model: SignedInModel, h: HtmlBuilder<Message>): Html => {
+  const isSigningOut = SignOutRequest.guards.Pending(model.signOutRequest);
 
-  return Button.view(
-    {
-      isDisabled: isPending,
-      onClick: Message.ClickedSignOut(),
-      toView: (attributes) =>
-        h.button(
-          [
-            ...attributes.button,
-            h.AriaLive("polite"),
-            h.AriaAtomic(true),
-            h.Class("button button-quiet"),
-          ],
-          [isPending ? "Signing out…" : "Sign out"]
-        ),
-    },
-    h
-  );
-};
-
-const accountView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
-  h.div(
-    [h.Class("account")],
-    [
-      h.p(
-        [h.Class("account-user")],
+  return h.submodel({
+    model: model.userMenu,
+    slotId: model.userMenu.id,
+    toParentMessage: (message) => Message.GotUserMenuMessage({ message }),
+    view: UserMenu.view,
+    viewInputs: {
+      anchor: { gap: 4, padding: 8, placement: "bottom-end" },
+      attributes: childAttributes([h.Class("user-menu")]),
+      backdropAttributes: childAttributes([h.Class("menu-backdrop")]),
+      buttonAttributes: childAttributes([
+        h.Class("header-button user-menu-button"),
+      ]),
+      buttonContent: h.span(
+        [h.Class("user-menu-button-content")],
         [
-          h.span([h.Class("account-label")], ["Signed in as "]),
-          h.strong([h.Class("account-name")], [model.user.name]),
+          h.span(
+            [h.Class("avatar"), h.AriaHidden(true)],
+            [initialsOf(model.user.name)]
+          ),
+          h.span([h.Class("user-menu-name")], [model.user.name]),
+          chevronDown(),
         ]
       ),
-      signOutButtonView(model.signOutRequest, h),
-      signOutFailureView(model.signOutRequest, h),
-    ]
-  );
+      groupToHeading: () => ({
+        className: "menu-heading",
+        content: h.div([], ["Signed in as", h.strong([], [model.user.name])]),
+      }),
+      isItemDisabled: () => isSigningOut,
+      itemGroupKey: () => "account",
+      itemToConfig: (item: UserMenuItem) =>
+        Match.value(item).pipe(
+          Match.when("SignOut", () => ({
+            className: "menu-item",
+            content: h.span(
+              [h.Class("menu-item-content")],
+              [signOutIcon(), isSigningOut ? "Signing out…" : "Sign out"]
+            ),
+          })),
+          Match.exhaustive
+        ),
+      items: USER_MENU_ITEMS,
+      itemsAttributes: childAttributes([h.Class("menu-items")]),
+    },
+  });
+};
+
+// THE PAGES
 
 const signedInPageView = (
   model: SignedInModel,
@@ -279,13 +413,25 @@ const signedInView = (model: SignedInModel, h: HtmlBuilder<Message>): Html =>
   shellView(
     {
       header: [
+        navigationToggleView(model, h),
         brandLinkView(homeRouter(), h),
-        navView(model.route, h),
-        accountView(model, h),
+        h.div(
+          [h.Class("header-end")],
+          [
+            SignOutRequest.guards.Pending(model.signOutRequest)
+              ? h.p(
+                  [h.Role("status"), h.Class("header-status")],
+                  ["Signing out…"]
+                )
+              : h.empty,
+            signOutFailureView(model.signOutRequest, h),
+            userMenuView(model, h),
+          ]
+        ),
       ],
-      mainClass: WIDE_MAIN_CLASS,
+      mainClass: MAIN_CLASS,
       page: signedInPageView(model, h),
-      side: tablesNavView(model, h),
+      side: sidebarView(model, h),
     },
     h
   );
@@ -347,21 +493,26 @@ const sessionUnavailableView = (h: HtmlBuilder<Message>): Html =>
           // NOTE: an alert, so that each failed retry, which mounts it
           // again, is announced.
           h.p(
-            [h.Role("alert")],
+            [h.Role("alert"), h.Class("form-alert")],
             [
               "The server did not answer. Check that it is running, then try again.",
             ]
           ),
-          Button.view(
-            {
-              onClick: Message.ClickedRetrySessionCheck(),
-              toView: (attributes) =>
-                h.button(
-                  [...attributes.button, h.Class("button button-primary")],
-                  ["Try again"]
-                ),
-            },
-            h
+          h.div(
+            [],
+            [
+              Button.view(
+                {
+                  onClick: Message.ClickedRetrySessionCheck(),
+                  toView: (attributes) =>
+                    h.button(
+                      [...attributes.button, h.Class("button button-primary")],
+                      ["Try again"]
+                    ),
+                },
+                h
+              ),
+            ]
           ),
         ]
       ),

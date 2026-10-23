@@ -5,10 +5,21 @@ import { load, pushUrl, replaceUrl } from "foldkit/navigation";
 
 import { SchemaRevision } from "./domain/schema-revision.ts";
 import { Message } from "./message.ts";
+import {
+  SHELL_PREFERENCES_KEY,
+  ShellPreferences,
+  ShellPreferencesJson,
+} from "./shell-preferences.ts";
 import { StdApi, atRevision, responseRevision } from "./std-client.ts";
 
 /** The element ID of every page's `main`. */
 export const MAIN_ID = "main";
+
+/**
+ * The ID of the navigation drawer's disclosure: its button is
+ * `navigation-button`, its panel (the sidebar) `navigation-panel`.
+ */
+export const NAVIGATION_TOGGLE_ID = "navigation";
 
 /**
  * Asks the server who the browser's session acts as (the current
@@ -131,6 +142,42 @@ export const FocusMain = Command.define("FocusMain", {
     preventScroll: true,
   }).pipe(Effect.ignore, Effect.as(Message.CompletedFocusMain())),
   messages: [Message.CompletedFocusMain],
+});
+
+/**
+ * Stores the shell's preferences in the browser (`localStorage`), so the
+ * next visit opens the navigation as the user left it. A browser that
+ * refuses (storage disabled or full) answers `FailedSaveShellPreferences`,
+ * which the navigation says.
+ */
+export const SaveShellPreferences = Command.define("SaveShellPreferences", {
+  args: { preferences: ShellPreferences },
+  execute: ({ preferences }) =>
+    Schema.encodeEffect(ShellPreferencesJson)(preferences).pipe(
+      Effect.flatMap((text) =>
+        Effect.try(() => {
+          globalThis.localStorage.setItem(SHELL_PREFERENCES_KEY, text);
+        })
+      ),
+      Effect.as(Message.CompletedSaveShellPreferences()),
+      Effect.orElseSucceed(() => Message.FailedSaveShellPreferences())
+    ),
+  messages: [
+    Message.CompletedSaveShellPreferences,
+    Message.FailedSaveShellPreferences,
+  ],
+});
+
+/**
+ * Moves focus into the navigation drawer once it opens on a narrow
+ * screen, to its first link, so keyboard users land in what they opened.
+ */
+export const FocusNavigation = Command.define("FocusNavigation", {
+  execute: Dom.focus(`#${NAVIGATION_TOGGLE_ID}-panel a`).pipe(
+    Effect.ignore,
+    Effect.as(Message.CompletedFocusNavigation())
+  ),
+  messages: [Message.CompletedFocusNavigation],
 });
 
 /** Follows an in-app link. */

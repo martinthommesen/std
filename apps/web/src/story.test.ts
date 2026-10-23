@@ -1,3 +1,4 @@
+import { Menu } from "@foldkit/ui";
 import { Effect, Option } from "effect";
 import { AsyncData } from "foldkit";
 import { make as makeDate } from "foldkit/calendar";
@@ -46,6 +47,7 @@ import {
 import { Message as TableListMessage } from "./page/table-list/message.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
 import type { SignedOutRoute } from "./route.ts";
+import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
 import {
   ASSET_FIELDS,
   REVISION_3,
@@ -56,8 +58,15 @@ import {
   summaryOf,
 } from "./table-fixture.ts";
 import { update } from "./update.ts";
+import { initUserMenu } from "./user-menu.ts";
 
-const checkingAt = (pathname: string) => init(urlOf(pathname)).model;
+/** Choosing "Sign out" in the (closed, as in the fixtures) user menu. */
+const selectedSignOut = Message.GotUserMenuMessage({
+  message: Menu.Message.SelectedItem({ index: 0, item: "SignOut" }),
+});
+
+const checkingAt = (pathname: string) =>
+  init(DEFAULT_SHELL_PREFERENCES, urlOf(pathname)).model;
 
 const loadedTables = Command.resolve(
   LoadTables,
@@ -113,10 +122,13 @@ const namesAndArgs = (
 
 describe("start-up", () => {
   it("asks the server for the session", () => {
-    const initial = init(urlOf("/"));
+    const initial = init(DEFAULT_SHELL_PREFERENCES, urlOf("/"));
 
     expect(initial.model).toStrictEqual(
-      Model.CheckingSession({ route: AppRoute.Home() })
+      Model.CheckingSession({
+        preferences: DEFAULT_SHELL_PREFERENCES,
+        route: AppRoute.Home(),
+      })
     );
     expect(initial.commands).toStrictEqual([LoadCurrentUser()]);
   });
@@ -249,7 +261,10 @@ describe("start-up", () => {
   });
 
   it("an unreachable server can be retried, and fail again", () => {
-    const unavailable = Model.SessionUnavailable({ route: AppRoute.Home() });
+    const unavailable = Model.SessionUnavailable({
+      preferences: DEFAULT_SHELL_PREFERENCES,
+      route: AppRoute.Home(),
+    });
 
     story(
       update,
@@ -261,7 +276,10 @@ describe("start-up", () => {
       message(Message.ClickedRetrySessionCheck()),
       model((app) => {
         expect(app).toStrictEqual(
-          Model.CheckingSession({ route: AppRoute.Home() })
+          Model.CheckingSession({
+            preferences: DEFAULT_SHELL_PREFERENCES,
+            route: AppRoute.Home(),
+          })
         );
       }),
       Command.expectExact(LoadCurrentUser()),
@@ -313,15 +331,19 @@ describe("signing in", () => {
         expect(app).toStrictEqual(adaEnteringHome);
         expect(Object.keys(app).toSorted()).toStrictEqual([
           "_tag",
+          "isNavigationOpen",
+          "isPreferenceSaveFailed",
           "maybeRecordForm",
           "maybeRevision",
           "maybeTableList",
           "nextPageId",
+          "preferences",
           "route",
           "sessionId",
           "signOutRequest",
           "tables",
           "user",
+          "userMenu",
         ]);
       }),
       Command.expectExact(
@@ -426,7 +448,7 @@ describe("signing out", () => {
     story(
       update,
       given(pagesOpened),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
       Command.resolveAll(
         [ReplaceUrl, Message.CompletedReplaceUrl()],
@@ -458,7 +480,7 @@ describe("signing out", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       model((app) => {
         expect(app).toStrictEqual(
           modifyFields(adaAtHome, {
@@ -485,7 +507,7 @@ describe("signing out", () => {
     story(
       update,
       given(adaAtHome),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       model((app) => {
         expect(app).toStrictEqual(
@@ -494,7 +516,7 @@ describe("signing out", () => {
           })
         );
       }),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.expectExact(
         SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
       ),
@@ -517,7 +539,7 @@ describe("signing out", () => {
     story(
       update,
       given(pending),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       Command.expectNone(),
       model((app) => {
         expect(app).toStrictEqual(pending);
@@ -529,7 +551,7 @@ describe("signing out", () => {
     story(
       update,
       given(signInOpenedDirectly),
-      message(Message.ClickedSignOut()),
+      message(selectedSignOut),
       message(Message.SucceededSignOut({ sessionId: 1 })),
       message(Message.FailedSignOut({ sessionId: 1 })),
       Command.expectNone(),
@@ -554,15 +576,19 @@ describe("answers of an earlier session", () => {
 
   /** Bob, signed in after Ada's session ended, his tables still loading. */
   const bobEntering = Model.SignedIn({
+    isNavigationOpen: false,
+    isPreferenceSaveFailed: false,
     maybeRecordForm: Option.none(),
     maybeRevision: Option.some(REVISION_4),
     maybeTableList: Option.none(),
     nextPageId: 1,
+    preferences: DEFAULT_SHELL_PREFERENCES,
     route: AppRoute.Home(),
     sessionId: 2,
     signOutRequest: SignOutRequest.Idle(),
     tables: Tables.Loading(),
     user: bob,
+    userMenu: initUserMenu(),
   });
 
   it("each session's requests carry its number, and the next session gets the next one", () => {
@@ -574,7 +600,7 @@ describe("answers of an earlier session", () => {
       })
     );
 
-    const adaSigningOut = update(adaEntered.model, Message.ClickedSignOut());
+    const adaSigningOut = update(adaEntered.model, selectedSignOut);
 
     // Ada's session ends before her table list or sign-out is answered.
     const adaEnded = update(
@@ -1023,7 +1049,7 @@ describe("review fixes: pages and revisions", () => {
 
   it("a deep link's first requests carry the revision session/current stated", () => {
     const entered = update(
-      init(urlOf("/tables/acme.asset")).model,
+      init(DEFAULT_SHELL_PREFERENCES, urlOf("/tables/acme.asset")).model,
       Message.SucceededLoadCurrentUser({
         maybeRevision: Option.some(REVISION_3),
         maybeUser: Option.some(ada),

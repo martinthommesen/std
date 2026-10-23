@@ -1,9 +1,11 @@
+import { Menu } from "@foldkit/ui";
 import { Option } from "effect";
 import {
   Command,
   click,
   expect,
   given,
+  Mount,
   label,
   role,
   scene,
@@ -20,6 +22,7 @@ import {
   LoadCurrentUser,
   LoadTables,
   ReplaceUrl,
+  SaveShellPreferences,
   SignOut,
 } from "./command.ts";
 import {
@@ -32,6 +35,7 @@ import { Message } from "./message.ts";
 import { Model } from "./model.ts";
 import { Message as SignInMessage, SignIn } from "./page/sign-in/sign-in.ts";
 import { AppRoute, homeRouter, signInRouter } from "./route.ts";
+import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
 import { REVISION_3, adaTables } from "./table-fixture.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
@@ -40,17 +44,47 @@ const banner = role("banner");
 
 const primaryNav = role("navigation", { name: "Primary" });
 
-const signOutButton = role("button", { name: "Sign out" });
+const userMenuButton = role("button", { name: "Ada Lovelace" });
+
+const signOutItem = role("menuitem", { name: "Sign out" });
+
+/** Opening the user menu: the click, and the menu's own focus move. */
+const openUserMenu = [
+  click(userMenuButton),
+  Command.resolve(Menu.FocusItems, Menu.Message.CompletedFocusItems()),
+  Mount.resolveAll(
+    [Menu.PortalMenuBackdrop, Menu.Message.CompletedPortalMenuBackdrop()],
+    [Menu.AnchorMenu, Menu.Message.CompletedAnchorMenu()]
+  ),
+];
+
+/** Choosing "Sign out": the click, and the menu's focus moving back. */
+const chooseSignOut = [
+  click(signOutItem),
+  Command.resolve(Menu.FocusButton, Menu.Message.CompletedFocusButton()),
+  Mount.expectEnded(Menu.PortalMenuBackdrop),
+  Mount.expectEnded(Menu.AnchorMenu),
+];
 
 const homeNavLink = within(primaryNav, role("link", { name: "Home" }));
 
 const tablesNav = role("navigation", { name: "Tables" });
 
+const administrationButton = within(
+  tablesNav,
+  role("button", { name: /^Administration/u })
+);
+
 describe("app", () => {
   it("checking the session has a heading and announces itself", () => {
     scene(
       { update, view },
-      given(Model.CheckingSession({ route: AppRoute.Home() })),
+      given(
+        Model.CheckingSession({
+          preferences: DEFAULT_SHELL_PREFERENCES,
+          route: AppRoute.Home(),
+        })
+      ),
       // oxlint-disable-next-line vitest/prefer-importing-vitest-globals -- this `expect` is Foldkit's scene step, imported from foldkit/scene
       expect(role("heading", { level: 1 })).toHaveText("STD"),
       expect(role("status")).toHaveText("Checking your session…"),
@@ -63,12 +97,22 @@ describe("app", () => {
       { update, view },
       given(adaAtHome),
       expect(within(banner, text("Ada Lovelace"))).toExist(),
-      expect(within(banner, signOutButton)).toBeEnabled(),
+      expect(within(banner, userMenuButton)).toHaveAttr(
+        "aria-haspopup",
+        "menu"
+      ),
       expect(homeNavLink).toHaveAttr("aria-current", "page"),
       expect(role("link", { name: "STD" })).toHaveAttr("href", homeRouter()),
+      expect(role("link", { name: "Skip to content" })).toHaveAttr(
+        "href",
+        "#main"
+      ),
       expect(role("heading", { level: 1 })).toHaveText("Welcome, Ada Lovelace"),
       expect(role("heading", { name: "Tables" })).toExist(),
-      expect(role("main")).toHaveAttr("id", "main")
+      expect(role("main")).toHaveAttr("id", "main"),
+      ...openUserMenu,
+      expect(role("menu")).toContainText("Signed in as"),
+      expect(signOutItem).toBeEnabled()
     );
   });
 
@@ -93,9 +137,10 @@ describe("app", () => {
     scene(
       { update, view },
       given(adaAtHome),
-      click(signOutButton),
-      expect(role("button", { name: "Signing out…" })).toBeDisabled(),
-      Command.expectExact(
+      ...openUserMenu,
+      ...chooseSignOut,
+      expect(within(banner, role("status"))).toHaveText("Signing out…"),
+      Command.expectHas(
         SignOut({ maybeRevision: Option.some(REVISION_3), sessionId: 1 })
       ),
       Command.resolve(SignOut, Message.SucceededSignOut({ sessionId: 1 })),
@@ -113,19 +158,28 @@ describe("app", () => {
     scene(
       { update, view },
       given(adaAtHome),
-      click(signOutButton),
+      ...openUserMenu,
+      ...chooseSignOut,
       Command.resolve(SignOut, Message.FailedSignOut({ sessionId: 1 })),
       expect(within(banner, role("alert"))).toHaveText(
         "Signing out did not work. Try again."
       ),
-      expect(signOutButton).toBeEnabled()
+      Mount.expectEnded(Menu.PortalMenuBackdrop),
+      Mount.expectEnded(Menu.AnchorMenu),
+      ...openUserMenu,
+      expect(signOutItem).toBeEnabled()
     );
   });
 
   it("an unreachable server is announced and offers a retry", () => {
     scene(
       { update, view },
-      given(Model.SessionUnavailable({ route: AppRoute.Home() })),
+      given(
+        Model.SessionUnavailable({
+          preferences: DEFAULT_SHELL_PREFERENCES,
+          route: AppRoute.Home(),
+        })
+      ),
       expect(role("heading", { name: "STD is not reachable" })).toExist(),
       expect(role("alert")).toContainText("The server did not answer."),
       click(role("button", { name: "Try again" })),
@@ -151,13 +205,25 @@ describe("app", () => {
         "href",
         "/tables/acme.asset"
       ),
-      // Tables of several namespaces are grouped, one heading each.
+      // The app's tables come first, under their namespace; the
+      // platform's are in the closed Administration group.
       expect(
-        within(tablesNav, role("heading", { level: 3, name: "acme" }))
+        within(tablesNav, role("heading", { level: 2, name: "acme" }))
       ).toExist(),
-      expect(
-        within(tablesNav, role("heading", { level: 3, name: "core" }))
-      ).toExist()
+      expect(administrationButton).toHaveAttr("aria-expanded", "false"),
+      click(administrationButton),
+      expect(administrationButton).toHaveAttr("aria-expanded", "true"),
+      Command.expectExact(
+        SaveShellPreferences({ preferences: { isAdministrationOpen: true } })
+      ),
+      Command.resolve(
+        SaveShellPreferences,
+        Message.CompletedSaveShellPreferences()
+      ),
+      expect(within(tablesNav, role("link", { name: "User" }))).toHaveAttr(
+        "href",
+        "/tables/core.user"
+      )
     );
   });
 

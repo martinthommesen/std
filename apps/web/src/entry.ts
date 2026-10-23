@@ -4,11 +4,13 @@ import { Runtime } from "foldkit";
 import { init } from "./main.ts";
 import { Message } from "./message.ts";
 import { Model } from "./model.ts";
+import { ShellPreferences, readShellPreferences } from "./shell-preferences.ts";
 import { StdApi } from "./std-client.ts";
 import { update } from "./update.ts";
 import { view } from "./view.ts";
 
 const application = Runtime.makeApplication({
+  Flags: ShellPreferences,
   Model,
   container: document.querySelector("#root") ?? document.body,
   devTools: { Message },
@@ -22,4 +24,4 @@ const application = Runtime.makeApplication({
   view,
 });
 
-Runtime.run(application);
+Runtime.run(application, { flags: readShellPreferences });

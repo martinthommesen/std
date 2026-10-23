@@ -1,3 +1,4 @@
+import { Menu } from "@foldkit/ui";
 import { CurrentSession } from "@std/api/session";
 import { TableMetadataSummary } from "@std/api/table-metadata";
 import { Schema } from "effect";
@@ -16,18 +17,21 @@ export const Message = defineMessageUnion({
   ChangedUrl: { url: Url },
   ClickedLink: { request: UrlRequest },
   ClickedRetrySessionCheck: {},
-  ClickedSignOut: {},
   CompletedFocusMain: {},
+  CompletedFocusNavigation: {},
   CompletedLoadExternal: {},
   CompletedNavigateInternal: {},
   CompletedReplaceUrl: {},
+  CompletedSaveShellPreferences: {},
   FailedAuthentication: { sessionId: Schema.Int },
   FailedLoadCurrentUser: {},
   FailedLoadTables: { sessionId: Schema.Int },
+  FailedSaveShellPreferences: {},
   FailedSignOut: { sessionId: Schema.Int },
   GotRecordFormMessage: { message: RecordFormMessage, pageId: Schema.Int },
   GotSignInMessage: { message: SignInMessage },
   GotTableListMessage: { message: TableListMessage, pageId: Schema.Int },
+  GotUserMenuMessage: { message: Menu.Message },
   SucceededLoadCurrentUser: {
     maybeRevision: Schema.Option(SchemaRevision),
     maybeUser: Schema.Option(CurrentSession),
@@ -38,6 +42,8 @@ export const Message = defineMessageUnion({
     tables: Schema.Array(TableMetadataSummary),
   },
   SucceededSignOut: { sessionId: Schema.Int },
+  ToggledAdministration: { isOpen: Schema.Boolean },
+  ToggledNavigation: { isOpen: Schema.Boolean },
 });
 
 /** What happens in the app. */

@@ -9,6 +9,8 @@ import { Button, Checkbox, Input, Select, Textarea } from "@foldkit/ui";
 import { Option } from "effect";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 
+import { check } from "./icons.ts";
+
 const CONTROL_CLASS = "control";
 
 const LABEL_CLASS = "control-label";
@@ -227,7 +229,7 @@ export const checkboxField = <Message>(
           [
             h.button(
               [...attributes.checkbox, h.Class("checkbox")],
-              config.isChecked ? ["✓"] : []
+              config.isChecked ? [check()] : []
             ),
             h.label(
               [...attributes.label, h.Class(LABEL_CLASS)],
@@ -239,14 +241,25 @@ export const checkboxField = <Message>(
     h
   );
 
+/**
+ * How a button looks: `primary` for the one main action of a view,
+ * `quiet` for the others, `danger` for a destructive one, `ghost` for a
+ * borderless one in a toolbar.
+ */
+export type ButtonVariant = "primary" | "quiet" | "danger" | "ghost";
+
 /** A button. */
 export interface ButtonConfig<Message> {
   readonly text: string;
   readonly onClick: Message;
-  readonly variant: "primary" | "quiet";
+  readonly variant: ButtonVariant;
   readonly isDisabled?: boolean;
   /** An accessible name that differs from the visible text. */
   readonly maybeAriaLabel?: Option.Option<string>;
+  /** An icon before the text (decorative: the text names the button). */
+  readonly maybeIcon?: Option.Option<Html>;
+  /** Whether only the icon shows; the text is then the accessible name. */
+  readonly isIconOnly?: boolean;
 }
 
 /**
@@ -259,8 +272,14 @@ export interface ButtonConfig<Message> {
 export const buttonView = <Message>(
   config: ButtonConfig<Message>,
   h: HtmlBuilder<Message>
-): Html =>
-  Button.view(
+): Html => {
+  const isIconOnly = config.isIconOnly ?? false;
+
+  const maybeAriaLabel = isIconOnly
+    ? Option.some(config.text)
+    : (config.maybeAriaLabel ?? Option.none());
+
+  return Button.view(
     {
       isDisabled: config.isDisabled ?? false,
       onClick: config.onClick,
@@ -268,14 +287,25 @@ export const buttonView = <Message>(
         h.button(
           [
             ...attributes.button,
-            ...Option.match(config.maybeAriaLabel ?? Option.none(), {
+            ...Option.match(maybeAriaLabel, {
               onNone: () => [],
               onSome: (label) => [h.AriaLabel(label)],
             }),
-            h.Class(`button button-${config.variant}`),
+            h.Class(
+              isIconOnly
+                ? `button button-${config.variant} button-icon`
+                : `button button-${config.variant}`
+            ),
           ],
-          [config.text]
+          [
+            ...Option.match(config.maybeIcon ?? Option.none(), {
+              onNone: () => [],
+              onSome: (icon) => [icon],
+            }),
+            ...(isIconOnly ? [] : [config.text]),
+          ]
         ),
     },
     h
   );
+};

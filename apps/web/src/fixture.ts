@@ -5,7 +5,9 @@ import type { CurrentUser } from "./model.ts";
 import { Model, SignOutRequest, Tables } from "./model.ts";
 import { init as signInInit } from "./page/sign-in/sign-in.ts";
 import { AppRoute } from "./route.ts";
+import { DEFAULT_SHELL_PREFERENCES } from "./shell-preferences.ts";
 import { REVISION_3, adaTables } from "./table-fixture.ts";
+import { initUserMenu } from "./user-menu.ts";
 
 /** A signed-in user, as `session/current` describes her. */
 export const ada: CurrentUser = {
@@ -26,10 +28,13 @@ export const ada: CurrentUser = {
 
 /** Ada, signed in, on the home page. */
 export const adaAtHome = Model.SignedIn({
+  isNavigationOpen: false,
+  isPreferenceSaveFailed: false,
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
   nextPageId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
   sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
@@ -37,19 +42,24 @@ export const adaAtHome = Model.SignedIn({
     data: { revision: REVISION_3, tables: adaTables.tables },
   }),
   user: ada,
+  userMenu: initUserMenu(),
 });
 
 /** Ada, just signed in, on the home page: her tables are loading. */
 export const adaEnteringHome = Model.SignedIn({
+  isNavigationOpen: false,
+  isPreferenceSaveFailed: false,
   maybeRecordForm: Option.none(),
   maybeRevision: Option.some(REVISION_3),
   maybeTableList: Option.none(),
   nextPageId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.Home(),
   sessionId: 1,
   signOutRequest: SignOutRequest.Idle(),
   tables: Tables.Loading(),
   user: ada,
+  userMenu: initUserMenu(),
 });
 
 /** The sign-in page after a redirect from the home page. */
@@ -57,6 +67,7 @@ export const signInRedirectedFromHome = Model.SignedOut({
   maybeReturnRoute: Option.some(AppRoute.Home()),
   nextPageId: 1,
   nextSessionId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
@@ -66,6 +77,7 @@ export const signInOpenedDirectly = Model.SignedOut({
   maybeReturnRoute: Option.none(),
   nextPageId: 1,
   nextSessionId: 1,
+  preferences: DEFAULT_SHELL_PREFERENCES,
   route: AppRoute.SignIn(),
   signIn: signInInit(),
 });
