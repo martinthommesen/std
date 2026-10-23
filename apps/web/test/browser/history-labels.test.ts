@@ -99,7 +99,7 @@ const historyNamesEveryUser = async (
   for (const [index, id] of ids.entries()) {
     // oxlint-disable-next-line no-await-in-loop -- each change needs the version the one before it made
     const assigned = await apiCall(origin, token, {
-      body: { assignee: { id } },
+      body: { assignedTo: { id } },
       method: "PATCH",
       path: `/${collectionOf(INCIDENTS)}/${printer.id}`,
       version: version + index,

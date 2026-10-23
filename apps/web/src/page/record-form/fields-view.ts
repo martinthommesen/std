@@ -21,7 +21,6 @@ import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { childAttributes } from "foldkit/html";
 
 import { problemFieldOf } from "../../domain/definition-problems.ts";
-import { fieldShowOf } from "../../domain/form-fields.ts";
 import type { FieldShow } from "../../domain/form-fields.ts";
 import {
   FieldInput,
@@ -42,12 +41,14 @@ import {
   fieldsOf,
   inputOf,
   isCreating,
+  showOfField,
   storedLabelOf,
 } from "./form.ts";
 import { Message } from "./message.ts";
 import { Submission, WriteError } from "./model.ts";
 import type { Model, Picker, PickerError } from "./model.ts";
 import { isSearchableByText } from "./picker-search.ts";
+import { serverErrorsOf } from "./server-errors.ts";
 import {
   MORE_RESULTS_ITEM,
   MORE_RESULTS_TEXT,
@@ -902,10 +903,10 @@ const notesOf = (
   problems,
 });
 
-const mergeProblems = (
-  first: readonly string[],
-  second: readonly string[]
-): readonly string[] => [...new Set([...first, ...second])];
+const combineProblems = (
+  left: readonly string[],
+  right: readonly string[]
+): readonly string[] => [...new Set([...left, ...right])];
 
 /**
  * The problems of a refused change set that name a field of the form, by
@@ -959,16 +960,22 @@ export const definitionProblemsByField = (
  */
 export const shownProblemsOf = (
   model: Model
-): Readonly<Record<string, readonly string[]>> =>
-  Record.union(
+): Readonly<Record<string, readonly string[]>> => {
+  const checkErrors = Option.match(AsyncData.getError(model.formState), {
+    onNone: () => ({}),
+    onSome: (error) => serverErrorsOf(fieldsOf(model), error),
+  });
+
+  return Record.union(
     Record.union(
       model.isShowingProblems ? checkForm(model).problems : {},
-      model.serverErrors,
-      mergeProblems
+      Record.union(model.serverErrors, checkErrors, combineProblems),
+      combineProblems
     ),
     definitionProblemsByField(model),
-    mergeProblems
+    combineProblems
   );
+};
 
 const fieldShowView = (
   model: Model,
@@ -1022,13 +1029,15 @@ const fieldShowView = (
  * @param field - The field, as the form describes it.
  * @param problems - The problems it shows.
  * @param h - The builder.
- * @returns The field.
+ * @param isPending - Whether this field needs the first server verdict.
+ * @returns An accessible control, derived value or pending placeholder.
  */
 export const fieldView = (
   model: Model,
   field: MetaField,
   problems: readonly string[],
-  h: HtmlBuilder<Message>
+  h: HtmlBuilder<Message>,
+  isPending: boolean
 ): Html =>
   h.keyed("div")(
     field.id,
@@ -1040,12 +1049,8 @@ export const fieldView = (
       h.DataAttribute("field-kind", field.type.kind),
     ],
     [
-      fieldShowView(
-        model,
-        field,
-        fieldShowOf(field, editedRecordOf(model)),
-        problems,
-        h
-      ),
+      isPending
+        ? h.p([], [`${field.label}: checking field state…`])
+        : fieldShowView(model, field, showOfField(model, field), problems, h),
     ]
   );

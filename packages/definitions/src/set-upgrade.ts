@@ -323,6 +323,17 @@ const localClash = (
       .find((entry) => entry.name === draft.name && isLocal(entry));
   }
 
+  if (draft.kind === "formRule") {
+    return installed
+      .all("formRule")
+      .find(
+        (entry) =>
+          entry.classId === draft.classId &&
+          entry.name === draft.name &&
+          isLocal(entry)
+      );
+  }
+
   if (draft.kind === "recordRule") {
     return installed
       .recordRulesOf(draft.classId)
@@ -705,7 +716,11 @@ const deactivation = (current: Definition): Deactivation => {
     };
   }
 
-  if (current.kind === "accessRule" || current.kind === "recordRule") {
+  if (
+    current.kind === "accessRule" ||
+    current.kind === "recordRule" ||
+    current.kind === "formRule"
+  ) {
     return {
       action: "deactivated",
       op: current.active
@@ -746,6 +761,7 @@ const SWITCHED_OFF: ReadonlySet<Definition["kind"]> = new Set<
   "layout",
   "savedFilter",
   "recordRule",
+  "formRule",
 ]);
 
 const planRemoval = (

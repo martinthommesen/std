@@ -51,11 +51,7 @@ import {
 } from "@std/definitions/effective-schema";
 import type { EffectiveField } from "@std/definitions/effective-schema";
 import type { DefinitionId } from "@std/definitions/ids";
-import {
-  fieldRulesOf,
-  rulesOnUpdate,
-  writtenOnCreate,
-} from "@std/definitions/record-rules";
+import { writtenOnCreate } from "@std/definitions/record-rules";
 import type { ConfigSnapshot } from "@std/definitions/snapshot";
 import {
   PLATFORM_CLASS_IDS,
@@ -67,7 +63,7 @@ import {
 } from "@std/definitions/well-known";
 import { storedEquals } from "@std/values/compare";
 import { isString } from "@std/values/field-value";
-import type { DecodedInput, StoredValue } from "@std/values/field-value";
+import type { DecodedInput } from "@std/values/field-value";
 import { isJsonValue } from "@std/values/json-value";
 import type { JsonObject, JsonValue } from "@std/values/json-value";
 import { parseUuid } from "@std/values/uuid";
@@ -93,20 +89,24 @@ import { assignNumbers } from "./auto-numbers.ts";
 import { changedFields, writeChangeEntry } from "./change-entry.ts";
 import type { ChangeCause, ChangeEntry, ChangeKind } from "./change-entry.ts";
 import { writeChangeImage } from "./change-image.ts";
+import { authorizeOwners, noteOwnerSave } from "./part-owner-access.ts";
 import {
   deriveIndividualName,
   individualOf,
   needsIndividual,
 } from "./party-rules.ts";
+import { hookChanges, writtenFields } from "./proposal-changes.ts";
+import { rulesById } from "./proposal-rules.ts";
 import { mapConstraints, withShownFields } from "./save-constraints.ts";
 import type { ConstraintFailure } from "./save-constraints.ts";
 import { SaveHooks } from "./save-hooks.ts";
 import type { HookEnvironment, SaveFailure, SaveMode } from "./save-hooks.ts";
+import type { SaveInput } from "./save-input.ts";
 import {
   deleteRecordRows,
   insertRecord,
   loadRecord,
-  lockRoot,
+  loadRoot,
   updateLock,
   updateRecord as updateRecordRows,
 } from "./save-sql.ts";
@@ -138,34 +138,7 @@ import {
   proposeUpdate,
   validateProposal,
 } from "./write-validation.ts";
-import type {
-  Proposal,
-  RulesById,
-  ValidationInput,
-} from "./write-validation.ts";
-
-/**
- * What every save names. The acting user is the `Actor` in the
- * environment (Contracts 3.1); the fields a body may name come from
- * `WriteAccess.nameable`.
- */
-export interface SaveInput {
-  /** The class whose endpoint the request came through. */
-  readonly endpointClassId: DefinitionId;
-  /** What produced the save; `{ kind: "api" }` by default. */
-  readonly cause?: ChangeCause;
-  /**
-   * Which `before` rules run (4.10): `user` by default; `settled` for the
-   * saves that settling persists (4.9), where only invariants run.
-   */
-  readonly mode?: SaveMode;
-  /**
-   * `aggregate`: a save finalization makes as the system effect (4.9,
-   * 4.10): it needs no write right of the acting user (read-only fields
-   * included, owner references excepted), but is validated as usual.
-   */
-  readonly system?: "aggregate";
-}
+import type { Proposal, ValidationInput } from "./write-validation.ts";
 
 /** A create: a record of exactly the endpoint's class (2.2 item 5). */
 export interface CreateInput extends SaveInput {
@@ -263,25 +236,6 @@ const effectiveById = (
 ): ReadonlyMap<DefinitionId, EffectiveField> =>
   new Map(
     effectiveFields(snapshot, classId).map((field) => [field.field.id, field])
-  );
-
-// The write rules of every field of a class (`@std/definitions/record-rules`),
-// the same ones the browser's `recordSchema` applies to the metadata: on
-// an update an owner reference is read-only (4.9), and the system effect
-// `aggregate` writes read-only fields like the service's own values.
-const rulesById = (
-  snapshot: ConfigSnapshot,
-  fields: ReadonlyMap<DefinitionId, EffectiveField>,
-  on: { readonly update: boolean; readonly input: SaveInput }
-): RulesById =>
-  new Map(
-    [...fields].map(([fieldId, field]) => {
-      const rules = fieldRulesOf(snapshot, field);
-      const system = on.input.system === "aggregate";
-      const writable = system ? { ...rules, readOnly: false } : rules;
-
-      return [fieldId, on.update ? rulesOnUpdate(writable) : writable];
-    })
   );
 
 const resolveBody = Effect.fn("Records.resolveBody")(function* resolveBody(
@@ -628,6 +582,15 @@ const recordChange = Effect.fn("Records.recordChange")(function* recordChange(
     snapshot,
   };
 
+  // Later part writes of this transaction decide this owner again, and may
+  // write the parts of an owner their acting user created (decision 0039).
+  yield* noteOwnerSave(snapshot, {
+    actorId: entry.actorId,
+    classId: change.classId,
+    kind: change.kind,
+    recordId: change.recordId,
+  });
+
   // The touched set (4.9): the owners this save changes, or `AggregateNotSettled`
   // for one this transaction already persisted.
   yield* noteAggregateWrite({
@@ -664,24 +627,6 @@ const project = Effect.fn("Records.project")(function* project(
 
   return yield* access.project({ endpointClassId, record, snapshot });
 });
-
-// The fields whose value the before-write hooks set or changed.
-const hookChanges = (
-  fields: ReadonlyMap<DefinitionId, EffectiveField>,
-  before: ReadonlyMap<DefinitionId, DecodedInput>,
-  after: ReadonlyMap<DefinitionId, DecodedInput>
-): readonly DefinitionId[] =>
-  [...after].flatMap(([fieldId, value]) => {
-    const field = fields.get(fieldId);
-    const previous = before.get(fieldId);
-
-    const same =
-      field !== undefined &&
-      previous !== undefined &&
-      storedEquals(field.type.kind, previous, value);
-
-    return same ? [] : [fieldId];
-  });
 
 /**
  * A retired table accepts reads only (Contracts 1.6): creates, updates and
@@ -790,9 +735,11 @@ const createIndividual = (
 
 /**
  * Reads and locks the owner chain of a part to be created, aggregate root
- * first, before anything is written (4.9). A missing owner, also one
- * deleted concurrently, is `InvalidReference` on the owner reference, like
- * any unknown target.
+ * first, before anything is written (4.9), then authorizes the create
+ * against every owner of it (decision 0039). A missing owner, also one
+ * deleted concurrently, and an owner the caller cannot see are
+ * `InvalidReference` on the owner reference, like any unknown target; an
+ * owner the caller sees but may not update is `NotAllowed`.
  *
  * @param snapshot - The configuration.
  * @param classId - The new record's class.
@@ -815,9 +762,23 @@ const lockOwnersForCreate = Effect.fn("Records.lockOwnersForCreate")(
 
     const chain = yield* lockChainForCreate(snapshot, classId, ownerId);
 
-    return Option.isSome(chain)
-      ? chain.value
-      : yield* new InvalidReference({ field: reference.name });
+    if (Option.isNone(chain)) {
+      return yield* new InvalidReference({ field: reference.name });
+    }
+
+    const owners = yield* authorizeOwners(
+      snapshot,
+      chain.value,
+      (yield* Actor).userId
+    );
+
+    if (owners === "hidden") {
+      return yield* new InvalidReference({ field: reference.name });
+    }
+
+    return owners === "refused"
+      ? yield* new NotAllowed({ refusedOn: "owner" })
+      : chain.value;
   }
 );
 
@@ -1016,7 +977,13 @@ const createInTransaction = Effect.fn("Records.createInTransaction")(
 
 /**
  * Steps 2 of 4.1: lock the root row alone, then (next statements) load the
- * record, check visibility and the version.
+ * record, check visibility, the owners of a part (decision 0039) and the
+ * version. A part whose owner the caller cannot see is `NotFound` like an
+ * unknown ID, before its version is compared; a visible owner the caller
+ * may not update is `NotAllowed`, also before the version, so a stale
+ * write learns nothing more than a current one. The owner check comes
+ * after the part's own visibility, so a hidden part is `NotFound` whatever
+ * its owner.
  */
 const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
   snapshot: ConfigSnapshot,
@@ -1024,7 +991,8 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
     readonly id: string;
     readonly expectedVersion: number | null;
   },
-  lock: RootLock
+  lock: RootLock,
+  chain: OwnerChain
 ) {
   const access = yield* WriteAccess;
   const stack = yield* SaveStack;
@@ -1034,7 +1002,7 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
     return yield* new NotFound();
   }
 
-  const locked = yield* lockRoot(
+  const locked = yield* loadRoot(
     snapshot,
     input.endpointClassId,
     input.id,
@@ -1071,6 +1039,16 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
     return yield* new NotFound();
   }
 
+  const owners = yield* authorizeOwners(snapshot, chain, (yield* Actor).userId);
+
+  if (owners === "hidden") {
+    return yield* new NotFound();
+  }
+
+  if (owners === "refused") {
+    return yield* new NotAllowed({ refusedOn: "owner" });
+  }
+
   // After visibility, so a hidden record stays an identical NotFound.
   yield* refuseRetiredClass(snapshot, record.classId);
 
@@ -1083,34 +1061,6 @@ const lockExisting = Effect.fn("Records.lockExisting")(function* lockExisting(
 
   return { readable: readable.value, record };
 });
-
-// Fields the update writes (3.9): of the fields it sets, those the caller
-// cannot read, whose value is invalid, or whose value changes.
-const writtenFields = (
-  fields: ReadonlyMap<DefinitionId, EffectiveField>,
-  proposal: Proposal,
-  existing: StoredRecord,
-  readable: ReadonlySet<DefinitionId>
-): Set<DefinitionId> =>
-  new Set(
-    [...proposal.values.keys(), ...proposal.invalid.keys()].filter(
-      (fieldId) => {
-        const field = fields.get(fieldId);
-        const value = proposal.values.get(fieldId);
-        const before: StoredValue | null = existing.values.get(fieldId) ?? null;
-
-        const unreadableOrInvalid =
-          !readable.has(fieldId) || proposal.invalid.has(fieldId);
-
-        const changed =
-          field === undefined ||
-          value === undefined ||
-          !storedEquals(field.type.kind, before, value);
-
-        return unreadableOrInvalid || changed;
-      }
-    )
-  );
 
 // The values whose columns change (written fields with a new value).
 const changedValues = (
@@ -1214,7 +1164,7 @@ const updateInTransaction = Effect.fn("Records.updateInTransaction")(
     ]);
 
     const chain = yield* lockOwnersOf(snapshot, input);
-    const locked = yield* lockExisting(snapshot, input, lock);
+    const locked = yield* lockExisting(snapshot, input, lock, chain);
     const { readable, record } = locked;
     const { classId } = record;
 
@@ -1413,7 +1363,7 @@ export const ensureUserIndividual = Effect.fn("Records.ensureUserIndividual")(
           );
         }
 
-        const locked = yield* lockRoot(
+        const locked = yield* loadRoot(
           snapshot,
           USER_CLASS_ID,
           input.id,
@@ -1469,7 +1419,13 @@ const deleteInTransaction = Effect.fn("Records.deleteInTransaction")(
     const access = yield* WriteAccess;
     const hooks = yield* SaveHooks;
     const chain = yield* lockOwnersOf(snapshot, input);
-    const { record } = yield* lockExisting(snapshot, input, "FOR UPDATE");
+
+    const { record } = yield* lockExisting(
+      snapshot,
+      input,
+      "FOR UPDATE",
+      chain
+    );
 
     yield* refusePlatformTable(snapshot, record.classId);
     yield* protectServiceIdentity(

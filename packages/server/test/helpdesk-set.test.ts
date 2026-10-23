@@ -44,6 +44,8 @@ const TICKET = "helpdesk.ticket";
 const INCIDENT = "helpdesk.incident";
 
 /** What each version must ship. */
+type Step2Version = Exclude<HelpdeskVersion, "v3">;
+
 interface Expected {
   readonly version: number;
   /** The reference field's name: `assigned_to` in v1, `assignee` from v2. */
@@ -61,7 +63,7 @@ const INTERNAL_COST_RULE = `${HELPDESK.rules.internalCost} deny agent ${TICKET} 
 
 const CUSTOMER_EMAIL_RULE = `${HELPDESK.rules.customerEmail} deny agent ${TICKET} fields customer_email read conditional`;
 
-const EXPECTED: Readonly<Record<HelpdeskVersion, Expected>> = {
+const EXPECTED: Readonly<Record<Step2Version, Expected>> = {
   v1: {
     assignee: "assigned_to",
     customerEmailRead: "yes",
@@ -102,7 +104,7 @@ const EXPECTED: Readonly<Record<HelpdeskVersion, Expected>> = {
   },
 };
 
-const VERSIONS: readonly HelpdeskVersion[] = ["v1", "v2"];
+const VERSIONS: readonly Step2Version[] = ["v1", "v2"];
 
 /**
  * One access rule as a line: ID, effect, roles, table, target, fields,
@@ -181,7 +183,7 @@ const choiceKeys = (field: MetaField | undefined): readonly string[] =>
  * @returns Nothing; fails on the first difference.
  */
 const shippedFilesDeclareTheSet = Effect.fn("HelpdeskSet.shippedFiles")(
-  function* shippedFilesDeclareTheSet(version: HelpdeskVersion) {
+  function* shippedFilesDeclareTheSet(version: Step2Version) {
     const expected = EXPECTED[version];
 
     const files = yield* readSetDirectory(
@@ -288,7 +290,7 @@ const shippedFilesDeclareTheSet = Effect.fn("HelpdeskSet.shippedFiles")(
  * @returns Nothing; fails on the first difference.
  */
 const callersSeeTheSet = Effect.fn("HelpdeskSet.callers")(
-  function* callersSeeTheSet(version: HelpdeskVersion) {
+  function* callersSeeTheSet(version: Step2Version) {
     const expected = EXPECTED[version];
     const http = yield* TestHttpClient;
     const fixture = yield* HelpdeskFixture;
@@ -370,7 +372,7 @@ const callersSeeTheSet = Effect.fn("HelpdeskSet.callers")(
   }
 );
 
-const callersLayer = (version: HelpdeskVersion) =>
+const callersLayer = (version: Step2Version) =>
   TestHttpClient.layer.pipe(Layer.provideMerge(helpdeskTestLayer({ version })));
 
 describe("helpdesk-set", () => {

@@ -1,4 +1,5 @@
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
+import { FormState } from "@std/api/form-state";
 import { Schema } from "effect";
 import { CalendarDate } from "foldkit/calendar";
 import { defineMessageUnion } from "foldkit/message";
@@ -73,6 +74,7 @@ export const Message = defineMessageUnion({
   ClickedReloadDefinition: {},
   ClickedReloadRecord: {},
   ClickedRetry: {},
+  ClickedRetryFormState: {},
   ClickedRetryRelatedList: { listId: Schema.Int },
   ClickedSave: {},
   ClickedShowRefusal: {},
@@ -88,6 +90,11 @@ export const Message = defineMessageUnion({
     revision: SchemaRevision,
   },
   FailedLoadFormMetadata: { error: MetaError },
+  FailedLoadFormState: {
+    error: WriteError,
+    generation: Schema.Int,
+    maybeRevision: Schema.Option(SchemaRevision),
+  },
   FailedLoadHistory: { error: HistoryError, generation: Schema.Int },
   FailedLoadHistoryLabels: { table: Schema.String },
   FailedLoadRecord: {
@@ -138,6 +145,11 @@ export const Message = defineMessageUnion({
   SucceededLoadFormMetadata: {
     revision: SchemaRevision,
     table: MetaTableSchema,
+  },
+  SucceededLoadFormState: {
+    generation: Schema.Int,
+    maybeRevision: Schema.Option(SchemaRevision),
+    verdict: FormState,
   },
   SucceededLoadHistory: {
     entries: Schema.Array(HistoryEntrySchema),

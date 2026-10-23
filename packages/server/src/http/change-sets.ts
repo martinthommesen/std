@@ -88,6 +88,7 @@ export const DEFINITION_TABLE: Readonly<Record<DefinitionKind, PlatformTable>> =
     choice: "choice",
     class: "class",
     field: "field",
+    formRule: "form_rule",
     grant: "role_permission",
     index: "index",
     layout: "layout",

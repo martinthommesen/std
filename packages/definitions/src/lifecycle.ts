@@ -136,6 +136,12 @@ const namingScope = (
     return snapshot.savedFiltersOf(target.classId);
   }
 
+  if (target.kind === "formRule") {
+    return snapshot
+      .all("formRule")
+      .filter((rule) => rule.classId === target.classId && isLive(rule));
+  }
+
   if (target.kind === "recordRule") {
     return snapshot.recordRulesOf(target.classId);
   }
@@ -581,6 +587,7 @@ const goesWithField = (edge: DependentEdge): boolean => {
     case "subscription":
     case "layout":
     case "savedFilter":
+    case "formRule":
     case "recordRule": {
       return false;
     }
@@ -628,7 +635,7 @@ const ownParts = (
 /** The kinds whose definitions on a table keep it from being purged. */
 const ATTACHED_BEHAVIOR: ReadonlySet<Definition["kind"]> = new Set<
   Definition["kind"]
->(["accessRule", "subscription", "recordRule"]);
+>(["accessRule", "subscription", "recordRule", "formRule"]);
 
 /**
  * Whether a dependent of a table (or of one of its fields) keeps the table

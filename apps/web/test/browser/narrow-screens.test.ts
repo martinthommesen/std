@@ -31,6 +31,7 @@ import {
   bearerToken,
   collectionOf,
   fillField,
+  formControl,
   formOutcome,
   openRecordForm,
   rendered,
@@ -312,9 +313,9 @@ const ctrlSConflictKeepsFocusClear = async (
   await openRecordForm(page, origin, printer);
 
   const { version } = await apiRecord(page, origin, printer);
-  const email = page.getByLabel("Customer email", { exact: true });
-
-  await email.fill("mine@example.com");
+  // NOTE: Sol's reproduction used Customer email; helpdesk v3's incident
+  // layout no longer shows it, so another one-line field takes its place.
+  await formControl(page, "Short description").fill("Mine, saved second");
   // As a user who scrolled: the field just above the bar, as it is before
   // the save (Sol's reproduction at 800 x 600).
   await page.evaluate(() => {
@@ -353,7 +354,7 @@ const ctrlSConflictKeepsFocusClear = async (
   const after = await focusAgainstBar(page);
 
   assert.deepStrictEqual(after, {
-    focusedLabel: "Customer email",
+    focusedLabel: "Short description (required)",
     isCovered: false,
     note: after.note,
   });

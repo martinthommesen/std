@@ -75,6 +75,11 @@ import {
   StorageSchema,
   SubscriptionOperationSchema,
 } from "./definition.ts";
+import {
+  ClearHiddenSchema,
+  FormRulePropertySchema,
+  FormRuleValueSchema,
+} from "./form-rule-schema.ts";
 import { DefinitionIdSchema } from "./ids.ts";
 import {
   RuleActionSchema,
@@ -370,9 +375,26 @@ export const RecordRuleEntrySchema = Struct({
 /** A record-rule entry. */
 export type RecordRuleEntry = typeof RecordRuleEntrySchema.Type;
 
+/** A form rule; field names resolve to stable IDs on its table. */
+export const FormRuleEntrySchema = Struct({
+  active: optionalKey(SchemaBoolean),
+  clearHidden: optionalKey(ClearHiddenSchema),
+  condition: optionalKey(ConditionSchema),
+  field: SchemaString,
+  id: DefinitionIdSchema,
+  message: optionalKey(SchemaString),
+  name: SchemaString,
+  order: optionalKey(Int),
+  property: FormRulePropertySchema,
+  protected: optionalKey(SchemaBoolean),
+  table: SchemaString,
+  value: optionalKey(FormRuleValueSchema),
+});
+
 /** One file of a set. */
 export const SetFileSchema = Struct({
   accessRules: optionalKey(SchemaArray(AccessRuleEntrySchema)),
+  formRules: optionalKey(SchemaArray(FormRuleEntrySchema)),
   grants: optionalKey(SchemaArray(GrantEntrySchema)),
   namespaces: optionalKey(SchemaArray(NamespaceEntrySchema)),
   permissions: optionalKey(SchemaArray(NamedEntrySchema)),

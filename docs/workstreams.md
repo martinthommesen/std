@@ -38,7 +38,7 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3a-aggregates` | 3A, 3T | aggregates (Contracts 4.9): owner references, root-first locks, settle and persist, aggregate saves, aggregate rules and quantifiers | merged |
 | 6 | `ws/3b-outbox-worker` | 3B | delivery worker (`std worker`), leases with fencing, dead letters, config subscriptions, payloads rebuilt from history (fail closed), afterCommit rules run from carrier deliveries | merged |
 | 6 | `ws/3b-dead-letter-admin` | 3B follow-up | dead-letter operator API (`/api/v1/deadDelivery`, retry and discard tasks), append-only stored actions `core.dead_delivery_action` (migration 0029, core set v4), admin page (decision 0037) | merged |
-| 6 | `ws/3c-form-rules` | 3C | form rules, browser evaluator, form-state | planned |
+| 6 | `ws/3c-form-rules` | 3C | form rules (`core.form_rule`, migration 0030, core set v5), `checkFormState`, browser evaluator with one check in flight, read-only forms for records the caller cannot update, helpdesk v3 ITIL form rules (decision 0036) | merged |
 | 6 | `ws/3g-tmf630-api` | 3G | the TMF630 API per Contracts 10 on the v5 baseline (Martin, 2026-10-22), TMF630 matrix file | merged |
 | 6 | `ws/3r-migration-phases` | 3R | migration phases and the `migration-phases` check (libpg-query AST allow-list), RU9/RU10/RU12 groundwork, release version 0.0.3 | merged |
 | 6 | `ws/ci-flakes-load`, `ws/ci-flakes-2-main` | CI follow-up | load flakes diagnosed by Gemini 4 Argon | merged |
@@ -54,6 +54,8 @@ How the plan's stages are being delivered. Each row is one branch (`ws/<id>-<slu
 | 6 | `ws/3k-oda-canvas-probe` | 3K | ODA Canvas on kind in GitHub Actions, committed measurements (Contracts 13.6): 10 of 10 runs succeeded | merged |
 | 6 | `ws/ci-pin-actions` | CI follow-up | `ci.yml` and `quickstart-compose.yml` pin every action by commit SHA | merged |
 | 6 | `ws/3s-tls-signing` | 3R (Martin's M16) | TLS to Postgres for every connection (`@std/postgres/transport`), quickstart PKI, doctor check 17, signed release workflow (cosign keyless, SBOM, provenance) | merged |
+| 6 | `ws/sec-part-owner` | security follow-up | scan finding F3: a write to a part is a write to its owner; part creates, updates and deletes need update rights on every owner up to the root (decision 0039) | merged |
+| 6 | `ws/sec-history-paging` | security follow-up | scan finding F6: history pages, counts and lookups run in SQL with key-first selection; bounded work per request (decision 0040) | merged |
 | 7 | `ws/4d-identity-party` | 4D | groups, nested roles, tokens, explain, rule editor; party roles; config subscriptions; TMF632, TMF669, TMF672 | planned |
 | 7 | `ws/4c-cmdb` | 4C | `cmdb` set, TMF638, TMF639 | planned |
 | 7 | `ws/4o-orders` | 4O | helpdesk v4: changes, approvals, requests, catalog items; TMF641, TMF622 | planned |

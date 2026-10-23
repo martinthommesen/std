@@ -219,7 +219,9 @@ export const tableOf = Effect.fn("Api.tableOf")(function* tableOf(
  */
 export const collectionNamed =
   (collection: string) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, E | UnknownTable, R> =>
     Effect.catchIf(
       effect,
       (failure) => failure instanceof UnknownTable,
@@ -632,7 +634,11 @@ const latestChangeOf = Effect.fn("Api.latestChange")(function* latestChangeOf(
     return Option.none<string>();
   }
 
-  const history = yield* recordHistory({ id: record.id, table }).pipe(
+  const history = yield* recordHistory({
+    id: record.id,
+    selection: { kind: "latest" },
+    table,
+  }).pipe(
     Effect.map((found): Option.Option<HistoryAnswer> => Option.some(found)),
     Effect.catchTags({ NotFound: noHistory, UnknownTable: noHistory })
   );

@@ -38,6 +38,7 @@ export const ProblemCodeSchema = Literals([
   "invalidCondition",
   "invalidSubscription",
   "invalidRecordRule",
+  "invalidFormRule",
   "invalidChoice",
   "invalidLayout",
   "invalidAutoNumber",

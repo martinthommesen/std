@@ -16,6 +16,7 @@
  *   readable field, `null` when empty, so a restricted value (`withheld`)
  *   still never looks empty, and an empty one never looks restricted.
  */
+import type { FormState } from "@std/api/form-state";
 import type {
   ChangeEntry as ChangeEntrySchema,
   Resource as ResourceSchema,
@@ -405,3 +406,30 @@ export const currentRevisionOf = (
   failure: unknown
 ): Option.Option<SchemaRevision> =>
   Option.flatMap(errorDetail(failure, "currentRevision"), decodeRevision);
+
+/**
+ * A form-state answer in definition names, with reference values already given as IDs.
+ * @param verdict - The binding form-state answer.
+ * @param fields - The fields used to build the request.
+ * @returns The verdict keyed by definition names, with reference UUIDs and normalized messages.
+ */
+export const formStateOfResponse = (
+  verdict: typeof FormState.Type,
+  fields: readonly WireField[]
+): typeof FormState.Type => ({
+  fields: Object.fromEntries(
+    Object.entries(verdict.fields).map(([name, state]) => [
+      nameIn(fields, name),
+      state,
+    ])
+  ),
+  messages: verdict.messages ?? [],
+  revision: verdict.revision,
+  schemaRevision: verdict.schemaRevision,
+  values: Object.fromEntries(
+    Object.entries(verdict.values).map(([name, value]) => [
+      nameIn(fields, name),
+      value,
+    ])
+  ),
+});
