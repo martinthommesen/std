@@ -48,6 +48,7 @@ import {
   tightenType,
 } from "./effective-schema.ts";
 import type { EffectiveField } from "./effective-schema.ts";
+import { formRuleProblems } from "./form-rules.ts";
 import type { DefinitionId } from "./ids.ts";
 import {
   apiAttributeNameOf,
@@ -1329,6 +1330,12 @@ const checkUniqueness = (
     (rule) => `${rule.classId}/${rule.name}`,
     (rule) => `The record rule name "${rule.name}" on its table`
   );
+  duplicates(
+    problems,
+    snapshot.all("formRule").filter(isLive),
+    (rule) => `${rule.classId}/${rule.name}`,
+    (rule) => `The form rule name "${rule.name}" on its table`
+  );
   // One subscription carries one afterCommit rule (decision 0022).
   duplicates(
     problems,
@@ -1640,6 +1647,8 @@ const checkAccessDefinition = (
     checkLayout(problems, snapshot, definition);
   } else if (definition.kind === "savedFilter") {
     checkSavedFilter(problems, snapshot, definition, purpose);
+  } else if (definition.kind === "formRule") {
+    problems.push(...formRuleProblems(snapshot, definition, purpose));
   } else if (definition.kind === "recordRule") {
     problems.push(...recordRuleProblems(snapshot, definition, purpose));
   }

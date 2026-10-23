@@ -20,13 +20,16 @@ import { buttonView } from "../../view/controls.ts";
 import { view as notFoundView } from "../not-found.ts";
 import type { TableMeta } from "../table-list/model.ts";
 import { fieldView, shownProblemsOf } from "./fields-view.ts";
+import { formStateStatusView } from "./form-state-view.ts";
 import {
   classMetaOf,
   editedRecordOf,
   fieldOf,
   fieldsOf,
   isCreating,
+  isFormStatePending,
   metaOf,
+  pendingFormFields,
 } from "./form.ts";
 import { Message } from "./message.ts";
 import { Deletion, Submission, WriteError } from "./model.ts";
@@ -452,6 +455,7 @@ const staleRecordView = (model: Model, h: HtmlBuilder<Message>): Html => {
 const sectionView = (
   model: Model,
   section: FormSection,
+  pending: ReadonlySet<string>,
   index: number,
   problems: Readonly<Record<string, readonly string[]>>,
   h: HtmlBuilder<Message>
@@ -461,7 +465,8 @@ const sectionView = (
       model,
       field,
       Option.getOrElse(Record.get(problems, field.id), () => []),
-      h
+      h,
+      pending.has(field.id)
     )
   );
 
@@ -498,11 +503,16 @@ const sectionView = (
 const isSaving = (model: Model): boolean =>
   Submission.guards.Saving(model.submission);
 
-const isSaveBlocked = (model: Model): boolean =>
-  isSaving(model) ||
-  isReloading(model) ||
-  isRecordOutdated(model) ||
-  Submission.guards.SavedUnread(model.submission);
+const isSaveBlocked = (model: Model): boolean => {
+  const isWaitingForServer =
+    isFormStatePending(model) || isSaving(model) || isReloading(model);
+
+  return (
+    isWaitingForServer ||
+    isRecordOutdated(model) ||
+    Submission.guards.SavedUnread(model.submission)
+  );
+};
 
 const saveText = (model: Model): string => {
   if (isSaving(model)) {
@@ -609,6 +619,7 @@ const formBodyView = (
   h: HtmlBuilder<Message>
 ): Html => {
   const problems = shownProblemsOf(model);
+  const pending = pendingFormFields(model);
 
   const sections = formSections(
     meta.table,
@@ -625,8 +636,9 @@ const formBodyView = (
     [h.Role("form"), h.AriaLabelledBy(HEADING_ID), h.Class("record-form")],
     [
       ...sections.map((section, index) =>
-        sectionView(model, section, index, problems, h)
+        sectionView(model, section, pending, index, problems, h)
       ),
+      formStateStatusView(model, h),
       submissionView(model, h),
       droppedEditsView(model, h),
       deletionView(model, h),

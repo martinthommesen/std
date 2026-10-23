@@ -149,6 +149,13 @@ export interface WriteAccessApi {
   readonly checkProposed: (
     input: ProposedCheck
   ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
+  /** Checks record and written-field permissions over an in-memory candidate, without persisting it (6.3). */
+  readonly checkProposedImage: (
+    input: ProposalCheck & {
+      readonly action: "create" | "update";
+      readonly written: ReadonlySet<DefinitionId>;
+    }
+  ) => Effect.Effect<void, NotAllowed | SqlError, InTransaction>;
   /**
    * The IDs among `ids` that exist, that the caller can see (3.6) and that
    * satisfy the allowed-records condition in the caller's view; a
@@ -209,6 +216,7 @@ export const projectAll = (input: ProjectionInput): JsonObject => {
 const ALLOW_ALL: WriteAccessApi = {
   checkExisting: () => Effect.void,
   checkProposed: () => Effect.void,
+  checkProposedImage: () => Effect.void,
   conditionView: classViewOf,
   forActor: () => ALLOW_ALL,
   nameable: (input) => input.snapshot.fields(input.endpointClassId),

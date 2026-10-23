@@ -1326,117 +1326,121 @@ describe("step 2 gate (helpdesk)", () => {
     );
   });
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "gate 2B: for the same filter, the UI list and the API return the same records in the same order, for the admin and an agent",
-      () =>
-        Effect.gen(function* listsTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "gate 2B: for the same filter, the UI list and the API return the same records in the same order, for the admin and an agent",
+        () =>
+          Effect.gen(function* listsTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await sameListsForBothUsers(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await sameListsForBothUsers(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
-      () =>
-        Effect.gen(function* devToolsTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const devOrigin = yield* viteDevServer(server.origin);
-          const browser = yield* launchBrowser;
-          const mcp = yield* devToolsMcp;
+      dbTest.effect(
+        "gate 2B: in development, the agent's DevTools Model and Message history never hold a restricted value",
+        () =>
+          Effect.gen(function* devToolsTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const devOrigin = yield* viteDevServer(server.origin);
+            const browser = yield* launchBrowser;
+            const mcp = yield* devToolsMcp;
 
-          const hidden = yield* Effect.promise(async () => {
-            await seed(server.origin, fixture);
+            const hidden = yield* Effect.promise(async () => {
+              await seed(server.origin, fixture);
 
-            return await hiddenFromTheAgent(server.origin, fixture);
-          });
+              return await hiddenFromTheAgent(server.origin, fixture);
+            });
 
-          // NOTE: the context stays open until the scope ends, so DevTools
-          // keeps the page's runtime.
-          const page = yield* Effect.promise(async () => {
-            const context = await browser.newContext();
+            // NOTE: the context stays open until the scope ends, so DevTools
+            // keeps the page's runtime.
+            const page = yield* Effect.promise(async () => {
+              const context = await browser.newContext();
 
-            return await context.newPage();
-          });
+              return await context.newPage();
+            });
 
-          yield* devToolsNeverHoldRestrictedValues(
-            mcp,
-            page,
-            devOrigin,
-            hidden,
-            fixture
-          );
-        }).pipe(Effect.scoped)
-    );
+            yield* devToolsNeverHoldRestrictedValues(
+              mcp,
+              page,
+              devOrigin,
+              hidden,
+              fixture
+            );
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "gate 2B: a restricted field shows as restricted, never as empty, and never reaches the browser",
-      () =>
-        Effect.gen(function* restrictedTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "gate 2B: a restricted field shows as restricted, never as empty, and never reaches the browser",
+        () =>
+          Effect.gen(function* restrictedTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await restrictedFieldsStayHidden(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await restrictedFieldsStayHidden(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "gate 2C: a form refused with SchemaChanged keeps valid input, marks the changed fields and never resubmits by itself",
-      () =>
-        Effect.gen(function* staleTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "gate 2C: a form refused with SchemaChanged keeps valid input, marks the changed fields and never resubmits by itself",
+        () =>
+          Effect.gen(function* staleTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await staleSaveKeepsInput(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await staleSaveKeepsInput(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "gate 2C: after a label-only change the same save succeeds",
-      () =>
-        Effect.gen(function* labelTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "gate 2C: after a label-only change the same save succeeds",
+        () =>
+          Effect.gen(function* labelTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await labelOnlyChangeSaves(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await labelOnlyChangeSaves(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "gate 2C: rename then re-create of a field name never writes the new field",
-      () =>
-        Effect.gen(function* renameTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "gate 2C: rename then re-create of a field name never writes the new field",
+        () =>
+          Effect.gen(function* renameTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await renameThenRecreate(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await renameThenRecreate(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 });

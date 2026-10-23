@@ -27,6 +27,7 @@
  */
 import type { FieldAction } from "@std/access/rules";
 import { NotAllowed } from "@std/api/errors/not-allowed";
+import type { SqlFragment } from "@std/conditions/sql-fragment";
 import {
   arrayParameter,
   identSql,
@@ -51,6 +52,7 @@ import { getRecord } from "./read-records.ts";
 import { makeReadScope } from "./read-view.ts";
 import {
   isNameable,
+  proposedRelation,
   readableOnProposal,
   readableOnRecord,
   truthColumn,
@@ -70,7 +72,9 @@ WHERE ${identSql(ALIAS, "id")} = ${textParameter(id, "uuid")}`;
 interface RuleCheck {
   readonly snapshot: ConfigSnapshot;
   readonly classId: DefinitionId;
-  readonly id: string;
+  readonly source:
+    | { readonly id: string }
+    | { readonly candidate: SqlFragment };
   readonly action: AccessAction;
   readonly fieldAction: FieldAction;
   readonly written: ReadonlySet<DefinitionId>;
@@ -82,8 +86,8 @@ const proposedCheck = (input: ProposedCheck): RuleCheck => ({
   action: input.action,
   classId: input.classId,
   fieldAction: input.action,
-  id: input.id,
   snapshot: input.snapshot,
+  source: { id: input.id },
   written: input.written,
 });
 
@@ -150,7 +154,7 @@ const makeRuleWriteAccess = (
 
     const [row] = yield* readRows(
       sql`SELECT ${truthColumn(every, "allowed")}
-${byId(check.snapshot, check.classId, check.id)}`
+${"candidate" in check.source ? check.source.candidate : byId(check.snapshot, check.classId, check.source.id)}`
     );
 
     if (row?.allowed !== "true") {
@@ -166,11 +170,22 @@ ${byId(check.snapshot, check.classId, check.id)}`
         action: input.action,
         classId: input.record.classId,
         fieldAction: "update",
-        id: input.record.id,
         snapshot: input.snapshot,
+        source: { id: input.record.id },
         written: input.written,
       }),
     checkProposed: (input) => allowed(proposedCheck(input)),
+    checkProposedImage: (input) =>
+      allowed({
+        action: input.action,
+        classId: input.classId,
+        fieldAction: input.action,
+        snapshot: input.snapshot,
+        source: {
+          candidate: sql`FROM ${proposedRelation(input.snapshot, { actorId: actor.userId, classId: input.classId, existing: input.existing, values: input.values })} AS ${identSql(ALIAS)}`,
+        },
+        written: input.written,
+      }),
     conditionView: (snapshot) => filterClassView(scopeOf(snapshot)),
     forActor: (other) => makeRuleWriteAccess(other, deps),
     nameable: (input) => {

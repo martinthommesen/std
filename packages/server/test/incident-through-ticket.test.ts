@@ -23,7 +23,9 @@ import { asObject } from "./api-support.ts";
 const MESSAGE = "Resolution notes are required to resolve an incident.";
 
 const testLayer = () =>
-  TestHttpClient.layer.pipe(Layer.provideMerge(helpdeskTestLayer()));
+  TestHttpClient.layer.pipe(
+    Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+  );
 
 /** The rule, as a generic `POST` body on `core.record_rule`. */
 const RULE_BODY = {

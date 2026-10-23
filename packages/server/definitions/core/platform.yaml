@@ -889,3 +889,60 @@ tables:
       - id: 2a65dc8d-5f9a-496f-823d-4b8b91b1d5a8
         name: active
         type: boolean
+
+  - id: 553d1bdb-321c-4eee-a7ba-2a67b6c0ffad
+    name: core.form_rule
+    label: Form rule
+    storage: platform
+    displayField: name
+    fields:
+      - id: ae90473e-cbc1-4855-832a-220b79ea5108
+        name: owner_layer
+        type: text
+        required: true
+      - id: 8bac245c-b6df-40ab-b512-d174128dd9f1
+        name: owner_set_id
+        type: uuid
+      - id: dd58a074-00fd-414e-9a5c-03b3013c650c
+        name: state
+        type: text
+        required: true
+      - id: 79da102a-55e9-4931-9e37-ee97fd23103b
+        name: protected
+        type: boolean
+      - id: 482cf00a-3e3e-4b78-8932-8e5fbfd3bfb8
+        name: table_id
+        type: { kind: reference, target: core.class }
+        required: true
+      - id: 745975c7-a5c9-467f-8442-d1848022cb60
+        name: name
+        type: text
+        required: true
+      - id: f3222226-1bb8-40da-886d-d3184b829512
+        name: field_id
+        type: { kind: reference, target: core.field }
+        required: true
+      - id: 0eca171c-56e9-4361-a0ce-ea83f1b0ebb4
+        name: condition
+        type: json
+      - id: a839c6cf-6aba-481c-94fe-4290ae35fc03
+        name: sort_order
+        type: integer
+        required: true
+      - id: 4878064d-288a-403c-946d-4dd93c425887
+        name: property
+        type: text
+        required: true
+      - id: 4433cd93-e790-4cf4-a4fc-bb9383ad8b25
+        name: value
+        type: json
+        required: true
+      - id: 9c2e53cf-3668-465a-ac74-1b29580845d0
+        name: active
+        type: boolean
+      - id: 48d07e9f-5050-4fa3-b641-589038a94bcd
+        name: clear_hidden
+        type: json
+      - id: 754b1c75-d716-4c65-a172-d36f1bed733c
+        name: message
+        type: text

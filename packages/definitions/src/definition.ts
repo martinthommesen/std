@@ -32,6 +32,11 @@ import type { Codec } from "effect/Schema";
 import { passthrough, transformOptional } from "effect/SchemaGetter";
 
 import { ConditionSchema } from "./condition.ts";
+import {
+  ClearHiddenSchema,
+  FormRulePropertySchema,
+  FormRuleValueSchema,
+} from "./form-rule-schema.ts";
 import { DefinitionIdSchema } from "./ids.ts";
 import {
   RuleActionSchema,
@@ -619,6 +624,36 @@ export type RecordRuleDraft = typeof RecordRuleDraftSchema.Type;
 /** A record rule definition. */
 export type RecordRuleDefinition = typeof RecordRuleDefinitionSchema.Type;
 
+/** Properties of a form rule, evaluated only by forms (decision 0036). */
+const formRuleFields = {
+  active: SchemaBoolean,
+  classId: DefinitionIdSchema,
+  clearHidden: optionalKey(NullOr(ClearHiddenSchema)),
+  condition: NullOr(ConditionSchema),
+  fieldId: DefinitionIdSchema,
+  kind: Literal("formRule"),
+  message: optionalKey(NullOr(SchemaString)),
+  name: SchemaString,
+  order: Int,
+  property: FormRulePropertySchema,
+  value: FormRuleValueSchema,
+} as const;
+
+/** A conditional field state; never a record-service write constraint. */
+export const FormRuleDefinitionSchema = Struct({
+  ...common,
+  ...formRuleFields,
+});
+
+/** A new form rule. */
+export const FormRuleDraftSchema = Struct({ ...draft, ...formRuleFields });
+
+/** A form rule. */
+export type FormRuleDefinition = typeof FormRuleDefinitionSchema.Type;
+
+/** A new form rule. */
+export type FormRuleDraft = typeof FormRuleDraftSchema.Type;
+
 /** Any definition. */
 export const DefinitionSchema = Union([
   NamespaceDefinitionSchema,
@@ -635,6 +670,7 @@ export const DefinitionSchema = Union([
   LayoutDefinitionSchema,
   SavedFilterDefinitionSchema,
   RecordRuleDefinitionSchema,
+  FormRuleDefinitionSchema,
 ]);
 
 /** Any definition. */
@@ -665,6 +701,7 @@ export const DEFINITION_KINDS: readonly DefinitionKind[] = [
   "layout",
   "savedFilter",
   "recordRule",
+  "formRule",
 ];
 
 /**

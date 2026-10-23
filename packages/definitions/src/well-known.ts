@@ -25,6 +25,7 @@ export const PLATFORM_CLASS_IDS = {
   config_set: "0b70df4d-c000-4b9a-aa7f-8b5b92f1afce",
   field: "de5ad84a-87aa-45a0-b76b-2ce287e306c2",
   field_override: "e29c0472-668e-40ff-bb0c-8ffa8e8b6f37",
+  form_rule: "553d1bdb-321c-4eee-a7ba-2a67b6c0ffad",
   index: "3e7e3e31-2fef-4414-9c85-e37a441a8809",
   layout: "ae98b973-f436-4315-a093-057af79dbc5c",
   namespace: "53500c6c-063b-423a-b626-a6a938649162",

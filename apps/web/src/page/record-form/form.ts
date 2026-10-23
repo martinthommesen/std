@@ -5,31 +5,35 @@
  * verdict as the server's for every field both see).
  */
 import { Combobox, DatePicker } from "@foldkit/ui";
+import { evaluateFormConditionInBrowser } from "@std/conditions/browser";
 import type { FieldError } from "@std/definitions/field-errors";
 import { validateRecord } from "@std/definitions/record-schema";
 import type { RecordVerdict } from "@std/definitions/record-schema";
+import type { MetaFormRule } from "@std/definitions/table-metadata";
 import type { JsonValue } from "@std/values/json-value";
-import { Match, Option, Record, pipe } from "effect";
+// oxlint-disable-next-line sonarjs/no-built-in-override -- Foldkit requires Effect module names; this module does not use the global Array.
+import { Array, Match, Option, Predicate, Record, Result, pipe } from "effect";
 import { AsyncData } from "foldkit";
 
 import {
   definitionProblems,
   withRecordLimits,
 } from "../../domain/definition-limits.ts";
+import type { FieldShow } from "../../domain/form-fields.ts";
 import { fieldShowOf, formFieldsOf } from "../../domain/form-fields.ts";
 import {
+  FieldInput,
   buildBody,
   createBaseValue,
+  inputJson,
   inputOfValue,
   judgedBody,
+  sameJson,
 } from "../../domain/form-input.ts";
-import type {
-  BodyField,
-  FormBody,
-  FieldInput,
-} from "../../domain/form-input.ts";
+import type { BodyField, FormBody } from "../../domain/form-input.ts";
 import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import type { RecordJson } from "../../domain/record.ts";
+import { tableClassView } from "../../domain/table-view.ts";
 import type { TableMeta } from "../table-list/model.ts";
 import { FormMode } from "./model.ts";
 import type { Model } from "./model.ts";
@@ -99,7 +103,7 @@ export const editedRecordOf = (model: Model): Option.Option<RecordJson> =>
  * @param model - The page.
  * @returns The fields; none before the metadata arrives.
  */
-export const fieldsOf = (model: Model): readonly MetaField[] =>
+export const schemaFieldsOf = (model: Model): readonly MetaField[] =>
   Option.match(metaOf(model), {
     onNone: () => [],
     onSome: (meta) =>
@@ -111,11 +115,202 @@ export const fieldsOf = (model: Model): readonly MetaField[] =>
   });
 
 /**
+ * The concrete form rules, with caller-simplified conditions.
+ * @param model - The record form.
+ * @returns The caller-visible form description.
+ */
+export const rulesOfForm = (model: Model): readonly MetaFormRule[] =>
+  Option.match(classMetaOf(model), {
+    onNone: () =>
+      Option.match(metaOf(model), {
+        onNone: () => [],
+        onSome: (meta) => meta.table.formRules,
+      }),
+    onSome: (table) => table.formRules,
+  });
+
+/** Whether the caller has a form to edit, independently of form-only restrictions.
+ * @param model - The form.
+ * @returns Whether at least one readable field can be edited.
+ */
+export const hasEditableSchema = (model: Model): boolean =>
+  schemaFieldsOf(model).some(
+    (field) => fieldShowOf(field, editedRecordOf(model))._tag === "Editable"
+  );
+
+/**
+ * Forms with rules wait for the verdict of their exact proposal.
+ * @param model - The record form.
+ * @returns Whether the form must wait for an authoritative verdict.
+ */
+export const isFormStatePending = (model: Model): boolean =>
+  hasEditableSchema(model) &&
+  rulesOfForm(model).length !== 0 &&
+  !AsyncData.isSuccess(model.formState);
+
+interface LocalFieldState {
+  readonly hidden: boolean;
+  readonly readOnly: boolean;
+  readonly required: boolean;
+  readonly choices: readonly string[] | null;
+  readonly pending: boolean;
+}
+
+const localFormStates = (
+  model: Model
+): Readonly<Record<string, LocalFieldState>> => {
+  const table = Option.orElse(classMetaOf(model), () =>
+    Option.map(metaOf(model), (meta) => meta.table)
+  );
+
+  if (Option.isNone(table)) {
+    return {};
+  }
+
+  const view = tableClassView(new Map([[table.value.name, table.value]]));
+  const initial: Readonly<Record<string, LocalFieldState>> = {};
+
+  return Array.reduce(rulesOfForm(model), initial, (states, rule) => {
+    // Derive targets are not metadata. Before the server's proposal, all image data is unavailable.
+    const verdict = evaluateFormConditionInBrowser(rule.condition, {
+      classId: table.value.name,
+      source: { record: {} },
+      view,
+    });
+
+    if (verdict === false) {
+      return states;
+    }
+
+    const state = states[rule.fieldId] ?? {
+      choices: null,
+      hidden: false,
+      pending: false,
+      readOnly: false,
+      required: false,
+    };
+
+    const assignment =
+      rule.property === "choices"
+        ? {
+            choices:
+              verdict === true && !Predicate.isBoolean(rule.value)
+                ? rule.value
+                : null,
+          }
+        : { [rule.property]: verdict === true && rule.value === true };
+
+    return Record.set(states, rule.fieldId, {
+      ...state,
+      ...assignment,
+      pending: state.pending || verdict === "unknown",
+    });
+  });
+};
+
+/** Fields whose state needs the server's first verdict.
+ * @param model - The form.
+ * @returns Pending field IDs, computed once for a view.
+ */
+export const pendingFormFields = (model: Model): ReadonlySet<string> =>
+  hasEditableSchema(model) && !AsyncData.hasData(model.formState)
+    ? new Set(
+        Object.entries(localFormStates(model)).flatMap(([id, state]) =>
+          state.pending ? [id] : []
+        )
+      )
+    : new Set();
+
+const choicesUnderRule = (
+  field: MetaField,
+  keys: readonly string[] | null | undefined
+): MetaField["choices"] => {
+  if (keys === undefined || keys === null) {
+    return field.choices;
+  }
+
+  const allowed = new Set(keys);
+
+  return field.choices?.filter((choice) => allowed.has(choice.key)) ?? null;
+};
+
+/**
+ * Effective form fields, with schema restrictions kept and hidden fields omitted.
+ * @param model - The record form.
+ * @returns The caller-visible form description.
+ */
+export const fieldsOf = (model: Model): readonly MetaField[] => {
+  const maybeVerdict = AsyncData.getData(model.formState);
+
+  const localStates = Option.isNone(maybeVerdict) ? localFormStates(model) : {};
+
+  return schemaFieldsOf(model).flatMap((field) => {
+    const state = Option.match(maybeVerdict, {
+      onNone: () => null,
+      onSome: (verdict) => verdict.fields[field.name] ?? null,
+    });
+
+    // Every readable field has a state. An absent state means the proposed image withholds it.
+    const withheld = Option.isSome(maybeVerdict) && state === null;
+
+    const local = localStates[field.id];
+    const localReadOnly = withheld || (local?.readOnly ?? false);
+    const localRequired = local?.required ?? false;
+
+    const choices = choicesUnderRule(
+      field,
+      state === null ? local?.choices : state.choices
+    );
+
+    const hidden = state?.hidden ?? local?.hidden === true;
+
+    return hidden
+      ? []
+      : [
+          {
+            ...field,
+            choices,
+            readOnly: field.readOnly || (state?.readOnly ?? localReadOnly),
+            required: field.required || (state?.required ?? localRequired),
+          },
+        ];
+  });
+};
+
+/**
+ * Read-only values show the derived proposal; editable values stay under the user's control.
+ * @param model - The record form.
+ * @param field - The field metadata.
+ * @returns The caller-visible form description.
+ */
+export const showOfField = (model: Model, field: MetaField): FieldShow => {
+  const show = fieldShowOf(field, editedRecordOf(model));
+  const maybeVerdict = AsyncData.getData(model.formState);
+
+  if (
+    Option.exists(
+      maybeVerdict,
+      (verdict) => !Object.hasOwn(verdict.fields, field.name)
+    )
+  ) {
+    return { _tag: "Restricted" };
+  }
+
+  if (show._tag !== "ReadOnly" || Option.isNone(maybeVerdict)) {
+    return show;
+  }
+
+  return Object.hasOwn(maybeVerdict.value.values, field.name)
+    ? { _tag: "ReadOnly", value: maybeVerdict.value.values[field.name] ?? null }
+    : show;
+};
+
+/**
  * A field by ID, as the form describes it.
  *
  * @param model - The page.
  * @param fieldId - The field's ID.
- * @returns The field.
+ * @returns The matching visible field, when present.
  */
 export const fieldOf = (
   model: Model,
@@ -153,16 +348,30 @@ export const storedLabelOf = (
   );
 
 /**
- * A field's input: the user's edit, else its base value as an input.
+ * A field's input: the user's edit, else the authoritative proposal, else its base value.
  *
  * @param model - The page.
  * @param field - The field.
  * @returns The input.
  */
 export const inputOf = (model: Model, field: MetaField): FieldInput =>
-  Option.getOrElse(Record.get(model.edits, field.id), () =>
-    inputOfValue(field, baseValueOf(model, field), storedLabelOf(model, field))
-  );
+  Option.getOrElse(Record.get(model.edits, field.id), () => {
+    const base = baseValueOf(model, field);
+
+    const proposed = Option.match(AsyncData.getData(model.formState), {
+      onNone: () => base,
+      onSome: (verdict) =>
+        Object.hasOwn(verdict.values, field.name)
+          ? (verdict.values[field.name] ?? null)
+          : base,
+    });
+
+    return inputOfValue(
+      field,
+      proposed,
+      sameJson(base, proposed) ? storedLabelOf(model, field) : Option.none()
+    );
+  });
 
 /**
  * The ID of a reference field's Combobox.
@@ -205,12 +414,24 @@ export const controlIdOf = (field: MetaField): string =>
  * sent, whatever the Model holds).
  *
  * @param model - The page.
+ * @param shown - The already projected fields, when the caller has them.
  * @returns Each with its input and base value.
  */
-export const editedFieldsOf = (model: Model): readonly BodyField[] => {
+export const editedFieldsOf = (
+  model: Model,
+  shown: readonly MetaField[] = fieldsOf(model)
+): readonly BodyField[] => {
   const maybeRecord = editedRecordOf(model);
 
-  return fieldsOf(model).flatMap((field) =>
+  const visible = new Set(shown.map((field) => field.id));
+
+  const automatic = new Set(model.automaticClears);
+
+  const cleared = schemaFieldsOf(model).filter(
+    (field) => !visible.has(field.id) && automatic.has(field.id)
+  );
+
+  return [...shown, ...cleared].flatMap((field) =>
     Option.match(Record.get(model.edits, field.id), {
       onNone: () => [],
       onSome: (input) =>
@@ -343,6 +564,70 @@ const joinProblems = (
   right: readonly string[]
 ): readonly string[] => [...left, ...right];
 
+const requiredFormErrors = (
+  model: Model,
+  field: MetaField,
+  schemaRequired: boolean
+): readonly FieldError[] => {
+  const editable =
+    fieldShowOf(field, editedRecordOf(model))._tag === "Editable";
+
+  if (!field.required || schemaRequired || !editable) {
+    return [];
+  }
+
+  const canonical = pipe(
+    AsyncData.getData(model.formState),
+    Option.filter(() => AsyncData.isSuccess(model.formState)),
+    Option.filter((verdict) => Object.hasOwn(verdict.values, field.name))
+  );
+
+  if (Option.isSome(canonical)) {
+    return canonical.value.values[field.name] === null
+      ? [{ _tag: "Required", field: field.name }]
+      : [];
+  }
+
+  const json = inputJson(field, inputOf(model, field));
+
+  if (Result.isFailure(json) || json.success !== null) {
+    return [];
+  }
+
+  return [{ _tag: "Required", field: field.name }];
+};
+
+const choiceFormErrors = (
+  model: Model,
+  field: MetaField
+): readonly FieldError[] => {
+  const allowed = Option.flatMap(
+    AsyncData.getData(model.formState),
+    (verdict) => Option.fromNullishOr(verdict.fields[field.name]?.choices)
+  );
+
+  if (Option.isNone(allowed)) {
+    return [];
+  }
+
+  const input = inputOf(model, field);
+
+  if (!FieldInput.guards.Choice(input) || input.key === "") {
+    return [];
+  }
+
+  return allowed.value.includes(input.key)
+    ? []
+    : [
+        {
+          _tag: "InvalidValue",
+          field: field.name,
+          message: "Choose one of the choices offered by this form.",
+          reason: "unknownChoice",
+        },
+      ];
+};
+
 /**
  * Builds the body from the edits and judges it.
  *
@@ -350,18 +635,42 @@ const joinProblems = (
  * @returns The body and its problems.
  */
 export const checkForm = (model: Model): FormCheck => {
-  const built = buildBody(editedFieldsOf(model));
+  const shown = fieldsOf(model);
+  const built = buildBody(editedFieldsOf(model, shown));
+
+  const canonical = Option.match(AsyncData.getData(model.formState), {
+    onNone: () => ({}),
+    onSome: (verdict) => verdict.values,
+  });
+
+  const bodyValues = judgedBody(built.body);
+
+  const validationValues = AsyncData.isSuccess(model.formState)
+    ? { ...bodyValues, ...canonical }
+    : { ...canonical, ...bodyValues };
 
   const verdict = Option.getOrElse(
-    verdictOf(model, judgedBody(built.body)),
+    verdictOf(model, validationValues),
     (): RecordVerdict => ({ errors: [], invalidBody: false, unknownFields: [] })
   );
 
   const fieldErrors = errorsByFieldId(
-    fieldsOf(model),
+    shown,
     verdict.errors.filter(
       (error) => !isRequiredOfTheServer(model, error.field, error._tag)
     )
+  );
+
+  const schemaRequired = new Set(
+    schemaFieldsOf(model).flatMap((field) => (field.required ? [field.id] : []))
+  );
+
+  const formProblems = errorsByFieldId(
+    shown,
+    shown.flatMap((field) => [
+      ...requiredFormErrors(model, field, schemaRequired.has(field.id)),
+      ...choiceFormErrors(model, field),
+    ])
   );
 
   const engineProblems = Option.match(metaOf(model), {
@@ -369,7 +678,7 @@ export const checkForm = (model: Model): FormCheck => {
     onSome: (meta) =>
       definitionProblems(
         meta.table.name,
-        fieldsOf(model),
+        shown,
         built.body.values,
         editedRecordOf(model)
       ),
@@ -386,7 +695,7 @@ export const checkForm = (model: Model): FormCheck => {
         fieldErrors,
         joinProblems
       ),
-      engineProblems,
+      Record.union(engineProblems, formProblems, joinProblems),
       joinProblems
     ),
     unknownFields: verdict.unknownFields,

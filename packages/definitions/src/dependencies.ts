@@ -36,6 +36,7 @@ import type {
   OverrideDraft,
   PermissionDraft,
   RecordRuleDraft,
+  FormRuleDraft,
   RoleDraft,
   SubscriptionDraft,
 } from "./definition.ts";
@@ -87,7 +88,8 @@ export type Referencing =
   | ChoiceDraft
   | LayoutDraft
   | SavedFilterDraft
-  | RecordRuleDraft;
+  | RecordRuleDraft
+  | FormRuleDraft;
 
 /** One dependency: `from` refers to `to`. */
 export interface Dependency {
@@ -113,6 +115,7 @@ export const REFERENCING_KINDS: ReadonlySet<DefinitionKind> =
     "layout",
     "savedFilter",
     "recordRule",
+    "formRule",
   ]);
 
 const edge = (
@@ -242,6 +245,14 @@ const edgesOf = (definition: Referencing): readonly Dependency[] => {
   if (definition.kind === "savedFilter") {
     return [
       edge(id, definition.classId, "saved_filter_on"),
+      ...conditionEdges(id, definition.condition),
+    ];
+  }
+
+  if (definition.kind === "formRule") {
+    return [
+      edge(id, definition.classId, "rule_on"),
+      edge(id, definition.fieldId, "rule_writes"),
       ...conditionEdges(id, definition.condition),
     ];
   }

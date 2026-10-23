@@ -40,7 +40,9 @@ const INCIDENT = "helpdesk.incident";
 const TICKET = "helpdesk.ticket";
 
 const testLayer = () =>
-  TestHttpClient.layer.pipe(Layer.provideMerge(helpdeskTestLayer()));
+  TestHttpClient.layer.pipe(
+    Layer.provideMerge(helpdeskTestLayer({ version: "v2" }))
+  );
 
 const decodeMetadata = Schema.decodeUnknownEffect(TableMetadata);
 

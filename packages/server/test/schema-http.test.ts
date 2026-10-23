@@ -1080,6 +1080,29 @@ const OPERATION_CASES: Readonly<Record<Operation["op"], OperationCase>> = {
     },
     target: "none",
   },
+  createFormRule: {
+    create: {
+      build: (id, refs) => ({
+        definition: {
+          active: true,
+          classId: refs.class,
+          condition: null,
+          fieldId: refs.field,
+          id,
+          kind: "formRule",
+          name: "matrix_form",
+          order: 0,
+          owner: { layer: "local" },
+          property: "required",
+          protected: false,
+          value: true,
+        },
+        op: "createFormRule",
+      }),
+      references: true,
+    },
+    target: "none",
+  },
   createGrant: {
     create: {
       build: (id, refs) => ({
@@ -3451,6 +3474,14 @@ describe("schema-http", () => {
                 ? []
                 : [
                     OPERATION_CASES.createSubscription.create.build(
+                      freshId(),
+                      VISIBLE_REFS
+                    ),
+                  ]),
+              ...(OPERATION_CASES.createFormRule.create === "none"
+                ? []
+                : [
+                    OPERATION_CASES.createFormRule.create.build(
                       freshId(),
                       VISIBLE_REFS
                     ),

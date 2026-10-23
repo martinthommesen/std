@@ -20,7 +20,6 @@ import { AsyncData } from "foldkit";
 import type { Attribute, Html, HtmlBuilder } from "foldkit/html";
 import { childAttributes } from "foldkit/html";
 
-import { fieldShowOf } from "../../domain/form-fields.ts";
 import type { FieldShow } from "../../domain/form-fields.ts";
 import {
   FieldInput,
@@ -37,13 +36,16 @@ import {
   checkForm,
   controlIdOf,
   editedRecordOf,
+  fieldsOf,
   inputOf,
   isCreating,
+  showOfField,
   storedLabelOf,
 } from "./form.ts";
 import { Message } from "./message.ts";
 import type { Model, Picker, PickerError } from "./model.ts";
 import { isSearchableByText } from "./picker-search.ts";
+import { serverErrorsOf } from "./server-errors.ts";
 import {
   MORE_RESULTS_ITEM,
   MORE_RESULTS_TEXT,
@@ -898,6 +900,11 @@ const notesOf = (
   problems,
 });
 
+const combineProblems = (
+  left: readonly string[],
+  right: readonly string[]
+): readonly string[] => [...new Set([...left, ...right])];
+
 /**
  * The problems each field shows: the client's (after a save attempt) and
  * the server's (until the field is edited).
@@ -907,12 +914,18 @@ const notesOf = (
  */
 export const shownProblemsOf = (
   model: Model
-): Readonly<Record<string, readonly string[]>> =>
-  Record.union(
+): Readonly<Record<string, readonly string[]>> => {
+  const checkErrors = Option.match(AsyncData.getError(model.formState), {
+    onNone: () => ({}),
+    onSome: (error) => serverErrorsOf(fieldsOf(model), error),
+  });
+
+  return Record.union(
     model.isShowingProblems ? checkForm(model).problems : {},
-    model.serverErrors,
-    (client, server) => [...new Set([...client, ...server])]
+    Record.union(model.serverErrors, checkErrors, combineProblems),
+    combineProblems
   );
+};
 
 const fieldShowView = (
   model: Model,
@@ -966,24 +979,22 @@ const fieldShowView = (
  * @param field - The field, as the form describes it.
  * @param problems - The problems it shows.
  * @param h - The builder.
- * @returns The field.
+ * @param isPending - Whether this field needs the first server verdict.
+ * @returns An accessible control, derived value or pending placeholder.
  */
 export const fieldView = (
   model: Model,
   field: MetaField,
   problems: readonly string[],
-  h: HtmlBuilder<Message>
+  h: HtmlBuilder<Message>,
+  isPending: boolean
 ): Html =>
   h.keyed("div")(
     field.id,
     [h.Class("form-row"), h.DataAttribute("field", field.name)],
     [
-      fieldShowView(
-        model,
-        field,
-        fieldShowOf(field, editedRecordOf(model)),
-        problems,
-        h
-      ),
+      isPending
+        ? h.p([], [`${field.label}: checking field state…`])
+        : fieldShowView(model, field, showOfField(model, field), problems, h),
     ]
   );

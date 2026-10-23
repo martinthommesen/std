@@ -68,7 +68,7 @@ const SESSION_CHECK = `${API_PREFIX}/session/current`;
 
 const UNAUTHENTICATED = 401;
 
-/** The column agents may never read (`examples/helpdesk/v2/access.yaml`). */
+/** The column agents may never read (`examples/helpdesk/v3/access.yaml`). */
 const INTERNAL_COST = "Internal cost";
 
 /** Its definition name, which the form marks its row with (`data-field`). */

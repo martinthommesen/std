@@ -820,193 +820,203 @@ describe("record forms", () => {
     assert.strictEqual(INCIDENTS, "helpdesk.incident");
   });
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "as an admin and as an agent, edit and save an incident",
-      () =>
-        Effect.gen(function* editTest() {
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "as an admin and as an agent, edit and save an incident",
+        () =>
+          Effect.gen(function* editTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
+
+            yield* Effect.promise(async () => {
+              await adminEditsAnIncident(browser, server.origin, fixture);
+              await agentEditsAnIncident(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
+
+      dbTest.effect("create an incident through the form", () =>
+        Effect.gen(function* createTest() {
           const database = yield* TestDatabase;
           const fixture = yield* HelpdeskFixture;
           const server = yield* stdServe(database.url, inject("webRoot"));
           const browser = yield* launchBrowser;
 
           yield* Effect.promise(async () => {
-            await adminEditsAnIncident(browser, server.origin, fixture);
-            await agentEditsAnIncident(browser, server.origin, fixture);
+            await agentCreatesAnIncident(browser, server.origin, fixture);
           });
         }).pipe(Effect.scoped)
-    );
+      );
 
-    dbTest.effect("create an incident through the form", () =>
-      Effect.gen(function* createTest() {
-        const database = yield* TestDatabase;
-        const fixture = yield* HelpdeskFixture;
-        const server = yield* stdServe(database.url, inject("webRoot"));
-        const browser = yield* launchBrowser;
+      dbTest.effect(
+        "a restricted field shows as restricted and never reaches the browser, in a form",
+        () =>
+          Effect.gen(function* restrictedTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-        yield* Effect.promise(async () => {
-          await agentCreatesAnIncident(browser, server.origin, fixture);
-        });
-      }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await restrictedFieldNeverReachesTheBrowser(
+                browser,
+                server.origin,
+                fixture
+              );
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "a restricted field shows as restricted and never reaches the browser, in a form",
-      () =>
-        Effect.gen(function* restrictedTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "a version conflict shows what happened, keeps the input and saves after a reload",
+        () =>
+          Effect.gen(function* conflictTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await restrictedFieldNeverReachesTheBrowser(
-              browser,
-              server.origin,
-              fixture
-            );
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await versionConflictKeepsTheInput(
+                browser,
+                server.origin,
+                fixture
+              );
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 
-    dbTest.effect(
-      "a version conflict shows what happened, keeps the input and saves after a reload",
-      () =>
-        Effect.gen(function* conflictTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "a field the record's own class denies is restricted through the parent's form too",
+        () =>
+          Effect.gen(function* parentChildTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await versionConflictKeepsTheInput(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await childDenialShowsThroughTheParent(
+                browser,
+                server.origin,
+                fixture
+              );
+            });
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "a field the record's own class denies is restricted through the parent's form too",
-      () =>
-        Effect.gen(function* parentChildTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+  layer(helpdeskTestLayer({ version: "v2" }), { excludeTestServices: true })(
+    (dbTest) => {
+      dbTest.effect(
+        "a related list shows what the API lists for the same filter",
+        () =>
+          Effect.gen(function* relatedTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await childDenialShowsThroughTheParent(
-              browser,
-              server.origin,
-              fixture
-            );
-          });
-        }).pipe(Effect.scoped)
-    );
-  });
+            yield* Effect.promise(async () => {
+              await relatedListMatchesTheApi(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
 
-  layer(helpdeskTestLayer(), { excludeTestServices: true })((dbTest) => {
-    dbTest.effect(
-      "a related list shows what the API lists for the same filter",
-      () =>
-        Effect.gen(function* relatedTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "the picker offers only allowed targets, and the server refuses others anyway",
+        () =>
+          Effect.gen(function* pickerTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await relatedListMatchesTheApi(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await pickerOffersOnlyAllowedTargets(
+                browser,
+                server.origin,
+                fixture
+              );
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "the picker offers only allowed targets, and the server refuses others anyway",
-      () =>
-        Effect.gen(function* pickerTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "the history shows a choice's label at the entry's revision after a relabel",
+        () =>
+          Effect.gen(function* historyTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await pickerOffersOnlyAllowedTargets(
-              browser,
-              server.origin,
-              fixture
-            );
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await historyShowsTheOldChoiceLabel(
+                browser,
+                server.origin,
+                fixture
+              );
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "the history shows a choice's label at the entry's revision after a relabel",
-      () =>
-        Effect.gen(function* historyTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "a password is write-only: set through the form, never shown or sent back",
+        () =>
+          Effect.gen(function* passwordTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const browser = yield* launchBrowser;
 
-          yield* Effect.promise(async () => {
-            await historyShowsTheOldChoiceLabel(
-              browser,
-              server.origin,
-              fixture
-            );
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await passwordIsWriteOnly(browser, server.origin, fixture);
+            });
+          }).pipe(Effect.scoped)
+      );
 
-    dbTest.effect(
-      "a password is write-only: set through the form, never shown or sent back",
-      () =>
-        Effect.gen(function* passwordTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const browser = yield* launchBrowser;
+      dbTest.effect(
+        "in development, the DevTools record holds the form but never a typed password",
+        () =>
+          Effect.gen(function* devToolsTest() {
+            const database = yield* TestDatabase;
+            const fixture = yield* HelpdeskFixture;
+            const server = yield* stdServe(database.url, inject("webRoot"));
+            const devOrigin = yield* viteDevServer(server.origin);
+            const browser = yield* launchBrowser;
+            const mcp = yield* devToolsMcp;
 
-          yield* Effect.promise(async () => {
-            await passwordIsWriteOnly(browser, server.origin, fixture);
-          });
-        }).pipe(Effect.scoped)
-    );
+            yield* Effect.promise(async () => {
+              await typePasswordOnDevServer(browser, devOrigin, fixture);
+            });
 
-    dbTest.effect(
-      "in development, the DevTools record holds the form but never a typed password",
-      () =>
-        Effect.gen(function* devToolsTest() {
-          const database = yield* TestDatabase;
-          const fixture = yield* HelpdeskFixture;
-          const server = yield* stdServe(database.url, inject("webRoot"));
-          const devOrigin = yield* viteDevServer(server.origin);
-          const browser = yield* launchBrowser;
-          const mcp = yield* devToolsMcp;
+            const model = yield* callWhenConnected(mcp, "foldkit_get_model", {
+              expand: true,
+            });
 
-          yield* Effect.promise(async () => {
-            await typePasswordOnDevServer(browser, devOrigin, fixture);
-          });
+            const history = yield* mcp.callTool("foldkit_list_messages", {
+              limit: 200,
+            });
 
-          const model = yield* callWhenConnected(mcp, "foldkit_get_model", {
-            expand: true,
-          });
+            const recorded = `${model}\n${history}`;
 
-          const history = yield* mcp.callTool("foldkit_list_messages", {
-            limit: 200,
-          });
-
-          const recorded = `${model}\n${history}`;
-
-          assert.notInclude(recorded, TYPED_TEXT);
-          // The record is real: it holds the form and the redacted input.
-          assert.include(model, "maybeRecordForm");
-          assert.include(model, fixture.agent2.name);
-          assert.include(history, "UpdatedWriteOnly");
-          assert.include(recorded, "<redacted:write-only value>");
-        }).pipe(Effect.scoped)
-    );
-  });
+            assert.notInclude(recorded, TYPED_TEXT);
+            // The record is real: it holds the form and the redacted input.
+            assert.include(model, "maybeRecordForm");
+            assert.include(model, fixture.agent2.name);
+            assert.include(history, "UpdatedWriteOnly");
+            assert.include(recorded, "<redacted:write-only value>");
+          }).pipe(Effect.scoped)
+      );
+    }
+  );
 });

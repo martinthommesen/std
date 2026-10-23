@@ -40,6 +40,13 @@ import {
   Union,
 } from "effect/Schema";
 
+import { ConditionSchema } from "./condition.ts";
+import {
+  ClearHiddenSchema,
+  FormRulePropertySchema,
+  FormRuleValueSchema,
+} from "./form-rule-schema.ts";
+
 /** Whether the caller may read or write a field: always, never or per record. */
 export const AccessStateSchema = Literals(["yes", "no", "perRecord"]);
 
@@ -220,6 +227,21 @@ export const MetaRelatedListSchema = Struct({
 /** One related list. */
 export type MetaRelatedList = typeof MetaRelatedListSchema.Type;
 
+/** A caller-simplified rule, ordered by order and stable ID (decision 0036). */
+export const MetaFormRuleSchema = Struct({
+  clearHidden: optionalKey(NullOr(ClearHiddenSchema)),
+  condition: ConditionSchema,
+  fieldId: SchemaString,
+  id: SchemaString,
+  message: optionalKey(NullOr(SchemaString)),
+  order: Int,
+  property: FormRulePropertySchema,
+  value: FormRuleValueSchema,
+});
+
+/** A browser-deliverable form rule. */
+export type MetaFormRule = typeof MetaFormRuleSchema.Type;
+
 /** The description of one table for the caller. */
 export const MetaTableSchema = Struct({
   /** The ancestors, root first. */
@@ -230,7 +252,7 @@ export const MetaTableSchema = Struct({
   displayField: NullOr(SchemaString),
   fields: SchemaArray(MetaFieldSchema),
   /** Form rules (Contracts 5.10), none before Step 3. */
-  formRules: SchemaArray(Json),
+  formRules: SchemaArray(MetaFormRuleSchema),
   helpText: NullOr(SchemaString),
   id: SchemaString,
   label: SchemaString,

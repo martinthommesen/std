@@ -12,6 +12,7 @@
  * asked again after the refresh; a save never is: the user saves again.
  */
 import { Combobox, DatePicker, Dialog } from "@foldkit/ui";
+import type { FormState } from "@std/api/form-state";
 import type { MetaRelatedList } from "@std/definitions/table-metadata";
 import { Equal, Option, Record, pipe } from "effect";
 import { AsyncData, Update } from "foldkit";
@@ -25,6 +26,7 @@ import type { MetaField, MetaTable } from "../../domain/metadata.ts";
 import {
   isNewerRevision,
   parseSchemaRevision,
+  revisionNumber,
 } from "../../domain/schema-revision.ts";
 import type { SchemaRevision } from "../../domain/schema-revision.ts";
 import {
@@ -62,18 +64,20 @@ import {
   SearchTargets,
   UpdateRecord,
 } from "./command.ts";
+import { forgetServerErrors, recordFieldEdit } from "./field-edit.ts";
+import { acceptFormState, requestFormState } from "./form-state-flow.ts";
 import {
   checkForm,
   classMetaOf,
   controlIdOf,
   datePickerIdOf,
   editedRecordOf,
-  errorsByFieldId,
   fieldOf,
   fieldsOf,
   inputOf,
   isCreating,
   isEmptyBody,
+  isFormStatePending,
   isReady,
   metaOf,
   pickerIdOf,
@@ -85,6 +89,7 @@ import {
   ClassMetadata,
   Deletion,
   FormMode,
+  FormStateVerdict,
   HistoryEntries,
   PickerResults,
   RelatedMetadata,
@@ -111,6 +116,7 @@ import {
   pickerFilterOf,
   pickerSortOf,
 } from "./picker-search.ts";
+import { serverErrorsOf } from "./server-errors.ts";
 
 type UpdateReturn = Update.ReturnWithOutMessage<
   Model,
@@ -196,12 +202,15 @@ export const init = (config: InitConfig): UpdateReturn => ({
     ReadToday(),
   ],
   model: {
+    automaticClears: [],
     classMetadata: ClassMetadata.Idle(),
     datePickers: {},
     deleteDialog: Dialog.init({ id: DELETE_DIALOG_ID }),
     deletion: Deletion.Idle(),
     droppedEdits: [],
     edits: {},
+    formGeneration: 0,
+    formState: FormStateVerdict.Idle(),
     generation: 0,
     history: {
       actorNames: {},
@@ -213,6 +222,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     isShowingProblems: false,
     maybeAppRevision: config.maybeAppRevision,
     maybeEditsFrom: Option.none(),
+    maybeFormStateKey: Option.none(),
     maybeRecordRevision: Option.none(),
     maybeToday: Option.none(),
     metadata: Metadata.Loading(),
@@ -226,6 +236,7 @@ export const init = (config: InitConfig): UpdateReturn => ({
     serverErrors: {},
     staleChanges: [],
     submission: Submission.Idle(),
+    suppressedFormFields: [],
     table: config.table,
     targetRequests: {},
     targets: {},
@@ -439,6 +450,24 @@ const resetPickerInputs = (model: Model): Model =>
       })
     ),
   });
+
+const reflectProposedPickers = (model: Model): Model => {
+  const fields = new Map(fieldsOf(model).map((field) => [field.id, field]));
+
+  return modifyFields(model, {
+    pickers: Record.map((picker, fieldId) => {
+      if (picker.combobox.isOpen || Object.hasOwn(model.edits, fieldId)) {
+        return picker;
+      }
+
+      return Option.match(Option.fromNullishOr(fields.get(fieldId)), {
+        onNone: () => picker,
+        onSome: (field) =>
+          restingPicker(picker, restingLabelOf(inputOf(model, field))),
+      });
+    }),
+  });
+};
 
 // RELATED LISTS
 
@@ -1179,18 +1208,6 @@ const retryRefusedHistory: Step = (model) =>
 
 // EDITS
 
-const forgetServerErrors =
-  (fieldId: string) =>
-  (model: Model): Model =>
-    modifyFields(model, {
-      serverErrors: Record.remove(fieldId),
-      submission: (submission) =>
-        Submission.guards.Saved(submission) ||
-        Submission.guards.Unchanged(submission)
-          ? Submission.Idle()
-          : submission,
-    });
-
 /**
  * Sets a field's input, when the form offers one for it.
  *
@@ -1213,13 +1230,15 @@ const editField = (
     ),
     {
       onNone: () => ({ model }),
-      onSome: (field) => ({
-        model: forgetServerErrors(fieldId)(
-          modifyFields(model, {
-            edits: Record.set(fieldId, toInput(field, inputOf(model, field))),
-          })
+      onSome: (field) =>
+        Update.combine(
+          recordFieldEdit(
+            model,
+            fieldId,
+            toInput(field, inputOf(model, field))
+          ),
+          [requestFormState]
         ),
-      }),
     }
   );
 
@@ -1230,11 +1249,13 @@ const editField = (
  * @param fieldId - The field.
  * @returns The page.
  */
-const forgetEdit = (model: Model, fieldId: string): PlainReturn => ({
-  model: forgetServerErrors(fieldId)(
-    modifyFields(model, { edits: Record.remove(fieldId) })
-  ),
-});
+const forgetEdit = (model: Model, fieldId: string): PlainReturn =>
+  Update.combine(
+    forgetServerErrors(fieldId)(
+      modifyFields(model, { edits: Record.remove(fieldId) })
+    ),
+    [requestFormState]
+  );
 
 const MIDNIGHT = "00:00";
 
@@ -2048,12 +2069,15 @@ const receiveClassMetadata = (model: Model, table: MetaTable): UpdateReturn => {
     return { model };
   }
 
-  return setUpControls(
+  return Update.combine(
     reconcileEdits(
       modifyFields(model, {
         classMetadata: () => ClassMetadata.Success({ data: table }),
+        formState: () => FormStateVerdict.Idle(),
+        maybeFormStateKey: () => Option.none(),
       })
-    )
+    ),
+    [setUpControls, requestFormState]
   );
 };
 
@@ -2114,6 +2138,8 @@ const receiveMetadata = (
       modifyFields(model, {
         classMetadata: (classMetadata) =>
           isFirstLoad ? classMetadata : ClassMetadata.Idle(),
+        formState: () => FormStateVerdict.Idle(),
+        maybeFormStateKey: () => Option.none(),
         metadata: () => Metadata.Success({ data: { revision, table } }),
         submission: (submission) =>
           isOtherRevision && isRefusedAsStale(submission)
@@ -2132,6 +2158,7 @@ const receiveMetadata = (
       : (stepModel) => ({ model: stepModel }),
     requestWaitingRelated,
     retryRefusedSearches,
+    requestFormState,
   ]);
 
   return sawRevision(next, Option.some(revision));
@@ -2203,11 +2230,14 @@ const receiveRecord = (
     );
 
   const read = modifyFields(model, {
+    automaticClears: () => [],
     deletion: (deletion) => (afterConflict ? Deletion.Idle() : deletion),
+    formState: () => FormStateVerdict.Idle(),
     maybeEditsFrom: (editsFrom) =>
       isChangedUnderEdits
         ? Option.orElse(editsFrom, () => recordOf(model))
         : editsFrom,
+    maybeFormStateKey: () => Option.none(),
     // NOTE: every change of the metadata's revision asks for the record
     // again (a newer `generation`), so a read answered here was sent at
     // the metadata's current revision.
@@ -2221,6 +2251,7 @@ const receiveRecord = (
 
       return afterConflict ? Submission.Idle() : submission;
     },
+    suppressedFormFields: () => [],
   });
 
   const shown = reconcileEdits(read);
@@ -2230,6 +2261,7 @@ const receiveRecord = (
       requestClassMetadata,
       setUpControls,
       refreshIfNewer(maybeRevision),
+      requestFormState,
     ]),
     maybeRevision
   );
@@ -2338,7 +2370,7 @@ const isSaveHeld = (model: Model): boolean =>
  * @returns The page and its Commands.
  */
 const save = (model: Model): UpdateReturn => {
-  if (isSaveHeld(model)) {
+  if (isFormStatePending(model) || isSaveHeld(model)) {
     return { model };
   }
 
@@ -2532,7 +2564,11 @@ const receiveSave = (
     : [];
 
   const editing = modifyFields(model, {
+    automaticClears: () => [],
+    formState: () => FormStateVerdict.Idle(),
+    maybeFormStateKey: () => Option.none(),
     mode: () => FormMode.Edit({ recordId: saved.id }),
+    suppressedFormFields: () => [],
   });
 
   if (isUnreadRecord(saved)) {
@@ -2613,43 +2649,10 @@ const receiveSave = (
       requestClassMetadata,
       setUpControls,
       refreshIfNewer(maybeRevision),
+      requestFormState,
     ]),
     maybeRevision
   );
-};
-
-const INVALID_REFERENCE_TEXT =
-  "The chosen record is not available here: it does not exist, you cannot see it, or this field does not allow it.";
-
-const UNKNOWN_FIELD_TEXT =
-  "The server does not know this field for you any more. Reload the definition.";
-
-const fieldIdByName = (model: Model, name: string): Option.Option<string> =>
-  Option.fromNullishOr(
-    fieldsOf(model).find((field) => field.name === name)?.id
-  );
-
-const serverErrorsOf = (
-  model: Model,
-  error: WriteError
-): Readonly<Record<string, readonly string[]>> => {
-  if (WriteError.guards.ValidationFailed(error)) {
-    return errorsByFieldId(fieldsOf(model), error.errors);
-  }
-
-  if (WriteError.guards.InvalidReference(error)) {
-    return Option.match(fieldIdByName(model, error.field), {
-      onNone: () => ({}),
-      onSome: (fieldId) => ({ [fieldId]: [INVALID_REFERENCE_TEXT] }),
-    });
-  }
-
-  return WriteError.guards.UnknownField(error)
-    ? Option.match(fieldIdByName(model, error.field), {
-        onNone: () => ({}),
-        onSome: (fieldId) => ({ [fieldId]: [UNKNOWN_FIELD_TEXT] }),
-      })
-    : {};
 };
 
 /**
@@ -2695,7 +2698,7 @@ const failSave = (
     return { model };
   }
 
-  const serverErrors = serverErrorsOf(model, error);
+  const serverErrors = serverErrorsOf(fieldsOf(model), error);
 
   const refused = modifyFields(model, {
     isShowingProblems: () => true,
@@ -2870,12 +2873,62 @@ const retry = (model: Model): UpdateReturn => {
 
 // UPDATE
 
+const receiveFormState = (
+  model: Model,
+  verdict: typeof FormState.Type,
+  maybeRevision: Option.Option<SchemaRevision>
+): UpdateReturn => {
+  if (
+    Option.exists(
+      metaOf(model),
+      (meta) =>
+        revisionNumber(meta.revision) !== verdict.schemaRevision ||
+        Option.exists(maybeRevision, (revision) => revision !== meta.revision)
+    )
+  ) {
+    return refreshMetadata(
+      modifyFields(model, {
+        formState: () => FormStateVerdict.Loading(),
+      })
+    );
+  }
+
+  return sawRevision(
+    Update.combine(reflectProposedPickers(acceptFormState(model, verdict)), [
+      requestFormState,
+    ]),
+    maybeRevision
+  );
+};
+
+const failFormState = (
+  model: Model,
+  error: WriteError,
+  maybeRevision: Option.Option<SchemaRevision>
+): UpdateReturn => {
+  const failed = modifyFields(model, {
+    formState: (state) =>
+      Option.match(AsyncData.getData(state), {
+        onNone: () => FormStateVerdict.Failure({ error }),
+        onSome: (data) => FormStateVerdict.Stale({ data, error }),
+      }),
+    isShowingProblems: (showing) =>
+      showing ||
+      WriteError.guards.ValidationFailed(error) ||
+      WriteError.guards.InvalidReference(error) ||
+      WriteError.guards.UnknownField(error),
+  });
+
+  return WriteError.guards.SchemaChanged(error)
+    ? sawRevision(refreshMetadata(failed), maybeRevision)
+    : { model: failed };
+};
+
 /**
- * The form page's update.
- *
- * @param model - The page.
- * @param message - What happened.
- * @returns The next page, its Commands, and what the app should know.
+ * Handles form input and composes proposal checks only where its source changes.
+ * @param model - The form.
+ * @param message - The incoming Message.
+ * @returns The updated form, Commands and parent notification.
  */
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
@@ -2914,6 +2967,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedRetry: () => retry(model),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    ClickedRetryFormState: () =>
+      requestFormState(
+        modifyFields(model, { maybeFormStateKey: () => Option.none() })
+      ),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedRetryRelatedList: ({ listId }) => retryRelatedList(model, listId),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     ClickedSave: () => save(model),
@@ -2944,6 +3002,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadFormMetadata: ({ error }) => failMetadata(model, error),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    FailedLoadFormState: ({ generation, error, maybeRevision }) =>
+      generation === model.formGeneration
+        ? failFormState(model, error, maybeRevision)
+        : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     FailedLoadHistory: ({ error, generation }) =>
       failHistory(model, generation, error),
@@ -3003,6 +3066,11 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadFormMetadata: ({ revision, table }) =>
       receiveMetadata(model, table, revision),
+    // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
+    SucceededLoadFormState: ({ generation, verdict, maybeRevision }) =>
+      generation === model.formGeneration
+        ? receiveFormState(model, verdict, maybeRevision)
+        : { model },
     // oxlint-disable-next-line sonarjs/function-name -- a Message.match case is keyed by its Message's tag
     SucceededLoadHistory: ({ entries, generation, maybeRevision }) =>
       sawRevision(
