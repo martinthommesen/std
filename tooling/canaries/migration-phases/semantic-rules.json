@@ -1,0 +1,837 @@
+{
+  "PLATFORM_MIGRATIONS": [
+    {
+      "id": 200,
+      "name": "fk-delete-cascade",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON DELETE CASCADE NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 201,
+      "name": "fk-delete-set-null",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON DELETE SET NULL NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 202,
+      "name": "fk-delete-set-default",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON DELETE SET DEFAULT NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 203,
+      "name": "fk-delete-no-action",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON DELETE NO ACTION NOT VALID"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 204,
+      "name": "fk-delete-restrict",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON DELETE RESTRICT NOT VALID"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 205,
+      "name": "fk-update-cascade",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE CASCADE NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 206,
+      "name": "fk-update-set-null",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE SET NULL NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 207,
+      "name": "fk-update-set-default",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE SET DEFAULT NOT VALID"
+      ],
+      "expectedProblems": [
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 208,
+      "name": "fk-update-no-action",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE NO ACTION NOT VALID"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 209,
+      "name": "fk-update-restrict",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE RESTRICT NOT VALID"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 210,
+      "name": "fk-default-actions",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) NOT VALID"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 211,
+      "name": "fk-inline-cascade",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a int REFERENCES core.o(id) ON DELETE CASCADE"
+      ],
+      "expectedProblems": [
+        "constraint on an existing table requires NOT VALID",
+        "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT"
+      ]
+    },
+    {
+      "id": 212,
+      "name": "fk-inline-restrict",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN a int REFERENCES core.o(id) ON DELETE RESTRICT"
+      ],
+      "expectedProblems": ["constraint on an existing table requires NOT VALID"]
+    },
+    {
+      "id": 213,
+      "name": "fk-fresh-cascade",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh (a int REFERENCES core.o(id) ON DELETE CASCADE)",
+        "ALTER TABLE core.fresh ADD CONSTRAINT f FOREIGN KEY (a) REFERENCES core.o(id) ON UPDATE CASCADE"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 214,
+      "name": "security-sql-14",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_14() RETURNS int LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "SECURITY DEFINER functions are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 215,
+      "name": "security-sql-15",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_15() RETURNS int LANGUAGE sql SECURITY INVOKER AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 216,
+      "name": "security-sql-16",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_16() RETURNS int LANGUAGE sql  AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 217,
+      "name": "security-plpgsql-17",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_17() RETURNS int LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN 1; END $$"
+      ],
+      "expectedProblems": [
+        "SECURITY DEFINER functions are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 218,
+      "name": "security-plpgsql-18",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_18() RETURNS int LANGUAGE plpgsql SECURITY INVOKER AS $$ BEGIN RETURN 1; END $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 219,
+      "name": "security-plpgsql-19",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.security_19() RETURNS int LANGUAGE plpgsql  AS $$ BEGIN RETURN 1; END $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 220,
+      "name": "definer-pinned-path",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.definer_pinned() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "SECURITY DEFINER functions are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 221,
+      "name": "invoker-set-path",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.invoker_pinned() RETURNS int LANGUAGE sql SECURITY INVOKER SET search_path = pg_catalog, pg_temp AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": [
+        "function SET clauses are not allowed in expand migrations"
+      ]
+    },
+    {
+      "id": 222,
+      "name": "domain-or-user-type-22",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.d"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 223,
+      "name": "domain-or-user-type-23",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.d DEFAULT 1"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 224,
+      "name": "domain-or-user-type-24",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z d"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 225,
+      "name": "domain-or-user-type-25",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z d DEFAULT 1"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 226,
+      "name": "domain-or-user-type-26",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z public.d"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 227,
+      "name": "domain-or-user-type-27",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z public.d DEFAULT 1"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 228,
+      "name": "domain-or-user-type-28",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z pg_catalog.d"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 229,
+      "name": "domain-or-user-type-29",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN z pg_catalog.d DEFAULT 1"
+      ],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 230,
+      "name": "domain-or-user-type-30",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.text"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 231,
+      "name": "domain-or-user-type-31",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN z core.text DEFAULT 1"
+      ],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 232,
+      "name": "domain-or-user-type-32",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z \"core.text\""],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 233,
+      "name": "domain-or-user-type-33",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN z \"core.text\" DEFAULT 1"
+      ],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 234,
+      "name": "domain-or-user-type-34",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.d[]"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 235,
+      "name": "domain-or-user-type-35",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.d[] DEFAULT 1"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 236,
+      "name": "domain-or-user-type-36",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.sample%TYPE"],
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"%\""]
+    },
+    {
+      "id": 237,
+      "name": "domain-or-user-type-37",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN z core.sample%TYPE DEFAULT 1"
+      ],
+      "expectedProblems": ["SQL parse refused: syntax error at or near \"%\""]
+    },
+    {
+      "id": 238,
+      "name": "domain-or-user-type-38",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z core.status"],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 239,
+      "name": "domain-or-user-type-39",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "ALTER TABLE core.sample ADD COLUMN z core.status DEFAULT 1"
+      ],
+      "expectedProblems": [
+        "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+      ]
+    },
+    {
+      "id": 240,
+      "name": "builtin-40",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z text"],
+      "expectedProblems": []
+    },
+    {
+      "id": 241,
+      "name": "builtin-41",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z int"],
+      "expectedProblems": []
+    },
+    {
+      "id": 242,
+      "name": "builtin-42",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z integer"],
+      "expectedProblems": []
+    },
+    {
+      "id": 243,
+      "name": "builtin-43",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z pg_catalog.int4"],
+      "expectedProblems": []
+    },
+    {
+      "id": 244,
+      "name": "builtin-44",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z pg_catalog.text"],
+      "expectedProblems": []
+    },
+    {
+      "id": 245,
+      "name": "builtin-45",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z numeric(9,2)"],
+      "expectedProblems": []
+    },
+    {
+      "id": 246,
+      "name": "builtin-46",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z boolean"],
+      "expectedProblems": []
+    },
+    {
+      "id": 247,
+      "name": "builtin-47",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z timestamptz"],
+      "expectedProblems": []
+    },
+    {
+      "id": 248,
+      "name": "builtin-48",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z uuid"],
+      "expectedProblems": []
+    },
+    {
+      "id": 249,
+      "name": "builtin-49",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z integer[]"],
+      "expectedProblems": []
+    },
+    {
+      "id": 250,
+      "name": "builtin-50",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z pg_catalog.text[]"],
+      "expectedProblems": []
+    },
+    {
+      "id": 251,
+      "name": "builtin-51",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["ALTER TABLE core.sample ADD COLUMN z int4range"],
+      "expectedProblems": []
+    },
+    {
+      "id": 252,
+      "name": "fresh-domain-columns",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE TABLE core.fresh_domain (id int)",
+        "ALTER TABLE core.fresh_domain ADD COLUMN z core.d DEFAULT 1"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 253,
+      "name": "function-schema-53",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION public.lower(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 254,
+      "name": "function-schema-54",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION \"public\".lower_254(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 255,
+      "name": "function-schema-55",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION lower_255(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 256,
+      "name": "function-schema-56",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION \"core.lower\"(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 257,
+      "name": "function-schema-57",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION std.lower_257(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 258,
+      "name": "function-schema-58",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION pg_catalog.lower_258(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 259,
+      "name": "function-schema-59",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION app.lower_259(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'hijacked' $$"
+      ],
+      "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+      ]
+    },
+    {
+      "id": 260,
+      "name": "function-core-builtin-basename",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION core.lower(varchar) RETURNS text LANGUAGE sql AS $$ SELECT 'isolated' $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 261,
+      "name": "function-quoted-core",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": [
+        "CREATE FUNCTION \"core\".quoted_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
+      ],
+      "expectedProblems": []
+    },
+    {
+      "id": 262,
+      "name": "schema-62",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA public"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 263,
+      "name": "schema-63",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA \"public\""],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 264,
+      "name": "schema-64",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA std"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 265,
+      "name": "schema-65",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA postgres"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 266,
+      "name": "schema-66",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA app"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 267,
+      "name": "schema-67",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA AUTHORIZATION std"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 268,
+      "name": "schema-68",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA AUTHORIZATION CURRENT_USER"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 269,
+      "name": "schema-69",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA AUTHORIZATION SESSION_USER"],
+      "expectedProblems": [
+        "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed"
+      ]
+    },
+    {
+      "id": 270,
+      "name": "core-schema",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA core"],
+      "expectedProblems": []
+    },
+    {
+      "id": 271,
+      "name": "core-quoted-schema",
+      "kind": "tx",
+      "phase": "expand",
+      "statements": ["CREATE SCHEMA \"core\""],
+      "expectedProblems": []
+    },
+    {
+      "id": 272,
+      "name": "concurrent-kind-72",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "statement": "ALTER TABLE core.sample ADD COLUMN z int",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 273,
+      "name": "concurrent-kind-73",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "statement": "CREATE TABLE core.wrong_runner (id int)",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 274,
+      "name": "concurrent-kind-74",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "statement": "CREATE INDEX i ON core.sample(id)",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 275,
+      "name": "concurrent-accepted-expand",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "statement": "CREATE INDEX CONCURRENTLY i ON core.sample(id)",
+      "expectedProblems": []
+    },
+    {
+      "id": 276,
+      "name": "concurrent-multiple-expand",
+      "kind": "concurrent_index",
+      "phase": "expand",
+      "statement": "CREATE INDEX CONCURRENTLY i ON core.sample(id); CREATE INDEX CONCURRENTLY j ON core.sample(id)",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
+    },
+    {
+      "id": 277,
+      "name": "concurrent-kind-77",
+      "kind": "concurrent_index",
+      "phase": "contract",
+      "statement": "ALTER TABLE core.sample ADD COLUMN z int",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 278,
+      "name": "concurrent-kind-78",
+      "kind": "concurrent_index",
+      "phase": "contract",
+      "statement": "CREATE TABLE core.wrong_runner (id int)",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 279,
+      "name": "concurrent-kind-79",
+      "kind": "concurrent_index",
+      "phase": "contract",
+      "statement": "CREATE INDEX i ON core.sample(id)",
+      "expectedProblems": [
+        "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement"
+      ]
+    },
+    {
+      "id": 280,
+      "name": "concurrent-accepted-contract",
+      "kind": "concurrent_index",
+      "phase": "contract",
+      "statement": "CREATE INDEX CONCURRENTLY i ON core.sample(id)",
+      "expectedProblems": []
+    },
+    {
+      "id": 281,
+      "name": "concurrent-multiple-contract",
+      "kind": "concurrent_index",
+      "phase": "contract",
+      "statement": "CREATE INDEX CONCURRENTLY i ON core.sample(id); CREATE INDEX CONCURRENTLY j ON core.sample(id)",
+      "expectedProblems": [
+        "SQL parse refused: Each migration string must contain exactly one SQL statement"
+      ]
+    }
+  ]
+}

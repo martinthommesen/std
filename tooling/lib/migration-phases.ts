@@ -9,6 +9,7 @@ import type {
   IndexStmt,
   Node,
   RangeVar,
+  TypeName,
 } from "libpg-query";
 
 import { functionBodyProblems, stringValue } from "./migration-functions.ts";
@@ -37,6 +38,86 @@ const refusedStatement =
 
 const constraintProblem =
   "constraint on an existing table requires NOT VALID (UNIQUE/PRIMARY KEY cannot use it)";
+
+const foreignKeyActionProblem =
+  "foreign key on an existing table requires ON DELETE and ON UPDATE NO ACTION or RESTRICT";
+
+const functionSchemaProblem =
+  "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path";
+
+// Platform migrations own core. Application namespaces and login-role schemas
+// are not safe places to add overloads of implicitly resolved functions.
+const expandSchemas = new Set(["core"]);
+
+// Concrete PostgreSQL built-ins only: never infer safety from qualification
+// alone, because a schema can also contain domains and user-defined types.
+const builtInTypes = new Set([
+  "bit",
+  "bool",
+  "box",
+  "bpchar",
+  "bytea",
+  "char",
+  "cidr",
+  "circle",
+  "date",
+  "datemultirange",
+  "daterange",
+  "float4",
+  "float8",
+  "inet",
+  "int2",
+  "int4",
+  "int4multirange",
+  "int4range",
+  "int8",
+  "int8multirange",
+  "int8range",
+  "interval",
+  "json",
+  "jsonb",
+  "jsonpath",
+  "line",
+  "lseg",
+  "macaddr",
+  "macaddr8",
+  "money",
+  "name",
+  "numeric",
+  "nummultirange",
+  "numrange",
+  "oid",
+  "path",
+  "pg_lsn",
+  "point",
+  "polygon",
+  "text",
+  "time",
+  "timestamp",
+  "timestamptz",
+  "timetz",
+  "tsmultirange",
+  "tsquery",
+  "tsrange",
+  "tstzmultirange",
+  "tstzrange",
+  "tsvector",
+  "uuid",
+  "varbit",
+  "varchar",
+  "xml",
+]);
+
+const builtInType = (type: TypeName | undefined): boolean => {
+  const names = type?.names?.map(stringValue) ?? [];
+  const qualified = names.length === 2 && names[0] === "pg_catalog";
+
+  return (
+    type?.pct_type !== true &&
+    (names.length === 1 || qualified) &&
+    builtInTypes.has(names.at(-1) ?? "")
+  );
+};
 
 // JSON tuples keep dots inside quoted identifiers distinct from qualification.
 // Unqualified names are not assumed to resolve to any particular search_path.
@@ -135,10 +216,30 @@ const constantValue = (
   return "other";
 };
 
-const constraintAllowed = (constraint: Constraint): boolean =>
-  (constraint.contype === "CONSTR_CHECK" ||
-    constraint.contype === "CONSTR_FOREIGN") &&
-  constraint.skip_validation === true;
+const constraintProblems = (
+  constraint: Constraint,
+  validationProblem = constraintProblem
+): readonly string[] => {
+  const problems: string[] = [];
+
+  if (
+    (constraint.contype !== "CONSTR_CHECK" &&
+      constraint.contype !== "CONSTR_FOREIGN") ||
+    constraint.skip_validation !== true
+  ) {
+    problems.push(validationProblem);
+  }
+
+  if (
+    constraint.contype === "CONSTR_FOREIGN" &&
+    (!["a", "r"].includes(constraint.fk_del_action ?? "") ||
+      !["a", "r"].includes(constraint.fk_upd_action ?? ""))
+  ) {
+    problems.push(foreignKeyActionProblem);
+  }
+
+  return problems;
+};
 
 const simpleColumnConstraints = new Set([
   "CONSTR_DEFAULT",
@@ -200,6 +301,16 @@ const addedColumnProblems = (
   const problems = columnOptionProblems(column, constraints);
 
   if (
+    !fresh &&
+    !builtInType(column.typeName) &&
+    !serialTypes.has(stringValue(column.typeName?.names?.at(-1)) ?? "")
+  ) {
+    problems.push(
+      "added column on an existing table requires a built-in type (unqualified or pg_catalog); domains and user-defined types require a reviewed exception"
+    );
+  }
+
+  if (
     constraints.some((constraint) => constraint.contype === "CONSTR_NOTNULL") &&
     constantValue(defaultValue) !== "constant"
   ) {
@@ -212,14 +323,17 @@ const addedColumnProblems = (
     );
   }
 
-  const unsafeConstraint = constraints.some(
-    (constraint) =>
-      !simpleColumnConstraints.has(constraint.contype ?? "") &&
-      !constraintAllowed(constraint)
-  );
+  if (!fresh) {
+    const failures = constraints.flatMap((constraint) =>
+      simpleColumnConstraints.has(constraint.contype ?? "")
+        ? []
+        : constraintProblems(
+            constraint,
+            "constraint on an existing table requires NOT VALID"
+          )
+    );
 
-  if (!fresh && unsafeConstraint) {
-    problems.push("constraint on an existing table requires NOT VALID");
+    problems.push(...new Set(failures));
   }
 
   return problems;
@@ -255,9 +369,7 @@ const alterTableProblems = (
       command.def !== undefined &&
       "Constraint" in command.def
     ) {
-      return isFresh || constraintAllowed(command.def.Constraint)
-        ? []
-        : [constraintProblem];
+      return isFresh ? [] : constraintProblems(command.def.Constraint);
     }
 
     if (command.subtype === "AT_ValidateConstraint") {
@@ -344,11 +456,22 @@ const functionProblems = (
     ];
   }
 
+  const names = definition.funcname?.map(stringValue) ?? [];
+
+  const schemaProblems =
+    names.length === 2 && expandSchemas.has(names[0] ?? "")
+      ? []
+      : [functionSchemaProblem];
+
   const nameProblems = functionExists(definition.funcname, functions)
     ? ["existing function name; use a new name even for a new signature"]
     : [];
 
-  return [...nameProblems, ...functionBodyProblems(definition, sql)];
+  return [
+    ...schemaProblems,
+    ...nameProblems,
+    ...functionBodyProblems(definition, sql),
+  ];
 };
 
 const otherStatementProblems = (
@@ -362,9 +485,19 @@ const otherStatementProblems = (
   }
 
   if ("CreateSchemaStmt" in node) {
-    return (node.CreateSchemaStmt.schemaElts?.length ?? 0) === 0
+    const schema = node.CreateSchemaStmt;
+
+    if ((schema.schemaElts?.length ?? 0) > 0) {
+      return [
+        "CREATE SCHEMA elements are not allowed; use separate statements",
+      ];
+    }
+
+    return expandSchemas.has(schema.schemaname ?? "")
       ? []
-      : ["CREATE SCHEMA elements are not allowed; use separate statements"];
+      : [
+          "expand CREATE SCHEMA requires the STD-owned core schema; public, login-role and unreviewed schemas are not allowed",
+        ];
   }
 
   if ("AlterEnumStmt" in node) {
@@ -392,6 +525,15 @@ const statementProblems = (
   fresh: ReadonlySet<string>,
   functions: FunctionNames
 ): readonly string[] => {
+  if (
+    migration.kind === "concurrent_index" &&
+    (!("IndexStmt" in node) || node.IndexStmt.concurrent !== true)
+  ) {
+    return [
+      "concurrent_index migration requires exactly one CREATE INDEX CONCURRENTLY statement",
+    ];
+  }
+
   if (migration.phase !== "expand" || historicalStatement(migration.id, sql)) {
     return [];
   }

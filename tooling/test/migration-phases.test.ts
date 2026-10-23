@@ -50,7 +50,7 @@ describe("migration-phases", () => {
     }
   );
 
-  it.each(["refused", "ast-rules", "historical-altered"])(
+  it.each(["refused", "ast-rules", "semantic-rules", "historical-altered"])(
     "checks every exact diagnostic and acceptance in %s",
     async (name) => {
       const result = await runCanary(name);

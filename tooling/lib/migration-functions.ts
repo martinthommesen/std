@@ -173,6 +173,18 @@ export const functionBodyProblems = (
     "DefElem" in node ? [node.DefElem] : []
   );
 
+  if (
+    options.some(
+      (option) =>
+        option.defname === "security" &&
+        option.arg !== undefined &&
+        "Boolean" in option.arg &&
+        option.arg.Boolean.boolval === true
+    )
+  ) {
+    return ["SECURITY DEFINER functions are not allowed in expand migrations"];
+  }
+
   if (options.some((option) => option.defname === "set")) {
     return ["function SET clauses are not allowed in expand migrations"];
   }

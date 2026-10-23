@@ -51,7 +51,7 @@
       "name": "schema-empty",
       "kind": "tx",
       "phase": "expand",
-      "statements": ["CREATE SCHEMA s"],
+      "statements": ["CREATE SCHEMA core"],
       "expectedProblems": []
     },
     {
@@ -654,8 +654,8 @@
       "kind": "tx",
       "phase": "expand",
       "statements": [
-        "CREATE FUNCTION \"a.b\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
-        "CREATE FUNCTION a.b() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$"
+        "CREATE FUNCTION core.\"a.b\"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$",
+        "CREATE FUNCTION core.a() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$"
       ],
       "expectedProblems": []
     },
@@ -738,9 +738,18 @@
         "CREATE FUNCTION public.unresolved(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
       ],
       "expectedProblems": [
-        "existing function name; use a new name even for a new signature"
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
       ],
-      "expectedStatement": 2
+      "extraProblems": [
+        {
+          "statement": 2,
+          "message": "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path"
+        },
+        {
+          "statement": 2,
+          "message": "existing function name; use a new name even for a new signature"
+        }
+      ]
     },
     {
       "id": 169,
@@ -752,6 +761,7 @@
         "CREATE FUNCTION resolved(x int) RETURNS int LANGUAGE sql AS $$ SELECT x $$"
       ],
       "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path",
         "existing function name; use a new name even for a new signature"
       ],
       "expectedStatement": 2
@@ -915,6 +925,7 @@
         "CREATE FUNCTION moved.moved_function() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$"
       ],
       "expectedProblems": [
+        "expand functions must be schema-qualified in the STD-owned core schema outside the application search_path",
         "existing function name; use a new name even for a new signature"
       ]
     },
